@@ -53,6 +53,9 @@ public interface IGameChild : IDisposable
 
     ulong? Started { get; }
 
+    /// <summary>Actual OS process exit time when available, before asynchronous world cleanup.</summary>
+    DateTimeOffset? ExitTimeUtc => null;
+
     /// <summary>Signalled when the game process exits.</summary>
     WaitHandle Exited { get; }
 

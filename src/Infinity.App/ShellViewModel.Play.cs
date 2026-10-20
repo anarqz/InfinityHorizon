@@ -115,6 +115,8 @@ public sealed partial class ShellViewModel
             Saves = SessionSavesFor(profile),
             Worlds = WorldsFor(profile.Mode, profile.Xuid),
             Text = S,
+            CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),
+            AccountId = _session.Me?.AccountId,
         };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
@@ -293,6 +295,9 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
                 break;
+            case SupervisorEvent.CrashCaptured captured:
+                PresentCrash(captured.Incident);
+                break;
             case SupervisorEvent.Exited:
                 SetStatus(S["supervisor.closing"]);
                 break;
@@ -327,6 +332,9 @@ public sealed partial class ShellViewModel
                 when Infinity.Core.Session.HookEvents.NoticeToast(notice.Detail, S) is { } toast:
                 Message = toast.Text;
                 SetStatus(toast.Text.Replace("\n", " · ", StringComparison.Ordinal));
+                break;
+            case SupervisorEvent.Error { Message: Infinity.Core.Api.ErrorCodes.AccountsFrozen }:
+                SetStatus(S["crash.frozen"]);
                 break;
             case SupervisorEvent.Error err:
                 SetStatus(S["supervisor.launch_refused"] + " (" + err.Message + ")");

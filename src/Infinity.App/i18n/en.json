@@ -1,4 +1,5 @@
 {
+ "play.public_warning": "Bugs and crashes are expected in public worlds with unknown players. Infinity mitigates problems where possible. Prefer playing with people you trust.",
  "account.cancel_deletion": "Cancel deletion",
  "account.delete": "Delete account",
  "account.delete_body": "Removes this account and everything the server keeps for it after a 14-day grace period. Saves on this PC are not touched.",

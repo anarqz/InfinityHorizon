@@ -23,6 +23,10 @@ internal sealed partial class RelayEngine
     private long _now, _lastKeepalive, _lastResend, _lastPace, _lastCarStates;
     private bool _closed;
     internal Func<ulong, IPEndPoint, long, bool>? Authorize { get; set; }
+    internal Action<ulong, string, int?, int?, int?>? ValidationRejected { get; set; }
+
+    private void Rejected(RelayPeer peer, string kind, int? message = null, int? router = null, int? value = null)
+        => ValidationRejected?.Invoke(peer.Xuid, kind, message, router, value);
     internal IReadOnlyList<ulong> PeerXuids => _peers.Where(p => p.Synced).Select(p => p.Xuid).ToArray();
     internal int PeerCount => _peers.Count;
     internal int SyncedCount => _peers.Count(p => p.Synced);

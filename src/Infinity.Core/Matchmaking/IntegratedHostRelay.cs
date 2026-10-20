@@ -25,6 +25,9 @@ public sealed class IntegratedHostRelay : IHostRelay
     private IReadOnlyList<string> _peers = Array.Empty<string>();
     private RelayNetworkStatus _network;
     private int _disposed, _running = 1;
+    private Diagnostics.CrashContext? _crashContext;
+
+    public Diagnostics.CrashContext? CrashContext { get => Volatile.Read(ref _crashContext); set => Volatile.Write(ref _crashContext, value); }
 
     private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options)
     {
@@ -36,7 +39,8 @@ public sealed class IntegratedHostRelay : IHostRelay
         _network = _nat.Snapshot();
         // World admission must be installed before any game datagram can establish a seat.
         _engine = new(new RelaySettings { MaxPlayers = checked((int)Math.Clamp(maxPlayers, 1u, 12u)), Races = races }, Send)
-        { Authorize = static (_, _, _) => false };
+        { Authorize = static (_, _, _) => false,
+          ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value) };
         var cancellation = _stop.Token;
         _actor = Task.Factory.StartNew(() => Run(cancellation), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         var serverNames = options.StunServers.Take(8).ToArray();

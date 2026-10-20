@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Net.Sockets;
+using Infinity.Core.Diagnostics;
 using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
@@ -53,12 +54,19 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     private readonly SemaphoreSlim _mineRead = new(1, 1);
     private readonly object _mineState = new();
     private readonly LobbyRoster _roster = new(ownXuid);
+    private readonly PublicWorldWarning _publicWarning = new();
     private UiFrame.MyWorld _mineSnapshot = NoWorld;
     private long _mineNextTicks, _mineEpoch;
 
-    public IReadOnlyList<UiFrame.Toast> LobbyToasts() => _roster.Drain().Select(change =>
-        new UiFrame.Toast(UiLevel.Info, 0, 50, _text(change.Joined ? "worlds.player_joined" : "worlds.player_left")
-            .Replace("{player}", change.Gamertag, StringComparison.Ordinal))).ToArray();
+    public IReadOnlyList<UiFrame.Toast> LobbyToasts()
+    {
+        var toasts = new List<UiFrame.Toast>();
+        if (_publicWarning.Take()) toasts.Add(new(UiLevel.Warn, 2, 150, _text("worlds.public_warning")));
+        toasts.AddRange(_roster.Drain().Select(change =>
+            new UiFrame.Toast(UiLevel.Info, 0, 50, _text(change.Joined ? "worlds.player_joined" : "worlds.player_left")
+                .Replace("{player}", change.Gamertag, StringComparison.Ordinal))));
+        return toasts;
+    }
 
     private void InvalidateMine(bool reset = false)
     {
@@ -69,6 +77,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
             if (reset)
             {
                 _roster.Reset();
+                _publicWarning.Reset();
+                CrashContext?.ObserveWorld(null);
                 Volatile.Write(ref _mineSnapshot, NoWorld);
                 (_mineId, _mineRole) = (null, UiWorldRole.None);
             }
@@ -76,6 +86,9 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     }
 
     public Session.GameReadiness GameReadiness { get; init; } = gameReadiness ?? new(clock);
+
+    /// <summary>The current session's bounded diagnostic context; frozen by the supervisor before cleanup.</summary>
+    public CrashContext? CrashContext { get; set; }
 
     /// <summary>The seat this session holds, when one is reserved (for the shell's status).</summary>
     public string? GrantId => _seat.GrantId;
@@ -239,6 +252,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
                     (_mineId, _mineRole) = (null, UiWorldRole.None);
                     _roster.Reset();
+                    _publicWarning.Reset();
+                    CrashContext?.ObserveWorld(null);
                     return _mineSnapshot = NoWorld;
                 }
             }
@@ -252,7 +267,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
             var members = new List<MemberRow>();
             var roster = await _mm.MembersAsync(seat.WorldId, cancellation).ConfigureAwait(false);
             if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
-            var named = roster is { Ok: true, Value: not null };
+            var named = roster is { Ok: true, Value: not null } && (roster.Value.WorldId is null || roster.Value.WorldId == seat.WorldId);
             if (named)
             {
                 members.AddRange(roster.Value!.Items.Select(Member));
@@ -268,6 +283,10 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
                 (_mineId, _mineRole) = (seat.WorldId, role);
                 if (named) _roster.Observe(seat.WorldId, roster.Value!);
+                if (role is UiWorldRole.Hosting or UiWorldRole.Seated) _publicWarning.Observe(seat.WorldId, world.Audience);
+                CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, _clock.GetUtcNow(), named,
+                    members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
+                        m.Role switch { 0 => "host", 1 => "seated", _ => "reserved" })).ToArray()) : null);
                 return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.Gamertag, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members);
             }
         }
@@ -379,6 +398,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
             var players = (uint)Math.Clamp((int)request.MaxPlayers, 2, 12);
             _relay = _startRelay?.Invoke(players);
             if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(relayUnavailableKey));
+            if (_relay is IntegratedWorldRelay integrated) integrated.CrashContext = CrashContext;
             var relay = _relay;
             var settings = new WorldSettings
             {
@@ -414,6 +434,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                         _host.Opened(_clock.GetUtcNow());
                         _nextAdmissionsRefresh = _clock.GetUtcNow() + TimeSpan.FromSeconds(3);
                         Volatile.Write(ref _hostedWorldId, openingId);
+                        _publicWarning.Observe(openingId, world.Audience);
                     }
                     hosted = true;
                     _log($"worlds: world {openingId} open ({settings.Mode}, {settings.Audience}, {players} players)");

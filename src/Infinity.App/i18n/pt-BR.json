@@ -1,4 +1,5 @@
 {
+ "play.public_warning": "Bugs e travamentos são esperados em mundos públicos com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira jogar com pessoas de confiança.",
  "account.cancel_deletion": "Cancelar exclusão",
  "account.delete": "Excluir conta",
  "account.delete_body": "Remove esta conta e tudo o que o servidor guarda dela depois de um prazo de 14 dias. Os saves neste PC não são tocados.",

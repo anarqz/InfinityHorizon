@@ -17,6 +17,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     public ushort Port => _transport.Port;
     public bool Running => Volatile.Read(ref _disposed) == 0 && _transport.Running;
     public RelayNetworkStatus NetworkStatus => _transport.NetworkStatus;
+    public Diagnostics.CrashContext? CrashContext { get => _transport.CrashContext; set => _transport.CrashContext = value; }
 
     public static IntegratedWorldRelay Start(uint maxPlayers, bool races, string ownXuid, RelayGrantVerifyKeys keys,
         ushort port = HostRelay.DefaultPort, IntegratedRelayOptions? options = null, TimeProvider? clock = null, bool devLanPeers = false)
