@@ -1,0 +1,364 @@
+<Application x:Class="Infinity.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             ThemeMode="Dark"
+             StartupUri="MainWindow.xaml">
+  <Application.Resources>
+    <ResourceDictionary>
+      <!-- Infinity Horizon (owner's palette, 2026-10-19). Every color the shell draws comes from here;
+           the brand art and the font are WPF resources inside infinity.exe, so the launcher looks the
+           same on Windows and under Wine/Proton (no Segoe fonts there, no Mica backdrop). -->
+      <Color x:Key="NightBlack">#FF0E0616</Color>
+      <Color x:Key="ElectricWine">#FF5A0626</Color>
+      <Color x:Key="NeonMagenta">#FFF01864</Color>
+      <Color x:Key="DeepCrimson">#FF9B0A27</Color>
+      <Color x:Key="HorizonRed">#FFE41E28</Color>
+      <Color x:Key="SunsetOrange">#FFFA6123</Color>
+      <Color x:Key="PinkGlow">#FFF91790</Color>
+      <Color x:Key="SolarGold">#FFFC9D1B</Color>
+      <Color x:Key="IntenseRose">#FFF9555C</Color>
+      <Color x:Key="DarkPurple">#FF65184D</Color>
+      <Color x:Key="DarkFuchsia">#FFA10652</Color>
+      <Color x:Key="SoftNeonWhite">#FFF9EAEE</Color>
+
+      <!-- Fluent's own accent (text box focus, radio buttons, scroll thumbs) follows the brand. -->
+      <Color x:Key="SystemAccentColor">#FFF01864</Color>
+      <Color x:Key="SystemAccentColorLight1">#FFF43C7E</Color>
+      <Color x:Key="SystemAccentColorLight2">#FFF91790</Color>
+      <Color x:Key="SystemAccentColorLight3">#FFFB6FB4</Color>
+      <Color x:Key="SystemAccentColorDark1">#FFC8104F</Color>
+      <Color x:Key="SystemAccentColorDark2">#FFA10652</Color>
+      <Color x:Key="SystemAccentColorDark3">#FF5A0626</Color>
+
+      <SolidColorBrush x:Key="InfinityBackground" Color="{StaticResource NightBlack}" />
+      <SolidColorBrush x:Key="InfinitySurface" Color="#FF170B22" />
+      <SolidColorBrush x:Key="InfinitySurfaceHigh" Color="#FF22102F" />
+      <SolidColorBrush x:Key="InfinityBorder" Color="#29F9EAEE" />
+      <SolidColorBrush x:Key="InfinityText" Color="{StaticResource SoftNeonWhite}" />
+      <SolidColorBrush x:Key="InfinityMuted" Color="#A6F9EAEE" />
+      <SolidColorBrush x:Key="InfinityFaint" Color="#66F9EAEE" />
+      <SolidColorBrush x:Key="InfinityAccent" Color="{StaticResource NeonMagenta}" />
+      <SolidColorBrush x:Key="InfinityPink" Color="{StaticResource PinkGlow}" />
+      <SolidColorBrush x:Key="InfinityGold" Color="{StaticResource SolarGold}" />
+      <SolidColorBrush x:Key="InfinityRose" Color="{StaticResource IntenseRose}" />
+      <SolidColorBrush x:Key="InfinityGood" Color="#FF6FD68A" />
+      <SolidColorBrush x:Key="InfinityWarnSurface" Color="#24FC9D1B" />
+      <SolidColorBrush x:Key="InfinityGoodSurface" Color="#1F6FD68A" />
+      <SolidColorBrush x:Key="InfinityDangerSurface" Color="#33E41E28" />
+      <SolidColorBrush x:Key="InfinityDangerBorder" Color="#99E41E28" />
+
+      <!-- The sunset gradient of the wordmark's HORIZON: the primary action and the highlights. -->
+      <LinearGradientBrush x:Key="InfinitySunset" StartPoint="0,0.5" EndPoint="1,0.5">
+        <GradientStop Color="{StaticResource PinkGlow}" Offset="0" />
+        <GradientStop Color="{StaticResource NeonMagenta}" Offset="0.35" />
+        <GradientStop Color="{StaticResource SunsetOrange}" Offset="0.78" />
+        <GradientStop Color="{StaticResource SolarGold}" Offset="1" />
+      </LinearGradientBrush>
+      <LinearGradientBrush x:Key="InfinitySunsetVertical" StartPoint="0.5,0" EndPoint="0.5,1">
+        <GradientStop Color="{StaticResource PinkGlow}" Offset="0" />
+        <GradientStop Color="{StaticResource SunsetOrange}" Offset="1" />
+      </LinearGradientBrush>
+      <LinearGradientBrush x:Key="InfinitySidebar" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#FF13071D" Offset="0" />
+        <GradientStop Color="#FF1A0820" Offset="0.6" />
+        <GradientStop Color="#FF2A0A26" Offset="1" />
+      </LinearGradientBrush>
+      <LinearGradientBrush x:Key="InfinityNavSelected" StartPoint="0,0.5" EndPoint="1,0.5">
+        <GradientStop Color="#40F01864" Offset="0" />
+        <GradientStop Color="#00F01864" Offset="1" />
+      </LinearGradientBrush>
+
+      <FontFamily x:Key="InfinityFont">pack://application:,,,/Assets/Fonts/#Selawik</FontFamily>
+      <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Selawik Semibold</FontFamily>
+
+      <BitmapImage x:Key="BrandLogo" UriSource="pack://application:,,,/Assets/logo.png" />
+      <BitmapImage x:Key="BrandMark" UriSource="pack://application:,,,/Assets/mark.png" />
+      <BitmapImage x:Key="BrandHero" UriSource="pack://application:,,,/Assets/hero.jpg" />
+      <BitmapImage x:Key="BrandStreaks" UriSource="pack://application:,,,/Assets/streaks.png" />
+      <BitmapImage x:Key="BrandLines" UriSource="pack://application:,,,/Assets/lines.png" />
+
+      <DropShadowEffect x:Key="InfinityGlow" Color="{StaticResource NeonMagenta}" BlurRadius="22" ShadowDepth="0" Opacity="0.55" />
+
+      <!-- A card: the panels of setup, mods, sign-in. -->
+      <Style x:Key="Card" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource InfinitySurface}" />
+        <Setter Property="BorderBrush" Value="{StaticResource InfinityBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="Padding" Value="22,18" />
+      </Style>
+
+      <!-- The shell's standard (owner, 2026-10-19): a title is bold and upright; the text under it is
+           italic and regular; buttons are never italic. -->
+      <Style x:Key="PageTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="28" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+      </Style>
+      <Style x:Key="PageSubtitle" TargetType="TextBlock">
+        <Setter Property="FontStyle" Value="Italic" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+      </Style>
+      <Style x:Key="SectionTag" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{StaticResource InfinityPink}" />
+      </Style>
+
+      <!-- Buttons: a dark surface that lights magenta on hover. -->
+      <Style TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="Background" Value="{StaticResource InfinitySurfaceHigh}" />
+        <Setter Property="BorderBrush" Value="{StaticResource InfinityBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="16,8" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="Box" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                      BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" SnapsToDevicePixels="True">
+                <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True" />
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityAccent}" />
+                  <Setter TargetName="Box" Property="Background" Value="#33F01864" />
+                </Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                  <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" />
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="Box" Property="Background" Value="#55F01864" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.4" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <!-- The primary action (Play, Sign in, Install): the sunset gradient with a neon glow. Same key
+           as Fluent's accent button, so every primary button of the shell takes it. -->
+      <Style x:Key="AccentButtonStyle" TargetType="Button">
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Background" Value="{StaticResource InfinitySunset}" />
+        <Setter Property="Padding" Value="20,9" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Grid>
+                <Border x:Name="Glow" CornerRadius="8" Background="{TemplateBinding Background}" Effect="{StaticResource InfinityGlow}" Opacity="0.75" />
+                <Border x:Name="Box" CornerRadius="8" Background="{TemplateBinding Background}" BorderBrush="#40FFFFFF" BorderThickness="0,1,0,0">
+                  <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                </Border>
+                <Border x:Name="Shine" CornerRadius="8" Background="#00FFFFFF" IsHitTestVisible="False" />
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Shine" Property="Background" Value="#1FFFFFFF" />
+                  <Setter TargetName="Glow" Property="Opacity" Value="1" />
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="Shine" Property="Background" Value="#26000000" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter TargetName="Box" Property="Background" Value="#33F9EAEE" />
+                  <Setter TargetName="Glow" Property="Visibility" Value="Collapsed" />
+                  <Setter Property="Foreground" Value="{StaticResource InfinityFaint}" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <!-- The big Play button of Home. -->
+      <Style x:Key="PlayButton" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+        <Setter Property="FontSize" Value="22" />
+        <Setter Property="Padding" Value="56,14" />
+        <Setter Property="MinWidth" Value="260" />
+      </Style>
+
+      <!-- Sidebar navigation: Tag="True" marks the page shown (a magenta bar and a soft gradient). -->
+      <Style x:Key="NavButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Margin" Value="0,2" />
+        <Setter Property="Padding" Value="18,10" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <!-- Background: the row's fill; BorderBrush: the bar at its left (both set by the style's triggers) -->
+            <ControlTemplate TargetType="Button">
+              <Grid Background="Transparent">
+                <Border x:Name="Fill" CornerRadius="0,8,8,0" Background="{TemplateBinding Background}" />
+                <Border x:Name="Bar" Width="3" HorizontalAlignment="Left" Background="{TemplateBinding BorderBrush}" CornerRadius="2" />
+                <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Left" VerticalAlignment="Center" />
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Fill" Property="Background" Value="#14F9EAEE" />
+                  <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.35" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+          <!-- Tag="{Binding Show…}": the page shown. Tag is an object, so compare with a real Boolean. -->
+          <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}">
+            <DataTrigger.Value>
+              <sys:Boolean>True</sys:Boolean>
+            </DataTrigger.Value>
+            <Setter Property="Background" Value="{StaticResource InfinityNavSelected}" />
+            <Setter Property="BorderBrush" Value="{StaticResource InfinitySunsetVertical}" />
+            <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+          </DataTrigger>
+        </Style.Triggers>
+      </Style>
+
+      <!-- A text link (change, exit, forgot password). -->
+      <Style x:Key="LinkButton" TargetType="Button">
+        <Setter Property="Padding" Value="6,2" />
+        <Setter Property="Margin" Value="6,0,0,0" />
+        <Setter Property="Foreground" Value="{StaticResource InfinityPink}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                <ContentPresenter x:Name="Text" VerticalAlignment="Center" />
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter Property="Foreground" Value="{StaticResource InfinityGold}" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.4" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <!-- Text fields on the dark surface. -->
+      <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Setter Property="Background" Value="{StaticResource InfinitySurfaceHigh}" />
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="BorderBrush" Value="{StaticResource InfinityBorder}" />
+        <Setter Property="CaretBrush" Value="{StaticResource InfinityPink}" />
+        <Setter Property="SelectionBrush" Value="{StaticResource InfinityAccent}" />
+        <Setter Property="Padding" Value="10,7" />
+      </Style>
+      <Style TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
+        <Setter Property="Background" Value="{StaticResource InfinitySurfaceHigh}" />
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="BorderBrush" Value="{StaticResource InfinityBorder}" />
+        <Setter Property="CaretBrush" Value="{StaticResource InfinityPink}" />
+        <Setter Property="SelectionBrush" Value="{StaticResource InfinityAccent}" />
+        <Setter Property="Padding" Value="10,7" />
+      </Style>
+
+      <!-- Fluent draws the check with Segoe Fluent Icons, which Wine/Proton does not have (and its
+           licence does not let us ship it): a CheckBox whose box and check are geometry. -->
+      <Style TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="CheckBox">
+              <Grid Background="Transparent">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border x:Name="Box" Width="20" Height="20" CornerRadius="5" BorderThickness="1.5" VerticalAlignment="Top" Margin="0,1,0,0"
+                        BorderBrush="#99F9EAEE" Background="Transparent">
+                  <Path x:Name="Check" Data="M 4,10 L 8,14 L 16,5" Stroke="White" StrokeThickness="2.4"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed" />
+                </Border>
+                <ContentPresenter Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True" />
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                  <Setter TargetName="Box" Property="Background" Value="{StaticResource InfinitySunset}" />
+                  <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityAccent}" />
+                  <Setter TargetName="Check" Property="Visibility" Value="Visible" />
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.45" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <!-- Radio buttons drawn the same way (no font glyphs). -->
+      <Style TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="RadioButton">
+              <Grid Background="Transparent">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid Width="20" Height="20" VerticalAlignment="Center">
+                  <Ellipse x:Name="Ring" Stroke="#99F9EAEE" StrokeThickness="1.5" />
+                  <Ellipse x:Name="Dot" Width="10" Height="10" Fill="{StaticResource InfinitySunset}" Visibility="Collapsed" />
+                </Grid>
+                <ContentPresenter Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True" />
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                  <Setter TargetName="Dot" Property="Visibility" Value="Visible" />
+                  <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource InfinityAccent}" />
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource InfinityPink}" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.45" />
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <Style TargetType="Hyperlink">
+        <Setter Property="Foreground" Value="{StaticResource InfinityPink}" />
+      </Style>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

@@ -1,0 +1,605 @@
+<Window x:Class="Infinity.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Infinity.App"
+        Title="Infinity Horizon · BETA" Width="1180" Height="780" MinWidth="960" MinHeight="640"
+        Icon="pack://application:,,,/Assets/infinity.ico"
+        WindowStartupLocation="CenterScreen" Background="{StaticResource InfinityBackground}"
+        Foreground="{StaticResource InfinityText}" FontFamily="{StaticResource InfinityFont}" FontSize="14">
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="Visible" />
+    <local:InverseVisibility x:Key="Hidden" />
+  </Window.Resources>
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="{Binding SidebarWidth}" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <!-- Sidebar: the wordmark, HOME, AZIMUTH, MODS, NEWS, HELP ... ACCOUNT, DONATE, server, version.
+         Worlds live only in the in-game overlay (OD-54): the launcher has no Servers page. -->
+    <Grid Grid.Column="0" Background="{StaticResource InfinitySidebar}" IsEnabled="{Binding Idle}"
+          Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+      <Image Source="{StaticResource BrandLines}" Stretch="UniformToFill" VerticalAlignment="Bottom" Height="150"
+             Opacity="0.18" IsHitTestVisible="False" />
+      <Border BorderBrush="#3365184D" BorderThickness="0,0,1,0" />
+      <DockPanel Margin="0,0,0,14">
+        <Image DockPanel.Dock="Top" Source="{StaticResource BrandLogo}" Width="172" Margin="22,22,22,12"
+               RenderOptions.BitmapScalingMode="HighQuality" />
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,0,12,0">
+          <Button Content="{Binding S[nav.help]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+          <Button Content="{Binding S[nav.bug]}" Style="{StaticResource NavButton}" Click="OnNavBugReport" Tag="{Binding ShowBugReport}" />
+          <Button Content="{Binding S[nav.discord]}" Style="{StaticResource NavButton}" Click="OnDiscord" />
+          <Border Height="1" Background="{StaticResource InfinityBorder}" Margin="20,8,8,8" />
+          <Button Content="{Binding S[nav.account]}" Style="{StaticResource NavButton}" IsEnabled="{Binding CanChangeIdentity}" Click="OnNavAccount" Tag="{Binding ShowAccount}" />
+          <Button Content="{Binding S[nav.donate]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+          <TextBlock Text="{Binding ServerLabel}" Margin="20,14,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
+          <TextBlock Text="{Binding VersionLabel}" Margin="20,2,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
+        </StackPanel>
+        <StackPanel Margin="0,0,12,0">
+          <Button Content="{Binding S[nav.play]}" Style="{StaticResource NavButton}" Click="OnNavHome" Tag="{Binding ShowHome}" />
+          <!-- OD-46: Azimuth setup, with a warning dot while it is not ready to play online. -->
+          <Button Style="{StaticResource NavButton}" Click="OnNavSetup" Tag="{Binding ShowSetup}">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="{Binding S[nav.azimuth]}" VerticalAlignment="Center" />
+              <Ellipse Width="8" Height="8" Margin="10,0,0,0" Fill="{StaticResource InfinityGold}" VerticalAlignment="Center"
+                       Visibility="{Binding SetupNeeded, Converter={StaticResource Visible}}" />
+            </StackPanel>
+          </Button>
+          <!-- OD-45: Mods, with a small tag when there is news (an update, or a release not seen yet). -->
+          <Button Style="{StaticResource NavButton}" IsEnabled="{Binding CanOpenMods}" Click="OnNavMods" Tag="{Binding ShowMods}">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="{Binding S[nav.mods]}" VerticalAlignment="Center" />
+              <Border Margin="10,0,0,0" Padding="7,1" CornerRadius="8" Background="{StaticResource InfinitySunset}"
+                      VerticalAlignment="Center" Visibility="{Binding ModsNews, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding ModsTag}" FontSize="10" FontWeight="Bold" Foreground="White" />
+              </Border>
+            </StackPanel>
+          </Button>
+          <Button Content="{Binding S[nav.news]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+        </StackPanel>
+      </DockPanel>
+    </Grid>
+
+    <!-- The page area: Home's art behind everything, then the top bar, the page and the status line. -->
+    <Grid Grid.Column="1" ClipToBounds="True">
+      <Grid IsHitTestVisible="False" Visibility="{Binding ShowHero, Converter={StaticResource Visible}}">
+        <Image Source="{StaticResource BrandHero}" Stretch="UniformToFill" HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.9" />
+        <Rectangle>
+          <Rectangle.Fill>
+            <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+              <GradientStop Color="#FF0E0616" Offset="0.05" />
+              <GradientStop Color="#C00E0616" Offset="0.45" />
+              <GradientStop Color="#300E0616" Offset="1" />
+            </LinearGradientBrush>
+          </Rectangle.Fill>
+        </Rectangle>
+        <Rectangle>
+          <Rectangle.Fill>
+            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+              <GradientStop Color="#CC0E0616" Offset="0" />
+              <GradientStop Color="#000E0616" Offset="0.25" />
+              <GradientStop Color="#000E0616" Offset="0.7" />
+              <GradientStop Color="#FF0E0616" Offset="1" />
+            </LinearGradientBrush>
+          </Rectangle.Fill>
+        </Rectangle>
+      </Grid>
+      <!-- Sign-in: the infinity mark, large and faint, anchored at the bottom-right corner (owner). -->
+      <Image Source="{StaticResource BrandMark}" Width="1100" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-90,-40"
+             Opacity="0.12" IsHitTestVisible="False" RenderOptions.BitmapScalingMode="HighQuality"
+             Visibility="{Binding ShowSignIn, Converter={StaticResource Visible}}" />
+      <!-- Speed streaks, faint, on every page but Home. -->
+      <Image Source="{StaticResource BrandStreaks}" Width="560" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,40,-120,0"
+             Opacity="0.10" IsHitTestVisible="False" Visibility="{Binding ShowHome, Converter={StaticResource Hidden}}" />
+
+      <DockPanel>
+        <!-- Top bar: connection / GAME (change) / profile (change) ... e-mail (exit). -->
+        <Border DockPanel.Dock="Top" Padding="22,14" BorderThickness="0,0,0,1" BorderBrush="#1FF9EAEE"
+                Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+          <DockPanel LastChildFill="False">
+            <Border DockPanel.Dock="Left" Padding="10,4" CornerRadius="12" Background="#26F9EAEE" VerticalAlignment="Center">
+              <StackPanel Orientation="Horizontal">
+                <Ellipse Width="8" Height="8" VerticalAlignment="Center">
+                  <Ellipse.Style>
+                    <Style TargetType="Ellipse">
+                      <Setter Property="Fill" Value="{StaticResource InfinityFaint}" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Online}" Value="True">
+                          <Setter Property="Fill" Value="{StaticResource InfinityAccent}" />
+                          <Setter Property="Effect" Value="{StaticResource InfinityGlow}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Ellipse.Style>
+                </Ellipse>
+                <TextBlock Text="{Binding Connection}" Margin="8,0,0,0" FontSize="11" FontWeight="Bold"
+                           Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" />
+              </StackPanel>
+            </Border>
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center"
+                        IsEnabled="{Binding CanChangeIdentity}"
+                        Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+              <TextBlock Text="{Binding GameLabel}" FontWeight="Bold" VerticalAlignment="Center" />
+              <Button Content="{Binding S[shell.change]}" Style="{StaticResource LinkButton}" Click="OnChangeGame" />
+              <TextBlock Text="/" Margin="10,0" Foreground="{StaticResource InfinityFaint}" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding ProfileLabel}" FontWeight="Bold" VerticalAlignment="Center" />
+              <Button Content="{Binding S[shell.change]}" Style="{StaticResource LinkButton}" Click="OnChangeProfile" />
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+                        IsEnabled="{Binding CanChangeIdentity}"
+                        Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+              <TextBlock Text="{Binding Email}" MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding Email}"
+                         VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
+              <Button Content="{Binding S[shell.exit]}" Style="{StaticResource LinkButton}" Click="OnSignOut" />
+            </StackPanel>
+          </DockPanel>
+        </Border>
+
+        <!-- Status line. -->
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding Message}" Margin="40,0,40,18" TextWrapping="Wrap"
+                   Foreground="{StaticResource InfinityMuted}" />
+
+        <!-- Content: one panel per step of sign-in -> game -> profile. -->
+        <Grid Margin="40,28,40,16">
+          <!-- A quiet first screen: the brand and one clear entrance. -->
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="520"
+                      Visibility="{Binding ShowWelcome, Converter={StaticResource Visible}}">
+            <Image Source="{StaticResource BrandLogo}" Width="480" RenderOptions.BitmapScalingMode="HighQuality" />
+            <Border HorizontalAlignment="Center" Margin="0,20,0,32" Padding="12,4" CornerRadius="4"
+                    Background="{StaticResource InfinityWarnSurface}" BorderBrush="{StaticResource InfinityGold}" BorderThickness="1">
+              <TextBlock Text="BETA" FontSize="11" FontWeight="Bold" Foreground="{StaticResource InfinityGold}" />
+            </Border>
+            <Button Content="{Binding S[welcome.sign_in]}" Click="OnOpenSignIn" Style="{StaticResource PlayButton}"
+                    HorizontalAlignment="Center" />
+          </StackPanel>
+          <!-- OD-74: native sign-in; the confirmation step owns its temporary credentials. -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowSignIn, Converter={StaticResource Visible}}">
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
+            <Border Style="{StaticResource Card}" Padding="28,24">
+              <StackPanel>
+                <Button Content="{Binding S[welcome.back]}" Click="OnWelcome" Style="{StaticResource LinkButton}"
+                        HorizontalAlignment="Left" Margin="-6,0,0,14" IsEnabled="{Binding Idle}" />
+                <TextBlock Text="{Binding S[signin.title]}" Style="{StaticResource PageTitle}" FontSize="24" />
+                <TextBlock Text="{Binding S[native.subtitle]}" Margin="0,6,0,20" Style="{StaticResource PageSubtitle}" />
+                <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Hidden}}">
+                  <TextBlock Text="{Binding S[native.email]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBox x:Name="EmailBox" Text="{Binding LoginEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" IsEnabled="{Binding Idle}" />
+                  <TextBlock Text="{Binding S[native.password]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  <PasswordBox x:Name="PasswordBox" Margin="0,6,0,4" IsEnabled="{Binding Idle}" KeyDown="OnPasswordKey" IsVisibleChanged="OnPasswordVisibility" />
+                  <Button Content="{Binding S[native.forgot]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,0,0,16" Click="OnForgot" IsEnabled="{Binding Idle}" />
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Button Content="{Binding S[native.sign_in]}" Click="OnNativeSignIn" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
+                    <Button Grid.Column="2" Content="{Binding S[native.sign_up]}" Click="OnNativeSignUp" IsEnabled="{Binding Idle}" />
+                  </Grid>
+                </StackPanel>
+                <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[native.check_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
+                  <TextBlock Text="{Binding VerificationText}" Style="{StaticResource PageSubtitle}" Margin="0,0,0,18" />
+                  <Button Content="{Binding S[native.confirmed]}" Click="OnConfirmed" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
+                  <Button Content="{Binding S[native.resend]}" Margin="0,12,0,0" Click="OnResend" IsEnabled="{Binding Idle}" />
+                  <Button Content="{Binding S[native.change_login]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,12,0,0" Click="OnCancelVerification" IsEnabled="{Binding Idle}" />
+                </StackPanel>
+                <Button Content="{Binding S[signin.cancel]}" HorizontalAlignment="Left" Margin="0,10,0,0"
+                        Click="OnCancelSignIn" Visibility="{Binding Busy, Converter={StaticResource Visible}}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+          </ScrollViewer>
+
+          <!-- New account: the first profile's name. -->
+          <Border Style="{StaticResource Card}" VerticalAlignment="Center" HorizontalAlignment="Center" Width="460" Padding="28,24"
+                  Visibility="{Binding ShowNeedsAccount, Converter={StaticResource Visible}}">
+            <StackPanel>
+              <TextBlock Text="{Binding S[signin.title]}" Style="{StaticResource PageTitle}" FontSize="24" />
+              <TextBlock Text="{Binding NeedsAccountText}" Margin="0,8,0,18" Style="{StaticResource PageSubtitle}" />
+              <TextBlock Text="{Binding S[signin.form_name]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+              <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" Margin="0,6,0,4" />
+              <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
+              <Button Content="{Binding S[signin.create]}" Margin="0,18,0,0" HorizontalAlignment="Left" Padding="28,9"
+                      Click="OnCreateAccount" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
+            </StackPanel>
+          </Border>
+
+          <!-- Account self-service: explicit typed confirmation and a fresh password proof. -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowAccount, Converter={StaticResource Visible}}">
+            <StackPanel MaxWidth="560" HorizontalAlignment="Center" Margin="24">
+              <TextBlock Text="{Binding S[nav.account]}" Style="{StaticResource PageTitle}" />
+              <Border Style="{StaticResource Card}" Padding="24" Margin="0,18,0,0">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[account.delete_title]}" FontSize="20" FontWeight="SemiBold" />
+                  <StackPanel Visibility="{Binding HasDeletionPending, Converter={StaticResource Hidden}}" IsEnabled="{Binding Idle}">
+                    <TextBlock Text="{Binding S[account.delete_body]}" Style="{StaticResource PageSubtitle}" Margin="0,12,0,18" />
+                    <TextBlock Text="{Binding S[native.email]}" />
+                    <TextBox Text="{Binding DeletionEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" />
+                    <TextBlock Text="{Binding DeletionHint}" TextWrapping="Wrap" />
+                    <TextBox Text="{Binding DeletionConfirmation, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" />
+                    <TextBlock Text="{Binding S[account.delete_password]}" />
+                    <PasswordBox x:Name="DeletionPasswordBox" Margin="0,6,0,18" IsVisibleChanged="OnPasswordVisibility" />
+                    <Button Content="{Binding S[account.delete_submit]}" Click="OnRequestDeletion" IsEnabled="{Binding CanRequestDeletion}" HorizontalAlignment="Left" />
+                  </StackPanel>
+                  <StackPanel Visibility="{Binding HasDeletionPending, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding DeletionPendingText}" Style="{StaticResource PageSubtitle}" Margin="0,12,0,18" />
+                    <Button Content="{Binding S[account.delete_cancel]}" Click="OnCancelDeletion" IsEnabled="{Binding CanChangeIdentity}" HorizontalAlignment="Left" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- Choose a game. -->
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="460"
+                      Visibility="{Binding ShowPickGame, Converter={StaticResource Visible}}">
+            <TextBlock Text="{Binding S[shell.pick_game]}" Style="{StaticResource PageTitle}" Margin="0,0,0,18" />
+            <ItemsControl ItemsSource="{Binding Games}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Content="{Binding Title}" Margin="0,5" Padding="20,16" FontSize="16" FontWeight="Bold"
+                          HorizontalContentAlignment="Left" IsEnabled="{Binding Accepting}" Click="OnChooseGame" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+
+          <!-- Choose a profile (from the server) or create one. -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowPickProfile, Converter={StaticResource Visible}}">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500" Margin="0,8">
+              <TextBlock Text="{Binding S[shell.pick_profile]}" Style="{StaticResource PageTitle}" />
+              <TextBlock Text="{Binding ProfilesText}" Margin="0,8,0,14" Style="{StaticResource PageSubtitle}" />
+              <ItemsControl ItemsSource="{Binding ProfileRows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,5">
+                      <Button Padding="20,14" HorizontalContentAlignment="Left" Click="OnChooseProfile">
+                        <StackPanel Margin="0,0,120,0">
+                          <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="16" />
+                          <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Button>
+                      <Button Content="{Binding DataContext.S[detail.convert], RelativeSource={RelativeSource AncestorType=Window}}"
+                              Style="{StaticResource LinkButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"
+                              Click="OnConvertProfile" Visibility="{Binding Hardcore, Converter={StaticResource Visible}}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[profiles.new]}" Style="{StaticResource SectionTag}" FontSize="12" />
+                  <DockPanel Margin="0,10,0,0">
+                    <Button DockPanel.Dock="Right" Content="{Binding S[profiles.add]}" Margin="10,0,0,0"
+                            Click="OnCreateProfile" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
+                    <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="11" Margin="0,6,0,0" Foreground="{StaticResource InfinityFaint}" />
+                  <!-- OD-52, OD-60: Hardcore (an Infinity Supporter's, a new career the game seeds) or Noob (the offline save). -->
+                  <StackPanel Margin="0,14,0,0" Visibility="{Binding CanChooseHardcore, Converter={StaticResource Visible}}">
+                    <RadioButton Content="{Binding S[signin.form_hardcore]}" IsChecked="{Binding NewHardcore}" GroupName="NewMode" FontWeight="Bold" />
+                    <TextBlock Text="{Binding S[modes.hardcore_hint]}" FontSize="11" Margin="30,2,0,10" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
+                    <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding S[modes.free_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
+                             Visibility="{Binding CanChooseHardcore, Converter={StaticResource Hidden}}" />
+                </StackPanel>
+              </Border>
+              <!-- OD-52: Hardcore → Noob, what is deleted for good, then the confirmation. -->
+              <Border Margin="0,16,0,0" Padding="18,16" CornerRadius="12" Background="{StaticResource InfinityDangerSurface}"
+                      BorderBrush="{StaticResource InfinityDangerBorder}" BorderThickness="1"
+                      Visibility="{Binding ShowConvert, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding ConvertTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding S[modes.convert_body]}" Margin="0,6,0,6" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding ConvertDeletes}" Margin="8,0,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}" />
+                  <TextBlock Text="{Binding S[modes.convert_keeps]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                  <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                    <Button Content="{Binding S[modes.convert_confirm]}" Click="OnConfirmConvert" IsEnabled="{Binding Idle}"
+                            BorderBrush="{StaticResource InfinityDangerBorder}" />
+                    <Button Content="{Binding S[modes.convert_cancel]}" Margin="10,0,0,0" Click="OnCancelConvert"
+                            Style="{StaticResource AccentButtonStyle}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- PLAY: admission happens here; the game starts only with a verified active ticket. -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}">
+            <StackPanel MaxWidth="600" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,8,0,8">
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                <TextBlock Text="{Binding S[play.online]}" Style="{StaticResource SectionTag}" VerticalAlignment="Center" />
+                <Border Margin="12,0,0,0" Padding="8,2" CornerRadius="4" Background="{StaticResource InfinityWarnSurface}">
+                  <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />
+                </Border>
+              </StackPanel>
+              <Image Source="{StaticResource BrandLogo}" Width="340" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality"
+                     Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}" />
+              <TextBlock Text="{Binding S[brand.tagline]}" Margin="0,12,0,20" Style="{StaticResource PageSubtitle}"
+                         Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}" />
+              <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <WrapPanel>
+                  <Button Content="{Binding S[profiles.play]}" HorizontalAlignment="Left" Click="OnPlay" IsEnabled="{Binding CanPlay}"
+                          Style="{StaticResource PlayButton}" Margin="0,0,12,8" />
+                  <Button Content="{Binding S[play.prepare]}" Click="OnNavSetup" VerticalAlignment="Center" Margin="0,0,0,8"
+                          Visibility="{Binding SetupNeeded, Converter={StaticResource Visible}}" />
+                </WrapPanel>
+                <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" FontWeight="Bold"
+                           AutomationProperties.LiveSetting="Polite" />
+              </StackPanel>
+              <Border Style="{StaticResource Card}" Background="#EE170B22" BorderBrush="#775A184D" Margin="0,2,0,0"
+                      Visibility="{Binding WaitingForAdmission, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding AdmissionTitle}" FontWeight="Bold" FontSize="22" TextWrapping="Wrap"
+                             AutomationProperties.LiveSetting="Polite" />
+                  <TextBlock Text="{Binding AdmissionDetail}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource InfinityMuted}" />
+                  <Grid Margin="0,18,0,12" Visibility="{Binding Queued, Converter={StaticResource Visible}}">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,26,0">
+                      <TextBlock Text="{Binding S[queue.your_position]}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                      <TextBlock Text="{Binding QueueNumber}" FontSize="48" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                                 AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding QueueEstimate}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding QueueAhead}" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,0" />
+                    </StackPanel>
+                  </Grid>
+                  <ProgressBar Height="3" IsIndeterminate="True" Margin="0,16,0,16" Foreground="{StaticResource InfinityAccent}"
+                               AutomationProperties.Name="{Binding AdmissionTitle}" />
+                  <TextBlock Text="{Binding S[queue.keep_open]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding S[queue.priority_hint]}" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"
+                             Foreground="{StaticResource InfinityMuted}" Visibility="{Binding ShowPriorityHint, Converter={StaticResource Visible}}" />
+                  <Button Content="{Binding LeaveQueueLabel}" Click="OnLeaveQueue" HorizontalAlignment="Left" Margin="0,18,0,0"
+                          IsEnabled="{Binding CanLeaveQueue}" />
+                </StackPanel>
+              </Border>
+              <TextBlock Text="{Binding HookLine}" Margin="0,8,0,0" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+              <WrapPanel Margin="0,14,0,0" Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
+                <Button Content="{Binding S[supervisor.quit_button]}" Margin="0,0,14,0" Click="OnQuitGame"
+                        Visibility="{Binding GameStarted, Converter={StaticResource Visible}}" />
+                <Button Content="{Binding S[saves.use_pc_save]}" Style="{StaticResource LinkButton}" Margin="0"
+                        Click="OnOpenSavePicker" IsEnabled="{Binding CanPickSave}" />
+              </WrapPanel>
+            </StackPanel>
+          </ScrollViewer>
+
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowBugReport, Converter={StaticResource Visible}}">
+            <StackPanel MaxWidth="740" HorizontalAlignment="Left">
+              <TextBlock Text="{Binding S[bugs.eyebrow]}" Style="{StaticResource SectionTag}" />
+              <TextBlock Text="{Binding S[bugs.title]}" Style="{StaticResource PageTitle}" Margin="0,8,0,0" />
+              <TextBlock Text="{Binding S[bugs.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,24" />
+              <Border Style="{StaticResource Card}">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[bugs.step1]}" FontWeight="Bold" FontSize="16" />
+                  <TextBlock Text="{Binding S[bugs.step1_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
+                  <TextBlock Text="{Binding S[bugs.step2]}" FontWeight="Bold" FontSize="16" />
+                  <TextBlock Text="{Binding S[bugs.step2_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
+                  <TextBlock Text="{Binding S[bugs.step3]}" FontWeight="Bold" FontSize="16" />
+                  <TextBlock Text="{Binding S[bugs.step3_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
+                  <TextBlock Text="{Binding VersionLabel}" FontSize="12" Foreground="{StaticResource InfinityGold}" />
+                  <Button Content="{Binding S[bugs.open]}" Click="OnGitHubIssues" Style="{StaticResource AccentButtonStyle}"
+                          HorizontalAlignment="Left" Margin="0,18,0,0" />
+                  <TextBlock Text="github.com/anarqz/InfinityHorizon" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,10,0,0" />
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- OD-46: Azimuth setup. A check per step, then how to get the compatible Azimuth. -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowSetup, Converter={StaticResource Visible}}">
+            <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+              <TextBlock Text="{Binding S[setup.title]}" Style="{StaticResource PageTitle}" />
+              <TextBlock Text="{Binding S[setup.subtitle]}" Margin="0,6,0,18" Style="{StaticResource PageSubtitle}" />
+
+              <Border Style="{StaticResource Card}">
+                <StackPanel>
+                  <TextBlock Text="{Binding SetupSummary}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" Margin="0,0,0,12" />
+                  <DockPanel Margin="0,4">
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding AzimuthFound, Converter={StaticResource Visible}}" />
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding AzimuthFound, Converter={StaticResource Hidden}}" />
+                    <TextBlock Text="{Binding SetupFoundLine}" TextWrapping="Wrap" />
+                  </DockPanel>
+                  <DockPanel Margin="0,4">
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding AzimuthVersionOk, Converter={StaticResource Visible}}" />
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding AzimuthVersionOk, Converter={StaticResource Hidden}}" />
+                    <TextBlock Text="{Binding SetupVersionLine}" TextWrapping="Wrap" />
+                  </DockPanel>
+                  <DockPanel Margin="0,4">
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding HookOk, Converter={StaticResource Visible}}" />
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding HookOk, Converter={StaticResource Hidden}}" />
+                    <TextBlock Text="{Binding SetupHookLine}" TextWrapping="Wrap" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding HookPackageProblem}" Margin="24,4,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding HasHookPackageProblem, Converter={StaticResource Visible}}" />
+                  <WrapPanel Margin="0,16,0,0">
+                    <Button Content="{Binding HookInstallLabel}" Margin="0,0,10,0" Click="OnInstallHook"
+                            Style="{StaticResource AccentButtonStyle}" Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}" />
+                    <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" />
+                    <Button Content="{Binding S[setup.recheck]}" Margin="10,0,0,0" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+
+              <TextBlock Text="{Binding S[setup.how_title]}" FontSize="18" FontWeight="Bold" Margin="0,26,0,10" />
+              <Border Style="{StaticResource Card}">
+                <StackPanel>
+                  <TextBlock Text="{Binding SetupStep1}" TextWrapping="Wrap" />
+                  <Button Content="{Binding S[setup.open_page]}" HorizontalAlignment="Left" Margin="24,10,0,0" Click="OnOpenAzimuthPage" />
+                  <TextBlock Text="{Binding AzimuthPage}" Margin="24,6,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
+                  <TextBlock Text="{Binding S[setup.step2]}" TextWrapping="Wrap" Margin="0,16,0,0" />
+                  <TextBlock Text="{Binding SetupStep3}" TextWrapping="Wrap" Margin="0,16,0,0" />
+                  <TextBlock Text="{Binding S[setup.step4]}" TextWrapping="Wrap" Margin="0,16,0,0" />
+                  <TextBlock Text="{Binding S[setup.disclaimer]}" TextWrapping="Wrap" Margin="0,16,0,0" FontSize="11"
+                             Foreground="{StaticResource InfinityFaint}" />
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- OD-45: Mods. Center: the catalog's mods (on/off, integrity by MD5, update, credits and link).
+               Right: the mod's options, a sidebar opened from the card. -->
+          <Grid Visibility="{Binding ShowMods, Converter={StaticResource Visible}}">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+              <StackPanel MaxWidth="780" HorizontalAlignment="Left" Margin="0,0,18,0">
+                <TextBlock Text="{Binding S[mods.title]}" Style="{StaticResource PageTitle}" />
+                <TextBlock Text="{Binding S[mods.subtitle]}" Margin="0,6,0,18" Style="{StaticResource PageSubtitle}" />
+
+                <Border Style="{StaticResource Card}" Padding="22">
+                  <StackPanel>
+                    <DockPanel>
+                      <CheckBox DockPanel.Dock="Right" Content="{Binding S[mods.enabled]}" IsChecked="{Binding EoEnabled}"
+                                IsEnabled="{Binding CanToggleEo}" VerticalAlignment="Center" FontWeight="Bold" />
+                      <StackPanel>
+                        <TextBlock Text="{Binding Eo.Name}" FontSize="20" FontWeight="Bold" />
+                        <TextBlock Text="{Binding EoStatus}" Margin="0,2,0,0" Style="{StaticResource PageSubtitle}" />
+                      </StackPanel>
+                    </DockPanel>
+
+                    <!-- Integrity: official build by MD5, or a warning. -->
+                    <Border Margin="0,14,0,0" Padding="12,7" CornerRadius="8" Background="{StaticResource InfinityGoodSurface}"
+                            Visibility="{Binding EoOfficial, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding EoIntegrity}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGood}" FontSize="12" />
+                    </Border>
+                    <Border Margin="0,14,0,0" Padding="12,7" CornerRadius="8" Background="{StaticResource InfinityWarnSurface}"
+                            Visibility="{Binding EoWarning, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding EoIntegrity}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" FontSize="12" />
+                    </Border>
+                    <TextBlock Text="{Binding EoAzimuthText}" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding EoAzimuthMismatch, Converter={StaticResource Visible}}" />
+
+                    <DockPanel Margin="0,14,0,0">
+                      <Button DockPanel.Dock="Right" Content="{Binding EoInstallLabel}" Margin="10,0,0,0" Click="OnInstallEo"
+                              Visibility="{Binding CanInstallEo, Converter={StaticResource Visible}}" Style="{StaticResource AccentButtonStyle}" />
+                      <Button DockPanel.Dock="Right" Content="{Binding S[mods.check]}" Click="OnCheckMods" IsEnabled="{Binding Idle}" />
+                      <Button DockPanel.Dock="Right" Content="{Binding S[mods.options]}" Margin="0,0,10,0" Click="OnToggleModOptions"
+                              IsEnabled="{Binding HasIni}" />
+                      <TextBlock Text="{Binding EoUpdateText}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    </DockPanel>
+
+                    <!-- Credits and the official repository, under the mod (owner's request). -->
+                    <TextBlock Margin="0,16,0,0" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap">
+                      <Run Text="{Binding EoCredits, Mode=OneWay}" />
+                      <Run Text=" · " />
+                      <Hyperlink NavigateUri="{Binding EoRepository}" RequestNavigate="OnOpenLink">
+                        <Run Text="{Binding EoRepository, Mode=OneWay}" />
+                      </Hyperlink>
+                    </TextBlock>
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+
+            <!-- The options sidebar: the INI as a form; Save and Undo stay at the bottom. -->
+            <Border Grid.Column="1" Width="440" Margin="0,-28,-40,-16" Padding="22,22,8,16" Background="{StaticResource InfinitySurface}"
+                    BorderBrush="#3365184D" BorderThickness="1,0,0,0"
+                    Visibility="{Binding ShowModOptions, Converter={StaticResource Visible}}">
+              <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,12,0">
+                  <Button DockPanel.Dock="Right" Content="{Binding S[mods.options_close]}" Style="{StaticResource LinkButton}"
+                          Click="OnToggleModOptions" VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding S[mods.options_title]}" FontSize="20" FontWeight="Bold" />
+                </DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="{Binding Eo.Name}" Style="{StaticResource PageSubtitle}" Margin="0,2,12,0" />
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                  <Button Content="{Binding S[mods.save_options]}" Click="OnSaveIni" IsEnabled="{Binding IniDirty}"
+                          Style="{StaticResource AccentButtonStyle}" />
+                  <Button Content="{Binding S[mods.revert_options]}" Margin="10,0,0,0" Click="OnRevertIni" IsEnabled="{Binding IniDirty}" />
+                </StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                  <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="{Binding S[mods.options_hint]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                    <ItemsControl ItemsSource="{Binding IniGroups}" Margin="0,8,0,0">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Border CornerRadius="10" Padding="16,12" Margin="0,6" Background="{StaticResource InfinitySurfaceHigh}">
+                            <StackPanel>
+                              <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{StaticResource InfinityPink}" />
+                              <TextBlock Text="{Binding Warning}" FontSize="11" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                         Visibility="{Binding HasWarning, Converter={StaticResource Visible}}" />
+                              <ItemsControl ItemsSource="{Binding Options}">
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate>
+                                    <CheckBox IsChecked="{Binding Value}" Margin="0,10,0,0" IsEnabled="{Binding Editable}">
+                                      <StackPanel>
+                                        <TextBlock Text="{Binding Label}" />
+                                        <TextBlock Text="{Binding Help}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" MaxWidth="330" />
+                                      </StackPanel>
+                                    </CheckBox>
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
+          </Grid>
+
+          <!-- OD-41: start the profile from one of Azimuth's own saves on this PC (backed up, then cloned). -->
+          <DockPanel MaxWidth="580" HorizontalAlignment="Center" VerticalAlignment="Center"
+                     Visibility="{Binding ShowPickSave, Converter={StaticResource Visible}}">
+            <StackPanel DockPanel.Dock="Top">
+              <TextBlock Text="{Binding S[saves.pick_title]}" Style="{StaticResource PageTitle}" />
+              <TextBlock Text="{Binding PickSaveText}" Margin="0,8,0,16" Style="{StaticResource PageSubtitle}" />
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+              <Button Margin="0,5" Padding="20,14" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                      Click="OnSkipSave" IsEnabled="{Binding Idle}">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[saves.new_career]}" FontWeight="Bold" />
+                  <TextBlock Text="{Binding S[saves.new_career_detail]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Button>
+              <TextBlock Text="{Binding S[saves.backup_note]}" Margin="0,8,0,0" FontSize="11" TextWrapping="Wrap"
+                         Foreground="{StaticResource InfinityFaint}" />
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="320">
+              <ItemsControl ItemsSource="{Binding SaveChoices}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Margin="0,5" Padding="20,14" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Click="OnPickSave" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
+                      <StackPanel>
+                        <TextBlock Text="{Binding Title}" FontWeight="Bold" />
+                        <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                      </StackPanel>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </DockPanel>
+        </Grid>
+      </DockPanel>
+    </Grid>
+    <Border Grid.Row="1" Grid.ColumnSpan="2" Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}"
+            BorderThickness="0,1,0,0" Padding="24,12">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="{Binding S[legal.about]}" Click="OnAbout" Margin="16,0,0,0" Padding="10,4" />
+        <Border DockPanel.Dock="Left" Padding="9,4" Margin="0,0,16,0" VerticalAlignment="Center" CornerRadius="4"
+                Background="{StaticResource InfinityWarnSurface}">
+          <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />
+        </Border>
+        <TextBlock Text="{Binding S[beta.notice]}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
+                   Foreground="{StaticResource InfinityMuted}" />
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>

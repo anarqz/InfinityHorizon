@@ -1,0 +1,18 @@
+* text=auto eol=lf
+native/hook/src/** text eol=crlf
+*.def text eol=crlf
+*.ps1 text eol=crlf
+*.py text eol=lf
+*.cs text eol=lf
+*.xaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.ttf binary
+*.wav binary
+
+# Preserve upstream notices and sources, including their original whitespace.
+native/overlay/third_party/** -whitespace
+src/Infinity.App/Assets/Fonts/*-LICENSE.txt -whitespace

@@ -35,3 +35,19 @@ attribution is a specified reasonable author attribution that must be preserved:
 This additional term applies to every copy of this program and to every work based on it. Under
 section 7 of the License, you must place this term, or a notice of where to find it, in the
 relevant source files of any work you convey that contains this program.
+
+
+THIRD-PARTY COMPONENTS
+
+Existing third-party copyright and permission notices remain applicable:
+- Hook infrastructure derived from Arthur (RokkuDayo)'s Forza Horizon 2 Extra Options;
+  GPL-3.0-or-later, with file-level attribution and details in native/hook/NOTICE.md.
+- The world protocol implementation follows the fh2-mods relay work by conner-mcvay and
+  contributors (https://github.com/conner-mcvay/fh2-mods); its MIT notice is preserved in
+  licenses/fh2-mods-LICENSE.txt. The intermediate Rust port is not distributed here.
+- BouncyCastle.Cryptography 2.6.2: licenses/BouncyCastle-LICENSE.md.
+- Dear ImGui 1.91.8 (MIT) and MinHook 1.3.3 (BSD notices): native/overlay/third_party/.
+- Selawik 1.01 (SIL OFL 1.1) and Fluent UI System Icons (MIT): native/overlay/third_party/fonts/.
+- TweetNaCl verification code in the hook is public domain.
+- The synthesized notification chime is original project material, GPL-3.0-or-later;
+  native/overlay/assets/README.md and tools/generate_chime.py record its source.

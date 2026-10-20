@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- No UI: pipe frames, ticket checks, supervisor, API, auth. The shell (Infinity.App) only
+       renders what this library decides (HANDOFF_WINDOWS.md §1). Windows-only code is marked
+       [SupportedOSPlatform("windows")]; the rest builds and tests anywhere. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Infinity.Core</RootNamespace>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Infinity.Core.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+<Project>
+  <!-- Shared by every project of Infinity.sln (OD-35, O-W1: WPF Fluent on .NET 10). -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <IsPackable>false</IsPackable>
+    <Version>0.1.0</Version>
+    <!-- CA1707: test names use underscores; CA1515/CA1716: public types are the API the tests use. -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1716</NoWarn>
+  </PropertyGroup>
+</Project>
