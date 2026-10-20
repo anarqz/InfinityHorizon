@@ -1,0 +1,37 @@
+Infinity Launcher
+Copyright (C) 2026 Alexandre Moraes and the Infinity Launcher contributors
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, version 3 of the License
+(see LICENSE), together with the additional term below.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+
+
+ADDITIONAL TERM UNDER SECTION 7(b) OF THE GNU GENERAL PUBLIC LICENSE VERSION 3
+
+As permitted by section 7(b) of the GNU General Public License version 3, the following author
+attribution is a specified reasonable author attribution that must be preserved:
+
+    Based on Infinity Launcher - https://github.com/anarqz/InfinityHorizon
+
+1. Any work that contains this program or any part of it, modified or not (including a fork, a
+   derivative work, or a work based on it), must preserve the attribution above, unaltered, in the
+   Appropriate Legal Notices it displays (as defined in section 0 of the License).
+
+2. Where such a work has an interactive user interface, those Appropriate Legal Notices, including
+   the attribution, must be shown in a convenient and prominently visible feature of that
+   interface, such as its start screen, main window or an "About" screen reachable from it, as
+   section 0 of the License requires.
+
+3. Where such a work has a public web page, store page or source repository front page that
+   describes it, that page should display the same attribution with the link.
+
+4. The attribution must not be removed, hidden, shortened or reworded, and must not be presented in
+   a way that suggests the authors of Infinity Launcher endorse the derived work.
+
+This additional term applies to every copy of this program and to every work based on it. Under
+section 7 of the License, you must place this term, or a notice of where to find it, in the
+relevant source files of any work you convey that contains this program.
