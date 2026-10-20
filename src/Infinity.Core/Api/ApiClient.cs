@@ -9,6 +9,7 @@ namespace Infinity.Core.Api;
 /// <summary>The stable error codes the launcher branches on (fi-protocol <c>ErrorCode</c>; parity-tested against errors.ts).</summary>
 public static class ErrorCodes
 {
+    public const string CrashDumpsDisabled = "CRASH.DUMPS_DISABLED";
     public const string AccountsFrozen = "ACCOUNTS.FROZEN";
     public const string RequestRateLimited = "REQUEST.RATE_LIMITED";
     public const string AuthTokenInvalid = "AUTH.TOKEN_INVALID";

@@ -82,22 +82,42 @@ public sealed class CrashIncidentStore(string stateDirectory)
     public CrashSubmission? Prepared(string id)
     {
         var folder = Folder(id); CheckDirectory(_root); CheckDirectory(folder);
-        var path = Path.Combine(folder, "submission.json"); var info = new FileInfo(path);
+        var current = Path.Combine(folder, "metadata-submission.json");
+        var path = File.Exists(current) ? current : Path.Combine(folder, "submission.json"); var info = new FileInfo(path);
         if (!info.Exists) return null;
         if (info.Length > MaxMetadataBytes || (info.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Invalid local submission");
         var draft = JsonSerializer.Deserialize<CrashSubmission>(File.ReadAllBytes(path), Json);
-        if (draft?.Request?.ReportId != id || !Guid.TryParseExact(draft.DumpKey, "D", out _)) throw new InvalidDataException("Invalid local submission");
+        if (!Guid.TryParseExact(draft?.Request?.ReportId, "D", out var reportId) || reportId == Guid.Empty)
+            throw new InvalidDataException("Invalid local submission");
         return draft;
     }
 
-    public void Prepare(CrashSubmission submission)
+    public void Prepare(CrashSubmission submission, string? incidentId = null)
     {
         ArgumentNullException.ThrowIfNull(submission);
-        var folder = Folder(submission.Request.ReportId); CheckDirectory(_root); CheckDirectory(folder);
+        if (!submission.IsCurrentMetadata) throw new InvalidDataException("Metadata-only consent is required");
+        var folder = Folder(incidentId ?? submission.Request.ReportId); CheckDirectory(_root); CheckDirectory(folder);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(submission, Json);
         if (bytes.Length > MaxMetadataBytes) throw new InvalidDataException("Submission size limit");
-        using var file = new FileStream(Path.Combine(folder, "submission.json"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        file.Write(bytes); file.Flush(true);
+        WriteNew(Path.Combine(folder, "metadata-submission.json"), bytes);
+    }
+
+    public string? SentReportId(string id)
+    {
+        var folder = Folder(id); CheckDirectory(_root); CheckDirectory(folder);
+        var path = Path.Combine(folder, "accepted-report.txt"); var info = new FileInfo(path);
+        if (!info.Exists) return null;
+        if (info.Length != 36 || (info.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Invalid local receipt");
+        var reportId = File.ReadAllText(path);
+        return Guid.TryParseExact(reportId, "D", out var parsed) && parsed != Guid.Empty ? reportId : throw new InvalidDataException("Invalid local receipt");
+    }
+
+    public void MarkSent(string incidentId, string reportId)
+    {
+        if (!Guid.TryParseExact(reportId, "D", out var parsed) || parsed == Guid.Empty) throw new InvalidDataException("Invalid report id");
+        var folder = Folder(incidentId); CheckDirectory(_root); CheckDirectory(folder);
+        if (SentReportId(incidentId) == reportId) return;
+        WriteNew(Path.Combine(folder, "accepted-report.txt"), System.Text.Encoding.ASCII.GetBytes(reportId));
     }
 
     public void Delete(string id)
@@ -105,7 +125,7 @@ public sealed class CrashIncidentStore(string stateDirectory)
         var folder = Folder(id);
         if (!Directory.Exists(folder)) return;
         CheckDirectory(_root); CheckDirectory(folder);
-        foreach (var name in new[] { "metadata.json", "crash.dmp", "submission.json" })
+        foreach (var name in new[] { "metadata.json", "crash.dmp", "submission.json", "metadata-submission.json", "accepted-report.txt" })
         {
             var path = Path.Combine(folder, name);
             if (File.Exists(path)) File.Delete(path);
@@ -117,6 +137,17 @@ public sealed class CrashIncidentStore(string stateDirectory)
     {
         foreach (var item in Directory.EnumerateDirectories(_root).Take(64).Select(p => new DirectoryInfo(p)).OrderByDescending(d => d.CreationTimeUtc).Select((d, i) => (d, i)).ToArray())
             if (Guid.TryParseExact(item.d.Name, "D", out _) && (item.i >= MaxIncidents || item.d.CreationTimeUtc < DateTime.UtcNow.AddDays(-7))) Delete(item.d.Name);
+    }
+
+    private static void WriteNew(string path, byte[] bytes)
+    {
+        var created = false;
+        try
+        {
+            using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            created = true; file.Write(bytes); file.Flush(true);
+        }
+        catch { if (created) File.Delete(path); throw; }
     }
 
     private static void CheckDirectory(string path)

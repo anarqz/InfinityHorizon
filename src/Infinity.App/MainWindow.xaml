@@ -325,6 +325,7 @@
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
                 <TextBlock Text="{Binding S[play.public_warning]}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <WrapPanel>
@@ -377,6 +378,7 @@
             <StackPanel MaxWidth="700" HorizontalAlignment="Left">
               <TextBlock Text="{Binding S[crash.title]}" Style="{StaticResource PageTitle}" />
               <TextBlock Text="{Binding S[crash.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,20" />
+              <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,20" />
               <Border Style="{StaticResource Card}">
                 <StackPanel>
                   <TextBlock Text="{Binding CrashCode}" FontWeight="Bold" FontSize="20" />
@@ -386,15 +388,27 @@
                   <TextBlock Text="{Binding CrashContextNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding S[crash.blame_unknown]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,0,0,16" />
                   <TextBlock Text="{Binding S[crash.metadata_privacy]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
-                  <CheckBox Content="{Binding S[crash.metadata_consent]}" IsChecked="{Binding CrashConsent}" IsEnabled="{Binding CrashIdle}" Margin="0,12,0,8" />
-                  <CheckBox Content="{Binding S[crash.dump_consent]}" IsChecked="{Binding CrashDumpConsent}" IsEnabled="{Binding CanChooseCrashDump}" />
-                  <TextBlock Text="{Binding CrashDumpNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="12" Margin="0,6,0,14" />
+                  <TextBlock Text="{Binding CrashMigrationNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,8,0,0" />
+                  <CheckBox IsChecked="{Binding CrashConsent}" IsEnabled="{Binding CanConsentCrash}" Margin="0,12,0,8">
+                    <TextBlock Text="{Binding S[crash.metadata_consent]}" TextWrapping="Wrap" MaxWidth="520" />
+                  </CheckBox>
+                  <TextBlock Text="{Binding S[crash.dumps_disabled]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="12" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding CrashStatus}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" AutomationProperties.LiveSetting="Polite" />
                   <WrapPanel Margin="0,16,0,0">
                     <Button Content="{Binding S[crash.send]}" Click="OnSendCrash" IsEnabled="{Binding CanSendCrash}" Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[crash.copy]}" Click="OnCopyCrash" IsEnabled="{Binding CanExportCrash}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[crash.save_report]}" Click="OnSaveCrashReport" IsEnabled="{Binding CanExportCrash}" Margin="0,0,8,8" />
                     <Button Content="{Binding S[crash.later]}" Click="OnLaterCrash" IsEnabled="{Binding CrashIdle}" Margin="0,0,8,8" />
                     <Button Content="{Binding S[crash.discard]}" Click="OnDiscardCrash" IsEnabled="{Binding CrashIdle}" Margin="0,0,0,8" />
                   </WrapPanel>
+                  <TextBlock Text="{Binding S[crash.manual_support]}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,16,0,6" />
+                  <TextBlock Text="{Binding CrashSupportNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,8" />
+                  <Button Content="{Binding S[crash.private_support]}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" HorizontalAlignment="Left" Margin="0,0,0,12" />
+                  <TextBlock Text="{Binding CrashDumpNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="12" Margin="0,0,0,8" />
+                  <CheckBox IsChecked="{Binding CrashManualDumpConsent}" IsEnabled="{Binding CanChooseManualCrashDump}" Margin="0,0,0,8">
+                    <TextBlock Text="{Binding S[crash.manual_dump_consent]}" TextWrapping="Wrap" MaxWidth="520" />
+                  </CheckBox>
+                  <Button Content="{Binding S[crash.save_dump]}" Click="OnSaveCrashDump" IsEnabled="{Binding CanSaveCrashDump}" HorizontalAlignment="Left" />
                 </StackPanel>
               </Border>
             </StackPanel>
