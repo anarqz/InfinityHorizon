@@ -80,7 +80,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && SetupStatus == AzimuthStatus.Ready;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready;
 
     public string? PlayStatus => _playStatus;
 

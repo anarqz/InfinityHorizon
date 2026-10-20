@@ -207,6 +207,45 @@ public partial class MainWindow : Window
     private void OnDiscardCrash(object sender, RoutedEventArgs e) => _vm.DiscardCrash();
     private async void OnSendCrash(object sender, RoutedEventArgs e) => await _vm.SendCrashAsync();
 
+    private void OnCopyCrash(object sender, RoutedEventArgs e)
+    {
+        if (_vm.CopyableCrashReport() is not { } report) return;
+        try { Clipboard.SetText(report); _vm.CrashExportResult(true); }
+        catch (System.Runtime.InteropServices.ExternalException) { _vm.CrashExportResult(false); }
+    }
+
+    private void OnSaveCrashReport(object sender, RoutedEventArgs e)
+    {
+        if (_vm.CopyableCrashReport() is not { } report) return;
+        var dialog = new Microsoft.Win32.SaveFileDialog { FileName = "infinity-crash-report.json", DefaultExt = ".json", Filter = "JSON (*.json)|*.json", OverwritePrompt = true };
+        if (dialog.ShowDialog(this) != true) return;
+        try { File.WriteAllText(dialog.FileName, report, new System.Text.UTF8Encoding(false)); _vm.CrashExportResult(true); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { _vm.CrashExportResult(false); }
+    }
+
+    private void OnPrivateCrashSupport(object sender, RoutedEventArgs e)
+    {
+        if (_vm.CrashPrivateSupportUrl is { } url) OpenCommunityLink(url.AbsoluteUri);
+    }
+
+    private async void OnSaveCrashDump(object sender, RoutedEventArgs e)
+    {
+        if (_vm.BeginManualCrashDumpExport() is not { } operation) return;
+        bool? success = null;
+        try
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog { FileName = "infinity-private-crash.dmp", DefaultExt = ".dmp", Filter = "Memory dump (*.dmp)|*.dmp", OverwritePrompt = true };
+            if (dialog.ShowDialog(this) != true || !_vm.IsCurrentCrashExport(operation)) return;
+            success = false;
+            var bytes = await _vm.ReadCrashDumpForManualExportAsync(operation);
+            if (bytes is null) return;
+            await File.WriteAllBytesAsync(dialog.FileName, bytes, operation.Stop.Token);
+            success = true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or OperationCanceledException) { success = false; }
+        finally { _vm.FinishManualCrashDumpExport(operation, success); }
+    }
+
     // Only the catalog's https links are opened (the mods' official repositories).
     private void OnOpenLink(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
     {
