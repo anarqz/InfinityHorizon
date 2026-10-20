@@ -210,6 +210,7 @@ public sealed partial class ShellViewModel
             _hook = _install is null ? null : new InstalledHook(HookKind.Unknown, null, null, HookSigner.None);
             Log("hook: " + e.Message);
         }
+        Changed(nameof(ShowBuildOriginWarning));
         // every check, once per change: what is next to the launcher, what is installed, and the decision
         var line = $"hook: check: devServer={DevServer} devKey={(DevHookKey is null ? "none" : "set")} " +
             $"package={(_hookPackage is { } p ? $"{p.Version} {p.Signer} {p.Sha256[..16]}… at {p.Path}" : _hookPackageError ?? "none at " + Path.Combine(AppContext.BaseDirectory, "hook"))} " +

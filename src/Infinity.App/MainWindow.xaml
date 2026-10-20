@@ -14,6 +14,7 @@
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="{Binding SidebarWidth}" />
@@ -589,7 +590,19 @@
         </Grid>
       </DockPanel>
     </Grid>
-    <Border Grid.Row="1" Grid.ColumnSpan="2" Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}"
+    <Border Grid.Row="1" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}"
+            BorderBrush="{StaticResource InfinityGold}" BorderThickness="0,1,0,0" Padding="20,10"
+            Visibility="{Binding ShowBuildOriginWarning, Converter={StaticResource Visible}}">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="{Binding S[build_origin.releases]}" Click="OnOfficialReleases"
+                VerticalAlignment="Center" Margin="18,0,0,0" Padding="12,6" />
+        <StackPanel VerticalAlignment="Center">
+          <TextBlock Text="{Binding S[build_origin.title]}" FontWeight="Bold" FontSize="12" Foreground="{StaticResource InfinityGold}" />
+          <TextBlock Text="{Binding S[build_origin.warning]}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}"
             BorderThickness="0,1,0,0" Padding="24,12">
       <DockPanel>
         <Button DockPanel.Dock="Right" Content="{Binding S[legal.about]}" Click="OnAbout" Margin="16,0,0,0" Padding="10,4" />

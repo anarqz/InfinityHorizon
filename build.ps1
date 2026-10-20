@@ -13,7 +13,7 @@ $out = Join-Path $root 'artifacts/win-x64'
 New-Item -ItemType Directory -Force $out, "$out/hook", "$out/overlay", "$out/licenses" | Out-Null
 
 # An existing signature must never survive a rebuild, including a switch to production mode.
-foreach ($file in @("$out/hook/infinity.dll.sig", "$out/overlay/infinity-overlay.dll.sig", "$out/development-key.txt")) {
+foreach ($file in @("$out/infinity.exe.sig", "$out/hook/infinity.dll.sig", "$out/overlay/infinity-overlay.dll.sig", "$out/development-key.txt", "$out/SHA256SUMS", "$out/SHA256SUMS.sig")) {
     if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
 }
 
@@ -31,6 +31,8 @@ if (!$Production) {
     & dotnet build "$root/tools/DevSign/DevSign.csproj" -c Release --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Development signer build failed' }
     $signer = "$root/tools/DevSign/bin/Release/net10.0/devsign.dll"
+    & dotnet $signer sign "$out/infinity.exe"
+    if ($LASTEXITCODE -ne 0) { throw 'Launcher development signing failed' }
     & dotnet $signer sign "$out/hook/infinity.dll"
     if ($LASTEXITCODE -ne 0) { throw 'Hook development signing failed' }
     & dotnet $signer sign "$out/overlay/infinity-overlay.dll"

@@ -34,10 +34,18 @@ Development signature trust is accepted only with development origins.
 The local signing seed stays in the user's LocalAppData, outside this checkout; the build stores
 only its public verification key in the output. Starting the launcher does not start a game.
 
-`build.ps1 -Zig <path> -Production` compiles without development trust and leaves the two DLLs
+`build.ps1 -Zig <path> -Production` compiles without development trust and leaves all three binaries
 unsigned. It never uses an official private key. Maintainers sign official distribution artifacts
 separately; a production deployment must supply its launch-ticket and relay public trust keys.
 Binary builds belong in versioned releases, rather than in the source tree.
+
+The launcher checks its executable, bundled hook/overlay and any installed Infinity hook against
+the official release public key. Keep each detached `.sig` beside its binary. Missing, modified
+or development-signed files show a caution with a link to
+[official releases](https://github.com/anarqz/InfinityHorizon/releases). This advisory does not add
+a play restriction; the existing hook/overlay signature checks still apply. The caution is
+expected when building from source. A binary's signature proves its signed bytes, not that a
+running client is unmodified.
 
 ## License
 

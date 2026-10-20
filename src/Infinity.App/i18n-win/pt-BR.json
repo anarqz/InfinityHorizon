@@ -310,5 +310,8 @@
   "account.delete_reauth": "Entre novamente com sua senha para confirmar esta solicitação.",
   "legal.about": "Sobre / licenças",
   "legal.license": "GPL-3.0-only com o termo de atribuição em NOTICE.",
-  "legal.third_party": "Os créditos e textos das licenças de terceiros estão na pasta licenses."
+  "legal.third_party": "Os créditos e textos das licenças de terceiros estão na pasta licenses.",
+  "build_origin.title": "Origem do build não verificada",
+  "build_origin.warning": "Não foi possível confirmar que este build veio de uma release oficial. Prefira os downloads do Infinity Horizon e tenha cuidado com arquivos de desconhecidos. Se você compilou o código por conta própria, este aviso é esperado. Bom jogo!",
+  "build_origin.releases": "Releases oficiais"
 }
