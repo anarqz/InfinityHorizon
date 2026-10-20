@@ -24,11 +24,11 @@ public sealed class Strings
     /// <summary><c>en</c> or <c>pt-BR</c>.</summary>
     public string Locale { get; }
 
-    /// <summary><c>pt-BR</c> for any Portuguese UI culture, otherwise <c>en</c>.</summary>
+    /// <summary><c>pt-BR</c> for Brazilian/European Portuguese UI cultures; all others use the English catalog.</summary>
     public static string LocaleFor(CultureInfo culture)
     {
         ArgumentNullException.ThrowIfNull(culture);
-        return culture.TwoLetterISOLanguageName == "pt" ? "pt-BR" : "en";
+        return culture.Name is "pt-BR" or "pt-PT" ? "pt-BR" : "en";
     }
 
     public static Strings Load(string directory, string locale)
