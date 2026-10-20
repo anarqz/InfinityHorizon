@@ -116,7 +116,8 @@ internal sealed partial class RelayEngine
         }
         else return;
         if (peer is null || !Allowed(peer.Xuid, peer.Endpoint) || !Allowed(peer.Xuid, endpoint)
-            || !TakeSideChannelRate(peer, data.Length, operation != 1) || LiveryCodec.Parse(data) is not { } message) return;
+            || !TakeSideChannelRate(peer, data.Length, operation != 1)) return;
+        if (LiveryCodec.Parse(data) is not { } message) { Rejected(peer, "invalid_livery"); return; }
         peer.LastSeen = _now;
         if (claimed.HasValue) peer.LiveryHook = endpoint;
         _liveries.Authorize = MayUseLivery;

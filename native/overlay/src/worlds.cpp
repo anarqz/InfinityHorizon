@@ -10,7 +10,7 @@
 //   one explains the Supporter tier. No queue for worlds: a full world is just full.
 // - Join reserves a seat only (matchmaking's handshake); the game's own Free Roam Online then
 //   lands the player in it. Before the first join or create of the session, the not-rated
-//   warning (OD-54).
+//   online-play warning (OD-54).
 // - A private or friends world is joined with its code (code_entry.cpp); create gives the host
 //   the code to share.
 // - Create: name (the keyboard), audience (Everyone, Supporters, Friends, Private; a free host
@@ -71,7 +71,7 @@ Screen g_screen = Screen::List;
 WorldFilter g_filter = WorldFilter::Near; // the default filter (Alex, 2026-10-19)
 bool g_queried = false;                    // the list was asked since the guide opened
 bool g_hide_full = false;
-bool g_warned = false; // the not-rated warning, once per game session
+bool g_warned = false; // the online-play warning, once per game session
 int g_focus = 0;       // the list's focus: 0 the filter row, then the tiles
 int g_chip = 1;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full
 uint64_t g_seen_list = 0, g_seen_join = 0, g_seen_hosted = 0;
@@ -573,13 +573,10 @@ void DrawWarning(ImDrawList *dl, float x, float y, float w) {
     dl->AddText(f.icon_big, f.icon_big->FontSize, ImVec2(x, y), kAmber, kIconWarning);
     y += 52 * s;
     const char *text = T(
-        "Online play in Infinity is not moderated or rated. Playing online exchanges data with other players over the internet, "
-        "and players you do not know may try to abuse it. Infinity has safety checks, but as an open-source project, "
-        "ill-intentioned players may find ways around them that we cannot foresee.\n\nPrefer playing only with friends or people you know.",
-        "O jogo online no Infinity não é moderado nem classificado. Jogar online troca dados com outros jogadores pela internet, "
-        "e jogadores que você não conhece podem tentar abusar disso. O Infinity tem mecanismos de segurança, mas, por ser um "
-        "projeto de código aberto, jogadores mal-intencionados podem encontrar formas de contorná-los que não conseguimos prever."
-        "\n\nPrefira jogar apenas com amigos ou pessoas que você conhece.");
+        "Online play exchanges data with other players. Bugs and crashes are expected in public worlds with unknown players. "
+        "Infinity mitigates problems where possible, but cannot prevent every problem.\n\nPrefer playing with people you trust.",
+        "Jogar online troca dados com outros jogadores. Bugs e travamentos são esperados em mundos públicos com jogadores desconhecidos. "
+        "O Infinity mitiga os problemas quando possível, mas não consegue evitar todos eles.\n\nPrefira jogar com pessoas de confiança.");
     Wrapped(dl, f.body, ImVec2(x, y), w, kText, text);
     y += WrappedHeight(f.body, w, text) + 28 * s;
     const float bh = 56 * s;
@@ -995,7 +992,13 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     const float reminder_height = f.small->CalcTextSizeA(f.small->FontSize, FLT_MAX, w, reminder).y;
     const float reminder_y = bottom - reminder_height;
     Wrapped(dl, f.small, ImVec2(x, reminder_y), w, kTextDim, reminder);
-    bottom = reminder_y - 16 * s;
+    const char *warning = T(
+        "Public worlds: bugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
+        "Mundos públicos: bugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.");
+    const float warning_height = WrappedHeight(f.small, w, warning);
+    const float warning_y = reminder_y - 12 * s - warning_height;
+    Wrapped(dl, f.small, ImVec2(x, warning_y), w, kAmber, warning);
+    bottom = warning_y - 16 * s;
     dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, bottom), true);
     Shared sh;
     {

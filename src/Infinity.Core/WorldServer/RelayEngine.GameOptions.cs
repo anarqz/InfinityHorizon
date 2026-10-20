@@ -41,6 +41,7 @@ internal sealed partial class RelayEngine
         var result = _gameOptions.Apply(peer, obj.Handle.Id, obj.Sequence, obj.Payload, _now, out var ready);
         if (result == GameOptionsUpdateResult.Overflow)
         {
+            Rejected(peer, "game_options_overflow", obj.Id, obj.Router);
             // Dropping only the overflowing fragment would leave a live, incomplete object
             // that no late join or new owner could recover. End this writer's session instead.
             peer.Doomed = true;

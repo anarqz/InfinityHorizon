@@ -19,7 +19,7 @@ namespace Infinity.App;
 /// </summary>
 public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private static readonly HttpClient Http = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
 
     private readonly ServerConfig _config;
     private readonly string _stateDirectory;
@@ -145,11 +145,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowNeedsAccount => _pending is not null;
 
-    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onMods && !_onSetup && !_onBugReport && !_onAccount;
+    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
 
-    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount;
+    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
 
-    public bool ShowHome => Ready && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount;
+    public bool ShowHome => Ready && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
 
     public bool Idle => !_busy;
 
@@ -292,6 +292,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _playStatus = null;
         _session?.Dispose();
         _session = null;
+        ClearCrashScreen();
         _pending = null;
         _saveTarget = null;
         SaveChoices.Clear();
@@ -307,6 +308,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         cancellation.ThrowIfCancellationRequested();
         _nativeFlow.Clear();
         _session = session;
+        LoadPendingCrash();
         _loginOpen = false;
         LeaveAccount();
         _onMods = _onSetup = _onBugReport = false;
@@ -387,6 +389,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        ClearCrashScreen();
         StopPlay();
         // the supervisor leaves the gate on cancel: let it finish before its token manager goes (SAURON)
         try

@@ -8,6 +8,7 @@ using Infinity.Core.Process;
 using Infinity.Core.Session;
 using Infinity.Core.Windows;
 using Infinity.Core.Wire;
+using Infinity.Core.Diagnostics;
 
 namespace Infinity.Core.Supervisor;
 
@@ -45,6 +46,8 @@ public sealed record SupervisorConfig(
 
     /// <summary>The shell's English/pt-BR catalog for notices; headless callers use English.</summary>
     public Strings? Text { get; init; }
+    public CrashIncidentStore? CrashReports { get; init; }
+    public string? AccountId { get; init; }
 }
 
 /// <summary>What the shell renders (ORCHESTRATOR §2.2 <c>SupervisorEvent</c>, §2.3).</summary>
@@ -83,6 +86,7 @@ public abstract record SupervisorEvent
     public sealed record NoticeSent(byte Level, string Text) : SupervisorEvent;
 
     public sealed record Exited(ExitDisposition Disposition) : SupervisorEvent;
+    public sealed record CrashCaptured(CrashIncident Incident) : SupervisorEvent;
 
     public sealed record Relaunching(int Attempt) : SupervisorEvent;
 
@@ -289,6 +293,12 @@ public sealed class PlaySupervisor
                 $"WINEDLLOVERRIDES for the game: {overrides ?? inherited ?? "(unset)"}{(overrides is null ? " (unchanged)" : "")}"));
         }
         var plan = new LaunchPlan(_config.Install.HostExe, [], _config.Install.Root, env, []);
+        var crashContext = new CrashContext(_clock);
+        var startedUtc = _clock.GetUtcNow();
+        CrashDumpSnapshot? dumpSnapshot = null;
+        if (_config.CrashReports is not null)
+            try { dumpSnapshot = CrashDumpCollector.Snapshot(_config.Install.Root); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _emit(new SupervisorEvent.Note("crash: dump snapshot unavailable")); }
         IGameChild child;
         if (await CancelBeforeSpawnAsync(sessionId, _config.Saves?.FenceToken ?? fence, cancellation).ConfigureAwait(false)) return null;
         try
@@ -308,7 +318,7 @@ public sealed class PlaySupervisor
             uint code;
             try
             {
-                (code, state) = await SuperviseAsync(child, pipe, uiPipe, endpoint, sessionId, token, active.Ticket.HeartbeatEveryMs, fence, state, cancellation).ConfigureAwait(false);
+                (code, state) = await SuperviseAsync(child, pipe, uiPipe, endpoint, sessionId, token, active.Ticket.HeartbeatEveryMs, fence, state, crashContext, cancellation).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
@@ -321,6 +331,21 @@ public sealed class PlaySupervisor
             await DrainJob(child).ConfigureAwait(false);
             var disposition = ExitDisposition.Classify(code);
             _emit(new SupervisorEvent.Exited(disposition));
+            if (disposition is ExitDisposition.Crashed && _config.CrashReports is { } reports && _config.AccountId is { } account)
+            {
+                try
+                {
+                    var ended = crashContext.FrozenAt ?? _clock.GetUtcNow();
+                    var dump = dumpSnapshot is null ? null : CrashDumpCollector.Capture(dumpSnapshot, checked((int)child.Pid), startedUtc, ended);
+                    var incident = new CrashIncident(Guid.CreateVersion7().ToString(), account, sessionId, _config.Game, _config.Xuid,
+                        ended, _config.LauncherVersion, _config.Install.HookVersion, _config.Install.Version, code,
+                        dump?.Info, dump?.Reason.ToString() ?? "snapshot_unavailable", crashContext.Freeze());
+                    reports.Save(incident, dump is null ? [] : dump.Bytes.AsSpan());
+                    _emit(new SupervisorEvent.CrashCaptured(incident));
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+                { _emit(new SupervisorEvent.Note("crash: diagnostic capture unavailable")); }
+            }
             // the session's progress to the cloud before the leave, with the line's newest fence
             ulong? endRevision = null;
             if (_config.Saves is { } after)
@@ -359,7 +384,7 @@ public sealed class PlaySupervisor
 
     /// <summary>The running session: accept, frames, heartbeats, commands, until the child exits.</summary>
     private async Task<(uint Code, SessionRecord State)> SuperviseAsync(
-        IGameChild child, IControlPipe pipe, IControlPipe? uiPipe, LauncherEndpoint endpoint, string sessionId, GameToken token, uint heartbeatEveryMs, ulong? fence, SessionRecord state, CancellationToken cancellation)
+        IGameChild child, IControlPipe pipe, IControlPipe? uiPipe, LauncherEndpoint endpoint, string sessionId, GameToken token, uint heartbeatEveryMs, ulong? fence, SessionRecord state, CrashContext crashContext, CancellationToken cancellation)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid, new Overlay.UiFrame.Status("", Overlay.UiTier.Free, Overlay.UiState.Running, ""));
@@ -373,6 +398,7 @@ public sealed class PlaySupervisor
         var worlds = overlay is null ? null : _config.Worlds?.Invoke(() => _ticket);
         if (worlds is not null)
         {
+            worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, stop.Token);
         }
         var exit = child.WaitForExitAsync(stop.Token);
@@ -401,6 +427,7 @@ public sealed class PlaySupervisor
                 var done = await Task.WhenAny(waits).ConfigureAwait(false);
                 if (done == exit)
                 {
+                    crashContext.Freeze(child.ExitTimeUtc);
                     return (await exit.ConfigureAwait(false), state);
                 }
                 if (done == accept)
@@ -505,11 +532,13 @@ public sealed class PlaySupervisor
                             heartbeat = Task.Delay(TimeSpan.FromMilliseconds(Math.Max(beat.Ticket.HeartbeatEveryMs, 5000)), _clock, stop.Token);
                         }
                     }
-                    catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded)
+                    catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded or ErrorCodes.AccountsFrozen)
                     {
                         tokensOpen = false;
                         endpoint.Revoke("the server ended the online session");
-                        await Notice(pipe, endpoint, overlay, 2, SessionEndedText(), stop.Token).ConfigureAwait(false);
+                        await Notice(pipe, endpoint, overlay, 2, e.Code == ErrorCodes.AccountsFrozen
+                            ? _config.Text?["crash.frozen"] ?? "Online access is temporarily frozen for security review. Sign-in and support remain available."
+                            : SessionEndedText(), stop.Token).ConfigureAwait(false);
                     }
                     catch (Exception e) when (e is ApiException or HttpRequestException or TimeoutException or IOException)
                     {

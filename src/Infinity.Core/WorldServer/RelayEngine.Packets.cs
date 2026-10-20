@@ -52,7 +52,7 @@ internal sealed partial class RelayEngine
         var synced = peer.Synced;
         for (var i = 0; i < header.Count && reader.Left >= 7; i++)
         {
-            if (!NerdCodec.TryRead(ref reader, out var message, out _)) break;
+            if (!NerdCodec.TryRead(ref reader, out var message, out _)) { Rejected(peer, "truncated_packet"); break; }
             switch (message)
             {
                 case NerdMessage.OpenConnection open:
@@ -87,10 +87,14 @@ internal sealed partial class RelayEngine
                     peer.CarPosition = position;
                     cars.Add(NerdCodec.Write(car with { Handle = new(HandleKind.Relay, car.Handle.Id, peer.Index) }));
                     break;
+                case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own:
+                    Rejected(peer, "invalid_car", 15); break;
                 case NerdMessage.CarEvent carEvent when carEvent.Handle.Kind == HandleKind.Own && NerdPayload.CarEventOk(carEvent.Kind, carEvent.Body):
                     var change = NerdCodec.Write(carEvent with { Handle = new(HandleKind.Relay, carEvent.Handle.Id, peer.Index) });
                     if (carEvent.Kind == 35) forward.Add(change); else cars.Add(change);
                     break;
+                case NerdMessage.CarEvent carEvent when carEvent.Handle.Kind == HandleKind.Own:
+                    Rejected(peer, "invalid_car_event", carEvent.Kind); break;
                 case NerdMessage.GroupSatNav nav when nav.Node is >= 0 and <= NerdCodec.SatNavNodeMax:
                     peer.CompletionConfirmed = true; SetGroupNode(nav.Node); break;
                 case NerdMessage.Other other when _settings.Races:
@@ -121,8 +125,9 @@ internal sealed partial class RelayEngine
     {
         if (_settings.Races && obj.Router == 6 && obj.Handle.Kind == HandleKind.Transfer)
         { OnGameOptions(peer, obj); return null; }
-        if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0
-            || !NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out _)) return null;
+        if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0) return null;
+        if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
+        { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
         obj = obj with { Payload = payload! };
         var key = (obj.Router, obj.Handle.Id);
         var previous = peer.Objects.GetValueOrDefault(key);

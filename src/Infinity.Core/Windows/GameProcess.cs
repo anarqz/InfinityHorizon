@@ -74,6 +74,9 @@ public sealed class GameProcess : Supervisor.IGameChild
     /// <summary><c>GetProcessTimes</c> creation time (session.json <c>child_started</c>): a reused pid never counts as the game.</summary>
     public ulong? Started { get; }
 
+    public DateTimeOffset? ExitTimeUtc => _exited.WaitOne(0) && Native.GetProcessTimes(_process, out _, out var ended, out _, out _)
+        && ended != 0 && ended <= long.MaxValue ? DateTimeOffset.FromFileTime((long)ended) : null;
+
     public Supervise Supervise { get; }
 
     /// <summary>Signalled when the game process exits; for <see cref="PipeServer.AcceptAsync"/>.</summary>

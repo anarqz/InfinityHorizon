@@ -25,7 +25,7 @@ public abstract record ExitDisposition
 
     public static ExitDisposition Classify(uint code) => code switch
     {
-        0 => new Normal(),
+        0 or QuitForcedExit => new Normal(),
         ExitRelaunch => new Relaunch(),
         _ => new Crashed(code),
     };

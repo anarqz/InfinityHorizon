@@ -202,6 +202,10 @@ public partial class MainWindow : Window
     }
 
     private void OnRevertIni(object sender, RoutedEventArgs e) => _vm.RevertIni();
+    private void OnReviewCrash(object sender, RoutedEventArgs e) => _vm.ReviewCrash();
+    private void OnLaterCrash(object sender, RoutedEventArgs e) => _vm.LaterCrash();
+    private void OnDiscardCrash(object sender, RoutedEventArgs e) => _vm.DiscardCrash();
+    private async void OnSendCrash(object sender, RoutedEventArgs e) => await _vm.SendCrashAsync();
 
     // Only the catalog's https links are opened (the mods' official repositories).
     private void OnOpenLink(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
