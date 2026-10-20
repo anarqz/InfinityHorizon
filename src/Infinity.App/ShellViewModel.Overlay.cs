@@ -27,6 +27,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private OverlayPackage? LoadOverlayPackage()
     {
+        _overlayOfficial = false;
         try
         {
             var folder = (DevServer ? Environment.GetEnvironmentVariable("FI_OVERLAY_PACKAGE") : null) ?? Path.Combine(AppContext.BaseDirectory, "overlay");
@@ -38,6 +39,7 @@ public sealed partial class ShellViewModel
             }
             var sha = SHA256.HashData(File.ReadAllBytes(dll));
             var signer = HookInstaller.SignerOf(Convert.ToHexStringLower(sha), File.ReadAllBytes(dll + ".sig"), DevHookKey);
+            _overlayOfficial = signer == HookSigner.Official;
             if (signer == HookSigner.None)
             {
                 Log("overlay: the package's signature does not verify; not loaded");
@@ -50,6 +52,10 @@ public sealed partial class ShellViewModel
         {
             Log("overlay: " + e.Message);
             return null;
+        }
+        finally
+        {
+            Changed(nameof(ShowBuildOriginWarning));
         }
     }
 

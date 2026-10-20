@@ -310,5 +310,8 @@
   "account.delete_reauth": "Sign in again with your password to confirm this request.",
   "legal.about": "About / licenses",
   "legal.license": "GPL-3.0-only with the attribution term in NOTICE.",
-  "legal.third_party": "Third-party credits and license texts are included in the licenses folder."
+  "legal.third_party": "Third-party credits and license texts are included in the licenses folder.",
+  "build_origin.title": "Build origin unverified",
+  "build_origin.warning": "We couldn’t confirm this build came from an official release. Prefer Infinity Horizon downloads and be careful with files from people you don’t know. Built it yourself from source? This warning is expected. Enjoy the game!",
+  "build_origin.releases": "Official releases"
 }

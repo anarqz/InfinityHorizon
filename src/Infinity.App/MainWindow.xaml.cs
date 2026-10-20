@@ -30,6 +30,7 @@ public partial class MainWindow : Window
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
+        Loaded += async (_, _) => await vm.VerifyBuildOriginAsync();
         var azimuth = Array.IndexOf(cli, "--azimuth") is var i and >= 0 && i + 1 < cli.Length ? cli[i + 1] : Environment.GetEnvironmentVariable("FI_AZIMUTH");
         // OD-46: --azimuth / FI_AZIMUTH, else the saved choice, the launcher's folder, then a look around.
         if (azimuth is not null)
@@ -45,6 +46,8 @@ public partial class MainWindow : Window
     }
 
     partial void ConfigureHarness(string[] args, ShellViewModel vm, ref bool handled);
+
+    private void OnOfficialReleases(object sender, RoutedEventArgs e) => OpenCommunityLink("https://github.com/anarqz/InfinityHorizon/releases");
 
     private void OnAbout(object sender, RoutedEventArgs e) => MessageBox.Show(this,
         $"Infinity Launcher {_vm.Version}\n\nBased on Infinity Launcher - https://github.com/anarqz/InfinityHorizon\n\n{_vm.S["legal.license"]}\n\n{_vm.S["legal.third_party"]}",
