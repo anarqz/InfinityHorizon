@@ -1,0 +1,6 @@
+#include "fonts.h"
+FI_FONT_REGULAR RCDATA "..\\third_party\\fonts\\selawk.ttf"
+FI_FONT_SEMIBOLD RCDATA "..\\third_party\\fonts\\selawksb.ttf"
+FI_FONT_BOLD RCDATA "..\\third_party\\fonts\\selawkb.ttf"
+FI_FONT_ICONS RCDATA "..\\third_party\\fonts\\FluentSystemIcons-Subset.ttf"
+FI_SOUND_NOTICE RCDATA "..\\assets\\infinity-notification.wav"

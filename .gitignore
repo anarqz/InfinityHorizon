@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+**/build/
+artifacts/
+.vs/
+.local/
+__pycache__/
+*.pyc
+*.pdb
+*.user
+*.dll
+*.exe
+*.sig
+*.pem
+*.key
+.env*

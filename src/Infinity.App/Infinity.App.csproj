@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The WPF shell (O-W1, 2026-10-19: WPF with the built-in Fluent theme, so the launcher also
+       runs under Wine/Proton on the Steam Decks). It renders what Infinity.Core decides. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>Infinity.App</RootNamespace>
+    <AssemblyName>infinity</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\infinity.ico</ApplicationIcon>
+    <!-- WPF0001: ThemeMode (Fluent) is still marked experimental in .NET 10. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Infinity.Core\Infinity.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The Infinity Horizon brand (owner's files, 2026-10-19): art, the icon and the Selawik font (OFL)
+       are resources inside infinity.exe, so nothing goes missing on Windows or under Wine/Proton; a
+       256 px icon is also copied next to it for Linux shortcuts (.desktop, Steam). -->
+  <ItemGroup>
+    <Resource Include="Assets\*.png;Assets\*.jpg;Assets\*.ico;Assets\Fonts\*.ttf" />
+    <Content Include="Assets\infinity-256.png" Link="infinity.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Fonts\Selawik-LICENSE.txt" Link="licenses\Selawik-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Local English and Brazilian Portuguese catalogs. -->
+  <ItemGroup>
+    <Content Include="i18n\*.json" Link="i18n\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Application-specific translations override the base catalog. -->
+    <Content Include="i18n-win\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

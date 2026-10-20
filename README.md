@@ -1,7 +1,43 @@
 # Infinity Launcher
 
-The source code of the Infinity Launcher, published so that anyone can see exactly what runs on
-their device.
+The client that runs on players' computers: a C# WPF launcher with its integrated world relay,
+a C hook and a C++ Direct3D 12 overlay. Windows x64; the Windows build also runs through
+Wine/Proton. No game, Azimuth executable, player save or backend service is included.
+
+## Build
+
+On Windows, install PowerShell 7, .NET SDK 10.0.401 (or a newer patch in that feature band),
+Visual Studio C++ build tools with a Windows SDK, Python 3.10+ and Zig 0.15.2.
+NuGet restores the pinned BouncyCastle package; ImGui, MinHook and the embedded fonts are vendored.
+
+```powershell
+git clone https://github.com/anarqz/InfinityHorizon.git
+cd InfinityHorizon
+pwsh -File build.ps1 -Zig C:\tools\zig\zig.exe
+```
+
+The output is `artifacts/win-x64/`: `infinity.exe` (self-contained .NET),
+`hook/infinity.dll`, `overlay/infinity-overlay.dll`, their development signatures,
+English/pt-BR catalogs and license notices. No private repository or game installation is needed
+to compile. Build just the managed projects with `dotnet build Infinity.sln -c Release`.
+
+## Run a local build
+
+```powershell
+pwsh -File run.ps1 -Server http://127.0.0.1:8480 -Portal http://127.0.0.1:3120
+```
+
+The launcher opens even when no server is available. Sign-in and online play require a compatible
+backend and the player's own game/Azimuth installation. `--server` / `FI_SERVER` and
+`--portal` / `FI_PORTAL` select a deployment; the defaults are loopback development addresses.
+Development signature trust is accepted only with development origins.
+The local signing seed stays in the user's LocalAppData, outside this checkout; the build stores
+only its public verification key in the output. Starting the launcher does not start a game.
+
+`build.ps1 -Zig <path> -Production` compiles without development trust and leaves the two DLLs
+unsigned. It never uses an official private key. Maintainers sign official distribution artifacts
+separately; a production deployment must supply its launch-ticket and relay public trust keys.
+Binary builds belong in versioned releases, rather than in the source tree.
 
 ## License
 
