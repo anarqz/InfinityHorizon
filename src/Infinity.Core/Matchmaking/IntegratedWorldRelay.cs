@@ -12,6 +12,19 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     private readonly IntegratedHostRelay _transport;
     private readonly WorldRelayAdmission _admission;
     private int _disposed;
+    public Action<string>? DiagnosticLog {get;set;}
+    private long _diagnosticAt;
+    private int _diagnosticCount;
+    private void Diagnostics(bool final=false)
+    {
+        var now=Environment.TickCount64;
+        if(DiagnosticLog is not {} sink || !final && (Volatile.Read(ref _diagnosticCount)>=2048 || now-Interlocked.Read(ref _diagnosticAt)<3000))return;
+        Interlocked.Exchange(ref _diagnosticAt,now);
+        Interlocked.Increment(ref _diagnosticCount);
+        var network=NetworkStatus;
+        Infinity.Core.Diagnostics.UdpDiagnostics.Enqueue(sink,_admission.DiagnosticSummary()+
+            FormattableString.Invariant($" nat={network.Nat} observations={network.PublicAddresses.Count} upnp={network.Upnp}"));
+    }
 
     private IntegratedWorldRelay(IntegratedHostRelay transport, WorldRelayAdmission admission)
     { _transport = transport; _admission = admission; }
@@ -61,7 +74,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         }
         cancellation.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(!Running, this);
-        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission); return; }
+        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission);Diagnostics(); return; }
         if (answer.Error?.Kind is MmErrorKind.Unauthorized or MmErrorKind.WorldNotFound or MmErrorKind.NotHost or MmErrorKind.WrongPool)
         {
             _admission.Clear();
@@ -81,12 +94,14 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        Diagnostics(final:true);
         _admission.Clear(); _transport.Dispose();
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        Diagnostics(final:true);
         _admission.Clear();
         await Task.Run(_transport.Dispose).ConfigureAwait(false);
     }

@@ -23,6 +23,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     private readonly ServerConfig _config;
     private readonly string _stateDirectory;
+    private readonly Infinity.Core.Diagnostics.BoundedRunLog _runLog;
     private ShellGate _gate = ShellGate.SignedOut;
     private AccountSession? _session;
     private PendingAccount? _pending;
@@ -39,6 +40,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _config = config;
         config.Validate();
         _stateDirectory = config.StateDirectory(stateDirectory);
+        _runLog=new(_stateDirectory);
         Version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
         ServerLabel = S.Format("shell.live", ("server", config.Server.Authority));

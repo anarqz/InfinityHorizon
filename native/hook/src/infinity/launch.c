@@ -114,6 +114,7 @@ static volatile LONG launch_refresh_sent;  /* a RefreshRequest went for the curr
 static SRWLOCK launch_out_lock = SRWLOCK_INIT;
 static unsigned char launch_outbox[LAUNCH_OUTBOX];
 static size_t launch_outbox_used;
+static unsigned launch_diagnostics_queued,launch_diagnostics_dropped;
 static volatile LONG launch_outbox_flushed; /* everything queued so far was written */
 static volatile LONG launch_connected;      /* the pipe is open after a good handshake */
 static HANDLE launch_pipe = INVALID_HANDLE_VALUE;
@@ -476,6 +477,7 @@ static int launch_flush(void) {
     size_t size = launch_outbox_used;
     memory_copy(pending, launch_outbox, size);
     launch_outbox_used = 0;
+    launch_diagnostics_queued=0;
     ReleaseSRWLockExclusive(&launch_out_lock);
     int ok = !size || launch_write(pending, size);
     InterlockedExchange(&launch_outbox_flushed, 1);
@@ -493,6 +495,17 @@ static int launch_queue_frame(unsigned type, const void *payload, size_t size) {
 }
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size) {
     return fi_launch_live() && size==25 && launch_queue_frame(0x17,payload,size);
+}
+int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size) {
+    if(!fi_launch_live() || size!=32 || payload[0]!=1 || payload[1]<1 || payload[1]>28 || payload[2]>2 || payload[3]>4)return 0;
+    unsigned char frame[37]={33,0,0,0,0x1a};memory_copy(frame+5,payload,32);
+    int queued=0;
+    AcquireSRWLockExclusive(&launch_out_lock);
+    if(launch_diagnostics_queued<64 && sizeof(frame)<=LAUNCH_OUTBOX-launch_outbox_used) {
+        memory_copy(launch_outbox+launch_outbox_used,frame,sizeof(frame));launch_outbox_used+=sizeof(frame);
+        launch_diagnostics_queued++;InterlockedExchange(&launch_outbox_flushed,0);queued=1;
+    } else if(launch_diagnostics_dropped!=0xffffffffu)launch_diagnostics_dropped++;
+    ReleaseSRWLockExclusive(&launch_out_lock);return queued;
 }
 
 /* Event{kind, detail}; kind 2 is reserved legacy, kind 6 carries overlay notices. */

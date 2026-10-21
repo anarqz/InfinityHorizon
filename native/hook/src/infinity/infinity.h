@@ -8,6 +8,7 @@
 #include "../core/infinity_base.h"
 
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size);
+int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size);
 int azimuth_proxy_relay_candidates(const unsigned char *payload,size_t size);
 
 /* cfg.c: <Azimuth>\Infinity.cfg. [hook] is the hook's (PLAN.md "Infinity.cfg [hook]"), read

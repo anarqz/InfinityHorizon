@@ -26,7 +26,7 @@ public sealed record SupervisorConfig(
 {
     public OnlineActivity? OnlineActivity { get; init; }
     /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
-    public uint MinimumOnlineHookBuild { get; init; } = BuildProfile.ProductionOnly ? 78u : 76u;
+    public uint MinimumOnlineHookBuild { get; init; } = BuildProfile.ProductionOnly ? 79u : 76u;
     /// <summary>One bounded accept (ORCHESTRATOR §1.4: called again for the child's whole life).</summary>
     public TimeSpan AcceptBound { get; init; } = TimeSpan.FromSeconds(10);
 
@@ -567,6 +567,11 @@ public sealed class PlaySupervisor
                             await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
                         }
                         var frame = received.Frame;
+                        if(frame is Frame.UdpDiagnostic diagnostic)
+                        {
+                            if(endpoint.Greeted && !suspended && tokensOpen)worlds?.RecordUdpDiagnostic(diagnostic);
+                            continue;
+                        }
                         if(frame is Frame.RelayNetworkHint hint)
                         {
                             if(endpoint.Greeted && !suspended && tokensOpen && worlds is not null)

@@ -31,6 +31,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
     private WorldAnnounced? _world;
     private UdpProofHost? _proof;
     private UdpProofHost Proof => _proof ??= new(ProofAuthority,_clock,()=>EffectiveNow().ToUnixTimeSeconds());
+    internal string DiagnosticSummary() {lock(_gate)return Proof.DiagnosticSummary();}
     private bool RequireProof => BuildProfile.ProductionOnly || requireSocketProof;
     private static readonly TimeSpan HostLease = TimeSpan.FromSeconds(45);
 

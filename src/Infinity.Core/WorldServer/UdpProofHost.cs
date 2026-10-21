@@ -23,6 +23,9 @@ internal sealed class UdpProofHost(Func<Guid, UdpProofHost.Authority?> lookup, T
     private long _rateAt;
     private long _preAt;
     private int _newCount,_renewCount,_retryCount;
+    private readonly uint[] _diagnostic=new uint[9];
+    private void Count(int slot) {if(_diagnostic[slot]!=uint.MaxValue)_diagnostic[slot]++;}
+    internal string DiagnosticSummary()=>FormattableString.Invariant($"udp host hello_game={_diagnostic[0]} hello_hook={_diagnostic[1]} response_game={_diagnostic[2]} response_hook={_diagnostic[3]} challenge_game={_diagnostic[4]} challenge_hook={_diagnostic[5]} ack_game={_diagnostic[6]} ack_hook={_diagnostic[7]} rejected={_diagnostic[8]}");
 
     private bool Fresh(long at, int seconds) => clock.GetElapsedTime(at) is var elapsed && elapsed>=TimeSpan.Zero && elapsed<TimeSpan.FromSeconds(seconds);
     private bool Matches(Authority? authority, UdpProofCodec.Packet p) => authority is not null && authority.Expires>unixNow()
@@ -62,6 +65,15 @@ internal sealed class UdpProofHost(Func<Guid, UdpProofHost.Authority?> lookup, T
         return _bindings.Any(b=>b.Peer==peer && b.Kind==kind && b.Endpoint.Equals(endpoint));
     }
     internal byte[]? Receive(ReadOnlySpan<byte> data, IPEndPoint source)
+    {
+        var packet=UdpProofCodec.Parse(data);
+        if(packet is {Type:1 or 3})Count((packet.Type==1?0:2)+packet.Kind);
+        var answer=ReceiveCore(data,source);
+        if(answer is {Length:147})Count((answer[5]==2?4:6)+answer[6]);
+        else Count(8);
+        return answer;
+    }
+    private byte[]? ReceiveCore(ReadOnlySpan<byte> data, IPEndPoint source)
     {
         var p=UdpProofCodec.Parse(data); if(p is null || p.Type is not (1 or 3)) return null;
         source=StunCodec.Canonical(source); if(source.Port==0 || !UdpProofCodec.Unicast(source.Address))return null;

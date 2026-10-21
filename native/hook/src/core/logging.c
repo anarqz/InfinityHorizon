@@ -72,6 +72,8 @@ void log_append(const char *message) {
     if (file == INVALID_HANDLE_VALUE) {
         return;
     }
+    LARGE_INTEGER length;
+    if(!GetFileSizeEx(file,&length) || length.QuadPart>=8*1024*1024) {CloseHandle(file);return;}
     write_stamp(file);
     DWORD bytes_written;
     WriteFile(file, message, (DWORD)text_length(message), &bytes_written, NULL);
@@ -126,6 +128,13 @@ void log_start(const wchar_t *directory) {
     static wchar_t previous_path[PATH_CAPACITY];
     if (!rotated && path_join(previous_path, directory, MOD_PREVIOUS_LOG_NAME)) {
         rotated = 1;
+        static wchar_t old_path[PATH_CAPACITY],new_path[PATH_CAPACITY];
+        for(unsigned i=5;i>=2;--i) {
+            wchar_t from[]=L"infinity.previous-1.log",to[]=L"infinity.previous-1.log";
+            from[18]=(wchar_t)('0'+i-1);to[18]=(wchar_t)('0'+i);
+            if(path_join(old_path,directory,i==2?MOD_PREVIOUS_LOG_NAME:from) && path_join(new_path,directory,to))
+                MoveFileExW(old_path,new_path,MOVEFILE_REPLACE_EXISTING);
+        }
         MoveFileExW(startup_log_path, previous_path, MOVEFILE_REPLACE_EXISTING);
     }
     if (!log_enabled) {
