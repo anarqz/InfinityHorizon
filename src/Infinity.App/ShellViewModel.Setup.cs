@@ -30,7 +30,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private byte[]? DevHookKey => DevServer ? HookInstaller.DevKey(Environment.GetEnvironmentVariable(HookInstaller.DevKeyEnv)) : null;
 
-    private bool DevServer => Infinity.Core.DevNet.PlainHttpUrl(_config.Server.GetLeftPart(UriPartial.Authority));
+    private bool DevServer => !_config.Production && Infinity.Core.DevNet.PlainHttpUrl(_config.Server.GetLeftPart(UriPartial.Authority));
 
     public bool ShowSetup => SignedIn && _onSetup && !ShowPickSave;
 

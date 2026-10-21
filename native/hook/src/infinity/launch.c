@@ -732,6 +732,20 @@ static int launch_copy(char *out, size_t cap, const char *text, size_t size) {
 }
 
 #ifdef FI_DEV
+static int launch_mentions_production(const char *text, size_t size) {
+    static const char suffix[] = ".infinity-horizon.com";
+    for (size_t i = 0; i + sizeof(suffix) - 1 <= size; ++i) {
+        size_t j = 0;
+        for (; j < sizeof(suffix) - 1; ++j) {
+            char c = text[i + j];
+            if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+            if (c != suffix[j]) break;
+        }
+        if (j == sizeof(suffix) - 1) return 1;
+    }
+    return 0;
+}
+
 /* The --dev build also takes http://<127.0.0.1 or a private LAN IPv4>:<port> (OD-34 LAN tests;
    fi_launcher_core::devnet::plain_http_url). */
 static int launch_plain_http_ok(const char *text, size_t length) {
@@ -762,6 +776,17 @@ static int launch_plain_http_ok(const char *text, size_t length) {
     }
     return (octet[0] == 127 && octet[1] == 0 && octet[2] == 0 && octet[3] == 1) || octet[0] == 10 ||
            (octet[0] == 172 && octet[1] >= 16 && octet[1] <= 31) || (octet[0] == 192 && octet[1] == 168);
+}
+#endif
+
+#ifndef FI_DEV
+static int launch_production_server_ok(const char *text, size_t size) {
+    static const char saves[] = "https://saves.infinity-horizon.com";
+    static const char mm[] = "https://mm.infinity-horizon.com";
+    size_t n = sizeof(saves) - 1;
+    if ((size == n || (size == n + 1 && text[n] == '/')) && launch_starts(text, size, saves)) return 1;
+    n = sizeof(mm) - 1;
+    return (size == n || (size == n + 1 && text[n] == '/')) && launch_starts(text, size, mm);
 }
 #endif
 
@@ -813,11 +838,12 @@ static int launch_ticket_ok(const LaunchTicket *t) {
         return 0;
     }
     if (!json_text(claims, size, "server", &text, &length) ||
-        !(launch_starts(text, length, "https://")
 #ifdef FI_DEV
-          || launch_plain_http_ok(text, length)
+        (launch_mentions_production(text, length) || !(launch_starts(text, length, "https://") || launch_plain_http_ok(text, length)))
+#else
+        !launch_production_server_ok(text, length)
 #endif
-          )) {
+          ) {
         launch_log("REFUSED: the ticket's game server is not https: offline.", 0, 0, "");
         return 0;
     }

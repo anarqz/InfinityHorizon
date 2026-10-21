@@ -12,6 +12,23 @@ public sealed partial class ShellViewModel
 {
     private readonly NativeSignInFlow _nativeFlow = new();
     private string _email = string.Empty;
+    private bool _registrationEnabled = true;
+    public bool CanCreateOnlineAccount => CanStartOnlineAccount && _registrationEnabled;
+    public bool ShowRegistrationDisabled => !_registrationEnabled;
+
+    private void ObserveRegistration(ServerInfo info)
+    {
+        _registrationEnabled = info.RegistrationEnabled;
+        Changed(string.Empty);
+    }
+
+    private void RegistrationDisabled()
+    {
+        _registrationEnabled = false;
+        _nativeFlow.Clear();
+        Message = OnlineServiceAllowsPlay ? S["native.registration_disabled"] : OnlineServiceMessage;
+        Changed(string.Empty);
+    }
 
     public string LoginEmail
     {
@@ -39,8 +56,9 @@ public sealed partial class ShellViewModel
         await CompleteNativeAsync(await _nativeFlow.SignInAsync(idp, api, info, device, LoginEmail.Trim(), password, cancellation), cancellation);
     });
 
-    public Task NativeSignUpAsync(string password) => Native(async (idp, _, _, cancellation) =>
+    public Task NativeSignUpAsync(string password) => Native(async (idp, info, _, cancellation) =>
     {
+        if (!info.RegistrationEnabled) { RegistrationDisabled(); return; }
         Message = S["native.creating"];
         await _nativeFlow.SignUpAsync(idp, LoginEmail.Trim(), password, cancellation);
         Message = S["native.verification_ready"];
@@ -110,7 +128,10 @@ public sealed partial class ShellViewModel
             cancellation.Token.ThrowIfCancellationRequested();
             if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) { Message = OnlineServiceMessage; return; }
             _serverReachable = true;
-            await work(new IdentityPlatform(Http, info.Idp.ApiKey, info.Idp.EmulatorUrl, S.Locale), info, api, cancellation.Token);
+            ObserveRegistration(info);
+            IdentityPlatform? identity = null;
+            PrepareNativeIdentity(ref identity);
+            await work(identity ?? new IdentityPlatform(Http, info.Idp.ApiKey, info.Idp.EmulatorUrl, S.Locale), info, api, cancellation.Token);
             if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) Message = OnlineServiceMessage;
         }
         catch (OperationCanceledException)
@@ -120,6 +141,7 @@ public sealed partial class ShellViewModel
         }
         catch (IdentityPlatformException e)
         {
+            if (e.Problem == IdpProblem.RegistrationDisabled) { RegistrationDisabled(); return; }
             Log($"auth: identity refused: {e.Problem}");
             if (e.Problem is IdpProblem.Credentials or IdpProblem.Disabled) _nativeFlow.Clear();
             Message = IdentityProblem(e);
@@ -133,6 +155,7 @@ public sealed partial class ShellViewModel
                 ExtendOnlineCooldown(e.RetryAfter);
                 return;
             }
+            if (e.Code == ErrorCodes.AccountsRegistrationDisabled) { RegistrationDisabled(); return; }
             Message = e.Code switch
             {
                 ErrorCodes.AuthRateLimited or ErrorCodes.RequestRateLimited => S["native.too_many"],
@@ -149,6 +172,7 @@ public sealed partial class ShellViewModel
         }
         finally
         {
+            if (_onlinePause is not null) Message = OnlineServiceMessage;
             _signIn = null;
             Busy = false;
             Changed(string.Empty);
@@ -156,6 +180,7 @@ public sealed partial class ShellViewModel
     }
 
     partial void PrepareNativeConnection(ref Task<(ServerInfo Info, ApiClient Api)>? connection, CancellationToken cancellation);
+    partial void PrepareNativeIdentity(ref IdentityPlatform? identity);
 
     private string IdentityProblem(IdentityPlatformException e) => e.Problem switch
     {

@@ -121,8 +121,10 @@ public sealed partial class ShellViewModel
         }
         var integrity = _integrity!;
         if (integrity.CarDbSha256 is not { Length: 64 } carDb) { ConfigurationMessage(S["integrity.inconclusive"], error: true, integrity: true); return; }
-        var development = DevNet.PlainHttpUrl(_session.Api.Core.GetLeftPart(UriPartial.Authority));
-        var (keys, policy) = TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
+        var development = DevServer;
+        var (keys, policy) = _config.Production
+            ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
+            : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {

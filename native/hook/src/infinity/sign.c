@@ -476,19 +476,14 @@ int azimuth_sign_verify(const unsigned char signature[64], const unsigned char *
     return ed_verify_parts(signature, message, 0, message, size, key);
 }
 
-/* The launch-ticket keys, by kid (ACCOUNTS.md section 4: lt-<year>-<month>, the current and the
-   next). The production public keys come from the server's launch-ticket-signing-key (Cloud KMS
-   or Secret Manager, ONLINE_OFFLINE.md T11) when it exists: until then no release build takes a
-   ticket, and a launcher start plays offline with "session refused". A development build
-   (build.py --dev, FI_DEV) takes the local stack's well-known key instead (compose
-   FI_LAUNCH_TICKET_SIGNING_KEYS lt-local-1, .env.example), which must never be in a release:
-   anyone has its seed. The development build accepts only the local development public key. */
+/* Purpose-specific production public trust (OD-102). Development builds keep only the
+   local public test key; release builds never accept its publicly known seed. */
 AzimuthLaunchKey azimuth_sign_launch_keys[AZIMUTH_LAUNCH_KEYS] = {
 #ifdef FI_DEV
     {"lt-local-1", 1, {0x1f, 0xb7, 0xb2, 0x6e, 0xfc, 0x09, 0xb4, 0x08, 0xd2, 0xe6, 0x7f, 0xac, 0xc9, 0x6c, 0xf4, 0xfe,
                        0x37, 0xb2, 0x09, 0x75, 0xaa, 0xae, 0xa0, 0x59, 0xab, 0xee, 0x40, 0x8b, 0x8c, 0xfd, 0xc4, 0x10}},
 #else
-    {"lt-2026-10", 0, {0}},
+    {"lt-20261021-1", 1, {0x5d, 0x08, 0xcd, 0xf2, 0xfa, 0xc6, 0xaa, 0xf4, 0x02, 0x72, 0xb3, 0x33, 0x41, 0x4f, 0xaf, 0x94, 0x78, 0x5b, 0xcc, 0x5d, 0xa9, 0xa4, 0x80, 0xfc, 0x09, 0x61, 0x13, 0xf0, 0xfd, 0xe5, 0xb9, 0xb8}},
 #endif
     {"lt-2026-11", 0, {0}},
 };

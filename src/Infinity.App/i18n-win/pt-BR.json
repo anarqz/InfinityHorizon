@@ -439,5 +439,6 @@
   "online.available_help": "Você pode entrar na conta e iniciar uma nova sessão online quando quiser. Uma sessão anterior em modo offline não se reconectará automaticamente.",
   "online.continue": "Voltar ao launcher",
   "online.view": "Ver status dos serviços",
-  "online.updates": "Atualizações do launcher"
+  "online.updates": "Atualizações do launcher",
+  "native.registration_disabled": "Cadastros desativados"
 }

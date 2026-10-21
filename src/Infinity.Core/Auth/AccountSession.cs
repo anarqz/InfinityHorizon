@@ -4,7 +4,7 @@ using Infinity.Core.Api;
 namespace Infinity.Core.Auth;
 
 /// <summary>Where the launcher talks to: the server (core and gate origins come from its <c>/info</c>) and the website used for account self-service.</summary>
-public sealed record ServerConfig(Uri Server, Uri Portal)
+public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = false)
 {
     /// <summary>Local development defaults; --server/--portal or FI_SERVER/FI_PORTAL select a deployment.</summary>
     public static ServerConfig Default { get; } = new(new Uri("http://127.0.0.1:8480"), new Uri("http://127.0.0.1:3120"));
@@ -17,14 +17,37 @@ public sealed record ServerConfig(Uri Server, Uri Portal)
         string? Arg(string name)
         {
             var at = args.ToList().IndexOf(name);
-            return at >= 0 && at + 1 < args.Count ? args[at + 1] : null;
+            if (at < 0) return null;
+            if (at + 1 >= args.Count || args[at + 1].StartsWith("--", StringComparison.Ordinal) || args.Count(value => value == name) != 1)
+                throw new ArgumentException("Invalid configuration argument");
+            return args[at + 1];
         }
         var server = Arg("--server") ?? env("FI_SERVER");
         var portal = Arg("--portal") ?? env("FI_PORTAL");
-        return new ServerConfig(
-            ApiClient.CheckOrigin(server is null ? Default.Server : new Uri(server)),
-            ApiClient.CheckOrigin(portal is null ? Default.Portal : new Uri(portal)));
+        var environment = Arg("--environment") ?? env("FI_ENVIRONMENT");
+        if (environment is not (null or "development" or "production"))
+            throw new ArgumentException("Environment must be development or production");
+        var production = environment == "production";
+        var config = new ServerConfig(
+            ApiClient.CheckOrigin(server is null ? production ? ProductionDeployment.Core : Default.Server : new Uri(server)),
+            ApiClient.CheckOrigin(portal is null ? production ? ProductionDeployment.Core : Default.Portal : new Uri(portal)), production);
+        config.Validate();
+        return config;
     }
+
+    public void Validate()
+    {
+        if (Production)
+        {
+            ProductionDeployment.RequireOrigin(Server, ProductionDeployment.Core);
+            // No hosted production portal is available. Native account operations use core.
+            ProductionDeployment.RequireOrigin(Portal, ProductionDeployment.Core);
+        }
+        else if (ProductionDeployment.IsOfficial(Server) || ProductionDeployment.IsOfficial(Portal))
+            throw new ArgumentException("Official endpoints require explicit production selection");
+    }
+
+    public string StateDirectory(string root) => Production ? Path.Combine(root, "production") : root;
 }
 
 /// <summary>
@@ -64,7 +87,10 @@ public sealed class AccountSession : IDisposable
     public static async Task<(ServerInfo Info, ApiClient Api)> ConnectAsync(HttpClient http, ServerConfig config, string clientHeader, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(config);
+        config.Validate();
         var info = await ApiClient.InfoAsync(http, config.Server, clientHeader, cancellation).ConfigureAwait(false);
+        if (config.Production) ProductionDeployment.ValidateInfo(info);
+        else ProductionDeployment.ValidateDevelopmentInfo(info);
         var (core, gate) = ApiClient.Origins(info, config.Server);
         return (info, new ApiClient(http, core, gate, clientHeader));
     }

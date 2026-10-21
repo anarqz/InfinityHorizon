@@ -91,8 +91,11 @@ public sealed partial class ShellViewModel
 
     private Infinity.Core.Matchmaking.RelayGrantVerifyKeys IntegratedRelayKeys(Uri matchmaking)
     {
-        // Release relay public keys have not been supplied yet (CR-S29). Never trust development
-        // keys for a production or public matchmaking origin.
+        if (_config.Production)
+        {
+            Infinity.Core.Auth.ProductionDeployment.RequireOrigin(matchmaking, Infinity.Core.Auth.ProductionDeployment.Matchmaking);
+            return Infinity.Core.Auth.ProductionDeployment.RelayKeys();
+        }
         if (!DevServer || !Infinity.Core.DevNet.PlainHttpUrl(matchmaking.OriginalString)) return new();
         var configured = Environment.GetEnvironmentVariable("FI_DEV_RELAY_VERIFY_KEYS");
         // a development run needs no extra variable: the local stack's public ring by default

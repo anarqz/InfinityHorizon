@@ -39,7 +39,9 @@ public partial class MainWindow : Window
         {
             if (await vm.RecoverInterruptedUpdateAsync(cli)) return;
             var onlineCheck = vm.CheckOnlineStatusAsync(manual: false);
-            var updateCheck = vm.ProbeServerAsync();
+            // Production bootstrap respects global closure before requesting discovery.
+            if (config.Production) await onlineCheck;
+            var updateCheck = !config.Production || vm.OnlineServiceAllowsPlay ? vm.ProbeServerAsync() : Task.CompletedTask;
             await vm.VerifyBuildOriginAsync();
             if (azimuth is not null) vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
             else await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
