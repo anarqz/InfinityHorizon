@@ -44,11 +44,12 @@
         </StackPanel>
         <StackPanel Margin="0,0,12,0">
           <Button Content="{Binding S[nav.play]}" Style="{StaticResource NavButton}" Click="OnNavHome" Tag="{Binding ShowHome}" />
-          <!-- OD-46: Azimuth setup, with a warning dot while it is not ready to play online. -->
+          <!-- All game configuration and validation live here. -->
           <Button Style="{StaticResource NavButton}" Click="OnNavSetup" Tag="{Binding ShowSetup}">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Text="{Binding S[nav.azimuth]}" VerticalAlignment="Center" />
-              <Ellipse Width="8" Height="8" Margin="10,0,0,0" Fill="{StaticResource InfinityGold}" VerticalAlignment="Center"
+              <TextBlock Text="{Binding S[nav.configure]}" VerticalAlignment="Center" />
+              <Ellipse Width="8" Height="8" Margin="10,0,0,0" Fill="#E41E28" VerticalAlignment="Center"
+                       ToolTip="{Binding S[play.setup_needed]}" AutomationProperties.Name="{Binding S[play.setup_needed]}"
                        Visibility="{Binding SetupNeeded, Converter={StaticResource Visible}}" />
             </StackPanel>
           </Button>
@@ -143,7 +144,7 @@
         </Border>
 
         <!-- Status line. -->
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding Message}" Margin="40,0,40,18" TextWrapping="Wrap"
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding DisplayMessage}" Margin="40,0,40,18" TextWrapping="Wrap"
                    Foreground="{StaticResource InfinityMuted}" />
 
         <!-- Content: one panel per step of sign-in -> game -> profile. -->
@@ -314,45 +315,22 @@
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}">
             <StackPanel MaxWidth="600" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,8,0,8">
               <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                <TextBlock Text="{Binding S[play.online]}" Style="{StaticResource SectionTag}" VerticalAlignment="Center" />
-                <Border Margin="12,0,0,0" Padding="8,2" CornerRadius="4" Background="{StaticResource InfinityWarnSurface}">
+                <Border Padding="8,2" CornerRadius="4" Background="{StaticResource InfinityWarnSurface}">
                   <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />
                 </Border>
               </StackPanel>
-              <Image Source="{StaticResource BrandLogo}" Width="340" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality"
+              <Image Source="{StaticResource BrandLogo}" Width="340" Margin="0,0,0,20" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality"
                      Visibility="{Binding ShowPlayBrand, Converter={StaticResource Visible}}" />
-              <TextBlock Text="{Binding S[brand.tagline]}" Margin="0,12,0,20" Style="{StaticResource PageSubtitle}"
-                         Visibility="{Binding ShowPlayBrand, Converter={StaticResource Visible}}" />
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
-                <Border Style="{StaticResource Card}" Margin="0,0,0,16">
-                  <StackPanel>
-                    <TextBlock Text="{Binding S[integrity.title]}" FontWeight="Bold" FontSize="18" />
-                    <TextBlock Text="{Binding IntegrityStatus}" TextWrapping="Wrap" Margin="0,8,0,8" AutomationProperties.LiveSetting="Polite" />
-                    <TextBlock Text="{Binding IntegrityFindings}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                    <TextBlock Text="{Binding IntegrityLocationLabel}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,8" Foreground="{StaticResource InfinityMuted}" />
-                    <WrapPanel>
-                      <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" Margin="0,0,8,8" />
-                      <Button Content="{Binding S[integrity.check]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
-                      <Button Content="{Binding S[integrity.cancel]}" Click="OnCancelIntegrity" Visibility="{Binding IntegrityChecking, Converter={StaticResource Visible}}" Margin="0,0,8,8" />
-                      <Button Content="{Binding S[integrity.copy]}" Click="OnCopyIntegrity" Margin="0,0,8,8" />
-                      <Button Content="{Binding S[crash.private_support]}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" Margin="0,0,8,8" />
-                    </WrapPanel>
-                    <TextBlock Text="{Binding S[integrity.help]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                  </StackPanel>
-                </Border>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <WrapPanel>
                   <Button Content="{Binding S[profiles.play]}" HorizontalAlignment="Left" Click="OnPlay" IsEnabled="{Binding CanPlay}"
                           Style="{StaticResource PlayButton}" Margin="0,0,12,8" />
-                  <Button Content="{Binding S[play.prepare]}" Click="OnNavSetup" VerticalAlignment="Center" Margin="0,0,0,8"
-                          Visibility="{Binding SetupNeeded, Converter={StaticResource Visible}}" />
                 </WrapPanel>
                 <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" FontWeight="Bold"
                            AutomationProperties.LiveSetting="Polite" />
-                <TextBlock Text="{Binding S[play.public_warning]}" TextWrapping="Wrap" Margin="0,14,0,14" Foreground="{StaticResource InfinityMuted}" />
-                <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
               </StackPanel>
               <Border Style="{StaticResource Card}" Background="#EE170B22" BorderBrush="#775A184D" Margin="0,2,0,0"
                       Visibility="{Binding WaitingForAdmission, Converter={StaticResource Visible}}">
@@ -381,7 +359,6 @@
                           IsEnabled="{Binding CanLeaveQueue}" />
                 </StackPanel>
               </Border>
-              <TextBlock Text="{Binding HookLine}" Margin="0,8,0,0" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
               <WrapPanel Margin="0,14,0,0" Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
                 <Button Content="{Binding S[supervisor.quit_button]}" Margin="0,0,14,0" Click="OnQuitGame"
                         Visibility="{Binding GameStarted, Converter={StaticResource Visible}}" />
@@ -436,6 +413,7 @@
               <TextBlock Text="{Binding S[bugs.eyebrow]}" Style="{StaticResource SectionTag}" />
               <TextBlock Text="{Binding S[bugs.title]}" Style="{StaticResource PageTitle}" Margin="0,8,0,0" />
               <TextBlock Text="{Binding S[bugs.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,24" />
+              <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Margin="0,0,0,18" Foreground="{StaticResource InfinityMuted}" />
               <Border Style="{StaticResource Card}">
                 <StackPanel>
                   <TextBlock Text="{Binding S[bugs.step1]}" FontWeight="Bold" FontSize="16" />
@@ -462,6 +440,7 @@
               <Border Style="{StaticResource Card}">
                 <StackPanel>
                   <TextBlock Text="{Binding SetupSummary}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" Margin="0,0,0,12" />
+                  <TextBlock Text="{Binding HookLine}" TextWrapping="Wrap" Margin="0,0,0,8" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                   <DockPanel Margin="0,4">
                     <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding AzimuthFound, Converter={StaticResource Visible}}" />
                     <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
@@ -482,12 +461,31 @@
                   </DockPanel>
                   <TextBlock Text="{Binding HookPackageProblem}" Margin="24,4,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
                              Visibility="{Binding HasHookPackageProblem, Converter={StaticResource Visible}}" />
+                  <TextBlock Text="{Binding EoAzimuthText}" Margin="24,4,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding EoAzimuthMismatch, Converter={StaticResource Visible}}" />
                   <WrapPanel Margin="0,16,0,0">
                     <Button Content="{Binding HookInstallLabel}" Margin="0,0,10,0" Click="OnInstallHook"
                             Style="{StaticResource AccentButtonStyle}" Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}" />
                     <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" />
                     <Button Content="{Binding S[setup.recheck]}" Margin="10,0,0,0" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" />
                   </WrapPanel>
+                </StackPanel>
+              </Border>
+
+              <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[integrity.title]}" FontWeight="Bold" FontSize="18" />
+                  <TextBlock Text="{Binding IntegrityStatus}" TextWrapping="Wrap" Margin="0,8,0,8" AutomationProperties.LiveSetting="Polite" />
+                  <TextBlock Text="{Binding IntegrityFindings}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding IntegrityLocationLabel}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,8" Foreground="{StaticResource InfinityMuted}" />
+                  <WrapPanel>
+                    <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[integrity.check]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[integrity.cancel]}" Click="OnCancelIntegrity" Visibility="{Binding IntegrityChecking, Converter={StaticResource Visible}}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[integrity.copy]}" Click="OnCopyIntegrity" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[crash.private_support]}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" Margin="0,0,8,8" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding S[integrity.help]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
                 </StackPanel>
               </Border>
 
@@ -539,7 +537,7 @@
                             Visibility="{Binding EoWarning, Converter={StaticResource Visible}}">
                       <TextBlock Text="{Binding EoIntegrity}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" FontSize="12" />
                     </Border>
-                    <TextBlock Text="{Binding EoAzimuthText}" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
+                    <TextBlock Text="{Binding S[play.setup_needed]}" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
                                Visibility="{Binding EoAzimuthMismatch, Converter={StaticResource Visible}}" />
 
                     <DockPanel Margin="0,14,0,0">

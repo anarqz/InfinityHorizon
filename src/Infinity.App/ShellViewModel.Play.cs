@@ -56,7 +56,7 @@ public sealed partial class ShellViewModel
 
     public string LeaveQueueLabel => S[_leavingQueue ? "queue.leaving" : "queue.cancel"];
 
-    public string PlayGuidance => SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : IntegrityReady ? "play.ready" : "integrity.not_checked"];
+    public string PlayGuidance => SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : "play.ready"];
 
     /// <summary>The detected Azimuth folder (<c>--azimuth</c>, <c>FI_AZIMUTH</c>), or null.</summary>
     public AzimuthInstall? Install
@@ -82,7 +82,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
 
     public string? PlayStatus => _playStatus;
 
@@ -93,12 +93,9 @@ public sealed partial class ShellViewModel
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         RefreshHook(); // the hook as it is now, not as it was when the screen last looked
-        if (CanPlay && _hook is not null && HookInstaller.ShouldInstall(_hook, _hookPackage) && _hookPackage is { } update &&
-            HookInstaller.Build(update.Version) > HookInstaller.Build(_hook.Version))
+        if (!GameConfigurationReady && !Playing)
         {
-            // a newer verified hook is offered: the old one may not know this server's keys (SAURON)
-            Log($"play: refused: hook {_hook.Version} installed, {update.Version} offered");
-            Message = S.Format("setup.update_first", ("version", update.Version!));
+            Message = S["play.setup_needed"];
             return;
         }
         if (!CanPlay || _session is null || _install is null || !OperatingSystem.IsWindows())
@@ -117,14 +114,14 @@ public sealed partial class ShellViewModel
         await CheckIntegrityAsync(futureSessionId);
         if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
             || !CanPlay || !IntegrityReady || _integrity is null)
-        { Message = IntegrityStatus; return; }
+        { ConfigurationMessage(IntegrityStatus, error: true); return; }
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
         if (profile is null)
         {
             return;
         }
         var integrity = _integrity!;
-        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { Message = S["integrity.inconclusive"]; return; }
+        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { ConfigurationMessage(S["integrity.inconclusive"], error: true); return; }
         var development = DevNet.PlainHttpUrl(_session.Api.Core.GetLeftPart(UriPartial.Authority));
         var (keys, policy) = TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         using var onlineActivity = new OnlineActivity();
@@ -154,6 +151,7 @@ public sealed partial class ShellViewModel
         _queuePlace = null;
         _admissionTitle = _admissionDetail = null;
         _hookLine = null;
+        ClearRuntimeConfigurationIssue();
         SetStatus(S["queue.requesting"]);
         var supervisor = new PlaySupervisor(config, new GateClient(_session.Api, _session.Tokens), new WindowsSpawner(),
             handoff => new WindowsPipe(PipeServer.Create(handoff.PipeName)),
@@ -314,15 +312,19 @@ public sealed partial class ShellViewModel
                 Changed(nameof(HookLine));
                 break;
             case SupervisorEvent.Refused r:
-                SetStatus(S.Format("supervisor.refused", ("reason", r.Reason)));
+                ConfigurationMessage(S.Format("supervisor.refused", ("reason", r.Reason)), error: true);
+                SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Running:
+                ClearRuntimeConfigurationIssue();
                 SetStatus(S["supervisor.running"]);
                 break;
             case SupervisorEvent.TokenPushed t:
+                ClearRuntimeConfigurationIssue();
                 _hookLine = (_hookLine?.Split(" · ")[0] ?? string.Empty) + " · " +
                     S.Format("supervisor.ticket_renewed", ("time", DateTimeOffset.UtcNow.ToString("HH:mm:ss", CultureInfo.InvariantCulture)));
                 Changed(nameof(HookLine));
+                Changed(string.Empty);
                 break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
@@ -338,6 +340,7 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Ended ended:
                 _waitingForAdmission = _queued = false;
+                if (ended.Reason is not "error") ClearRuntimeConfigurationIssue();
                 var text = ended.Reason switch
                 {
                     "queue_cancelled" => S[ended.Left ? "queue.left" : "queue.leave_pending"],
@@ -351,7 +354,8 @@ public sealed partial class ShellViewModel
                 SetStatus(ended.Left || ended.Reason is "queue_cancelled" or "error" ? text : text + " " + S["supervisor.leave_failed"]);
                 break;
             case SupervisorEvent.HookOffline:
-                SetStatus(S["supervisor.hook_offline"]);
+                ConfigurationMessage(S["supervisor.hook_offline"], error: true);
+                SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error err when err.Message.StartsWith("save: ", StringComparison.Ordinal):
                 SetStatus(Infinity.Core.Overlay.OverlayNotices.SaveBlocked(S, err.Message[6..]).Text.Replace("\n", " · ", StringComparison.Ordinal));
@@ -379,10 +383,13 @@ public sealed partial class ShellViewModel
                 _integrity?.Revoke();
                 _integrityStatus = S[content.Message == ErrorCodes.ContentPolicyUnavailable ? "integrity.policy_unavailable"
                     : content.Message == ErrorCodes.ContentIncompatible ? "integrity.incompatible" : "integrity.inconclusive"];
-                SetStatus(_integrityStatus);
+                ConfigurationMessage(_integrityStatus, error: true);
+                SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error err:
-                SetStatus(S["supervisor.launch_refused"] + " (" + err.Message + ")");
+                ConfigurationMessage(S["supervisor.launch_refused"] + " (" + err.Message + ")", error: _configurationHasError);
+                _configurationRuntimeIssue = true;
+                SetStatus(string.Empty);
                 break;
         }
     }
