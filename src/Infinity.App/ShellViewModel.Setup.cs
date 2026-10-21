@@ -19,6 +19,7 @@ public sealed partial class ShellViewModel
     private InstalledHook? _hook;
     private HookPackage? _hookPackage;
     private string? _hookPackageError;
+    private bool _configurationHasError, _messageForConfiguration, _configurationRuntimeIssue;
 
     /// <summary>
     /// The development hook key (<c>FI_DEV_HOOK_KEY</c>) counts only against a development server
@@ -33,8 +34,35 @@ public sealed partial class ShellViewModel
 
     public AzimuthStatus SetupStatus => AzimuthSetup.StatusOf(_install, _hook);
 
-    /// <summary>The sidebar's warning dot: Azimuth is not ready to play online.</summary>
-    public bool SetupNeeded => !_searching && SetupStatus != AzimuthStatus.Ready;
+    private bool GameConfigurationReady => !_searching && !_configurationHasError && SetupStatus == AzimuthStatus.Ready
+        && !HasHookPackageProblem && !HookUpdateNeeded && IntegrityReady;
+
+    private bool HookUpdateNeeded => _hook is not null && _hookPackage is not null
+        && HookInstaller.Build(_hookPackage.Version) > HookInstaller.Build(_hook.Version);
+
+    /// <summary>Pending or failed configuration is explained only in Configure.</summary>
+    public bool SetupNeeded
+    {
+        get { var needed = !GameConfigurationReady || _configurationRuntimeIssue; InspectConfiguration(ref needed); return needed; }
+    }
+    partial void InspectConfiguration(ref bool needsAttention);
+
+    public string? DisplayMessage => _messageForConfiguration && !ShowSetup ? null : Message;
+
+    private void ConfigurationMessage(string message, bool error = false)
+    {
+        Message = message;
+        _messageForConfiguration = true;
+        _configurationHasError = error;
+        Changed(string.Empty);
+    }
+
+    private void ClearRuntimeConfigurationIssue()
+    {
+        if (!_configurationRuntimeIssue) return;
+        _configurationRuntimeIssue = false;
+        if (!_configurationHasError && _messageForConfiguration) Message = null;
+    }
 
     public bool Searching => _searching;
 
@@ -107,6 +135,9 @@ public sealed partial class ShellViewModel
     /// <summary>Finds Azimuth off the UI thread (the look-around reads folders), then shows the setup when it is not ready.</summary>
     public async Task FindAzimuthAsync(string? explicitFolder, bool openSetupWhenNeeded)
     {
+        _configurationHasError = false;
+        _configurationRuntimeIssue = false;
+        if (_messageForConfiguration) Message = null;
         _searching = true;
         Changed(string.Empty);
         AzimuthInstall? found;
@@ -138,11 +169,11 @@ public sealed partial class ShellViewModel
         if (!SignedIn || !ModsIdle) return;
         if (!AzimuthSetup.SaveChoice(_stateDirectory, folder))
         {
-            Message = S["setup.not_azimuth_folder"];
+            ConfigurationMessage(S["setup.not_azimuth_folder"], error: true);
             return;
         }
         Install = AzimuthInstall.Detect(folder);
-        Message = SetupSummary;
+        ConfigurationMessage(SetupSummary);
         Changed(string.Empty);
     }
 
@@ -173,12 +204,12 @@ public sealed partial class ShellViewModel
             var installed = HookInstaller.Install(_install.Root, _hookPackage, DevHookKey, GameRunning);
             Log($"hook: {installed.Version} installed ({installed.Signer}) in {_install.Root}");
             Install = AzimuthInstall.Detect(_install.Root);
-            Message = S.Format("setup.hook_installed", ("version", installed.Version!));
+            ConfigurationMessage(S.Format("setup.hook_installed", ("version", installed.Version!)));
         }
         catch (Exception e) when (e is HookException or IOException or UnauthorizedAccessException)
         {
             Log("hook: install failed: " + e.Message);
-            Message = S["setup.hook_install_failed"] + " (" + e.Message + ")";
+            ConfigurationMessage(S["setup.hook_install_failed"] + " (" + e.Message + ")", error: true);
         }
         RefreshHook();
         Changed(string.Empty);

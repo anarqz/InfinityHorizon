@@ -107,7 +107,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             _message = value;
+            _messageForConfiguration = false;
             Changed();
+            Changed(nameof(DisplayMessage));
         }
     }
 
