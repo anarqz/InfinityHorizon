@@ -64,8 +64,7 @@ public sealed partial class ShellViewModel
         get => _install;
         set
         {
-            ClearIntegrity();
-            _install = value;
+            if (value != _install) { ClearIntegrity(); _install = value; }
             if (value is not null)
             {
                 SwitchCaches(value.Root, online: null);

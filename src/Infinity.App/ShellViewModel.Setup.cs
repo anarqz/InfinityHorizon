@@ -20,6 +20,7 @@ public sealed partial class ShellViewModel
     private HookPackage? _hookPackage;
     private string? _hookPackageError;
     private bool _configurationHasError, _messageForConfiguration, _configurationRuntimeIssue;
+    private bool _azimuthChoiceFailed;
 
     /// <summary>
     /// The development hook key (<c>FI_DEV_HOOK_KEY</c>) counts only against a development server
@@ -34,8 +35,7 @@ public sealed partial class ShellViewModel
 
     public AzimuthStatus SetupStatus => AzimuthSetup.StatusOf(_install, _hook);
 
-    private bool GameConfigurationReady => !_searching && !_configurationHasError && SetupStatus == AzimuthStatus.Ready
-        && !HasHookPackageProblem && !HookUpdateNeeded && IntegrityReady;
+    private bool GameConfigurationReady => !_configurationHasError && AzimuthCardReady && IntegrityReady;
 
     private bool HookUpdateNeeded => _hook is not null && _hookPackage is not null
         && HookInstaller.Build(_hookPackage.Version) > HookInstaller.Build(_hook.Version);
@@ -104,6 +104,10 @@ public sealed partial class ShellViewModel
 
     public bool HasHookPackageProblem => HookPackageProblem is not null;
 
+    public bool AzimuthCardReady => !_searching && !_azimuthChoiceFailed && SetupStatus == AzimuthStatus.Ready
+        && !HasHookPackageProblem && !HookUpdateNeeded;
+    public string AzimuthCardStatus => S[_searching ? "configure.checking" : AzimuthCardReady ? "configure.ready" : "configure.attention"];
+
     public string SetupSummary => SetupStatus switch
     {
         AzimuthStatus.Missing => S["setup.summary_missing"],
@@ -137,6 +141,7 @@ public sealed partial class ShellViewModel
     {
         _configurationHasError = false;
         _configurationRuntimeIssue = false;
+        _azimuthChoiceFailed = false;
         if (_messageForConfiguration) Message = null;
         _searching = true;
         Changed(string.Empty);
@@ -169,10 +174,12 @@ public sealed partial class ShellViewModel
         if (!SignedIn || !ModsIdle) return;
         if (!AzimuthSetup.SaveChoice(_stateDirectory, folder))
         {
+            _azimuthChoiceFailed = true;
             ConfigurationMessage(S["setup.not_azimuth_folder"], error: true);
             return;
         }
         Install = AzimuthInstall.Detect(folder);
+        _azimuthChoiceFailed = false;
         ConfigurationMessage(SetupSummary);
         Changed(string.Empty);
     }
