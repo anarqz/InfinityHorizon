@@ -85,6 +85,7 @@ public sealed partial class ShellViewModel
         {
             var (info, _) = await AccountSession.ConnectAsync(Http, _config, ClientHeader, cancellation);
             _serverReachable = true;
+            ObserveRegistration(info);
             return info;
         }
         catch (ApiException error) when (Infinity.Core.Online.OnlinePause.From(error) is { } pause)
@@ -122,7 +123,7 @@ public sealed partial class ShellViewModel
         {
             if (UpdateInstaller.IsGameDirectory(AppContext.BaseDirectory))
             { _updateFailureKey = "updater.location"; _launcherUpdatePhase = UpdatePhase.Failed; Changed(string.Empty); return; }
-            var arguments = new[] { "--server", _config.Server.ToString(), "--portal", _config.Portal.ToString(), "--locale", S.Locale };
+            var arguments = new[] { "--environment", _config.Production ? "production" : "development", "--server", _config.Server.ToString(), "--portal", _config.Portal.ToString(), "--locale", S.Locale };
             var progress = new Progress<UpdateProgress>(value =>
             { if (!acceptingProgress) return; (_launcherUpdatePhase, _updateBytes, _updateTotal) = (value.Phase, value.ReceivedBytes, value.TotalBytes); Changed(string.Empty); });
             var plan = await Task.Run(() => _updater.StageAsync(AppContext.BaseDirectory, arguments, progress, download.Token), download.Token);

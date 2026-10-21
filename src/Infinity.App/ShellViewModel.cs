@@ -37,7 +37,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         S = strings;
         _config = config;
-        _stateDirectory = stateDirectory;
+        config.Validate();
+        _stateDirectory = config.StateDirectory(stateDirectory);
         Version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
         ServerLabel = S.Format("shell.live", ("server", config.Server.Authority));
@@ -195,6 +196,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public async Task CreateAccountAsync()
     {
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
+        if (!_registrationEnabled) { RegistrationDisabled(); return; }
         if (_pending is null || !CheckName())
         {
             return;
@@ -372,6 +374,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             ObserveOnlinePause(pause);
             ExtendOnlineCooldown(e.RetryAfter);
+        }
+        catch (ApiException e) when (e.Code == ErrorCodes.AccountsRegistrationDisabled)
+        {
+            RegistrationDisabled();
         }
         catch (OperationCanceledException)
         {

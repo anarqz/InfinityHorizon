@@ -31,12 +31,17 @@ The launcher opens even when no server is available. Sign-in and online play req
 backend and the player's own game/Azimuth installation. `--server` / `FI_SERVER` and
 `--portal` / `FI_PORTAL` select a deployment; the defaults are loopback development addresses.
 Development signature trust is accepted only with development origins.
+Development remains the default. `--environment production` (or `FI_ENVIRONMENT=production`)
+explicitly selects the official HTTPS bootstrap and isolated local state; it never restores a
+development session. Production discovery validates each service origin and the native Identity
+Platform project, with no emulator or fallback to LAN. `run.ps1` always selects development.
 The local signing seed stays in the user's LocalAppData, outside this checkout; the build stores
 only its public verification key in the output. Starting the launcher does not start a game.
 
 `build.ps1 -Zig <path> -Version <semver> -Production` compiles without development trust and leaves all four binaries
 unsigned. It never uses an official private key. Maintainers sign official distribution artifacts
-separately; a production deployment must supply its launch-ticket and relay public trust keys.
+separately. Production launch-ticket and relay public trust are embedded separately from the
+release/update signing key; development builds of the hook keep only local ticket trust.
 Binary builds belong in versioned releases, rather than in the source tree.
 
 The launcher checks its executable, bundled hook/overlay and any installed Infinity hook against
@@ -48,7 +53,8 @@ expected when building from source. A binary's signature proves its signed bytes
 running client is unmodified.
 
 At startup, the launcher checks the latest stable release and backend version policy. Online
-play requires a successful check and a compatible version. A required update has its own screen;
+play requires reachable backend version policy and a compatible version. Unavailable release
+discovery is advisory; a known required update has its own screen;
 account and support actions remain accessible. Compatible newer builds from source are not
 downgraded. Version compatibility is separate from the build-origin advisory above.
 

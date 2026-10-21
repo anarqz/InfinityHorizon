@@ -439,5 +439,6 @@
   "online.available_help": "You can sign in and start a new online session when you are ready. An earlier offline session will not reconnect automatically.",
   "online.continue": "Back to launcher",
   "online.view": "View service status",
-  "online.updates": "Launcher updates"
+  "online.updates": "Launcher updates",
+  "native.registration_disabled": "Registrations disabled"
 }

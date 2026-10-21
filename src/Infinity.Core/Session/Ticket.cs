@@ -105,8 +105,8 @@ public sealed class TicketKeys
 
     /// <summary>
     /// The keys and policy a launch ticket is verified with (supervisor.rs <c>ticket_trust</c>).
-    /// Release builds embed no production key yet (ONLINE_OFFLINE T11), so only a development
-    /// server (loopback or LAN, plain http) hands out a ticket the launcher accepts.
+    /// This helper supplies local development trust only. Explicit production configuration uses
+    /// ProductionDeployment's separate release ring; never infer that selection from a URL.
     /// </summary>
     public static (TicketKeys Keys, TicketPolicy Policy) Trust(bool developmentServer, string? devKeyEnv)
     {
@@ -119,7 +119,7 @@ public sealed class TicketKeys
         {
             keys.Add(extra);
         }
-        return (new TicketKeys([.. keys]), TicketPolicy.Default with { AllowHttp = true });
+        return (new TicketKeys([.. keys]), TicketPolicy.Default with { AllowHttp = true, Development = true });
     }
 }
 
@@ -132,6 +132,8 @@ public sealed record TicketPolicy
 
     /// <summary>Development servers only (plain http on loopback or a private LAN address).</summary>
     public bool AllowHttp { get; init; }
+    public bool Production { get; init; }
+    public bool Development { get; init; }
 
     public static TicketPolicy Default { get; } = new();
 }
@@ -200,6 +202,20 @@ public static class TicketVerifier
         if (!(secure || localHttp))
         {
             throw new TicketException("game server is not https");
+        }
+        if (policy.Development && Uri.TryCreate(parsed.Server, UriKind.Absolute, out var destination) && Auth.ProductionDeployment.IsOfficial(destination))
+            throw new TicketException("development ticket cannot select a production game server");
+        if (policy.Production)
+        {
+            try
+            {
+                var expected = parsed.Pool == "vip" ? Auth.ProductionDeployment.Saves
+                    : parsed.Pool == "free" ? Auth.ProductionDeployment.Matchmaking : null;
+                if (expected is null) throw new InvalidDataException("Unknown production pool");
+                Auth.ProductionDeployment.RequireOrigin(new Uri(parsed.Server), expected);
+            }
+            catch (Exception error) when (error is ArgumentException or InvalidDataException or UriFormatException)
+            { throw new TicketException("game server is not an approved production pool"); }
         }
         return parsed;
     }

@@ -728,7 +728,7 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
 
     private static void ValidateArguments(IReadOnlyList<string> arguments)
     {
-        if (arguments.Count > 6 || arguments.Count % 2 != 0) throw new InvalidDataException("Invalid update restart arguments.");
+        if (arguments.Count > 8 || arguments.Count % 2 != 0) throw new InvalidDataException("Invalid update restart arguments.");
         var names = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 0; index < arguments.Count; index += 2)
         {
@@ -737,6 +737,8 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
             if (name is null || value is null || !names.Add(name) || value.Length > 2048) throw new InvalidDataException("Invalid update restart arguments.");
             if (name == "--locale")
             { if (value is not ("en" or "pt-BR")) throw new InvalidDataException("Invalid update locale."); }
+            else if (name == "--environment")
+            { if (value is not ("development" or "production")) throw new InvalidDataException("Invalid update environment."); }
             else if (name is "--server" or "--portal")
             {
                 if (!Uri.TryCreate(value, UriKind.Absolute, out var origin) || origin.UserInfo.Length != 0 ||
@@ -744,8 +746,10 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
                     throw new InvalidDataException("Invalid update restart origin.");
                 ApiClient.CheckOrigin(origin);
             }
-            else throw new InvalidDataException("Only server, portal and locale may be preserved across update.");
+            else throw new InvalidDataException("Only environment, server, portal and locale may be preserved across update.");
         }
+        if (names.Contains("--environment"))
+            Auth.ServerConfig.From(arguments, _ => null);
     }
 
     private static void ValidateJournal(UpdateJournal journal, string expectedId)

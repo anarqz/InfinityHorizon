@@ -31,6 +31,7 @@ public static class ErrorCodes
     public const string AuthEmailUnverified = "AUTH.EMAIL_UNVERIFIED";
     public const string AuthProviderNotAllowed = "AUTH.PROVIDER_NOT_ALLOWED";
     public const string AccountsBanned = "ACCOUNTS.BANNED";
+    public const string AccountsRegistrationDisabled = "ACCOUNTS.REGISTRATION_DISABLED";
     public const string SharingTooManyDevices = "SHARING.TOO_MANY_DEVICES";
     public const string AccountsNameUnavailable = "ACCOUNTS.NAME_UNAVAILABLE";
     public const string AccountsProfileLimit = "ACCOUNTS.PROFILE_LIMIT";

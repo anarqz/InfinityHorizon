@@ -178,8 +178,10 @@
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <Button Content="{Binding S[native.sign_in]}" Click="OnNativeSignIn" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
-                    <Button Grid.Column="2" Content="{Binding S[native.sign_up]}" Click="OnNativeSignUp" IsEnabled="{Binding CanStartOnlineAccount}" />
+                    <Button Grid.Column="2" Content="{Binding S[native.sign_up]}" Click="OnNativeSignUp" IsEnabled="{Binding CanCreateOnlineAccount}" />
                   </Grid>
+                  <TextBlock Text="{Binding S[native.registration_disabled]}" Margin="0,12,0,0" TextWrapping="Wrap"
+                             Visibility="{Binding ShowRegistrationDisabled, Converter={StaticResource Visible}}" />
                 </StackPanel>
                 <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding S[native.check_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -205,7 +207,7 @@
               <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" Margin="0,6,0,4" />
               <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
               <Button Content="{Binding S[signin.create]}" Margin="0,18,0,0" HorizontalAlignment="Left" Padding="28,9"
-                      Click="OnCreateAccount" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
+                      Click="OnCreateAccount" IsEnabled="{Binding CanCreateOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
             </StackPanel>
           </Border>
 

@@ -10,6 +10,6 @@ $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
 $start.WorkingDirectory = $folder
 $start.Environment['FI_DEV_HOOK_KEY'] = $key
-foreach ($argument in @('--server', $Server, '--portal', $Portal)) { $start.ArgumentList.Add($argument) }
+foreach ($argument in @('--environment', 'development', '--server', $Server, '--portal', $Portal)) { $start.ArgumentList.Add($argument) }
 $process = [Diagnostics.Process]::Start($start)
 $process.Dispose()
