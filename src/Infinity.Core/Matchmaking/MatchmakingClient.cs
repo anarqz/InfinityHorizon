@@ -262,7 +262,8 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         {
             throw new InvalidOperationException("no game access ticket");
         }
-        using var request = new HttpRequestMessage(method, new Uri(Matchmaking, route));
+        using var request = new HttpRequestMessage(method, new Uri(Matchmaking, route))
+            {Version=HttpVersion.Version11,VersionPolicy=HttpVersionPolicy.RequestVersionOrLower};
         request.Headers.TryAddWithoutValidation("X-Fi-Client", clientHeader);
         request.Headers.TryAddWithoutValidation("X-Fi-Session", token);
         if (body is not null)

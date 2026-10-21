@@ -20,6 +20,7 @@ namespace Infinity.App;
 public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 {
     private static readonly HttpClient Http = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
+    private static readonly Lazy<HttpClient> ProductionMatchmakingHttp=new(Infinity.Core.Matchmaking.MatchmakingTransport.Create);
 
     private readonly ServerConfig _config;
     private readonly string _stateDirectory;
