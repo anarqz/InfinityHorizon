@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -159,14 +160,12 @@ public sealed class ModManager(string azimuthRoot, Func<bool> gameRunning)
         {
             throw new ModException($"{mod.Name} {release.Version} is not a vetted release");
         }
-        if (download.Scheme != Uri.UriSchemeHttps || download.Host != "github.com")
+        if (download != release.DownloadUrl(mod))
         {
             throw new ModException("downloads come only from github.com");
         }
         RefuseWhileRunning();
-        using var request = new HttpRequestMessage(HttpMethod.Get, download);
-        request.Headers.TryAddWithoutValidation("User-Agent", "infinity-launcher");
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
+        using var response = await DownloadAsync(http, download, cancellation).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         if (response.Content.Headers.ContentLength > MaxAssetBytes)
         {
@@ -187,6 +186,39 @@ public sealed class ModManager(string azimuthRoot, Func<bool> gameRunning)
             }
         }
         return Install(mod, release, buffer.ToArray(), DateTime.UtcNow);
+    }
+
+    // The supplied client must disable automatic redirects and carry no credentials/cookies.
+    // GitHub serves release bytes through its CDN; validate each hop before sending it.
+    private static async Task<HttpResponseMessage> DownloadAsync(HttpClient http, Uri location, CancellationToken cancellation)
+    {
+        if (http.DefaultRequestHeaders.Any())
+            throw new ModException("a dedicated download client is required");
+        var visited = new HashSet<Uri>();
+        for (var redirects = 0; ; redirects++)
+        {
+            if (!location.IsAbsoluteUri || location.Scheme != Uri.UriSchemeHttps || !location.IsDefaultPort
+                || location.UserInfo.Length != 0 || location.Fragment.Length != 0
+                || location.Host is not ("github.com" or "release-assets.githubusercontent.com" or "objects.githubusercontent.com" or "github-releases.githubusercontent.com")
+                || !visited.Add(location))
+                throw new ModException("the mod download destination is not supported");
+            using var request = new HttpRequestMessage(HttpMethod.Get, location);
+            request.Headers.TryAddWithoutValidation("User-Agent", "infinity-launcher");
+            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
+            if (response.RequestMessage?.RequestUri is { } actual && actual != location)
+            {
+                response.Dispose();
+                throw new ModException("automatic download redirects are not supported");
+            }
+            if (response.StatusCode is not (HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther
+                or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect))
+                return response;
+            var next = response.Headers.Location;
+            response.Dispose();
+            if (redirects >= 5 || next is null || !Uri.TryCreate(location, next, out var resolved))
+                throw new ModException("the mod download redirected too many times or has no destination");
+            location = resolved;
+        }
     }
 
     /// <summary><see cref="InstallAsync"/> from the asset's bytes (tests, and a download already in hand).</summary>
