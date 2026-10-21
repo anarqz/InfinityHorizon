@@ -26,26 +26,33 @@ public partial class MainWindow : Window
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
         var vm = new ShellViewModel(strings, config, state);
         DataContext = vm;
+        vm.UpdateRestartRequested += () => Application.Current.Shutdown();
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
-        Loaded += async (_, _) => await vm.VerifyBuildOriginAsync();
+        ContentRendered += async (_, _) => await vm.ConfirmUpdatedStartupAsync(cli);
         var azimuth = Array.IndexOf(cli, "--azimuth") is var i and >= 0 && i + 1 < cli.Length ? cli[i + 1] : Environment.GetEnvironmentVariable("FI_AZIMUTH");
         // OD-46: --azimuth / FI_AZIMUTH, else the saved choice, the launcher's folder, then a look around.
-        if (azimuth is not null)
+        Loaded += async (_, _) =>
         {
-            vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
-        }
-        else
-        {
-            Loaded += async (_, _) => await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
-        }
-        // the server's state at start, whatever found Azimuth (the top bar never says OFFLINE on a guess)
-        Loaded += async (_, _) => await vm.ProbeServerAsync();
+            if (await vm.RecoverInterruptedUpdateAsync(cli)) return;
+            var updateCheck = vm.ProbeServerAsync();
+            await vm.VerifyBuildOriginAsync();
+            if (azimuth is not null) vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
+            else await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
+            await updateCheck;
+        };
     }
 
     partial void ConfigureHarness(string[] args, ShellViewModel vm, ref bool handled);
+
+    private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesAsync();
+    private async void OnApplyLauncherUpdate(object sender, RoutedEventArgs e) => await _vm.ApplyLauncherUpdateAsync();
+    private void OnCancelLauncherUpdate(object sender, RoutedEventArgs e) => _vm.CancelLauncherUpdate();
+    private void OnUpdateSupport(object sender, RoutedEventArgs e) => _vm.OpenUpdateSupport();
+    private void OnOpenLauncherUpdate(object sender, RoutedEventArgs e) => _vm.OpenLauncherUpdate();
+    private void OnExitLauncherUpdate(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
     private void OnOfficialReleases(object sender, RoutedEventArgs e) => OpenCommunityLink("https://github.com/anarqz/InfinityHorizon/releases");
 

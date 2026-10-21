@@ -38,7 +38,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         S = strings;
         _config = config;
         _stateDirectory = stateDirectory;
-        Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
+        Version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
         ServerLabel = S.Format("shell.live", ("server", config.Server.Authority));
     }
 
@@ -54,7 +55,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public int SidebarWidth => SignedIn ? 220 : 0;
 
-    public bool CanChangeIdentity => SignedIn && !Playing && !_busy;
+    public bool CanChangeIdentity => SignedIn && !Playing && !_busy && !LauncherUpdateBusy;
 
     public bool ShowWelcome => !SignedIn && _pending is null && !_loginOpen;
 
@@ -166,23 +167,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     private bool? _serverReachable;
 
     /// <summary>At start: <c>/launcher/v1/info</c> once, logged either way (the shell never calls the server silently).</summary>
-    public async Task ProbeServerAsync()
-    {
-        try
-        {
-            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var (info, _) = await AccountSession.ConnectAsync(Http, _config, ClientHeader, bound.Token);
-            _serverReachable = true;
-            Log($"server: {_config.Server} info ok ({info.Games?.Count ?? 0} game(s))");
-        }
-        catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or Infinity.Core.Api.ApiException or TaskCanceledException or OperationCanceledException)
-        {
-            _serverReachable = false;
-            Log($"server: {_config.Server} info failed: {e.GetType().Name}: {e.Message}");
-        }
-        Changed(nameof(Connection));
-        Changed(nameof(Online));
-    }
+    public Task ProbeServerAsync() => CheckLauncherUpdatesAsync();
 
     public string Email => _gate.AccountEmail ?? string.Empty;
 
@@ -390,6 +375,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _updateStop.Cancel();
+        _updater?.Dispose();
         ClearIntegrity();
         ClearCrashScreen();
         StopPlay();

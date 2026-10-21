@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory)][string]$Zig,
     [string]$Python = 'python',
+    [string]$Version = '0.1.0',
     [switch]$Production
 )
 $ErrorActionPreference = 'Stop'
@@ -13,13 +14,16 @@ $out = Join-Path $root 'artifacts/win-x64'
 New-Item -ItemType Directory -Force $out, "$out/hook", "$out/overlay", "$out/licenses" | Out-Null
 
 # An existing signature must never survive a rebuild, including a switch to production mode.
-foreach ($file in @("$out/infinity.exe.sig", "$out/hook/infinity.dll.sig", "$out/overlay/infinity-overlay.dll.sig", "$out/development-key.txt", "$out/SHA256SUMS", "$out/SHA256SUMS.sig")) {
+foreach ($file in @("$out/infinity.exe.sig", "$out/infinity-updater.exe.sig", "$out/hook/infinity.dll.sig", "$out/overlay/infinity-overlay.dll.sig", "$out/development-key.txt", "$out/SHA256SUMS", "$out/SHA256SUMS.sig")) {
     if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
 }
 
 & dotnet publish "$root/src/Infinity.App/Infinity.App.csproj" -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o $out
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" -o $out
 if ($LASTEXITCODE -ne 0) { throw 'Launcher publish failed' }
+& dotnet publish "$root/src/Infinity.Updater/Infinity.Updater.csproj" -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" -o $out
+if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
 $hookArgs = @("$root/native/hook/build.py", $zigPath, '--output', "$out/hook/infinity.dll")
 if (!$Production) { $hookArgs += '--dev' }
 & $Python @hookArgs
@@ -33,6 +37,8 @@ if (!$Production) {
     $signer = "$root/tools/DevSign/bin/Release/net10.0/devsign.dll"
     & dotnet $signer sign "$out/infinity.exe"
     if ($LASTEXITCODE -ne 0) { throw 'Launcher development signing failed' }
+    & dotnet $signer sign "$out/infinity-updater.exe"
+    if ($LASTEXITCODE -ne 0) { throw 'Updater development signing failed' }
     & dotnet $signer sign "$out/hook/infinity.dll"
     if ($LASTEXITCODE -ne 0) { throw 'Hook development signing failed' }
     & dotnet $signer sign "$out/overlay/infinity-overlay.dll"
