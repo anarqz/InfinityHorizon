@@ -387,7 +387,7 @@
   "integrity.incompatible": "Alguns arquivos críticos selecionados diferem da referência do servidor. Os mundos online estão indisponíveis. Verifique a instalação ou procure o suporte.",
   "integrity.inconclusive": "Não foi possível verificar todos os arquivos críticos selecionados. Os mundos online continuam indisponíveis. Tente novamente ou procure o suporte.",
   "integrity.policy_unavailable": "A verificação de compatibilidade do servidor está indisponível. Tente novamente antes de jogar online.",
-  "integrity.invalid_content": "Escolha a pasta do pacote do jogo que contém Mount, ou a própria Mount. O manifesto e o executável precisam estar presentes. Caminhos redirecionados não podem ser verificados; no Proton, use uma unidade mapeada diretamente para a pasta do jogo.",
+  "integrity.invalid_content": "Escolha a pasta do pacote do jogo que contém Mount, ou a própria Mount. O manifesto e o executável precisam estar presentes e legíveis. No Linux/Proton, selecione normalmente a pasta do jogo; não é necessário mapear uma unidade adicional.",
   "integrity.local_failed": "Não foi possível salvar a pasta escolhida. Confira as permissões de acesso e tente novamente.",
   "integrity.cancelled": "A verificação foi cancelada. Verifique a instalação antes de jogar online.",
   "integrity.copied": "Diagnóstico da instalação copiado.",

@@ -22,8 +22,8 @@ public static class CriticalFileReader
     {
         ArgumentNullException.ThrowIfNull(files);
         if (files.Count is < 1 or > MaxFiles) throw new InvalidDataException("Invalid critical-file list");
-        var root = Path.GetFullPath(mount);
-        if (!Path.IsPathFullyQualified(mount) || root.StartsWith(@"\\", StringComparison.Ordinal) || !Directory.Exists(root) || !SafeAncestors(root))
+        var root = ContentPath.ResolveDirectory(mount);
+        if (!ContentPath.SafeWithin(root, root))
             throw new InvalidDataException("Invalid game-content root");
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -42,12 +42,12 @@ public static class CriticalFileReader
                 var full = Path.Combine(root, file.Path.Replace('/', Path.DirectorySeparatorChar));
                 try
                 {
-                    if (!SafeAncestors(full)) { Absent(file, "unsafe_path"); continue; }
+                    if (!ContentPath.SafeWithin(root, full)) { Absent(file, "unsafe_path"); continue; }
                     var input = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
                     var retained = false;
                     try
                     {
-                        if (!SafeAncestors(full) || (OperatingSystem.IsWindows() && !HandleMatches(input.SafeFileHandle, full))) { Absent(file, "unsafe_path"); continue; }
+                        if (!ContentPath.SafeWithin(root, full) || (OperatingSystem.IsWindows() && !HandleMatches(input.SafeFileHandle, full))) { Absent(file, "unsafe_path"); continue; }
                         var length = input.Length;
                         if (length > MaxFileBytes || file.ExpectedByteLength is { } expected && length != expected)
                         {
@@ -67,7 +67,7 @@ public static class CriticalFileReader
                 catch (DirectoryNotFoundException) { Absent(file, "missing"); }
                 catch (Exception error) when (FileError(error)) { Absent(file, "unreadable"); }
             }
-            var result = new CriticalFileSnapshot(observations.ToImmutable(), findings.ToImmutable(), held);
+            var result = new CriticalFileSnapshot(root, observations.ToImmutable(), findings.ToImmutable(), held);
             held = [];
             return result;
         }
@@ -99,22 +99,12 @@ public static class CriticalFileReader
     [SupportedOSPlatform("windows")]
     internal static bool HandleMatches(SafeFileHandle handle, string expected)
     {
-        var buffer = new char[32768];
-        var length = Native.GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
-        if (length == 0 || length >= buffer.Length) return false;
-        var actual = new string(buffer, 0, (int)length);
-        if (actual.StartsWith(@"\\?\", StringComparison.Ordinal)) actual = actual[4..];
-        return Path.GetFullPath(expected).Equals(actual, StringComparison.OrdinalIgnoreCase);
+        try { return Path.GetFullPath(expected).Equals(ContentPath.FinalPath(handle), StringComparison.OrdinalIgnoreCase); }
+        catch (Exception error) when (FileError(error)) { return false; }
     }
     internal static bool FileError(Exception error) => error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
         or NotSupportedException or System.Security.SecurityException;
     internal sealed record HeldFile(string Path, FileStream Stream, long Length, DateTime Modified);
-    private static class Native
-    {
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
-        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-        internal static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, [Out] char[] path, uint length, uint flags);
-    }
 }
 
 public sealed class CriticalFileSnapshot : IDisposable
@@ -122,10 +112,11 @@ public sealed class CriticalFileSnapshot : IDisposable
     private readonly object _sync = new();
     private readonly List<CriticalFileReader.HeldFile> _held;
     private bool _disposed, _handlesReleased;
+    private readonly string _root;
     public ImmutableArray<CriticalObservation> Files { get; }
     public ImmutableArray<InstallationFinding> Findings { get; }
-    internal CriticalFileSnapshot(ImmutableArray<CriticalObservation> files, ImmutableArray<InstallationFinding> findings, List<CriticalFileReader.HeldFile> held)
-    { Files = files; Findings = findings; _held = held; }
+    internal CriticalFileSnapshot(string root, ImmutableArray<CriticalObservation> files, ImmutableArray<InstallationFinding> findings, List<CriticalFileReader.HeldFile> held)
+    { _root = root; Files = files; Findings = findings; _held = held; }
     public bool IsCurrent()
     {
         lock (_sync)
@@ -133,7 +124,7 @@ public sealed class CriticalFileSnapshot : IDisposable
             if (_disposed || !Findings.IsEmpty || Files.Any(file => file.Sha256 is null)) return false;
             try
             {
-                return _held.All(file => CriticalFileReader.SafeAncestors(file.Path) && new FileInfo(file.Path).Length == file.Length
+                return _held.All(file => ContentPath.SafeWithin(_root, file.Path) && new FileInfo(file.Path).Length == file.Length
                     && File.GetLastWriteTimeUtc(file.Path) == file.Modified
                     && (_handlesReleased || !OperatingSystem.IsWindows() || CriticalFileReader.HandleMatches(file.Stream.SafeFileHandle, file.Path)));
             }
