@@ -100,23 +100,28 @@ public sealed class OnlineContentSession : IDisposable
             ? new ContentObservedFile(file.FileId, null, null) : new ContentObservedFile(file.FileId, (ulong?)file.ByteLength, file.Sha256)).ToArray();
         var request = new ContentScan(Guid.CreateVersion7(ServerNow).ToString(), sessionId, "fh2", manifest.ManifestId, files);
         _permission = null;
-        var response = await _api.SubmitContentScanAsync(await _access(cancellation).ConfigureAwait(false), request, cancellation).ConfigureAwait(false);
+        DateTimeOffset? responseDate = null;
+        var responseStamp = _clock.GetTimestamp();
+        var response = await _api.SubmitContentScanObservedAsync(await _access(cancellation).ConfigureAwait(false), request,
+            date => { responseDate = date; responseStamp = _clock.GetTimestamp(); }, cancellation).ConfigureAwait(false);
         if (response.ScanId != request.ScanId) throw new InvalidDataException("Wrong content receipt");
-        ValidatePermission(response.Permission);
+        // Bound against this POST's clock, independent of the capabilities GET's round-trip delay.
+        var permissionStamp = _clock.GetTimestamp();
+        var permissionNow = responseDate is { } date ? date + _clock.GetElapsedTime(responseStamp, permissionStamp) : ServerNow;
+        ValidatePermission(response.Permission, responseDate ?? permissionNow, permissionNow);
         _permission = response.Permission;
-        _permissionStamp = _clock.GetTimestamp();
+        _permissionStamp = permissionStamp;
         _permissionLifetime = Timestamp(_permission.ExpiresAt, out var expires)
-            ? TimeSpan.FromTicks(Math.Clamp((expires - ServerNow).Ticks, 0, TimeSpan.FromHours(12).Ticks)) : TimeSpan.Zero;
+            ? TimeSpan.FromTicks(Math.Clamp((expires - permissionNow).Ticks, 0, TimeSpan.FromHours(12).Ticks)) : TimeSpan.Zero;
         if (readableBefore && !_snapshot.IsCurrent()) _revoked = true;
     }
 
     private bool Allowed() => !_disposed && !_revoked && _snapshot?.IsCurrent() == true && Manifest is { } manifest
         && _permission is { State: "compatible", OnlineAllowed: true, Reason: "compatible", ScanId: { } scanId } permission
         && ScanId(scanId) && permission.SessionId == SessionId && permission.Files.Count == manifest.Files.Count
-        && permission.Files.All(file => file.State == "compatible") && Timestamp(permission.ExpiresAt, out var expires)
-        && expires > ServerNow && _clock.GetElapsedTime(_permissionStamp) < _permissionLifetime;
+        && permission.Files.All(file => file.State == "compatible") && _clock.GetElapsedTime(_permissionStamp) < _permissionLifetime;
 
-    private void ValidatePermission(ContentPermission value)
+    private void ValidatePermission(ContentPermission value, DateTimeOffset responseDate, DateTimeOffset now)
     {
         if (value is null || value.SessionId != SessionId || value.ScanId is null || !ScanId(value.ScanId)
             || !StateName(value.State) || value.Reason is not ("compatible" or "policy_unavailable" or "policy_changed" or "missing_scan" or "scan_expired" or "incompatible_files" or "inconclusive_scan")
@@ -126,9 +131,9 @@ public sealed class OnlineContentSession : IDisposable
             if (file is null || !StateName(file.State) || !ids.Add(file.FileId) || Manifest?.Files.Any(expected => expected.FileId == file.FileId) != true)
                 throw new InvalidDataException("Invalid content result");
         if (value.OnlineAllowed && (value.State != "compatible" || value.Reason != "compatible" || value.Files.Count != Manifest?.Files.Count
-            || value.Files.Any(file => file.State != "compatible") || !Timestamp(value.ExpiresAt, out var expires) || expires <= ServerNow
+            || value.Files.Any(file => file.State != "compatible") || !Timestamp(value.ExpiresAt, out var expires) || expires <= now
             // HTTP Date has one-second resolution; the local lease is still capped at exactly twelve hours.
-            || expires >= ServerNow.AddHours(12).AddSeconds(1)))
+            || expires >= responseDate.AddHours(12).AddSeconds(1)))
             throw new InvalidDataException("Invalid online permission");
     }
 

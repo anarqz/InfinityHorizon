@@ -50,13 +50,17 @@ public sealed partial class ApiClient
     public Task<ContentCapabilities> ContentCapabilitiesAsync(string access, string game, CancellationToken cancellation = default) =>
         ContentRequestAsync<ContentCapabilities>(HttpMethod.Get, $"/gate/v1/content/capabilities?game={Uri.EscapeDataString(game)}", null, access, null, 8192, HttpStatusCode.OK, cancellation);
 
-    public Task<ContentScanAccepted> SubmitContentScanAsync(string access, ContentScan scan, CancellationToken cancellation = default)
+    public Task<ContentScanAccepted> SubmitContentScanAsync(string access, ContentScan scan, CancellationToken cancellation = default) =>
+        SubmitContentScanObservedAsync(access, scan, null, cancellation);
+
+    internal Task<ContentScanAccepted> SubmitContentScanObservedAsync(string access, ContentScan scan,
+        Action<DateTimeOffset?>? observeResponseDate, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(scan);
         ContentId(scan.ScanId, version7: true);
         ContentId(scan.SessionId);
         ContentId(scan.ManifestId);
-        return ContentRequestAsync<ContentScanAccepted>(HttpMethod.Post, "/gate/v1/content/scans", scan, access, scan.ScanId, 8192, HttpStatusCode.OK, cancellation);
+        return ContentRequestAsync<ContentScanAccepted>(HttpMethod.Post, "/gate/v1/content/scans", scan, access, scan.ScanId, 8192, HttpStatusCode.OK, cancellation, observeResponseDate);
     }
 
     public Task<ContentPermission> ContentPermissionAsync(string access, string sessionId, CancellationToken cancellation = default)
@@ -73,7 +77,7 @@ public sealed partial class ApiClient
     }
 
     private async Task<T> ContentRequestAsync<T>(HttpMethod method, string path, object? body, string access, string? actionId,
-        int limit, HttpStatusCode expected, CancellationToken cancellation)
+        int limit, HttpStatusCode expected, CancellationToken cancellation, Action<DateTimeOffset?>? observeResponseDate = null)
     {
         using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         bound.CancelAfter(TimeSpan.FromSeconds(10));
@@ -91,6 +95,7 @@ public sealed partial class ApiClient
         }
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, bound.Token).ConfigureAwait(false);
         ObserveDate(response.Headers.Date, DateTimeOffset.UtcNow);
+        observeResponseDate?.Invoke(response.Headers.Date);
         if (response.Content.Headers.ContentLength > limit) throw new InvalidDataException("Content response too large");
         await using var input = await response.Content.ReadAsStreamAsync(bound.Token).ConfigureAwait(false);
         using var output = new MemoryStream();
