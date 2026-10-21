@@ -12,7 +12,7 @@ public sealed record GameContentLocation(string PackageRoot, string Mount)
         if (string.IsNullOrWhiteSpace(directory)) return null;
         try
         {
-            var root = Path.GetFullPath(directory);
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
             if (Path.GetFileName(root).Equals("Mount", StringComparison.OrdinalIgnoreCase)) root = Path.GetDirectoryName(root)!;
             var mount = Path.Combine(root, "Mount");
             if (root.StartsWith(@"\\", StringComparison.Ordinal) || !CriticalFileReader.SafeAncestors(mount)
