@@ -39,7 +39,7 @@ public sealed record TicketClaims
     /// <summary><c>vip</c> or <c>free</c> (internal id; shown as "Infinity Supporter"). Display only: the server enforces it.</summary>
     [JsonPropertyName("tier")] public required string Tier { get; init; }
 
-    /// <summary>Game-plane pool the ticket admits to (<c>vip</c>, <c>free</c>, <c>legacy-free</c>).</summary>
+    /// <summary>Game-plane pool the ticket admits to (<c>vip</c> or <c>matchmaking</c> on the platform).</summary>
     [JsonPropertyName("pool")] public required string Pool { get; init; }
 
     /// <summary>Hex of the handoff nonce the launcher sent when it asked for the session.</summary>
@@ -217,7 +217,7 @@ public static class TicketVerifier
             try
             {
                 var expected = parsed.Pool == "vip" ? Auth.ProductionDeployment.Saves
-                    : parsed.Pool == "free" ? Auth.ProductionDeployment.Matchmaking : null;
+                    : parsed.Pool == "matchmaking" ? Auth.ProductionDeployment.Matchmaking : null;
                 if (expected is null) throw new InvalidDataException("Unknown production pool");
                 Auth.ProductionDeployment.RequireOrigin(new Uri(parsed.Server), expected);
             }
