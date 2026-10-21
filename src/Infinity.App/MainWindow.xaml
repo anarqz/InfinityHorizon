@@ -431,14 +431,27 @@
             </StackPanel>
           </ScrollViewer>
 
-          <!-- OD-46: Azimuth setup. A check per step, then how to get the compatible Azimuth. -->
+          <!-- Configure: independent Azimuth and game integrity checks. -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowSetup, Converter={StaticResource Visible}}">
-            <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+            <StackPanel>
               <TextBlock Text="{Binding S[setup.title]}" Style="{StaticResource PageTitle}" />
-              <TextBlock Text="{Binding S[setup.subtitle]}" Margin="0,6,0,18" Style="{StaticResource PageSubtitle}" />
+              <TextBlock Text="{Binding S[configure.intro]}" Margin="0,6,0,18" Style="{StaticResource PageSubtitle}" />
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
 
-              <Border Style="{StaticResource Card}">
+              <Border Grid.Column="0" VerticalAlignment="Top">
+                <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Card}"><Style.Triggers>
+                  <DataTrigger Binding="{Binding AzimuthCardReady}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource InfinityGood}" /></DataTrigger>
+                </Style.Triggers></Style></Border.Style>
                 <StackPanel>
+                  <Grid Margin="0,0,0,18">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="AZIMUTH" FontWeight="Bold" FontSize="18" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite">
+                      <TextBlock Text="✓" FontSize="20" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Margin="0,0,6,0" Visibility="{Binding AzimuthCardReady, Converter={StaticResource Visible}}" />
+                      <TextBlock Text="{Binding AzimuthCardStatus}" VerticalAlignment="Center" FontSize="12" />
+                    </StackPanel>
+                  </Grid>
                   <TextBlock Text="{Binding SetupSummary}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding HookLine}" TextWrapping="Wrap" Margin="0,0,0,8" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                   <DockPanel Margin="0,4">
@@ -466,42 +479,44 @@
                   <WrapPanel Margin="0,16,0,0">
                     <Button Content="{Binding HookInstallLabel}" Margin="0,0,10,0" Click="OnInstallHook"
                             Style="{StaticResource AccentButtonStyle}" Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}" />
-                    <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" />
-                    <Button Content="{Binding S[setup.recheck]}" Margin="10,0,0,0" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" />
+                    <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[setup.recheck]}" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,0,8" />
                   </WrapPanel>
+                  <Button Content="{Binding S[setup.grab]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,8,0,0" Click="OnOpenAzimuthPage" />
                 </StackPanel>
               </Border>
 
-              <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+              <Border Grid.Column="2" VerticalAlignment="Top">
+                <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Card}"><Style.Triggers>
+                  <DataTrigger Binding="{Binding IntegrityReady}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource InfinityGood}" /></DataTrigger>
+                </Style.Triggers></Style></Border.Style>
                 <StackPanel>
-                  <TextBlock Text="{Binding S[integrity.title]}" FontWeight="Bold" FontSize="18" />
+                  <Grid Margin="0,0,0,18">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding S[integrity.title]}" FontWeight="Bold" FontSize="18" TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite">
+                      <TextBlock Text="✓" FontSize="20" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Margin="0,0,6,0" Visibility="{Binding IntegrityReady, Converter={StaticResource Visible}}" />
+                      <TextBlock Text="{Binding IntegrityCardStatus}" VerticalAlignment="Center" FontSize="12" />
+                    </StackPanel>
+                  </Grid>
                   <TextBlock Text="{Binding IntegrityStatus}" TextWrapping="Wrap" Margin="0,8,0,8" AutomationProperties.LiveSetting="Polite" />
                   <TextBlock Text="{Binding IntegrityFindings}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
                   <TextBlock Text="{Binding IntegrityLocationLabel}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,8" Foreground="{StaticResource InfinityMuted}" />
                   <WrapPanel>
                     <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[integrity.check]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[setup.recheck]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
                     <Button Content="{Binding S[integrity.cancel]}" Click="OnCancelIntegrity" Visibility="{Binding IntegrityChecking, Converter={StaticResource Visible}}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[integrity.copy]}" Click="OnCopyIntegrity" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[crash.private_support]}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" Margin="0,0,8,8" />
                   </WrapPanel>
-                  <TextBlock Text="{Binding S[integrity.help]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  <StackPanel Visibility="{Binding ShowIntegritySupport, Converter={StaticResource Visible}}">
+                    <WrapPanel Margin="-6,8,0,8">
+                      <Button Content="{Binding S[integrity.copy]}" Style="{StaticResource LinkButton}" Click="OnCopyIntegrity" />
+                      <Button Content="{Binding S[crash.private_support]}" Style="{StaticResource LinkButton}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding S[integrity.help]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  </StackPanel>
                 </StackPanel>
               </Border>
-
-              <TextBlock Text="{Binding S[setup.how_title]}" FontSize="18" FontWeight="Bold" Margin="0,26,0,10" />
-              <Border Style="{StaticResource Card}">
-                <StackPanel>
-                  <TextBlock Text="{Binding SetupStep1}" TextWrapping="Wrap" />
-                  <Button Content="{Binding S[setup.open_page]}" HorizontalAlignment="Left" Margin="24,10,0,0" Click="OnOpenAzimuthPage" />
-                  <TextBlock Text="{Binding AzimuthPage}" Margin="24,6,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
-                  <TextBlock Text="{Binding S[setup.step2]}" TextWrapping="Wrap" Margin="0,16,0,0" />
-                  <TextBlock Text="{Binding SetupStep3}" TextWrapping="Wrap" Margin="0,16,0,0" />
-                  <TextBlock Text="{Binding S[setup.step4]}" TextWrapping="Wrap" Margin="0,16,0,0" />
-                  <TextBlock Text="{Binding S[setup.disclaimer]}" TextWrapping="Wrap" Margin="0,16,0,0" FontSize="11"
-                             Foreground="{StaticResource InfinityFaint}" />
-                </StackPanel>
-              </Border>
+              </Grid>
             </StackPanel>
           </ScrollViewer>
 

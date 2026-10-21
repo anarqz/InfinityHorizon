@@ -247,10 +247,10 @@ public partial class MainWindow : Window
 
     private async void OnCheckIntegrity(object sender, RoutedEventArgs e) => await _vm.CheckIntegrityAsync();
     private void OnCancelIntegrity(object sender, RoutedEventArgs e) => _vm.CancelIntegrityCheck();
-    private void OnChooseContent(object sender, RoutedEventArgs e)
+    private async void OnChooseContent(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog { Title = _vm.S["integrity.choose_title"] };
-        if (dialog.ShowDialog(this) == true) _vm.ChooseContentFolder(dialog.FolderName);
+        if (dialog.ShowDialog(this) == true) await _vm.ChooseContentFolderAsync(dialog.FolderName);
     }
     private void OnCopyIntegrity(object sender, RoutedEventArgs e)
     {
