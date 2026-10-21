@@ -6,6 +6,7 @@ namespace Infinity.Core.Session;
 /// <summary><c>Capture.what</c> values (frame 0x13, ORCHESTRATOR §6).</summary>
 public static class CaptureWhat
 {
+    public const byte RemotePaintReceiver = 5;
     /// <summary>The DXGI factory shims saw the swapchain and its queue.</summary>
     public const byte Dxgi = 1;
 

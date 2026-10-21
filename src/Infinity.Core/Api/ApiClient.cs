@@ -9,6 +9,11 @@ namespace Infinity.Core.Api;
 /// <summary>The stable error codes the launcher branches on (fi-protocol <c>ErrorCode</c>; parity-tested against errors.ts).</summary>
 public static class ErrorCodes
 {
+    public const string ContentPolicyUnavailable = "CONTENT.POLICY_UNAVAILABLE";
+    public const string ContentRecheckRequired = "CONTENT.RECHECK_REQUIRED";
+    public const string ContentIncompatible = "CONTENT.INCOMPATIBLE";
+    public const string ContentInconclusive = "CONTENT.INCONCLUSIVE";
+    public const string ContentPolicyChanged = "CONTENT.POLICY_CHANGED";
     public const string CrashDumpsDisabled = "CRASH.DUMPS_DISABLED";
     public const string AccountsFrozen = "ACCOUNTS.FROZEN";
     public const string RequestRateLimited = "REQUEST.RATE_LIMITED";

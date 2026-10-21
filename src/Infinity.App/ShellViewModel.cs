@@ -292,6 +292,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _playStatus = null;
         _session?.Dispose();
         _session = null;
+        ClearIntegrity();
         ClearCrashScreen();
         _pending = null;
         _saveTarget = null;
@@ -389,6 +390,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        ClearIntegrity();
         ClearCrashScreen();
         StopPlay();
         // the supervisor leaves the gate on cancel: let it finish before its token manager goes (SAURON)

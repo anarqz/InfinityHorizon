@@ -55,10 +55,18 @@ typedef struct {
     unsigned short seq, count, got, layers;
     unsigned car, total;
     unsigned char *bytes, *have; /* have: one byte per chunk while assembling */
+    int refused; /* a conflicting sequence cannot be restarted until a newer sequence */
 } LwPaint;
 
 static SRWLOCK lw_lock = SRWLOCK_INIT;
 static LwPaint lw_peers[LW_PEERS];
+/* A replacement is assembled separately, so an incomplete/refused transfer never destroys
+   the last complete paint. Both arrays are bounded to LW_PEERS * LW_MAX_LIVERY bytes each. */
+static LwPaint lw_incoming[LW_PEERS];
+
+/* Policy v1 permits no remote serialized paint. Only the authenticated launcher's local
+   control channel may select a supported mode; no packet can enable a game parser here. */
+static int lw_remote_stock_only(void) { return fi_launch_protocol(); }
 
 /* the player's own paint (kept across worlds in a session) */
 static struct {
@@ -256,7 +264,7 @@ static int lw_find(unsigned long long id, LwPaint *out) {
         if (copy) {
             memory_copy(copy, lw_own.bytes, lw_own.size);
             *out = (LwPaint){1, 1, 0, id, lw_own.creator, lw_own.seq, 0, 0, lw_own.layers, lw_own.car, lw_own.size,
-                             copy, 0};
+                             copy, 0, 0};
             found = 1;
         }
     }
@@ -389,6 +397,11 @@ int fi_livery_route(const wchar_t *headers, const unsigned char *body, size_t si
             lw_log_call("ContentVersioning.RetrieveVersionedLiveryById", "passed to the server", id, size);
             return 0; /* a server id (a permanent paint): the server's */
         }
+        if (lw_remote_stock_only()) {
+            *reply = lw_reply_none(reply_size);
+            lw_log_call("ContentVersioning.RetrieveVersionedLiveryById", "refused by stock-only receiver policy", id, 0);
+            return *reply != 0;
+        }
         LwPaint paint;
         unsigned long long until = GetTickCount64() + LW_RETRIEVE_WAIT_MS;
         int found = lw_find(id, &paint);
@@ -504,6 +517,7 @@ static int lw_message(unsigned char *m, const unsigned char *value, unsigned siz
 }
 
 static void lw_send_want(void) {
+    if (lw_remote_stock_only()) return;
     unsigned char v[10], m[40];
     v[0] = LW_VERSION;
     v[1] = LW_OP_WANT;
@@ -522,6 +536,7 @@ static void lw_send_ack(unsigned long long owner, unsigned seq) {
 
 /* Every chunk of the player's own paint (called with lw_lock held). */
 static void lw_send_own(void) {
+    if (lw_remote_stock_only()) return;
     static unsigned char v[2 + LW_CHUNK_HEAD + LW_CHUNK], m[24 + sizeof(v) + 4];
     unsigned count = (lw_own.size + LW_CHUNK - 1) / LW_CHUNK;
     unsigned long long xuid = azimuth_account_xuid_value();
@@ -548,8 +563,27 @@ static void lw_drop_peer(LwPaint *p) {
     *p = (LwPaint){0};
 }
 
+static int lw_sequence_after(unsigned next, unsigned previous) {
+    unsigned distance = (next - previous) & 0xffffu;
+    return distance != 0 && distance < 0x8000u;
+}
+
+static int lw_chunk_matches(const LwPaint *p, unsigned car, unsigned layers,
+                            unsigned long long creator, unsigned total, unsigned count) {
+    return p->car == car && p->layers == layers && p->creator == creator &&
+           p->total == total && p->count == count;
+}
+
+static void lw_refuse_incoming(LwPaint *p) {
+    lw_free(p->bytes);
+    lw_free(p->have);
+    p->bytes = p->have = 0;
+    p->refused = 1;
+}
+
 /* A world mate's chunk (DATA): assembled, then kept with its world id. */
 static void lw_on_data(const unsigned char *v, unsigned size) {
+    if (lw_remote_stock_only()) return;
     if (size < 2 + LW_CHUNK_HEAD) return;
     unsigned seq = lw_be16(v + 2), index = lw_be16(v + 4), count = lw_be16(v + 6), total = lw_be32(v + 8);
     unsigned car = lw_be32(v + 12);
@@ -557,55 +591,72 @@ static void lw_on_data(const unsigned char *v, unsigned size) {
     unsigned layers = lw_be16(v + 24);
     unsigned long long creator = lw_be64(v + 26);
     unsigned n = size - 2 - LW_CHUNK_HEAD;
+    if (total > LW_MAX_LIVERY || !owner) return;
     unsigned want_count = total ? (total + LW_CHUNK - 1) / LW_CHUNK : 1;
     unsigned expected = index + 1 < want_count ? LW_CHUNK : total - (want_count - 1) * LW_CHUNK;
-    if (total > LW_MAX_LIVERY || count != want_count || index >= count || n != expected || !owner) return;
+    if (count != want_count || index >= count || n != expected) return;
     int ack = 0, done_now = 0;
     AcquireSRWLockExclusive(&lw_lock);
-    LwPaint *slot = 0;
-    for (int i = 0; i < LW_PEERS && !slot; ++i) {
-        if (lw_peers[i].used && lw_peers[i].owner == owner) slot = &lw_peers[i];
-    }
-    if (slot && slot->seq != seq) {
-        lw_drop_peer(slot); /* a newer paint replaces it */
-        slot = 0;
-    }
-    if (!slot) {
-        for (int i = 0; i < LW_PEERS && !slot; ++i) {
-            if (!lw_peers[i].used) slot = &lw_peers[i];
-        }
-        if (slot) {
-            slot->bytes = lw_alloc(total ? total : 1);
-            slot->have = lw_alloc(count);
-            if (!slot->bytes || !slot->have) {
+    int at = -1;
+    for (int i = 0; i < LW_PEERS && at < 0; ++i)
+        if (lw_peers[i].used && lw_peers[i].owner == owner) at = i;
+    if (at < 0)
+        for (int i = 0; i < LW_PEERS && at < 0; ++i)
+            if (!lw_peers[i].used) at = i;
+    if (at >= 0) {
+        LwPaint *current = &lw_peers[at], *slot = &lw_incoming[at];
+        if (!current->used) { current->used = 1; current->owner = owner; }
+        const LwPaint *floor = slot->used ? slot : current->complete ? current : 0;
+        if (floor && (seq != floor->seq ? !lw_sequence_after(seq, floor->seq) : floor->refused)) goto finished;
+        if (current->complete && current->seq == seq) {
+            /* A duplicate is acknowledged only if it describes exactly the stored content. */
+            ack = lw_chunk_matches(current, car, layers, creator, total, count) &&
+                  memory_equal(current->bytes + index * LW_CHUNK, v + 2 + LW_CHUNK_HEAD, n);
+            if (!ack) {
                 lw_drop_peer(slot);
-                slot = 0;
-            } else {
-                for (unsigned i = 0; i < count; ++i) slot->have[i] = 0;
-                slot->used = 1;
+                slot->used = slot->refused = 1;
                 slot->owner = owner;
                 slot->seq = (unsigned short)seq;
-                slot->count = (unsigned short)count;
-                slot->total = total;
-                slot->car = car;
-                slot->layers = (unsigned short)layers;
-                slot->creator = creator;
             }
+            goto finished;
+        }
+        if (!slot->used || slot->seq != seq) {
+            lw_drop_peer(slot);
+            slot->used = 1;
+            slot->owner = owner;
+            slot->seq = (unsigned short)seq;
+            slot->count = (unsigned short)count;
+            slot->total = total;
+            slot->car = car;
+            slot->layers = (unsigned short)layers;
+            slot->creator = creator;
+            slot->bytes = lw_alloc(total ? total : 1);
+            slot->have = lw_alloc(count);
+            if (!slot->bytes || !slot->have) { lw_refuse_incoming(slot); goto finished; }
+            for (unsigned i = 0; i < count; ++i) slot->have[i] = 0;
+        }
+        if (!lw_chunk_matches(slot, car, layers, creator, total, count)) {
+            lw_refuse_incoming(slot);
+            goto finished;
+        }
+        if (slot->have[index]) {
+            if (!memory_equal(slot->bytes + index * LW_CHUNK, v + 2 + LW_CHUNK_HEAD, n)) lw_refuse_incoming(slot);
+            goto finished;
+        }
+        memory_copy(slot->bytes + index * LW_CHUNK, v + 2 + LW_CHUNK_HEAD, n);
+        slot->have[index] = 1;
+        if (++slot->got == slot->count) {
+            slot->complete = 1;
+            slot->id = fi_livery_content_id(car, slot->bytes, total);
+            lw_free(slot->have);
+            slot->have = 0;
+            lw_drop_peer(current);
+            *current = *slot;
+            *slot = (LwPaint){0};
+            ack = done_now = 1;
         }
     }
-    if (slot && slot->total == total && slot->car == car) {
-        if (slot->complete) {
-            ack = 1; /* the relay did not hear the ACK */
-        } else if (!slot->have[index]) {
-            memory_copy(slot->bytes + index * LW_CHUNK, v + 2 + LW_CHUNK_HEAD, n);
-            slot->have[index] = 1;
-            if (++slot->got == slot->count) {
-                slot->complete = 1;
-                slot->id = fi_livery_content_id(car, slot->bytes, total);
-                ack = done_now = 1;
-            }
-        }
-    }
+finished:
     ReleaseSRWLockExclusive(&lw_lock);
     if (ack) lw_send_ack(owner, seq);
     if (done_now) {
@@ -647,7 +698,10 @@ void azimuth_livery_received(const unsigned char *packet, int size) {
                     unsigned long long owner = lw_be64(v + 2);
                     AcquireSRWLockExclusive(&lw_lock);
                     for (int i = 0; i < LW_PEERS; ++i) {
-                        if (lw_peers[i].used && lw_peers[i].owner == owner) lw_drop_peer(&lw_peers[i]);
+                        if (lw_peers[i].used && lw_peers[i].owner == owner) {
+                            lw_drop_peer(&lw_peers[i]);
+                            lw_drop_peer(&lw_incoming[i]);
+                        }
                     }
                     ReleaseSRWLockExclusive(&lw_lock);
                 }
@@ -712,7 +766,7 @@ void azimuth_livery_world_entered(const void *remote) {
     lw_want_tries = 0;
     lw_want_at = 0;
     AcquireSRWLockExclusive(&lw_lock);
-    for (int i = 0; i < LW_PEERS; ++i) lw_drop_peer(&lw_peers[i]);
+    for (int i = 0; i < LW_PEERS; ++i) { lw_drop_peer(&lw_peers[i]); lw_drop_peer(&lw_incoming[i]); }
     lw_own.stored = 0; /* a new world: the paint goes to its relay too */
     lw_own.tries = 0;
     lw_own.sent_at = 0;
@@ -761,7 +815,7 @@ void azimuth_livery_world_left(void) {
         lw_socket = LW_INVALID;
     }
     AcquireSRWLockExclusive(&lw_lock);
-    for (int i = 0; i < LW_PEERS; ++i) lw_drop_peer(&lw_peers[i]);
+    for (int i = 0; i < LW_PEERS; ++i) { lw_drop_peer(&lw_peers[i]); lw_drop_peer(&lw_incoming[i]); }
     ReleaseSRWLockExclusive(&lw_lock);
 }
 
@@ -1045,6 +1099,146 @@ int fi_livery_run_current(unsigned timeout_ms) {
     return result;
 }
 
-void fi_livery_apply(unsigned char *game_image) {
+/* ------------------------------------------------------- remote paint load boundary */
+
+#define LW_QUEUE_REMOTE_RVA 0x9ee3d0u
+#define LW_NOTIFY_VTABLE_RVA 0x2c62ff0u
+#define LW_NOTIFY_FAILURE_RVA 0x1db440u
+#define LW_NOTIFY_RELEASE_RVA 0x3224acu
+#define LW_CAPTURE_RECEIVER 5u
+
+/* Win64: manager, versioned id, pointer to one owned notify reference, opaque fourth register.
+   The game's id=-1 path does no queue allocation but still releases that owned reference. */
+typedef void (*LwQueueRemote)(void *, unsigned long long, void **, uintptr_t);
+typedef void (*LwNotifyFailure)(void *);
+static LwQueueRemote lw_queue_original;
+static unsigned char *lw_receiver_image;
+static volatile LONG lw_receiver_ready, lw_receiver_faulted;
+
+static const unsigned char lw_queue_bytes[16] = {
+    0x48, 0x8b, 0xc4, 0x4c, 0x89, 0x40, 0x18, 0x48,
+    0x89, 0x50, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50
+};
+static const unsigned char lw_failure_bytes[3] = {0xc2, 0x00, 0x00};
+static const unsigned char lw_release_bytes[12] = {
+    0x48, 0x81, 0xe9, 0xd8, 0x02, 0x00, 0x00, 0xe9, 0x78, 0xff, 0xff, 0xff
+};
+
+int fi_livery_remote_ready(void) {
+    return lw_receiver_ready != 0 && lw_receiver_faulted == 0;
+}
+
+int fi_livery_remote_policy(unsigned mode) {
+    /* No permissive mode exists in this version. Unsupported policy always fails closed. */
+    return mode == 0 && fi_livery_remote_ready();
+}
+
+static void lw_receiver_fault(void) {
+    InterlockedExchange(&lw_receiver_ready, 0);
+    if (InterlockedExchange(&lw_receiver_faulted, 1) == 0) fi_launch_capture(LW_CAPTURE_RECEIVER, 0);
+}
+
+static void lw_queue_remote(void *manager, unsigned long long id, void **notify, uintptr_t opaque) {
+    if (!lw_remote_stock_only()) {
+        lw_queue_original(manager, id, notify, opaque);
+        return;
+    }
+    void *listener = 0, *vtable = 0;
+    if (!notify || !memory_read(notify, &listener, sizeof(listener))) {
+        lw_receiver_fault();
+        return; /* no valid owned reference is available to release */
+    }
+    if (listener) {
+        if (!memory_read_pointer(listener, &vtable)) {
+            lw_receiver_fault();
+            return;
+        }
+        if (vtable == lw_game + LW_NOTIFY_VTABLE_RVA) {
+            /* The supported interface's failure method is a checked no-op. The original
+               id=-1 path below, rather than this wrapper, consumes exactly the owned ref. */
+            ((LwNotifyFailure)(uintptr_t)(lw_game + LW_NOTIFY_FAILURE_RVA))(listener);
+        } else {
+            uintptr_t release = 0;
+            lw_receiver_fault();
+            /* The original function owns this internal game reference. Only its usual
+               cleanup may consume an unexpected readable game interface; an unreadable
+               release slot cannot be repaired by guessing an object or an address. */
+            if (!memory_read((unsigned char *)vtable + 0x18, &release, sizeof(release)) ||
+                release < (uintptr_t)lw_game + 0x1000 || release >= (uintptr_t)lw_game + 0x1dcc000u) return;
+        }
+    }
+    /* This precedes both the existing disk-cache hit and the HTTP completion/parser path.
+       Do not pass an empty successful livery or synthesize another car/model pointer. */
+    lw_queue_original(manager, ~0ull, notify, opaque);
+}
+
+static int lw_receiver_image_ok(unsigned char *image) {
+    IMAGE_DOS_HEADER dos;
+    IMAGE_NT_HEADERS64 nt;
+    unsigned char queue[sizeof(lw_queue_bytes)], failure[sizeof(lw_failure_bytes)], release[sizeof(lw_release_bytes)];
+    uintptr_t on_failure = 0, on_release = 0;
+    return image && memory_read(image, &dos, sizeof(dos)) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
+           dos.e_lfanew >= 64 && dos.e_lfanew <= 4096 && memory_read(image + dos.e_lfanew, &nt, sizeof(nt)) &&
+           nt.Signature == IMAGE_NT_SIGNATURE && nt.FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+           !(nt.FileHeader.Characteristics & IMAGE_FILE_DLL) && nt.FileHeader.TimeDateStamp == GAME_TIMESTAMP &&
+           nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC && nt.OptionalHeader.SizeOfImage == GAME_IMAGE_SIZE &&
+           memory_read(image + LW_QUEUE_REMOTE_RVA, queue, sizeof(queue)) && memory_equal(queue, lw_queue_bytes, sizeof(queue)) &&
+           memory_read(image + LW_NOTIFY_FAILURE_RVA, failure, sizeof(failure)) && memory_equal(failure, lw_failure_bytes, sizeof(failure)) &&
+           memory_read(image + LW_NOTIFY_RELEASE_RVA, release, sizeof(release)) && memory_equal(release, lw_release_bytes, sizeof(release)) &&
+           memory_read(image + LW_NOTIFY_VTABLE_RVA + 0x40, &on_failure, sizeof(on_failure)) &&
+           on_failure == (uintptr_t)(image + LW_NOTIFY_FAILURE_RVA) &&
+           memory_read(image + LW_NOTIFY_VTABLE_RVA + 0x18, &on_release, sizeof(on_release)) &&
+           on_release == (uintptr_t)(image + LW_NOTIFY_RELEASE_RVA);
+}
+
+static int lw_receiver_install(unsigned char *game_image) {
+    if (lw_receiver_faulted) return 0;
+    if (lw_queue_original) {
+        if (lw_receiver_image != game_image) {
+            InterlockedExchange(&lw_receiver_faulted, 1);
+            InterlockedExchange(&lw_receiver_ready, 0);
+            return 0;
+        }
+        return fi_livery_remote_ready();
+    }
+    if (!lw_receiver_image_ok(game_image)) return 0;
+    unsigned char *code = VirtualAlloc(0, 32, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!code) return 0;
+    memory_copy(code, lw_queue_bytes, sizeof(lw_queue_bytes));
+    uintptr_t back = (uintptr_t)(game_image + LW_QUEUE_REMOTE_RVA + sizeof(lw_queue_bytes));
+    uintptr_t target = (uintptr_t)lw_queue_remote;
+    unsigned char jump[14] = {0xff, 0x25, 0, 0, 0, 0};
+    memory_copy(jump + 6, &back, sizeof(back));
+    memory_copy(code + sizeof(lw_queue_bytes), jump, sizeof(jump));
+    DWORD old_protection, ignored;
+    if (!VirtualProtect(code, 32, PAGE_EXECUTE_READ, &old_protection)) {
+        VirtualFree(code, 0, MEM_RELEASE); return 0;
+    }
+    FlushInstructionCache(GetCurrentProcess(), code, 32);
+    unsigned char *at = game_image + LW_QUEUE_REMOTE_RVA;
+    if (!VirtualProtect(at, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
+        VirtualFree(code, 0, MEM_RELEASE); return 0;
+    }
     lw_game = game_image;
+    lw_receiver_image = game_image;
+    lw_queue_original = (LwQueueRemote)(uintptr_t)code;
+    memory_copy(jump + 6, &target, sizeof(target));
+    memory_copy(at, jump, sizeof(jump));
+    FlushInstructionCache(GetCurrentProcess(), at, sizeof(jump));
+    if (!VirtualProtect(at, sizeof(jump), old_protection, &ignored)) {
+        /* The jump remains conservative, but an incomplete installation must never authorize
+           worlds or be retried as a healthy installation in this process. */
+        InterlockedExchange(&lw_receiver_faulted, 1);
+        return 0;
+    }
+    InterlockedExchange(&lw_receiver_ready, 1);
+    return 1;
+}
+
+void fi_livery_apply(unsigned char *game_image) {
+    if (!lw_queue_original) lw_game = game_image;
+    int ready = lw_receiver_install(game_image);
+    fi_launch_capture(LW_CAPTURE_RECEIVER, ready);
+    log_append(ready ? "LIVERY: stock-only remote load boundary installed before cache and parser.\r\n"
+                     : "LIVERY: remote load boundary unavailable; online worlds must remain disabled.\r\n");
 }

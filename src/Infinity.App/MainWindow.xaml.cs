@@ -228,6 +228,19 @@ public partial class MainWindow : Window
         if (_vm.CrashPrivateSupportUrl is { } url) OpenCommunityLink(url.AbsoluteUri);
     }
 
+    private async void OnCheckIntegrity(object sender, RoutedEventArgs e) => await _vm.CheckIntegrityAsync();
+    private void OnCancelIntegrity(object sender, RoutedEventArgs e) => _vm.CancelIntegrityCheck();
+    private void OnChooseContent(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = _vm.S["integrity.choose_title"] };
+        if (dialog.ShowDialog(this) == true) _vm.ChooseContentFolder(dialog.FolderName);
+    }
+    private void OnCopyIntegrity(object sender, RoutedEventArgs e)
+    {
+        try { Clipboard.SetText(_vm.CopyableIntegrityReport()); _vm.IntegrityCopyResult(true); }
+        catch (System.Runtime.InteropServices.ExternalException) { _vm.IntegrityCopyResult(false); }
+    }
+
     private async void OnSaveCrashDump(object sender, RoutedEventArgs e)
     {
         if (_vm.BeginManualCrashDumpExport() is not { } operation) return;

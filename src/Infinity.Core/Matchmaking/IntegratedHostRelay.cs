@@ -29,7 +29,7 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     public Diagnostics.CrashContext? CrashContext { get => Volatile.Read(ref _crashContext); set => Volatile.Write(ref _crashContext, value); }
 
-    private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options)
+    private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options, RelayContentPolicy? contentPolicy)
     {
         _socket = socket;
         Port = checked((ushort)((IPEndPoint)socket.LocalEndPoint!).Port);
@@ -38,9 +38,11 @@ public sealed class IntegratedHostRelay : IHostRelay
         if (options.EnableDiscovery && options.EnableUpnp) _nat.SetUpnp(RelayUpnpState.Pending);
         _network = _nat.Snapshot();
         // World admission must be installed before any game datagram can establish a seat.
-        _engine = new(new RelaySettings { MaxPlayers = checked((int)Math.Clamp(maxPlayers, 1u, 12u)), Races = races }, Send)
-        { Authorize = static (_, _, _) => false,
-          ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value) };
+        _engine = new(new RelaySettings { MaxPlayers = checked((int)Math.Clamp(maxPlayers, 1u, 12u)), Races = races }, Send, contentPolicy)
+        {
+            Authorize = static (_, _, _) => false,
+            ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value)
+        };
         var cancellation = _stop.Token;
         _actor = Task.Factory.StartNew(() => Run(cancellation), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         var serverNames = options.StunServers.Take(8).ToArray();
@@ -54,14 +56,15 @@ public sealed class IntegratedHostRelay : IHostRelay
     public RelayNetworkStatus NetworkStatus => Volatile.Read(ref _network);
 
     /// <summary>Binds before returning, so a caller never advertises a world whose UDP port is occupied.</summary>
-    public static IntegratedHostRelay Start(uint maxPlayers, bool races, ushort port = HostRelay.DefaultPort, IntegratedRelayOptions? options = null)
+    public static IntegratedHostRelay Start(uint maxPlayers, bool races, ushort port = HostRelay.DefaultPort, IntegratedRelayOptions? options = null,
+        RelayContentPolicy? contentPolicy = null)
     {
         options ??= new();
         ArgumentNullException.ThrowIfNull(options.StunServers);
         if (options.StunInterval < TimeSpan.FromMilliseconds(50) || options.StunInterval > TimeSpan.FromHours(1))
             throw new ArgumentOutOfRangeException(nameof(options));
         var socket = RelayNetwork.Bind(port);
-        try { return new(socket, maxPlayers, races, options); }
+        try { return new(socket, maxPlayers, races, options, contentPolicy); }
         catch { socket.Dispose(); throw; }
     }
 
@@ -105,6 +108,19 @@ public sealed class IntegratedHostRelay : IHostRelay
     }
 
     private bool Enqueue(Action action) => Running && _commands.Writer.TryWrite(new(action));
+
+    /// <summary>Installs stock-only on the actor and discards any previously accepted custom paints.</summary>
+    public async Task SetContentPolicyAsync(RelayContentPolicy policy, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ObjectDisposedException.ThrowIf(!Running, this);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _stop.Token);
+        bound.CancelAfter(TimeSpan.FromSeconds(2));
+        if (!_commands.Writer.TryWrite(new(() => _engine.SetContentPolicy(policy), completion, bound.Token)))
+            throw new IOException("The relay control queue is full or closed");
+        await completion.Task.WaitAsync(bound.Token).ConfigureAwait(false);
+    }
 
     private async Task DiscoverAsync(string[] names, CancellationToken cancellation)
     {

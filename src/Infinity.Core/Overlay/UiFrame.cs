@@ -62,7 +62,7 @@ public enum UiDirection
 
 /// <summary>
 /// One UI-pipe frame between the launcher and the overlay (<c>&lt;control pipe&gt;-ui</c>; overlay_ui.rs).
-/// Same envelope as the control pipe, its own type space 0x01-0x10 (0x07-0x10: worlds, OD-54, OD-63;
+/// Same envelope as the control pipe, its own type space 0x01-0x12 (0x07-0x10: worlds, OD-54, OD-63;
 /// native/overlay/src/pipe.cpp is the other end). The hook never sees it.
 /// </summary>
 public abstract record UiFrame
@@ -81,6 +81,13 @@ public abstract record UiFrame
     public sealed record GameReadiness(bool Ready) : UiFrame
     {
         public override byte Type => 0x11;
+        public override UiDirection Direction => UiDirection.ToOverlay;
+    }
+
+    /// <summary>0x12, launcher → overlay; an allowed installation decision expires after ten seconds.</summary>
+    public sealed record WorldAccess(bool Allowed, string Message) : UiFrame
+    {
+        public override byte Type => 0x12;
         public override UiDirection Direction => UiDirection.ToOverlay;
     }
 
@@ -231,6 +238,10 @@ public abstract record UiFrame
             case GameReadiness ready:
                 w.Flag(ready.Ready);
                 break;
+            case WorldAccess access:
+                w.Flag(access.Allowed);
+                w.Str(access.Message);
+                break;
             case UiHello h:
                 w.U16(h.Protocol);
                 w.U32(h.Pid);
@@ -352,7 +363,7 @@ public abstract record UiFrame
         {
             return null;
         }
-        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x11)
+        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x12)
         {
             throw new ProtocolException($"unknown ui frame type 0x{buffer[4]:x2}");
         }
@@ -379,7 +390,8 @@ public abstract record UiFrame
             0x0E => DecodeMine(ref r),
             0x0F => new WorldAction(r.U8(), r.Str(), r.Str(), r.U8()),
             0x10 => new ActionResult(r.U8(), r.U8(), r.Str()),
-            _ => new GameReadiness(r.Flag("GameReadiness.ready")),
+            0x11 => new GameReadiness(r.Flag("GameReadiness.ready")),
+            _ => new WorldAccess(r.Flag("WorldAccess.allowed"), r.Str()),
         };
         r.End();
         used = 4 + length.Value;

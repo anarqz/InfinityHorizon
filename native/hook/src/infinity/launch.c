@@ -877,6 +877,9 @@ static int launch_go_online(const LaunchTicket *t) {
     launch_log(free_tier ? "online through the launcher's session (free tier, display only); token for " :
                            "online through the launcher's session (Infinity Supporter, display only); token for ",
                1, launch_token_left_ms() / 1000u, " s.");
+    /* CR-L29 local capability, not attestation. A later livery_apply reports installation
+       if the handshake ran first; every reconnect also gets the current fail-closed value. */
+    fi_launch_capture(5, fi_livery_remote_ready());
     return 1;
 }
 
@@ -1048,6 +1051,7 @@ static int launch_session_frame(void) {
    died or closed: ORCHESTRATOR.md 1.6), then offline. */
 static void launch_session(void) {
     InterlockedExchange(&launch_connected, 1);
+    ULONGLONG next_receiver_report = 0;
     for (;;) {
         unsigned long long left = launch_token_left_ms();
         if ((launch_refresh_wanted || (left && left < LAUNCH_REFRESH_MS)) && !InterlockedExchange(&launch_refresh_sent, 1)) {
@@ -1060,6 +1064,14 @@ static void launch_session(void) {
             launch_log("launcher gone (the pipe broke on a write, error ", 1, GetLastError(),
                        "): playing on until the session token expires.");
             break;
+        }
+        /* Capability state is a lease. It must not be lost when ordinary event traffic fills
+           the bounded outbox. Only this pipe-writer thread sends the periodic current value. */
+        ULONGLONG now = GetTickCount64();
+        if (now >= next_receiver_report) {
+            unsigned char capability[7] = {3, 0, 0, 0, FRAME_CAPTURE, 5, (unsigned char)(fi_livery_remote_ready() != 0)};
+            if (!launch_write(capability, sizeof(capability))) break;
+            next_receiver_report = now + 1000;
         }
         DWORD error = 0;
         int got = launch_read_frame(LAUNCH_READ_POLL_MS, &error);

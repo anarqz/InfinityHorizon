@@ -146,6 +146,10 @@ int azimuth_world_lan_send(const void *data, int size);
 /* the current paint's world id before a world: the game image (runtime.c), the game thread's
    per-frame turn (game_ready.c's main update), the overlay's ask (livery.c fi_livery_sync) */
 void fi_livery_apply(unsigned char *game_image);
+/* Remote-paint policy v1: mode 0 (stock_only) only. The queue boundary must be installed
+   before a launcher session may create/join a world; Capture.what 5 reports this readiness. */
+int fi_livery_remote_ready(void);
+int fi_livery_remote_policy(unsigned mode);
 void fi_livery_game_tick(void);
 int fi_livery_run_current(unsigned timeout_ms);
 /* OD-54: the launcher's relay port while this PC hosts in a launcher session (0: not hosting). */

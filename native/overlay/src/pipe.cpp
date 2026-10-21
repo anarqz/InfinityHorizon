@@ -9,6 +9,8 @@
 // (0 queued, 1 running, 2 offline, 3 exiting), str detail}; 0x03 Toast{u8 level, u8 icon, u16 ttl
 // in tenths, str text}: `icon` is the toast kind (ToastKind order) and `text` is "Title\nBody";
 // 0x04 Panel{u8 open} opens or closes the guide.
+// 0x11 GameReadiness{u8 ready}, lease 1.5 s; 0x12 WorldAccess{u8 allowed, str message},
+// an independent 10 s lease. Missing/malformed/expired installation access stays denied.
 //
 // Worlds (OD-54/57/58; the launcher talks to matchmaking, the overlay only asks):
 // Overlay -> launcher: 0x07 WorldsQuery{u8 filter (1 friends, 2 near, 3 global), u8 notFull};
@@ -96,6 +98,13 @@ struct Reader {
 void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
     Reader r{body, size};
     switch (type) {
+    case 0x12: {
+        const uint8_t allowed = r.U8();
+        const std::string message = r.Str();
+        if (r.ok && r.left == 0 && allowed <= 1 && message.size() <= 512) SetWorldAccess(allowed == 1, message);
+        else SetWorldAccess(false, {});
+        break;
+    }
     case 0x11: {
         const uint8_t ready = r.U8();
         if (r.ok && size == 1 && ready <= 1) SetGameReadiness(ready == 1);
