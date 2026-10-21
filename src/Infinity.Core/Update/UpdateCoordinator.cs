@@ -21,6 +21,8 @@ public sealed class UpdateCoordinator : IDisposable
     private readonly SemaphoreSlim _operation = new(1, 1);
     private Discovery? _discovery;
     private Discovery? _requiredDiscovery;
+    private bool _discoveryAttempted;
+    private bool _releaseUnavailable;
     private bool _disposed;
 
     public UpdateCoordinator(string stateDirectory)
@@ -40,10 +42,13 @@ public sealed class UpdateCoordinator : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await _operation.WaitAsync(cancellation).ConfigureAwait(false);
+        var previous = _discovery;
         try
         {
             _discovery = null;
             _requiredDiscovery = null;
+            _discoveryAttempted = false;
+            _releaseUnavailable = false;
             var release = await _source.GetLatestAsync(cancellation).ConfigureAwait(false)
                 ?? throw new InvalidDataException("No approved release is available.");
             var descriptorAsset = Asset(release, DescriptorAssetName);
@@ -62,7 +67,14 @@ public sealed class UpdateCoordinator : IDisposable
             UpdateReleaseStateStore.RecordKnown(_stateDirectory, descriptor, raw);
             _discovery = new(descriptor, raw, signature, package, _clock.GetTimestamp(), _clock.GetUtcNow());
         }
-        finally { _operation.Release(); }
+        catch
+        {
+            // A failed refresh cannot erase a still-valid, verified mandatory release.
+            _discovery = Usable(previous) ? previous : null;
+            _releaseUnavailable = true;
+            throw;
+        }
+        finally { _discoveryAttempted = true; _operation.Release(); }
     }
 
     public UpdateDecision Evaluate(string current, ServerInfo info, string? game)
@@ -77,19 +89,31 @@ public sealed class UpdateCoordinator : IDisposable
     private UpdateDecision EvaluateCore(string current, ServerInfo info, string? game)
     {
         var discovery = _discovery;
-        if (!Usable(discovery) || !LauncherVersion.TryParse(current, out var installed)
+        if (!LauncherVersion.TryParse(current, out var installed)
             || !LauncherVersion.TryParse(info.MinLauncher, out var minimum)
             || !LauncherVersion.TryParse(info.LatestLauncher, out var latest) || latest < minimum)
             return new(UpdatePhase.Unavailable, null);
-        var target = latest > minimum ? latest : minimum;
+        var floor = minimum;
         if (game is not null)
         {
             var selected = info.Games?.Where(item => item.Id == game).ToArray();
             if (selected is not { Length: 1 } || !LauncherVersion.TryParse(selected[0].MinLauncher, out var gameMinimum))
                 return new(UpdatePhase.Unavailable, null);
-            if (gameMinimum > target) target = gameMinimum;
+            if (gameMinimum > floor) floor = gameMinimum;
         }
+        if (!Usable(discovery))
+        {
+            if (!_discoveryAttempted) return new(UpdatePhase.Unavailable, null);
+            // GitHub availability is advisory; a verified backend minimum remains authoritative.
+            return installed >= floor ? new(UpdatePhase.ReleaseUnavailable, floor.Value) : new(UpdatePhase.Unavailable, floor.Value);
+        }
+        var target = latest > floor ? latest : floor;
         if (!LauncherVersion.TryParse(discovery!.Descriptor.Version, out var approved)) return new(UpdatePhase.Unavailable, null);
+        if (_releaseUnavailable)
+        {
+            if (installed < approved && approved >= floor) return new(UpdatePhase.Required, approved.Value);
+            return installed < floor ? new(UpdatePhase.Unavailable, floor.Value) : new(UpdatePhase.ReleaseUnavailable, floor.Value);
+        }
         if (approved > target) target = approved;
         if (installed >= target) return new(UpdatePhase.Current, target.Value);
         return approved >= target ? new(UpdatePhase.Required, approved.Value) : new(UpdatePhase.Unavailable, target.Value);

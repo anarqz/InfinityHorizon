@@ -23,10 +23,12 @@ public sealed partial class ShellViewModel
     private long _updateBytes, _updateTotal;
     public event Action? UpdateRestartRequested;
 
-    public bool LauncherUpdateAllowsPlay => !_updateAwaitingCommit && !_updateRecoveryBlocked && _launcherUpdatePhase == UpdatePhase.Current;
+    public bool LauncherUpdateAllowsPlay => !_updateAwaitingCommit && !_updateRecoveryBlocked && _launcherUpdatePhase is UpdatePhase.Current or UpdatePhase.ReleaseUnavailable;
+    public bool LauncherReleaseUnavailable => _launcherUpdatePhase == UpdatePhase.ReleaseUnavailable;
     public bool LauncherUpdateBusy => _updateAwaitingCommit || _updateChecking || _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying;
     public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport;
-    public bool ShowLauncherUpdateBanner => !ShowOnlineStatusBanner && !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !ShowLauncherUpdate;
+    public bool ShowLauncherUpdateBanner => !ShowOnlineStatusBanner && !ShowOnlineStatusPage && (LauncherReleaseUnavailable && LauncherUpdateAllowsPlay || !LauncherUpdateAllowsPlay && !ShowLauncherUpdate);
+    public string LauncherUpdateBannerAction => S[LauncherReleaseUnavailable ? "updater.retry" : "updater.open"];
     public bool CanRetryLauncherUpdate => !LauncherUpdateBusy && !Playing;
     public bool CanCancelLauncherUpdate => _updateDownload is not null && _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying;
     public bool CanApplyLauncherUpdate => _launcherUpdatePhase == UpdatePhase.Required && !LauncherUpdateBusy && !_updateRecoveryBlocked && !Playing && !IntegrityChecking && !_busy && CrashIdle;
@@ -35,7 +37,7 @@ public sealed partial class ShellViewModel
     {
         UpdatePhase.Checking => "checking", UpdatePhase.Current => "current", UpdatePhase.Required => "required",
         UpdatePhase.Downloading => "downloading", UpdatePhase.Verifying => "verifying", UpdatePhase.Applying => "applying",
-        UpdatePhase.RecoveryRequired => "recovery", UpdatePhase.Failed => "failed", _ => "unavailable",
+        UpdatePhase.RecoveryRequired => "recovery", UpdatePhase.Failed => "failed", UpdatePhase.ReleaseUnavailable => "release_unavailable", _ => "unavailable",
     })];
     public string LauncherUpdateProgress => _updateTotal > 0 && _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying ? S.Format("updater.progress",
         ("received", (_updateBytes / 1048576d).ToString("F1", CultureInfo.CurrentCulture)),
@@ -59,7 +61,7 @@ public sealed partial class ShellViewModel
             using var bound = CancellationTokenSource.CreateLinkedTokenSource(_updateStop.Token);
             bound.CancelAfter(TimeSpan.FromSeconds(25));
             var infoTask = UpdateServerInfoAsync(bound.Token);
-            var releaseTask = _updater.DiscoverAsync(bound.Token);
+            var releaseTask = DiscoverLauncherReleaseAsync(bound.Token);
             await Task.WhenAll(infoTask, releaseTask);
             if (_updateRecoveryBlocked) return;
             var decision = _updater.Evaluate(Version, await infoTask, _gate.Game);
@@ -68,6 +70,13 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (UpdateFailure(error))
         { _launcherUpdatePhase = UpdatePhase.Unavailable; Log("update: check unavailable (" + error.GetType().Name + ")"); }
         finally { _updateChecking = false; Changed(string.Empty); }
+    }
+
+    private async Task DiscoverLauncherReleaseAsync(CancellationToken cancellation)
+    {
+        try { await _updater!.DiscoverAsync(cancellation); }
+        catch (Exception error) when (UpdateFailure(error))
+        { Log("update: release discovery unavailable (" + error.GetType().Name + ")"); }
     }
 
     private async Task<ServerInfo> UpdateServerInfoAsync(CancellationToken cancellation)
