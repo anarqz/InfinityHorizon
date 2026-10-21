@@ -10,6 +10,7 @@ using Infinity.Core.Session;
 using Infinity.Core.Shell;
 using Infinity.Core.Supervisor;
 using Infinity.Core.Windows;
+using Infinity.Core.Online;
 
 namespace Infinity.App;
 
@@ -81,7 +82,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready && IntegrityCanStart && LauncherUpdateAllowsPlay;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
 
     public string? PlayStatus => _playStatus;
 
@@ -89,6 +90,7 @@ public sealed partial class ShellViewModel
 
     public async Task PlayAsync()
     {
+        if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         RefreshHook(); // the hook as it is now, not as it was when the screen last looked
         if (CanPlay && _hook is not null && HookInstaller.ShouldInstall(_hook, _hookPackage) && _hookPackage is { } update &&
@@ -107,6 +109,8 @@ public sealed partial class ShellViewModel
         var startingSession = _session;
         var startingInstall = _install;
         var startingGame = _gate.Game;
+        if (!await RefreshOnlineServiceForPlayAsync()) return;
+        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) return;
         if (!await RefreshLauncherPolicyAsync()) return;
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var futureSessionId = Guid.CreateVersion7().ToString();
@@ -123,11 +127,13 @@ public sealed partial class ShellViewModel
         if (integrity.CarDbSha256 is not { Length: 64 } carDb) { Message = S["integrity.inconclusive"]; return; }
         var development = DevNet.PlainHttpUrl(_session.Api.Core.GetLeftPart(UriPartial.Authority));
         var (keys, policy) = TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
+        using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
             Saves = SessionSavesFor(profile),
-            Worlds = WorldsFor(profile.Mode, profile.Xuid),
+            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity),
+            OnlineActivity = onlineActivity,
             Text = S,
             CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),
             AccountId = _session.Me?.AccountId,
@@ -157,6 +163,7 @@ public sealed partial class ShellViewModel
         EnforceModLocks();
         // BUG-0001: the online session's drivatar caches never reach offline play.
         var caches = SwitchCaches(_install.Root, online: true);
+        _playOnlineActivity = onlineActivity;
         try
         {
             _playTask = Task.Run(() => supervisor.RunAsync(_play.Token));
@@ -174,6 +181,7 @@ public sealed partial class ShellViewModel
             _waitingForAdmission = _queued = _leavingQueue = false;
             RefreshHook();
             _commands = null;
+            if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             Changed(string.Empty);
         }
     }
@@ -359,6 +367,9 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Error { Message: Infinity.Core.Api.ErrorCodes.AccountsFrozen }:
                 SetStatus(S["crash.frozen"]);
+                break;
+            case SupervisorEvent.OnlinePaused paused:
+                ObserveOnlinePause(paused.Pause);
                 break;
             case SupervisorEvent.Error { Message: ErrorCodes.GameUpdateRequired }:
                 RequireLauncherUpdate();

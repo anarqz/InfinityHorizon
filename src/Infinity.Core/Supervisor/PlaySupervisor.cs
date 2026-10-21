@@ -9,6 +9,7 @@ using Infinity.Core.Session;
 using Infinity.Core.Windows;
 using Infinity.Core.Wire;
 using Infinity.Core.Diagnostics;
+using Infinity.Core.Online;
 
 namespace Infinity.Core.Supervisor;
 
@@ -23,6 +24,9 @@ public sealed record SupervisorConfig(
     TicketPolicy Policy,
     string StateDirectory)
 {
+    public OnlineActivity? OnlineActivity { get; init; }
+    /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
+    public uint MinimumOnlineHookBuild { get; init; } = 76;
     /// <summary>One bounded accept (ORCHESTRATOR §1.4: called again for the child's whole life).</summary>
     public TimeSpan AcceptBound { get; init; } = TimeSpan.FromSeconds(10);
 
@@ -101,6 +105,7 @@ public abstract record SupervisorEvent
     public sealed record Ended(string Reason, bool Left) : SupervisorEvent;
 
     public sealed record Error(string Message) : SupervisorEvent;
+    public sealed record OnlinePaused(OnlinePause Pause) : SupervisorEvent;
 
     /// <summary>Something the launcher decided for this launch, for the log (Wine overrides, ...).</summary>
     public sealed record Note(string Text) : SupervisorEvent;
@@ -159,6 +164,9 @@ public sealed class PlaySupervisor
     private readonly ChannelReader<SupervisorCommand> _commands;
     private readonly TimeProvider _clock;
     private readonly Func<Handoff, IControlPipe>? _uiPipes;
+    private readonly OnlineActivity _online;
+    private readonly bool _ownsOnline;
+    private int _pauseEmitted;
 
     // the session's current game access ticket (matchmaking's X-Fi-Session), renewed by each heartbeat
     private volatile string _ticket = string.Empty;
@@ -181,10 +189,18 @@ public sealed class PlaySupervisor
         _emit = emit ?? throw new ArgumentNullException(nameof(emit));
         _commands = commands ?? throw new ArgumentNullException(nameof(commands));
         _clock = clock ?? TimeProvider.System;
+        _online = config.OnlineActivity ?? new OnlineActivity();
+        _ownsOnline = config.OnlineActivity is null;
     }
 
     /// <summary>Runs until the play session ends (relaunches included).</summary>
     public async Task RunAsync(CancellationToken cancellation)
+    {
+        try { await RunCoreAsync(cancellation).ConfigureAwait(false); }
+        finally { if (_ownsOnline) _online.Dispose(); }
+    }
+
+    private async Task RunCoreAsync(CancellationToken cancellation)
     {
         var relaunches = new Queue<DateTimeOffset>();
         var initialSessionId = _config.InitialSessionId;
@@ -203,6 +219,8 @@ public sealed class PlaySupervisor
             }
             catch (Exception e) when (e is ApiException or HttpRequestException or TicketException or SignatureException or ProtocolException or IOException or InvalidDataException or JsonException or System.ComponentModel.Win32Exception)
             {
+                if (e is ApiException apiClosed && OnlinePause.From(apiClosed) is { } pause)
+                { _online.TryPause(pause); EmitPause(pause); }
                 _emit(new SupervisorEvent.Error(e is ApiException api ? api.Code : e.Message));
                 _emit(new SupervisorEvent.Ended("error", false));
                 return;
@@ -211,6 +229,7 @@ public sealed class PlaySupervisor
             {
                 return;
             }
+            if (_online.IsPaused) return; // Operator reopen never re-admits a running/ended activity automatically.
             var now = _clock.GetUtcNow();
             while (relaunches.Count > 0 && now - relaunches.Peek() > RelaunchWindow)
             {
@@ -229,6 +248,8 @@ public sealed class PlaySupervisor
     /// <summary>One gate session and one game process; null when it ended without a game exit.</summary>
     private async Task<ExitDisposition?> OneSessionAsync(string? initialSessionId, CancellationToken cancellation)
     {
+        using var preparing = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _online.Cancellation);
+        if (_online.IsPaused) { EmitPause(await _online.Paused.ConfigureAwait(false)); return null; }
         var handoff = new Handoff(HandoffChannel.Pipe, Launch.NewNonce());
         // The pipe exists before the child (ORCHESTRATOR §1.2): the hook's 5 s wait always finds it.
         using var pipe = _pipes(handoff);
@@ -236,15 +257,16 @@ public sealed class PlaySupervisor
         using var uiPipe = _config.Overlay is not null && _uiPipes is not null ? _uiPipes(handoff) : null;
         var admission = await new GateAdmission(_gate, _emit, _clock).WaitAsync(
             id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false),
-            cancellation, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
+            preparing.Token, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
         if (admission is null)
         {
+            if (_online.IsPaused) EmitPause(await _online.Paused.ConfigureAwait(false));
             return null;
         }
         var (sessionId, active) = admission.Value;
         var state = new SessionRecord(sessionId, _config.Game, _config.Xuid, handoff.NonceHex);
         var fence = active.Lease?.FenceToken;
-        if (await CancelBeforeSpawnAsync(sessionId, fence, cancellation).ConfigureAwait(false)) return null;
+        if (await CancelBeforeSpawnAsync(sessionId, fence, preparing.Token).ConfigureAwait(false)) return null;
         _ticket = active.Ticket.Token;
         _emit(new SupervisorEvent.Admitted(active.Pool));
         byte[] claims, signature;
@@ -267,15 +289,18 @@ public sealed class PlaySupervisor
         {
             try
             {
-                await saves.BeforeSpawnAsync(active, cancellation).ConfigureAwait(false);
+                await saves.BeforeSpawnAsync(active, preparing.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            catch (OperationCanceledException) when (preparing.IsCancellationRequested)
             {
-                await CancelBeforeSpawnAsync(sessionId, saves.FenceToken ?? fence, cancellation).ConfigureAwait(false);
+                await CancelBeforeSpawnAsync(sessionId, saves.FenceToken ?? fence, preparing.Token).ConfigureAwait(false);
                 return null;
             }
             catch (Exception e) when (e is Saves.SaveBlockedException or ApiException or HttpRequestException or IOException or UnauthorizedAccessException)
             {
+                var closure = e is ApiException apiError ? OnlinePause.From(apiError)
+                    : e is Saves.SaveBlockedException blockedError ? OnlinePause.From(blockedError.Code, System.Net.HttpStatusCode.ServiceUnavailable) : null;
+                if (closure is not null) { _online.TryPause(closure); EmitPause(closure); }
                 var leftBlocked = await LeaveQuietly(sessionId, "player", saves.FenceToken ?? fence).ConfigureAwait(false);
                 _emit(new SupervisorEvent.Error("save: " + (e is Saves.SaveBlockedException blocked ? blocked.Code : e is ApiException api ? api.Code : e.Message)));
                 _emit(new SupervisorEvent.Ended("save_blocked", leftBlocked));
@@ -284,7 +309,7 @@ public sealed class PlaySupervisor
         }
 
         var token = new GameToken(new Secret(active.Ticket.Token), Unix(active.Ticket.ExpiresAt));
-        var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), Launch.FirstProtocolBuild);
+        var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild);
         List<(string, string)> env = [(Launch.EnvLaunch, handoff.EnvValue), (Launch.EnvLauncherExe, _config.LauncherExe)];
         // Wine / Proton: ExtraOptions' winmm.dll next to azimuth.exe loads only with winmm=n,b
         if (WineHost.Detected)
@@ -310,10 +335,14 @@ public sealed class PlaySupervisor
             try { dumpSnapshot = CrashDumpCollector.Snapshot(_config.Install.Root); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _emit(new SupervisorEvent.Note("crash: dump snapshot unavailable")); }
         IGameChild child;
-        if (await CancelBeforeSpawnAsync(sessionId, _config.Saves?.FenceToken ?? fence, cancellation).ConfigureAwait(false)) return null;
+        if (await CancelBeforeSpawnAsync(sessionId, _config.Saves?.FenceToken ?? fence, preparing.Token).ConfigureAwait(false)) return null;
         try
         {
-            child = _spawner.Spawn(plan);
+            if (!_online.TryStart(() => _spawner.Spawn(plan), out child))
+            {
+                await CancelBeforeSpawnAsync(sessionId, _config.Saves?.FenceToken ?? fence, preparing.Token).ConfigureAwait(false);
+                return null;
+            }
         }
         catch
         {
@@ -362,9 +391,10 @@ public sealed class PlaySupervisor
             {
                 try
                 {
-                    endRevision = await after.AfterExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    using var drain = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    endRevision = await after.AfterExitAsync(drain.Token).WaitAsync(drain.Token).ConfigureAwait(false);
                 }
-                catch (Exception e) when (e is ApiException or HttpRequestException or IOException or UnauthorizedAccessException or InvalidOperationException)
+                catch (Exception e) when (e is ApiException or HttpRequestException or IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
                 {
                     _emit(new SupervisorEvent.Error("save: " + (e is ApiException api ? api.Code : e.Message)));
                 }
@@ -386,7 +416,8 @@ public sealed class PlaySupervisor
 
     private async Task<bool> CancelBeforeSpawnAsync(string sessionId, ulong? fence, CancellationToken cancellation)
     {
-        if (!cancellation.IsCancellationRequested) return false;
+        if (!cancellation.IsCancellationRequested && !_online.IsPaused) return false;
+        if (_online.IsPaused) EmitPause(await _online.Paused.ConfigureAwait(false));
         var left = await LeaveQuietly(sessionId, "player", fence).ConfigureAwait(false);
         _emit(new SupervisorEvent.Ended("queue_cancelled", left));
         return true;
@@ -397,6 +428,7 @@ public sealed class PlaySupervisor
         IGameChild child, IControlPipe pipe, IControlPipe? uiPipe, LauncherEndpoint endpoint, string sessionId, GameToken token, uint heartbeatEveryMs, ulong? fence, SessionRecord state, CrashContext crashContext, CancellationToken cancellation)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        using var onlineStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, _online.Cancellation);
         using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid, new Overlay.UiFrame.Status("", Overlay.UiTier.Free, Overlay.UiState.Running, ""));
         Task<bool>? overlayNext = null;
         if (overlay is not null)
@@ -409,7 +441,7 @@ public sealed class PlaySupervisor
         if (worlds is not null)
         {
             worlds.CrashContext = crashContext;
-            _ = SeatLoopAsync(worlds, overlay!, stop.Token);
+            _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
         var exit = child.WaitForExitAsync(stop.Token);
         var frames = Channel.CreateUnbounded<ReceivedFrame>();
@@ -418,20 +450,55 @@ public sealed class PlaySupervisor
         Task<bool>? nextFrame = null;
         var heartbeatEvery = TimeSpan.FromMilliseconds(Math.Max(heartbeatEveryMs, 5000));
         Task? heartbeat = Task.Delay(heartbeatEvery, _clock, stop.Token);
+        Task<GateHeartbeatResponse>? beatRequest = null;
+        var beatRetry = new OperationBackoff();
         var tokensOpen = true;
+        var suspended = false;
         var hookGone = false;
         ulong pushedExp = 0; // the expiry of the last token handed to the hook
         var lastBeat = DateTimeOffset.MinValue;
         Task<bool>? quit = null;
         var command = _commands.WaitToReadAsync(stop.Token).AsTask();
+        async Task SuspendAsync(OnlineSuspendReason reason, string message, OnlinePause? pause = null)
+        {
+            if (suspended) return;
+            suspended = true; tokensOpen = false; heartbeat = null; _ticket = string.Empty;
+            token = new GameToken(new Secret(string.Empty), 0);
+            await onlineStop.CancelAsync().ConfigureAwait(false);
+            _config.OnlineAccessLost?.Invoke();
+            if (pause is not null) EmitPause(pause);
+            // IPC is control, Notice is display only. Dropping a failed write triggers the new hook's fail-closed pipe path.
+            if (endpoint.Suspend(reason) is { } frame)
+            {
+                using var writeBound = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                try { await pipe.WriteAsync(frame.Encode(), writeBound.Token).WaitAsync(writeBound.Token).ConfigureAwait(false); }
+                catch (Exception error) when (error is IOException or OperationCanceledException or ObjectDisposedException or TimeoutException)
+                { pipe.Dispose(); hookGone = true; nextFrame = null; }
+            }
+            if (worlds is not null) _ = worlds.SuspendOnlineAsync();
+            if (overlay is not null)
+            {
+                await overlay.SendFrameAsync(new Overlay.UiFrame.WorldAccess(false, message), stop.Token).ConfigureAwait(false);
+                await overlay.SetStatusAsync(new Overlay.UiFrame.Status("", Overlay.UiTier.Free, Overlay.UiState.Offline, message), stop.Token).ConfigureAwait(false);
+            }
+            await Notice(pipe, endpoint, overlay, 2, message, stop.Token).ConfigureAwait(false);
+        }
         try
         {
             while (true)
             {
+                if (!suspended && (_online.IsPaused || worlds?.OnlineActivity.IsPaused == true))
+                {
+                    var pause = _online.IsPaused ? await _online.Paused.ConfigureAwait(false) : await worlds!.OnlineActivity.Paused.ConfigureAwait(false);
+                    _online.TryPause(pause);
+                    await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
+                }
                 var waits = new List<Task> { exit, command };
                 if (accept is not null) waits.Add(accept);
                 if (nextFrame is not null) waits.Add(nextFrame);
                 if (heartbeat is not null) waits.Add(heartbeat);
+                if (beatRequest is not null) waits.Add(beatRequest);
+                if (!suspended) { waits.Add(_online.Paused); if (worlds is not null) waits.Add(worlds.OnlineActivity.Paused); }
                 if (quit is not null) waits.Add(quit);
                 if (overlayNext is not null) waits.Add(overlayNext);
                 var done = await Task.WhenAny(waits).ConfigureAwait(false);
@@ -463,12 +530,22 @@ public sealed class PlaySupervisor
                         worlds?.GameReadiness.Invalidate();
                         if (overlay is not null) await overlay.SendFrameAsync(new Overlay.UiFrame.GameReadiness(false), stop.Token).ConfigureAwait(false);
                         nextFrame = null; // The hook closed the pipe; the process handle stays the truth.
+                        hookGone = true;
+                        _emit(new SupervisorEvent.HookOffline());
+                        await SuspendAsync(OnlineSuspendReason.ControlLost, SessionEndedText()).ConfigureAwait(false);
                         continue;
                     }
                     while (frames.Reader.TryRead(out var received))
                     {
+                        if (!suspended && _online.IsPaused)
+                        {
+                            var pause = await _online.Paused.ConfigureAwait(false);
+                            await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
+                        }
                         var frame = received.Frame;
-                        state = await OnFrame(frame, endpoint, pipe, token, state, stop.Token).ConfigureAwait(false);
+                        try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
+                        { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
                         if (frame is Frame.Event { Kind: HookEvents.GameReadiness } && worlds is not null)
                         {
                             ObserveReadiness(received, worlds.GameReadiness);
@@ -485,13 +562,13 @@ public sealed class PlaySupervisor
                         {
                             _ = worlds.CloseHostAsync(stop.Token);
                         }
-                        if (frame is Frame.RefreshRequest && tokensOpen)
+                        if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {
                             // A hook whose requests keep failing may ask again and again: one forced beat per
                             // ForcedBeatEvery; inside it the token in hand (≤ 10 min) is sent again
                             // without a call. (The 5 s cadence seen live was the local gate's
                             // heartbeatEveryMs, lease TTL 20 s / 5, not refresh requests.)
-                            if (_clock.GetUtcNow() - lastBeat >= _config.ForcedBeatEvery)
+                            if (beatRequest is null && _clock.GetUtcNow() - lastBeat >= _config.ForcedBeatEvery)
                             {
                                 heartbeat = Task.CompletedTask; // beat now
                             }
@@ -507,18 +584,28 @@ public sealed class PlaySupervisor
                 {
                     heartbeat = null;
                     lastBeat = _clock.GetUtcNow();
+                    if (tokensOpen && !_online.IsPaused)
+                    {
+                        try { beatRequest = _gate.HeartbeatAsync(sessionId, fence, onlineStop.Token); }
+                        catch (Exception error) when (error is ApiException or HttpRequestException or TimeoutException or IOException or OperationCanceledException)
+                        { beatRequest = Task.FromException<GateHeartbeatResponse>(error); }
+                    }
+                }
+                else if (done == beatRequest)
+                {
+                    var request = beatRequest!; beatRequest = null;
                     try
                     {
-                        var beat = await _gate.HeartbeatAsync(sessionId, fence, stop.Token).ConfigureAwait(false);
+                        var beat = await request.ConfigureAwait(false);
+                        if (!tokensOpen || _online.IsPaused) continue; // A cancelled HTTP request may still return a late success.
+                        beatRetry.Success();
                         fence = beat.Lease?.FenceToken ?? fence;
                         _config.Saves?.OnLease(beat.Lease);
                         token = new GameToken(new Secret(beat.Ticket.Token), Unix(beat.Ticket.ExpiresAt));
                         _ticket = beat.Ticket.Token;
                         if (!beat.GamePlane.Open)
                         {
-                            tokensOpen = false;
-                            _config.OnlineAccessLost?.Invoke();
-                            await Notice(pipe, endpoint, overlay, 2, SessionEndedText(), stop.Token).ConfigureAwait(false);
+                            await SuspendAsync(OnlineSuspendReason.SessionEnded, SessionEndedText()).ConfigureAwait(false);
                         }
                         else if (endpoint.Greeted && !hookGone && token.ExpiresUnix >= pushedExp + TokenPushEvery)
                         {
@@ -543,24 +630,32 @@ public sealed class PlaySupervisor
                             heartbeat = Task.Delay(TimeSpan.FromMilliseconds(Math.Max(beat.Ticket.HeartbeatEveryMs, 5000)), _clock, stop.Token);
                         }
                     }
+                    catch (ApiException error) when (OnlinePause.From(error) is { })
+                    {
+                        var pause = OnlinePause.From(error)!; _online.TryPause(pause);
+                        await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
+                    }
                     catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded or ErrorCodes.AccountsFrozen or ErrorCodes.GameUpdateRequired
                         or ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged)
                     {
-                        tokensOpen = false;
-                        _config.OnlineAccessLost?.Invoke();
                         if (e.Code.StartsWith("CONTENT.", StringComparison.Ordinal) || e.Code == ErrorCodes.GameUpdateRequired) _emit(new SupervisorEvent.Error(e.Code));
-                        endpoint.Revoke("the server ended the online session");
-                        await Notice(pipe, endpoint, overlay, 2, e.Code == ErrorCodes.AccountsFrozen
+                        await SuspendAsync(e.Code == ErrorCodes.GameUpdateRequired ? OnlineSuspendReason.UpdateRequired : OnlineSuspendReason.SessionEnded, e.Code == ErrorCodes.AccountsFrozen
                             ? _config.Text?["crash.frozen"] ?? "Online access is temporarily frozen for security review. Sign-in and support remain available."
                             : e.Code == ErrorCodes.GameUpdateRequired
                                 ? _config.Text?["updater.session_required"] ?? "Update Infinity Launcher after this game session to return online. Your progress keeps saving."
-                                : SessionEndedText(), stop.Token).ConfigureAwait(false);
+                                : SessionEndedText()).ConfigureAwait(false);
                     }
-                    catch (Exception e) when (e is ApiException or HttpRequestException or TimeoutException or IOException)
+                    catch (OperationCanceledException) when (suspended || _online.IsPaused) { }
+                    catch (Exception e) when (OperationBackoff.Transient(e) && !stop.IsCancellationRequested)
                     {
                         // A missed beat: try again soon; the ticket in hand lasts 10 minutes.
                         _emit(new SupervisorEvent.Error($"heartbeat: {(e is ApiException api ? api.Code : e.Message)}"));
-                        heartbeat = Task.Delay(TimeSpan.FromSeconds(10), _clock, stop.Token);
+                        if (tokensOpen && !_online.IsPaused) heartbeat = Task.Delay(beatRetry.Failed(e), _clock, onlineStop.Token);
+                    }
+                    catch (ApiException error)
+                    {
+                        _emit(new SupervisorEvent.Error(error.Code));
+                        await SuspendAsync(OnlineSuspendReason.SessionEnded, SessionEndedText()).ConfigureAwait(false);
                     }
                 }
                 else if (done == command)
@@ -581,7 +676,7 @@ public sealed class PlaySupervisor
                                 await Notice(pipe, endpoint, overlay, n.Level, n.Text, stop.Token).ConfigureAwait(false);
                                 break;
                             case SupervisorCommand.OverlayStatus s when overlay is not null:
-                                await overlay.SetStatusAsync(s.Status, stop.Token).ConfigureAwait(false);
+                                if (!suspended) await overlay.SetStatusAsync(s.Status, stop.Token).ConfigureAwait(false);
                                 break;
                             case SupervisorCommand.OverlayToast toast when overlay is not null:
                                 await overlay.ToastAsync(toast.Toast, stop.Token).ConfigureAwait(false);
@@ -614,19 +709,19 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Event e:
                                 _emit(new SupervisorEvent.OverlayEvent(e.Kind, e.Detail));
                                 break;
-                            case Overlay.UiIncoming.Worlds w when worlds is not null:
+                            case Overlay.UiIncoming.Worlds w when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.ListAsync(w.Query, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
-                            case Overlay.UiIncoming.Join j when worlds is not null:
+                            case Overlay.UiIncoming.Join j when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.JoinAsync(j.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
-                            case Overlay.UiIncoming.Create c when worlds is not null:
+                            case Overlay.UiIncoming.Create c when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.CreateAsync(c.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
-                            case Overlay.UiIncoming.Mine when worlds is not null:
+                            case Overlay.UiIncoming.Mine when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.MyWorldAsync(stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
-                            case Overlay.UiIncoming.Act a when worlds is not null:
+                            case Overlay.UiIncoming.Act a when worlds is not null && !suspended:
                                 // the result, then the world as it is now
                                 _ = ReplyAsync(overlay, async () => await worlds.ActAsync(a.Request, stop.Token).ConfigureAwait(false), stop.Token)
                                     .ContinueWith(_ => ReplyAsync(overlay, async () => await worlds.MyWorldAsync(stop.Token).ConfigureAwait(false), stop.Token),
@@ -647,17 +742,32 @@ public sealed class PlaySupervisor
             await stop.CancelAsync().ConfigureAwait(false);
             if (worlds is not null)
             {
-                await worlds.LeaveAsync(CancellationToken.None).ConfigureAwait(false);
-                await worlds.CloseHostAsync(CancellationToken.None).ConfigureAwait(false);
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    if (suspended) await worlds.SuspendOnlineAsync().WaitAsync(cleanup.Token).ConfigureAwait(false);
+                    else await Task.WhenAll(worlds.LeaveAsync(cleanup.Token), worlds.CloseHostAsync(cleanup.Token)).WaitAsync(cleanup.Token).ConfigureAwait(false);
+                }
+                catch (Exception error) when (error is ApiException or HttpRequestException or IOException or OperationCanceledException or TimeoutException) { }
             }
         }
     }
 
-    private static async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation)
+    private void EmitPause(OnlinePause pause)
+    {
+        if (Interlocked.Exchange(ref _pauseEmitted, 1) == 0) _emit(new SupervisorEvent.OnlinePaused(pause));
+    }
+
+    private string PauseText(OnlinePause pause) => pause.Reason == "budget"
+        ? _config.Text?["online.budget"] ?? "Online play is paused because the service has reached its monthly budget. You can keep playing offline; your progress stays on this PC."
+        : _config.Text?["online.operator"] ?? "Online services are temporarily paused. You can keep playing offline; your progress stays on this PC.";
+
+    private async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation)
     {
         try
         {
             var frame = await work().ConfigureAwait(false);
+            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
             await overlay.SendFrameAsync(frame, cancellation).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -683,7 +793,7 @@ public sealed class PlaySupervisor
                 {
                     await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, closed), cancellation).ConfigureAwait(false);
                 }
-                var mine = await worlds.MyWorldAsync(cancellation).ConfigureAwait(false);
+                var mine = await worlds.PollMyWorldAsync(cancellation).ConfigureAwait(false);
                 await overlay.SendFrameAsync(mine, cancellation).ConfigureAwait(false);
                 foreach (var toast in worlds.LobbyToasts()) await overlay.ToastAsync(toast, cancellation).ConfigureAwait(false);
             }
@@ -744,7 +854,7 @@ public sealed class PlaySupervisor
         if (endpoint.Greeted)
         {
             try { await pipe.WriteAsync(new Frame.Notice(level, text).Encode(), cancellation).ConfigureAwait(false); }
-            catch (IOException) { /* The overlay and launcher own display; a broken legacy pipe cannot suppress it. */ }
+            catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException) { /* Display never substitutes for suspension control. */ }
         }
     }
 

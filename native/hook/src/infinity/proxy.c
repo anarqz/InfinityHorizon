@@ -255,6 +255,7 @@ static void px_new_txid(unsigned char *t) {
 }
 
 static void px_send(const void *data, int size, const PxAddr *to) {
+    if (!fi_launch_network_allowed()) return;
     px.sendto(px_socket, (const char *)data, size, 0, to, (int)sizeof(*to));
 }
 
@@ -376,6 +377,7 @@ static void px_take_world(const char *reply) {
 /* POST worlds/punch with this socket's public addresses (a thread: the proxy keeps relaying). */
 static DWORD WINAPI px_signal(void *argument) {
     LONG generation = (LONG)(intptr_t)argument;
+    if (!fi_launch_network_allowed() || px_generation != generation) return 0;
     static char body[512], reply[2048];
     PxLine l;
     l.size = 0;
@@ -399,8 +401,9 @@ static DWORD WINAPI px_signal(void *argument) {
     memory_copy(body, l.text, l.size + 1);
     static wchar_t header[1200];
     azimuth_account_auth_header(header, ARRAY_COUNT(header));
+    if (!fi_launch_network_allowed() || px_generation != generation) return 0;
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/worlds/punch", header, body, reply, sizeof(reply));
-    if (px_generation != generation) {
+    if (px_generation != generation || !fi_launch_network_allowed()) {
         return 0;
     }
     PxLine m;
@@ -457,7 +460,7 @@ static DWORD WINAPI px_thread(void *argument) {
         px_binding_request(px_txid[i], &px_stun[i]);
     }
     px_new_txid(px_txid[PX_STUN_SERVERS]);
-    while (px_generation == generation) {
+    while (px_generation == generation && fi_launch_network_allowed()) {
         DWORD now = (DWORD)GetTickCount64();
         /* the punch exchange once STUN answered (or gave up waiting) */
         if (!signalled) {
@@ -486,6 +489,7 @@ static DWORD WINAPI px_thread(void *argument) {
         }
         int from_size = (int)sizeof(from_raw);
         int n = px.recvfrom(own, (char *)packet, sizeof(packet), 0, from_raw, &from_size);
+        if (px_generation != generation || !fi_launch_network_allowed()) break;
         if (n <= 0) {
             continue;
         }
@@ -554,7 +558,7 @@ static DWORD WINAPI px_thread(void *argument) {
 
 int azimuth_proxy_send_world(const void *data, int size) {
     UINT_PTR s = px_socket;
-    if (s == PX_INVALID || !px_have_world || px_direct) {
+    if (!fi_launch_network_allowed() || s == PX_INVALID || !px_have_world || px_direct) {
         return 0;
     }
     PxAddr world = px_world;
@@ -640,6 +644,7 @@ void azimuth_proxy_configure(int direct) {
 /* Called with the world the session named (CreateAssociationAsync). For a world on another PC
    it starts the proxy and returns 1 with `local` = the address the game should use. */
 int azimuth_proxy_start(const void *world, void *local) {
+    if (!fi_launch_network_allowed()) return 0;
     PxAddr target, here;
     memory_copy(&target, world, sizeof(target));
     if (px_direct && fi_tier_free()) {
@@ -658,6 +663,7 @@ int azimuth_proxy_start(const void *world, void *local) {
     }
     azimuth_proxy_stop();
     px_resolve_stun();
+    if (!fi_launch_network_allowed()) return 0;
     UINT_PTR s = px.socket(PX_AF_INET6, PX_SOCK_DGRAM, PX_IPPROTO_UDP);
     if (s == PX_INVALID) {
         log_append("PROXY: no socket; the game goes to the world directly.\r\n");
@@ -682,6 +688,11 @@ int azimuth_proxy_start(const void *world, void *local) {
     px_have_world = 0;
     for (unsigned i = 0; i < PX_STUN_SERVERS; ++i) px_mapped_seen[i] = 0;
     px_add_candidate(&target);
+    if (!fi_launch_network_allowed()) {
+        px_socket = PX_INVALID;
+        px.closesocket(s);
+        return 0;
+    }
     LONG generation = InterlockedIncrement(&px_generation);
     HANDLE t = CreateThread(0, 0, px_thread, (void *)(intptr_t)generation, 0, 0);
     if (!t) {
@@ -759,6 +770,7 @@ static int px_net_line(const char *text, const char *key, char *out, size_t cap)
    network's public address, IPv6, the NAT's kind) and, while hosting, what the relay found
    (dedicated_server.net). Takes about 1.5 s. */
 void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
+    if (!fi_launch_network_allowed()) return;
     px_report(out, cap, L"\n\nFREE ROAM (worlds over the Internet)");
     if (!px_load()) {
         return;
@@ -777,6 +789,7 @@ void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
         any.family = PX_AF_INET6;
         if (px.bind(s, &any, (int)sizeof(any)) == 0) {
             for (unsigned i = 0; i < px_stun_count; ++i) {
+                if (!fi_launch_network_allowed()) break;
                 unsigned char m[20] = {0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42};
                 px_new_txid(tx[i]);
                 memory_copy(m + 8, tx[i], 12);
@@ -784,7 +797,8 @@ void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
             }
             DWORD started = (DWORD)GetTickCount64();
             unsigned answered = 0;
-            while (answered < px_stun_count && (DWORD)GetTickCount64() - started < PX_STUN_WAIT_MS) {
+            while (fi_launch_network_allowed() && answered < px_stun_count &&
+                   (DWORD)GetTickCount64() - started < PX_STUN_WAIT_MS) {
                 int from_size = (int)sizeof(from_raw);
                 int n = px.recvfrom(s, (char *)packet, sizeof(packet), 0, from_raw, &from_size);
                 if (n <= 0) continue;

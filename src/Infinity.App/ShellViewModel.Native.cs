@@ -96,20 +96,27 @@ public sealed partial class ShellViewModel
 
     private async Task Native(Func<IdentityPlatform, ServerInfo, ApiClient, CancellationToken, Task> work)
     {
+        if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (_busy) return;
         Busy = true;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var epoch = _onlinePauseEpoch;
         _signIn = cancellation;
         try
         {
-            var (info, api) = await AccountSession.ConnectAsync(Http, _config, ClientHeader, cancellation.Token);
+            Task<(ServerInfo Info, ApiClient Api)>? connection = null;
+            PrepareNativeConnection(ref connection, cancellation.Token);
+            var (info, api) = await (connection ?? AccountSession.ConnectAsync(Http, _config, ClientHeader, cancellation.Token)).WaitAsync(cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) { Message = OnlineServiceMessage; return; }
             _serverReachable = true;
             await work(new IdentityPlatform(Http, info.Idp.ApiKey, info.Idp.EmulatorUrl, S.Locale), info, api, cancellation.Token);
+            if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) Message = OnlineServiceMessage;
         }
         catch (OperationCanceledException)
         {
             _nativeFlow.Clear();
-            Message = S["signin.cancelled"];
+            Message = OnlineServiceAllowsPlay ? S["signin.cancelled"] : OnlineServiceMessage;
         }
         catch (IdentityPlatformException e)
         {
@@ -120,6 +127,12 @@ public sealed partial class ShellViewModel
         catch (ApiException e)
         {
             Log($"auth: server refused: {e.Code}");
+            if (Infinity.Core.Online.OnlinePause.From(e) is { } pause)
+            {
+                ObserveOnlinePause(pause);
+                ExtendOnlineCooldown(e.RetryAfter);
+                return;
+            }
             Message = e.Code switch
             {
                 ErrorCodes.AuthRateLimited or ErrorCodes.RequestRateLimited => S["native.too_many"],
@@ -141,6 +154,8 @@ public sealed partial class ShellViewModel
             Changed(string.Empty);
         }
     }
+
+    partial void PrepareNativeConnection(ref Task<(ServerInfo Info, ApiClient Api)>? connection, CancellationToken cancellation);
 
     private string IdentityProblem(IdentityPlatformException e) => e.Problem switch
     {

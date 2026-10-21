@@ -733,7 +733,7 @@ static int net_forward(NetRequest *request, HRESULT *error) {
         }
     }
     /* a launcher start forwards only within the launcher's session (offline otherwise) */
-    if ((fi_launch_protocol() && !fi_launch_online()) || !net_server_host[0]) {
+    if ((fi_launch_protocol() && !fi_launch_live()) || !net_server_host[0]) {
         goto done;
     }
     if (!net_load_winhttp() || !buffer_append_wide(&path, L"/") ||
@@ -821,12 +821,14 @@ static int net_forward(NetRequest *request, HRESULT *error) {
         line += taken;
     }
     DWORD body_size = (DWORD)request->request_body.size;
+    if (fi_launch_protocol() && !fi_launch_live()) goto done;
     if (!http_send(http, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                    body_size ? request->request_body.data : WINHTTP_NO_REQUEST_DATA, body_size,
                    body_size, 0) ||
         !http_receive(http, NULL)) {
         goto done;
     }
+    if (fi_launch_protocol() && !fi_launch_live()) goto done;
     DWORD status = 0, status_size = sizeof(status);
     if (!http_query_headers(http, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
@@ -852,6 +854,7 @@ static int net_forward(NetRequest *request, HRESULT *error) {
         buffer_append(&request->response_headers, fields, length * sizeof(wchar_t));
     }
     for (;;) {
+        if (fi_launch_protocol() && !fi_launch_live()) goto done;
         DWORD available = 0, read = 0;
         if (!http_query_available(http, &available)) {
             *error = HRESULT_FROM_WIN32(GetLastError());
@@ -988,6 +991,8 @@ int azimuth_net_auto_update(void) {
 static DWORD net_request(const wchar_t *method, const wchar_t *path, const wchar_t *headers,
                          const wchar_t *content_type, const void *body, size_t body_size, void *out,
                          size_t capacity, size_t *received, int timeout_ms) {
+    if (received) *received = 0;
+    if (fi_launch_protocol() && !fi_launch_live()) return 0;
     /* the game's language, for the server's messages (X-Fh2-Lang: pt-BR; English otherwise),
        and the car database's SHA-256 (free roam worlds, azimuth_world.c) */
     wchar_t joined[1600]; /* the session's two header lines are about 1.1k characters */
@@ -1039,6 +1044,7 @@ static DWORD net_request_at(const wchar_t *host, INTERNET_PORT port, int secure,
     if (received) {
         *received = 0;
     }
+    if (fi_launch_protocol() && !fi_launch_live()) return 0;
     if (!net_load_winhttp() || body_size > 0x7fffffffu) {
         return 0;
     }
@@ -1073,6 +1079,7 @@ static DWORD net_request_at(const wchar_t *host, INTERNET_PORT port, int secure,
         http_add_headers(http, headers, (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
     }
     size = body ? (DWORD)body_size : 0;
+    if (fi_launch_protocol() && !fi_launch_live()) goto done;
     if (!http_send(http, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                    size ? (void *)body : WINHTTP_NO_REQUEST_DATA, size, size, 0) ||
         !http_receive(http, NULL) ||
@@ -1083,6 +1090,7 @@ static DWORD net_request_at(const wchar_t *host, INTERNET_PORT port, int secure,
         goto done;
     }
     for (;;) {
+        if (fi_launch_protocol() && !fi_launch_live()) { status = 0; goto done; }
         DWORD available = 0, read = 0;
         if (!http_query_available(http, &available) || !available) {
             break;

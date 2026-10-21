@@ -70,6 +70,22 @@ public sealed class LauncherEndpoint
     /// <summary>True once <c>Hello</c> was answered.</summary>
     public bool Greeted { get; private set; }
 
+    public bool OnlineSuspended { get; private set; }
+
+    /// <summary>Latch before delivery. Before Hello refuse admission; afterward return the one terminal control frame.</summary>
+    public Frame.OnlineSuspend? Suspend(OnlineSuspendReason reason)
+    {
+        if (!Enum.IsDefined(reason)) throw new ProtocolException("unknown online suspension reason");
+        if (OnlineSuspended) return null;
+        OnlineSuspended = true;
+        if (!Greeted)
+        {
+            _admission = new Admission.Refused("online_suspended");
+            return null;
+        }
+        return new Frame.OnlineSuspend(reason);
+    }
+
     /// <summary>The gate ended before <c>Hello</c>: the hook gets <c>Refused</c> instead. No effect once greeted.</summary>
     public void Revoke(string reason)
     {
@@ -116,6 +132,8 @@ public sealed class LauncherEndpoint
         {
             throw new ProtocolException("first frame must be Hello");
         }
+        if (OnlineSuspended && frame is Frame.RefreshRequest or Frame.RelaunchRequest or Frame.Event { Kind: 3 or 5 })
+            return ([], null);
         EndpointEvent evt = frame switch
         {
             Frame.RefreshRequest => new EndpointEvent.TokenRefreshNeeded(),

@@ -51,7 +51,9 @@ static unsigned world_players;
 static volatile LONG world_launcher_port;
 
 void azimuth_world_launcher_host(unsigned port) {
+    if (port && !fi_launch_network_allowed()) return;
     InterlockedExchange(&world_launcher_port, (LONG)port);
+    if (port && !fi_launch_network_allowed()) InterlockedExchange(&world_launcher_port, 0);
 }
 
 void azimuth_world_set_directory(const wchar_t *directory) {
@@ -64,10 +66,12 @@ void azimuth_world_set_directory(const wchar_t *directory) {
 }
 
 unsigned azimuth_world_port(void) {
+    if (!fi_launch_network_allowed()) return 0;
     return world_on ? world_config.port : (unsigned)world_launcher_port;
 }
 
 int azimuth_world_hosting(void) {
+    if (!fi_launch_network_allowed()) return 0;
     return world_on != 0 || world_launcher_port != 0;
 }
 
@@ -589,6 +593,7 @@ static void world_add_net(WorldText *t) {
 
 /* POST /infinity/v1/worlds (start and heartbeat). Returns the HTTP status. */
 static DWORD world_announce(void) {
+    if (!fi_launch_network_allowed()) return 0;
     static char body[1536], reply[4096];
     WorldText t = {body, 0, sizeof(body)};
     body[0] = 0;
@@ -615,6 +620,7 @@ static DWORD world_announce(void) {
     world_add(&t, "}");
     ReleaseSRWLockExclusive(&world_lock);
     DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/worlds", world_token_header(), body, reply, sizeof(reply));
+    if (!fi_launch_network_allowed()) return 0;
     if (status == 200) {
         world_pass_kicks(reply);
         world_pass_punches(reply);

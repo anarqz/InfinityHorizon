@@ -42,6 +42,9 @@ public static class ErrorCodes
     public const string SharingTooManyRecentDevices = "SHARING.TOO_MANY_RECENT_DEVICES";
     public const string PoolFull = "POOL.FULL";
     public const string ServiceMaintenance = "SERVICE.MAINTENANCE";
+    public const string ServiceBudgetClosed = "SERVICE.BUDGET_CLOSED";
+    public const string ServiceOnlineClosed = "SERVICE.ONLINE_CLOSED";
+    public const string ServiceUnavailable = "SERVICE.UNAVAILABLE";
     public const string RequestTooLarge = "REQUEST.TOO_LARGE";
     public const string SavesProfileNotFound = "SAVES.PROFILE_NOT_FOUND";
     public const string SavesLeaseHeld = "SAVES.LEASE_HELD";
@@ -83,6 +86,13 @@ public sealed class ApiException(HttpStatusCode status, string code, string mess
 /// </summary>
 public sealed partial class ApiClient
 {
+    private static readonly JsonSerializerOptions StatusJson = new(JsonSerializerDefaults.Web)
+    {
+        RespectRequiredConstructorParameters = true,
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        MaxDepth = 4,
+    };
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         AllowOutOfOrderMetadataProperties = true,
@@ -172,6 +182,47 @@ public sealed partial class ApiClient
     /// </summary>
     public Task<SignInResult> ExchangeIdTokenAsync(IdTokenGrant grant, string idempotencyKey, CancellationToken cancellation = default) =>
         SendAsync<SignInResult>(HttpMethod.Post, Core, "/launcher/v1/auth/token", grant, access: null, idempotencyKey, cancellation);
+
+    /// <summary>A public on-demand check; never schedules background polling or sends a bearer token.</summary>
+    public static async Task<OnlineStatus> OnlineStatusAsync(HttpClient http, Uri server, string clientHeader, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(CheckOrigin(server), "/core/v1/online-status"));
+        request.Headers.TryAddWithoutValidation("X-Fi-Client", clientHeader);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
+        const int limit = 4096;
+        if (response.Content.Headers.ContentLength is > limit) throw new InvalidDataException("Online status is too large.");
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
+        var bytes = new byte[limit + 1]; var length = 0;
+        while (length < bytes.Length)
+        {
+            var read = await stream.ReadAsync(bytes.AsMemory(length), cancellation).ConfigureAwait(false);
+            if (read == 0) break; length += read;
+        }
+        if (length > limit) throw new InvalidDataException("Online status is too large.");
+        if (!response.IsSuccessStatusCode)
+        {
+            var oldContent = response.Content;
+            response.Content = new ByteArrayContent(bytes, 0, length);
+            oldContent.Dispose();
+            return await Read<OnlineStatus>(response, cancellation).ConfigureAwait(false);
+        }
+        ValidateStatusNames(bytes.AsSpan(0, length));
+        var value = JsonSerializer.Deserialize<OnlineStatus>(bytes.AsSpan(0, length), StatusJson) ?? throw new InvalidDataException("Online status is missing.");
+        Online.OnlineStatusRules.Validate(value);
+        return value;
+    }
+
+    public Task<OnlineStatus> OnlineStatusAsync(CancellationToken cancellation = default) => OnlineStatusAsync(_http, Core, _client, cancellation);
+
+    private static void ValidateStatusNames(ReadOnlySpan<byte> bytes)
+    {
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 4 });
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+            if (reader.TokenType == JsonTokenType.PropertyName && !names.Add(reader.GetString()!))
+                throw new InvalidDataException("Duplicate online-status field.");
+    }
 
     public Task<LauncherAccountCreated> CreateAccountAsync(LauncherAccountCreate create, CancellationToken cancellation = default) =>
         SendAsync<LauncherAccountCreated>(HttpMethod.Post, Core, "/launcher/v1/accounts", create, access: null, idempotent: true, cancellation);

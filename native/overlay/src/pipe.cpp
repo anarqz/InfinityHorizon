@@ -23,7 +23,7 @@
 // 0x0A JoinResult{u8 status (0 seat reserved, 1 full, 2 not allowed, 3 wrong code, 4 closed,
 // 5 slow down), str message}; 0x0C Hosted{u8 status (0 open), str worldId, str code, str message}.
 //
-// My world (OD-63): overlay -> launcher 0x0D MyWorldQuery{} (every 5 s while the Worlds tab is
+// My world (OD-63): overlay -> launcher 0x0D MyWorldQuery{} (on explicit open/action/refresh while the Worlds tab is
 // shown); 0x0F WorldAction{u8 action (1 close, 2 leave, 3 kick, 4 add friend, 5 report), str xuid,
 // str gamertag, u8 reason (1 cheating, 2 abuse, 3 other)}. Launcher -> overlay 0x0E MyWorld{u8 role
 // (0 none, 1 hosting, 2 reserved, 3 seated), str worldId, str name, str host, str code, u8 audience,

@@ -158,11 +158,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// The top bar: signed in, or the server's state before sign-in (checked at start, so
     /// "OFFLINE" means the server did not answer, never just "not signed in").
     /// </summary>
-    public string Connection => _session is not null ? S["shell.connected"]
+    public string Connection => OnlineServicePaused ? S["online.paused_label"] : _session is not null ? S["shell.connected"]
         : _serverReachable switch { true => S["shell.reachable"], false => S["shell.offline"], null => S["shell.checking"] };
 
     /// <summary>The server answers (or a session is open): the top bar's status dot.</summary>
-    public bool Online => _session is not null || _serverReachable == true;
+    public bool Online => OnlineServiceAllowsPlay && (_session is not null || _serverReachable == true);
 
     private bool? _serverReachable;
 
@@ -192,6 +192,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>The first profile of a new account (<c>needs_account</c>).</summary>
     public async Task CreateAccountAsync()
     {
+        if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (_pending is null || !CheckName())
         {
             return;
@@ -201,7 +202,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             var session = await _pending.CreateAccountAsync("fh2", NewName);
             _pending = null;
             NewName = string.Empty;
-            await EnterAsync(session);
+            try { await EnterAsync(session); }
+            catch { session.Dispose(); throw; }
             if (session.Me?.Profiles.FirstOrDefault(p => p.Game == "fh2") is { } first)
             {
                 OfferSaves(first);
@@ -290,8 +292,12 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task EnterAsync(AccountSession session, CancellationToken cancellation = default)
     {
+        var epoch = _onlinePauseEpoch;
+        cancellation.ThrowIfCancellationRequested();
+        if (!OnlineServiceAllowsPlay) throw new OperationCanceledException("Online services paused.", cancellation);
         var me = await session.RefreshMeAsync(cancellation);
         cancellation.ThrowIfCancellationRequested();
+        if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) throw new OperationCanceledException("Online services paused.", cancellation);
         _nativeFlow.Clear();
         _session = session;
         LoadPendingCrash();
@@ -359,12 +365,22 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             Message = S["profiles.name_rule"] + " (" + e.Code + ")";
         }
+        catch (ApiException e) when (Infinity.Core.Online.OnlinePause.From(e) is { } pause)
+        {
+            ObserveOnlinePause(pause);
+            ExtendOnlineCooldown(e.RetryAfter);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = OnlineServiceAllowsPlay ? S["signin.cancelled"] : OnlineServiceMessage;
+        }
         catch (Exception e) when (e is ApiException or HttpRequestException or IOException)
         {
             Message = Describe(e);
         }
         finally
         {
+            if (_onlinePause is not null) Message = OnlineServiceMessage;
             Busy = false;
         }
     }
@@ -375,6 +391,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        DisposeOnlineStatus();
         _updateStop.Cancel();
         _updater?.Dispose();
         ClearIntegrity();

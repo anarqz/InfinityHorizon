@@ -6,6 +6,7 @@ namespace Infinity.Core.Session;
 /// <summary><c>Capture.what</c> values (frame 0x13, ORCHESTRATOR §6).</summary>
 public static class CaptureWhat
 {
+    public const byte OnlineSuspend = 6;
     public const byte RemotePaintReceiver = 5;
     /// <summary>The DXGI factory shims saw the swapchain and its queue.</summary>
     public const byte Dxgi = 1;
@@ -18,8 +19,11 @@ public static class CaptureWhat
     public const byte OverlayLoad = 4;
 }
 
+/// <summary>Bounded terminal control reasons; never player text or an authorization token.</summary>
+public enum OnlineSuspendReason : byte { Policy, UpdateRequired, Integrity, SessionEnded, ControlLost }
+
 /// <summary>
-/// One control-pipe frame between the launcher and the hook (types 0x01-0x0a, 0x13, 0x14;
+/// One control-pipe frame between the launcher and the hook (types 0x01-0x0a, 0x13-0x15;
 /// 0x0b-0x12 reserved). Layouts are fixed by the golden vectors in session.rs and
 /// Infinity.Core.Tests; they change only together with the C hook and HOOK_MIGRATION.md.
 /// </summary>
@@ -30,6 +34,12 @@ public abstract record Frame
     }
 
     public abstract byte Type { get; }
+
+    /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
+    public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
+    {
+        public override byte Type => 0x15;
+    }
 
     /// <summary>hook → launcher, first frame.</summary>
     public sealed record Hello(ushort Protocol, uint Pid, string HookVersion) : Frame
@@ -127,6 +137,10 @@ public abstract record Frame
         var w = new WireWriter(Type);
         switch (this)
         {
+            case OnlineSuspend suspend:
+                if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
+                w.U8((byte)suspend.Reason);
+                break;
             case Hello h:
                 w.U16(h.Protocol);
                 w.U32(h.Pid);
@@ -207,9 +221,12 @@ public abstract record Frame
             0x0a => new TicketCode(r.Bytes(), r.Take(64).ToArray(), r.Str()),
             0x13 => new Capture(r.U8(), r.Flag("flag byte")),
             0x14 => new Overlay(r.Flag("flag byte"), r.Take(32).ToArray(), r.Str()),
+            0x15 => new OnlineSuspend((OnlineSuspendReason)r.U8()),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
+        if (frame is OnlineSuspend suspend && !Enum.IsDefined(suspend.Reason))
+            throw new ProtocolException("unknown online suspension reason");
         used = 4 + length.Value;
         return frame;
     }

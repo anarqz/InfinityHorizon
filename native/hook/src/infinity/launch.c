@@ -36,6 +36,7 @@
 #define LAUNCH_REFRESH_MS 120000u    /* RefreshRequest when the token has less than 2 minutes */
 #define LAUNCH_READ_POLL_MS 100u     /* the reader loop's wait for a frame between its other work */
 #define LAUNCH_OUTBOX 65536u
+#define LAUNCH_WRITE_WAIT_MS 2000u /* backpressure must not strand a token or a suspend frame */
 #define LAUNCH_EXIT_RELAUNCH 0x46490001u /* fi_launcher_core::launch::EXIT_RELAUNCH ("FI" 1) */
 
 enum {
@@ -50,6 +51,7 @@ enum {
     FRAME_EVENT = 0x09,
     FRAME_CAPTURE = 0x13,
     FRAME_OVERLAY = 0x14,
+    FRAME_ONLINE_SUSPEND = 0x15,
 };
 
 /* Where the session stands (launch_state). */
@@ -71,6 +73,8 @@ typedef BOOL(WINAPI *PeekNamedPipeFn)(HANDLE, LPVOID, DWORD, LPDWORD, LPDWORD, L
 typedef HANDLE(WINAPI *CreateToolhelp32SnapshotFn)(DWORD, DWORD);
 typedef BOOL(WINAPI *Process32WFn)(HANDLE, LPPROCESSENTRY32W);
 typedef void(WINAPI *GetSystemTimeAsFileTimeFn)(LPFILETIME);
+typedef BOOL(WINAPI *CancelIoExFn)(HANDLE, LPOVERLAPPED);
+typedef BOOL(WINAPI *GetOverlappedResultFn)(HANDLE, LPOVERLAPPED, LPDWORD, BOOL);
 
 static struct {
     WaitNamedPipeWFn wait_named_pipe;
@@ -79,6 +83,8 @@ static struct {
     CreateToolhelp32SnapshotFn snapshot;
     Process32WFn first, next;
     GetSystemTimeAsFileTimeFn system_time;
+    CancelIoExFn cancel_io;
+    GetOverlappedResultFn io_result;
 } launch_api;
 
 static volatile LONG launch_state;
@@ -91,6 +97,7 @@ static unsigned long long launch_deadline_ms;
 /* The server's clock minus this PC's, when this PC's is far off (from the ticket's iat). */
 static long long launch_clock_offset;
 static volatile LONG launch_ended;      /* the game plane refused the session twice: offline */
+static volatile LONG launch_suspended;  /* terminal: no token or networking can resume */
 static volatile LONG launch_refused_401; /* 401s since the last token */
 static volatile LONG launch_refresh_wanted;
 static volatile LONG launch_refresh_sent;  /* a RefreshRequest went for the current token */
@@ -106,6 +113,14 @@ static wchar_t launch_bin[PATH_CAPACITY];
 /* One frame, read or written: the 4-byte length, then type and payload. */
 static unsigned char launch_frame[4 + LAUNCH_MAX_FRAME];
 static size_t launch_frame_size; /* type + payload of the frame in launch_frame */
+static unsigned long long launch_partial_header_at;
+
+/* The receive buffer may have carried a raw signed ticket or game bearer. */
+static void launch_frame_clear(void) {
+    for (size_t i = 0; i < sizeof(launch_frame); ++i) ((volatile unsigned char *)launch_frame)[i] = 0;
+    launch_frame_size = 0;
+    launch_partial_header_at = 0;
+}
 
 /* ------------------------------------------------------------------ text */
 
@@ -152,6 +167,35 @@ int fi_launch_protocol(void) {
     return fi_cfg()->launch == FI_LAUNCH_PROTOCOL;
 }
 
+int fi_launch_suspended(void) {
+    return launch_suspended != 0;
+}
+
+/* Identity stays pinned for local saves. Only online authority and networking are discarded.
+   Latch before cleanup so an in-flight join or worker can never reopen the session. */
+static void launch_suspend(unsigned reason) {
+    if (InterlockedExchange(&launch_suspended, 1)) return;
+    InterlockedExchange(&launch_ended, 1);
+    AcquireSRWLockExclusive(&launch_lock);
+    for (size_t i = 0; i < sizeof(launch_token); ++i) ((volatile char *)launch_token)[i] = 0;
+    launch_deadline_ms = 0;
+    launch_clock_offset = 0;
+    ReleaseSRWLockExclusive(&launch_lock);
+    InterlockedExchange(&launch_refresh_wanted, 0);
+    InterlockedExchange(&launch_refresh_sent, 1);
+    azimuth_freeroam_suspend();
+    azimuth_proxy_stop();
+    azimuth_livery_world_left();
+    azimuth_world_launcher_host(0);
+    azimuth_world_left();
+    launch_log("online suspended for this process (reason ", 1, reason, "); local play continues.");
+}
+
+static unsigned long long launch_token_left_ms(void);
+static void launch_check_expiry(void) {
+    if (launch_state == LAUNCH_ONLINE && !fi_launch_suspended() && !launch_token_left_ms()) launch_suspend(3);
+}
+
 /* Offline for the rest of this session (once the handshake failed). */
 static void launch_fail(int why) {
     InterlockedExchange(&launch_why, why);
@@ -170,8 +214,10 @@ static int launch_resolve(void) {
     launch_api.first = (Process32WFn)(uintptr_t)GetProcAddress(kernel, "Process32FirstW");
     launch_api.next = (Process32WFn)(uintptr_t)GetProcAddress(kernel, "Process32NextW");
     launch_api.system_time = (GetSystemTimeAsFileTimeFn)(uintptr_t)GetProcAddress(kernel, "GetSystemTimeAsFileTime");
+    launch_api.cancel_io = (CancelIoExFn)(uintptr_t)GetProcAddress(kernel, "CancelIoEx");
+    launch_api.io_result = (GetOverlappedResultFn)(uintptr_t)GetProcAddress(kernel, "GetOverlappedResult");
     return launch_api.wait_named_pipe && launch_api.server_pid && launch_api.peek && launch_api.snapshot &&
-           launch_api.first && launch_api.next && launch_api.system_time;
+           launch_api.first && launch_api.next && launch_api.system_time && launch_api.cancel_io && launch_api.io_result;
 }
 
 /* The pid of the process that started this one (Toolhelp32), 0 when unknown. */
@@ -287,10 +333,42 @@ static size_t launch_encode_hello(unsigned char *out, size_t cap, unsigned proto
     return launch_frame_end(&w);
 }
 
+/* One cancellable pipe operation. The OVERLAPPED and buffer remain alive through cancellation.
+   Only the session thread owns this handle, so no concurrent reader can steal its bytes. */
+static int launch_io(void *data, DWORD size, DWORD *done, DWORD wait_ms, int writing) {
+    launch_check_expiry();
+    if (launch_state == LAUNCH_ONLINE && !fi_launch_suspended()) {
+        unsigned long long left = launch_token_left_ms();
+        if (left && left < wait_ms) wait_ms = (DWORD)left;
+    }
+    OVERLAPPED io = {0};
+    io.hEvent = CreateEventW(0, TRUE, FALSE, 0);
+    if (!io.hEvent) return 0;
+    BOOL started = writing ? WriteFile(launch_pipe, data, size, done, &io)
+                           : ReadFile(launch_pipe, data, size, done, &io);
+    int ok = started != 0;
+    if (!started && GetLastError() == ERROR_IO_PENDING) {
+        if (WaitForSingleObject(io.hEvent, wait_ms) == WAIT_OBJECT_0) {
+            ok = launch_api.io_result(launch_pipe, &io, done, FALSE) != 0;
+        } else {
+            launch_api.cancel_io(launch_pipe, &io);
+            launch_api.io_result(launch_pipe, &io, done, TRUE);
+            SetLastError(ERROR_TIMEOUT);
+        }
+    }
+    DWORD error = ok ? 0 : GetLastError();
+    CloseHandle(io.hEvent);
+    launch_check_expiry();
+    if (!ok) SetLastError(error);
+    return ok;
+}
+
 static int launch_write(const unsigned char *data, size_t size) {
     DWORD written = 0;
+    ULONGLONG until = GetTickCount64() + LAUNCH_WRITE_WAIT_MS;
     while (size) {
-        if (!WriteFile(launch_pipe, data, (DWORD)size, &written, 0) || !written) {
+        ULONGLONG now = GetTickCount64();
+        if (now >= until || !launch_io((void *)data, (DWORD)size, &written, (DWORD)(until - now), 1) || !written) {
             return 0;
         }
         data += written;
@@ -303,26 +381,41 @@ static int launch_write(const unsigned char *data, size_t size) {
    GetLastError). With `whole`, nothing is read until all `size` bytes are there (a frame's
    length is never taken half, so a time-out leaves the stream where it was). Polls with
    PeekNamedPipe, so the writes of this same thread never wait behind a blocking read on the
-   synchronous handle. */
+   overlapped handle; every operation has a cancellation deadline. */
 static int launch_read(unsigned char *out, size_t size, unsigned wait_ms, int whole, DWORD *error) {
     unsigned long long until = GetTickCount64() + wait_ms;
     while (size) {
+        launch_check_expiry();
         DWORD available = 0, got = 0;
         if (!launch_api.peek(launch_pipe, 0, 0, 0, &available, 0)) {
             *error = GetLastError();
             return -1;
         }
         if (!available || (whole && available < size)) {
+            if (whole && available) {
+                unsigned long long now = GetTickCount64();
+                if (!launch_partial_header_at) launch_partial_header_at = now;
+                if (now - launch_partial_header_at >= LAUNCH_FRAME_WAIT_MS) {
+                    *error = ERROR_TIMEOUT;
+                    return -1;
+                }
+            }
             if (GetTickCount64() >= until) {
                 return 0;
             }
             Sleep(LAUNCH_POLL_MS);
             continue;
         }
-        if (!ReadFile(launch_pipe, out, (DWORD)(available < size ? available : size), &got, 0) || !got) {
+        if (whole) launch_partial_header_at = 0;
+        ULONGLONG now = GetTickCount64();
+        /* Peek already promises these bytes. Hitting the poll boundary simultaneously with
+           their arrival is not loss of trust; consume them with a short bounded operation. */
+        DWORD io_wait = now >= until ? LAUNCH_POLL_MS : (DWORD)(until - now);
+        if (!launch_io(out, (DWORD)(available < size ? available : size), &got, io_wait, 0)) {
             *error = GetLastError();
             return -1;
         }
+        if (!got) { *error = ERROR_BROKEN_PIPE; return -1; }
         out += got;
         size -= got;
     }
@@ -393,7 +486,7 @@ static int launch_queue_frame(unsigned type, const void *payload, size_t size) {
 void fi_launch_event(unsigned kind, const char *detail) {
     unsigned char payload[260];
     size_t n = detail ? text_length(detail) : 0;
-    if (!fi_launch_protocol() || n > sizeof(payload) - 3) {
+    if (!fi_launch_protocol() || n > sizeof(payload) - 3 || (fi_launch_suspended() && (kind == 3 || kind == 5))) {
         return;
     }
     payload[0] = (unsigned char)kind;
@@ -779,6 +872,17 @@ static int launch_set_token(const unsigned char *token, size_t size, unsigned lo
         left = 3600; /* a session token lives 15 minutes (ACCOUNTS.md section 4) */
     }
     AcquireSRWLockExclusive(&launch_lock);
+    if (fi_launch_suspended()) {
+        ReleaseSRWLockExclusive(&launch_lock);
+        return 0;
+    }
+    /* The previous token is the lease, not the arrival of a newer frame. Check its deadline
+       while holding the same lock as replacement; a late refresh can never reopen it. */
+    if (launch_state == LAUNCH_ONLINE && GetTickCount64() >= launch_deadline_ms) {
+        ReleaseSRWLockExclusive(&launch_lock);
+        launch_suspend(3);
+        return 0;
+    }
     memory_copy(launch_token, token, size);
     launch_token[size] = 0;
     launch_deadline_ms = GetTickCount64() + (unsigned long long)left * 1000u;
@@ -799,10 +903,13 @@ static unsigned long long launch_token_left_ms(void) {
     return left;
 }
 
-/* A live session: the ticket checked out, the game plane has not ended it, and the token has
-   not expired (after the launcher is gone the game plays on until then, ORCHESTRATOR.md 1.6). */
+/* A live session: the ticket checked out, control is trusted and its token has not expired. */
 int fi_launch_live(void) {
-    return launch_state == LAUNCH_ONLINE && !launch_ended && launch_token_left_ms() > 0;
+    return launch_state == LAUNCH_ONLINE && !launch_ended && !fi_launch_suspended() && launch_token_left_ms() > 0;
+}
+
+int fi_launch_network_allowed(void) {
+    return !fi_launch_protocol() || (!fi_launch_suspended() && (launch_state != LAUNCH_ONLINE || fi_launch_live()));
 }
 
 /* "X-Fi-Session: <token>\r\nX-Fi-Hook: <MOD_VERSION>" into `out`: its length, 0 without a live
@@ -814,6 +921,11 @@ size_t fi_launch_headers(wchar_t *out, size_t cap) {
         return 0;
     }
     AcquireSRWLockExclusive(&launch_lock);
+    if (fi_launch_suspended() || !launch_token[0] || GetTickCount64() >= launch_deadline_ms) {
+        ReleaseSRWLockExclusive(&launch_lock);
+        return 0;
+    }
+    size_t want = sizeof(session) - 1 + text_length(launch_token) + sizeof(hook) - 1;
     for (const char *parts[3] = {session, launch_token, hook}, **p = parts; p < parts + 3; ++p) {
         for (const char *c = *p; *c && n + 1 < cap; ++c) {
             out[n++] = (wchar_t)(unsigned char)*c;
@@ -821,7 +933,6 @@ size_t fi_launch_headers(wchar_t *out, size_t cap) {
     }
     ReleaseSRWLockExclusive(&launch_lock);
     out[n] = 0;
-    size_t want = sizeof(session) - 1 + text_length(launch_token) + sizeof(hook) - 1;
     return n == want ? n : 0;
 }
 
@@ -834,12 +945,14 @@ int fi_launch_refused(DWORD status) {
     if (!fi_launch_protocol() || (status != 401 && status != 403)) {
         return 0;
     }
+    if (fi_launch_suspended()) return 1;
     if (status == 401) {
         LONG count = InterlockedIncrement(&launch_refused_401);
         if (count == 1) {
             InterlockedExchange(&launch_refresh_wanted, 1);
             log_append("LAUNCH: the game plane refused the session token (401): asking the launcher for a new one.\r\n");
-        } else if (count == 2 && !InterlockedExchange(&launch_ended, 1)) {
+        } else if (count == 2) {
+            launch_suspend(3); /* SessionEnded */
             log_append("LAUNCH: the game plane refused the session token again: online session ended, offline from now "
                        "on.\r\n");
         }
@@ -880,12 +993,14 @@ static int launch_go_online(const LaunchTicket *t) {
     /* CR-L29 local capability, not attestation. A later livery_apply reports installation
        if the handshake ran first; every reconnect also gets the current fail-closed value. */
     fi_launch_capture(5, fi_livery_remote_ready());
+    fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
     return 1;
 }
 
 /* --------------------------------------------------------------- thread */
 
 static void launch_close(void) {
+    launch_frame_clear();
     if (launch_pipe != INVALID_HANDLE_VALUE) {
         CloseHandle(launch_pipe);
         launch_pipe = INVALID_HANDLE_VALUE;
@@ -915,7 +1030,7 @@ static int launch_handshake(void) {
     /* SQOS identification: whoever serves the name can identify this client but never
        impersonate it (the PID check below runs only after the open). */
     launch_pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
-                              SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, 0);
+                              FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, 0);
     if (launch_pipe == INVALID_HANDLE_VALUE) {
         launch_log("the launcher's pipe could not be opened (error ", 1, GetLastError(), "): offline.");
         launch_fail(LAUNCH_WHY_NO_PIPE);
@@ -987,6 +1102,7 @@ static int launch_handshake(void) {
         launch_fail(launch_state == LAUNCH_LATE ? LAUNCH_WHY_LATE : LAUNCH_WHY_TICKET);
         return 0;
     }
+    launch_frame_clear();
     return 1;
 }
 
@@ -996,6 +1112,7 @@ static int launch_handshake(void) {
    launcher's exit classification turns into a new launch (ORCHESTRATOR.md 1.5, B10). The
    frame gets 2 s to go; the exit code alone is enough when the pipe is gone. */
 void fi_launch_relaunch(unsigned reason) {
+    if (fi_launch_suspended()) return;
     unsigned char frame[6] = {2, 0, 0, 0, FRAME_RELAUNCH_REQUEST, (unsigned char)reason};
     launch_queue(frame, sizeof(frame));
     for (unsigned waited = 0; waited < 2000 && launch_connected && !launch_outbox_flushed; waited += 20) {
@@ -1016,10 +1133,18 @@ static int launch_session_frame(void) {
     size_t size;
     const unsigned char *text;
     switch (type) {
+    case FRAME_ONLINE_SUSPEND: {
+        unsigned reason = (unsigned)launch_le(&r, 1);
+        if (r.bad || r.left || reason > 4) return 0;
+        launch_suspend(reason);
+        return 1;
+    }
     case FRAME_TOKEN: {
         text = launch_blob(&r, &size);
         unsigned long long expires = launch_le(&r, 8);
-        if (r.bad || r.left || !launch_set_token(text, size, expires)) {
+        if (r.bad || r.left) return 0;
+        if (fi_launch_suspended()) return 1; /* late frames never restore authority */
+        if (!launch_set_token(text, size, expires)) {
             launch_log("REFUSED: a Token frame that does not parse.", 0, 0, "");
             return 0;
         }
@@ -1045,16 +1170,16 @@ static int launch_session_frame(void) {
     }
 }
 
-/* After the handshake, on the same thread: the launcher's frames (Token, Notice, Overlay, Bye),
-   the queued frames for it, and a RefreshRequest when the token has less than 2 minutes. When
-   the pipe goes, the game plays on with the token it has until that expires (the launcher has
-   died or closed: ORCHESTRATOR.md 1.6), then offline. */
+/* The authenticated control stream is a lease on online activity. Losing it, or reaching the
+   token deadline without a refresh, terminally quarantines networking (CR-L32). */
 static void launch_session(void) {
     InterlockedExchange(&launch_connected, 1);
     ULONGLONG next_receiver_report = 0;
     for (;;) {
         unsigned long long left = launch_token_left_ms();
-        if ((launch_refresh_wanted || (left && left < LAUNCH_REFRESH_MS)) && !InterlockedExchange(&launch_refresh_sent, 1)) {
+        if (!left && !fi_launch_suspended()) launch_suspend(3); /* SessionEnded */
+        if (!fi_launch_suspended() && (launch_refresh_wanted || (left && left < LAUNCH_REFRESH_MS)) &&
+            !InterlockedExchange(&launch_refresh_sent, 1)) {
             static const unsigned char refresh[5] = {1, 0, 0, 0, FRAME_REFRESH_REQUEST};
             launch_queue(refresh, sizeof(refresh));
             InterlockedExchange(&launch_refresh_wanted, 0);
@@ -1062,7 +1187,7 @@ static void launch_session(void) {
         }
         if (!launch_flush()) {
             launch_log("launcher gone (the pipe broke on a write, error ", 1, GetLastError(),
-                       "): playing on until the session token expires.");
+                       "): online authority is discarded.");
             break;
         }
         /* Capability state is a lease. It must not be lost when ordinary event traffic fills
@@ -1070,6 +1195,9 @@ static void launch_session(void) {
         ULONGLONG now = GetTickCount64();
         if (now >= next_receiver_report) {
             unsigned char capability[7] = {3, 0, 0, 0, FRAME_CAPTURE, 5, (unsigned char)(fi_livery_remote_ready() != 0)};
+            if (!launch_write(capability, sizeof(capability))) break;
+            capability[5] = 6;
+            capability[6] = 1;
             if (!launch_write(capability, sizeof(capability))) break;
             next_receiver_report = now + 1000;
         }
@@ -1080,28 +1208,29 @@ static void launch_session(void) {
         }
         if (got < 0) {
             if (got == -2) {
-                launch_log("REFUSED: a frame longer than 64 KiB: the pipe is closed; playing on until the session token "
-                           "expires.", 0, 0, "");
+                launch_log("REFUSED: a frame longer than 64 KiB: online authority is discarded.", 0, 0, "");
             } else {
-                launch_log(error == ERROR_BROKEN_PIPE ? "launcher gone (broken pipe): playing on until the session token "
-                                                        "expires."
+                launch_log(error == ERROR_BROKEN_PIPE ? "launcher gone (broken pipe): online authority is discarded."
                                                       : "launcher gone (the pipe failed, error ",
                            error != ERROR_BROKEN_PIPE, error,
-                           error == ERROR_BROKEN_PIPE ? "" : "): playing on until the session token expires.");
+                           error == ERROR_BROKEN_PIPE ? "" : "): online authority is discarded.");
             }
             break;
         }
         if (launch_frame[4] == FRAME_BYE) {
             LaunchReader r = {launch_frame + 5, launch_frame_size - 1, 0};
             unsigned reason = (unsigned)launch_le(&r, 1);
-            launch_log("the launcher said Bye (reason ", 1, reason, "): playing on until the session token expires.");
+            launch_log(r.bad || r.left ? "REFUSED: malformed Bye (reason " : "the launcher said Bye (reason ",
+                       1, reason, "): online authority is discarded.");
             break;
         }
         if (!launch_session_frame()) {
-            launch_log("the pipe is closed; playing on until the session token expires.", 0, 0, "");
+            launch_log("the pipe is closed; online authority is discarded.", 0, 0, "");
             break;
         }
+        launch_frame_clear();
     }
+    launch_suspend(4); /* ControlLost; idempotent after an explicit suspension */
     InterlockedExchange(&launch_connected, 0);
     InterlockedExchange(&launch_outbox_flushed, 1);
     launch_close();

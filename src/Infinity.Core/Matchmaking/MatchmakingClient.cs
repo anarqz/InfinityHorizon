@@ -27,6 +27,9 @@ public sealed record MmResult<T>(HttpStatusCode Status, T? Value, MmError? Error
 /// <summary>The matchmaking routes the launcher calls, behind an interface so its logic tests with a fake.</summary>
 public interface IMatchmakingApi
 {
+    /// <summary>Retain only a short-lived credential for authenticated own-seat/host cleanup after suspension.</summary>
+    void BeginCleanup() { }
+    void EndCleanup() { }
     Task<MmResult<WorldList>> ListAsync(string filter, bool notFull = false, CancellationToken cancellation = default);
 
     Task<MmResult<WorldView>> GetAsync(string worldId, CancellationToken cancellation = default);
@@ -52,6 +55,8 @@ public interface IMatchmakingApi
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default);
 
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
+
+    Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) => SeatAsync(cancellation);
 
     Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default);
 
@@ -79,10 +84,36 @@ public interface IMatchmakingApi
 /// as <c>X-Fi-Session</c> (GATE_API.md §3; never <c>Authorization</c>), read from
 /// <paramref name="ticket"/> per call so a ticket the gate's heartbeat rotated is used at once.
 /// Same origin rules as <see cref="ApiClient"/>. No <c>Idempotency-Key</c>: the contract makes
-/// these writes idempotent by the client-minted world id or by state. Holds no state.
+/// these writes idempotent by the client-minted world id or by state. After suspension only a
+/// fixed-window cleanup credential remains; it cannot renew the session or permit ordinary calls.
 /// </summary>
-public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string clientHeader, Func<string> ticket) : IMatchmakingApi
+public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string clientHeader, Func<string> ticket, TimeProvider? clock = null) : IMatchmakingApi
 {
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly object _cleanupGate = new();
+    private string _lastTicket = string.Empty, _cleanupTicket = string.Empty;
+    private long _cleanupStarted;
+    private bool _cleanupBegun;
+    public void BeginCleanup()
+    {
+        lock (_cleanupGate)
+        {
+            if (_cleanupBegun) return;
+            _cleanupBegun = true;
+            var current = _ticket();
+            _cleanupTicket = string.IsNullOrEmpty(current) ? _lastTicket : current;
+            _lastTicket = string.Empty;
+            _cleanupStarted = _clock.GetTimestamp();
+        }
+    }
+    public void EndCleanup()
+    {
+        lock (_cleanupGate)
+        {
+            _lastTicket = string.Empty;
+            if (_clock.GetElapsedTime(_cleanupStarted) >= TimeSpan.FromSeconds(10)) _cleanupTicket = string.Empty;
+        }
+    }
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
     private readonly Func<string> _ticket = ticket ?? throw new ArgumentNullException(nameof(ticket));
 
@@ -181,6 +212,9 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     public Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default) =>
         SendAsync<SeatAnswer>(HttpMethod.Get, "/mm/v1/seat", null, cancellation);
 
+    public Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) =>
+        SendAsync<SeatAnswer>(HttpMethod.Get, "/mm/v1/seat?includeMembers=true", null, cancellation);
+
     public Task<MmResult<Punches>> PunchesAsync(CancellationToken cancellation = default) =>
         SendAsync<Punches>(HttpMethod.Get, "/mm/v1/punches", null, cancellation);
 
@@ -208,7 +242,17 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
 
     private async Task<MmResult<T>> SendAsync<T>(HttpMethod method, string route, object? body, CancellationToken cancellation)
     {
-        var token = _ticket();
+        string token;
+        lock (_cleanupGate)
+        {
+            if (_cleanupBegun)
+            {
+                if (_clock.GetElapsedTime(_cleanupStarted) >= TimeSpan.FromSeconds(10)) _cleanupTicket = string.Empty;
+                if (method != HttpMethod.Delete || !CleanupRoute(route)) throw new InvalidOperationException("Online activity has ended.");
+                token = _cleanupTicket;
+            }
+            else { token = _ticket(); if (!string.IsNullOrEmpty(token)) _lastTicket = token; }
+        }
         if (string.IsNullOrEmpty(token))
         {
             throw new InvalidOperationException("no game access ticket");
@@ -223,6 +267,10 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
         return await ReadAsync<T>(response, cancellation).ConfigureAwait(false);
     }
+
+    private static bool CleanupRoute(string route) => route == "/mm/v1/seat"
+        || route.StartsWith("/mm/v1/join/", StringComparison.Ordinal) && !route[12..].Contains('/')
+        || route.StartsWith("/mm/v1/worlds/", StringComparison.Ordinal) && !route[14..].Contains('/');
 
     private static async Task<MmResult<T>> ReadAsync<T>(HttpResponseMessage response, CancellationToken cancellation)
     {

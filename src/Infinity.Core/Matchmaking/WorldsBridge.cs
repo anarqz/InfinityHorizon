@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Net.Sockets;
+using System.Net;
 using Infinity.Core.Diagnostics;
+using Infinity.Core.Api;
+using Infinity.Core.Online;
 using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
@@ -26,12 +29,13 @@ public interface IWorldSocial
 /// gives the localised message for a key (<c>worlds.*</c>), so the overlay shows the shell's words.
 /// </summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
-    Justification = "The session's async-only semaphore never creates a native wait handle; pending reads retain it until cancellation drains them.")]
+    Justification = "Session cancellation state remains available to late transports until their canceled operations drain.")]
 public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, TimeProvider? clock = null,
     string mode = "noob", Func<uint, IHostRelay?>? startRelay = null, Func<IReadOnlyList<string>>? lanAddresses = null, string? ownXuid = null, Action<string>? log = null,
     string relayUnavailableKey = "worlds.integrated_unavailable", Func<IHostRelay, WorldAnnounced, CancellationToken, Task>? updateRelayWorld = null,
     Func<IHostRelay, CancellationToken, Task>? refreshRelayAdmissions = null, Session.GameReadiness? gameReadiness = null,
-    Func<CancellationToken, Task<WorldAccessDecision>>? checkWorldAccess = null, Action<string>? worldAccessDenied = null)
+    Func<CancellationToken, Task<WorldAccessDecision>>? checkWorldAccess = null, Action<string>? worldAccessDenied = null,
+    OnlineActivity? onlineActivity = null, bool idleWhenNoWorld = false, Func<double>? retryJitter = null)
 {
     // the world's open and close in the launcher's log (ids only, never addresses)
     private readonly Action<string> _log = log ?? (_ => { });
@@ -48,12 +52,37 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     private CancellationTokenSource? _hostStop;
     private string? _hostedWorldId;
     private DateTimeOffset _nextAdmissionsRefresh;
+    private DateTimeOffset _hostLastSuccess;
+    private long _hostLastStamp;
     private readonly IMatchmakingApi _mm = mm ?? throw new ArgumentNullException(nameof(mm));
     private readonly Func<string, string> _text = text ?? throw new ArgumentNullException(nameof(text));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly object _timeState = new();
+    private readonly DateTimeOffset _timeAnchor = (clock ?? TimeProvider.System).GetUtcNow();
+    private readonly long _timeStamp = (clock ?? TimeProvider.System).GetTimestamp();
+    private DateTimeOffset _observedNow;
     private readonly SeatKeeper _seat = new();
-    private readonly SemaphoreSlim _mineRead = new(1, 1);
     private readonly object _mineState = new();
+    private readonly CancellationTokenSource _onlineStop = new();
+    private readonly OnlineActivity _online = onlineActivity ?? new();
+    private int _suspended;
+    private int _observingPause;
+    private Task? _suspending;
+    private Task<UiFrame.MyWorld>? _mineRead;
+    private bool _mineReconciled, _mineUncertain = true;
+    private DateTimeOffset? _pendingRequestUntil;
+    private string? _pendingRequestId;
+    private DateTimeOffset? _lastRosterAt;
+    private DateTimeOffset? _lastSeatAt;
+    private readonly WorldOperationRetry _seatReadRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _membersRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _listRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _joinRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _renewRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _createRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _announceRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _admissionsRetry = new(clock ?? TimeProvider.System, retryJitter);
+    private readonly WorldOperationRetry _actionRetry = new(clock ?? TimeProvider.System, retryJitter);
     private readonly LobbyRoster _roster = new(ownXuid);
     private readonly PublicWorldWarning _publicWarning = new();
     private UiFrame.MyWorld _mineSnapshot = NoWorld;
@@ -75,6 +104,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         {
             Interlocked.Increment(ref _mineEpoch);
             Interlocked.Exchange(ref _mineNextTicks, 0);
+            _mineUncertain = true;
             if (reset)
             {
                 _roster.Reset();
@@ -82,6 +112,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 CrashContext?.ObserveWorld(null);
                 Volatile.Write(ref _mineSnapshot, NoWorld);
                 (_mineId, _mineRole) = (null, UiWorldRole.None);
+                _lastRosterAt = null;
             }
         }
     }
@@ -100,18 +131,179 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
 
     private async Task<WorldAccessDecision> AccessAsync(CancellationToken cancellation)
     {
+        if (!OnlineOpen) { _ = SuspendOnlineAsync(); return WorldAccessDecision.Inconclusive; }
         if (checkWorldAccess is null) return WorldAccessDecision.Compatible;
         try
         {
-            var access = await checkWorldAccess(cancellation).ConfigureAwait(false);
+            var access = await checkWorldAccess(cancellation).WaitAsync(cancellation).ConfigureAwait(false);
+            if (!OnlineOpen) { _ = SuspendOnlineAsync(); return WorldAccessDecision.Inconclusive; }
+            cancellation.ThrowIfCancellationRequested();
             return access is not null && (access.Allowed || !string.IsNullOrEmpty(access.MessageKey))
                 ? access : WorldAccessDecision.Inconclusive;
         }
+        catch (ApiException error) when (Pause(error)) { return WorldAccessDecision.Inconclusive; }
+        catch (OperationCanceledException) when (!OnlineOpen) { return WorldAccessDecision.Inconclusive; }
         catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException or TimeoutException
             || e is OperationCanceledException && !cancellation.IsCancellationRequested)
         {
             return WorldAccessDecision.Inconclusive;
         }
+    }
+
+    public OnlineActivity OnlineActivity => _online;
+
+    // Wire deadlines remain server instants; a local rollback cannot extend their remaining lifetime.
+    private DateTimeOffset Now
+    {
+        get
+        {
+            lock (_timeState)
+            {
+                var monotonic = _timeAnchor + _clock.GetElapsedTime(_timeStamp);
+                var wall = _clock.GetUtcNow();
+                if (monotonic > _observedNow) _observedNow = monotonic;
+                if (wall > _observedNow) _observedNow = wall;
+                return _observedNow;
+            }
+        }
+    }
+
+    private bool OnlineOpen => Volatile.Read(ref _suspended) == 0 && !_online.IsPaused;
+
+    private CancellationTokenSource OnlineCancellation(CancellationToken cancellation)
+    {
+        if (Interlocked.Exchange(ref _observingPause, 1) == 0) _ = ObservePauseAsync();
+        return CancellationTokenSource.CreateLinkedTokenSource(cancellation, _onlineStop.Token, _online.Cancellation);
+    }
+
+    private async Task ObservePauseAsync()
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_onlineStop.Token, _online.Cancellation);
+        try { await _online.Paused.WaitAsync(stop.Token).ConfigureAwait(false); await SuspendOnlineAsync().ConfigureAwait(false); }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        { if (_online.IsPaused) await SuspendOnlineAsync().ConfigureAwait(false); }
+    }
+
+    private bool Pause(ApiException error)
+    {
+        if (_online.TryPause(error) || OnlinePause.From(error) is not null) { _ = SuspendOnlineAsync(); return true; }
+        return false;
+    }
+
+    private void Observe<T>(MmResult<T> result)
+    {
+        if (result.Error is { } error && _online.TryPause(error.Code, result.Status, error.Details))
+            _ = SuspendOnlineAsync();
+    }
+
+    private async Task<MmResult<T>?> OperationAsync<T>(WorldOperationRetry retry,
+        Func<CancellationToken, Task<MmResult<T>>> operation, CancellationToken cancellation,
+        Func<MmResult<T>, Task>? discardLate = null, TimeSpan? remaining = null)
+    {
+        if (!OnlineOpen || !retry.TryBegin(out var generation)) return null;
+        var duration = remaining is { } limit && limit < TimeSpan.FromSeconds(10) ? limit : TimeSpan.FromSeconds(10);
+        if (duration <= TimeSpan.Zero) { retry.Cancel(generation); return null; }
+        using var deadline = new CancellationTokenSource(duration, _clock);
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
+        var token = attempt.Token;
+        try
+        {
+            var pending = operation(token);
+            var discarded = 0;
+            async Task DiscardOnce(MmResult<T> result)
+            {
+                if (discardLate is not null && Interlocked.Exchange(ref discarded, 1) == 0)
+                    await discardLate(result).ConfigureAwait(false);
+            }
+            // An obsolete operation cannot publish a world, but a typed global closure still ends this session.
+            _ = DiscardLateAsync(pending, DiscardOnce, token);
+            var answer = await pending.WaitAsync(token).ConfigureAwait(false);
+            Observe(answer);
+            if (!OnlineOpen || token.IsCancellationRequested)
+            {
+                await DiscardOnce(answer).ConfigureAwait(false);
+                retry.Cancel(generation); return null;
+            }
+            var transient = answer.Status == HttpStatusCode.TooManyRequests || (int)answer.Status >= 500
+                || answer.Error?.Kind is MmErrorKind.Unavailable or MmErrorKind.RateLimited;
+            var after = answer.RetryAfter ?? answer.Error?.RetryAfter;
+            if (answer.Value is JoinAnswer { RetryAfterSeconds: { } seconds }) after = TimeSpan.FromSeconds(seconds);
+            retry.Complete(generation, transient, after);
+            return answer;
+        }
+        catch (ApiException error)
+        {
+            if (Pause(error)) { retry.Cancel(generation); return null; }
+            retry.Complete(generation, transient: true, error.RetryAfter); throw;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        { retry.Cancel(generation); throw; }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        { retry.Complete(generation, transient: true); throw new TimeoutException("The matchmaking attempt timed out."); }
+        catch (Exception error) when (HostFailure(error) || error is TimeoutException)
+        { retry.Complete(generation, transient: true); throw; }
+        finally { retry.Cancel(generation); }
+    }
+
+    private async Task DiscardLateAsync<T>(Task<MmResult<T>> pending, Func<MmResult<T>, Task> discard, CancellationToken cancellation)
+    {
+        try
+        {
+            var result = await pending.ConfigureAwait(false);
+            Observe(result);
+            if (!OnlineOpen || cancellation.IsCancellationRequested) await discard(result).ConfigureAwait(false);
+        }
+        catch (Exception error) when (HostFailure(error) || error is TimeoutException) { }
+    }
+
+    /// <summary>Terminal for this play session: cancel work and release its relay before any late result can be published.</summary>
+    public Task SuspendOnlineAsync()
+    {
+        lock (_mineState) return _suspending ??= SuspendCoreAsync();
+    }
+
+    private async Task SuspendCoreAsync()
+    {
+        if (Interlocked.Exchange(ref _suspended, 1) != 0) return;
+        _mm.BeginCleanup();
+        try
+        {
+            try { _onlineStop.Cancel(); } catch (AggregateException) { }
+            CancellationTokenSource? stop;
+            string? world;
+            lock (_hostState)
+            {
+                stop = _hostStop; _hostStop = null;
+                _hostGeneration++;
+                world = HostedWorldId;
+                Volatile.Write(ref _hostedWorldId, null);
+                _host.Stop();
+            }
+            try { stop?.Cancel(); } catch (AggregateException) { }
+            stop?.Dispose();
+            string? grant;
+            lock (_mineState)
+            {
+                grant = _seat.GrantId;
+                _seat.Left();
+                InvalidateMine(reset: true);
+            }
+            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await StopRelayAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+            var close = world is not null ? CloseWorldAsync(world, budget.Token) : Task.CompletedTask;
+            var leave = grant is not null ? ReleaseGrantAsync(grant, budget.Token) : Task.CompletedTask;
+            await Task.WhenAll(close, leave).WaitAsync(budget.Token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (HostFailure(error) || error is TimeoutException) { }
+        finally { _mm.EndCleanup(); }
+    }
+
+    private async Task ReleaseGrantAsync(string grant, CancellationToken cancellation = default)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try { await _mm.LeaveGrantAsync(grant, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false); }
+        catch (Exception error) when (HostFailure(error) || error is TimeoutException) { }
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
@@ -132,6 +324,9 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     public async Task<UiFrame.WorldsList> ListAsync(UiFrame.WorldsQuery query, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(query);
+        RequestReconcile();
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
             return new(query.Filter, 2, DeniedMessage(denied, "list"), []);
         var filter = query.Filter switch
@@ -142,18 +337,18 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         };
         try
         {
-            var answer = await _mm.ListAsync(filter, query.NotFull, cancellation).ConfigureAwait(false);
+            var answer = await OperationAsync(_listRetry, token => _mm.ListAsync(filter, query.NotFull, token), cancellation).ConfigureAwait(false);
             if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                 return new(query.Filter, 2, DeniedMessage(changed, "list"), []);
-            if (!answer.Ok || answer.Value is not { } list)
+            if (answer is not { Ok: true, Value: { } list })
             {
-                var key = answer.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed";
+                var key = answer?.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed";
                 return new UiFrame.WorldsList(query.Filter, 2, _text(key), []);
             }
             var rows = list.Items.Select(w => Row(w, false)).Concat(list.Locked.Select(w => Row(w, true))).ToList();
             return new UiFrame.WorldsList(query.Filter, 0, string.Empty, rows);
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception e) when (HostFailure(e))
         {
             return new UiFrame.WorldsList(query.Filter, 2, _text("worlds.list_failed"), []);
         }
@@ -163,6 +358,9 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     public async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
+        RequestReconcile();
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
             return new(UiJoin.NotAllowed, DeniedMessage(denied, "join"));
         if (GameReadiness.CurrentGeneration is not { } generation)
@@ -180,17 +378,19 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await _mm.JoinAsync(worldId, code, cancellation).ConfigureAwait(false);
+                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, token), cancellation,
+                    result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
+                if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
                 try { after = await AccessAsync(cancellation).ConfigureAwait(false); }
                 catch (OperationCanceledException)
                 {
-                    if (answer.Value?.Grant is { } canceled) await _mm.LeaveGrantAsync(canceled.Id, CancellationToken.None).ConfigureAwait(false);
+                    if (answer.Value?.Grant is { } canceled) await ReleaseGrantAsync(canceled.Id, CancellationToken.None).ConfigureAwait(false);
                     throw;
                 }
                 if (!after.Allowed)
                 {
-                    if (answer.Value?.Grant is { } stale) await _mm.LeaveGrantAsync(stale.Id, CancellationToken.None).ConfigureAwait(false);
+                    if (answer.Value?.Grant is { } stale) await ReleaseGrantAsync(stale.Id, CancellationToken.None).ConfigureAwait(false);
                     return new(UiJoin.NotAllowed, DeniedMessage(after, "join"));
                 }
                 if (answer.Value is not { } join)
@@ -202,20 +402,36 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     case JoinStatuses.Granted when join.Grant is { } grant:
                         if (worldId is not null && grant.WorldId != worldId)
                         {
-                            await _mm.LeaveGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
+                            await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
                             return new(UiJoin.NotAllowed, DeniedMessage(WorldAccessDecision.Inconclusive, "join"));
                         }
                         if (!GameReadiness.Matches(generation))
                         {
-                            await _mm.LeaveGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
+                            await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
                             return new(UiJoin.NotAllowed, _text("worlds.load_game"));
                         }
-                        _seat.Granted(grant, _clock.GetUtcNow());
-                        InvalidateMine(reset: true);
+                        var accepted = false;
+                        lock (_mineState)
+                        {
+                            if (OnlineOpen && !cancellation.IsCancellationRequested && GameReadiness.Matches(generation))
+                            {
+                                _seat.Granted(grant, Now);
+                                InvalidateMine(reset: true);
+                                accepted = OnlineOpen && !cancellation.IsCancellationRequested;
+                                if (!accepted) _seat.Left();
+                            }
+                        }
+                        if (!accepted)
+                        {
+                            await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
+                            return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
+                        }
                         return new UiFrame.JoinResult(UiJoin.Reserved, _text("worlds.reserved"));
                     case JoinStatuses.Locked when attempt == 0:
                         // the seat of another world: leave it, then ask again once
-                        await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
+                        var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
+                        Observe(left);
+                        if (!OnlineOpen) return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         _seat.Left();
                         continue;
                     case JoinStatuses.Full:
@@ -233,7 +449,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
             }
             return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.join_failed"));
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception e) when (HostFailure(e))
         {
             return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.join_failed"));
         }
@@ -245,13 +461,15 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     /// </summary>
     public async Task<string?> TickAsync(CancellationToken cancellation)
     {
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
         {
             var hadSeat = _seat.GrantId is not null;
             await LeaveAsync(cancellation).ConfigureAwait(false);
             return hadSeat ? _text(denied.MessageKey) : null;
         }
-        var now = _clock.GetUtcNow();
+        var now = Now;
         var next = _seat.Next(now);
         if (next.Step == SeatStep.Stop && next.Why is SeatDecision.Lapsed or SeatDecision.HoldReached)
         {
@@ -265,22 +483,40 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         }
         try
         {
-            var renewed = await _mm.RenewSeatAsync(grantId, cancellation).ConfigureAwait(false);
+            var epoch = Volatile.Read(ref _mineEpoch);
+            var renewed = await OperationAsync(_renewRetry, token => _mm.RenewSeatAsync(grantId, token), cancellation).ConfigureAwait(false);
+            if (renewed is null || epoch != Volatile.Read(ref _mineEpoch) || _seat.GrantId != grantId) return null;
             if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
             {
                 await LeaveAsync(CancellationToken.None).ConfigureAwait(false);
                 return _text(changed.MessageKey);
             }
-            if (!renewed.Ok || renewed.Value is not { } seat)
+            lock (_mineState)
             {
-                _seat.RenewFailed(now, renewed.RetryAfter);
-                return null;
+                if (!OnlineOpen || cancellation.IsCancellationRequested || epoch != Volatile.Read(ref _mineEpoch)
+                    || _seat.GrantId != grantId) return null;
+                if (!renewed.Ok || renewed.Value is not { } seat)
+                {
+                    _seat.RenewFailed(Now, renewed.RetryAfter);
+                    return null;
+                }
+                if (seat.Seat?.GrantId is { } returned && returned != grantId) { RequestReconcile(); return null; }
+                var seatAt = DateTimeOffset.TryParse(seat.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var generated) ? generated : (DateTimeOffset?)null;
+                if (seatAt is { } observed && _lastSeatAt is { } previous && observed < previous)
+                {
+                    RequestReconcile();
+                    return null;
+                }
+                var after = _seat.Observe(seat, Now);
+                // A successful renew is authoritative too: an older in-flight GET cannot undo it.
+                Interlocked.Increment(ref _mineEpoch);
+                if (seatAt is not null) _lastSeatAt = seatAt;
+                if (after.Step == SeatStep.Stop) InvalidateMine(reset: true);
+                return after.Step == SeatStep.Stop && after.Why != SeatDecision.LeftSeat ? _text("worlds.seat_ended") : null;
             }
-            var after = _seat.Observe(seat, now);
-            if (after.Step == SeatStep.Stop) InvalidateMine(reset: true);
-            return after.Step == SeatStep.Stop && after.Why != SeatDecision.LeftSeat ? _text("worlds.seat_ended") : null;
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception e) when (HostFailure(e))
         {
             _seat.RenewFailed(now);
             return null;
@@ -301,35 +537,71 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
 
     /// <summary>
     /// The overlay's "my world" (OD-63): the world the profile hosts or holds a seat in
-    /// (<c>GET /mm/v1/seat</c>), its code for the host, and its players (<c>GET …/members</c>;
-    /// only the host when the server gives no roster).
+    /// (<c>GET /mm/v1/seat?includeMembers=true</c>), its code for the host, and its players.
+    /// An omitted roster uses the bounded legacy members route; a failed read retains valid state.
     /// </summary>
-    public async Task<UiFrame.MyWorld> MyWorldAsync(CancellationToken cancellation)
+    public Task<UiFrame.MyWorld> MyWorldAsync(CancellationToken cancellation) => MineAsync(background: false, cancellation);
+
+    /// <summary>Periodic reconciliation sleeps after an idle free session has a confirmed empty seat.</summary>
+    public Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) => MineAsync(background: true, cancellation);
+
+    /// <summary>An explicit UI/action/reconnect asks for one fresh reconciliation without erasing a good roster.</summary>
+    public void RequestReconcile()
     {
+        lock (_mineState)
+        {
+            _mineUncertain = true;
+            Interlocked.Increment(ref _mineEpoch);
+            Interlocked.Exchange(ref _mineNextTicks, 0);
+        }
+    }
+
+    private Task<UiFrame.MyWorld> MineAsync(bool background, CancellationToken cancellation)
+    {
+        lock (_mineState)
+        {
+            if (!OnlineOpen) { _ = SuspendOnlineAsync(); return Task.FromResult(NoWorld); }
+            if (_mineRead is { IsCompleted: false }) return _mineRead.WaitAsync(cancellation);
+            if (background && idleWhenNoWorld && _mineReconciled && !_mineUncertain && _pendingRequestUntil is null
+                && !_joinRetry.Running && !_createRetry.Running && HostedWorldId is null && _seat.GrantId is null && _mineSnapshot.Role == UiWorldRole.None)
+                return Task.FromResult(_mineSnapshot);
+            _mineRead = ReadMineAsync(cancellation);
+            return _mineRead;
+        }
+    }
+
+    private async Task<UiFrame.MyWorld> ReadMineAsync(CancellationToken cancellation)
+    {
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false })
         {
             InvalidateMine(reset: true);
             return NoWorld;
         }
-        await _mineRead.WaitAsync(cancellation).ConfigureAwait(false);
         var epoch = Volatile.Read(ref _mineEpoch);
         try
         {
-            if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false })
-            {
-                InvalidateMine(reset: true);
-                return NoWorld;
-            }
-            if (_clock.GetUtcNow().UtcTicks < Volatile.Read(ref _mineNextTicks)) return _mineSnapshot;
-            Interlocked.Exchange(ref _mineNextTicks, (_clock.GetUtcNow() + TimeSpan.FromSeconds(5)).UtcTicks);
-            var answer = await _mm.SeatAsync(cancellation).ConfigureAwait(false);
-            if (epoch != Volatile.Read(ref _mineEpoch) || !answer.Ok || answer.Value is null) return _mineSnapshot;
-            if (answer.Value?.Seat is not { } seat)
+            if (Now.UtcTicks < Volatile.Read(ref _mineNextTicks)) return _mineSnapshot;
+            Interlocked.Exchange(ref _mineNextTicks, (Now + TimeSpan.FromSeconds(5)).UtcTicks);
+            var answer = await OperationAsync(_seatReadRetry, _mm.SeatWithMembersAsync, cancellation).ConfigureAwait(false);
+            if (!OnlineOpen) return NoWorld;
+            if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
+            if (answer is not { Ok: true, Value: { } value }) { _mineUncertain = true; return _mineSnapshot; }
+            var seatAt = DateTimeOffset.TryParse(value.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var observedAt) ? observedAt : (DateTimeOffset?)null;
+            if (seatAt is { } observed && _lastSeatAt is { } previous && observed < previous) return _mineSnapshot;
+            if (value.Seat is not { } seat)
             {
                 lock (_mineState)
                 {
-                    if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
+                    if (!OnlineOpen || epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
+                    ObserveRequest(value.Request);
+                    _mineReconciled = true; _mineUncertain = false;
+                    if (seatAt is not null) _lastSeatAt = seatAt;
+                    _seat.Observe(value, Now);
                     (_mineId, _mineRole) = (null, UiWorldRole.None);
+                    _lastRosterAt = null;
                     _roster.Reset();
                     _publicWarning.Reset();
                     CrashContext?.ObserveWorld(null);
@@ -343,42 +615,80 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 _ => UiWorldRole.Reserved,
             };
             var world = seat.World;
+            if (world.Id != seat.WorldId) { _mineUncertain = true; return _mineSnapshot; }
             var members = new List<MemberRow>();
-            var roster = await _mm.MembersAsync(seat.WorldId, cancellation).ConfigureAwait(false);
+            // Only an omitted roster uses the bounded legacy route. An embedded but unbound roster is not a fallback signal.
+            var embedded = value.Members is not null;
+            var roster = embedded ? new MmResult<WorldMembers>(HttpStatusCode.OK, value.Members, null, null)
+                : await OperationAsync(_membersRetry, token => _mm.MembersAsync(seat.WorldId, token), cancellation).ConfigureAwait(false);
             if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false })
             {
                 InvalidateMine(reset: true);
                 return NoWorld;
             }
             if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
-            var named = roster is { Ok: true, Value: not null } && (roster.Value.WorldId is null || roster.Value.WorldId == seat.WorldId);
+            if (embedded && value.Members!.WorldId != seat.WorldId) { _mineUncertain = true; return _mineSnapshot; }
+            var named = roster is { Ok: true, Value.Items: { } items } && items.All(member => member is not null)
+                && (roster.Value.WorldId is null || roster.Value.WorldId == seat.WorldId);
+            var boundedRoster = named ? roster!.Value! with { Items = roster.Value!.Items.Take(12).ToArray() } : null;
+            if (named && _mineId == seat.WorldId && _lastRosterAt is { } latest
+                && DateTimeOffset.TryParse(roster!.Value!.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var generated) && generated <= latest)
+                return _mineSnapshot;
             if (named)
             {
-                members.AddRange(roster.Value!.Items.Select(Member));
+                members.AddRange(boundedRoster!.Items.Select(Member));
             }
             else
             {
+                if (_mineId == seat.WorldId && _mineSnapshot.Named) { _mineUncertain = true; return _mineSnapshot; }
                 members.Add(new MemberRow(world.Host.Xuid, world.Host.Gamertag, world.Host.Tier == "vip" ? UiTier.Supporter : UiTier.Free, 0,
                     role == UiWorldRole.Hosting ? UiFriend.Self : UiFriend.None));
             }
             var row = Row(world, false);
             lock (_mineState)
             {
-                if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
+                if (!OnlineOpen || epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
+                _mineReconciled = true; _mineUncertain = false;
+                if (seatAt is not null) _lastSeatAt = seatAt;
+                ObserveRequest(value.Request);
+                if (seat.State != SeatStates.Reserved || seat.GrantId is not null && seat.ExpiresAt is not null
+                    && seat.HoldUntil is not null && _seat.GrantId != seat.GrantId) _seat.Observe(value, Now);
+                if (_mineId != seat.WorldId) { _lastRosterAt = null; _roster.Reset(); }
+                if (_mineId != seat.WorldId || _mineRole != role) Interlocked.Increment(ref _mineEpoch);
                 (_mineId, _mineRole) = (seat.WorldId, role);
-                if (named) _roster.Observe(seat.WorldId, roster.Value!);
+                if (named)
+                {
+                    _roster.Observe(seat.WorldId, boundedRoster!);
+                    _lastRosterAt = DateTimeOffset.TryParse(boundedRoster!.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
+                }
                 if (role is UiWorldRole.Hosting or UiWorldRole.Seated) _publicWarning.Observe(seat.WorldId, world.Audience);
-                CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, _clock.GetUtcNow(), named,
+                CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
                         m.Role switch { 0 => "host", 1 => "seated", _ => "reserved" })).ToArray()) : null);
                 return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.Gamertag, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members);
             }
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception e) when (HostFailure(e) || e is TimeoutException)
         {
+            if (!OnlineOpen) return NoWorld;
+            _mineUncertain = true;
             return _mineSnapshot;
         }
-        finally { _mineRead.Release(); }
+    }
+
+    private void ObserveRequest(SeatRequest? request)
+    {
+        if (request is { State: OfferStates.Pending } && DateTimeOffset.TryParse(request.ExpiresAt,
+            System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var expires)
+            && expires > Now)
+        {
+            if (_pendingRequestId != request.Id) { _pendingRequestId = request.Id; _pendingRequestUntil = expires; }
+            else if (_pendingRequestUntil <= Now) { _pendingRequestId = null; _pendingRequestUntil = null; }
+            else if (expires < _pendingRequestUntil) _pendingRequestUntil = expires;
+        }
+        else { _pendingRequestId = null; _pendingRequestUntil = null; }
     }
 
     /// <summary>One player of the roster as the overlay draws it (the XUID is the action key only).</summary>
@@ -403,6 +713,9 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         ArgumentNullException.ThrowIfNull(request);
         UiFrame.ActionResult Done(string key) => new(request.Action, 0, _text(key));
         UiFrame.ActionResult Refused(string key) => new(request.Action, 1, _text(key));
+        if (!OnlineOpen) { _ = SuspendOnlineAsync(); return Refused("worlds.action_failed"); }
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
         try
         {
             switch (request.Action)
@@ -419,6 +732,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     InvalidateMine(reset: true);
                     _seat.Left();
                     var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
+                    Observe(left);
                     _log(left.Ok ? "worlds: seat left from the overlay" : $"worlds: leave refused: {left.Error?.Kind}");
                     return left.Ok ? Done("worlds.left") : Refused("worlds.action_failed");
                 case UiWorldAction.Kick:
@@ -430,8 +744,10 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     }
                     var kickedRelay = _relay;
                     var kickedGeneration = Volatile.Read(ref _hostGeneration);
-                    var kicked = await _mm.ModerationAsync(id, new Moderation { Action = ModerationActions.Kick, Xuid = request.Xuid }, cancellation).ConfigureAwait(false);
-                    if (kicked.Ok && kickedGeneration == Volatile.Read(ref _hostGeneration) && HostedWorldId == id)
+                    var kicked = await OperationAsync(_actionRetry,
+                        token => _mm.ModerationAsync(id, new Moderation { Action = ModerationActions.Kick, Xuid = request.Xuid }, token), cancellation).ConfigureAwait(false);
+                    if (kicked is null) return Refused("worlds.action_failed");
+                    if (OnlineOpen && kicked.Ok && kickedGeneration == Volatile.Read(ref _hostGeneration) && HostedWorldId == id)
                         kickedRelay?.Kick(request.Xuid); // at once; the punches confirm it
                     _log(kicked.Ok ? $"worlds: kicked a player from {id}" : $"worlds: kick refused: {kicked.Error?.Kind}");
                     return kicked.Ok ? Done("worlds.kicked") : Refused("worlds.action_failed");
@@ -454,10 +770,12 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     return Refused("worlds.action_failed");
             }
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (ApiException error) when (Pause(error)) { return Refused("worlds.action_failed"); }
+        catch (Exception e) when (HostFailure(e))
         {
             return Refused("worlds.action_failed");
         }
+        finally { RequestReconcile(); }
     }
 
     /// <summary>
@@ -468,6 +786,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     public async Task<UiFrame.Hosted> CreateAsync(UiFrame.CreateWorld request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
             return new(1, string.Empty, string.Empty, DeniedMessage(denied, "create"));
         if (GameReadiness.CurrentGeneration is not { } generation)
@@ -509,9 +829,10 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     return new(1, string.Empty, string.Empty, DeniedMessage(beforePut, "create"));
                 if (!GameReadiness.Matches(generation)) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
                 openingId = WorldHostScheduler.NewWorldId();
-                var pending = _mm.PutWorldAsync(openingId, settings, stop.Token);
-                _ = CloseStalePutAsync(pending, openingId, operation, stop.Token);
-                var opened = await pending.WaitAsync(stop.Token).ConfigureAwait(false);
+                var minted = openingId;
+                var pending = OperationAsync(_createRetry, token => _mm.PutWorldAsync(minted, settings, token), stop.Token,
+                    result => result.Ok ? CloseWorldAsync(minted, CancellationToken.None) : Task.CompletedTask);
+                var opened = await pending.ConfigureAwait(false);
                 stop.Token.ThrowIfCancellationRequested();
                 if (!IsCurrent(operation)) throw new OperationCanceledException(stop.Token);
                 if (opened is { Ok: true, Value: { } world })
@@ -531,9 +852,11 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     lock (_hostState)
                     {
                         if (_hostGeneration != operation.Generation) throw new OperationCanceledException(stop.Token);
-                        _host.Hosting(openingId, _clock.GetUtcNow());
-                        _host.Opened(_clock.GetUtcNow());
-                        _nextAdmissionsRefresh = _clock.GetUtcNow() + TimeSpan.FromSeconds(3);
+                        _host.Hosting(openingId, Now);
+                        _host.Opened(Now);
+                        _hostLastSuccess = Now;
+                        _hostLastStamp = _clock.GetTimestamp();
+                        _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
@@ -542,14 +865,14 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id
-                if (opened.Error is { Kind: MmErrorKind.AlreadyHosting, WorldId: { } old } && attempt == 0)
+                if (opened?.Error is { Kind: MmErrorKind.AlreadyHosting, WorldId: { } old } && attempt == 0)
                 {
                     await _mm.CloseAsync(old, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false);
                     continue;
                 }
                 await StopRelayAsync().ConfigureAwait(false);
-                _log($"worlds: open refused: {opened.Error?.Kind}");
-                var key = opened.Error?.Kind switch
+                _log($"worlds: open refused: {opened?.Error?.Kind}");
+                var key = opened?.Error?.Kind switch
                 {
                     MmErrorKind.SupporterRequired => "worlds.host_supporters",
                     MmErrorKind.ModeMismatch => "worlds.host_mode",
@@ -559,6 +882,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 return new UiFrame.Hosted(1, string.Empty, string.Empty, _text(key));
             }
         }
+        catch (ApiException error) when (Pause(error)) { }
         catch (Exception e) when (HostFailure(e))
         {
             // The finally block also covers exceptions from relay startup, settings and the policy callback.
@@ -583,6 +907,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     /// <summary>Every few seconds while hosting: the announce when due (with the relay's players), the server's kicks passed on. A toast text when the world ended.</summary>
     public async Task<string?> HostTickAsync(CancellationToken cancellation)
     {
+        using var online = OnlineCancellation(cancellation);
+        cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
         {
             var hadHost = HostedWorldId is not null;
@@ -591,7 +917,12 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         }
         var operation = QueueHostOperation(replace: false, create: false);
         await operation.Previous.ConfigureAwait(false);
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(operation.Stop, cancellation);
+        var hostRemaining = TimeSpan.FromSeconds(45) - _clock.GetElapsedTime(_hostLastStamp);
+        var wallRemainingAtStart = _hostLastSuccess.AddSeconds(45) - Now;
+        if (wallRemainingAtStart < hostRemaining) hostRemaining = wallRemainingAtStart;
+        var budget = hostRemaining > TimeSpan.Zero && hostRemaining < TimeSpan.FromSeconds(10) ? hostRemaining : TimeSpan.FromSeconds(10);
+        using var deadline = new CancellationTokenSource(budget, _clock);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(operation.Stop, cancellation, deadline.Token);
         try
         {
             if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } beforeHost)
@@ -606,26 +937,46 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                 return _text("worlds.host_ended");
             }
-            var now = _clock.GetUtcNow();
+            var now = Now;
+            if (HostExpired())
+            {
+                await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
+                return _text("worlds.host_ended");
+            }
             if (_host.Next(now).Step != HostStep.Announce)
             {
                 if (refreshRelayAdmissions is null || now < _nextAdmissionsRefresh) return null;
                 _nextAdmissionsRefresh = now + TimeSpan.FromSeconds(3);
                 try
                 {
-                    await refreshRelayAdmissions(relay, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false);
-                    stop.Token.ThrowIfCancellationRequested();
-                    if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } afterRefresh)
+                    if (!_admissionsRetry.TryBegin(out var refreshGeneration)) return null;
+                    try
                     {
-                        await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
-                        return _text(afterRefresh.MessageKey);
+                        await refreshRelayAdmissions(relay, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false);
+                        stop.Token.ThrowIfCancellationRequested();
+                        if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } afterRefresh)
+                        {
+                            await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
+                            return _text(afterRefresh.MessageKey);
+                        }
+                        if (IsCurrent(operation)) _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
+                        _admissionsRetry.Complete(refreshGeneration, transient: false);
                     }
-                    if (IsCurrent(operation)) _nextAdmissionsRefresh = _clock.GetUtcNow() + TimeSpan.FromSeconds(3);
+                    catch (ApiException admissionFailure)
+                    { _admissionsRetry.Complete(refreshGeneration, transient: true, admissionFailure.RetryAfter); throw; }
+                    catch (OperationCanceledException) when (stop.IsCancellationRequested)
+                    { _admissionsRetry.Cancel(refreshGeneration); throw; }
+                    catch (Exception refreshError) when (HostFailure(refreshError) || refreshError is TimeoutException)
+                    { _admissionsRetry.Complete(refreshGeneration, transient: true); throw; }
                 }
                 catch (InvalidOperationException)
                 {
                     await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                     return _text("worlds.host_ended");
+                }
+                catch (ApiException readFailure) when (OnlinePause.From(readFailure) is null)
+                {
+                    // The retry circuit retains its header; the host and signed grants keep their original deadlines.
                 }
                 catch (Exception e) when (e is HttpRequestException or IOException or SocketException or TimeoutException
                     || e is OperationCanceledException && !stop.IsCancellationRequested)
@@ -640,9 +991,19 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                 return _text(beforeBeat.MessageKey);
             }
-            var beat = await _mm.AnnounceAsync(id, new Heartbeat { Peers = peers }, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false);
+            var remaining = TimeSpan.FromSeconds(45) - _clock.GetElapsedTime(_hostLastStamp);
+            var wallRemaining = _hostLastSuccess.AddSeconds(45) - Now;
+            if (wallRemaining < remaining) remaining = wallRemaining;
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers }, token), stop.Token,
+                remaining: remaining).ConfigureAwait(false);
+            if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();
             if (!IsCurrent(operation)) return null;
+            if (HostExpired())
+            {
+                await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
+                return _text("worlds.host_ended");
+            }
             if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } afterBeat)
             {
                 await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
@@ -676,26 +1037,50 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                     await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                     return _text(afterUpdate.MessageKey);
                 }
-                _host.Announced(_clock.GetUtcNow());
-                _nextAdmissionsRefresh = _clock.GetUtcNow() + TimeSpan.FromSeconds(3);
+                _host.Announced(Now);
+                _hostLastSuccess = Now;
+                _hostLastStamp = _clock.GetTimestamp();
+                _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
                 foreach (var punch in world.Punches.Where(p => p.Kicked))
                 {
                     relay.Kick(punch.Xuid);
                 }
                 return null;
             }
-            if (beat.Error is { } error && _host.Failed(error, _clock.GetUtcNow()).Outcome is HostOutcome.WorldGone or HostOutcome.Refused)
+            if (beat.Error is { } error && _host.Failed(error, Now).Outcome is HostOutcome.WorldGone or HostOutcome.Refused)
             {
                 await CloseCurrentHostAsync(id, CancellationToken.None).ConfigureAwait(false);
                 _log($"worlds: world {id} ended by the server: {error.Kind}");
                 return _text("worlds.host_ended");
             }
         }
+        catch (ApiException error) when (Pause(error))
+        {
+            await SuspendOnlineAsync().ConfigureAwait(false);
+            return _text("worlds.host_ended");
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !operation.Stop.IsCancellationRequested && !cancellation.IsCancellationRequested)
+        {
+            if (IsCurrent(operation) && HostExpired())
+            {
+                await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
+                return _text("worlds.host_ended");
+            }
+            if (IsCurrent(operation)) _host.Transient(Now);
+        }
         catch (OperationCanceledException)
         {
             await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception e) when (HostFailure(e)) { if (IsCurrent(operation)) _host.Transient(_clock.GetUtcNow()); }
+        catch (Exception e) when (HostFailure(e))
+        {
+            if (IsCurrent(operation) && HostExpired())
+            {
+                await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
+                return _text("worlds.host_ended");
+            }
+            if (IsCurrent(operation)) _host.Transient(Now);
+        }
         finally { operation.Completion.TrySetResult(); }
         return null;
     }
@@ -738,6 +1123,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         try
         {
             var closed = await _mm.CloseAsync(id, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
+            Observe(closed);
             _log(closed.Ok ? $"worlds: world {id} closed (DELETE ok)" : $"worlds: world {id} DELETE refused: {closed.Error?.Kind}");
         }
         catch (Exception e) when (HostFailure(e))
@@ -749,8 +1135,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
 
     private async Task StopRelayAsync()
     {
-        var relay = _relay;
-        _relay = null;
+        var relay = Interlocked.Exchange(ref _relay, null);
         if (relay is IAsyncDisposable asynchronous) await asynchronous.DisposeAsync().ConfigureAwait(false);
         else if (relay is not null) await Task.Run(relay.Dispose).ConfigureAwait(false);
     }
@@ -778,7 +1163,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         }
         if (previousStop is not null)
         {
-            previousStop.Cancel();
+            try { previousStop.Cancel(); } catch (AggregateException) { }
             previousStop.Dispose();
         }
         return operation;
@@ -786,19 +1171,9 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
 
     private bool IsCurrent(HostOperation operation) => Volatile.Read(ref _hostGeneration) == operation.Generation;
     private UiFrame.Hosted HostingFailed() => new(1, string.Empty, string.Empty, _text("worlds.host_failed"));
-    private static bool HostFailure(Exception exception) => exception is HttpRequestException or OperationCanceledException or InvalidOperationException or IOException or SocketException or ArgumentException;
-
-    // A canceled HTTP wait can still succeed on a transport that ignored cancellation. Observe it
-    // until completion and delete only that operation's minted id, never a replacement world's id.
-    private async Task CloseStalePutAsync(Task<MmResult<WorldAnnounced>> pending, string id, HostOperation operation, CancellationToken cancellation)
-    {
-        try
-        {
-            var answer = await pending.ConfigureAwait(false);
-            if (answer.Ok && (!IsCurrent(operation) || cancellation.IsCancellationRequested)) await CloseWorldAsync(id, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception e) when (HostFailure(e)) { }
-    }
+    private bool HostExpired() => Now >= _hostLastSuccess.AddSeconds(45)
+        || _clock.GetElapsedTime(_hostLastStamp) >= TimeSpan.FromSeconds(45);
+    private static bool HostFailure(Exception exception) => exception is HttpRequestException or OperationCanceledException or InvalidOperationException or IOException or SocketException or ArgumentException or TimeoutException;
 
     /// <summary>The play session is ending: the seat is let go (idempotent on the server).</summary>
     public async Task LeaveAsync(CancellationToken cancellation)
@@ -811,9 +1186,10 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         _seat.Left();
         try
         {
-            await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
+            var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
+            Observe(left);
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception e) when (HostFailure(e))
         {
             // the seat lapses on its own within 60 s
         }

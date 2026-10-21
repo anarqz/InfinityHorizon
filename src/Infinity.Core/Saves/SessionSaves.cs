@@ -177,7 +177,7 @@ public sealed class SessionSaves
             sent = _saves.State(_xuid)?.PendingUpload is not null
                 ? await _saves.SendPendingAsync(access, _xuid, _line.Lease, cancellation).ConfigureAwait(false)
                 : await _saves.UploadAsync(access, _xuid, _line.Lease, newest, mark?.Revision ?? 0, CommitKinds.Upload, cancellation).ConfigureAwait(false);
-            if (sent.Failure is not { KeepsPending: true } f || f.Kind == SaveFailureKind.SessionEnded)
+            if (sent.Failure is not { KeepsPending: true } f || f.Kind is SaveFailureKind.SessionEnded or SaveFailureKind.OnlineClosed)
             {
                 break;
             }

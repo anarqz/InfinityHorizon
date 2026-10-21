@@ -265,6 +265,16 @@ static int fr_base64_decode(const wchar_t *text, char *out, size_t capacity) {
 typedef int(WINAPI *FrBindFn)(UINT_PTR, const void *, int);
 typedef int(WINAPI *FrSendToFn)(UINT_PTR, const char *, int, int, const void *, int);
 typedef int(WINAPI *FrWsaSendToFn)(UINT_PTR, void *, DWORD, DWORD *, DWORD, const void *, int, void *, void *);
+typedef int(WINAPI *FrRecvFromFn)(UINT_PTR, char *, int, int, void *, int *);
+typedef int(WINAPI *FrWsaRecvFromFn)(UINT_PTR, void *, DWORD, DWORD *, DWORD *, void *, int *, void *, void *);
+typedef int(WINAPI *FrSendFn)(UINT_PTR, const char *, int, int);
+typedef int(WINAPI *FrWsaSendFn)(UINT_PTR, void *, DWORD, DWORD *, DWORD, void *, void *);
+typedef int(WINAPI *FrRecvFn)(UINT_PTR, char *, int, int);
+typedef int(WINAPI *FrWsaRecvFn)(UINT_PTR, void *, DWORD, DWORD *, DWORD *, void *, void *);
+typedef int(WINAPI *FrSocketFn)(UINT_PTR);
+typedef int(WINAPI *FrShutdownFn)(UINT_PTR, int);
+typedef void(WINAPI *FrSetErrorFn)(int);
+typedef BOOL(WINAPI *FrCancelIoFn)(HANDLE, LPOVERLAPPED);
 typedef int(WINAPI *FrSetOptionFn)(UINT_PTR, int, int, const char *, int);
 typedef int(WINAPI *FrPtonFn)(int, const wchar_t *, void *);
 
@@ -272,6 +282,19 @@ static HMODULE fr_ws2;
 static FrBindFn fr_real_bind;
 static FrSendToFn fr_real_sendto;
 static FrWsaSendToFn fr_real_wsa_sendto;
+static FrRecvFromFn fr_real_recvfrom;
+static FrWsaRecvFromFn fr_real_wsa_recvfrom;
+static FrSendFn fr_real_send;
+static FrWsaSendFn fr_real_wsa_send;
+static FrRecvFn fr_real_recv;
+static FrWsaRecvFn fr_real_wsa_recv;
+static FrSocketFn fr_real_close;
+static FrShutdownFn fr_real_shutdown;
+static FrSetErrorFn fr_set_error;
+static FrCancelIoFn fr_cancel_io;
+static SRWLOCK fr_socket_lock = SRWLOCK_INIT;
+#define FR_SOCKET_LIMIT 64u
+static UINT_PTR fr_bound_sockets[FR_SOCKET_LIMIT];
 /* Set when the car database changed during the session (azimuth_world.c): from then on the
    game's socket sends to [::1]:9, so the world stops hearing this player and drops it, and
    the game, hearing nothing back, leaves the world. Only a copy of the destination is
@@ -292,23 +315,55 @@ static int fr_load_ws2(void) {
         fr_real_bind = (FrBindFn)(uintptr_t)GetProcAddress(fr_ws2, "bind");
         fr_real_sendto = (FrSendToFn)(uintptr_t)GetProcAddress(fr_ws2, "sendto");
         fr_real_wsa_sendto = (FrWsaSendToFn)(uintptr_t)GetProcAddress(fr_ws2, "WSASendTo");
+        fr_real_recvfrom = (FrRecvFromFn)(uintptr_t)GetProcAddress(fr_ws2, "recvfrom");
+        fr_real_wsa_recvfrom = (FrWsaRecvFromFn)(uintptr_t)GetProcAddress(fr_ws2, "WSARecvFrom");
+        fr_real_send = (FrSendFn)(uintptr_t)GetProcAddress(fr_ws2, "send");
+        fr_real_wsa_send = (FrWsaSendFn)(uintptr_t)GetProcAddress(fr_ws2, "WSASend");
+        fr_real_recv = (FrRecvFn)(uintptr_t)GetProcAddress(fr_ws2, "recv");
+        fr_real_wsa_recv = (FrWsaRecvFn)(uintptr_t)GetProcAddress(fr_ws2, "WSARecv");
+        fr_real_close = (FrSocketFn)(uintptr_t)GetProcAddress(fr_ws2, "closesocket");
+        fr_real_shutdown = (FrShutdownFn)(uintptr_t)GetProcAddress(fr_ws2, "shutdown");
+        fr_set_error = (FrSetErrorFn)(uintptr_t)GetProcAddress(fr_ws2, "WSASetLastError");
+        fr_cancel_io = (FrCancelIoFn)(uintptr_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CancelIoEx");
         fr_real_setsockopt = (FrSetOptionFn)(uintptr_t)GetProcAddress(fr_ws2, "setsockopt");
         fr_real_pton = (FrPtonFn)(uintptr_t)GetProcAddress(fr_ws2, "InetPtonW");
     }
-    return fr_real_bind && fr_real_setsockopt && fr_real_pton && fr_real_sendto && fr_real_wsa_sendto;
+    return fr_real_bind && fr_real_setsockopt && fr_real_pton && fr_real_sendto && fr_real_wsa_sendto &&
+           fr_real_recvfrom && fr_real_wsa_recvfrom && fr_real_send && fr_real_wsa_send && fr_real_recv &&
+           fr_real_wsa_recv && fr_real_close && fr_real_shutdown && fr_set_error && fr_cancel_io;
 }
 
 /* The game's socket is IPv6 ([::]:5100, the manifest's SecureConsoleSocket) and Windows makes
    those IPv6-only: clearing IPV6_V6ONLY lets it reach IPv4 worlds as ::ffff:a.b.c.d. */
 static int WINAPI fr_bind(UINT_PTR socket, const void *address, int length) {
     unsigned short family = 0;
-    if (address && length >= 2 && memory_read(address, &family, sizeof(family)) &&
-        family == FR_AF_INET6) {
+    unsigned slot = FR_SOCKET_LIMIT;
+    AcquireSRWLockExclusive(&fr_socket_lock);
+    if (address && length >= 2) memory_read(address, &family, sizeof(family));
+    if (family == FR_AF_INET6 || family == 2 /* AF_INET */) {
+        if (!fi_launch_network_allowed()) {
+            ReleaseSRWLockExclusive(&fr_socket_lock);
+            fr_set_error(10050); /* WSAENETDOWN: never replace the quarantined world socket */
+            return -1;
+        }
+        slot = 0;
+        while (slot < FR_SOCKET_LIMIT && fr_bound_sockets[slot] && fr_bound_sockets[slot] != socket) ++slot;
+        if (slot == FR_SOCKET_LIMIT) {
+            ReleaseSRWLockExclusive(&fr_socket_lock);
+            fr_set_error(10055); /* WSAENOBUFS: never leave a bound socket outside quarantine */
+            return -1;
+        }
+    }
+    if (family == FR_AF_INET6) {
         DWORD off = 0;
         fr_real_setsockopt(socket, FR_IPPROTO_IPV6, FR_IPV6_V6ONLY, (const char *)&off, sizeof(off));
-        fr_game_socket = socket;
     }
     int result = fr_real_bind(socket, address, length);
+    if (result == 0) {
+        if (slot < FR_SOCKET_LIMIT) fr_bound_sockets[slot] = socket;
+        if (family == FR_AF_INET6) fr_game_socket = socket;
+    }
+    ReleaseSRWLockExclusive(&fr_socket_lock);
     FR_LINE(line);
     fr_text(&line, "FREEROAM: game socket bound, family ");
     fr_number(&line, family);
@@ -321,7 +376,29 @@ static int fr_is_cut(UINT_PTR socket) {
     return fr_cut && socket == fr_game_socket;
 }
 
+static int fr_is_suspended(UINT_PTR socket) {
+    (void)socket;
+    /* All game import traffic is denied, including an unbound send or a late new socket. */
+    if (!fi_launch_network_allowed()) {
+        fr_set_error(10050); /* WSAENETDOWN */
+        return 1;
+    }
+    return 0;
+}
+
+static int WINAPI fr_close(UINT_PTR socket) {
+    AcquireSRWLockExclusive(&fr_socket_lock);
+    if (fr_game_socket == socket) fr_game_socket = 0;
+    for (unsigned i = 0; i < FR_SOCKET_LIMIT; ++i) {
+        if (fr_bound_sockets[i] == socket) fr_bound_sockets[i] = 0;
+    }
+    int result = fr_real_close(socket);
+    ReleaseSRWLockExclusive(&fr_socket_lock);
+    return result;
+}
+
 static int WINAPI fr_sendto(UINT_PTR socket, const char *data, int size, int flags, const void *to, int to_size) {
+    if (fr_is_suspended(socket)) return -1;
     if (fr_is_cut(socket)) {
         return fr_real_sendto(socket, data, size, flags, &fr_nowhere, sizeof(fr_nowhere));
     }
@@ -330,11 +407,80 @@ static int WINAPI fr_sendto(UINT_PTR socket, const char *data, int size, int fla
 
 static int WINAPI fr_wsa_sendto(UINT_PTR socket, void *buffers, DWORD count, DWORD *sent, DWORD flags,
                                 const void *to, int to_size, void *overlapped, void *completion) {
+    if (fr_is_suspended(socket)) return -1;
     if (fr_is_cut(socket)) {
         return fr_real_wsa_sendto(socket, buffers, count, sent, flags, &fr_nowhere, sizeof(fr_nowhere), overlapped,
                                   completion);
     }
     return fr_real_wsa_sendto(socket, buffers, count, sent, flags, to, to_size, overlapped, completion);
+}
+
+static int WINAPI fr_recvfrom(UINT_PTR socket, char *data, int size, int flags, void *from, int *from_size) {
+    if (fr_is_suspended(socket)) return -1;
+    int result = fr_real_recvfrom(socket, data, size, flags, from, from_size);
+    return fr_is_suspended(socket) ? -1 : result;
+}
+
+static int WINAPI fr_wsa_recvfrom(UINT_PTR socket, void *buffers, DWORD count, DWORD *received, DWORD *flags,
+                                 void *from, int *from_size, void *overlapped, void *completion) {
+    /* Serialize asynchronous registration with cancellation. Never replace WSA_IO_PENDING
+       with an immediate failure: its caller must retain buffers until the cancellation completes. */
+    if (overlapped) AcquireSRWLockExclusive(&fr_socket_lock);
+    if (fr_is_suspended(socket)) {
+        if (overlapped) ReleaseSRWLockExclusive(&fr_socket_lock);
+        return -1;
+    }
+    int result = fr_real_wsa_recvfrom(socket, buffers, count, received, flags, from, from_size, overlapped, completion);
+    if (overlapped) {
+        ReleaseSRWLockExclusive(&fr_socket_lock);
+        return result;
+    }
+    return fr_is_suspended(socket) ? -1 : result;
+}
+
+static int WINAPI fr_send(UINT_PTR socket, const char *data, int size, int flags) {
+    return fr_is_suspended(socket) ? -1 : fr_real_send(socket, data, size, flags);
+}
+
+static int WINAPI fr_wsa_send(UINT_PTR socket, void *buffers, DWORD count, DWORD *sent, DWORD flags,
+                             void *overlapped, void *completion) {
+    return fr_is_suspended(socket) ? -1 : fr_real_wsa_send(socket, buffers, count, sent, flags, overlapped, completion);
+}
+
+static int WINAPI fr_recv(UINT_PTR socket, char *data, int size, int flags) {
+    if (fr_is_suspended(socket)) return -1;
+    int result = fr_real_recv(socket, data, size, flags);
+    return fr_is_suspended(socket) ? -1 : result;
+}
+
+static int WINAPI fr_wsa_recv(UINT_PTR socket, void *buffers, DWORD count, DWORD *received, DWORD *flags,
+                             void *overlapped, void *completion) {
+    if (overlapped) AcquireSRWLockExclusive(&fr_socket_lock);
+    if (fr_is_suspended(socket)) {
+        if (overlapped) ReleaseSRWLockExclusive(&fr_socket_lock);
+        return -1;
+    }
+    int result = fr_real_wsa_recv(socket, buffers, count, received, flags, overlapped, completion);
+    if (overlapped) {
+        ReleaseSRWLockExclusive(&fr_socket_lock);
+        return result;
+    }
+    return fr_is_suspended(socket) ? -1 : result;
+}
+
+/* Shutdown retains game ownership of its handle (no descriptor reuse/double close). Existing
+   receives are released by Winsock; all subsequent sends/receives and binds fail closed. */
+void azimuth_freeroam_suspend(void) {
+    AcquireSRWLockExclusive(&fr_socket_lock);
+    if (fr_real_shutdown) {
+        for (unsigned i = 0; i < FR_SOCKET_LIMIT; ++i) {
+            if (fr_bound_sockets[i]) {
+                fr_cancel_io((HANDLE)fr_bound_sockets[i], NULL);
+                fr_real_shutdown(fr_bound_sockets[i], 2 /* SD_BOTH */);
+            }
+        }
+    }
+    ReleaseSRWLockExclusive(&fr_socket_lock);
 }
 
 /* Cuts this game off the world it is in (see fr_cut). */
@@ -387,6 +533,20 @@ static int fr_install_sockets(void) {
                 real = (void *)(uintptr_t)fr_sendto;
             } else if (real == (void *)(uintptr_t)fr_real_wsa_sendto) {
                 real = (void *)(uintptr_t)fr_wsa_sendto;
+            } else if (real == (void *)(uintptr_t)fr_real_recvfrom) {
+                real = (void *)(uintptr_t)fr_recvfrom;
+            } else if (real == (void *)(uintptr_t)fr_real_wsa_recvfrom) {
+                real = (void *)(uintptr_t)fr_wsa_recvfrom;
+            } else if (real == (void *)(uintptr_t)fr_real_send) {
+                real = (void *)(uintptr_t)fr_send;
+            } else if (real == (void *)(uintptr_t)fr_real_wsa_send) {
+                real = (void *)(uintptr_t)fr_wsa_send;
+            } else if (real == (void *)(uintptr_t)fr_real_recv) {
+                real = (void *)(uintptr_t)fr_recv;
+            } else if (real == (void *)(uintptr_t)fr_real_wsa_recv) {
+                real = (void *)(uintptr_t)fr_wsa_recv;
+            } else if (real == (void *)(uintptr_t)fr_real_close) {
+                real = (void *)(uintptr_t)fr_close;
             }
             if (table[k] == real) {
                 continue;
@@ -852,6 +1012,10 @@ static void *const fr_assoc_vtable[16] = {
 static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote, int behavior, void **out) {
     (void)self;
     (void)behavior;
+    if (!fi_launch_network_allowed()) {
+        if (out) *out = 0;
+        return E_ACCESSDENIED;
+    }
     wchar_t base64[128];
     base64[0] = 0;
     if (remote) {
@@ -871,6 +1035,11 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
     association->lpVtbl = fr_assoc_vtable;
     association->references = 1;
     association->remote = fr_world_address(base64);
+    if (!fi_launch_network_allowed()) {
+        fr_assoc_release(association);
+        if (out) *out = 0;
+        return E_ACCESSDENIED;
+    }
     azimuth_proxy_start(&association->remote, &association->remote);
     azimuth_livery_world_entered(&association->remote); /* OD-66: world mates' paints (launcher sessions) */
     if (fi_launch_protocol()) {
