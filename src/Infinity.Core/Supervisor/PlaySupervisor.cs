@@ -543,16 +543,18 @@ public sealed class PlaySupervisor
                             heartbeat = Task.Delay(TimeSpan.FromMilliseconds(Math.Max(beat.Ticket.HeartbeatEveryMs, 5000)), _clock, stop.Token);
                         }
                     }
-                    catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded or ErrorCodes.AccountsFrozen
+                    catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded or ErrorCodes.AccountsFrozen or ErrorCodes.GameUpdateRequired
                         or ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged)
                     {
                         tokensOpen = false;
                         _config.OnlineAccessLost?.Invoke();
-                        if (e.Code.StartsWith("CONTENT.", StringComparison.Ordinal)) _emit(new SupervisorEvent.Error(e.Code));
+                        if (e.Code.StartsWith("CONTENT.", StringComparison.Ordinal) || e.Code == ErrorCodes.GameUpdateRequired) _emit(new SupervisorEvent.Error(e.Code));
                         endpoint.Revoke("the server ended the online session");
                         await Notice(pipe, endpoint, overlay, 2, e.Code == ErrorCodes.AccountsFrozen
                             ? _config.Text?["crash.frozen"] ?? "Online access is temporarily frozen for security review. Sign-in and support remain available."
-                            : SessionEndedText(), stop.Token).ConfigureAwait(false);
+                            : e.Code == ErrorCodes.GameUpdateRequired
+                                ? _config.Text?["updater.session_required"] ?? "Update Infinity Launcher after this game session to return online. Your progress keeps saving."
+                                : SessionEndedText(), stop.Token).ConfigureAwait(false);
                     }
                     catch (Exception e) when (e is ApiException or HttpRequestException or TimeoutException or IOException)
                     {

@@ -16,7 +16,7 @@ cd InfinityHorizon
 pwsh -File build.ps1 -Zig C:\tools\zig\zig.exe
 ```
 
-The output is `artifacts/win-x64/`: `infinity.exe` (self-contained .NET),
+The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
 `hook/infinity.dll`, `overlay/infinity-overlay.dll`, their development signatures,
 English/pt-BR catalogs and license notices. No private repository or game installation is needed
 to compile. Build just the managed projects with `dotnet build Infinity.sln -c Release`.
@@ -34,7 +34,7 @@ Development signature trust is accepted only with development origins.
 The local signing seed stays in the user's LocalAppData, outside this checkout; the build stores
 only its public verification key in the output. Starting the launcher does not start a game.
 
-`build.ps1 -Zig <path> -Production` compiles without development trust and leaves all three binaries
+`build.ps1 -Zig <path> -Version <semver> -Production` compiles without development trust and leaves all four binaries
 unsigned. It never uses an official private key. Maintainers sign official distribution artifacts
 separately; a production deployment must supply its launch-ticket and relay public trust keys.
 Binary builds belong in versioned releases, rather than in the source tree.
@@ -46,6 +46,17 @@ or development-signed files show a caution with a link to
 a play restriction; the existing hook/overlay signature checks still apply. The caution is
 expected when building from source. A binary's signature proves its signed bytes, not that a
 running client is unmodified.
+
+At startup, the launcher checks the latest stable release and backend version policy. Online
+play requires a successful check and a compatible version. A required update has its own screen;
+account and support actions remain accessible. Compatible newer builds from source are not
+downgraded. Version compatibility is separate from the build-origin advisory above.
+
+Official updates authenticate a signed descriptor and every runtime file before a separate
+helper replaces the launcher after it exits. The helper verifies the package again, keeps a
+rollback journal and waits for the replacement to initialize before committing. Updates wait
+until the game and save cleanup have finished. Keep the launcher in its own directory, outside
+the Azimuth game directory, so runtime updates can be applied there.
 
 ## License
 

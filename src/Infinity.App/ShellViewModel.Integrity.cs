@@ -103,6 +103,7 @@ public sealed partial class ShellViewModel
 
     private async Task<WorldAccessDecision> CheckWorldAccessAsync(OnlineContentSession? integrity, CancellationToken cancellation)
     {
+        if (!LauncherUpdateAllowsPlay) return new(false, "updater.session_required");
         if (integrity is null || !ReferenceEquals(_integrity, integrity))
             return new(false, "worlds.integrity_inconclusive");
         var allowed = await integrity.OnlineAllowedAsync(cancellation).ConfigureAwait(false);

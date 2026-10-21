@@ -81,7 +81,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready && IntegrityCanStart;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready && IntegrityCanStart && LauncherUpdateAllowsPlay;
 
     public string? PlayStatus => _playStatus;
 
@@ -89,6 +89,7 @@ public sealed partial class ShellViewModel
 
     public async Task PlayAsync()
     {
+        if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         RefreshHook(); // the hook as it is now, not as it was when the screen last looked
         if (CanPlay && _hook is not null && HookInstaller.ShouldInstall(_hook, _hookPackage) && _hookPackage is { } update &&
             HookInstaller.Build(update.Version) > HookInstaller.Build(_hook.Version))
@@ -104,9 +105,14 @@ public sealed partial class ShellViewModel
             return;
         }
         var startingSession = _session;
+        var startingInstall = _install;
+        var startingGame = _gate.Game;
+        if (!await RefreshLauncherPolicyAsync()) return;
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var futureSessionId = Guid.CreateVersion7().ToString();
         await CheckIntegrityAsync(futureSessionId);
-        if (!ReferenceEquals(_session, startingSession) || !IntegrityReady || _integrity is null)
+        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
+            || !CanPlay || !IntegrityReady || _integrity is null)
         { Message = IntegrityStatus; return; }
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
         if (profile is null)
@@ -353,6 +359,10 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Error { Message: Infinity.Core.Api.ErrorCodes.AccountsFrozen }:
                 SetStatus(S["crash.frozen"]);
+                break;
+            case SupervisorEvent.Error { Message: ErrorCodes.GameUpdateRequired }:
+                RequireLauncherUpdate();
+                SetStatus(S["updater.session_required"]);
                 break;
             case SupervisorEvent.Error content when content.Message is ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged or ErrorCodes.ContentPolicyUnavailable:
                 _integrity?.Revoke();

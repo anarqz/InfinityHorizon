@@ -12,6 +12,7 @@
   </Window.Resources>
   <Grid>
     <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
@@ -23,7 +24,7 @@
 
     <!-- Sidebar: the wordmark, HOME, AZIMUTH, MODS, NEWS, HELP ... ACCOUNT, DONATE, server, version.
          Worlds live only in the in-game overlay (OD-54): the launcher has no Servers page. -->
-    <Grid Grid.Column="0" Background="{StaticResource InfinitySidebar}" IsEnabled="{Binding Idle}"
+    <Grid Grid.Row="1" Grid.Column="0" Background="{StaticResource InfinitySidebar}" IsEnabled="{Binding Idle}"
           Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
       <Image Source="{StaticResource BrandLines}" Stretch="UniformToFill" VerticalAlignment="Bottom" Height="150"
              Opacity="0.18" IsHitTestVisible="False" />
@@ -67,7 +68,7 @@
     </Grid>
 
     <!-- The page area: Home's art behind everything, then the top bar, the page and the status line. -->
-    <Grid Grid.Column="1" ClipToBounds="True">
+    <Grid Grid.Row="1" Grid.Column="1" ClipToBounds="True">
       <Grid IsHitTestVisible="False" Visibility="{Binding ShowHero, Converter={StaticResource Visible}}">
         <Image Source="{StaticResource BrandHero}" Stretch="UniformToFill" HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.9" />
         <Rectangle>
@@ -650,7 +651,35 @@
         </Grid>
       </DockPanel>
     </Grid>
-    <Border Grid.Row="1" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}"
+    <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}" Padding="22,10"
+            Visibility="{Binding ShowLauncherUpdateBanner, Converter={StaticResource Visible}}">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="{Binding S[updater.open]}" Click="OnOpenLauncherUpdate" Margin="16,0,0,0" />
+        <TextBlock Text="{Binding LauncherUpdateStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
+      </DockPanel>
+    </Border>
+    <Border Grid.Row="1" Grid.ColumnSpan="2" Panel.ZIndex="20" Background="{StaticResource InfinityBackground}"
+            Visibility="{Binding ShowLauncherUpdate, Converter={StaticResource Visible}}">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="680" Margin="40,36" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <Image Source="{StaticResource BrandLogo}" Width="240" HorizontalAlignment="Left" Margin="0,0,0,30" />
+          <TextBlock Text="{Binding S[updater.title]}" FontSize="30" FontWeight="Bold" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding LauncherUpdateStatus}" Margin="0,16,0,12" FontSize="17" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{Binding LauncherUpdateVersion}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding LauncherUpdateProgress}" Foreground="{StaticResource InfinityMuted}" Margin="0,10,0,0" />
+          <ProgressBar IsIndeterminate="True" Height="4" Margin="0,18,0,14" Visibility="{Binding LauncherUpdateBusy, Converter={StaticResource Visible}}" />
+          <WrapPanel Margin="0,20,0,12">
+            <Button Content="{Binding S[updater.apply]}" Click="OnApplyLauncherUpdate" IsEnabled="{Binding CanApplyLauncherUpdate}" Margin="0,0,10,10" />
+            <Button Content="{Binding S[updater.cancel]}" Click="OnCancelLauncherUpdate" Visibility="{Binding CanCancelLauncherUpdate, Converter={StaticResource Visible}}" Margin="0,0,10,10" />
+            <Button Content="{Binding S[updater.retry]}" Click="OnCheckLauncherUpdates" IsEnabled="{Binding CanRetryLauncherUpdate}" Margin="0,0,10,10" />
+            <Button Content="{Binding S[updater.support]}" Click="OnUpdateSupport" IsEnabled="{Binding CanRetryLauncherUpdate}" Margin="0,0,10,10" />
+            <Button Content="{Binding S[updater.exit]}" Click="OnExitLauncherUpdate" Margin="0,0,10,10" />
+          </WrapPanel>
+          <TextBlock Text="{Binding S[updater.help]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}"
             BorderBrush="{StaticResource InfinityGold}" BorderThickness="0,1,0,0" Padding="20,10"
             Visibility="{Binding ShowBuildOriginWarning, Converter={StaticResource Visible}}">
       <DockPanel>
@@ -662,7 +691,7 @@
         </StackPanel>
       </DockPanel>
     </Border>
-    <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}"
+    <Border Grid.Row="3" Grid.ColumnSpan="2" Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}"
             BorderThickness="0,1,0,0" Padding="24,12">
       <DockPanel>
         <Button DockPanel.Dock="Right" Content="{Binding S[legal.about]}" Click="OnAbout" Margin="16,0,0,0" Padding="10,4" />
