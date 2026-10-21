@@ -59,6 +59,8 @@
   "worlds.list_failed": "Não foi possível carregar os lobbies. Tente de novo em instantes.",
   "worlds.friends_supporters": "Lobbies de amigos vêm com o Infinity Supporter.",
   "worlds.reserved": "Vá em Free Roam Online para entrar no lobby",
+  "worlds.close_before_join": "Feche seu lobby atual antes de entrar em outro.",
+  "worlds.already_in_lobby": "Você já tem um lobby ativo. Volte a ele ou saia antes de tentar entrar novamente.",
   "worlds.full": "Esse lobby está cheio. Tente outro.",
   "worlds.closed": "Esse lobby fechou.",
   "worlds.code_needed": "Esse lobby precisa do código.",

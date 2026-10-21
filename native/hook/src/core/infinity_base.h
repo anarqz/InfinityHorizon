@@ -15,7 +15,7 @@
    MAJOR.MINOR.PATCH+fh2online.N shape: the self-update of older hooks and the launcher read
    the first "+fh2online.<digits>" of this file and compare only N. */
 #define MOD_NAME "ForzaInfinity"
-#define MOD_VERSION "0.3.0+fh2online.78"
+#define MOD_VERSION "0.3.0+fh2online.79"
 #define MOD_WIDE_TEXT(text) L##text
 #define MOD_WIDE(text) MOD_WIDE_TEXT(text)
 #define MOD_VERSION_WIDE MOD_WIDE(MOD_VERSION)

@@ -16,6 +16,8 @@ public sealed partial class WorldsBridge
     private bool NeedsProof=>BuildProfile.ProductionOnly || SocketProofRequired;
     private readonly SemaphoreSlim _proofWrites=new(1,1);
     private byte[]? _proofPayload;
+    // Seat-view refreshes are not credential changes. Guard network replies with this generation.
+    private long _proofGeneration;
     private bool ClaimSeatProof(SeatAnswer answer,ref long epoch,string? expectedGrant=null)
     {
         if(!NeedsProof)return true;
@@ -66,7 +68,9 @@ public sealed partial class WorldsBridge
             {
                 await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);return false;
             }
-            if(_proofPayload is null || !_proofPayload.AsSpan(1,48).SequenceEqual(frame.Payload.AsSpan(1,48)))_networkRevision=0;
+            if(_proofPayload is null || !_proofPayload.AsSpan(1,48).SequenceEqual(frame.Payload.AsSpan(1,48))
+                || !CryptographicOperations.FixedTimeEquals(_proofPayload.AsSpan(57,32),frame.Payload.AsSpan(57,32)))
+            { _networkRevision=0;_proofGeneration++; }
             if(_proofPayload is not null)CryptographicOperations.ZeroMemory(_proofPayload);
             _proofPayload=frame.Payload.ToArray();return true;
         }
@@ -89,7 +93,7 @@ public sealed partial class WorldsBridge
         try
         {
             if(epoch!=Volatile.Read(ref _mineEpoch))return;
-            if(_proofPayload is not null) {CryptographicOperations.ZeroMemory(_proofPayload);_proofPayload=null;}
+            if(_proofPayload is not null) {CryptographicOperations.ZeroMemory(_proofPayload);_proofPayload=null;_proofGeneration++;}
             _networkRevision=0;
             if(SendRelayContext is not null)await SendRelayContext(new([0]),bound.Token).ConfigureAwait(false);
         }

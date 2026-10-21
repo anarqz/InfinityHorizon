@@ -35,6 +35,12 @@ public abstract record Frame
     }
 
     public abstract byte Type { get; }
+    public sealed record UdpDiagnostic(byte[] Payload):Frame
+    {
+        public override byte Type=>0x1a;
+        public override string ToString()=>"UdpDiagnostic { bounded }";
+        public static bool Valid(ReadOnlySpan<byte> p)=>p.Length==32 && p[0]==1 && p[1] is >=1 and <=28 && p[2]<=2 && p[3]<=4;
+    }
     public sealed record RelayClock(ulong UnixSeconds):Frame
     {
         public override byte Type=>0x19;
@@ -170,6 +176,9 @@ public abstract record Frame
         var w = new WireWriter(Type);
         switch (this)
         {
+            case UdpDiagnostic diagnostic:
+                if(!UdpDiagnostic.Valid(diagnostic.Payload))throw new ProtocolException("Invalid UDP diagnostic");
+                w.Fixed(diagnostic.Payload,32,"UDP diagnostic");break;
             case RelayClock clock:
                 if(clock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
                 var timestamp=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(timestamp,clock.UnixSeconds);w.Fixed(timestamp,8,"relay clock");break;
@@ -268,6 +277,7 @@ public abstract record Frame
             0x17 => new RelayNetworkHint(r.Take(length.Value-1).ToArray()),
             0x18 => new RelayCandidates(r.Take(length.Value-1).ToArray()),
             0x19 => new RelayClock(BinaryPrimitives.ReadUInt64BigEndian(r.Take(8))),
+            0x1a => new UdpDiagnostic(r.Take(length.Value-1).ToArray()),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();

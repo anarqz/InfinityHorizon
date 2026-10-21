@@ -924,6 +924,10 @@ static FrSockaddrIn6 fr_world_address(const wchar_t *base64) {
         source = "unreadable host; default";
     }
     address.port = (unsigned short)(((port & 0xff) << 8) | (port >> 8));
+    if(fi_launch_protocol()) {
+        log_append("FREEROAM: session destination resolved (address omitted).\r\n");
+        return address;
+    }
     FR_LINE(line);
     fr_text(&line, "FREEROAM: world [");
     fr_wide(&line, host[0] ? host : L"::1", host[0] ? fr_wide_length(host) : 3);

@@ -97,6 +97,9 @@ static PxAddr px_stun[PX_STUN_SERVERS];
 static unsigned px_stun_count;
 static PxAddr px_mapped[PX_STUN_SERVERS];
 static unsigned char px_mapped_seen[PX_STUN_SERVERS];
+static unsigned char px_stun_provider[PX_STUN_SERVERS],px_stun_attempts[PX_STUN_SERVERS];
+static unsigned char px_stun_accepted[PX_STUN_SERVERS];
+static unsigned long long px_mapped_at[PX_STUN_SERVERS],px_stun_round,px_stun_retry[PX_STUN_SERVERS];
 static unsigned char px_txid[PX_STUN_SERVERS + 1][12]; /* the servers', then the probes' */
 static unsigned short px_local_port;
 typedef struct { unsigned char hello[104], response[147]; unsigned phase;
@@ -106,6 +109,31 @@ static volatile LONG px_game_proved,px_hook_proved;
 static unsigned long px_proof_serial;
 static unsigned long long px_game_at,px_hook_at;
 static int px_proof_required(void) { return fi_launch_protocol(); }
+/* Actor-owned, fixed-enum diagnostics. Never queue packet text or credential-derived ids. */
+static unsigned char px_diag_attempt[16],px_diag_queue[64][3];
+static unsigned px_diag_head,px_diag_size,px_diag_dropped;
+static unsigned long px_diag_seen[3],px_diag_tx,px_diag_rx;
+static unsigned long long px_diag_started,px_diag_last;
+static int px_diag_enabled,px_diag_final;
+static void px_diag(unsigned phase,unsigned kind,unsigned candidate) {
+    if(!px_diag_enabled || phase<1 || phase>28 || kind>2 || candidate>4 || (px_diag_seen[kind]&(1UL<<phase)))return;
+    px_diag_seen[kind]|=1UL<<phase;
+    if(px_diag_size==64) {if(px_diag_dropped!=0xffffffffu)px_diag_dropped++;return;}
+    unsigned at=(px_diag_head+px_diag_size++)%64;
+    px_diag_queue[at][0]=(unsigned char)phase;px_diag_queue[at][1]=(unsigned char)kind;px_diag_queue[at][2]=(unsigned char)candidate;
+}
+static void px_diag_tick(int final) {
+    unsigned long long now=GetTickCount64();
+    if(!px_diag_enabled || (final ? px_diag_final : !px_diag_size || (px_diag_last && now-px_diag_last<1000)))return;
+    unsigned char p[32]={1,23,2,0};memory_copy(p+4,px_diag_attempt,16);
+    if(final)px_diag_final=1;
+    else {memory_copy(p+1,px_diag_queue[px_diag_head],3);px_diag_head=(px_diag_head+1)%64;px_diag_size--;}
+    unsigned long long elapsed=now-px_diag_started;
+    unsigned long values[3]={elapsed>0xffffffffULL?0xffffffffUL:(unsigned long)elapsed,px_diag_tx,px_diag_rx};
+    for(unsigned k=0;k<3;++k)for(unsigned b=0;b<4;++b)p[20+k*4+b]=(unsigned char)(values[k]>>(24-b*8));
+    if(!fi_launch_udp_diagnostic(p,sizeof(p)) && px_diag_dropped!=0xffffffffu)px_diag_dropped++;
+    px_diag_last=now;
+}
 static SRWLOCK px_hint_lock=SRWLOCK_INIT;
 static unsigned char px_hint_payload[122],px_hint_grant[16];
 static unsigned long px_hint_revision,px_hint_applied;
@@ -487,6 +515,29 @@ static void px_proof_reset(void) {
     fi_udp_zero(px_proofs,sizeof(px_proofs));
     InterlockedExchange(&px_game_proved,0);InterlockedExchange(&px_hook_proved,0);px_game_at=px_hook_at=0;
 }
+/* IPv4 hints must agree across independent providers, never IPv4 versus IPv6. */
+static unsigned short px_external_port(unsigned long long now) {
+    for(unsigned i=0;i<px_stun_count;++i) {
+        const unsigned char *a=px_mapped[i].address;
+        if(!px_mapped_seen[i] || now-px_mapped_at[i]>=30000 || a[10]!=255 || a[11]!=255)continue;
+        int v4=1;for(unsigned b=0;b<10;++b)v4&=a[b]==0;if(!v4)continue;
+        for(unsigned j=i+1;j<px_stun_count;++j)
+            if(px_stun_provider[i]!=px_stun_provider[j] && px_mapped_seen[j] && now-px_mapped_at[j]<30000
+                && px_same(&px_mapped[i],&px_mapped[j]))
+                return (unsigned short)((px_mapped[i].port>>8)|((px_mapped[i].port&255)<<8));
+    }return 0;
+}
+/* At most two sends/server/15s round. Reuse the transaction on retry; reject old-round replies. */
+static void px_stun_tick(unsigned long long now) {
+    if(!px_stun_round || now-px_stun_round>=15000) {
+        px_stun_round=now;
+        for(unsigned i=0;i<px_stun_count;++i) {px_new_txid(px_txid[i]);px_stun_attempts[i]=0;px_stun_accepted[i]=0;px_stun_retry[i]=now;}
+    }
+    for(unsigned i=0;i<px_stun_count;++i)if(px_stun_attempts[i]<2 && now>=px_stun_retry[i]) {
+        px_binding_request(px_txid[i],&px_stun[i]);px_stun_attempts[i]++;px_stun_retry[i]=now+750;
+        if(px_diag_tx!=0xffffffffUL)px_diag_tx++;px_diag(7,2,0);
+    }
+}
 static int px_proof_context(unsigned char *context) {
     unsigned long serial=0;if(!fi_udp_context_get(context,&serial))return 0;
     if(serial!=px_proof_serial) {
@@ -521,19 +572,21 @@ static void px_network_tick(const unsigned char *context,int publish) {
         unsigned long revision=px_hint_revision+1;
         for(unsigned i=0;i<4;++i)hint[16+i]=(unsigned char)(revision>>(24-8*i));
         hint[20]=(unsigned char)(px_local_port>>8);hint[21]=(unsigned char)px_local_port;hint[22]=hint[23]=hint[24]=0;
-        /* A mapped port is useful only when both STUN observations agree. */
-        if(px_stun_count>=2 && px_mapped_seen[0] && px_mapped_seen[1] && px_same(&px_mapped[0],&px_mapped[1])) {
-            unsigned port=(unsigned)((px_mapped[0].port>>8)|((px_mapped[0].port&255)<<8));
+        unsigned port=px_external_port(now);
+        if(port) {
             hint[22]=1;hint[23]=(unsigned char)(port>>8);hint[24]=(unsigned char)port;
+            px_diag(9,2,1);
         }
         if(fi_launch_relay_network_hint(hint,sizeof(hint))) {
             px_hint_revision=revision;px_hint_sent=now;px_hint_size=0;
-        }
+            px_diag(11,2,0);
+        } else px_diag(12,2,0);
     }
     int expired=px_hint_deadline && now>=px_hint_deadline;
     if(expired)px_hint_deadline=0;
     ReleaseSRWLockExclusive(&px_hint_lock);
     if(!size && !expired)return;
+    px_diag(size?13:14,2,0);
     PxAddr old[PX_CANDIDATES];static PxProof proofs[2][PX_CANDIDATES];LONG old_count=px_candidate_count;
     memory_copy(old,px_candidates,sizeof(old));memory_copy(proofs,px_proofs,sizeof(proofs));
     px_candidate_count=0;px_add_candidate(&px_initial);
@@ -567,6 +620,7 @@ static void px_proof_tick(const unsigned char *context) {
             }
             if(now<proof->next_send)continue;
             proof->next_send=now+500;px_send(proof->phase==2 ? proof->response : proof->hello,proof->phase==2 ? 147 : 104,&px_candidates[i]);
+            if(px_diag_tx!=0xffffffffUL)px_diag_tx++;px_diag(proof->phase==2?17:15,kind,i==0?3:0);
         }
     }
 }
@@ -574,21 +628,24 @@ static int px_proof_received(const unsigned char *packet,int n,const PxAddr *fro
     if(n<4 || !memory_equal(packet,"FIUP",4))return 0;
     if(n!=147 || (packet[5]!=2 && packet[5]!=4) || !fi_udp_verify(packet,(size_t)n,context+57)
         || !memory_equal(packet+8,context+1,48) || fi_udp_u64(packet+107)>fi_udp_u64(context+49)
-        || fi_udp_u64(packet+107)<=fi_launch_server_unix())return 1;
+        || fi_udp_u64(packet+107)<=fi_launch_server_unix()) {px_diag(19,2,0);return 1;}
     LONG candidate=-1;
     for(LONG i=0;i<px_candidate_count && i<PX_CANDIDATES;++i)if(px_same(from,&px_candidates[i])) {candidate=i;break;}
     if(candidate<0 || (px_have_world && !px_same(from,&px_world)))return 1;
     PxProof *proof=&px_proofs[packet[6]][candidate];unsigned long long now=GetTickCount64();
     if((proof->phase!=1 && proof->phase!=2) || now-proof->started>=5000 || !memory_equal(packet+56,proof->hello+56,16))return 1;
     if(packet[5]==2) {
+        px_diag(16,packet[6],candidate==0?3:0);
         if(proof->phase==2 && !memory_equal(packet+6,proof->response+6,109))return 1;
         memory_copy(proof->response,packet,147);proof->response[5]=3;fi_udp_sign(proof->response,147,context+57);
-        proof->phase=2;proof->next_send=now+500;px_send(proof->response,147,from);return 1;
+        proof->phase=2;proof->next_send=now+500;px_send(proof->response,147,from);
+        if(px_diag_tx!=0xffffffffUL)px_diag_tx++;px_diag(17,packet[6],candidate==0?3:0);return 1;
     }
     if(proof->phase!=2 || !memory_equal(packet+6,proof->response+6,109))return 1;
     proof->phase=3;proof->proved=now;
+    px_diag(18,packet[6],candidate==0?3:0);
     if(packet[6]==0) {
-        px_game_at=now;InterlockedExchange(&px_game_proved,1);px_pick(from,"authenticated UDP",started);
+        px_game_at=now;InterlockedExchange(&px_game_proved,1);px_pick(from,"authenticated UDP",started);px_diag(21,0,candidate==0?3:0);
         PxProof *hook=&px_proofs[1][candidate];
         if(hook->proved && now-hook->proved<45000) {px_hook_at=hook->proved;InterlockedExchange(&px_hook_proved,1);}
         else {px_hook_at=0;InterlockedExchange(&px_hook_proved,0);}
@@ -606,20 +663,23 @@ static DWORD WINAPI px_thread(void *argument) {
     memory_copy(&game, &px_candidates[0], sizeof(game));
     int have_game = 0, signalled = 0, gave_up = 0;
     DWORD started = (DWORD)GetTickCount64(), last_probe = 0, last_keepalive = (DWORD)GetTickCount64();
-    for (unsigned i = 0; i < px_stun_count; ++i) {
-        px_new_txid(px_txid[i]);
-        px_binding_request(px_txid[i], &px_stun[i]);
-    }
+    px_diag_enabled=px_proof_required() && fi_udp_random(px_diag_attempt,16);px_diag_started=GetTickCount64();
+    px_diag_last=0;px_diag_head=px_diag_size=px_diag_dropped=0;px_diag_tx=px_diag_rx=0;px_diag_final=0;
+    for(unsigned i=0;i<3;++i)px_diag_seen[i]=0;
+    px_diag(5,2,0);px_diag(fi_launch_server_unix()?3:4,2,0);
+    px_stun_round=0;
     px_new_txid(px_txid[PX_STUN_SERVERS]);
     while (px_generation == generation && fi_launch_network_allowed()) {
         DWORD now = (DWORD)GetTickCount64();
+        px_diag_tick(0);px_stun_tick(GetTickCount64());
         if(px_proof_required() && !px_have_world && now-started>=30000) {
             log_append("PROXY: direct connection could not be established within 30 seconds.\r\n");
             fi_launch_event(6,"2|connection.direct_failed");break;
         }
         unsigned char proof_context[89];
         if(px_proof_required()) {
-            if(!px_proof_context(proof_context)) {fi_udp_zero(proof_context,89);px_proof_reset();break;}
+            if(!px_proof_context(proof_context)) {px_diag(2,2,0);fi_udp_zero(proof_context,89);px_proof_reset();break;}
+            px_diag(1,2,0);
             px_network_tick(proof_context,signalled);
             px_proof_tick(proof_context);
         }
@@ -628,6 +688,8 @@ static DWORD WINAPI px_thread(void *argument) {
             unsigned answered = 0;
             for (unsigned i = 0; i < px_stun_count; ++i) answered += px_mapped_seen[i];
             if (answered == px_stun_count || now - started >= PX_STUN_WAIT_MS) {
+                if(answered<px_stun_count)px_diag(8,2,0);
+                if(!px_external_port(GetTickCount64()))px_diag(10,2,0);
                 signalled = 1;
                 HANDLE t = px_proof_required() ? 0 : CreateThread(0, 0, px_signal, (void *)(intptr_t)generation, 0, 0);
                 if (t) CloseHandle(t);
@@ -657,6 +719,7 @@ static DWORD WINAPI px_thread(void *argument) {
             continue;
         }
         px_from(from_raw, &from);
+        if(px_diag_rx!=0xffffffffUL)px_diag_rx++;
         if(px_proof_required() && px_proof_received(packet,n,&from,proof_context,started)) {fi_udp_zero(proof_context,89);continue;}
         fi_udp_zero(proof_context,89);
         unsigned kind = 0;
@@ -676,9 +739,10 @@ static DWORD WINAPI px_thread(void *argument) {
                 }
             } else if (kind == 0x0101) {
                 for (unsigned i = 0; i < px_stun_count; ++i) {
-                    if (memory_equal(txid, px_txid[i], 12) && px_same(&from, &px_stun[i]) && has_mapped) {
+                    if (!px_stun_accepted[i] && memory_equal(txid, px_txid[i], 12) && px_same(&from, &px_stun[i]) && has_mapped) {
                         px_mapped[i] = mapped;
                         px_mapped_seen[i] = 1;
+                        px_mapped_at[i]=GetTickCount64();px_stun_attempts[i]=2;px_stun_accepted[i]=1;px_diag(28,2,0);
                     }
                 }
                 if (memory_equal(txid, px_txid[PX_STUN_SERVERS], 12) && px_is_candidate(&from)) {
@@ -716,6 +780,19 @@ static DWORD WINAPI px_thread(void *argument) {
         if (px_have_world && (!px_proof_required() || (px_proof_current() && px_game_proved)) && px_same(&from, &px_world) && have_game) {
             px_send(packet, n, &game);
         }
+    }
+    if(!px_game_proved)px_diag(20,0,0);
+    px_diag_tick(1);px_diag_enabled=0;
+    if(px_proof_required()) {
+        /* Terminal-only file write: preserve all coalesced transitions after network work ends. */
+        PxLine summary;summary.size=0;summary.text[0]=0;
+        px_text(&summary,"PROXY: UDP final game_ack=");px_number(&summary,(px_diag_seen[0]&(1UL<<18))!=0);
+        px_text(&summary," hook_ack=");px_number(&summary,(px_diag_seen[1]&(1UL<<18))!=0);
+        px_text(&summary," game_phases=");px_number(&summary,px_diag_seen[0]);
+        px_text(&summary," hook_phases=");px_number(&summary,px_diag_seen[1]);
+        px_text(&summary," shared_phases=");px_number(&summary,px_diag_seen[2]);
+        px_text(&summary," tx=");px_number(&summary,px_diag_tx);px_text(&summary," rx=");px_number(&summary,px_diag_rx);
+        px_text(&summary," dropped=");px_number(&summary,px_diag_dropped);px_text(&summary,"\r\n");log_append(summary.text);
     }
     px_proof_reset();
     InterlockedCompareExchangePointer((void *volatile *)&px_socket, (void *)PX_INVALID, (void *)own);
@@ -788,6 +865,7 @@ static void px_resolve_stun(void) {
         int have4 = 0, have6 = 0;
         for (PxAddrInfo *i = list; i && px_stun_count < PX_STUN_SERVERS; i = (PxAddrInfo *)i->next) {
             if ((i->family == PX_AF_INET && !have4) || (i->family == PX_AF_INET6 && !have6)) {
+                px_stun_provider[px_stun_count]=(unsigned char)k;
                 px_from((const unsigned char *)i->addr, &px_stun[px_stun_count++]);
                 have4 |= i->family == PX_AF_INET;
                 have6 |= i->family == PX_AF_INET6;

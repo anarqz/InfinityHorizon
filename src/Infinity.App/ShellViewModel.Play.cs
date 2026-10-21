@@ -259,8 +259,7 @@ public sealed partial class ShellViewModel
         if (suppressed) return;
         try
         {
-            Directory.CreateDirectory(_stateDirectory);
-            File.AppendAllText(Path.Combine(_stateDirectory, "launcher.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {line}{Environment.NewLine}");
+            _runLog.Append(line);
         }
         catch (IOException)
         {

@@ -39,6 +39,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 {
     // the world's open and close in the launcher's log (ids only, never addresses)
     private readonly Action<string> _log = log ?? (_ => { });
+    private readonly Diagnostics.UdpDiagnostics _udpDiagnostics=new(log??(_=>{}),clock);
+    public void RecordUdpDiagnostic(Session.Frame.UdpDiagnostic frame)=>_udpDiagnostics.Native(frame);
     // the host's own game is a player of its relay too, but never one of the world's peers (Mac, 2026-10-19)
     private readonly string? _ownXuid = ownXuid;
     private readonly Func<IReadOnlyList<string>> _lan = lanAddresses ?? HostRelay.LanAddresses;
@@ -401,6 +403,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         ArgumentNullException.ThrowIfNull(request);
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
+        if (HostingOrOpening || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting)
+        {
+            _udpDiagnostics.Managed(Diagnostics.UdpDiagnostics.ManagedPhase.JoinHostBlocked);
+            return new(UiJoin.NotAllowed, _text("worlds.close_before_join"));
+        }
         RequestReconcile();
         var joinEpoch=Volatile.Read(ref _mineEpoch);
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
@@ -434,6 +441,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 {
                     if (answer.Value?.Grant is { } stale) await ReleaseGrantAsync(stale.Id, CancellationToken.None).ConfigureAwait(false);
                     return new(UiJoin.NotAllowed, DeniedMessage(after, "join"));
+                }
+                if(HostingOrOpening)
+                {
+                    if(answer.Value?.Grant is {} staleHost)await ReleaseGrantAsync(staleHost.Id,CancellationToken.None).ConfigureAwait(false);
+                    return new(UiJoin.NotAllowed,_text("worlds.close_before_join"));
                 }
                 if (answer.Value is not { } join)
                 {
@@ -478,9 +490,18 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         }
                         return new UiFrame.JoinResult(UiJoin.Reserved, _text("worlds.reserved"));
                     case JoinStatuses.Locked when attempt == 0:
-                        // the seat of another world: leave it, then ask again once
+                        // A used seat in this lobby is also Locked. An invite code does not
+                        // reveal its target here, so never destroy a live seat on that ambiguity.
+                        if (join.Locked is not { } locked || worldId is null || locked.WorldId == worldId)
+                        {
+                            _udpDiagnostics.Managed(Diagnostics.UdpDiagnostics.ManagedPhase.JoinSeatPreserved);
+                            return new(UiJoin.NotAllowed, _text("worlds.already_in_lobby"));
+                        }
+                        if (HostingOrOpening || joinEpoch!=Volatile.Read(ref _mineEpoch))
+                            return new(UiJoin.NotAllowed, _text("worlds.close_before_join"));
                         var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
                         Observe(left);
+                        if (!left.Ok) return new(UiJoin.NotAllowed, _text("worlds.join_failed"));
                         if (!OnlineOpen) return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         _seat.Left();
                         continue;
@@ -578,6 +599,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>The world this launcher hosts, when open.</summary>
     public string? HostedWorldId => Volatile.Read(ref _hostedWorldId);
+    private bool HostingOrOpening {get {lock(_hostState)return _hostedWorldId is not null || _hostStop is not null && !_hostOperation.IsCompleted;}}
 
     /// <summary>Friend requests and reports from the Worlds tab (OD-63); null: refused with <c>worlds.action_failed</c>.</summary>
     public IWorldSocial? Social { get; init; }
@@ -866,7 +888,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var players = (uint)Math.Clamp((int)request.MaxPlayers, 2, 12);
             _relay = _startRelay?.Invoke(players);
             if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(relayUnavailableKey));
-            if (_relay is IntegratedWorldRelay integrated) integrated.CrashContext = CrashContext;
+            if (_relay is IntegratedWorldRelay integrated) {integrated.CrashContext = CrashContext;integrated.DiagnosticLog=_log;}
             var relay = _relay;
             var settings = new WorldSettings
             {
