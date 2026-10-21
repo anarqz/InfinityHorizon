@@ -24,6 +24,7 @@ internal sealed partial class RelayEngine
     private bool _closed;
     private RelayContentPolicy? _contentPolicy;
     internal Func<ulong, IPEndPoint, long, bool>? Authorize { get; set; }
+    internal Func<ulong, IPEndPoint, long, bool>? AuthorizeHook { get; set; }
     internal Action<ulong, string, int?, int?, int?>? ValidationRejected { get; set; }
 
     private void Rejected(RelayPeer peer, string kind, int? message = null, int? router = null, int? value = null)
@@ -81,6 +82,9 @@ internal sealed partial class RelayEngine
     private uint NowWire => unchecked((uint)_now + 1);
     private static bool SharedXuid(ulong xuid) => xuid is 0 or 0x0009000000000000;
     private bool Allowed(ulong xuid, IPEndPoint endpoint) => Authorize?.Invoke(xuid, endpoint, _now) ?? true;
+    private bool AllowedHook(ulong xuid,IPEndPoint endpoint) => (AuthorizeHook ?? Authorize)?.Invoke(xuid,endpoint,_now) ?? true;
+    private bool HookSource(RelayPeer peer,IPEndPoint endpoint) => AuthorizeHook is not null
+        ? AllowedHook(peer.Xuid,endpoint) : MaySpeakFor(peer.Endpoint,endpoint);
     private bool RetiredAttempt(IPEndPoint endpoint, uint attempt)
     {
         while (_retiredOrder.TryPeek(out var item) && _now - item.At >= RetiredAttemptMs)

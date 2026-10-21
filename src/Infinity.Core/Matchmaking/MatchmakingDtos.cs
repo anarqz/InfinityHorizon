@@ -114,6 +114,14 @@ public sealed record AnnouncePort
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? Lan { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AnnounceExternalPort? External { get; init; }
+}
+
+public sealed record AnnounceExternalPort
+{
+    public required ushort Port { get; init; }
+    public required string Source { get; init; }
 }
 
 /// <summary><c>PUT /mm/v1/worlds/{worldId}</c> body (§2.5): open or change the host's world.</summary>
@@ -163,6 +171,22 @@ public sealed record RelayGrant
     public required string Claims { get; init; }
 
     public required string Signature { get; init; }
+    public RelayUdpProof? UdpProof { get; init; }
+    public override string ToString() => "RelayGrant { redacted }";
+}
+
+/// <summary>Grant-scoped TLS-only secret; never include in state, logging or UDP.</summary>
+public sealed record RelayUdpProof
+{
+    public required uint Version { get; init; }
+    public required string Key { get; init; }
+    public override string ToString() => "RelayUdpProof { redacted }";
+    internal byte[]? Decode()
+    {
+        if (Version != 1 || Key is not { Length: 44 }) return null;
+        try { var bytes = Convert.FromBase64String(Key); return bytes.Length == 32 && Convert.ToBase64String(bytes) == Key ? bytes : null; }
+        catch (FormatException) { return null; }
+    }
 }
 
 public sealed record PeerEndpoint
@@ -175,6 +199,7 @@ public sealed record PeerEndpoint
 /// <summary>One grant the host's relay must allow, or drop (<c>kicked</c>).</summary>
 public sealed record Punch
 {
+    public NetworkHints? Candidates { get; init; }
     public required string GrantId { get; init; }
 
     public required string Xuid { get; init; }

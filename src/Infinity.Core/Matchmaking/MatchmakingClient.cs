@@ -27,6 +27,9 @@ public sealed record MmResult<T>(HttpStatusCode Status, T? Value, MmError? Error
 /// <summary>The matchmaking routes the launcher calls, behind an interface so its logic tests with a fake.</summary>
 public interface IMatchmakingApi
 {
+    Task<MmResult<SeatNetworkAnswer>> SeatNetworkAsync(SeatNetworkRequest request,CancellationToken cancellation=default) =>
+        Task.FromResult(new MmResult<SeatNetworkAnswer>(HttpStatusCode.NotFound,null,
+            new MmError(HttpStatusCode.NotFound,"MM.WORLD_NOT_FOUND","unavailable",MmErrorKind.WorldNotFound,null,null),null));
     /// <summary>Retain only a short-lived credential for authenticated own-seat/host cleanup after suspension.</summary>
     void BeginCleanup() { }
     void EndCleanup() { }
@@ -89,6 +92,8 @@ public interface IMatchmakingApi
 /// </summary>
 public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string clientHeader, Func<string> ticket, TimeProvider? clock = null) : IMatchmakingApi
 {
+    public Task<MmResult<SeatNetworkAnswer>> SeatNetworkAsync(SeatNetworkRequest request,CancellationToken cancellation=default) =>
+        SendAsync<SeatNetworkAnswer>(HttpMethod.Post,"/mm/v1/seat/network",request,cancellation);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly object _cleanupGate = new();
     private string _lastTicket = string.Empty, _cleanupTicket = string.Empty;

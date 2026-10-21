@@ -75,8 +75,8 @@ public sealed partial class ShellViewModel
         {
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(Http, mm, ClientHeader, ticket);
             return new Infinity.Core.Matchmaking.WorldsBridge(
-                matchmaking, key => S[key], null, mode,
-                players => StartRelay(players, xuid, relayKeys, devLan), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
+                matchmaking, key => S[key], _config.Production?session.Api.TrustedTimeProvider():null, mode,
+                players => StartRelay(players, xuid, relayKeys, devLan, _config.Production?session.Api.TrustedTimeProvider():null), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
                 updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
                     ? integrated.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
                 refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
@@ -85,6 +85,8 @@ public sealed partial class ShellViewModel
                 onlineActivity: onlineActivity, idleWhenNoWorld: session.Me?.Access.Tier != "vip")
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
+                SocketProofRequired=_config.Production,SocketProofKeys=relayKeys,
+                TrustedServerNow=session.Api.TrustedServerNow,
             };
         };
     }
@@ -116,12 +118,12 @@ public sealed partial class ShellViewModel
     private bool DevLanAdmission(Uri matchmaking) => DevServer && Infinity.Core.DevNet.PlainHttpUrl(matchmaking.OriginalString);
 
     /// <summary>The world's relay, inside the launcher (the Rust infinity-relay.exe was retired on 2026-10-20).</summary>
-    private Infinity.Core.Matchmaking.IntegratedWorldRelay? StartRelay(uint players, string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys, bool devLan)
+    private Infinity.Core.Matchmaking.IntegratedWorldRelay? StartRelay(uint players, string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys, bool devLan, TimeProvider? clock=null)
     {
         try
         {
             var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys, devLanPeers: devLan,
-                contentPolicy: Infinity.Core.WorldServer.RelayContentPolicy.StockOnly);
+                contentPolicy: Infinity.Core.WorldServer.RelayContentPolicy.StockOnly,requireSocketProof:_config.Production,clock:clock);
             Log($"worlds: relay bound on UDP {relay.Port}; awaiting world admission"
                 + (devLan ? " (development LAN admission: granted peers from private addresses, endpoint not verified)" : ""));
             return relay;

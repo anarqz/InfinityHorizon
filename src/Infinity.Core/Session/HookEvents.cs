@@ -35,6 +35,7 @@ public static class HookEvents
         if (detail is not { Length: > 2 } || detail[1] != '|' || detail[0] is < '0' or > '2') return null;
         var level = (byte)(detail[0] - '0');
         var text = detail[2..].Trim();
+        if(text=="connection.direct_failed")text=strings?[text] ?? "The direct connection could not be established. Try again or check Connection details.";
         if (text.Length == 0) return null;
         return Overlay.OverlayNotices.Create(level, text, strings);
     }

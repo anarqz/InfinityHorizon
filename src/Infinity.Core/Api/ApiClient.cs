@@ -126,6 +126,20 @@ public sealed partial class ApiClient
     /// a dead token.
     /// </summary>
     public TimeSpan ClockOffset { get; private set; }
+    private readonly object _serverTimeLock=new();
+    private DateTimeOffset? _serverTime;
+    private long _serverTimeStamp;
+
+    /// <summary>A Date sample from the configured HTTPS origin, advanced only by monotonic elapsed time.</summary>
+    public DateTimeOffset? TrustedServerNow()
+    {
+        lock(_serverTimeLock)return _serverTime is {} time ? time+TimeProvider.System.GetElapsedTime(_serverTimeStamp) : null;
+    }
+    public TimeProvider TrustedTimeProvider()=>new ServerTime(this);
+    private sealed class ServerTime(ApiClient api):TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow()=>api.TrustedServerNow() ?? throw new InvalidOperationException("Trusted server time unavailable");
+    }
 
     /// <summary>Now on the server's clock (to the second, as <c>Date</c> carries it).</summary>
     public DateTimeOffset ServerNow(TimeProvider clock)
@@ -140,6 +154,15 @@ public sealed partial class ApiClient
         if (serverDate is { } date)
         {
             ClockOffset = date - localNow;
+            if(Core.Scheme==Uri.UriSchemeHttps && Gate.Scheme==Uri.UriSchemeHttps)
+            {
+                lock(_serverTimeLock)
+                {
+                    var now=TimeProvider.System.GetTimestamp();
+                    var previous=_serverTime is {} sampled ? sampled+TimeProvider.System.GetElapsedTime(_serverTimeStamp,now) : date;
+                    _serverTime=date>previous?date:previous;_serverTimeStamp=now;
+                }
+            }
         }
     }
 

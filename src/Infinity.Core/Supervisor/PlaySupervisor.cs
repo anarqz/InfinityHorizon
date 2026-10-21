@@ -26,7 +26,7 @@ public sealed record SupervisorConfig(
 {
     public OnlineActivity? OnlineActivity { get; init; }
     /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
-    public uint MinimumOnlineHookBuild { get; init; } = 76;
+    public uint MinimumOnlineHookBuild { get; init; } = BuildProfile.ProductionOnly ? 78u : 76u;
     /// <summary>One bounded accept (ORCHESTRATOR §1.4: called again for the child's whole life).</summary>
     public TimeSpan AcceptBound { get; init; } = TimeSpan.FromSeconds(10);
 
@@ -447,6 +447,23 @@ public sealed class PlaySupervisor
         var worlds = overlay is null ? null : _config.Worlds?.Invoke(() => _ticket);
         if (worlds is not null)
         {
+            worlds.SendRelayContext=async (context,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                if(context.Payload.Length==89)
+                {
+                    if(worlds.TrustedServerNow?.Invoke() is not {} serverTime)throw new IOException("Trusted server time unavailable");
+                    await pipe.WriteAsync(new Frame.RelayClock((ulong)serverTime.ToUnixTimeSeconds()).Encode(),ct).ConfigureAwait(false);
+                }
+                var bytes=context.Encode();
+                try {await pipe.WriteAsync(bytes,ct).ConfigureAwait(false);}
+                finally {System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);}
+            };
+            worlds.SendRelayCandidates=async (candidates,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                await pipe.WriteAsync(candidates.Encode(),ct).ConfigureAwait(false);
+            };
             worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
@@ -550,6 +567,12 @@ public sealed class PlaySupervisor
                             await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
                         }
                         var frame = received.Frame;
+                        if(frame is Frame.RelayNetworkHint hint)
+                        {
+                            if(endpoint.Greeted && !suspended && tokensOpen && worlds is not null)
+                                _=worlds.NetworkHintAsync(hint,onlineStop.Token);
+                            continue;
+                        }
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
@@ -565,9 +588,9 @@ public sealed class PlaySupervisor
                             await overlay.ToastAsync(noticeToast, stop.Token).ConfigureAwait(false);
                         }
                         // OD-57: the world closes when its host leaves free roam (the hook''s Event 4)
-                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamLeft } && worlds?.HostedWorldId is not null)
+                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamLeft } && worlds is not null)
                         {
-                            _ = worlds.CloseHostAsync(stop.Token);
+                            _ = worlds.HostedWorldId is not null ? worlds.CloseHostAsync(stop.Token) : worlds.LeaveAsync(stop.Token);
                         }
                         if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {

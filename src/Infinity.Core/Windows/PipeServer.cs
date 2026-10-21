@@ -42,6 +42,7 @@ public sealed class PipeServer : IDisposable
     public static readonly TimeSpan WriteBound = TimeSpan.FromSeconds(2);
 
     private readonly NamedPipeServerStream _stream;
+    private readonly SemaphoreSlim _writes = new(1,1);
 
     private PipeServer(string name, NamedPipeServerStream stream)
     {
@@ -171,14 +172,17 @@ public sealed class PipeServer : IDisposable
         ArgumentNullException.ThrowIfNull(frame);
         using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         bound.CancelAfter(WriteBound);
+        var entered=false;
         try
         {
+            await _writes.WaitAsync(bound.Token).ConfigureAwait(false);entered=true;
             await _stream.WriteAsync(frame, bound.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
         {
             throw new TimeoutException("the peer did not read the pipe in time");
         }
+        finally { if(entered)_writes.Release(); }
     }
 
     public void Dispose()
