@@ -54,6 +54,10 @@ public sealed record IniGroup(string Title, string? Warning, IReadOnlyList<IniOp
 /// </summary>
 public sealed partial class ShellViewModel
 {
+    private static readonly HttpClient ModDownloads = new(new HttpClientHandler
+    {
+        AllowAutoRedirect = false, UseCookies = false, Credentials = null,
+    }) { Timeout = Timeout.InfiniteTimeSpan };
     private static readonly JsonSerializerOptions SeenJson = new() { WriteIndented = true };
     private bool _onMods;
     private bool _showModOptions;
@@ -271,23 +275,28 @@ public sealed partial class ShellViewModel
             Message = S["mods.close_game"];
             return;
         }
-        // GitHub's own URL for the asset when the check listed it, else the release's known path;
-        // either way the bytes must have the catalog's SHA-256.
-        var url = _eoUpdate is { } u && u.AssetName == release.AssetName ? u.DownloadUrl : release.DownloadUrl(Eo);
+        // Always start at the catalog's official release URL, then verify the downloaded bytes.
+        var url = release.DownloadUrl(Eo);
         Busy = true;
         Message = S.Format("mods.installing", ("version", release.Version));
         try
         {
             using var bound = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-            var backup = await Mods().InstallAsync(Http, Eo, release, url, bound.Token);
+            var backup = await Mods().InstallAsync(ModDownloads, Eo, release, url, bound.Token);
             Log($"mods: ExtraOptions {release.Version} installed (backup {backup})");
             Message = S.Format("mods.installed", ("version", release.Version));
         }
         catch (Exception e) when (e is ModException or HttpRequestException or TaskCanceledException or IOException
                                     or UnauthorizedAccessException or InvalidDataException)
         {
-            Log("mods: install failed: " + e.Message);
-            Message = S["mods.install_failed"] + " (" + e.Message + ")";
+            Log("mods: install failed: " + e.GetType().Name);
+            Message = S[e switch
+            {
+                HttpRequestException or TaskCanceledException => "mods.download_failed",
+                IOException io when (io.HResult & 0xffff) is 225 or 226 => "mods.antivirus_blocked",
+                UnauthorizedAccessException or IOException => "mods.write_failed",
+                _ => "mods.install_failed",
+            }];
         }
         finally
         {
