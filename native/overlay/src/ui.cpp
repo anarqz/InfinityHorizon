@@ -6,10 +6,9 @@
 //   then slides down. One at a time; the rest wait in order. Generic: connection status, news,
 //   updates, achievements, friends.
 // - Sidebar: the Xbox guide. Slides in from the left over a dimmed game: the profile header
-//   (avatar, gamertag, tier chip, connection), a row of tabs (Home, People, Notifications,
-//   Settings), rounded tiles with the white Xbox focus ring, and the controller hints at the
-//   bottom. Free players get notifications only; the People features show locked with the
-//   Infinity Supporter tag (OD-50, the server refuses them too: OD-51).
+//   (avatar, gamertag, tier chip, connection), tabs Home, Lobbies, Friends and Settings,
+//   rounded tiles with the white focus ring, and controller hints. Friends is coming soon;
+//   Settings opens the connection diagnostic report. Transient toasts remain available.
 //
 // Every text is UTF-8 (built with /utf-8); Portuguese when Windows' UI language is Portuguese.
 #include "overlay.h"
@@ -60,7 +59,9 @@ struct Model {
     Tier tier = Tier::Unknown;
     Link link = Link::Connecting;
     std::string detail;
-    std::deque<Toast> history;   // the last 20 shown
+    std::string connection_details;
+    uint8_t connection_state = 2;
+    ULONGLONG connection_at = 0;
 };
 std::mutex g_lock;
 Model g_model;
@@ -69,10 +70,12 @@ Model g_model;
 ToastSchedule<Toast> g_toasts;
 bool g_open = false;
 float g_open_anim = 0; // 0 closed .. 1 open
-int g_tab = 0; // 0 Home, 1 Worlds, 2 People, 3 Notifications, 4 Settings
-constexpr int kTabs = 5, kTabWorlds = 1, kTabNotifications = 3;
+int g_tab = 0; // 0 Home, 1 Lobbies, 2 Friends, 3 Settings
+constexpr int kTabs = 4, kTabWorlds = 1, kTabFriends = 2;
 int g_focus = 0;
 bool g_confirm_quit = false; // "Quit the game" asks for a second A
+bool g_connection_open = false;
+float g_connection_scroll = 0;
 
 const char *IconOf(ToastKind kind) {
     switch (kind) {
@@ -186,7 +189,6 @@ struct Tile {
 };
 
 std::vector<Tile> TilesFor(int tab, const Model &m) {
-    const bool supporter = m.tier == Tier::Supporter;
     std::vector<Tile> tiles;
     switch (tab) {
     case 0: {
@@ -195,32 +197,13 @@ std::vector<Tile> TilesFor(int tab, const Model &m) {
                             : m.link == Link::Reconnecting ? T("Reconnecting...", "Reconectando...")
                                                            : T("Connecting...", "Conectando...");
         tiles.push_back({kIconGlobe, T("Connection", "Conexão"), m.detail.empty() ? state : std::string(state) + " · " + m.detail, false, 0});
-        tiles.push_back({kIconMessage, T("Notifications", "Notificações"),
-                         std::to_string(m.history.size()) + T(" recent", " recentes"), false, 4});
         tiles.push_back({kIconGame, T("Back to the game", "Voltar ao jogo"), T("Close the guide", "Fechar o guia"), false, 1});
         tiles.push_back({kIconPower, g_confirm_quit ? T("Press A again to quit", "Aperte A de novo para sair") : T("Quit the game", "Sair do jogo"),
                          g_confirm_quit ? T("Your progress is saved", "Seu progresso fica salvo") : T("Closes Forza Horizon 2", "Fecha o Forza Horizon 2"), false, 5});
         break;
     }
-    case 2:
-        tiles.push_back({kIconAddFriend, T("Add a friend", "Adicionar amigo"), T("Find a player by gamertag", "Encontre um jogador pelo gamertag"), !supporter, supporter ? 2 : 3});
-        tiles.push_back({kIconPeople, T("Friends", "Amigos"), T("Who is online and where", "Quem está online e onde"), !supporter, supporter ? 2 : 3});
-        tiles.push_back({kIconContact, T("Player profiles", "Perfis de jogadores"), T("Cards of the players around you", "Cartões dos jogadores ao seu redor"), !supporter, supporter ? 2 : 3});
-        if (!supporter) {
-            tiles.push_back({kIconStar, T("Infinity Supporter", "Infinity Supporter"), T("Friends, profiles, leaderboards and more", "Amigos, perfis, placares e mais"), false, 3});
-        }
-        break;
-    case 3:
-        if (m.history.empty()) {
-            tiles.push_back({kIconMessage, T("No notifications yet", "Nenhuma notificação ainda"), "", false, 0});
-        }
-        for (auto it = m.history.rbegin(); it != m.history.rend() && tiles.size() < 8; ++it) {
-            tiles.push_back({IconOf(it->kind), it->title, it->body, false, 0});
-        }
-        break;
     default:
-        tiles.push_back({kIconSettings, T("Open the guide", "Abrir o guia"), T("Hold View · Shift+Tab", "Segure View · Shift+Tab"), false, 0});
-        tiles.push_back({kIconInfo, T("Infinity overlay", "Overlay do Infinity"), T("Version 0.1 · notifications and guide", "Versão 0.1 · notificações e guia"), false, 0});
+        tiles.push_back({kIconGlobe, T("CONNECTION DETAILS", "DETALHES DA CONEXÃO"), "", false, 4});
         break;
     }
     return tiles;
@@ -236,7 +219,7 @@ void Activate(const Tile &tile) {
     case 2: PushToast(ToastKind::Info, T("Coming soon", "Em breve"), tile.title); break;
     case 3: PushToast(ToastKind::Achievement, T("Infinity Supporter", "Infinity Supporter"),
                       T("Unlock friends and player profiles in the launcher.", "Libere amigos e perfis de jogadores pelo launcher.")); break;
-    case 4: g_tab = kTabNotifications; g_focus = 0; break;
+    case 4: g_connection_open = true; SendEvent(8, ""); break;
     case 5:
         if (!g_confirm_quit) {
             g_confirm_quit = true;
@@ -341,8 +324,8 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     y += av + 34 * s;
 
     // tabs
-    const char *icons[] = {kIconHome, kIconWorld, kIconPeople, kIconMessage, kIconSettings};
-    const char *names[] = {T("Home", "Início"), T("Worlds", "Mundos"), T("People", "Pessoas"), T("Notifications", "Notificações"), T("Settings", "Ajustes")};
+    const char *icons[] = {kIconHome, kIconWorld, kIconPeople, kIconSettings};
+    const char *names[] = {T("Home", "Início"), T("Lobbies", "Lobbies"), T("Friends", "Amigos"), T("Settings", "Ajustes")};
     const float tw = (pw - 2 * pad) / kTabs;
     for (int i = 0; i < kTabs; ++i) {
         const float tx = x0 + pad + i * tw;
@@ -363,6 +346,16 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
 
     if (g_tab == kTabWorlds) {
         DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, height - 80 * s, supporter, dt);
+    } else if (g_tab == kTabFriends) {
+        g_pending.action = -1;
+        const float center_x = x0 + pw / 2;
+        const float center_y = (y + height - 80 * s) / 2;
+        const float icon_size = 84 * s;
+        const ImVec2 icon = f.icon_big->CalcTextSizeA(icon_size, FLT_MAX, 0, kIconContact);
+        dl->AddText(f.icon_big, icon_size, ImVec2(center_x - icon.x / 2, center_y - 66 * s), Rgba(255, 255, 255, 0.22f), kIconContact);
+        const char *soon = T("Coming soon", "Em breve");
+        const ImVec2 text = Measure(f.title, soon);
+        TextAt(dl, f.title, ImVec2(center_x - text.x / 2, center_y + 34 * s), kTextDim, soon);
     } else {
         DrawTiles(dl, x0, y, pw, pad, m);
     }
@@ -399,16 +392,20 @@ void SetLink(Link link, const std::string &detail) {
     std::lock_guard<std::mutex> lock(g_lock);
     g_model.link = link;
     g_model.detail = detail;
+    if (link != Link::Online) { g_model.connection_details.clear(); g_model.connection_state = 2; }
+}
+
+void SetConnectionDetails(uint8_t state, const std::string &text) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_model.connection_state = state;
+    g_model.connection_details = text;
+    g_model.connection_at = GetTickCount64();
 }
 
 void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl) {
     std::lock_guard<std::mutex> lock(g_lock);
     const float hold = ttl ? std::clamp(ttl / 10.0f, 1.0f, 30.0f) : 4.6f;
     g_toasts.Push({kind, title, body, 0, hold});
-    g_model.history.push_back({kind, title, body, 0, hold});
-    if (g_model.history.size() > 20) {
-        g_model.history.pop_front();
-    }
 }
 
 bool SidebarOpen() { return g_open; }
@@ -420,17 +417,25 @@ void ToggleSidebar() {
         WorldsReset();
     }
     g_confirm_quit = false;
+    g_connection_open = false;
     SendPanel(g_open);
 }
 void CloseSidebar() {
     if (g_open) {
         g_open = false;
         g_confirm_quit = false;
+        g_connection_open = false;
         SendPanel(false);
     }
 }
 
 void Navigate(Nav nav) {
+    if (g_connection_open) {
+        if (nav == Nav::Back || nav == Nav::Accept) g_connection_open = false;
+        if (nav == Nav::Up) g_connection_scroll -= 80 * s;
+        if (nav == Nav::Down) g_connection_scroll += 80 * s;
+        return;
+    }
     if (CodeEntryOpen()) {
         CodeEntryNavigate(nav);
         return;
@@ -511,19 +516,19 @@ void DrawUi(float width, float height, float dt) {
     const int request = g_dev_request.exchange(0);
     if (request == 1 || request == 2) {
         KeyboardRequest r;
-        r.title = request == 1 ? T("World password", "Senha do mundo") : T("World name", "Nome do mundo");
+        r.title = request == 1 ? T("Lobby password", "Senha do lobby") : T("Lobby name", "Nome do lobby");
         r.hint = request == 1 ? T("The password the host gave you", "A senha que o anfitrião passou") : T("Sunday drive", "Passeio de domingo");
         r.secret = request == 1;
         r.max = request == 1 ? 64 : 48;
         OpenKeyboard(r, [request](bool ok, const std::string &text) {
             Log("keyboard: %s, %zu bytes", ok ? "done" : "cancelled", text.size());
             if (ok && request == 2) {
-                PushToast(ToastKind::Success, T("World name", "Nome do mundo"), text);
+                PushToast(ToastKind::Success, T("Lobby name", "Nome do lobby"), text);
             }
         });
     }
     if (request == 3) {
-        OpenCodeEntry(T("Enter the world code", "Digite o código do mundo"), "0123456789", [](bool join, const std::string &code) {
+        OpenCodeEntry(T("Enter the lobby code", "Digite o código do lobby"), "0123456789", [](bool join, const std::string &code) {
             Log("code: %s, %zu characters", join ? "join" : "back", code.size());
         });
     }
@@ -534,11 +539,27 @@ void DrawUi(float width, float height, float dt) {
         snapshot.tier = g_model.tier;
         snapshot.link = g_model.link;
         snapshot.detail = g_model.detail;
-        snapshot.history = g_model.history;
+        snapshot.connection_details = g_model.connection_details;
+        snapshot.connection_state = g_model.connection_state;
+        snapshot.connection_at = g_model.connection_at;
     }
     ImGui::GetIO().MouseDrawCursor = g_open;
     ImDrawList *dl = ImGui::GetForegroundDrawList();
-    DrawSidebar(dl, width, height, dt, snapshot);
+    if (!g_connection_open) DrawSidebar(dl, width, height, dt, snapshot);
+    if (g_connection_open) {
+        ImGui::SetNextWindowPos(ImVec2(width / 2, height / 2), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(std::min(width - 48 * s, 660 * s), std::min(height - 64 * s, 600 * s)), ImGuiCond_Always);
+        if (ImGui::Begin(T("Connection details", "Detalhes da conexão"), &g_connection_open, ImGuiWindowFlags_NoCollapse)) {
+            ImGui::BeginChild("connection-report", ImVec2(0, -48 * s));
+            if (g_connection_scroll != 0) { ImGui::SetScrollY(ImGui::GetScrollY() + g_connection_scroll); g_connection_scroll = 0; }
+            const bool expired = snapshot.connection_state == 0 && GetTickCount64() - snapshot.connection_at >= 10000;
+            const char *body = expired || snapshot.connection_details.empty() ? T("Connection details unavailable.", "Detalhes da conexão indisponíveis.") : snapshot.connection_details.c_str();
+            ImGui::TextWrapped("%s", body);
+            ImGui::EndChild();
+            if (ImGui::Button(T("Close", "Fechar"))) g_connection_open = false;
+        }
+        ImGui::End();
+    }
     DrawKeyboard(width, height, dt);
     DrawCodeEntry(width, height, dt);
     UpdateToasts(dl, width, height, dt);

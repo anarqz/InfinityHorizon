@@ -41,7 +41,7 @@ public sealed class OverlayChannel : IDisposable
         {
             lock (_lock)
             {
-                return _session.Ready;
+                return !_closed && _session.Ready;
             }
         }
     }

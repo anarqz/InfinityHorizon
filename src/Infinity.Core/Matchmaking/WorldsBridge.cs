@@ -119,6 +119,38 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
 
     public Session.GameReadiness GameReadiness { get; init; } = gameReadiness ?? new(clock);
 
+    /// <summary>Explicit diagnostic only: no seats, joins, hosting or authority changes.</summary>
+    public async Task<UiFrame.ConnectionDetails> ConnectionDetailsAsync(string endpoints, CancellationToken cancellation)
+    {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        string result;
+        byte state;
+        try
+        {
+            var reply = await _mm.ListAsync("global", cancellation: cancellation).ConfigureAwait(false);
+            result = _text(reply.Ok ? "connection.accepted" : "connection.refused") + " (HTTP " + (int)reply.Status + ")";
+            state = reply.Ok ? (byte)1 : (byte)2;
+        }
+        catch (Exception error) when (HostFailure(error) || error is System.Text.Json.JsonException)
+        { result = _text("connection.unavailable"); state = 2; }
+        WorldServer.RelayNetworkStatus? network;
+        lock (_hostState) network = _relay switch
+        {
+            IntegratedWorldRelay relay => relay.NetworkStatus,
+            IntegratedHostRelay relay => relay.NetworkStatus,
+            _ => null,
+        };
+        var unknown = _text("connection.not_measured");
+        var publicAddress = network?.PublicAddresses.Count > 0 ? string.Join(", ", network.PublicAddresses.Take(4).Select(a => a.Address + ":" + a.Port)) : unknown;
+        var nat = network?.Nat switch { WorldServer.RelayNatKind.Cone => _text("connection.nat_cone"), WorldServer.RelayNatKind.Symmetric => _text("connection.nat_symmetric"), _ => unknown };
+        var ipv6 = network?.PublicAddresses.Any(a => System.Net.IPAddress.TryParse(a.Address, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6) == true
+            ? _text("connection.yes") : unknown;
+        var text = endpoints + "\n\n" + _text("connection.matchmaking") + ": " + result + "\n" + _text("connection.response") + ": " + started.ElapsedMilliseconds + " ms"
+            + "\n\n" + _text("connection.public_address") + ": " + publicAddress + "\nIPv6: " + ipv6 + "\nNAT: " + nat
+            + "\nUPnP: " + (network is null ? unknown : _text("connection.upnp." + network.Upnp.ToString().ToLowerInvariant())) + "\n\n" + _text("connection.snapshot");
+        return new(state, text);
+    }
+
     /// <summary>The current session's bounded diagnostic context; frozen by the supervisor before cleanup.</summary>
     public CrashContext? CrashContext { get; set; }
 

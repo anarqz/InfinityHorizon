@@ -133,6 +133,10 @@ public sealed partial class ShellViewModel
             Text = S,
             CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),
             AccountId = _session.Me?.AccountId,
+            ConnectionEndpoints = "Core: " + _session.Api.Core.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped)
+                + "\nGate: " + _session.Api.Gate.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped)
+                + "\nMatchmaking: " + (Uri.TryCreate(_session.Info.Services?.Matchmaking, UriKind.Absolute, out var matchmakingOrigin)
+                    ? matchmakingOrigin.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped) : S["connection.unavailable"]),
             CarDbSha256 = carDb,
             InitialSessionId = futureSessionId,
             OnlineAccessLost = integrity.Revoke,
@@ -380,6 +384,8 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Error content when content.Message is ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged or ErrorCodes.ContentPolicyUnavailable:
                 _integrity?.Revoke();
+                VerificationCache.Invalidate();
+                _integrityFailed = true;
                 _integrityStatus = S[content.Message == ErrorCodes.ContentPolicyUnavailable ? "integrity.policy_unavailable"
                     : content.Message == ErrorCodes.ContentIncompatible ? "integrity.incompatible" : "integrity.inconclusive"];
                 ConfigurationMessage(_integrityStatus, error: true);

@@ -55,6 +55,7 @@ public sealed record SupervisorConfig(
     public string CarDbSha256 { get; init; } = "";
     public Func<string, CancellationToken, Task>? PrepareAdmission { get; init; }
     public Action? OnlineAccessLost { get; init; }
+    public string ConnectionEndpoints { get; init; } = "";
     public string? InitialSessionId { get; init; }
 }
 
@@ -431,6 +432,8 @@ public sealed class PlaySupervisor
         using var onlineStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, _online.Cancellation);
         using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid, new Overlay.UiFrame.Status("", Overlay.UiTier.Free, Overlay.UiState.Running, ""));
         Task<bool>? overlayNext = null;
+        Task? connectionQuery = null;
+        long? lastConnectionQuery = null;
         if (overlay is not null)
         {
             _ = overlay.RunAsync(child.Pid, child.Exited, _config.AcceptBound, stop.Token);
@@ -706,6 +709,12 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Event { Kind: Overlay.UiEventKind.Quit } when quit is null:
                                 quit = child.QuitAsync(_config.QuitGrace, stop.Token);
                                 break;
+                            case Overlay.UiIncoming.Event { Kind: Overlay.UiEventKind.ConnectionDetails, Detail: "" }
+                                when (connectionQuery is null || connectionQuery.IsCompleted)
+                                    && (lastConnectionQuery is null || _clock.GetElapsedTime(lastConnectionQuery.Value) >= TimeSpan.FromSeconds(5)):
+                                lastConnectionQuery = _clock.GetTimestamp();
+                                connectionQuery = SendConnectionDetailsAsync(overlay, suspended ? null : worlds, stop.Token, onlineStop.Token);
+                                break;
                             case Overlay.UiIncoming.Event e:
                                 _emit(new SupervisorEvent.OverlayEvent(e.Kind, e.Detail));
                                 break;
@@ -761,6 +770,25 @@ public sealed class PlaySupervisor
     private string PauseText(OnlinePause pause) => pause.Reason == "budget"
         ? _config.Text?["online.budget"] ?? "Online play is paused because the service has reached its monthly budget. You can keep playing offline; your progress stays on this PC."
         : _config.Text?["online.operator"] ?? "Online services are temporarily paused. You can keep playing offline; your progress stays on this PC.";
+
+    private async Task SendConnectionDetailsAsync(OverlayChannel overlay, Matchmaking.WorldsBridge? worlds, CancellationToken cancellation, CancellationToken onlineCancellation)
+    {
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation, worlds is null ? cancellation : onlineCancellation);
+        bound.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            await overlay.SendFrameAsync(new Overlay.UiFrame.ConnectionDetails(0, _config.Text?["connection.checking"] ?? "Checking connection…"), bound.Token).ConfigureAwait(false);
+            var result = worlds is null
+                ? new Overlay.UiFrame.ConnectionDetails(2, _config.ConnectionEndpoints + "\n\n" + (_config.Text?["connection.unavailable"] ?? "Connection details unavailable."))
+                : await worlds.ConnectionDetailsAsync(_config.ConnectionEndpoints, bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
+            bound.Token.ThrowIfCancellationRequested();
+            if (overlay.Ready) await overlay.SendFrameAsync(result, bound.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested && !onlineCancellation.IsCancellationRequested)
+        { /* The native checking state expires at the same ten-second bound. */ }
+        catch (OperationCanceledException) { }
+        catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException) { }
+    }
 
     private async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation)
     {

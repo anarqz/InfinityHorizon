@@ -162,6 +162,7 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
     case 16: Navigate(Nav::Up); break;
     case 17: DevRequest(3); break; // the world code
     case 18: Navigate(Nav::Back); break;
+    case 19: Navigate(Nav::TabRight); break;
     default: break;
     }
 }
