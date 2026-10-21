@@ -748,7 +748,7 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
             }
             else throw new InvalidDataException("Only environment, server, portal and locale may be preserved across update.");
         }
-        if (names.Contains("--environment"))
+        if (names.Contains("--environment") || BuildProfile.ProductionOnly)
             Auth.ServerConfig.From(arguments, _ => null);
     }
 

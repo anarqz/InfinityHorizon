@@ -4,13 +4,24 @@ param(
     [Parameter(Mandatory)][string]$Zig,
     [string]$Python = 'python',
     [string]$Version = '0.1.0',
+    [string]$Output,
     [switch]$Production
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = $PSScriptRoot
 $zigPath = (Resolve-Path -LiteralPath $Zig).Path
-$out = Join-Path $root 'artifacts/win-x64'
+$devOutput = [IO.Path]::GetFullPath((Join-Path $root 'artifacts/win-x64'))
+$out = if ($Output) { [IO.Path]::GetFullPath($Output) } elseif ($Production) { Join-Path $root 'artifacts/production/win-x64' } else { $devOutput }
+if ($Production) {
+    if ($out.TrimEnd('\','/').Equals($devOutput, [StringComparison]::OrdinalIgnoreCase) -or $out.StartsWith($devOutput + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Production output must be separate from the development package.'
+    }
+    if ((Test-Path -LiteralPath $out) -and (Get-ChildItem -LiteralPath $out -Force | Select-Object -First 1)) {
+        throw 'Use a new empty production output directory.'
+    }
+}
+$profile = if ($Production) { 'true' } else { 'false' }
 New-Item -ItemType Directory -Force $out, "$out/hook", "$out/overlay", "$out/licenses" | Out-Null
 
 # An existing signature must never survive a rebuild, including a switch to production mode.
@@ -19,10 +30,10 @@ foreach ($file in @("$out/infinity.exe.sig", "$out/infinity-updater.exe.sig", "$
 }
 
 & dotnet publish "$root/src/Infinity.App/Infinity.App.csproj" -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" -o $out
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
 if ($LASTEXITCODE -ne 0) { throw 'Launcher publish failed' }
 & dotnet publish "$root/src/Infinity.Updater/Infinity.Updater.csproj" -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" -o $out
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
 if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
 $hookArgs = @("$root/native/hook/build.py", $zigPath, '--output', "$out/hook/infinity.dll")
 if (!$Production) { $hookArgs += '--dev' }

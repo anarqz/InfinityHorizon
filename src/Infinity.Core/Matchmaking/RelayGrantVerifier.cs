@@ -65,7 +65,9 @@ public sealed class RelayGrantVerifyKeys
     /// <c>FI_RELAY_GRANT_VERIFY_KEYS</c> default, the public half of its public dev seed). Only for
     /// a private/loopback plain-http stack; never a production key.
     /// </summary>
+#if !INFINITY_PRODUCTION_BUILD
     public const string LocalStack = "rg-local-1:A4Qtlcgz2EIO20E32DMyuO5ss4tu84VRWw51EeB04wg=";
+#endif
 
     internal static bool ValidKid(string? kid) => kid is { Length: >= 1 and <= 32 }
         && kid.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
@@ -99,9 +101,11 @@ public sealed class RelayGrantVerifyKeys
         ArgumentNullException.ThrowIfNull(origin);
         if (!origin.IsAbsoluteUri) throw new ArgumentException("An absolute server origin is required", nameof(origin));
         var keys = releaseKeys?.Take(9).ToList() ?? [];
+#if !INFINITY_PRODUCTION_BUILD
         if (string.IsNullOrEmpty(origin.UserInfo) && origin.Query.Length == 0 && origin.Fragment.Length == 0
             && DevNet.PlainHttpUrl(origin.OriginalString) && developmentKeys is not null)
             keys.AddRange(developmentKeys.Take(9));
+#endif
         return new([.. keys]);
     }
 

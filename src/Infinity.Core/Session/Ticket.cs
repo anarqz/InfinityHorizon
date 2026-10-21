@@ -70,6 +70,7 @@ public sealed class TicketKeys
     public byte[]? Get(string kid) => _keys.FirstOrDefault(k => k.Kid == kid).Key;
 
     /// <summary>The local stack's key id (compose <c>FI_LAUNCH_TICKET_SIGNING_KEYS</c>, <c>.env.example</c>).</summary>
+#if !INFINITY_PRODUCTION_BUILD
     public const string LocalStackKid = "lt-local-1";
 
     /// <summary>
@@ -81,6 +82,7 @@ public sealed class TicketKeys
         0x1f, 0xb7, 0xb2, 0x6e, 0xfc, 0x09, 0xb4, 0x08, 0xd2, 0xe6, 0x7f, 0xac, 0xc9, 0x6c, 0xf4, 0xfe,
         0x37, 0xb2, 0x09, 0x75, 0xaa, 0xae, 0xa0, 0x59, 0xab, 0xee, 0x40, 0x8b, 0x8c, 0xfd, 0xc4, 0x10,
     ];
+#endif
 
     /// <summary><c>FI_DEV_TICKET_KEY=&lt;kid&gt;:&lt;64 hex&gt;</c>: one more key for a development server.</summary>
     public const string DevTicketKeyEnv = "FI_DEV_TICKET_KEY";
@@ -110,6 +112,10 @@ public sealed class TicketKeys
     /// </summary>
     public static (TicketKeys Keys, TicketPolicy Policy) Trust(bool developmentServer, string? devKeyEnv)
     {
+#if INFINITY_PRODUCTION_BUILD
+        if (developmentServer || devKeyEnv is not null) return (new TicketKeys(), TicketPolicy.Default with { Production = true });
+        return (Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true });
+#else
         if (!developmentServer)
         {
             return (new TicketKeys(), TicketPolicy.Default);
@@ -120,6 +126,7 @@ public sealed class TicketKeys
             keys.Add(extra);
         }
         return (new TicketKeys([.. keys]), TicketPolicy.Default with { AllowHttp = true, Development = true });
+#endif
     }
 }
 

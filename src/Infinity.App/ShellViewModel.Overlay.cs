@@ -96,12 +96,16 @@ public sealed partial class ShellViewModel
             Infinity.Core.Auth.ProductionDeployment.RequireOrigin(matchmaking, Infinity.Core.Auth.ProductionDeployment.Matchmaking);
             return Infinity.Core.Auth.ProductionDeployment.RelayKeys();
         }
+#if INFINITY_PRODUCTION_BUILD
+        return new();
+#else
         if (!DevServer || !Infinity.Core.DevNet.PlainHttpUrl(matchmaking.OriginalString)) return new();
         var configured = Environment.GetEnvironmentVariable("FI_DEV_RELAY_VERIFY_KEYS");
         // a development run needs no extra variable: the local stack's public ring by default
         if (string.IsNullOrWhiteSpace(configured)) configured = Infinity.Core.Matchmaking.RelayGrantVerifyKeys.LocalStack;
         try { return Infinity.Core.Matchmaking.RelayGrantVerifyKeys.Parse(configured); }
         catch (ArgumentException) { Log("worlds: invalid development relay public-key configuration"); return new(); }
+#endif
     }
 
     /// <summary>
