@@ -44,6 +44,7 @@ public partial class MainWindow : Window
             if (azimuth is not null) vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
             else await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
             await Task.WhenAll(updateCheck, onlineCheck);
+            await vm.RefreshIntegrityAutomaticallyAsync();
         };
     }
 

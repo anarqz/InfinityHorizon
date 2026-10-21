@@ -22,7 +22,8 @@ public sealed record ServerInfo(
     string? Motd,
     ServiceMap? Services,
     IReadOnlyList<GameInfo>? Games,
-    IdpConfig Idp);
+    IdpConfig Idp,
+    bool RegistrationEnabled = true);
 
 /// <summary>Identity Platform for the native sign-in (OD-43): <c>emulatorUrl</c> only on local stacks.</summary>
 public sealed record IdpConfig(string ApiKey, string ProjectId, string? EmulatorUrl);

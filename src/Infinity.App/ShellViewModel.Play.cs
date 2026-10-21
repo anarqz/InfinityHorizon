@@ -113,14 +113,14 @@ public sealed partial class ShellViewModel
         await CheckIntegrityAsync(futureSessionId);
         if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
             || !CanPlay || !IntegrityReady || _integrity is null)
-        { ConfigurationMessage(IntegrityStatus, error: true); return; }
+        { ConfigurationMessage(IntegrityStatus, error: true, integrity: true); return; }
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
         if (profile is null)
         {
             return;
         }
         var integrity = _integrity!;
-        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { ConfigurationMessage(S["integrity.inconclusive"], error: true); return; }
+        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { ConfigurationMessage(S["integrity.inconclusive"], error: true, integrity: true); return; }
         var development = DevNet.PlainHttpUrl(_session.Api.Core.GetLeftPart(UriPartial.Authority));
         var (keys, policy) = TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         using var onlineActivity = new OnlineActivity();
@@ -184,6 +184,8 @@ public sealed partial class ShellViewModel
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             Changed(string.Empty);
+            if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
+                await RefreshIntegrityAutomaticallyAsync();
         }
     }
 
@@ -388,7 +390,7 @@ public sealed partial class ShellViewModel
                 _integrityFailed = true;
                 _integrityStatus = S[content.Message == ErrorCodes.ContentPolicyUnavailable ? "integrity.policy_unavailable"
                     : content.Message == ErrorCodes.ContentIncompatible ? "integrity.incompatible" : "integrity.inconclusive"];
-                ConfigurationMessage(_integrityStatus, error: true);
+                ConfigurationMessage(_integrityStatus, error: true, integrity: true);
                 SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error err:
