@@ -46,7 +46,7 @@ public sealed class GameVerificationCache(string stateDirectory)
             var files = paths.Select(p =>
             {
                 var path = Path.Combine(mount, p.Replace('/', Path.DirectorySeparatorChar));
-                if (!CriticalFileReader.SafeAncestors(path)) throw new IOException("Unsafe cache input");
+                if (!ContentPath.SafeWithin(mount, path)) throw new IOException("Unsafe cache input");
                 var info = new FileInfo(path);
                 return new Stamp(p, info.Length, info.LastWriteTimeUtc.Ticks);
             }).ToArray();
@@ -72,6 +72,6 @@ public sealed class GameVerificationCache(string stateDirectory)
     {
         var path = Path.Combine(mount, stamp.Path.Replace('/', Path.DirectorySeparatorChar));
         var info = new FileInfo(path);
-        return CriticalFileReader.SafeAncestors(path) && info.Exists && info.Length == stamp.Length && info.LastWriteTimeUtc.Ticks == stamp.Modified;
+        return ContentPath.SafeWithin(mount, path) && info.Exists && info.Length == stamp.Length && info.LastWriteTimeUtc.Ticks == stamp.Modified;
     }
 }

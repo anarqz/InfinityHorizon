@@ -12,10 +12,10 @@ public sealed record GameContentLocation(string PackageRoot, string Mount)
         if (string.IsNullOrWhiteSpace(directory)) return null;
         try
         {
-            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+            var root = ContentPath.NormalizeSelection(directory);
             if (Path.GetFileName(root).Equals("Mount", StringComparison.OrdinalIgnoreCase)) root = Path.GetDirectoryName(root)!;
-            var mount = Path.Combine(root, "Mount");
-            if (root.StartsWith(@"\\", StringComparison.Ordinal) || !CriticalFileReader.SafeAncestors(mount)
+            var mount = ContentPath.ResolveDirectory(Path.Combine(root, "Mount"));
+            if (!ContentPath.SafeWithin(mount, mount)
                 || !File.Exists(Path.Combine(mount, "AppxManifest.xml")) || !File.Exists(Path.Combine(mount, Executable))) return null;
             return new(root, mount);
         }

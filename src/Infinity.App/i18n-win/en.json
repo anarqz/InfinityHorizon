@@ -387,7 +387,7 @@
   "integrity.incompatible": "Some selected critical files differ from the server's compatibility reference. Online worlds are unavailable. Verify the installation or contact support for help.",
   "integrity.inconclusive": "We could not verify all selected critical files. Online worlds remain unavailable. Retry the check or contact support.",
   "integrity.policy_unavailable": "The server's compatibility check is unavailable. Try again before playing online.",
-  "integrity.invalid_content": "Choose the game package folder containing Mount, or Mount itself. The manifest and executable must be present. Redirected paths cannot be verified; under Proton, use a drive mapped directly to the game folder.",
+  "integrity.invalid_content": "Choose the game package folder containing Mount, or Mount itself. The manifest and executable must be present and readable. On Linux/Proton, select your game folder normally; no custom drive mapping is required.",
   "integrity.local_failed": "The game-folder choice could not be saved. Check access permissions and try again.",
   "integrity.cancelled": "The check was cancelled. Verify the installation before playing online.",
   "integrity.copied": "Installation diagnostic copied.",
