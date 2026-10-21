@@ -16,7 +16,7 @@
 // - Create: name (the keyboard), audience (Everyone, Supporters, Friends, Private; a free host
 //   gets Everyone or Private), players 2-12, latency limit.
 // - My world (OD-63): while the profile hosts a world or holds a seat in one, the tab shows that
-//   world instead of the list (asked every 5 s while shown): the host closes it or kicks players,
+//   world instead of the list (updated by the launcher): the host closes it or kicks players,
 //   a player leaves it; anyone adds a player as a friend or reports them with a reason. Player
 //   names only, never their XUIDs (OD-61).
 // - Syncing cars (OD-65 amendment): once a world is created or a seat reserved, the hook uploads
@@ -95,7 +95,7 @@ bool g_world_action_busy = false;
 std::function<void()> g_after_warning;
 
 // my world (OD-63)
-float g_mine_poll = 0;      // seconds to the next MyWorldQuery
+bool g_mine_refresh = true; // one explicit reconcile on open/action/manual refresh
 bool g_showing_mine = false; // the List screen shows my world this frame
 int g_mine_focus = 0;       // 0 the close or leave button, then the players
 int g_mine_count = 0;       // what the focus walks: 1 + the players
@@ -142,7 +142,7 @@ void FinishSync(int result) {
                   T("Go to Free Roam Online to join the world", "Vá em Free Roam Online para entrar no mundo"));
         CloseSidebar();
     }
-    g_mine_poll = 0;
+    g_mine_refresh = true;
 }
 
 struct Create {
@@ -933,7 +933,7 @@ void WorldsReset() {
     if (g_screen != Screen::Busy && g_screen != Screen::Hosted) {
         g_screen = Screen::List;
     }
-    g_mine_poll = 0;
+    g_mine_refresh = true;
     g_queried = false; // a fresh list
 }
 
@@ -947,7 +947,7 @@ bool WorldsNavigate(Nav nav) {
             case Nav::Up: if (g_mine_focus > 0) --g_mine_focus; return true;
             case Nav::Down: if (g_mine_focus + 1 < g_mine_count) ++g_mine_focus; return true;
             case Nav::Accept: g_accept = true; return true;
-            case Nav::Y: g_mine_poll = 0; return true; // refresh
+            case Nav::Y: g_mine_refresh = true; return true; // refresh
             default: return false; // the tabs, close
             }
         }
@@ -1085,10 +1085,9 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         g_seen_list = sh.list_serial;
         g_focus = std::min(g_focus, 2 + kMaxJoinable + kMaxLocked);
     }
-    // my world: asked every 5 s while this tab is shown
-    g_mine_poll -= dt;
-    if (g_mine_poll <= 0) {
-        g_mine_poll = 5.0f;
+    // The launcher owns active/pending reconciliation. An open tab must not create a second poll loop.
+    if (g_mine_refresh) {
+        g_mine_refresh = false;
         if (DevHost()) {
             if (g_dev_wait < 0) { g_dev_wait = 0.05f; g_dev_kind = 6; }
         } else {
@@ -1112,7 +1111,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
             g_screen = Screen::List;
             PushToast(sh.action_status == 0 ? ToastKind::Success : ToastKind::Warning,
                       sh.action_status == 0 ? T("Done", "Pronto") : T("Not done", "Não foi feito"), sh.action_message);
-            g_mine_poll = 0;
+            g_mine_refresh = true;
         }
     }
 

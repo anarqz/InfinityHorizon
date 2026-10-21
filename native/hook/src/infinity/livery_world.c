@@ -471,6 +471,12 @@ static unsigned char lw_world[28];
 static volatile LONG lw_serial;   /* a new world, or none: the worker of an older one stops */
 static int lw_mode;               /* 0 none, 1 own socket, 2 the proxy's socket */
 static UINT_PTR lw_socket = LW_INVALID;
+/* Leave and terminal control may race. Transfer ownership before closing so they cannot
+   close the same descriptor twice (the second close could hit an unrelated reused handle). */
+static void lw_close_socket(void) {
+    UINT_PTR owned = (UINT_PTR)InterlockedExchangePointer((void *volatile *)&lw_socket, (void *)LW_INVALID);
+    if (owned != LW_INVALID) lw_ws.closesocket(owned);
+}
 static int lw_done;
 static unsigned lw_want_tries;
 static unsigned long long lw_want_at;
@@ -490,6 +496,7 @@ static int lw_private(const unsigned char *a /* 16 bytes */) {
 }
 
 static void lw_send(const unsigned char *data, int size) {
+    if (!fi_launch_network_allowed()) return;
     if (lw_mode == 1 && lw_socket != LW_INVALID) {
         lw_ws.sendto(lw_socket, (const char *)data, size, 0, lw_world, (int)sizeof(lw_world));
     } else if (lw_mode == 2) {
@@ -667,6 +674,7 @@ finished:
 
 /* A message from the relay (the own socket's thread, or proxy.c). */
 void azimuth_livery_received(const unsigned char *packet, int size) {
+    if (!fi_launch_network_allowed()) return;
     if (size < 28 || lw_be16(packet) != LW_KIND || lw_be32(packet + 4) != LW_MAGIC ||
         lw_be16(packet + 2) + 20u != (unsigned)size) {
         return;
@@ -719,10 +727,11 @@ static DWORD WINAPI lw_worker(void *argument) {
     LONG serial = (LONG)(intptr_t)argument;
     static unsigned char packet[1024];
     unsigned char from[64];
-    while (lw_serial == serial) {
+    while (lw_serial == serial && fi_launch_network_allowed()) {
         if (lw_mode == 1 && lw_socket != LW_INVALID) {
             int from_size = (int)sizeof(from);
             int n = lw_ws.recvfrom(lw_socket, (char *)packet, sizeof(packet), 0, from, &from_size);
+            if (lw_serial != serial || !fi_launch_network_allowed()) break;
             if (n >= 2 && lw_be16(packet) == 0x3E91u) {
                 azimuth_carstate_received(packet, n); /* the relay passing another car's headlights and roof */
             } else if (n > 0) {
@@ -754,13 +763,10 @@ static void lw_own_changed(void) {
 
 /* freeroam.c: the game joined a world (`remote`: its sockaddr_in6). */
 void azimuth_livery_world_entered(const void *remote) {
-    if (!fi_launch_protocol() || !remote) return;
+    if (!fi_launch_protocol() || !remote || !fi_launch_network_allowed()) return;
     const unsigned char *r = remote;
     LONG serial = InterlockedIncrement(&lw_serial);
-    if (lw_socket != LW_INVALID) {
-        lw_ws.closesocket(lw_socket);
-        lw_socket = LW_INVALID;
-    }
+    lw_close_socket();
     memory_copy(lw_world, r, sizeof(lw_world));
     lw_done = 0;
     lw_want_tries = 0;
@@ -791,6 +797,10 @@ void azimuth_livery_world_entered(const void *remote) {
         log_append("LIVERY: no socket for the world's relay; world mates' paints stay stock.\r\n");
         return;
     }
+    if (!fi_launch_network_allowed()) {
+        azimuth_livery_world_left();
+        return;
+    }
     HANDLE t = CreateThread(0, 0, lw_worker, (void *)(intptr_t)serial, 0, 0);
     if (t) CloseHandle(t);
     log_append(lw_mode == 1 ? "LIVERY: world mates' paints through the relay (this PC's own socket).\r\n"
@@ -802,7 +812,7 @@ void azimuth_livery_world_entered(const void *remote) {
    private peer's other ports, MATCHMAKING_API.md 5a). 1 sent. The relay's answers come back on
    the same socket (lw_worker hands carstate's on). */
 int azimuth_world_lan_send(const void *data, int size) {
-    if (lw_mode != 1 || lw_socket == LW_INVALID) return 0;
+    if (!fi_launch_network_allowed() || lw_mode != 1 || lw_socket == LW_INVALID) return 0;
     return lw_ws.sendto(lw_socket, (const char *)data, size, 0, lw_world, (int)sizeof(lw_world)) == size;
 }
 
@@ -810,10 +820,7 @@ int azimuth_world_lan_send(const void *data, int size) {
 void azimuth_livery_world_left(void) {
     InterlockedIncrement(&lw_serial);
     lw_mode = 0;
-    if (lw_socket != LW_INVALID) {
-        lw_ws.closesocket(lw_socket);
-        lw_socket = LW_INVALID;
-    }
+    lw_close_socket();
     AcquireSRWLockExclusive(&lw_lock);
     for (int i = 0; i < LW_PEERS; ++i) { lw_drop_peer(&lw_peers[i]); lw_drop_peer(&lw_incoming[i]); }
     ReleaseSRWLockExclusive(&lw_lock);

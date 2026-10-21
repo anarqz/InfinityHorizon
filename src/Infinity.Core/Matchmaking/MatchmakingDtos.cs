@@ -348,6 +348,9 @@ public sealed record SeatAnswer
 
     public SeatRequest? Request { get; init; }
 
+    /// <summary>Opt-in atomic roster from GET seat?includeMembers=true; absent on older servers/no seat.</summary>
+    public WorldMembers? Members { get; init; }
+
     public required string GeneratedAt { get; init; }
 }
 

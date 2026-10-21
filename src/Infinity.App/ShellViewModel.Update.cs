@@ -25,8 +25,8 @@ public sealed partial class ShellViewModel
 
     public bool LauncherUpdateAllowsPlay => !_updateAwaitingCommit && !_updateRecoveryBlocked && _launcherUpdatePhase == UpdatePhase.Current;
     public bool LauncherUpdateBusy => _updateAwaitingCommit || _updateChecking || _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying;
-    public bool ShowLauncherUpdate => !LauncherUpdateAllowsPlay && !Playing && !_updateSupport;
-    public bool ShowLauncherUpdateBanner => !LauncherUpdateAllowsPlay && !ShowLauncherUpdate;
+    public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport;
+    public bool ShowLauncherUpdateBanner => !ShowOnlineStatusBanner && !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !ShowLauncherUpdate;
     public bool CanRetryLauncherUpdate => !LauncherUpdateBusy && !Playing;
     public bool CanCancelLauncherUpdate => _updateDownload is not null && _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying;
     public bool CanApplyLauncherUpdate => _launcherUpdatePhase == UpdatePhase.Required && !LauncherUpdateBusy && !_updateRecoveryBlocked && !Playing && !IntegrityChecking && !_busy && CrashIdle;
@@ -41,7 +41,7 @@ public sealed partial class ShellViewModel
         ("received", (_updateBytes / 1048576d).ToString("F1", CultureInfo.CurrentCulture)),
         ("total", (_updateTotal / 1048576d).ToString("F1", CultureInfo.CurrentCulture))) : "";
 
-    public void OpenLauncherUpdate() { _updateSupport = false; Changed(string.Empty); }
+    public void OpenLauncherUpdate() { _onlineSupport = true; _updateSupport = false; Changed(string.Empty); }
     public void CancelLauncherUpdate() { if (CanCancelLauncherUpdate) _updateDownload?.Cancel(); }
     public void OpenUpdateSupport() { if (_launcherUpdatePhase == UpdatePhase.Applying) return; _updateSupport = true; Changed(string.Empty); }
 
@@ -78,6 +78,8 @@ public sealed partial class ShellViewModel
             _serverReachable = true;
             return info;
         }
+        catch (ApiException error) when (Infinity.Core.Online.OnlinePause.From(error) is { } pause)
+        { ObserveOnlinePause(pause); ExtendOnlineCooldown(error.RetryAfter); _serverReachable = true; throw; }
         catch { _serverReachable = false; throw; }
     }
 

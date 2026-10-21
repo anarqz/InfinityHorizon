@@ -99,6 +99,10 @@ int fi_launch_late(void);
 int fi_launch_online(void);
 /* A live session: online, not ended by the game plane, the token not expired. */
 int fi_launch_live(void);
+/* CR-L32: terminal online quarantine; local identity/save ownership stays unchanged. */
+int fi_launch_suspended(void);
+/* Also denies UDP work at the token deadline, before the control thread's next turn. */
+int fi_launch_network_allowed(void);
 /* "X-Fi-Session: <token>\r\nX-Fi-Hook: <MOD_VERSION>" into `out`: its length, 0 without a live
    session. */
 size_t fi_launch_headers(wchar_t *out, size_t cap);
@@ -240,6 +244,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
 int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out);
 /* Cuts the game's traffic to the world it is in (the car database changed). */
 void azimuth_freeroam_cut(void);
+void azimuth_freeroam_suspend(void);
 /* world.c: the legacy relay lifecycle and current launcher host-port bridge. */
 void azimuth_world_set_directory(const wchar_t *directory);
 int azimuth_world_hosting(void);

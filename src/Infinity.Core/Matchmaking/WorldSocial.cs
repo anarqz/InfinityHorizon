@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using Infinity.Core.Api;
+using Infinity.Core.Online;
 
 namespace Infinity.Core.Matchmaking;
 
@@ -21,7 +22,7 @@ public sealed class WorldSocial(ApiClient api, Func<CancellationToken, Task<stri
             var result = await _api.AddFriendAsync(token, game, gamertag, cancellation).ConfigureAwait(false);
             return (true, result.State == "friends" ? "worlds.friend_now" : "worlds.friend_requested");
         }
-        catch (ApiException e)
+        catch (ApiException e) when (OnlinePause.From(e) is null)
         {
             return (false, FriendRefusal(e.Code));
         }
@@ -39,7 +40,7 @@ public sealed class WorldSocial(ApiClient api, Func<CancellationToken, Task<stri
             await _api.ReportAsync(token, new GameReport { Game = game, Xuid = xuid, Reason = reason, WorldId = worldId }, cancellation).ConfigureAwait(false);
             return (true, "worlds.reported");
         }
-        catch (ApiException e)
+        catch (ApiException e) when (OnlinePause.From(e) is null)
         {
             return (false, e.Code == ErrorCodes.RequestRateLimited ? "worlds.slow_down" : "worlds.report_failed");
         }

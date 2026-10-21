@@ -170,21 +170,21 @@
                 <TextBlock Text="{Binding S[native.subtitle]}" Margin="0,6,0,20" Style="{StaticResource PageSubtitle}" />
                 <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Hidden}}">
                   <TextBlock Text="{Binding S[native.email]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                  <TextBox x:Name="EmailBox" Text="{Binding LoginEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" IsEnabled="{Binding Idle}" />
+                  <TextBox x:Name="EmailBox" Text="{Binding LoginEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" IsEnabled="{Binding CanStartOnlineAccount}" />
                   <TextBlock Text="{Binding S[native.password]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                  <PasswordBox x:Name="PasswordBox" Margin="0,6,0,4" IsEnabled="{Binding Idle}" KeyDown="OnPasswordKey" IsVisibleChanged="OnPasswordVisibility" />
-                  <Button Content="{Binding S[native.forgot]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,0,0,16" Click="OnForgot" IsEnabled="{Binding Idle}" />
+                  <PasswordBox x:Name="PasswordBox" Margin="0,6,0,4" IsEnabled="{Binding CanStartOnlineAccount}" KeyDown="OnPasswordKey" IsVisibleChanged="OnPasswordVisibility" />
+                  <Button Content="{Binding S[native.forgot]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,0,0,16" Click="OnForgot" IsEnabled="{Binding CanStartOnlineAccount}" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <Button Content="{Binding S[native.sign_in]}" Click="OnNativeSignIn" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
-                    <Button Grid.Column="2" Content="{Binding S[native.sign_up]}" Click="OnNativeSignUp" IsEnabled="{Binding Idle}" />
+                    <Button Content="{Binding S[native.sign_in]}" Click="OnNativeSignIn" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
+                    <Button Grid.Column="2" Content="{Binding S[native.sign_up]}" Click="OnNativeSignUp" IsEnabled="{Binding CanStartOnlineAccount}" />
                   </Grid>
                 </StackPanel>
                 <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding S[native.check_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
                   <TextBlock Text="{Binding VerificationText}" Style="{StaticResource PageSubtitle}" Margin="0,0,0,18" />
-                  <Button Content="{Binding S[native.confirmed]}" Click="OnConfirmed" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
-                  <Button Content="{Binding S[native.resend]}" Margin="0,12,0,0" Click="OnResend" IsEnabled="{Binding Idle}" />
+                  <Button Content="{Binding S[native.confirmed]}" Click="OnConfirmed" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
+                  <Button Content="{Binding S[native.resend]}" Margin="0,12,0,0" Click="OnResend" IsEnabled="{Binding CanStartOnlineAccount}" />
                   <Button Content="{Binding S[native.change_login]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,12,0,0" Click="OnCancelVerification" IsEnabled="{Binding Idle}" />
                 </StackPanel>
                 <Button Content="{Binding S[signin.cancel]}" HorizontalAlignment="Left" Margin="0,10,0,0"
@@ -204,7 +204,7 @@
               <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" Margin="0,6,0,4" />
               <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
               <Button Content="{Binding S[signin.create]}" Margin="0,18,0,0" HorizontalAlignment="Left" Padding="28,9"
-                      Click="OnCreateAccount" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
+                      Click="OnCreateAccount" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
             </StackPanel>
           </Border>
 
@@ -658,6 +658,16 @@
         <TextBlock Text="{Binding LauncherUpdateStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
       </DockPanel>
     </Border>
+    <Border Grid.Row="0" Grid.ColumnSpan="2" Panel.ZIndex="30" Background="{StaticResource InfinityWarnSurface}" Padding="22,10"
+            Visibility="{Binding ShowOnlineStatusBanner, Converter={StaticResource Visible}}">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="{Binding S[online.retry]}" Click="OnCheckOnlineStatus" IsEnabled="{Binding CanCheckOnlineStatus}" Margin="16,0,0,0" />
+        <StackPanel>
+          <TextBlock Text="{Binding OnlineServiceMessage}" TextWrapping="Wrap" FontWeight="SemiBold" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{Binding OnlineRetryHint}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
     <Border Grid.Row="1" Grid.ColumnSpan="2" Panel.ZIndex="20" Background="{StaticResource InfinityBackground}"
             Visibility="{Binding ShowLauncherUpdate, Converter={StaticResource Visible}}">
       <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -679,6 +689,27 @@
         </StackPanel>
       </ScrollViewer>
     </Border>
+    <Border Grid.Row="1" Grid.ColumnSpan="2" Panel.ZIndex="30" Background="{StaticResource InfinityBackground}"
+            Visibility="{Binding ShowOnlineStatusPage, Converter={StaticResource Visible}}">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="680" Margin="40,36" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <Image Source="{StaticResource BrandLogo}" Width="240" HorizontalAlignment="Left" Margin="0,0,0,30" />
+          <TextBlock Text="{Binding OnlineServiceTitle}" FontSize="30" FontWeight="Bold" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding OnlineServiceMessage}" Margin="0,16,0,12" FontSize="17" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{Binding OnlineRetryHint}" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding S[online.resume]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,14,0,0" Visibility="{Binding OnlineServicePaused, Converter={StaticResource Visible}}" />
+          <WrapPanel Margin="0,20,0,12">
+            <Button Content="{Binding S[online.retry]}" Click="OnCheckOnlineStatus" IsEnabled="{Binding CanCheckOnlineStatus}" Margin="0,0,10,10" Style="{StaticResource AccentButtonStyle}" />
+            <Button Content="{Binding S[online.continue]}" Click="OnCloseOnlineStatus" Visibility="{Binding OnlineServiceAllowsPlay, Converter={StaticResource Visible}}" Margin="0,0,10,10" />
+            <Button Content="{Binding S[online.support]}" Click="OnOnlineSupport" Margin="0,0,10,10" />
+            <Button Content="{Binding S[online.updates]}" Click="OnOpenLauncherUpdate" Margin="0,0,10,10" />
+            <Button Content="{Binding S[updater.exit]}" Click="OnExitLauncherUpdate" Margin="0,0,10,10" />
+          </WrapPanel>
+          <TextBlock Text="{Binding OnlineServiceHelp}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+          <Button Content="{Binding S[nav.discord]}" Click="OnDiscord" HorizontalAlignment="Left" Margin="0,16,0,0" />
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
     <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}"
             BorderBrush="{StaticResource InfinityGold}" BorderThickness="0,1,0,0" Padding="20,10"
             Visibility="{Binding ShowBuildOriginWarning, Converter={StaticResource Visible}}">
@@ -695,6 +726,7 @@
             BorderThickness="0,1,0,0" Padding="24,12">
       <DockPanel>
         <Button DockPanel.Dock="Right" Content="{Binding S[legal.about]}" Click="OnAbout" Margin="16,0,0,0" Padding="10,4" />
+        <Button DockPanel.Dock="Right" Content="{Binding S[online.view]}" Click="OnOpenOnlineStatus" Margin="16,0,0,0" Padding="10,4" />
         <Border DockPanel.Dock="Left" Padding="9,4" Margin="0,0,16,0" VerticalAlignment="Center" CornerRadius="4"
                 Background="{StaticResource InfinityWarnSurface}">
           <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />

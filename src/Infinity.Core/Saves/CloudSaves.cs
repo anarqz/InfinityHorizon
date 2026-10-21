@@ -111,6 +111,8 @@ public sealed record CloudSaveLine(SaveLease Lease, SaveHead Head)
 /// <summary>What a save call came to, mapped from the contract's codes (SAVES_API.md §6, SAVE_SYNC.md §4).</summary>
 public enum SaveFailureKind
 {
+    /// <summary>Global online closure: preserve pending bytes without an automatic retry.</summary>
+    OnlineClosed,
     /// <summary>Unreachable, 429 (<c>SAVES.RATE_LIMITED</c>), 503 (<c>SAVES.UNAVAILABLE</c>), any 5xx: retry with backoff, same key and bytes.</summary>
     Transient,
 
@@ -196,7 +198,7 @@ public sealed record SaveFailure(
     /// and a pending upload that can never succeed must not block every later commit.
     /// </summary>
     public bool KeepsPending => Kind is SaveFailureKind.Transient or SaveFailureKind.Unauthorized or SaveFailureKind.LeaseExpired
-        or SaveFailureKind.SessionEnded or SaveFailureKind.Unconfirmed;
+        or SaveFailureKind.SessionEnded or SaveFailureKind.Unconfirmed or SaveFailureKind.OnlineClosed;
 
     /// <summary>Maps the contract's error body (SAVES_API.md §6).</summary>
     public static SaveFailure From(HttpStatusCode status, ErrorBody error, TimeSpan? retryAfter)
@@ -212,6 +214,7 @@ public sealed record SaveFailure(
             ErrorCodes.SavesLeaseLost => SaveFailureKind.LeaseLost,
             ErrorCodes.SavesLeaseExpired => SaveFailureKind.LeaseExpired,
             ErrorCodes.SavesRevisionConflict => SaveFailureKind.RevisionConflict,
+            ErrorCodes.ServiceBudgetClosed or ErrorCodes.ServiceOnlineClosed when status == HttpStatusCode.ServiceUnavailable => SaveFailureKind.OnlineClosed,
             ErrorCodes.SavesGateRefused => SaveFailureKind.GateRefused,
             ErrorCodes.SavesSummaryUnreadable => SaveFailureKind.SummaryUnreadable,
             ErrorCodes.SavesBundleInvalid => SaveFailureKind.BundleInvalid,

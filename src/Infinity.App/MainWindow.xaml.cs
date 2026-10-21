@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
         var vm = new ShellViewModel(strings, config, state);
         DataContext = vm;
+        vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
         vm.UpdateRestartRequested += () => Application.Current.Shutdown();
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         var handled = false;
@@ -37,17 +38,22 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             if (await vm.RecoverInterruptedUpdateAsync(cli)) return;
+            var onlineCheck = vm.CheckOnlineStatusAsync(manual: false);
             var updateCheck = vm.ProbeServerAsync();
             await vm.VerifyBuildOriginAsync();
             if (azimuth is not null) vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
             else await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
-            await updateCheck;
+            await Task.WhenAll(updateCheck, onlineCheck);
         };
     }
 
     partial void ConfigureHarness(string[] args, ShellViewModel vm, ref bool handled);
 
     private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesAsync();
+    private async void OnCheckOnlineStatus(object sender, RoutedEventArgs e) => await _vm.CheckOnlineStatusAsync();
+    private void OnOnlineSupport(object sender, RoutedEventArgs e) => _vm.OpenOnlineSupport();
+    private void OnOpenOnlineStatus(object sender, RoutedEventArgs e) => _vm.OpenOnlineStatus();
+    private void OnCloseOnlineStatus(object sender, RoutedEventArgs e) => _vm.CloseOnlineStatus();
     private async void OnApplyLauncherUpdate(object sender, RoutedEventArgs e) => await _vm.ApplyLauncherUpdateAsync();
     private void OnCancelLauncherUpdate(object sender, RoutedEventArgs e) => _vm.CancelLauncherUpdate();
     private void OnUpdateSupport(object sender, RoutedEventArgs e) => _vm.OpenUpdateSupport();

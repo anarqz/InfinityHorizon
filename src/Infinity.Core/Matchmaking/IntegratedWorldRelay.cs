@@ -1,5 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
+using Infinity.Core.Api;
+using Infinity.Core.Online;
 using Infinity.Core.WorldServer;
 
 namespace Infinity.Core.Matchmaking;
@@ -50,6 +52,11 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(matchmaking);
         ObjectDisposedException.ThrowIf(!Running, this);
         var answer = await matchmaking.PunchesAsync(cancellation).ConfigureAwait(false);
+        if (answer.Error is { } error && OnlinePause.From(error.Code, answer.Status, error.Details) is not null)
+        {
+            _admission.Clear();
+            throw new ApiException(answer.Status, error.Code, "Online activity closed", error.Details, answer.RetryAfter);
+        }
         cancellation.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(!Running, this);
         if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches); return; }
@@ -58,7 +65,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
             _admission.Clear();
             throw new InvalidOperationException("Integrated world admission ended");
         }
-        // Transient failure keeps only the already verified, expiring snapshot.
+        // Keep the verified expiring snapshot, but preserve retry metadata for the bridge's circuit.
+        throw new ApiException(answer.Status, answer.Error?.Code ?? "HTTP.BAD_BODY", "Admission refresh unavailable",
+            answer.Error?.Details, answer.RetryAfter ?? answer.Error?.RetryAfter);
     }
 
     public void Kick(string xuid)
