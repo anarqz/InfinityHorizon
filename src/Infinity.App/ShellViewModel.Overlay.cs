@@ -73,7 +73,8 @@ public sealed partial class ShellViewModel
         var devLan = DevLanAdmission(mm);
         return ticket =>
         {
-            var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(Http, mm, ClientHeader, ticket);
+            var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
+                _config.Production?ProductionMatchmakingHttp.Value:Http, mm, ClientHeader, ticket);
             return new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], _config.Production?session.Api.TrustedTimeProvider():null, mode,
                 players => StartRelay(players, xuid, relayKeys, devLan, _config.Production?session.Api.TrustedTimeProvider():null), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
