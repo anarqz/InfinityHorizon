@@ -18,7 +18,7 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
     public const int MaxDescriptorBytes = 65536;
     public const long MaxZipBytes = 536870912;
     public const long MaxExpandedBytes = 1073741824;
-    public static string DefaultStateDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
+    public static string DefaultStateDirectory => Auth.ServerConfig.Default.StateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher"));
     private readonly byte[] _key;
     private readonly TimeProvider _clock;
     private readonly string? _stateDirectory;

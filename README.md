@@ -31,7 +31,7 @@ The launcher opens even when no server is available. Sign-in and online play req
 backend and the player's own game/Azimuth installation. `--server` / `FI_SERVER` and
 `--portal` / `FI_PORTAL` select a deployment; the defaults are loopback development addresses.
 Development signature trust is accepted only with development origins.
-Development remains the default. `--environment production` (or `FI_ENVIRONMENT=production`)
+Development builds keep development as their default. `--environment production` (or `FI_ENVIRONMENT=production`)
 explicitly selects the official HTTPS bootstrap and isolated local state; it never restores a
 development session. Production discovery validates each service origin and the native Identity
 Platform project, with no emulator or fallback to LAN. `run.ps1` always selects development.
@@ -43,6 +43,13 @@ unsigned. It never uses an official private key. Maintainers sign official distr
 separately. Production launch-ticket and relay public trust are embedded separately from the
 release/update signing key; development builds of the hook keep only local ticket trust.
 Binary builds belong in versioned releases, rather than in the source tree.
+
+`-Production` uses a separate `artifacts/production/win-x64` output and compiles the official
+production-only profile: launching without arguments uses the official HTTPS bootstrap and
+isolated production state. Ambient development endpoint variables are ignored and development
+CLI selections are refused. `-Output <new-empty-directory>` selects an isolated staging path;
+production builds cannot overwrite the development runtime. Local ticket/relay trust is omitted
+from the production managed binaries. Maintainers still sign all production bytes separately.
 
 The launcher checks its executable, bundled hook/overlay and any installed Infinity hook against
 the official release public key. Keep each detached `.sig` beside its binary. Missing, modified

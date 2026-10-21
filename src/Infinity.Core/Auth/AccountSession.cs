@@ -6,8 +6,12 @@ namespace Infinity.Core.Auth;
 /// <summary>Where the launcher talks to: the server (core and gate origins come from its <c>/info</c>) and the website used for account self-service.</summary>
 public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = false)
 {
-    /// <summary>Local development defaults; --server/--portal or FI_SERVER/FI_PORTAL select a deployment.</summary>
+    /// <summary>Official builds use production only; development builds keep their explicit local selection.</summary>
+#if INFINITY_PRODUCTION_BUILD
+    public static ServerConfig Default { get; } = new(ProductionDeployment.Core, ProductionDeployment.Core, true);
+#else
     public static ServerConfig Default { get; } = new(new Uri("http://127.0.0.1:8480"), new Uri("http://127.0.0.1:3120"));
+#endif
 
     /// <summary><c>--server &lt;url&gt;</c> / <c>--portal &lt;url&gt;</c>, then <c>FI_SERVER</c> / <c>FI_PORTAL</c>, then <see cref="Default"/>.</summary>
     public static ServerConfig From(IReadOnlyList<string> args, Func<string, string?> env)
@@ -22,12 +26,21 @@ public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = fals
                 throw new ArgumentException("Invalid configuration argument");
             return args[at + 1];
         }
+#if INFINITY_PRODUCTION_BUILD
+        // Environment inherited from a development shortcut/prefix must never select LAN.
+        var server = Arg("--server");
+        var portal = Arg("--portal");
+        var environment = Arg("--environment");
+        if (environment is not (null or "production")) throw new ArgumentException("This build uses production only");
+        const bool production = true;
+#else
         var server = Arg("--server") ?? env("FI_SERVER");
         var portal = Arg("--portal") ?? env("FI_PORTAL");
         var environment = Arg("--environment") ?? env("FI_ENVIRONMENT");
         if (environment is not (null or "development" or "production"))
             throw new ArgumentException("Environment must be development or production");
         var production = environment == "production";
+#endif
         var config = new ServerConfig(
             ApiClient.CheckOrigin(server is null ? production ? ProductionDeployment.Core : Default.Server : new Uri(server)),
             ApiClient.CheckOrigin(portal is null ? production ? ProductionDeployment.Core : Default.Portal : new Uri(portal)), production);
@@ -37,6 +50,7 @@ public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = fals
 
     public void Validate()
     {
+        if (BuildProfile.ProductionOnly && !Production) throw new ArgumentException("This build uses production only");
         if (Production)
         {
             ProductionDeployment.RequireOrigin(Server, ProductionDeployment.Core);

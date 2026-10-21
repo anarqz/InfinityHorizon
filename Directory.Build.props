@@ -14,4 +14,11 @@
     <!-- CA1707: test names use underscores; CA1515/CA1716: public types are the API the tests use. -->
     <NoWarn>$(NoWarn);CA1707;CA1515;CA1716</NoWarn>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(InfinityProduction)' == 'true'">
+    <DefineConstants>$(DefineConstants);INFINITY_PRODUCTION_BUILD</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="InfinityProfile" Value="development" Condition="'$(InfinityProduction)' != 'true'" />
+    <AssemblyMetadata Include="InfinityProfile" Value="production" Condition="'$(InfinityProduction)' == 'true'" />
+  </ItemGroup>
 </Project>
