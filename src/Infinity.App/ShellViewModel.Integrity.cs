@@ -14,6 +14,8 @@ public sealed partial class ShellViewModel
 {
     private OnlineContentSession? _integrity;
     private CancellationTokenSource? _integrityStop;
+    private readonly CancellationTokenSource _integrityLifetime = new();
+    private bool _integrityRefreshPending;
     private readonly ReceiverReadinessLease _receiverReadiness = new();
     private GameContentLocation? _contentLocation;
     private bool _contentLocationLoaded, _integrityChecking, _integrityFailed;
@@ -67,28 +69,42 @@ public sealed partial class ShellViewModel
         await CheckIntegrityAsync();
     }
 
-    private void ClearIntegrity()
+    private void ClearIntegrity(bool preserveConfiguration = false)
     {
+        if (_integrityChecking) _integrityRefreshPending = true;
         _integrityStop?.Cancel();
         _integrity?.Dispose(); _integrity = null;
         _receiverReadiness.Disconnected();
-        _configurationHasError = false;
-        _configurationRuntimeIssue = false;
-        if (_messageForConfiguration) Message = null;
+        if (!preserveConfiguration)
+        {
+            _configurationHasError = _configurationRuntimeIssue = _configurationErrorFromIntegrity = false;
+            if (_messageForConfiguration) Message = null;
+        }
         _integrityStatus = null;
         _integrityFailed = false;
     }
 
     public void CancelIntegrityCheck() => _integrityStop?.Cancel();
 
-    public async Task CheckIntegrityAsync(string? futureSessionId = null)
+    public Task CheckIntegrityAsync(string? futureSessionId = null) => CheckIntegrityCoreAsync(futureSessionId, automatic: false);
+
+    /// <summary>One event-driven check; no timer/retry loop. Authentication and a selected folder are required.</summary>
+    public Task RefreshIntegrityAutomaticallyAsync() => CheckIntegrityCoreAsync(null, automatic: true);
+
+    private async Task CheckIntegrityCoreAsync(string? futureSessionId, bool automatic)
     {
-        if (!CanCheckIntegrity || _session is not { } session) return;
+        if (_integrityLifetime.IsCancellationRequested || _session is not { } session) return;
+        if (automatic)
+        {
+            if (!SignedIn || !OnlineServiceAllowsPlay || HasDeletionPending || ContentLocation is null || Playing || _searching || _integrityChecking) return;
+        }
+        else if (!CanCheckIntegrity) return;
         VerificationCache.Invalidate();
         var install = _install;
-        ClearIntegrity();
+        ClearIntegrity(preserveConfiguration: automatic && !_configurationErrorFromIntegrity);
         if (ContentLocation is not { } location) { _integrityStatus = S["integrity.content_unset"]; Changed(string.Empty); return; }
-        using var stop = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_integrityLifetime.Token);
+        stop.CancelAfter(TimeSpan.FromMinutes(5));
         _integrityStop = stop; _integrityChecking = true; Changed(string.Empty);
         OnlineContentSession? check = null;
         try
@@ -106,7 +122,7 @@ public sealed partial class ShellViewModel
         }
         catch (Exception error) when (error is ApiException or HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException or OperationCanceledException or ObjectDisposedException)
         {
-            if (ReferenceEquals(_session, session) && ReferenceEquals(_install, install))
+            if (!_integrityLifetime.IsCancellationRequested && ReferenceEquals(_session, session) && ReferenceEquals(_install, install))
             {
                 _integrityStatus = S[error is OperationCanceledException ? "integrity.cancelled" : "integrity.inconclusive"];
                 _integrityFailed = error is not OperationCanceledException;
@@ -117,6 +133,11 @@ public sealed partial class ShellViewModel
             check?.Dispose();
             if (ReferenceEquals(_integrityStop, stop)) { _integrityStop = null; _integrityChecking = false; }
             Changed(string.Empty);
+            if (_integrityRefreshPending)
+            {
+                _integrityRefreshPending = false;
+                await RefreshIntegrityAutomaticallyAsync();
+            }
         }
     }
 

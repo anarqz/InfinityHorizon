@@ -20,6 +20,7 @@ public sealed partial class ShellViewModel
     private HookPackage? _hookPackage;
     private string? _hookPackageError;
     private bool _configurationHasError, _messageForConfiguration, _configurationRuntimeIssue;
+    private bool _configurationErrorFromIntegrity;
     private bool _azimuthChoiceFailed;
 
     /// <summary>
@@ -49,11 +50,12 @@ public sealed partial class ShellViewModel
 
     public string? DisplayMessage => _messageForConfiguration && !ShowSetup ? null : Message;
 
-    private void ConfigurationMessage(string message, bool error = false)
+    private void ConfigurationMessage(string message, bool error = false, bool integrity = false)
     {
         Message = message;
         _messageForConfiguration = true;
         _configurationHasError = error;
+        _configurationErrorFromIntegrity = integrity;
         Changed(string.Empty);
     }
 

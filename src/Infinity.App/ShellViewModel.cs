@@ -326,6 +326,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             Message = DeletionPendingText;
         }
         else Message = S["signin.done_toast"];
+        await RefreshIntegrityAutomaticallyAsync();
     }
 
     private void FillProfiles()
@@ -393,6 +394,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _integrityLifetime.Cancel();
         DisposeOnlineStatus();
         _updateStop.Cancel();
         _updater?.Dispose();
