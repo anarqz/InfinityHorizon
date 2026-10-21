@@ -105,7 +105,7 @@ public abstract record SupervisorEvent
     /// <summary>The play session is over; <paramref name="Left"/> tells whether the gate leave was sent.</summary>
     public sealed record Ended(string Reason, bool Left) : SupervisorEvent;
 
-    public sealed record Error(string Message) : SupervisorEvent;
+    public sealed record Error(string Message, bool DuringAdmission = false) : SupervisorEvent;
     public sealed record OnlinePaused(OnlinePause Pause) : SupervisorEvent;
 
     /// <summary>Something the launcher decided for this launch, for the log (Wine overrides, ...).</summary>
@@ -171,6 +171,7 @@ public sealed class PlaySupervisor
 
     // the session's current game access ticket (matchmaking's X-Fi-Session), renewed by each heartbeat
     private volatile string _ticket = string.Empty;
+    private bool _admissionPending;
 
     public PlaySupervisor(
         SupervisorConfig config,
@@ -222,7 +223,7 @@ public sealed class PlaySupervisor
             {
                 if (e is ApiException apiClosed && OnlinePause.From(apiClosed) is { } pause)
                 { _online.TryPause(pause); EmitPause(pause); }
-                _emit(new SupervisorEvent.Error(e is ApiException api ? api.Code : e.Message));
+                _emit(new SupervisorEvent.Error(e is ApiException api ? api.Code : e.Message, DuringAdmission: _admissionPending));
                 _emit(new SupervisorEvent.Ended("error", false));
                 return;
             }
@@ -249,6 +250,7 @@ public sealed class PlaySupervisor
     /// <summary>One gate session and one game process; null when it ended without a game exit.</summary>
     private async Task<ExitDisposition?> OneSessionAsync(string? initialSessionId, CancellationToken cancellation)
     {
+        _admissionPending = false;
         using var preparing = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _online.Cancellation);
         if (_online.IsPaused) { EmitPause(await _online.Paused.ConfigureAwait(false)); return null; }
         var handoff = new Handoff(HandoffChannel.Pipe, Launch.NewNonce());
@@ -256,6 +258,7 @@ public sealed class PlaySupervisor
         using var pipe = _pipes(handoff);
         // the UI pipe too, before the child: the overlay connects once the hook loaded it
         using var uiPipe = _config.Overlay is not null && _uiPipes is not null ? _uiPipes(handoff) : null;
+        _admissionPending = true;
         var admission = await new GateAdmission(_gate, _emit, _clock).WaitAsync(
             id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false),
             preparing.Token, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
@@ -283,6 +286,7 @@ public sealed class PlaySupervisor
             await LeaveQuietly(sessionId, "player", fence).ConfigureAwait(false);
             throw new TicketException($"the server's launch ticket was refused: {e.Message}");
         }
+        _admissionPending = false;
         Write(state);
 
         // OD-52 / OD-60: the cloud save before the game (seed, download, install); never over an unknown state.

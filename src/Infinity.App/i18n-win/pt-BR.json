@@ -278,6 +278,7 @@
   "queue.leave_pending": "Não foi possível confirmar sua saída. As consultas pararam; o servidor libera uma vaga sem consultas após 90 segundos.",
   "queue.left": "Você saiu da fila. Entre novamente quando quiser.",
   "queue.ended": "Sua vaga na fila foi encerrada. Selecione Jogar online para entrar novamente.",
+  "queue.failed": "Não foi possível iniciar sua sessão online. Tente novamente. Se o problema continuar, entre em contato com o suporte no Discord.",
   "bugs.eyebrow": "AJUDE A MELHORAR O BETA",
   "bugs.title": "Encontrou um bug?",
   "bugs.intro": "Conte o que aconteceu. Relatos claros nos ajudam a corrigir problemas e manter todos na estrada.",

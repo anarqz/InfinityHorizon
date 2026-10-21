@@ -278,6 +278,7 @@
   "queue.leave_pending": "We couldn’t confirm your departure. Polling has stopped; the server releases an unpolled queue place after 90 seconds.",
   "queue.left": "You left the queue. Join again whenever you’re ready.",
   "queue.ended": "Your place in the queue has ended. Select Play online to join again.",
+  "queue.failed": "We couldn’t start your online session. Try again. If the problem continues, contact support on Discord.",
   "bugs.eyebrow": "HELP IMPROVE THE BETA",
   "bugs.title": "Found a bug?",
   "bugs.intro": "Tell us what happened. Clear reports help us fix problems and keep everyone driving.",

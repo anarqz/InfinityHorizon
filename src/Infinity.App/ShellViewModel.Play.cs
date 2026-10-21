@@ -395,6 +395,11 @@ public sealed partial class ShellViewModel
                 ConfigurationMessage(_integrityStatus, error: true, integrity: true);
                 SetStatus(string.Empty);
                 break;
+            case SupervisorEvent.Error { DuringAdmission: true }:
+                // Admission errors belong on Play. Keep technical installation diagnostics in Configure.
+                Message = S["queue.failed"];
+                SetStatus(Message);
+                break;
             case SupervisorEvent.Error err:
                 ConfigurationMessage(S["supervisor.launch_refused"] + " (" + err.Message + ")", error: _configurationHasError);
                 _configurationRuntimeIssue = true;
