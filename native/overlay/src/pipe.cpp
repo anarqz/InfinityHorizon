@@ -98,6 +98,12 @@ struct Reader {
 void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
     Reader r{body, size};
     switch (type) {
+    case 0x13: {
+        const uint8_t state = r.U8();
+        const std::string text = r.Str();
+        if (r.ok && r.left == 0 && state <= 2 && text.size() <= 4096) SetConnectionDetails(state, text);
+        break;
+    }
     case 0x12: {
         const uint8_t allowed = r.U8();
         const std::string message = r.Str();
@@ -300,6 +306,7 @@ void Session(HANDLE pipe) {
     {
         std::lock_guard<std::mutex> lock(g_out_lock);
         g_connected = false;
+        SetConnectionDetails(2, "");
         g_out.clear();
     }
     CloseHandle(read_event);

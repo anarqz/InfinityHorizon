@@ -28,6 +28,7 @@ public sealed class OnlineContentSession : IDisposable
     public InstallationState State => !_revoked && _permission is { State: "compatible" } ? InstallationState.Compatible
         : _permission?.State == "incompatible" ? InstallationState.Incompatible : InstallationState.Inconclusive;
     public string? CarDbSha256 => _snapshot?.Files.FirstOrDefault(file => file.FileId == "car_database")?.Sha256;
+    public bool FilesCurrent => _snapshot?.IsCurrent() == true;
     public ImmutableArray<InstallationFinding> Findings
     {
         get

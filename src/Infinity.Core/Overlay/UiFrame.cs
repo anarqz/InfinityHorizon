@@ -25,6 +25,7 @@ public static class UiEventKind
 
     /// <summary>The player confirmed "Quit game" in the panel: the supervisor closes the game.</summary>
     public const byte Quit = 7;
+    public const byte ConnectionDetails = 8;
 }
 
 /// <summary><c>Status.tier</c>.</summary>
@@ -62,7 +63,7 @@ public enum UiDirection
 
 /// <summary>
 /// One UI-pipe frame between the launcher and the overlay (<c>&lt;control pipe&gt;-ui</c>; overlay_ui.rs).
-/// Same envelope as the control pipe, its own type space 0x01-0x12 (0x07-0x10: worlds, OD-54, OD-63;
+/// Same envelope as the control pipe, its own type space 0x01-0x13 (0x07-0x10: worlds, OD-54, OD-63;
 /// native/overlay/src/pipe.cpp is the other end). The hook never sees it.
 /// </summary>
 public abstract record UiFrame
@@ -76,6 +77,12 @@ public abstract record UiFrame
     public abstract byte Type { get; }
 
     public abstract UiDirection Direction { get; }
+
+    public sealed record ConnectionDetails(byte State, string Text) : UiFrame
+    {
+        public override byte Type => 0x13;
+        public override UiDirection Direction => UiDirection.ToOverlay;
+    }
 
     /// <summary>0x11, launcher → overlay; expires after 1500 ms without an update.</summary>
     public sealed record GameReadiness(bool Ready) : UiFrame
@@ -235,6 +242,10 @@ public abstract record UiFrame
         var w = new WireWriter(Type);
         switch (this)
         {
+            case ConnectionDetails details:
+                if (details.State > 2 || System.Text.Encoding.UTF8.GetByteCount(details.Text) > 4096) throw new ProtocolException("Invalid connection details");
+                w.U8(details.State); w.Str(details.Text);
+                break;
             case GameReadiness ready:
                 w.Flag(ready.Ready);
                 break;
@@ -263,6 +274,7 @@ public abstract record UiFrame
                 w.Flag(p.Open);
                 break;
             case UiEvent e:
+                if (e.Kind == UiEventKind.ConnectionDetails && e.Detail.Length != 0) throw new ProtocolException("Connection query detail must be empty");
                 w.U8(e.Kind);
                 w.Str(e.Detail);
                 break;
@@ -363,7 +375,7 @@ public abstract record UiFrame
         {
             return null;
         }
-        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x12)
+        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x13)
         {
             throw new ProtocolException($"unknown ui frame type 0x{buffer[4]:x2}");
         }
@@ -391,9 +403,12 @@ public abstract record UiFrame
             0x0F => new WorldAction(r.U8(), r.Str(), r.Str(), r.U8()),
             0x10 => new ActionResult(r.U8(), r.U8(), r.Str()),
             0x11 => new GameReadiness(r.Flag("GameReadiness.ready")),
-            _ => new WorldAccess(r.Flag("WorldAccess.allowed"), r.Str()),
+            0x12 => new WorldAccess(r.Flag("WorldAccess.allowed"), r.Str()),
+            _ => new ConnectionDetails(r.U8(), r.Str()),
         };
         r.End();
+        if (frame is ConnectionDetails details && (details.State > 2 || System.Text.Encoding.UTF8.GetByteCount(details.Text) > 4096)) throw new ProtocolException("Invalid connection details");
+        if (frame is UiEvent { Kind: UiEventKind.ConnectionDetails } query && query.Detail.Length != 0) throw new ProtocolException("Connection query detail must be empty");
         used = 4 + length.Value;
         return frame;
     }

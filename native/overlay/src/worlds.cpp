@@ -121,7 +121,7 @@ void StartSync(bool hosted) {
     g_sync_hosted = hosted;
     g_sync_result = 1000;
     const uint64_t serial = ++g_sync_serial;
-    Log("livery: syncing the current car before the world");
+    Log("livery: syncing the current car before the lobby");
     std::thread([serial] {
         const int result = LiverySync(kSyncTimeoutMs);
         if (g_sync_serial == serial) g_sync_result = result;
@@ -139,7 +139,7 @@ void FinishSync(int result) {
     } else {
         g_screen = Screen::List;
         PushToast(ToastKind::Success, T("Seat reserved", "Lugar reservado"),
-                  T("Go to Free Roam Online to join the world", "Vá em Free Roam Online para entrar no mundo"));
+                  T("Go to Free Roam Online to join the lobby", "Vá em Free Roam Online para entrar no lobby"));
         CloseSidebar();
     }
     g_mine_refresh = true;
@@ -261,7 +261,7 @@ void Join(const std::string &world, const std::string &code) {
 void JoinByCode() {
     if (!GameReady() || !WorldAccessAllowed()) return;
     WithWarning([] {
-        OpenCodeEntry(T("Enter the world code", "Digite o código do mundo"), "0123456789", [](bool join, const std::string &code) {
+        OpenCodeEntry(T("Enter the lobby code", "Digite o código do lobby"), "0123456789", [](bool join, const std::string &code) {
             if (join) {
                 g_warned = true; // already accepted on the way in
                 Join(std::string(), code);
@@ -284,7 +284,7 @@ void StartCreate(bool supporter) {
 void SubmitCreate() {
     if (!GameReady() || !WorldAccessAllowed()) { g_screen = Screen::List; return; }
     g_world_action_busy = false;
-    g_busy = T("Creating your world...", "Criando seu mundo...");
+    g_busy = T("Creating your lobby...", "Criando seu lobby...");
     g_screen = Screen::Busy;
     if (DevHost()) {
         g_dev_wait = 0.8f;
@@ -323,7 +323,7 @@ void DevAnswer() {
         break;
     case 3:
         g_shared.join_status = 3;
-        g_shared.join_message = T("That code does not open any world", "Esse código não abre nenhum mundo");
+        g_shared.join_message = T("That code does not open any lobby", "Esse código não abre nenhum lobby");
         ++g_shared.join_serial;
         break;
     case 4:
@@ -353,7 +353,7 @@ void DevAnswer() {
     }
     case 11: case 12: case 13: case 14: case 15: {
         const int action = g_dev_kind - 10;
-        static const char *done[] = {"", "Your world is closed.", "You left the world.", "The player was removed from your world.", "Friend request sent.",
+        static const char *done[] = {"", "Your lobby is closed.", "You left the lobby.", "The player was removed from your lobby.", "Friend request sent.",
                                      "Thanks. The report was sent to the moderators."};
         g_shared.action = static_cast<uint8_t>(action);
         g_shared.action_status = 0;
@@ -433,7 +433,7 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     std::string sub = w.host;
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
     if (locked) sub += std::string(" · ") + LockName(w.lock);
-    if (!GameReady()) sub = T("Load your game to access worlds", "Carregue sua partida para acessar os mundos");
+    if (!GameReady()) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
     TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), w.lock == 1 ? kPinkU : kTextDim, sub.c_str());
     dl->PopClipRect();
     const std::string count = std::to_string(w.players) + "/" + std::to_string(w.max);
@@ -453,7 +453,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
         return;
     }
     const bool ready = GameReady();
-    const char *load_hint = T("Load your game to access worlds", "Carregue sua partida para acessar os mundos");
+    const char *load_hint = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
     // filter chips
     const char *chips[4] = {FilterName(WorldFilter::Friends), FilterName(WorldFilter::Near), FilterName(WorldFilter::Global), T("Hide full", "Sem cheios")};
     float cx = x;
@@ -486,7 +486,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
     {
         const int index = static_cast<int>(g_items.size());
         const ImVec2 a(x, y), b(x + w, y + th);
-        Tile(dl, a, b, focus_of(index), kIconAddFriend, T("Create a world", "Criar um mundo"), ready ? T("Pick who can join, players and latency", "Escolha quem entra, jogadores e latência") : load_hint, !ready);
+        Tile(dl, a, b, focus_of(index), kIconAddFriend, T("Create a lobby", "Criar um lobby"), ready ? T("Pick who can join, players and latency", "Escolha quem entra, jogadores e latência") : load_hint, !ready);
         if (Clicked(a, b)) { g_focus = index; g_accept = true; }
         g_items.push_back({Item::CreateTile});
         y += th + gap;
@@ -494,31 +494,31 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
     {
         const int index = static_cast<int>(g_items.size());
         const ImVec2 a(x, y), b(x + w, y + th);
-        Tile(dl, a, b, focus_of(index), kIconLock, T("Enter a world code", "Digitar o código de um mundo"), ready ? T("For private and friends worlds", "Para mundos privados e de amigos") : load_hint, !ready);
+        Tile(dl, a, b, focus_of(index), kIconLock, T("Enter a lobby code", "Digitar o código de um lobby"), ready ? T("For private and friends lobbies", "Para lobbies privados e de amigos") : load_hint, !ready);
         if (Clicked(a, b)) { g_focus = index; g_accept = true; }
         g_items.push_back({Item::CodeTile});
         y += th + 16 * s;
     }
 
     if (g_filter == WorldFilter::None) {
-        const char *hint = T("Pick a filter to find worlds.", "Escolha um filtro para encontrar mundos.");
+        const char *hint = T("Pick a filter to find lobbies.", "Escolha um filtro para encontrar lobbies.");
         TextAt(dl, f.body, ImVec2(x, y), kTextDim, hint);
         return;
     }
     if (sh.list_status == 1) {
         const char *dots = (static_cast<int>(ImGui::GetTime() * 3) % 3 == 0) ? "·" : (static_cast<int>(ImGui::GetTime() * 3) % 3 == 1) ? "· ·" : "· · ·";
-        TextAt(dl, f.body, ImVec2(x, y), kTextDim, (std::string(T("Looking for worlds ", "Procurando mundos ")) + dots).c_str());
+        TextAt(dl, f.body, ImVec2(x, y), kTextDim, (std::string(T("Looking for lobbies ", "Procurando lobbies ")) + dots).c_str());
         return;
     }
     if (sh.list_status == 2) {
-        Wrapped(dl, f.body, ImVec2(x, y), w, kRed, sh.list_message.empty() ? T("Could not load the worlds.", "Não foi possível carregar os mundos.") : sh.list_message.c_str());
+        Wrapped(dl, f.body, ImVec2(x, y), w, kRed, sh.list_message.empty() ? T("Could not load the lobbies.", "Não foi possível carregar os lobbies.") : sh.list_message.c_str());
         return;
     }
     const auto joinable = Joinable(sh.rows);
     const auto locked = supporter ? std::vector<WorldRow>{} : Locked(sh.rows);
     const float wh = 64 * s;
     if (joinable.empty()) {
-        TextAt(dl, f.body, ImVec2(x, y), kTextDim, T("No worlds here right now. Create your own!", "Nenhum mundo aqui agora. Crie o seu!"));
+        TextAt(dl, f.body, ImVec2(x, y), kTextDim, T("No lobbies here right now. Create your own!", "Nenhum lobby aqui agora. Crie o seu!"));
         y += 36 * s;
     }
     for (size_t i = 0; i < joinable.size() && y + wh < bottom; ++i) {
@@ -531,7 +531,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
     }
     if (!locked.empty() && y + 40 * s < bottom) {
         y += 10 * s;
-        TextAt(dl, f.tag, ImVec2(x, y), kPinkU, T("INFINITY SUPPORTER WORLDS", "MUNDOS INFINITY SUPPORTER"));
+        TextAt(dl, f.tag, ImVec2(x, y), kPinkU, T("INFINITY SUPPORTER LOBBIES", "LOBBIES INFINITY SUPPORTER"));
         y += 24 * s;
         for (size_t i = 0; i < locked.size() && y + wh < bottom; ++i) {
             const int index = static_cast<int>(g_items.size());
@@ -564,7 +564,7 @@ void AcceptList(bool supporter, const Shared &sh) {
         if (item.row < static_cast<int>(rows.size())) {
             const WorldRow &r = rows[item.row];
             if (r.lock == 4) {
-                PushToast(ToastKind::Info, r.name, T("This world is full. Try another one.", "Esse mundo está cheio. Tente outro."));
+                PushToast(ToastKind::Info, r.name, T("This lobby is full. Try another one.", "Esse lobby está cheio. Tente outro."));
             } else if (r.lock == 3) {
                 JoinByCode();
             } else if (r.lock != 0) {
@@ -598,9 +598,9 @@ void DrawWarning(ImDrawList *dl, float x, float y, float w) {
     dl->AddText(f.icon_big, f.icon_big->FontSize, ImVec2(x, y), kAmber, kIconWarning);
     y += 52 * s;
     const char *text = T(
-        "Online play exchanges data with other players. Bugs and crashes are expected in public worlds with unknown players. "
+        "Online play exchanges data with other players. Bugs and crashes are expected in public lobbies with unknown players. "
         "Infinity mitigates problems where possible, but cannot prevent every problem.\n\nPrefer playing with people you trust.",
-        "Jogar online troca dados com outros jogadores. Bugs e travamentos são esperados em mundos públicos com jogadores desconhecidos. "
+        "Jogar online troca dados com outros jogadores. Bugs e travamentos são esperados em lobbies públicos com jogadores desconhecidos. "
         "O Infinity mitiga os problemas quando possível, mas não consegue evitar todos eles.\n\nPrefira jogar com pessoas de confiança.");
     Wrapped(dl, f.body, ImVec2(x, y), w, kText, text);
     y += WrappedHeight(f.body, w, text) + 28 * s;
@@ -640,7 +640,7 @@ void DrawBusy(ImDrawList *dl, float x, float y, float w) {
 }
 
 void DrawCreate(ImDrawList *dl, float x, float y, float w, bool supporter) {
-    y = Panel(dl, x, y, T("Create a world", "Criar um mundo"));
+    y = Panel(dl, x, y, T("Create a lobby", "Criar um lobby"));
     const float fh = 66 * s, gap = 8 * s;
     const std::string players = std::to_string(g_create.players);
     struct Field { const char *label; std::string value; bool choice; } fields[] = {
@@ -669,19 +669,19 @@ void DrawCreate(ImDrawList *dl, float x, float y, float w, bool supporter) {
         y += fh + gap;
     }
     if (!supporter) {
-        Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("Infinity Supporters can also open worlds to Supporters only or to friends.",
-                                                          "Infinity Supporters também podem abrir mundos só para Supporters ou para amigos."));
+        Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("Infinity Supporters can also open lobbies to Supporters only or to friends.",
+                                                          "Infinity Supporters também podem abrir lobbies só para Supporters ou para amigos."));
         y += 44 * s;
     } else {
         y += 8 * s;
     }
     const ImVec2 a(x, y), b(x + w, y + 56 * s);
-    Button(dl, a, b, g_create.field == 4, true, T("Create world", "Criar mundo"));
+    Button(dl, a, b, g_create.field == 4, true, T("Create lobby", "Criar lobby"));
     if (Clicked(a, b)) { g_create.field = 4; g_accept = true; }
 }
 
 void DrawHosted(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
-    y = Panel(dl, x, y, T("Your world is open", "Seu mundo está aberto"));
+    y = Panel(dl, x, y, T("Your lobby is open", "Seu lobby está aberto"));
     TextAt(dl, f.body, ImVec2(x, y), kText, g_create.name.c_str());
     y += 30 * s;
     TextAt(dl, f.small, ImVec2(x, y), kTextDim, AudienceName(g_create.audience));
@@ -698,8 +698,8 @@ void DrawHosted(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
         dl->AddText(f.heading, size, ImVec2(x + (w - cs.x) / 2, y + 14 * s), kText, code.c_str());
         y = b.y + 24 * s;
     }
-    Wrapped(dl, f.body, ImVec2(x, y), w, kText, T("Go to Free Roam Online in the game's menu to start your world.",
-                                                  "Vá em Free Roam Online no menu do jogo para começar seu mundo."));
+    Wrapped(dl, f.body, ImVec2(x, y), w, kText, T("Go to Free Roam Online in the game's menu to start your lobby.",
+                                                  "Vá em Free Roam Online no menu do jogo para começar seu lobby."));
     y += 70 * s;
     const ImVec2 a(x, y), b(x + w, y + 56 * s);
     Button(dl, a, b, true, true, T("OK", "OK"));
@@ -707,12 +707,12 @@ void DrawHosted(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
 }
 
 void DrawSupporter(ImDrawList *dl, float x, float y, float w) {
-    y = Panel(dl, x, y, T("Infinity Supporter worlds", "Mundos Infinity Supporter"));
+    y = Panel(dl, x, y, T("Infinity Supporter lobbies", "Lobbies Infinity Supporter"));
     dl->AddText(f.icon_big, f.icon_big->FontSize, ImVec2(x, y), kPinkU, kIconStar);
     y += 52 * s;
-    const char *text = T("These worlds are open to Infinity Supporters. Supporters keep Infinity's servers running, and get worlds for "
+    const char *text = T("These lobbies are open to Infinity Supporters. Supporters keep Infinity's servers running, and get lobbies for "
                          "Supporters, friends and player profiles, cloud saves and leaderboards.\n\nBecome a Supporter in the Infinity launcher.",
-                         "Esses mundos são abertos para Infinity Supporters. Os Supporters mantêm os servidores do Infinity no ar e ganham mundos "
+                         "Esses lobbies são abertos para Infinity Supporters. Os Supporters mantêm os servidores do Infinity no ar e ganham lobbies "
                          "para Supporters, amigos e perfis de jogadores, saves na nuvem e placares.\n\nTorne-se um Supporter pelo launcher do Infinity.");
     Wrapped(dl, f.body, ImVec2(x, y), w, kText, text);
     y += WrappedHeight(f.body, w, text) + 28 * s;
@@ -725,7 +725,7 @@ void DrawSupporter(ImDrawList *dl, float x, float y, float w) {
 const char *MemberStatus(const MemberRow &m) {
     switch (m.role) {
     case 0: return T("Host", "Anfitrião");
-    case 1: return T("In the world", "No mundo");
+    case 1: return T("In the lobby", "No lobby");
     default: return T("On the way", "Chegando");
     }
 }
@@ -759,7 +759,7 @@ void MemberTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow 
 
 void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyWorld &m) {
     g_mine_role = m.role;
-    const char *tag = m.role == 1 ? T("YOUR WORLD", "SEU MUNDO") : m.role == 2 ? T("SEAT RESERVED", "LUGAR RESERVADO") : T("YOU ARE IN A WORLD", "VOCÊ ESTÁ EM UM MUNDO");
+    const char *tag = m.role == 1 ? T("YOUR LOBBY", "SEU LOBBY") : m.role == 2 ? T("SEAT RESERVED", "LUGAR RESERVADO") : T("YOU ARE IN A LOBBY", "VOCÊ ESTÁ EM UM LOBBY");
     TextAt(dl, f.tag, ImVec2(x, y), kPinkU, tag);
     y += 24 * s;
     dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + 44 * s), true);
@@ -782,7 +782,7 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
     y += 6 * s;
     const float bh = 52 * s;
     const ImVec2 a(x, y), b(x + w, y + bh);
-    Button(dl, a, b, g_mine_focus == 0, false, m.role == 1 ? T("Close world", "Fechar mundo") : T("Leave world", "Sair do mundo"));
+    Button(dl, a, b, g_mine_focus == 0, false, m.role == 1 ? T("Close lobby", "Fechar lobby") : T("Leave lobby", "Sair do lobby"));
     if (Clicked(a, b)) { g_mine_focus = 0; g_accept = true; }
     y += bh + 20 * s;
 
@@ -812,7 +812,7 @@ struct Choice {
 
 std::vector<Choice> MemberChoices(const MemberRow &m) {
     std::vector<Choice> out;
-    if (g_mine_role == 1 && m.role != 0) out.push_back({3, T("Remove from my world", "Remover do meu mundo"), true});
+    if (g_mine_role == 1 && m.role != 0) out.push_back({3, T("Remove from my lobby", "Remover do meu lobby"), true});
     switch (m.friend_state) {
     case 0: out.push_back({4, T("Add friend", "Adicionar amigo"), true}); break;
     case 2: out.push_back({4, T("Friend request sent", "Pedido de amizade enviado"), false}); break;
@@ -866,11 +866,11 @@ void DrawReport(ImDrawList *dl, float x, float y, float w) {
 }
 
 void DrawConfirm(ImDrawList *dl, float x, float y, float w) {
-    const char *title = g_confirm == 1 ? T("Close your world?", "Fechar seu mundo?") : g_confirm == 2 ? T("Leave this world?", "Sair deste mundo?")
+    const char *title = g_confirm == 1 ? T("Close your lobby?", "Fechar seu lobby?") : g_confirm == 2 ? T("Leave this lobby?", "Sair deste lobby?")
                                                                                       : T("Remove this player?", "Remover este jogador?");
-    const char *text = g_confirm == 1 ? T("Everyone in it goes back to their own world.", "Todos que estão nele voltam para o próprio mundo.")
+    const char *text = g_confirm == 1 ? T("Everyone in it goes back to their own lobby.", "Todos que estão nele voltam para o próprio lobby.")
                        : g_confirm == 2 ? T("Your seat is let go. Leave Free Roam Online in the game's menu too.", "Seu lugar é liberado. Saia também do Free Roam Online no menu do jogo.")
-                                        : T("They leave your world now and cannot join it again while it is open.", "Ele sai do seu mundo agora e não pode voltar enquanto ele estiver aberto.");
+                                        : T("They leave your lobby now and cannot join it again while it is open.", "Ele sai do seu lobby agora e não pode voltar enquanto ele estiver aberto.");
     y = Panel(dl, x, y, title);
     if (g_confirm == 3) {
         TextAt(dl, f.body, ImVec2(x, y), kText, g_member.gamertag.c_str());
@@ -878,7 +878,7 @@ void DrawConfirm(ImDrawList *dl, float x, float y, float w) {
     }
     Wrapped(dl, f.body, ImVec2(x, y), w, kText, text);
     y += WrappedHeight(f.body, w, text) + 24 * s;
-    const char *yes = g_confirm == 1 ? T("Close world", "Fechar mundo") : g_confirm == 2 ? T("Leave world", "Sair do mundo") : T("Remove", "Remover");
+    const char *yes = g_confirm == 1 ? T("Close lobby", "Fechar lobby") : g_confirm == 2 ? T("Leave lobby", "Sair do lobby") : T("Remove", "Remover");
     Buttons(dl, x, y, w, {{1, yes, true}, {0, T("Back", "Voltar"), true}});
 }
 } // namespace
@@ -1024,8 +1024,8 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     const float reminder_y = bottom - reminder_height;
     Wrapped(dl, f.small, ImVec2(x, reminder_y), w, kTextDim, reminder);
     const char *warning = T(
-        "Public worlds: bugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
-        "Mundos públicos: bugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.");
+        "Public lobbies: bugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
+        "Lobbies públicos: bugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.");
     const float warning_height = WrappedHeight(f.small, w, warning);
     const float warning_y = reminder_y - 12 * s - warning_height;
     Wrapped(dl, f.small, ImVec2(x, warning_y), w, kAmber, warning);
@@ -1057,7 +1057,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
             } else if (sh.join_status == 3) {
                 // a wrong code: back on the code screen, with the reason
                 g_screen = Screen::List;
-                OpenCodeEntry(T("Enter the world code", "Digite o código do mundo"), "0123456789", [](bool join, const std::string &code) {
+                OpenCodeEntry(T("Enter the lobby code", "Digite o código do lobby"), "0123456789", [](bool join, const std::string &code) {
                     if (join) Join(std::string(), code);
                 });
                 CodeEntryRefused(sh.join_message);
@@ -1077,7 +1077,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
                 StartSync(true); // then the Hosted screen
             } else {
                 g_screen = Screen::Create;
-                PushToast(ToastKind::Warning, T("Could not create the world", "Não foi possível criar o mundo"), sh.hosted.message);
+                PushToast(ToastKind::Warning, T("Could not create the lobby", "Não foi possível criar o lobby"), sh.hosted.message);
             }
         }
     }
@@ -1223,7 +1223,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         if (accept) {
             if (g_create.field == 0) {
                 KeyboardRequest r;
-                r.title = T("World name", "Nome do mundo");
+                r.title = T("Lobby name", "Nome do lobby");
                 r.initial = g_create.name;
                 r.max = 48;
                 OpenKeyboard(r, [](bool ok, const std::string &text) {

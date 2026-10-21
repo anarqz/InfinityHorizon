@@ -34,6 +34,7 @@ enum class ToastKind : uint8_t { Info, Success, Warning, Error, Achievement, Upd
 
 void SetProfile(const std::string &gamertag, Tier tier);
 void SetLink(Link link, const std::string &detail);
+void SetConnectionDetails(uint8_t state, const std::string &text);
 // ttl is the fully open hold time in tenths of a second; 0 uses the default, bounded to 1..30 s.
 void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl = 0);
 

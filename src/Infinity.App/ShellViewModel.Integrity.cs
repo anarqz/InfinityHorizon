@@ -19,6 +19,11 @@ public sealed partial class ShellViewModel
     private bool _contentLocationLoaded, _integrityChecking, _integrityFailed;
     private bool? _lastReceiverReady;
     private string? _integrityStatus;
+    private GameVerificationCache? _verificationCache;
+    private GameVerificationCache VerificationCache => _verificationCache ??= new(_stateDirectory);
+    private string? VerificationScope => _session?.Me?.AccountId is { } account && ContentLocation is { } location
+        ? GameVerificationCache.Scope(_session.Api.Core.AbsoluteUri, _session.Api.Gate.AbsoluteUri, account, _gate.Game ?? "fh2", location.Mount) : null;
+    private bool CachedIntegrityReady => VerificationScope is { } scope && ContentLocation is { } location && VerificationCache.IsCurrent(scope, location.Mount);
 
     private GameContentLocation? ContentLocation
     {
@@ -32,20 +37,21 @@ public sealed partial class ShellViewModel
     public bool IntegrityChecking => _integrityChecking;
     public bool CanCheckIntegrity => SignedIn && ContentLocation is not null && !Playing && !_busy && !_integrityChecking;
     public bool CanChooseContent => SignedIn && !Playing && !_busy && !_integrityChecking;
-    public bool IntegrityReady => !_integrityChecking && _integrity?.State == InstallationState.Compatible;
+    public bool IntegrityReady => !_integrityChecking && !_integrityFailed && (_integrity is { State: InstallationState.Compatible, FilesCurrent: true } || CachedIntegrityReady);
     public bool IntegrityCanStart => !_integrityChecking && ContentLocation is not null && (_integrity is null || IntegrityReady);
     public bool ShowPlayBrand => ShowPlayAction;
     public string IntegrityLocationLabel => ContentLocation is { } location ? location.PackageRoot : S["integrity.content_unset"];
     public bool ShowIntegritySupport => !_integrityChecking && (_integrityFailed || _integrity is not null && !IntegrityReady);
     public string IntegrityCardStatus => S[_integrityChecking ? "configure.checking" : IntegrityReady ? "configure.ready"
         : ShowIntegritySupport ? "configure.attention" : "configure.pending"];
-    public string IntegrityStatus => _integrityChecking ? S["integrity.checking"] : _integrityStatus ?? S["integrity.not_checked"];
+    public string IntegrityStatus => _integrityChecking ? S["integrity.checking"] : _integrityStatus ?? S[CachedIntegrityReady ? "integrity.cached" : "integrity.not_checked"];
     public string IntegrityFindings => _integrity is null ? "" : string.Join("\n", _integrity.Findings.Take(12)
         .Select(f => (f.Path.Length == 0 ? "" : f.Path + ": ") + S["integrity.reason." + f.Reason]));
 
     public async Task ChooseContentFolderAsync(string folder)
     {
         if (!CanChooseContent) return;
+        VerificationCache.Invalidate();
         ClearIntegrity();
         var location = GameContentLocation.Detect(folder);
         if (location is null) { _configurationHasError = true; _integrityFailed = true; _integrityStatus = S["integrity.invalid_content"]; Changed(string.Empty); return; }
@@ -78,6 +84,7 @@ public sealed partial class ShellViewModel
     public async Task CheckIntegrityAsync(string? futureSessionId = null)
     {
         if (!CanCheckIntegrity || _session is not { } session) return;
+        VerificationCache.Invalidate();
         var install = _install;
         ClearIntegrity();
         if (ContentLocation is not { } location) { _integrityStatus = S["integrity.content_unset"]; Changed(string.Empty); return; }
@@ -91,6 +98,8 @@ public sealed partial class ShellViewModel
             if (stop.IsCancellationRequested || !ReferenceEquals(_session, session) || !ReferenceEquals(_install, install)) return;
             _integrity = check; check = null;
             _integrityFailed = _integrity.State != InstallationState.Compatible;
+            if (!_integrityFailed && _integrity.Manifest is { } manifest && VerificationScope is { } scope)
+                VerificationCache.Remember(scope, location.Mount, manifest.Files.Select(f => f.Path).ToArray());
             _integrityStatus = _integrity.Reason == "policy_unavailable" ? S["integrity.policy_unavailable"]
                 : S[_integrity.State == InstallationState.Compatible ? "integrity.compatible"
                     : _integrity.State == InstallationState.Incompatible ? "integrity.incompatible" : "integrity.inconclusive"];
