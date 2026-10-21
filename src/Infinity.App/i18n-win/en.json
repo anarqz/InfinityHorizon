@@ -1,4 +1,5 @@
 {
+  "connection.direct_failed": "The direct connection could not be established. Try again or check Connection details.",
   "worlds.public_warning": "Public lobby\nBugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
   "worlds.player_left": "Player left the lobby\n{player} left your lobby.",
   "worlds.player_joined": "Player joined the lobby\n{player} joined your lobby.",

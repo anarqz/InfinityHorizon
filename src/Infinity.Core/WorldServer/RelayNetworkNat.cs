@@ -23,6 +23,24 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
     private IPEndPoint[] _servers = [];
     private long _lastRound = -1, _answerAt;
     private int _answers;
+    private readonly Dictionary<Guid,(uint Revision,long Window,int Sent,long Seen)> _grantedPunches=[];
+    internal void PunchGranted(Guid grant,uint revision,IReadOnlyList<IPEndPoint> endpoints,long now)
+    {
+        foreach(var old in _grantedPunches.Where(p=>now-p.Value.Seen>=90000).Select(p=>p.Key).ToArray())_grantedPunches.Remove(old);
+        var previous=_grantedPunches.GetValueOrDefault(grant);
+        if(revision<=previous.Revision || endpoints.Count>5)return;
+        if(!_grantedPunches.ContainsKey(grant) && _grantedPunches.Count>=64)return;
+        var window=previous.Window;var sent=previous.Sent;
+        if(now-window>=15000) {window=now;sent=0;}
+        foreach(var endpoint in endpoints)
+        {
+            if(sent+2>10)break;
+            if(endpoint.AddressFamily==AddressFamily.InterNetworkV6 && !dualStack)continue;
+            for(var i=0;i<2;i++)send(new(StunCodec.Canonical(endpoint),StunCodec.BindingRequest(RandomNumberGenerator.GetBytes(12))));
+            sent+=2;
+        }
+        _grantedPunches[grant]=(revision,window,sent,now);
+    }
     private RelayUpnpState _upnp = RelayUpnpState.Off;
     private IPEndPoint? _upnpAddress;
 

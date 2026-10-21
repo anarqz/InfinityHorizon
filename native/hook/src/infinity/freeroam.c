@@ -1040,12 +1040,18 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
         if (out) *out = 0;
         return E_ACCESSDENIED;
     }
-    azimuth_proxy_start(&association->remote, &association->remote);
+    /* Role comes from the server's destination, before a joining proxy rewrites it to loopback. */
+    FrSockaddrIn6 original_remote = association->remote;
+    if (azimuth_proxy_start(&association->remote, &association->remote) < 0) {
+        fr_assoc_release(association);
+        if (out) *out = 0;
+        return E_ACCESSDENIED;
+    }
     azimuth_livery_world_entered(&association->remote); /* OD-66: world mates' paints (launcher sessions) */
     if (fi_launch_protocol()) {
         /* OD-54: the world is the launcher's relay on loopback when this PC hosts it (the server
            answers the host 127.0.0.1:<port>, MATCHMAKING_API.md 4a); the launcher hears which */
-        const unsigned char *a = association->remote.address;
+        const unsigned char *a = original_remote.address;
         int loopback = 1;
         for (int i = 0; i < 15 && loopback; ++i) {
             loopback = a[i] == 0;
@@ -1053,7 +1059,7 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
         loopback = (loopback && a[15] == 1) ||
                    (a[10] == 0xff && a[11] == 0xff && a[12] == 127 && !a[0] && !a[1] && !a[2] && !a[3] && !a[4] &&
                     !a[5] && !a[6] && !a[7] && !a[8] && !a[9]);
-        unsigned port = ((association->remote.port & 0xffu) << 8) | (association->remote.port >> 8);
+        unsigned port = ((original_remote.port & 0xffu) << 8) | (original_remote.port >> 8);
         if (loopback && port && port != 9) { /* ::1 port 9 is "nowhere" */
             char detail[16];
             size_t n = 0;

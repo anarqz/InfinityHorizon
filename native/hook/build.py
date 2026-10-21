@@ -44,6 +44,7 @@ SOURCES = [
     "src/infinity/freeroam.c",
     "src/infinity/world.c",
     "src/infinity/proxy.c",
+    "src/infinity/udp_proof.c",
     "src/infinity/carstate.c",
     "src/infinity/carstate_hook.c",
     "src/infinity/events.c",

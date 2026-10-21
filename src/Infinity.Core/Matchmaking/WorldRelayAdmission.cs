@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using Infinity.Core.WorldServer;
 
 namespace Infinity.Core.Matchmaking;
@@ -13,11 +14,12 @@ namespace Infinity.Core.Matchmaking;
 /// for this world and host is admitted from any RFC 1918 address, the endpoint unchecked. The
 /// shell sets it only for a private/loopback plain-http server and matchmaking; never in a release.
 /// </remarks>
-internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys keys, TimeProvider? clock = null, bool devLanPeers = false)
+internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys keys, TimeProvider? clock = null, bool devLanPeers = false, bool requireSocketProof = false)
 {
     private sealed record Entry(string GrantId, long ExpiresAt, TimeSpan Lifetime, long StartedAt);
+    private sealed record ProofGrant(ulong Peer, Entry Lease, UdpProofHost.Authority Authority);
     private sealed record Snapshot(long StartedAt, DateTimeOffset HostUntil, Dictionary<(ulong Xuid, IPEndPoint Endpoint), Entry> Entries,
-        Dictionary<ulong, Entry> LanEntries);
+        Dictionary<ulong, Entry> LanEntries, Dictionary<Guid,ProofGrant> ProofGrants);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly DateTimeOffset _originUtc = (clock ?? TimeProvider.System).GetUtcNow();
     private readonly long _originTimestamp = (clock ?? TimeProvider.System).GetTimestamp();
@@ -27,6 +29,9 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
     private Snapshot? _snapshot;
     private string? _worldId;
     private WorldAnnounced? _world;
+    private UdpProofHost? _proof;
+    private UdpProofHost Proof => _proof ??= new(ProofAuthority,_clock,()=>EffectiveNow().ToUnixTimeSeconds());
+    private bool RequireProof => BuildProfile.ProductionOnly || requireSocketProof;
     private static readonly TimeSpan HostLease = TimeSpan.FromSeconds(45);
 
     internal void Update(WorldAnnounced world)
@@ -68,46 +73,95 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
                 if (_revoked.Count < 4096 && Guid.TryParseExact(kicked.GrantId, "D", out _)) _revoked[kicked.GrantId] = started;
             var entries = new Dictionary<(ulong, IPEndPoint), Entry>();
             var lanEntries = new Dictionary<ulong, Entry>();
+            var proofGrants = new Dictionary<Guid,ProofGrant>();
             var duplicateGrants = world.Punches.GroupBy(p => p.GrantId, StringComparer.Ordinal).Where(p => p.Count() > 1).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
             foreach (var punch in world.Punches)
             {
-                if (punch.Kicked || duplicateGrants.Contains(punch.GrantId) || _revoked.ContainsKey(punch.GrantId) || _revoked.Count >= 4096
+                if (punch.Relay is null || punch.Kicked || duplicateGrants.Contains(punch.GrantId) || _revoked.ContainsKey(punch.GrantId) || _revoked.Count >= 4096
                     || !ulong.TryParse(punch.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) || xuid == ownXuid) continue;
                 IPAddress? address = null;
                 var observed = punch.Endpoint is { Port: > 0 } && IPAddress.TryParse(punch.Endpoint.Ip, out address) && Unicast(address);
-                if (!observed && !devLanPeers) continue;
+                var proofKey = punch.Relay.UdpProof?.Decode();
+                if (!observed && !devLanPeers && proofKey is null) continue;
                 RelayGrantClaims grant;
                 try
                 {
                     grant = RelayGrantVerifier.Verify(punch.Relay, keys, now.ToUnixTimeSeconds(),
                         new(world.Id, world.Host.Xuid, punch.Xuid, "host", punch.GrantId));
                 }
-                catch (RelayGrantException) { continue; }
+                catch (RelayGrantException) { if(proofKey is not null) CryptographicOperations.ZeroMemory(proofKey); continue; }
                 // The endpoint must come from the authenticated platform observation, never an
                 // OpenConnection XUID or a same-IP guess. Missing observations fail closed.
                 var lifetime = DateTimeOffset.FromUnixTimeSeconds(grant.Exp) - now;
                 var entry = new Entry(grant.Grant, grant.Exp, lifetime < HostLease ? lifetime : HostLease, started);
+                if(proofKey is not null)
+                    proofGrants[Guid.Parse(grant.Grant)] = new(xuid,entry,new(UdpProofCodec.Header(Guid.Parse(grant.Grant),id,ownXuid,xuid),proofKey,grant.Exp));
                 if (observed) entries[(xuid, StunCodec.Canonical(new(address!, punch.Endpoint!.Port)))] = entry;
                 if (devLanPeers) lanEntries[xuid] = entry;
             }
             _world = world;
             Volatile.Write(ref _snapshot, new(renewHostLease ? started : previousSnapshot?.StartedAt ?? started,
-                renewHostLease ? now + HostLease : previousSnapshot?.HostUntil ?? now, entries, lanEntries));
+                renewHostLease ? now + HostLease : previousSnapshot?.HostUntil ?? now, entries, lanEntries,proofGrants));
+            _proof?.Reconcile();
+            if(previousSnapshot is not null) foreach(var old in previousSnapshot.ProofGrants.Values) CryptographicOperations.ZeroMemory(old.Authority.Key);
         }
     }
 
     internal bool Allowed(ulong xuid, IPEndPoint endpoint, long unused)
+        => AllowedKind(xuid,endpoint,0);
+    internal bool AllowedHook(ulong xuid,IPEndPoint endpoint,long unused) => AllowedKind(xuid,endpoint,1);
+    private bool HostLive(Snapshot snapshot,DateTimeOffset now) => _clock.GetElapsedTime(snapshot.StartedAt) is var elapsed
+        && elapsed>=TimeSpan.Zero && elapsed<HostLease && now<snapshot.HostUntil;
+    private UdpProofHost.Authority? ProofAuthority(Guid grant)
     {
         var snapshot = Volatile.Read(ref _snapshot);
-        if (snapshot is null) return false;
+        if(snapshot is null || !HostLive(snapshot,EffectiveNow()) || !snapshot.ProofGrants.TryGetValue(grant,out var proof)
+            || !Live(proof.Lease,EffectiveNow()))return null;
+        return proof.Authority;
+    }
+    internal byte[]? ReceiveProof(ReadOnlySpan<byte> data,IPEndPoint endpoint)
+    { lock(_gate) return Proof.Receive(data,endpoint); }
+    internal IReadOnlyList<(Guid Grant,uint Revision,IPEndPoint[] Endpoints)> NetworkHints()
+    {
+        lock(_gate)
+        {
+            var result=new List<(Guid,uint,IPEndPoint[])>();var now=EffectiveNow();
+            foreach(var punch in _world?.Punches ?? [])
+            {
+                if(result.Count>=64)break;
+                if(punch.Kicked || punch.Candidates is not {Revision:>0} hints || !Guid.TryParse(punch.GrantId,out var grant)
+                    || ProofAuthority(grant) is null || !DateTimeOffset.TryParse(hints.GeneratedAt,CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out var generated)
+                    || !DateTimeOffset.TryParse(hints.ExpiresAt,CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out var expires)
+                    || expires<=now || expires-generated>TimeSpan.FromSeconds(30) || generated>now+TimeSpan.FromSeconds(1))continue;
+                try {result.Add((grant,hints.Revision,RelayNetworkFrames.Endpoints(hints.Candidates)));}
+                catch(ProtocolException) { }
+            }
+            return result;
+        }
+    }
+    private bool AllowedKind(ulong xuid,IPEndPoint endpoint,byte kind)
+    {
+        // Own-host loopback uses only the immutable lease snapshot, so a refresh can build
+        // its replacement without blocking local game traffic behind signature verification.
+        if(xuid==ownXuid)
+        {
+            var local=Volatile.Read(ref _snapshot);
+            return local is not null && HostLive(local,EffectiveNow()) && IPAddress.IsLoopback(StunCodec.Canonical(endpoint).Address);
+        }
+        lock(_gate)
+        {
+        var snapshot = Volatile.Read(ref _snapshot);
+        if(snapshot is null)return false;
         var now = EffectiveNow();
-        var elapsed = _clock.GetElapsedTime(snapshot.StartedAt);
-        if (elapsed < TimeSpan.Zero || elapsed >= HostLease || now >= snapshot.HostUntil) return false;
+        if(!HostLive(snapshot,now)) return false;
         endpoint = StunCodec.Canonical(endpoint);
         if (xuid == ownXuid) return IPAddress.IsLoopback(endpoint.Address);
+        if(Proof.Allowed(xuid,kind,endpoint))return true;
+        if(RequireProof)return false;
         if (snapshot.Entries.TryGetValue((xuid, endpoint), out var entry) && Live(entry, now)) return true;
         var address = endpoint.Address.IsIPv4MappedToIPv6 ? endpoint.Address.MapToIPv4() : endpoint.Address;
         return devLanPeers && HostRelay.IsPrivate(address) && snapshot.LanEntries.TryGetValue(xuid, out var lan) && Live(lan, now);
+        }
     }
 
     private bool Live(Entry entry, DateTimeOffset now) =>
@@ -133,11 +187,14 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
             foreach (var punch in _world?.Punches ?? [])
                 if (punch.Xuid == id && _revoked.Count < 4096 && Guid.TryParseExact(punch.GrantId, "D", out _))
                     _revoked[punch.GrantId] = _clock.GetTimestamp();
-            Volatile.Write(ref _snapshot, snapshot with { Entries = next, LanEntries = lan });
+            var proof=new Dictionary<Guid,ProofGrant>(snapshot.ProofGrants);
+            foreach(var item in proof.Where(p=>p.Value.Peer==xuid).ToArray()) { CryptographicOperations.ZeroMemory(item.Value.Authority.Key);proof.Remove(item.Key); }
+            Volatile.Write(ref _snapshot, snapshot with { Entries = next, LanEntries = lan,ProofGrants=proof });
+            _proof?.Reconcile();
         }
     }
 
-    internal void Clear() { lock (_gate) { _world = null; Volatile.Write(ref _snapshot, null); } }
+    internal void Clear() { lock (_gate) { _world = null; if(_snapshot is { } s) foreach(var p in s.ProofGrants.Values)CryptographicOperations.ZeroMemory(p.Authority.Key); Volatile.Write(ref _snapshot, null); _proof?.Clear(); } }
 
     private DateTimeOffset EffectiveNow()
     {

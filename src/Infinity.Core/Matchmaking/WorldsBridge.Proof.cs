@@ -1,0 +1,98 @@
+// Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Infinity.Core.Session;
+using Infinity.Core.WorldServer;
+
+namespace Infinity.Core.Matchmaking;
+
+public sealed partial class WorldsBridge
+{
+    public RelayGrantVerifyKeys? SocketProofKeys {get;init;}
+    public Func<DateTimeOffset?>? TrustedServerNow {get;init;}
+    public bool SocketProofRequired {get;init;}
+    public Func<Frame.RelayContext,CancellationToken,Task>? SendRelayContext {get;set;}
+    private bool NeedsProof=>BuildProfile.ProductionOnly || SocketProofRequired;
+    private readonly SemaphoreSlim _proofWrites=new(1,1);
+    private byte[]? _proofPayload;
+    private bool ClaimSeatProof(SeatAnswer answer,ref long epoch,string? expectedGrant=null)
+    {
+        if(!NeedsProof)return true;
+        lock(_mineState)
+        {
+            if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch)
+                || !DateTimeOffset.TryParse(answer.GeneratedAt,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out var generated)
+                || _lastSeatAt is {} previous && generated<previous
+                || answer.Seat is {} seat && (seat.World.Id!=seat.WorldId || seat.State is not (SeatStates.Hosting or SeatStates.Reserved or SeatStates.Seated)
+                    || expectedGrant is not null && seat.GrantId!=expectedGrant))return false;
+            epoch=Interlocked.Increment(ref _mineEpoch);return true;
+        }
+    }
+
+    private Frame.RelayContext ProofFrame(RelayGrant relay,string world,string grant)
+    {
+        byte[]? key=null;
+        try
+        {
+            key=relay.UdpProof?.Decode();
+            if(key is null || SocketProofKeys is null || _ownXuid is null || relay.Claims is null || relay.Claims.Length>2048)throw new InvalidDataException();
+            using var parsed=JsonDocument.Parse(Convert.FromBase64String(relay.Claims));
+            var host=parsed.RootElement.GetProperty("host").GetProperty("xuid").GetString() ?? throw new InvalidDataException();
+            var verified=RelayGrantVerifier.Verify(relay,SocketProofKeys,Now.ToUnixTimeSeconds(),new(world,host,_ownXuid,"joiner",grant));
+            var header=UdpProofCodec.Header(Guid.Parse(verified.Grant),Guid.Parse(verified.World),ulong.Parse(verified.Host.Xuid,System.Globalization.CultureInfo.InvariantCulture),
+                ulong.Parse(verified.Xuid,System.Globalization.CultureInfo.InvariantCulture));
+            var payload=new byte[89];payload[0]=1;header.AsSpan(8,48).CopyTo(payload.AsSpan(1));
+            BinaryPrimitives.WriteUInt64BigEndian(payload.AsSpan(49),(ulong)verified.Exp);key.CopyTo(payload,57);
+            return new(payload);
+        }
+        catch(Exception error) when(error is FormatException or InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException or RelayGrantException)
+        { throw new InvalidDataException("Authenticated UDP socket context unavailable"); }
+        finally { if(key is not null)CryptographicOperations.ZeroMemory(key); }
+    }
+    private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation)
+    {
+        if(!NeedsProof)return true;
+        Frame.RelayContext frame;
+        try { frame=ProofFrame(relay,world,grant); }
+        catch(InvalidDataException) { await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);return false; }
+        var entered=false;
+        try
+        {
+            await _proofWrites.WaitAsync(cancellation).ConfigureAwait(false);entered=true;
+            if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch) || SendRelayContext is null)return false;
+            await SendRelayContext(frame,cancellation).ConfigureAwait(false);
+            if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch))
+            {
+                await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);return false;
+            }
+            if(_proofPayload is null || !_proofPayload.AsSpan(1,48).SequenceEqual(frame.Payload.AsSpan(1,48)))_networkRevision=0;
+            if(_proofPayload is not null)CryptographicOperations.ZeroMemory(_proofPayload);
+            _proofPayload=frame.Payload.ToArray();return true;
+        }
+        finally {CryptographicOperations.ZeroMemory(frame.Payload);if(entered)_proofWrites.Release();}
+    }
+    private Task<bool> SendSeatProofAsync(Seat? seat,long epoch,CancellationToken cancellation)
+    {
+        if(!NeedsProof)return Task.FromResult(true);
+        if(seat is null || seat.State==SeatStates.Hosting)return ClearSeatProofAsync(epoch);
+        if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync(epoch,success:false);
+        return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation);
+    }
+    private async Task<bool> ClearSeatProofAsync(long epoch,bool success=true) {await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);return success;}
+    private async Task ClearProofAsync(CancellationToken cancellation,long? expectedEpoch=null)
+    {
+        if(!NeedsProof)return;
+        var epoch=expectedEpoch ?? Volatile.Read(ref _mineEpoch);
+        using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation);bound.CancelAfter(TimeSpan.FromSeconds(2));
+        await _proofWrites.WaitAsync(bound.Token).ConfigureAwait(false);
+        try
+        {
+            if(epoch!=Volatile.Read(ref _mineEpoch))return;
+            if(_proofPayload is not null) {CryptographicOperations.ZeroMemory(_proofPayload);_proofPayload=null;}
+            _networkRevision=0;
+            if(SendRelayContext is not null)await SendRelayContext(new([0]),bound.Token).ConfigureAwait(false);
+        }
+        finally {_proofWrites.Release();}
+    }
+}

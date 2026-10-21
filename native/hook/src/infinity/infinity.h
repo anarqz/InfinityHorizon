@@ -7,6 +7,9 @@
 #include "../core/azimuth_host.h"
 #include "../core/infinity_base.h"
 
+int fi_launch_relay_network_hint(const unsigned char *payload,size_t size);
+int azimuth_proxy_relay_candidates(const unsigned char *payload,size_t size);
+
 /* cfg.c: <Azimuth>\Infinity.cfg. [hook] is the hook's (PLAN.md "Infinity.cfg [hook]"), read
    once at start (and written once, when the section is missing, from the older hooks'
    data\bin\FH2_ExtraOptions.ini); [relay] is the launcher's, read for HOST WORLD. */
@@ -185,6 +188,18 @@ int azimuth_progress_read(const unsigned char *body, size_t size, unsigned out[4
 int azimuth_progress_over(const unsigned base[4], const unsigned now[4], double hours);
 /* The XUID this session plays as online (0 offline). */
 unsigned long long azimuth_account_xuid_value(void);
+/* FIUP proof material is private to authenticated control/proxy memory. */
+unsigned long long fi_launch_server_unix(void);
+void fi_udp_zero(void *memory, size_t size);
+unsigned long long fi_udp_u64(const unsigned char *p);
+void fi_udp_context_clear(void);
+int fi_udp_context_set(const unsigned char *p, size_t n);
+int fi_udp_context_get(unsigned char *out, unsigned long *serial);
+int fi_udp_random(unsigned char *out, size_t n);
+int fi_udp_valid(const unsigned char *p, size_t n);
+int fi_udp_sign(unsigned char *p, size_t n, const unsigned char *key);
+int fi_udp_verify(const unsigned char *p, size_t n, const unsigned char *key);
+int azimuth_proxy_proof_mode(void);
 /* proxy.c (F3): the joining player's UDP proxy between the game and a world on another
    PC (STUN, the punch exchange, the source filter). start returns 1 with `local` (a 28-byte
    sockaddr_in6) when the game should send there instead of `world`. */

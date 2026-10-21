@@ -30,7 +30,7 @@ public interface IWorldSocial
 /// </summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
     Justification = "Session cancellation state remains available to late transports until their canceled operations drain.")]
-public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, TimeProvider? clock = null,
+public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, TimeProvider? clock = null,
     string mode = "noob", Func<uint, IHostRelay?>? startRelay = null, Func<IReadOnlyList<string>>? lanAddresses = null, string? ownXuid = null, Action<string>? log = null,
     string relayUnavailableKey = "worlds.integrated_unavailable", Func<IHostRelay, WorldAnnounced, CancellationToken, Task>? updateRelayWorld = null,
     Func<IHostRelay, CancellationToken, Task>? refreshRelayAdmissions = null, Session.GameReadiness? gameReadiness = null,
@@ -320,6 +320,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 _seat.Left();
                 InvalidateMine(reset: true);
             }
+            try {await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);}
+            catch(Exception error) when(HostFailure(error)) { }
             using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await StopRelayAsync().WaitAsync(budget.Token).ConfigureAwait(false);
             var close = world is not null ? CloseWorldAsync(world, budget.Token) : Task.CompletedTask;
@@ -387,12 +389,20 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     }
 
     /// <summary>A join by id or code. One live seat per profile: a seat elsewhere is left first (the player chose this world).</summary>
-    public async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, CancellationToken cancellation)
+    private int _joinAttempt;
+    public async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation)
+    {
+        if(Interlocked.CompareExchange(ref _joinAttempt,1,0)!=0)return new(UiJoin.SlowDown,_text("worlds.slow_down"));
+        try {return await JoinCoreAsync(request,cancellation).ConfigureAwait(false);}
+        finally {Volatile.Write(ref _joinAttempt,0);}
+    }
+    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
         RequestReconcile();
+        var joinEpoch=Volatile.Read(ref _mineEpoch);
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
             return new(UiJoin.NotAllowed, DeniedMessage(denied, "join"));
         if (GameReadiness.CurrentGeneration is not { } generation)
@@ -442,10 +452,18 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                             await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
                             return new(UiJoin.NotAllowed, _text("worlds.load_game"));
                         }
+                        var proofInstalled=false;
+                        try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation).ConfigureAwait(false);}
+                        catch(Exception error) when(HostFailure(error)) { }
+                        if(!proofInstalled || joinEpoch!=Volatile.Read(ref _mineEpoch))
+                        {
+                            await ReleaseGrantAsync(grant.Id,CancellationToken.None).ConfigureAwait(false);
+                            return new(UiJoin.NotAllowed,_text("worlds.join_failed"));
+                        }
                         var accepted = false;
                         lock (_mineState)
                         {
-                            if (OnlineOpen && !cancellation.IsCancellationRequested && GameReadiness.Matches(generation))
+                            if (OnlineOpen && !cancellation.IsCancellationRequested && GameReadiness.Matches(generation) && joinEpoch==Volatile.Read(ref _mineEpoch))
                             {
                                 _seat.Granted(grant, Now);
                                 InvalidateMine(reset: true);
@@ -493,6 +511,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     /// </summary>
     public async Task<string?> TickAsync(CancellationToken cancellation)
     {
+        if(Volatile.Read(ref _joinAttempt)!=0)return null;
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
@@ -523,6 +542,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 await LeaveAsync(CancellationToken.None).ConfigureAwait(false);
                 return _text(changed.MessageKey);
             }
+            if(renewed is {Ok:true,Value:{} proofSeat} && (!ClaimSeatProof(proofSeat,ref epoch,grantId)
+                || !await SendSeatProofAsync(proofSeat.Seat,epoch,cancellation).ConfigureAwait(false)))return null;
             lock (_mineState)
             {
                 if (!OnlineOpen || cancellation.IsCancellationRequested || epoch != Volatile.Read(ref _mineEpoch)
@@ -593,6 +614,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         lock (_mineState)
         {
             if (!OnlineOpen) { _ = SuspendOnlineAsync(); return Task.FromResult(NoWorld); }
+            if(Volatile.Read(ref _joinAttempt)!=0)return Task.FromResult(_mineSnapshot);
             if (_mineRead is { IsCompleted: false }) return _mineRead.WaitAsync(cancellation);
             if (background && idleWhenNoWorld && _mineReconciled && !_mineUncertain && _pendingRequestUntil is null
                 && !_joinRetry.Running && !_createRetry.Running && HostedWorldId is null && _seat.GrantId is null && _mineSnapshot.Role == UiWorldRole.None)
@@ -623,6 +645,8 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
             var seatAt = DateTimeOffset.TryParse(value.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.AssumeUniversal, out var observedAt) ? observedAt : (DateTimeOffset?)null;
             if (seatAt is { } observed && _lastSeatAt is { } previous && observed < previous) return _mineSnapshot;
+            if(!ClaimSeatProof(value,ref epoch) || !await SendSeatProofAsync(value.Seat,epoch,cancellation).ConfigureAwait(false))
+            { _mineUncertain=true;return _mineSnapshot; }
             if (value.Seat is not { } seat)
             {
                 lock (_mineState)
@@ -852,7 +876,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
                 Audience = request.Audience switch { 1 => WorldAudiences.Supporters, 2 => WorldAudiences.Friends, 3 => WorldAudiences.Private, _ => WorldAudiences.Everyone },
                 MaxRttMs = request.Latency switch { 1 => 150u, 2 => 100u, 3 => 60u, _ => null },
                 Races = true,
-                Endpoint = new AnnouncePort { Port = relay.Port, Lan = _lan() is { Count: > 0 } lan ? lan : null },
+                Endpoint = Announcement(relay),
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {
@@ -1026,7 +1050,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
             var remaining = TimeSpan.FromSeconds(45) - _clock.GetElapsedTime(_hostLastStamp);
             var wallRemaining = _hostLastSuccess.AddSeconds(45) - Now;
             if (wallRemaining < remaining) remaining = wallRemaining;
-            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers }, token), stop.Token,
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers,Endpoint=Announcement(relay) }, token), stop.Token,
                 remaining: remaining).ConfigureAwait(false);
             if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();
@@ -1172,6 +1196,9 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
         else if (relay is not null) await Task.Run(relay.Dispose).ConfigureAwait(false);
     }
 
+    private AnnouncePort Announcement(IHostRelay relay)=>RelayAnnouncement.Build(relay.Port,_lan(),relay switch
+    { IntegratedWorldRelay integrated=>integrated.NetworkStatus,IntegratedHostRelay host=>host.NetworkStatus,_=>null });
+
     private sealed record HostOperation(long Generation, Task Previous, TaskCompletionSource Completion, CancellationToken Stop);
 
     // Queue order and generation changes are atomic. Only the queue owner mutates host/relay state;
@@ -1211,6 +1238,7 @@ public sealed class WorldsBridge(IMatchmakingApi mm, Func<string, string> text, 
     public async Task LeaveAsync(CancellationToken cancellation)
     {
         InvalidateMine(reset: true);
+        await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);
         if (_seat.GrantId is null)
         {
             return;

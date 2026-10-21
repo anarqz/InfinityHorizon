@@ -52,6 +52,7 @@ enum {
     FRAME_CAPTURE = 0x13,
     FRAME_OVERLAY = 0x14,
     FRAME_ONLINE_SUSPEND = 0x15,
+    FRAME_RELAY_CONTEXT = 0x16,
 };
 
 /* Where the session stands (launch_state). */
@@ -96,6 +97,13 @@ static char launch_token[LAUNCH_MAX_TOKEN + 1];
 static unsigned long long launch_deadline_ms;
 /* The server's clock minus this PC's, when this PC's is far off (from the ticket's iat). */
 static long long launch_clock_offset;
+static unsigned long long launch_proof_epoch, launch_proof_tick;
+static SRWLOCK launch_proof_clock_lock=SRWLOCK_INIT;
+unsigned long long fi_launch_server_unix(void) {
+    AcquireSRWLockShared(&launch_proof_clock_lock);
+    unsigned long long now=launch_proof_epoch ? launch_proof_epoch + (GetTickCount64()-launch_proof_tick)/1000u : 0;
+    ReleaseSRWLockShared(&launch_proof_clock_lock);return now;
+}
 static volatile LONG launch_ended;      /* the game plane refused the session twice: offline */
 static volatile LONG launch_suspended;  /* terminal: no token or networking can resume */
 static volatile LONG launch_refused_401; /* 401s since the last token */
@@ -175,6 +183,7 @@ int fi_launch_suspended(void) {
    Latch before cleanup so an in-flight join or worker can never reopen the session. */
 static void launch_suspend(unsigned reason) {
     if (InterlockedExchange(&launch_suspended, 1)) return;
+    AcquireSRWLockExclusive(&launch_proof_clock_lock);launch_proof_epoch=launch_proof_tick=0;ReleaseSRWLockExclusive(&launch_proof_clock_lock);
     InterlockedExchange(&launch_ended, 1);
     AcquireSRWLockExclusive(&launch_lock);
     for (size_t i = 0; i < sizeof(launch_token); ++i) ((volatile char *)launch_token)[i] = 0;
@@ -184,6 +193,7 @@ static void launch_suspend(unsigned reason) {
     InterlockedExchange(&launch_refresh_wanted, 0);
     InterlockedExchange(&launch_refresh_sent, 1);
     azimuth_freeroam_suspend();
+    fi_udp_context_clear();
     azimuth_proxy_stop();
     azimuth_livery_world_left();
     azimuth_world_launcher_host(0);
@@ -480,6 +490,9 @@ static int launch_queue_frame(unsigned type, const void *payload, size_t size) {
     launch_put(&w, payload, size);
     size_t n = launch_frame_end(&w);
     return n && launch_queue(frame, n);
+}
+int fi_launch_relay_network_hint(const unsigned char *payload,size_t size) {
+    return fi_launch_live() && size==25 && launch_queue_frame(0x17,payload,size);
 }
 
 /* Event{kind, detail}; kind 2 is reserved legacy, kind 6 carries overlay notices. */
@@ -1159,6 +1172,22 @@ static int launch_session_frame(void) {
     size_t size;
     const unsigned char *text;
     switch (type) {
+    case 0x19: {
+        if(r.left!=8)return 0;
+        unsigned long long epoch=fi_udp_u64(r.at),tick=GetTickCount64();
+        if(!epoch || epoch>0x7fffffffffffffffull)return 0;
+        if(fi_launch_suspended())return 1;
+        AcquireSRWLockExclusive(&launch_proof_clock_lock);
+        unsigned long long previous=launch_proof_epoch ? launch_proof_epoch+(tick-launch_proof_tick)/1000u : 0;
+        if(epoch>previous) {launch_proof_epoch=epoch;launch_proof_tick=tick;}
+        ReleaseSRWLockExclusive(&launch_proof_clock_lock);return 1;
+    }
+    case 0x18:
+        if(fi_launch_suspended())return 1;
+        return azimuth_proxy_relay_candidates(r.at,r.left);
+    case FRAME_RELAY_CONTEXT:
+        if (fi_launch_suspended()) { fi_udp_context_clear();return 1; }
+        return fi_udp_context_set(r.at,r.left);
     case FRAME_ONLINE_SUSPEND: {
         unsigned reason = (unsigned)launch_le(&r, 1);
         if (r.bad || r.left || reason > 4) return 0;

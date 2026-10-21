@@ -37,7 +37,7 @@ internal sealed partial class RelayEngine
     }
 
     private bool MayUseLivery(ulong xuid) => _peers.Any(peer => peer.Synced && peer.Xuid == xuid
-        && Allowed(peer.Xuid, peer.Endpoint) && (peer.LiveryHook is null || Allowed(peer.Xuid, peer.LiveryHook)));
+        && Allowed(peer.Xuid, peer.Endpoint) && (peer.LiveryHook is null || AllowedHook(peer.Xuid, peer.LiveryHook)));
 
     // A separate hook socket may bind only to a private peer on the same IP. Public NAT addresses
     // can represent unrelated players and therefore always require an exact endpoint.
@@ -72,8 +72,8 @@ internal sealed partial class RelayEngine
         if (CarStateCodec.ParseUp(data) is not { } up) return;
         var peer = _peers.FirstOrDefault(p => p.Endpoint.Equals(endpoint));
         if (peer is not null && peer.Xuid != up.Xuid) return;
-        peer ??= _peers.FirstOrDefault(p => p.Synced && p.Xuid == up.Xuid && MaySpeakFor(p.Endpoint, endpoint));
-        if (peer is null || !peer.Synced || !Allowed(peer.Xuid, peer.Endpoint) || !Allowed(peer.Xuid, endpoint)
+        peer ??= _peers.FirstOrDefault(p => p.Synced && p.Xuid == up.Xuid && HookSource(p, endpoint));
+        if (peer is null || !peer.Synced || !Allowed(peer.Xuid, peer.Endpoint) || !AllowedHook(peer.Xuid, endpoint)
             || !TakeSideChannelRate(peer, data.Length, true) || peer.CarStateAt is { } at && _now - at < 50) return;
         peer.CarStateAt = _now;
         peer.LastSeen = _now;
@@ -86,10 +86,10 @@ internal sealed partial class RelayEngine
     private void PassCarState(RelayPeer from)
     {
         if (from.CarState is not { } state || !Allowed(from.Xuid, from.Endpoint)
-            || from.CarHook is not { } source || !Allowed(from.Xuid, source)) return;
+            || from.CarHook is not { } source || !AllowedHook(from.Xuid, source)) return;
         var packet = CarStateCodec.WriteDown(new(state, from.Index, from.Xuid, from.CarPosition));
         foreach (var peer in _peers)
-            if (peer != from && peer.Synced && Allowed(peer.Xuid, peer.Endpoint) && peer.CarHook is { } hook && Allowed(peer.Xuid, hook)) Emit(hook, packet);
+            if (peer != from && peer.Synced && Allowed(peer.Xuid, peer.Endpoint) && peer.CarHook is { } hook && AllowedHook(peer.Xuid, hook)) Emit(hook, packet);
     }
 
     private void ReceiveLivery(ReadOnlySpan<byte> data, IPEndPoint endpoint)
@@ -113,10 +113,10 @@ internal sealed partial class RelayEngine
         {
             peer = _peers.FirstOrDefault(p => p.Endpoint.Equals(endpoint));
             if (peer is not null && (!peer.Synced || peer.Xuid != xuid)) return;
-            peer ??= _peers.FirstOrDefault(p => p.Synced && p.Xuid == xuid && MaySpeakFor(p.Endpoint, endpoint));
+            peer ??= _peers.FirstOrDefault(p => p.Synced && p.Xuid == xuid && HookSource(p, endpoint));
         }
         else return;
-        if (peer is null || !Allowed(peer.Xuid, peer.Endpoint) || !Allowed(peer.Xuid, endpoint)
+        if (peer is null || !Allowed(peer.Xuid, peer.Endpoint) || !AllowedHook(peer.Xuid, endpoint)
             || !TakeSideChannelRate(peer, data.Length, operation != 1)) return;
         if (LiveryCodec.Parse(data) is not { } message) { Rejected(peer, "invalid_livery"); return; }
         peer.LastSeen = _now;
@@ -138,7 +138,7 @@ internal sealed partial class RelayEngine
         {
             if (item.Message is LiveryMessage.Data data && !MayUseLivery(data.Chunk.Owner)) continue;
             if (_peers.FirstOrDefault(p => p.Synced && p.Xuid == item.To && Allowed(p.Xuid, p.Endpoint)) is { LiveryHook: { } hook } peer
-                && Allowed(peer.Xuid, hook))
+                && AllowedHook(peer.Xuid, hook))
                 Emit(hook, LiveryCodec.Write(item.Message));
         }
         // Notes contain only IDs, reasons and sizes. This owner deliberately retains no log or history.

@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using Infinity.Core.Wire;
+using System.Buffers.Binary;
 
 namespace Infinity.Core.Session;
 
@@ -34,6 +35,38 @@ public abstract record Frame
     }
 
     public abstract byte Type { get; }
+    public sealed record RelayClock(ulong UnixSeconds):Frame
+    {
+        public override byte Type=>0x19;
+    }
+
+    public sealed record RelayNetworkHint(byte[] Payload) : Frame
+    {
+        public override byte Type=>0x17;
+        public override string ToString()=>"RelayNetworkHint { redacted }";
+    }
+    public sealed record RelayCandidates(byte[] Payload) : Frame
+    {
+        public override byte Type=>0x18;
+        public override string ToString()=>"RelayCandidates { redacted }";
+    }
+
+    /// <summary>Grant-scoped secret over the authenticated control pipe only; never display the payload.</summary>
+    public sealed record RelayContext(byte[] Payload) : Frame
+    {
+        public override byte Type=>0x16;
+        public override string ToString()=>"RelayContext { redacted }";
+        public bool Equals(RelayContext? other)=>other is not null && Payload.AsSpan().SequenceEqual(other.Payload);
+        public override int GetHashCode()=>Payload.Length;
+        internal static void Validate(ReadOnlySpan<byte> payload)
+        {
+            if(payload.Length==1 && payload[0]==0)return;
+            if(payload.Length!=89 || payload[0]!=1 || new Guid(payload.Slice(1,16),bigEndian:true)==Guid.Empty
+                || new Guid(payload.Slice(17,16),bigEndian:true)==Guid.Empty || BinaryPrimitives.ReadUInt64BigEndian(payload[33..])==0
+                || BinaryPrimitives.ReadUInt64BigEndian(payload[41..])==0 || BinaryPrimitives.ReadUInt64BigEndian(payload[49..]) is 0 or > long.MaxValue)
+                throw new ProtocolException("Invalid relay context");
+        }
+    }
 
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
@@ -137,6 +170,15 @@ public abstract record Frame
         var w = new WireWriter(Type);
         switch (this)
         {
+            case RelayClock clock:
+                if(clock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
+                var timestamp=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(timestamp,clock.UnixSeconds);w.Fixed(timestamp,8,"relay clock");break;
+            case RelayNetworkHint hint:
+                Matchmaking.RelayNetworkFrames.Hint(hint.Payload);w.Fixed(hint.Payload,hint.Payload.Length,"relay network hint");break;
+            case RelayCandidates candidates:
+                Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);w.Fixed(candidates.Payload,candidates.Payload.Length,"relay candidates");break;
+            case RelayContext context:
+                RelayContext.Validate(context.Payload); w.Fixed(context.Payload,context.Payload.Length,"relay context");break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -222,9 +264,17 @@ public abstract record Frame
             0x13 => new Capture(r.U8(), r.Flag("flag byte")),
             0x14 => new Overlay(r.Flag("flag byte"), r.Take(32).ToArray(), r.Str()),
             0x15 => new OnlineSuspend((OnlineSuspendReason)r.U8()),
+            0x16 => new RelayContext(r.Take(length.Value-1).ToArray()),
+            0x17 => new RelayNetworkHint(r.Take(length.Value-1).ToArray()),
+            0x18 => new RelayCandidates(r.Take(length.Value-1).ToArray()),
+            0x19 => new RelayClock(BinaryPrimitives.ReadUInt64BigEndian(r.Take(8))),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
+        if(frame is RelayContext context)RelayContext.Validate(context.Payload);
+        if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
+        if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
+        if(frame is RelayCandidates candidates)Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);
         if (frame is OnlineSuspend suspend && !Enum.IsDefined(suspend.Reason))
             throw new ProtocolException("unknown online suspension reason");
         used = 4 + length.Value;

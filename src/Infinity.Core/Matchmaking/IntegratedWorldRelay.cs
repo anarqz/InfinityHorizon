@@ -23,12 +23,12 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
 
     public static IntegratedWorldRelay Start(uint maxPlayers, bool races, string ownXuid, RelayGrantVerifyKeys keys,
         ushort port = HostRelay.DefaultPort, IntegratedRelayOptions? options = null, TimeProvider? clock = null, bool devLanPeers = false,
-        RelayContentPolicy? contentPolicy = null)
+        RelayContentPolicy? contentPolicy = null, bool requireSocketProof=false)
     {
         ArgumentNullException.ThrowIfNull(keys);
         if (keys.Count == 0 || !ulong.TryParse(ownXuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) || xuid == 0)
             throw new InvalidOperationException("Integrated relay trust is not configured");
-        return new(IntegratedHostRelay.Start(maxPlayers, races, port, options, contentPolicy), new(xuid, keys, clock, devLanPeers));
+        return new(IntegratedHostRelay.Start(maxPlayers, races, port, options, contentPolicy), new(xuid, keys, clock, devLanPeers,requireSocketProof));
     }
 
     /// <summary>Only a successful authenticated PUT/announce may refresh the 45-second world lease.</summary>
@@ -39,7 +39,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         try
         {
             _admission.Update(world);
-            await _transport.SetAdmissionValidatorAsync(_admission.Allowed, cancellation).ConfigureAwait(false);
+            await _transport.SetAdmissionPolicyAsync(_admission.Allowed,_admission.AllowedHook,
+                (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),cancellation).ConfigureAwait(false);
+            _transport.PunchNetworkHints(_admission);
         }
         catch { _admission.Clear(); throw; }
     }
@@ -59,7 +61,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         }
         cancellation.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(!Running, this);
-        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches); return; }
+        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission); return; }
         if (answer.Error?.Kind is MmErrorKind.Unauthorized or MmErrorKind.WorldNotFound or MmErrorKind.NotHost or MmErrorKind.WrongPool)
         {
             _admission.Clear();

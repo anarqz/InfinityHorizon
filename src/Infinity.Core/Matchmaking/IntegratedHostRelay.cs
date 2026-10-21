@@ -26,6 +26,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private RelayNetworkStatus _network;
     private int _disposed, _running = 1;
     private Diagnostics.CrashContext? _crashContext;
+    private Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? _proofReceiver;
 
     public Diagnostics.CrashContext? CrashContext { get => Volatile.Read(ref _crashContext); set => Volatile.Write(ref _crashContext, value); }
 
@@ -89,7 +90,11 @@ public sealed class IntegratedHostRelay : IHostRelay
     }
 
     /// <summary>Completes only after the actor installs the admission policy. Null is never allow-all.</summary>
-    public async Task SetAdmissionValidatorAsync(Func<ulong, IPEndPoint, long, bool>? validator, CancellationToken cancellation = default)
+    public Task SetAdmissionValidatorAsync(Func<ulong,IPEndPoint,long,bool>? validator,CancellationToken cancellation=default)
+        => SetAdmissionPolicyAsync(validator,null,null,cancellation);
+
+    internal async Task SetAdmissionPolicyAsync(Func<ulong, IPEndPoint, long, bool>? validator,
+        Func<ulong,IPEndPoint,long,bool>? hookValidator,Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? proofReceiver,CancellationToken cancellation=default)
     {
         ObjectDisposedException.ThrowIf(!Running, this);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -100,7 +105,8 @@ public sealed class IntegratedHostRelay : IHostRelay
         {
             token.ThrowIfCancellationRequested();
             // Do not accumulate an unbounded queue of channel writers behind a busy actor.
-            if (!_commands.Writer.TryWrite(new(() => _engine.Authorize = validator ?? (static (_, _, _) => false), completion, token)))
+            if (!_commands.Writer.TryWrite(new(() => { _engine.Authorize = validator ?? (static (_, _, _) => false);
+                _engine.AuthorizeHook=hookValidator; _proofReceiver=proofReceiver; }, completion, token)))
                 throw new IOException("The relay control queue is full or closed");
             await completion.Task.WaitAsync(token).ConfigureAwait(false);
         }
@@ -108,6 +114,10 @@ public sealed class IntegratedHostRelay : IHostRelay
     }
 
     private bool Enqueue(Action action) => Running && _commands.Writer.TryWrite(new(action));
+    internal void PunchNetworkHints(WorldRelayAdmission admission) => Enqueue(()=>
+    {
+        foreach(var hint in admission.NetworkHints())_nat.PunchGranted(hint.Grant,hint.Revision,hint.Endpoints,_clock.ElapsedMilliseconds);
+    });
 
     /// <summary>Installs stock-only on the actor and discards any previously accepted custom paints.</summary>
     public async Task SetContentPolicyAsync(RelayContentPolicy policy, CancellationToken cancellation = default)
@@ -163,6 +173,11 @@ public sealed class IntegratedHostRelay : IHostRelay
                     catch (SocketException exception) when (exception.SocketErrorCode is SocketError.WouldBlock or SocketError.ConnectionReset or SocketError.MessageSize) { break; }
                     var now = _clock.ElapsedMilliseconds;
                     var peer = StunCodec.Canonical((IPEndPoint)from);
+                    if(count>=4 && buffer.AsSpan(0,4).SequenceEqual("FIUP"u8))
+                    {
+                        if(_proofReceiver?.Invoke(buffer.AsMemory(0,count),peer) is { } proofReply)Send(new(peer,proofReply));
+                        activity=true;continue;
+                    }
                     _nat.Receive(buffer.AsSpan(0, count), peer, now);
                     // The engine ignores Binding messages and owns the STUN-framed hook side channels.
                     _engine.Receive(buffer.AsSpan(0, count), peer, now);

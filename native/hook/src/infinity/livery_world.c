@@ -778,7 +778,9 @@ void azimuth_livery_world_entered(const void *remote) {
     lw_own.sent_at = 0;
     ReleaseSRWLockExclusive(&lw_lock);
     lw_mode = 0;
-    if (lw_private(r + 8)) {
+    if (azimuth_proxy_proof_mode()) {
+        lw_mode=2; /* FIUP proves game and hook kinds separately on the forwarding socket. */
+    } else if (lw_private(r + 8)) {
         if (lw_ws_load()) {
             UINT_PTR s = lw_ws.socket(23 /* AF_INET6 */, 2 /* SOCK_DGRAM */, 17 /* IPPROTO_UDP */);
             if (s != LW_INVALID) {
