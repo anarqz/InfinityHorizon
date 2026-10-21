@@ -23,6 +23,7 @@ bool DevHost();
 int LiverySync(uint32_t timeout_ms);
 void SetGameReadiness(bool ready);
 bool GameReady();
+void SetWorldAccess(bool allowed, const std::string &message);
 void InitToastSound(HMODULE self);
 void PlayToastSound();
 

@@ -35,6 +35,7 @@
 
 #include "fi_overlay.h"
 #include "style.h"
+#include "world_access.h"
 
 namespace fi {
 
@@ -46,6 +47,8 @@ constexpr int kMaxJoinable = 5, kMaxLocked = 3;
 
 // ---------------------------------------------------------------- what the launcher sent (any thread)
 struct Shared {
+    WorldAccessLease access;
+    std::string access_message;
     WorldFilter filter = WorldFilter::None;
     uint8_t list_status = 0; // WorldsStatus
     std::string list_message;
@@ -65,6 +68,18 @@ struct Shared {
 std::mutex g_lock;
 Shared g_shared;
 
+bool WorldAccessAllowed() {
+    if (DevHost()) return true;
+    std::lock_guard<std::mutex> lock(g_lock);
+    return g_shared.access.Allowed(GetTickCount64());
+}
+
+const char *AccessMessage(const Shared &sh) {
+    return !sh.access.Allowed(GetTickCount64()) && !sh.access_message.empty() ? sh.access_message.c_str() : T(
+        "Online installation verification is unavailable. Return to the launcher to review your installation or get help.",
+        "A verificação da instalação para jogar online está indisponível. Volte ao launcher para verificar sua instalação ou obter ajuda.");
+}
+
 // ---------------------------------------------------------------- render-thread state
 enum class Screen { List, Warning, Busy, Create, Hosted, Supporter, Member, Report, Confirm, Sync };
 Screen g_screen = Screen::List;
@@ -76,6 +91,7 @@ int g_focus = 0;       // the list's focus: 0 the filter row, then the tiles
 int g_chip = 1;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full
 uint64_t g_seen_list = 0, g_seen_join = 0, g_seen_hosted = 0;
 std::string g_busy;    // what Busy says
+bool g_world_action_busy = false;
 std::function<void()> g_after_warning;
 
 // my world (OD-63)
@@ -186,6 +202,7 @@ std::string FormatCode(const std::string &code) {
 
 // ---------------------------------------------------------------- requests
 void Act(uint8_t action, const MemberRow &member, uint8_t reason) {
+    g_world_action_busy = true;
     g_busy = T("One moment...", "Um momento...");
     g_screen = Screen::Busy;
     if (DevHost()) {
@@ -197,6 +214,7 @@ void Act(uint8_t action, const MemberRow &member, uint8_t reason) {
 }
 
 void Query() {
+    if (!WorldAccessAllowed()) return;
     if (g_filter == WorldFilter::None) {
         return;
     }
@@ -225,9 +243,10 @@ void WithWarning(std::function<void()> then) {
 }
 
 void Join(const std::string &world, const std::string &code) {
-    if (!GameReady()) return;
+    if (!GameReady() || !WorldAccessAllowed()) return;
     WithWarning([world, code] {
-        if (!GameReady()) return;
+        if (!GameReady() || !WorldAccessAllowed()) return;
+        g_world_action_busy = false;
         g_busy = T("Reserving your seat...", "Reservando seu lugar...");
         g_screen = Screen::Busy;
         if (DevHost()) {
@@ -240,7 +259,7 @@ void Join(const std::string &world, const std::string &code) {
 }
 
 void JoinByCode() {
-    if (!GameReady()) return;
+    if (!GameReady() || !WorldAccessAllowed()) return;
     WithWarning([] {
         OpenCodeEntry(T("Enter the world code", "Digite o código do mundo"), "0123456789", [](bool join, const std::string &code) {
             if (join) {
@@ -252,9 +271,9 @@ void JoinByCode() {
 }
 
 void StartCreate(bool supporter) {
-    if (!GameReady()) return;
+    if (!GameReady() || !WorldAccessAllowed()) return;
     WithWarning([supporter] {
-        if (!GameReady()) return;
+        if (!GameReady() || !WorldAccessAllowed()) return;
         g_create = Create{};
         g_create.name = T("Sunday drive", "Passeio de domingo");
         g_create.audience = supporter ? 0 : 0;
@@ -263,7 +282,8 @@ void StartCreate(bool supporter) {
 }
 
 void SubmitCreate() {
-    if (!GameReady()) { g_screen = Screen::List; return; }
+    if (!GameReady() || !WorldAccessAllowed()) { g_screen = Screen::List; return; }
+    g_world_action_busy = false;
     g_busy = T("Creating your world...", "Criando seu mundo...");
     g_screen = Screen::Busy;
     if (DevHost()) {
@@ -428,6 +448,10 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
 // ---------------------------------------------------------------- screens
 void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supporter, const Shared &sh) {
     g_items.clear();
+    if (!DevHost() && !sh.access.Allowed(GetTickCount64())) {
+        Wrapped(dl, f.body, ImVec2(x, y), w, kAmber, AccessMessage(sh));
+        return;
+    }
     const bool ready = GameReady();
     const char *load_hint = T("Load your game to access worlds", "Carregue sua partida para acessar os mundos");
     // filter chips
@@ -521,6 +545,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
 }
 
 void AcceptList(bool supporter, const Shared &sh) {
+    if (!WorldAccessAllowed()) return;
     if (g_focus < 0 || g_focus >= static_cast<int>(g_items.size())) return;
     const Item item = g_items[g_focus];
     switch (item.kind) {
@@ -859,6 +884,12 @@ void DrawConfirm(ImDrawList *dl, float x, float y, float w) {
 } // namespace
 
 // ---------------------------------------------------------------- public
+void SetWorldAccess(bool allowed, const std::string &message) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_shared.access.Observe(allowed, GetTickCount64());
+    g_shared.access_message = message;
+}
+
 void SetWorlds(WorldFilter filter, uint8_t status, const std::string &message, std::vector<WorldRow> rows) {
     std::lock_guard<std::mutex> lock(g_lock);
     if (filter != g_shared.filter) {
@@ -906,7 +937,7 @@ void WorldsReset() {
     g_queried = false; // a fresh list
 }
 
-bool WorldsCanRefresh() { return g_screen == Screen::List; }
+bool WorldsCanRefresh() { return g_screen == Screen::List && WorldAccessAllowed(); }
 
 bool WorldsNavigate(Nav nav) {
     switch (g_screen) {
@@ -1005,6 +1036,14 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         std::lock_guard<std::mutex> lock(g_lock);
         sh = g_shared;
     }
+    const bool world_access = DevHost() || sh.access.Allowed(GetTickCount64());
+    if (!world_access && (g_screen == Screen::Warning || g_screen == Screen::Create || g_screen == Screen::Hosted
+        || g_screen == Screen::Supporter || g_screen == Screen::Sync || (g_screen == Screen::Busy && !g_world_action_busy))) {
+        g_screen = Screen::List;
+        g_after_warning = nullptr;
+        ++g_sync_serial;
+        g_accept = false;
+    }
     if (g_dev_wait >= 0) {
         g_dev_wait -= dt;
         if (g_dev_wait < 0) DevAnswer();
@@ -1013,7 +1052,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     if (sh.join_serial != g_seen_join) {
         g_seen_join = sh.join_serial;
         if (g_screen == Screen::Busy) {
-            if (sh.join_status == 0) {
+            if (sh.join_status == 0 && world_access) {
                 StartSync(false); // the seat's prompt comes after the car's paint
             } else if (sh.join_status == 3) {
                 // a wrong code: back on the code screen, with the reason
@@ -1034,7 +1073,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     if (sh.hosted_serial != g_seen_hosted) {
         g_seen_hosted = sh.hosted_serial;
         if (g_screen == Screen::Busy) {
-            if (sh.hosted.status == 0) {
+            if (sh.hosted.status == 0 && world_access) {
                 StartSync(true); // then the Hosted screen
             } else {
                 g_screen = Screen::Create;
@@ -1079,6 +1118,11 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
 
     const bool accept = g_accept;
     g_accept = false;
+    if (!world_access && (g_screen != Screen::List || sh.mine.role != 0)) {
+        const char *message = AccessMessage(sh);
+        Wrapped(dl, f.body, ImVec2(x, y), w, kAmber, message);
+        y += WrappedHeight(f.body, w, message) + 16 * s;
+    }
     switch (g_screen) {
     case Screen::List:
         g_showing_mine = sh.mine.role != 0;
@@ -1102,8 +1146,10 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
             break;
         }
         if (!g_queried) {
-            g_queried = true;
-            Query();
+            if (world_access) {
+                g_queried = true;
+                Query();
+            }
         }
         DrawList(dl, x, y, w, bottom, supporter, sh);
         g_focus = std::clamp(g_focus, 0, std::max(0, static_cast<int>(g_items.size()) - 1));

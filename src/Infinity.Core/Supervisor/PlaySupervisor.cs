@@ -48,6 +48,10 @@ public sealed record SupervisorConfig(
     public Strings? Text { get; init; }
     public CrashIncidentStore? CrashReports { get; init; }
     public string? AccountId { get; init; }
+    public string CarDbSha256 { get; init; } = "";
+    public Func<string, CancellationToken, Task>? PrepareAdmission { get; init; }
+    public Action? OnlineAccessLost { get; init; }
+    public string? InitialSessionId { get; init; }
 }
 
 /// <summary>What the shell renders (ORCHESTRATOR §2.2 <c>SupervisorEvent</c>, §2.3).</summary>
@@ -81,7 +85,10 @@ public abstract record SupervisorEvent
 
     public sealed record HookEvent(byte Kind, string Detail) : SupervisorEvent;
 
-    public sealed record Capture(byte What, bool Ok) : SupervisorEvent;
+    public sealed record Capture(byte What, bool Ok) : SupervisorEvent
+    {
+        public long? ReceivedTimestamp { get; init; }
+    }
 
     public sealed record NoticeSent(byte Level, string Text) : SupervisorEvent;
 
@@ -180,18 +187,21 @@ public sealed class PlaySupervisor
     public async Task RunAsync(CancellationToken cancellation)
     {
         var relaunches = new Queue<DateTimeOffset>();
+        var initialSessionId = _config.InitialSessionId;
         while (true)
         {
             ExitDisposition? disposition;
             try
             {
-                disposition = await OneSessionAsync(cancellation).ConfigureAwait(false);
+                var sessionId = initialSessionId;
+                initialSessionId = null;
+                disposition = await OneSessionAsync(sessionId, cancellation).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
                 return;
             }
-            catch (Exception e) when (e is ApiException or HttpRequestException or TicketException or SignatureException or ProtocolException or IOException or System.ComponentModel.Win32Exception)
+            catch (Exception e) when (e is ApiException or HttpRequestException or TicketException or SignatureException or ProtocolException or IOException or InvalidDataException or JsonException or System.ComponentModel.Win32Exception)
             {
                 _emit(new SupervisorEvent.Error(e is ApiException api ? api.Code : e.Message));
                 _emit(new SupervisorEvent.Ended("error", false));
@@ -217,7 +227,7 @@ public sealed class PlaySupervisor
     }
 
     /// <summary>One gate session and one game process; null when it ended without a game exit.</summary>
-    private async Task<ExitDisposition?> OneSessionAsync(CancellationToken cancellation)
+    private async Task<ExitDisposition?> OneSessionAsync(string? initialSessionId, CancellationToken cancellation)
     {
         var handoff = new Handoff(HandoffChannel.Pipe, Launch.NewNonce());
         // The pipe exists before the child (ORCHESTRATOR §1.2): the hook's 5 s wait always finds it.
@@ -225,8 +235,8 @@ public sealed class PlaySupervisor
         // the UI pipe too, before the child: the overlay connects once the hook loaded it
         using var uiPipe = _config.Overlay is not null && _uiPipes is not null ? _uiPipes(handoff) : null;
         var admission = await new GateAdmission(_gate, _emit, _clock).WaitAsync(
-            id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, "", 0, false),
-            cancellation).ConfigureAwait(false);
+            id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false),
+            cancellation, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
         if (admission is null)
         {
             return null;
@@ -507,6 +517,7 @@ public sealed class PlaySupervisor
                         if (!beat.GamePlane.Open)
                         {
                             tokensOpen = false;
+                            _config.OnlineAccessLost?.Invoke();
                             await Notice(pipe, endpoint, overlay, 2, SessionEndedText(), stop.Token).ConfigureAwait(false);
                         }
                         else if (endpoint.Greeted && !hookGone && token.ExpiresUnix >= pushedExp + TokenPushEvery)
@@ -532,9 +543,12 @@ public sealed class PlaySupervisor
                             heartbeat = Task.Delay(TimeSpan.FromMilliseconds(Math.Max(beat.Ticket.HeartbeatEveryMs, 5000)), _clock, stop.Token);
                         }
                     }
-                    catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded or ErrorCodes.AccountsFrozen)
+                    catch (ApiException e) when (e.Code is ErrorCodes.SessionsEnded or ErrorCodes.AccountsFrozen
+                        or ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged)
                     {
                         tokensOpen = false;
+                        _config.OnlineAccessLost?.Invoke();
+                        if (e.Code.StartsWith("CONTENT.", StringComparison.Ordinal)) _emit(new SupervisorEvent.Error(e.Code));
                         endpoint.Revoke("the server ended the online session");
                         await Notice(pipe, endpoint, overlay, 2, e.Code == ErrorCodes.AccountsFrozen
                             ? _config.Text?["crash.frozen"] ?? "Online access is temporarily frozen for security review. Sign-in and support remain available."
@@ -588,6 +602,9 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Hello hello:
                                 _emit(new SupervisorEvent.OverlayConnected(hello.OverlayVersion));
                                 await overlay.SendFrameAsync(new Overlay.UiFrame.GameReadiness(worlds?.GameReadiness.CurrentGeneration is not null), stop.Token).ConfigureAwait(false);
+                                await overlay.SendFrameAsync(worlds is null
+                                    ? new Overlay.UiFrame.WorldAccess(false, _config.Text?["worlds.integrity_inconclusive"] ?? "Online installation verification is unavailable. Return to the launcher for help.")
+                                    : await worlds.AccessFrameAsync(stop.Token).ConfigureAwait(false), stop.Token).ConfigureAwait(false);
                                 break;
                             case Overlay.UiIncoming.Event { Kind: Overlay.UiEventKind.Quit } when quit is null:
                                 quit = child.QuitAsync(_config.QuitGrace, stop.Token);
@@ -655,6 +672,7 @@ public sealed class PlaySupervisor
             try
             {
                 await Task.Delay(worlds.HostPollInterval, cancellation).ConfigureAwait(false);
+                await overlay.SendFrameAsync(await worlds.AccessFrameAsync(cancellation).ConfigureAwait(false), cancellation).ConfigureAwait(false);
                 if (await worlds.TickAsync(cancellation).ConfigureAwait(false) is { } ended)
                 {
                     await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, ended), cancellation).ConfigureAwait(false);
@@ -705,7 +723,7 @@ public sealed class PlaySupervisor
                 _emit(new SupervisorEvent.HookEvent(e.Kind, e.Detail));
                 break;
             case EndpointEvent.Capture c:
-                _emit(new SupervisorEvent.Capture(c.What, c.Ok));
+                _emit(new SupervisorEvent.Capture(c.What, c.Ok) { ReceivedTimestamp = TimeProvider.System.GetTimestamp() });
                 break;
         }
         return state;

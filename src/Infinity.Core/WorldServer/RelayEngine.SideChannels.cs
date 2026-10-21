@@ -94,6 +94,7 @@ internal sealed partial class RelayEngine
 
     private void ReceiveLivery(ReadOnlySpan<byte> data, IPEndPoint endpoint)
     {
+        if (_contentPolicy is not null) return; // stock_only: no attribute traversal or blob allocation.
         // Identify a known participant and apply its shared socket-independent work budget
         // before Parse allocates a chunk. Rotating source ports cannot reset this allowance.
         if (!StunCodec.TryAttribute(data, LiveryCodec.Kind, LiveryCodec.Attribute, out var value)
@@ -132,6 +133,7 @@ internal sealed partial class RelayEngine
 
     private void SendLiveries(IReadOnlyList<LiveryOutput> output)
     {
+        if (_contentPolicy is not null) return;
         foreach (var item in output)
         {
             if (item.Message is LiveryMessage.Data data && !MayUseLivery(data.Chunk.Owner)) continue;
@@ -146,7 +148,7 @@ internal sealed partial class RelayEngine
     private void TickSideChannels()
     {
         _liveries.Authorize = MayUseLivery;
-        if (_now - _lastLiveryTick >= LiveryBoard.OutputWindowMs)
+        if (_contentPolicy is null && _now - _lastLiveryTick >= LiveryBoard.OutputWindowMs)
         {
             _lastLiveryTick = _now;
             SendLiveries(_liveries.Tick(_now));
@@ -161,7 +163,7 @@ internal sealed partial class RelayEngine
     private void OnPeerLeft(RelayPeer peer)
     {
         _sideChannelRates.Remove(peer);
-        if (!_peers.Any(p => p.Xuid == peer.Xuid)) SendLiveries(_liveries.OnLeave(peer.Xuid));
+        if (_contentPolicy is null && !_peers.Any(p => p.Xuid == peer.Xuid)) SendLiveries(_liveries.OnLeave(peer.Xuid));
         if (_peers.Count == 0) _liveries.Clear();
     }
 

@@ -22,6 +22,7 @@ internal sealed partial class RelayEngine
     private int _groupNode;
     private long _now, _lastKeepalive, _lastResend, _lastPace, _lastCarStates;
     private bool _closed;
+    private RelayContentPolicy? _contentPolicy;
     internal Func<ulong, IPEndPoint, long, bool>? Authorize { get; set; }
     internal Action<ulong, string, int?, int?, int?>? ValidationRejected { get; set; }
 
@@ -31,7 +32,7 @@ internal sealed partial class RelayEngine
     internal int PeerCount => _peers.Count;
     internal int SyncedCount => _peers.Count(p => p.Synced);
 
-    internal RelayEngine(RelaySettings? settings, Action<RelayDatagram> send)
+    internal RelayEngine(RelaySettings? settings, Action<RelayDatagram> send, RelayContentPolicy? contentPolicy = null)
     {
         _settings = settings ?? new();
         if (_settings.MaxPlayers is < 1 or > 12 || _settings.MaxPeersPerIp < 1 || _settings.MaxUnsynced is < 1 or > 254
@@ -41,6 +42,14 @@ internal sealed partial class RelayEngine
             || _settings.RaceFinishMs < 1 || _settings.GameOptionsGapMs < 1 || _settings.SyncCompleteMs < 1 || _settings.ResendAfterMs < 1)
             throw new ArgumentOutOfRangeException(nameof(settings));
         _send = send ?? throw new ArgumentNullException(nameof(send));
+        _contentPolicy = contentPolicy;
+    }
+
+    internal void SetContentPolicy(RelayContentPolicy? policy)
+    {
+        _contentPolicy = policy;
+        _liveries.Clear();
+        foreach (var peer in _peers) peer.LiveryHook = null;
     }
 
     internal void Receive(ReadOnlySpan<byte> data, IPEndPoint endpoint, long nowMilliseconds)

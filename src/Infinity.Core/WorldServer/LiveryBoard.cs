@@ -55,11 +55,13 @@ internal sealed class LiveryBoard
         internal int Generation { get; set; }
     }
     private readonly record struct Flow(ulong To, ulong Owner);
+    private readonly record struct SequenceFloor(ushort Sequence, bool Refused = false);
     private sealed record Control(LiveryOutput Output, int Generation = 0);
 
     private readonly HashSet<ulong> _participants = [];
     private readonly Dictionary<ulong, Livery> _liveries = [];
     private readonly Dictionary<ulong, Partial> _partials = [];
+    private readonly Dictionary<ulong, SequenceFloor> _sequenceFloors = [];
     private readonly Dictionary<ulong, long> _newSequenceAt = [];
     private readonly Dictionary<ulong, Viewer> _viewers = [];
     private readonly List<Flow> _flows = [];
@@ -133,9 +135,18 @@ internal sealed class LiveryBoard
         if (chunk.Total > LiveryCodec.MaxLiveryBytes || chunk.Count != count || chunk.Index >= chunk.Count
             || chunk.Data.Length != (chunk.Index + 1 < count ? LiveryCodec.ChunkBytes : (long)chunk.Total - (count - 1) * LiveryCodec.ChunkBytes)
             || !Register(from)) return [];
+        if (_sequenceFloors.TryGetValue(from, out var floor)
+            && (floor.Sequence == chunk.Sequence ? floor.Refused : !SequenceAfter(chunk.Sequence, floor.Sequence))) return [];
         if (_liveries.TryGetValue(from, out var stored))
         {
-            if (stored.Sequence == chunk.Sequence) { QueueControl(from, new LiveryMessage.Stored(chunk.Sequence)); return Drain(); }
+            if (stored.Sequence == chunk.Sequence)
+            {
+                var start = chunk.Index * LiveryCodec.ChunkBytes;
+                if (stored.Meta != chunk.Meta || stored.Bytes.Length != chunk.Total
+                    || !stored.Bytes.AsSpan(start, chunk.Data.Length).SequenceEqual(chunk.Data))
+                { _sequenceFloors[from] = new(chunk.Sequence, true); Note(new LiveryNote.Refused(from, "chunks that disagree")); return []; }
+                QueueControl(from, new LiveryMessage.Stored(chunk.Sequence)); return Drain();
+            }
             if (!SequenceAfter(chunk.Sequence, stored.Sequence)) return [];
         }
         var fresh = true;
@@ -148,12 +159,18 @@ internal sealed class LiveryBoard
         {
             if (_newSequenceAt.TryGetValue(from, out var at) && _now - at < PutEveryMs)
             { Note(new LiveryNote.Refused(from, "more than one new livery per second")); return []; }
-            _newSequenceAt[from] = _now; partial = new(chunk, _now); _partials[from] = partial;
+            _newSequenceAt[from] = _now; _sequenceFloors[from] = new(chunk.Sequence);
+            partial = new(chunk, _now); _partials[from] = partial;
         }
         if (partial is null) return [];
         if (partial.Total != chunk.Total || partial.Meta != chunk.Meta || partial.Parts.Length != chunk.Count)
-        { _partials.Remove(from); Note(new LiveryNote.Refused(from, "chunks that disagree")); return []; }
-        if (partial.Parts[chunk.Index] is null) { partial.Parts[chunk.Index] = chunk.Data.ToArray(); partial.Got++; }
+        { RefusePartial(from, chunk.Sequence); return []; }
+        if (partial.Parts[chunk.Index] is { } previous)
+        {
+            if (!previous.AsSpan().SequenceEqual(chunk.Data)) RefusePartial(from, chunk.Sequence);
+            return [];
+        }
+        partial.Parts[chunk.Index] = chunk.Data.ToArray(); partial.Got++;
         if (partial.Got < partial.Parts.Length) return [];
         _partials.Remove(from);
         var bytes = new byte[partial.Total]; var offset = 0;
@@ -164,6 +181,12 @@ internal sealed class LiveryBoard
         foreach (var (to, viewer) in _viewers)
             if (to != from) StartTransfer(to, viewer, from, partial.Sequence);
         return Drain();
+    }
+
+    private void RefusePartial(ulong from, ushort sequence)
+    {
+        _partials.Remove(from); _sequenceFloors[from] = new(sequence, true);
+        Note(new LiveryNote.Refused(from, "chunks that disagree"));
     }
 
     internal List<LiveryOutput> OnWant(ulong from, long now)
@@ -206,7 +229,7 @@ internal sealed class LiveryBoard
     private void RemovePeer(ulong xuid)
     {
         var had = _liveries.Remove(xuid);
-        _participants.Remove(xuid); _partials.Remove(xuid); _newSequenceAt.Remove(xuid);
+        _participants.Remove(xuid); _partials.Remove(xuid); _sequenceFloors.Remove(xuid); _newSequenceAt.Remove(xuid);
         if (_viewers.Remove(xuid, out var departed))
             foreach (var owner in departed.Pending.Keys.ToArray()) RemoveTransfer(xuid, departed, owner);
         foreach (var (to, viewer) in _viewers)
@@ -245,7 +268,7 @@ internal sealed class LiveryBoard
     {
         Advance(now);
         foreach (var owner in _partials.Where(pair => _now - pair.Value.Started >= PartialTtlMs).Select(pair => pair.Key).ToArray())
-            _partials.Remove(owner);
+        { _sequenceFloors[owner] = new(_partials[owner].Sequence, true); _partials.Remove(owner); }
         ScheduleDue(); return Drain();
     }
 
@@ -318,7 +341,7 @@ internal sealed class LiveryBoard
 
     internal void Clear()
     {
-        _participants.Clear(); _liveries.Clear(); _partials.Clear(); _newSequenceAt.Clear(); _viewers.Clear();
+        _participants.Clear(); _liveries.Clear(); _partials.Clear(); _sequenceFloors.Clear(); _newSequenceAt.Clear(); _viewers.Clear();
         _flows.Clear(); _controls.Clear(); _notes.Clear(); _nextFlow = 0; _now = 0; _windowAt = long.MinValue;
         WindowDatagrams = 0; WindowWireBytes = 0; _windowControls = 0;
     }

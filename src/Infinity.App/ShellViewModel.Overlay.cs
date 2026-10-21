@@ -68,6 +68,7 @@ public sealed partial class ShellViewModel
             return null;
         }
         var session = _session;
+        var integrity = _integrity;
         var relayKeys = IntegratedRelayKeys(mm);
         var devLan = DevLanAdmission(mm);
         return ticket =>
@@ -79,7 +80,8 @@ public sealed partial class ShellViewModel
                 updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
                     ? integrated.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
                 refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
-                    ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask)
+                    ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
+                checkWorldAccess: ct => CheckWorldAccessAsync(integrity, ct))
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
             };
@@ -110,7 +112,8 @@ public sealed partial class ShellViewModel
     {
         try
         {
-            var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys, devLanPeers: devLan);
+            var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys, devLanPeers: devLan,
+                contentPolicy: Infinity.Core.WorldServer.RelayContentPolicy.StockOnly);
             Log($"worlds: relay bound on UDP {relay.Port}; awaiting world admission"
                 + (devLan ? " (development LAN admission: granted peers from private addresses, endpoint not verified)" : ""));
             return relay;

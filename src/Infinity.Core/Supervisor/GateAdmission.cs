@@ -11,7 +11,8 @@ public sealed class GateAdmission(IGate gate, Action<SupervisorEvent> emit, Time
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     public async Task<(string SessionId, GateActive Active)?> WaitAsync(
-        Func<string, PlaySessionCreate> request, CancellationToken cancellation)
+        Func<string, PlaySessionCreate> request, CancellationToken cancellation,
+        Func<string, CancellationToken, Task>? prepare = null, string? initialSessionId = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         string? openSession = null;
@@ -21,11 +22,15 @@ public sealed class GateAdmission(IGate gate, Action<SupervisorEvent> emit, Time
             while (true)
             {
                 cancellation.ThrowIfCancellationRequested();
-                var id = Guid.CreateVersion7().ToString();
+                var id = initialSessionId ?? Guid.CreateVersion7().ToString();
+                initialSessionId = null;
                 GateSession session;
                 emit(new SupervisorEvent.RequestingAdmission());
                 try
                 {
+                    // CR-L29 binds a verified scan to this exact future session before create.
+                    // No gate session exists yet if preparing fails or is cancelled.
+                    if (prepare is not null) await prepare(id, cancellation).ConfigureAwait(false);
                     // Until a definitive refusal arrives, cancellation must clean up even a lost create response.
                     openSession = id;
                     session = await gate.CreateAsync(request(id), cancellation).ConfigureAwait(false);

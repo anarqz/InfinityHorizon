@@ -55,7 +55,7 @@ public sealed partial class ShellViewModel
 
     public string LeaveQueueLabel => S[_leavingQueue ? "queue.leaving" : "queue.cancel"];
 
-    public string PlayGuidance => SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : "play.ready"];
+    public string PlayGuidance => SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : IntegrityReady ? "play.ready" : "integrity.not_checked"];
 
     /// <summary>The detected Azimuth folder (<c>--azimuth</c>, <c>FI_AZIMUTH</c>), or null.</summary>
     public AzimuthInstall? Install
@@ -63,6 +63,7 @@ public sealed partial class ShellViewModel
         get => _install;
         set
         {
+            ClearIntegrity();
             _install = value;
             if (value is not null)
             {
@@ -80,7 +81,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && SetupStatus == AzimuthStatus.Ready && IntegrityCanStart;
 
     public string? PlayStatus => _playStatus;
 
@@ -102,11 +103,18 @@ public sealed partial class ShellViewModel
             Message = Playing ? S["supervisor.already"] : S["supervisor.not_ready"];
             return;
         }
+        var startingSession = _session;
+        var futureSessionId = Guid.CreateVersion7().ToString();
+        await CheckIntegrityAsync(futureSessionId);
+        if (!ReferenceEquals(_session, startingSession) || !IntegrityReady || _integrity is null)
+        { Message = IntegrityStatus; return; }
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
         if (profile is null)
         {
             return;
         }
+        var integrity = _integrity!;
+        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { Message = S["integrity.inconclusive"]; return; }
         var development = DevNet.PlainHttpUrl(_session.Api.Core.GetLeftPart(UriPartial.Authority));
         var (keys, policy) = TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
@@ -117,6 +125,15 @@ public sealed partial class ShellViewModel
             Text = S,
             CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),
             AccountId = _session.Me?.AccountId,
+            CarDbSha256 = carDb,
+            InitialSessionId = futureSessionId,
+            OnlineAccessLost = integrity.Revoke,
+            PrepareAdmission = async (id, ct) =>
+            {
+                if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
+                await integrity.PrepareAdmissionAsync(id, ct).ConfigureAwait(false);
+                if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
+            },
         };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
@@ -234,9 +251,10 @@ public sealed partial class ShellViewModel
 
     private void Render(SupervisorEvent e)
     {
-        Log(e is SupervisorEvent.Admitted a ? $"Admitted pool={a.Pool.Name} tier={a.Pool.Tier}"
+        if (e is not SupervisorEvent.Capture { What: CaptureWhat.RemotePaintReceiver }) Log(e is SupervisorEvent.Admitted a ? $"Admitted pool={a.Pool.Name} tier={a.Pool.Tier}"
             : e is SupervisorEvent.Queued qlog ? $"Queued position={qlog.Place.Position} ahead={qlog.Place.Ahead}"
             : e is SupervisorEvent.AdmissionRetry retryLog ? $"Admission retry {retryLog.Code} after={retryLog.Delay.TotalSeconds:F0}s" : e.ToString());
+        IntegrityOn(e);
         OverlayOn(e);
         switch (e)
         {
@@ -335,6 +353,12 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Error { Message: Infinity.Core.Api.ErrorCodes.AccountsFrozen }:
                 SetStatus(S["crash.frozen"]);
+                break;
+            case SupervisorEvent.Error content when content.Message is ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged or ErrorCodes.ContentPolicyUnavailable:
+                _integrity?.Revoke();
+                _integrityStatus = S[content.Message == ErrorCodes.ContentPolicyUnavailable ? "integrity.policy_unavailable"
+                    : content.Message == ErrorCodes.ContentIncompatible ? "integrity.incompatible" : "integrity.inconclusive"];
+                SetStatus(_integrityStatus);
                 break;
             case SupervisorEvent.Error err:
                 SetStatus(S["supervisor.launch_refused"] + " (" + err.Message + ")");

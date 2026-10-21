@@ -319,13 +319,27 @@
                 </Border>
               </StackPanel>
               <Image Source="{StaticResource BrandLogo}" Width="340" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality"
-                     Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}" />
+                     Visibility="{Binding ShowPlayBrand, Converter={StaticResource Visible}}" />
               <TextBlock Text="{Binding S[brand.tagline]}" Margin="0,12,0,20" Style="{StaticResource PageSubtitle}"
-                         Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}" />
+                         Visibility="{Binding ShowPlayBrand, Converter={StaticResource Visible}}" />
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
-                <TextBlock Text="{Binding S[play.public_warning]}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
-                <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[integrity.title]}" FontWeight="Bold" FontSize="18" />
+                    <TextBlock Text="{Binding IntegrityStatus}" TextWrapping="Wrap" Margin="0,8,0,8" AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock Text="{Binding IntegrityFindings}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                    <TextBlock Text="{Binding IntegrityLocationLabel}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,8" Foreground="{StaticResource InfinityMuted}" />
+                    <WrapPanel>
+                      <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" Margin="0,0,8,8" />
+                      <Button Content="{Binding S[integrity.check]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
+                      <Button Content="{Binding S[integrity.cancel]}" Click="OnCancelIntegrity" Visibility="{Binding IntegrityChecking, Converter={StaticResource Visible}}" Margin="0,0,8,8" />
+                      <Button Content="{Binding S[integrity.copy]}" Click="OnCopyIntegrity" Margin="0,0,8,8" />
+                      <Button Content="{Binding S[crash.private_support]}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" Margin="0,0,8,8" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding S[integrity.help]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                  </StackPanel>
+                </Border>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <WrapPanel>
@@ -336,6 +350,8 @@
                 </WrapPanel>
                 <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" FontWeight="Bold"
                            AutomationProperties.LiveSetting="Polite" />
+                <TextBlock Text="{Binding S[play.public_warning]}" TextWrapping="Wrap" Margin="0,14,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
               </StackPanel>
               <Border Style="{StaticResource Card}" Background="#EE170B22" BorderBrush="#775A184D" Margin="0,2,0,0"
                       Visibility="{Binding WaitingForAdmission, Converter={StaticResource Visible}}">
