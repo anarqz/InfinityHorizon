@@ -32,9 +32,19 @@ public static class ContentPath
         var selected = new DirectoryInfo(path);
         if ((selected.Attributes & FileAttributes.ReparsePoint) != 0)
         {
-            var target = selected.ResolveLinkTarget(returnFinalTarget: true);
-            if (target is not DirectoryInfo) throw new InvalidDataException("Selected content folder could not be resolved");
-            path = NormalizeSelection(target.FullName);
+            FileSystemInfo? target;
+            try
+            {
+                target = selected.ResolveLinkTarget(returnFinalTarget: true);
+            }
+            catch (IOException) when (Process.WineHost.Detected)
+            {
+                // Wine may expose a Unix directory link without a Windows reparse buffer.
+                // Open the explicitly selected root normally; descendants keep their own guard.
+                target = null;
+            }
+            if (target is DirectoryInfo) path = NormalizeSelection(target.FullName);
+            else if (!Process.WineHost.Detected) throw new InvalidDataException("Selected content folder could not be resolved");
         }
         if (!OperatingSystem.IsWindows()) return path;
         using var handle = Native.CreateFileW(path, 0, 3, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
@@ -73,8 +83,9 @@ public static class ContentPath
         for (FileSystemInfo? current = File.Exists(path) ? new FileInfo(path) : new DirectoryInfo(path); current is not null;
             current = current is FileInfo file ? file.Directory : ((DirectoryInfo)current).Parent)
         {
+            if (Path.TrimEndingDirectorySeparator(current.FullName).Equals(root, comparison))
+                return current.Exists && ((current.Attributes & FileAttributes.ReparsePoint) == 0 || Process.WineHost.Detected);
             if (current.Exists && (current.Attributes & FileAttributes.ReparsePoint) != 0) return false;
-            if (Path.TrimEndingDirectorySeparator(current.FullName).Equals(root, comparison)) return true;
         }
         return false;
     }

@@ -13,8 +13,9 @@ public sealed record GameContentLocation(string PackageRoot, string Mount)
         try
         {
             var root = ContentPath.NormalizeSelection(directory);
-            if (Path.GetFileName(root).Equals("Mount", StringComparison.OrdinalIgnoreCase)) root = Path.GetDirectoryName(root)!;
-            var mount = ContentPath.ResolveDirectory(Path.Combine(root, "Mount"));
+            var directMount = File.Exists(Path.Combine(root, "AppxManifest.xml")) && File.Exists(Path.Combine(root, Executable));
+            var mount = ContentPath.ResolveDirectory(directMount ? root : Path.Combine(root, "Mount"));
+            if (directMount && Path.GetFileName(root).Equals("Mount", StringComparison.OrdinalIgnoreCase)) root = Path.GetDirectoryName(root)!;
             if (!ContentPath.SafeWithin(mount, mount)
                 || !File.Exists(Path.Combine(mount, "AppxManifest.xml")) || !File.Exists(Path.Combine(mount, Executable))) return null;
             return new(root, mount);
