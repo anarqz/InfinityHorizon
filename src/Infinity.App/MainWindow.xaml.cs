@@ -57,7 +57,11 @@ public partial class MainWindow : Window
     private async void OnApplyLauncherUpdate(object sender, RoutedEventArgs e) => await _vm.ApplyLauncherUpdateAsync();
     private void OnCancelLauncherUpdate(object sender, RoutedEventArgs e) => _vm.CancelLauncherUpdate();
     private void OnUpdateSupport(object sender, RoutedEventArgs e) => _vm.OpenUpdateSupport();
-    private void OnOpenLauncherUpdate(object sender, RoutedEventArgs e) => _vm.OpenLauncherUpdate();
+    private async void OnOpenLauncherUpdate(object sender, RoutedEventArgs e)
+    {
+        if (_vm.LauncherReleaseUnavailable) await _vm.CheckLauncherUpdatesAsync();
+        else _vm.OpenLauncherUpdate();
+    }
     private void OnExitLauncherUpdate(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
     private void OnOfficialReleases(object sender, RoutedEventArgs e) => OpenCommunityLink("https://github.com/anarqz/InfinityHorizon/releases");

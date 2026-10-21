@@ -654,8 +654,8 @@
     <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}" Padding="22,10"
             Visibility="{Binding ShowLauncherUpdateBanner, Converter={StaticResource Visible}}">
       <DockPanel>
-        <Button DockPanel.Dock="Right" Content="{Binding S[updater.open]}" Click="OnOpenLauncherUpdate" Margin="16,0,0,0" />
-        <TextBlock Text="{Binding LauncherUpdateStatus}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        <Button DockPanel.Dock="Right" Content="{Binding LauncherUpdateBannerAction}" Click="OnOpenLauncherUpdate" IsEnabled="{Binding CanRetryLauncherUpdate}" Margin="16,0,0,0" />
+        <TextBlock Text="{Binding LauncherUpdateStatus}" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
       </DockPanel>
     </Border>
     <Border Grid.Row="0" Grid.ColumnSpan="2" Panel.ZIndex="30" Background="{StaticResource InfinityWarnSurface}" Padding="22,10"
