@@ -479,14 +479,17 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
     }
 
     /// <summary>The launcher's installation folder, also for the helper running from a transaction inside it.</summary>
-    private static string InstallBoundary
+    private static string InstallBoundary => InstallationBoundary(AppContext.BaseDirectory);
+
+    internal static string InstallationBoundary(string applicationDirectory)
     {
-        get
-        {
-            var base_ = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
-            var store = base_.IndexOf(Path.DirectorySeparatorChar + ".infinity-update", StringComparison.OrdinalIgnoreCase);
-            return store > 0 ? base_[..store] : base_;
-        }
+        var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(applicationDirectory));
+        var parent = Path.GetDirectoryName(directory);
+        // worker.exe runs directly inside .infinity-update/<transaction N>/.
+        // Similar ordinary directory names must not change the protected boundary.
+        return parent is not null && Path.GetFileName(parent).Equals(".infinity-update", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParseExact(Path.GetFileName(directory), "N", out _)
+            ? Path.GetDirectoryName(parent) ?? directory : directory;
     }
 
     private static bool Above(string item, string boundary)
