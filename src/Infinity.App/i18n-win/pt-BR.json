@@ -53,6 +53,8 @@
   "worlds.host_mode": "Esse lobby não combina com o modo do seu perfil.",
   "worlds.host_failed": "Não foi possível abrir o lobby. Tente de novo em instantes.",
   "worlds.host_ended": "Lobby fechado\nSeu lobby não está mais aberto.",
+  "worlds.host_idle_warning": "Ninguém entrou\nSeu lobby fecha em 1 minuto se ninguém entrar.",
+  "worlds.host_idle_closed": "Lobby fechado\nNinguém entrou em 5 minutos. Abra de novo quando quiser jogar.",
   "setup.update_first": "Atualize o hook do Infinity para {version} na página Azimuth primeiro: o instalado pode não conhecer este servidor.",
   "supervisor.hook_offline": "O jogo ficou offline: o hook não aceitou esta sessão (veja a página Azimuth). O progresso continua salvo neste PC.",
   "native.confirmed": "Já confirmei meu e-mail",

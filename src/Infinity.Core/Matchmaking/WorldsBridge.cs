@@ -54,6 +54,16 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private CancellationTokenSource? _hostStop;
     private string? _hostedWorldId;
     private DateTimeOffset _nextAdmissionsRefresh;
+    // OD-107: punches are read every 3 s only while a granted player is still connecting; else 10 s
+    // (the 15 s announce carries punches too). A world with only its host closes after 5 minutes.
+    public static readonly TimeSpan JoiningAdmissionsEvery = TimeSpan.FromSeconds(3);
+    public static readonly TimeSpan QuietAdmissionsEvery = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan AloneWarnAfter = TimeSpan.FromMinutes(4);
+    public static readonly TimeSpan AloneCloseAfter = TimeSpan.FromMinutes(5);
+    private bool _hostJoining = true;
+    private DateTimeOffset? _hostAloneSince;
+    private bool _hostAloneWarned;
+    private TimeSpan AdmissionsEvery => _hostJoining ? JoiningAdmissionsEvery : QuietAdmissionsEvery;
     private int? _announcedExternalPort;
     private DateTimeOffset _hostLastSuccess;
     private long _hostLastStamp;
@@ -89,7 +99,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private readonly LobbyRoster _roster = new(ownXuid);
     private readonly PublicWorldWarning _publicWarning = new();
     private UiFrame.MyWorld _mineSnapshot = NoWorld;
-    private long _mineNextTicks, _mineEpoch;
+    private long _mineNextTicks, _mineEpoch, _mineReadTicks;
+    // OD-107: settled background reads (no pending request, join or uncertainty) slow down.
+    public static readonly TimeSpan SeatReadEvery = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan QuietSeatReadInWorld = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan QuietSeatReadNoWorld = TimeSpan.FromSeconds(30);
 
     public IReadOnlyList<UiFrame.Toast> LobbyToasts()
     {
@@ -639,9 +653,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (!OnlineOpen) { _ = SuspendOnlineAsync(); return Task.FromResult(NoWorld); }
             if(Volatile.Read(ref _joinAttempt)!=0)return Task.FromResult(_mineSnapshot);
             if (_mineRead is { IsCompleted: false }) return _mineRead.WaitAsync(cancellation);
-            if (background && idleWhenNoWorld && _mineReconciled && !_mineUncertain && _pendingRequestUntil is null
-                && !_joinRetry.Running && !_createRetry.Running && HostedWorldId is null && _seat.GrantId is null && _mineSnapshot.Role == UiWorldRole.None)
+            var settled = _mineReconciled && !_mineUncertain && _pendingRequestUntil is null && !_joinRetry.Running && !_createRetry.Running;
+            if (background && idleWhenNoWorld && settled && HostedWorldId is null && _seat.GrantId is null && _mineSnapshot.Role == UiWorldRole.None)
                 return Task.FromResult(_mineSnapshot);
+            var quiet = _mineSnapshot.Role == UiWorldRole.None ? QuietSeatReadNoWorld : QuietSeatReadInWorld;
+            if (background && settled && Now.UtcTicks < Volatile.Read(ref _mineReadTicks) + quiet.Ticks) return Task.FromResult(_mineSnapshot);
             _mineRead = ReadMineAsync(cancellation);
             return _mineRead;
         }
@@ -660,7 +676,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         try
         {
             if (Now.UtcTicks < Volatile.Read(ref _mineNextTicks)) return _mineSnapshot;
-            Interlocked.Exchange(ref _mineNextTicks, (Now + TimeSpan.FromSeconds(5)).UtcTicks);
+            Interlocked.Exchange(ref _mineNextTicks, (Now + SeatReadEvery).UtcTicks);
+            Interlocked.Exchange(ref _mineReadTicks, Now.UtcTicks);
             var answer = await OperationAsync(_seatReadRetry, _mm.SeatWithMembersAsync, cancellation).ConfigureAwait(false);
             if (!OnlineOpen) return NoWorld;
             if (epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
@@ -936,7 +953,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _announcedExternalPort = null;
                         _hostLastSuccess = Now;
                         _hostLastStamp = _clock.GetTimestamp();
-                        _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
+                        (_hostJoining, _hostAloneSince, _hostAloneWarned) = (true, Now, false);
+                        _nextAdmissionsRefresh = Now + AdmissionsEvery;
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
@@ -1027,7 +1045,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (step != HostStep.Announce && !(step == HostStep.Wait && ExternalPortMoved(relay, now)))
             {
                 if (refreshRelayAdmissions is null || now < _nextAdmissionsRefresh) return null;
-                _nextAdmissionsRefresh = now + TimeSpan.FromSeconds(3);
+                _nextAdmissionsRefresh = now + AdmissionsEvery;
                 try
                 {
                     if (!_admissionsRetry.TryBegin(out var refreshGeneration)) return null;
@@ -1040,7 +1058,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                             return _text(afterRefresh.MessageKey);
                         }
-                        if (IsCurrent(operation)) _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
+                        if (IsCurrent(operation)) _nextAdmissionsRefresh = Now + AdmissionsEvery;
                         _admissionsRetry.Complete(refreshGeneration, transient: false);
                     }
                     catch (ApiException admissionFailure)
@@ -1124,10 +1142,27 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 _announcedExternalPort = sentExternalPort;
                 _hostLastSuccess = Now;
                 _hostLastStamp = _clock.GetTimestamp();
-                _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
                 foreach (var punch in world.Punches.Where(p => p.Kicked))
                 {
                     relay.Kick(punch.Xuid);
+                }
+                // A granted player who is not synced yet is still connecting: keep the fast cadence for them.
+                _hostJoining = world.Punches.Any(p => !p.Kicked && !peers.Contains(p.Xuid, StringComparer.Ordinal));
+                _nextAdmissionsRefresh = Now + AdmissionsEvery;
+                // Only the host, no grant, no held seat (pending invites and requests hold one, §3.4).
+                var alone = peers.Count == 0 && world.Punches.Count == 0 && world.Players <= 1 && world.OpenSeats + 1 >= world.MaxPlayers;
+                if (!alone) { (_hostAloneSince, _hostAloneWarned) = (null, false); return null; }
+                var aloneFor = Now - (_hostAloneSince ??= Now);
+                if (aloneFor >= AloneCloseAfter)
+                {
+                    await CloseCurrentHostAsync(id, CancellationToken.None).ConfigureAwait(false);
+                    _log($"worlds: world {id} closed after {(int)aloneFor.TotalSeconds} s with no other player");
+                    return _text("worlds.host_idle_closed");
+                }
+                if (aloneFor >= AloneWarnAfter && !_hostAloneWarned)
+                {
+                    _hostAloneWarned = true;
+                    return _text("worlds.host_idle_warning");
                 }
                 return null;
             }
