@@ -149,7 +149,7 @@ public sealed partial class ShellViewModel
             UpdateRestartRequested?.Invoke();
         }
         catch (Exception error) when (UpdateFailure(error))
-        { _launcherUpdatePhase = UpdatePhase.Failed; Log("update: apply unavailable (" + error.GetType().Name + ")"); Changed(string.Empty); }
+        { _launcherUpdatePhase = UpdatePhase.Failed; Log("update: apply unavailable (" + error.GetType().Name + ": " + error.Message + ")"); Changed(string.Empty); }
         finally
         {
             acceptingProgress = false;
