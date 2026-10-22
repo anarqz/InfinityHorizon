@@ -34,6 +34,9 @@ public sealed class TokenManager : IDisposable
 
     public string AccountId { get; }
 
+    /// <summary>The current refresh token, for <see cref="SessionStore"/> right after sign-in.</summary>
+    public Secret RefreshToken => _refresh;
+
     /// <summary>Raised with the new refresh token after every rotation.</summary>
     public event Action<Secret>? Changed;
 
@@ -45,6 +48,10 @@ public sealed class TokenManager : IDisposable
         ArgumentNullException.ThrowIfNull(signedIn);
         return new TokenManager(api, signedIn.AccountId, signedIn.AccessToken, signedIn.AccessExpiresAt, new Secret(signedIn.RefreshToken), clock);
     }
+
+    /// <summary>A saved session (<see cref="SessionStore"/>): no access token yet, so the first call refreshes.</summary>
+    public static TokenManager Resume(ApiClient api, string accountId, Secret refreshToken, TimeProvider? clock = null) =>
+        new(api, accountId, string.Empty, "0001-01-01T00:00:00Z", refreshToken, clock);
 
     public static TokenManager From(ApiClient api, LauncherAccountCreated created, TimeProvider? clock = null)
     {

@@ -5,6 +5,7 @@ using System.IO;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Infinity.Core;
 using Infinity.Core.Api;
 using Infinity.Core.Auth;
@@ -286,6 +287,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _playStatus = null;
         _session?.Dispose();
         _session = null;
+        SessionStore.Delete(_stateDirectory);
         ClearIntegrity();
         ClearCrashScreen();
         _pending = null;
@@ -302,7 +304,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         var epoch = _onlinePauseEpoch;
         cancellation.ThrowIfCancellationRequested();
         if (!OnlineServiceAllowsPlay) throw new OperationCanceledException("Online services paused.", cancellation);
+        // Stay signed in: every rotated refresh token is saved before the next request can use it.
+        session.Tokens.Changed += refresh => KeepSession(session, refresh);
         var me = await session.RefreshMeAsync(cancellation);
+        KeepSession(session, session.Tokens.RefreshToken);
         cancellation.ThrowIfCancellationRequested();
         if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) throw new OperationCanceledException("Online services paused.", cancellation);
         _nativeFlow.Clear();
@@ -332,6 +337,49 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
         else Message = S["signin.done_toast"];
         await RefreshIntegrityAutomaticallyAsync();
+    }
+
+    private void KeepSession(AccountSession session, Secret refresh)
+    {
+        try
+        {
+            SessionStore.Save(_stateDirectory, session.Tokens.AccountId, session.Email, refresh);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            Log("auth: session not kept: " + e.GetType().Name);
+        }
+    }
+
+    /// <summary>Signs back in with the session kept from the last run; any refusal falls back to the sign-in screen.</summary>
+    public async Task ResumeSessionAsync()
+    {
+        if (_session is not null || _busy || !OnlineServiceAllowsPlay || SessionStore.Load(_stateDirectory) is not { } saved) return;
+        Busy = true;
+        AccountSession? session = null;
+        try
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var (info, api) = await AccountSession.ConnectAsync(Http, _config, ClientHeader, cancellation.Token);
+            session = AccountSession.Resume(api, info, DeviceIdentity.Load(_stateDirectory, "windows"), saved);
+            await EnterAsync(session, cancellation.Token);
+            Log("auth: session resumed");
+            session = null;
+        }
+        catch (ApiException e)
+        {
+            Log($"auth: saved session refused: {e.Code}");
+            if (e.Code is ErrorCodes.AuthRefreshInvalid or ErrorCodes.AuthRefreshReused or ErrorCodes.AccountsBanned) SessionStore.Delete(_stateDirectory);
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or JsonException or OperationCanceledException or InvalidOperationException)
+        {
+            Log($"auth: saved session not resumed: {e.GetType().Name}");
+        }
+        finally
+        {
+            session?.Dispose();
+            Busy = false;
+        }
     }
 
     private void FillProfiles()
