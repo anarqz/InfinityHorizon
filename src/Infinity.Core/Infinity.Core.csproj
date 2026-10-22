@@ -17,4 +17,7 @@
     <InternalsVisibleTo Include="Infinity.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Help/faq.json" />
+  </ItemGroup>
 </Project>

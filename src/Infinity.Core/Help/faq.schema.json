@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Infinity Help FAQ",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title_en", "title_br", "descr_en", "descr_br", "keywords", "discordLink"],
+    "properties": {
+      "title_en": { "type": "string", "minLength": 1, "pattern": "\\S" },
+      "title_br": { "type": "string", "minLength": 1, "pattern": "\\S" },
+      "descr_en": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "BBCode: b, i, u, code, br; newlines preserved." },
+      "descr_br": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "BBCode: b, i, u, code, br; newlines preserved." },
+      "keywords": { "type": "array", "items": { "type": "string", "minLength": 1, "pattern": "\\S" } },
+      "discordLink": { "anyOf": [
+        { "type": "null" },
+        { "type": "string", "format": "uri", "pattern": "^https://(discord\\.gg|discord\\.com)/[^\\s]+$" }
+      ] }
+    }
+  }
+}
