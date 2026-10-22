@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
         var vm = new ShellViewModel(strings, config, state);
         DataContext = vm;
+        _ = new GamepadNavigator(this, () => vm.Playing);
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
         vm.UpdateRestartRequested += () => Application.Current.Shutdown();
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
@@ -46,6 +47,7 @@ public partial class MainWindow : Window
             if (azimuth is not null) vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
             else await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
             await Task.WhenAll(updateCheck, onlineCheck);
+            await vm.ResumeSessionAsync();
             await vm.RefreshIntegrityAutomaticallyAsync();
         };
     }

@@ -2,6 +2,8 @@
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace Infinity.App;
@@ -10,6 +12,12 @@ public partial class App : Application
 {
     public App()
     {
+        // Under Wine/Proton WPF's Direct3D 9 path leaves stale regions on screen (a pane drawn over
+        // another until the mouse moves); software rendering draws every frame correctly there.
+        if (Infinity.Core.Process.WineHost.Detected)
+        {
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+        }
         // A fault in one action never takes the launcher (and the play session it supervises) down:
         // it is written to launcher.log and the shell keeps running.
         DispatcherUnhandledException += OnDispatcherUnhandled;

@@ -256,7 +256,7 @@
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500" Margin="0,8">
               <TextBlock Text="{Binding S[shell.pick_profile]}" Style="{StaticResource PageTitle}" />
               <TextBlock Text="{Binding ProfilesText}" Margin="0,8,0,14" Style="{StaticResource PageSubtitle}" />
-              <ItemsControl ItemsSource="{Binding ProfileRows}">
+              <ItemsControl ItemsSource="{Binding ProfileRows}" Focusable="False">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
                     <Grid Margin="0,5">

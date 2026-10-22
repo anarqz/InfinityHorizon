@@ -196,6 +196,13 @@ public sealed class AccountSession : IDisposable
     public Task<Profile> ConfirmNoobAsync(string xuid, string idempotencyKey, CancellationToken cancellation = default) =>
         Tokens.WithAccessAsync(access => Api.ChangeModeAsync(access, xuid, new ModeChange("noob", true), idempotencyKey, cancellation), cancellation);
 
+    /// <summary>The session <see cref="SessionStore"/> kept from the last run; <see cref="RefreshMeAsync"/> proves it.</summary>
+    public static AccountSession Resume(ApiClient api, ServerInfo info, Device device, SessionStore.Saved saved)
+    {
+        ArgumentNullException.ThrowIfNull(saved);
+        return new AccountSession(api, TokenManager.Resume(api, saved.AccountId, saved.RefreshToken), device, info, saved.Email);
+    }
+
     internal static AccountSession From(ApiClient api, SignedIn signedIn, Device device, ServerInfo info) =>
         new(api, TokenManager.From(api, signedIn), device, info, null);
 

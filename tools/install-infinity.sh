@@ -185,16 +185,17 @@ launch() {
   [ -z "$SERVER" ] || args+=(--server "$SERVER" --portal "$SERVER")
   if [ -n "$AZIMUTH" ]; then args+=(--azimuth "Z:${AZIMUTH//\//\\}"); rw="$rw:$AZIMUTH"; fi
   mkdir -p "$DATA/prefix"
+  cd "$APP"
+  export STEAM_COMPAT_CLIENT_INSTALL_PATH="$root" STEAM_COMPAT_DATA_PATH="$DATA/prefix" \
+    STEAM_COMPAT_INSTALL_PATH="$APP" PRESSURE_VESSEL_FILESYSTEMS_RW="$rw" SteamAppId=0 SteamGameId=0
+  if [ ! -f "$DATA/prefix/.software-render" ]; then
+    say "Preparing the Proton prefix (first start only)..."
+    "$RUNTIME/run" -- "$PROTON/proton" waitforexitandrun reg add 'HKCU\Software\Microsoft\Avalon.Graphics' \
+      /v DisableHWAcceleration /t REG_DWORD /d 1 /f >>"$DATA/launcher.log" 2>&1 && touch "$DATA/prefix/.software-render"
+  fi
   say "Starting Infinity Horizon with $(basename "$PROTON") + $(basename "$RUNTIME")..."
   say "Log: $DATA/launcher.log"
-  cd "$APP"
-  STEAM_COMPAT_CLIENT_INSTALL_PATH="$root" \
-  STEAM_COMPAT_DATA_PATH="$DATA/prefix" \
-  STEAM_COMPAT_INSTALL_PATH="$APP" \
-  PRESSURE_VESSEL_FILESYSTEMS_RW="$rw" \
-  SteamAppId=0 SteamGameId=0 \
-    "$RUNTIME/run" -- "$PROTON/proton" waitforexitandrun "$APP/infinity.exe" "${args[@]}" \
-    >>"$DATA/launcher.log" 2>&1
+  "$RUNTIME/run" -- "$PROTON/proton" waitforexitandrun "$APP/infinity.exe" "${args[@]}" >>"$DATA/launcher.log" 2>&1
 }
 
 settings() {
