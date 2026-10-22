@@ -65,6 +65,9 @@ public static class SessionStore
         }
     }
 
+    /// <summary>A session is kept (not yet proven): the shell waits for it instead of offering sign-in.</summary>
+    public static bool Exists(string stateDirectory) => OperatingSystem.IsWindows() && File.Exists(Path.Combine(stateDirectory, FileName));
+
     public static void Delete(string stateDirectory)
     {
         try
