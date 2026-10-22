@@ -23,7 +23,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         Interlocked.Increment(ref _diagnosticCount);
         var network=NetworkStatus;
         Infinity.Core.Diagnostics.UdpDiagnostics.Enqueue(sink,_admission.DiagnosticSummary()+
-            FormattableString.Invariant($" nat={network.Nat} observations={network.PublicAddresses.Count} upnp={network.Upnp}"));
+            FormattableString.Invariant($" nat={network.Nat} observations={network.PublicAddresses.Count} upnp={network.Upnp} punch_hints={network.PunchHints} punch_sent={network.PunchesSent} send_errors={network.SendErrors}"));
     }
 
     private IntegratedWorldRelay(IntegratedHostRelay transport, WorldRelayAdmission admission)

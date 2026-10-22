@@ -25,6 +25,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private IReadOnlyList<string> _peers = Array.Empty<string>();
     private RelayNetworkStatus _network;
     private int _disposed, _running = 1;
+    private uint _sendErrors; // actor thread only
     private Diagnostics.CrashContext? _crashContext;
     private Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? _proofReceiver;
 
@@ -141,7 +142,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private void Send(RelayDatagram datagram)
     {
         try { _socket.SendTo(datagram.Data, SocketFlags.None, StunCodec.ForSocket(datagram.Destination, _socket.AddressFamily == AddressFamily.InterNetworkV6)); }
-        catch (SocketException) { /* UDP loss is handled by reliability or the next bounded discovery round. */ }
+        catch (SocketException) { if (_sendErrors != uint.MaxValue) _sendErrors++; /* UDP loss is handled by reliability or the next bounded discovery round. */ }
         catch (ObjectDisposedException) { /* cancellation closed the socket */ }
     }
 
@@ -187,7 +188,7 @@ public sealed class IntegratedHostRelay : IHostRelay
                 if (at >= nextTick)
                 {
                     _engine.Tick(at); _nat.Tick(at); nextTick = at + 20;
-                    Volatile.Write(ref _network, _nat.Snapshot());
+                    Volatile.Write(ref _network, _nat.Snapshot() with { SendErrors = _sendErrors });
                     Volatile.Write(ref _peers, Array.AsReadOnly(_engine.PeerXuids.Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
                 }
                 if (!activity) cancellation.WaitHandle.WaitOne(2);
