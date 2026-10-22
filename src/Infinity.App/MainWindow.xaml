@@ -29,6 +29,7 @@
       <Image Source="{StaticResource BrandLines}" Stretch="UniformToFill" VerticalAlignment="Bottom" Height="150"
              Opacity="0.18" IsHitTestVisible="False" />
       <Border BorderBrush="#3365184D" BorderThickness="0,0,1,0" />
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <DockPanel Margin="0,0,0,14">
         <Image DockPanel.Dock="Top" Source="{StaticResource BrandLogo}" Width="172" Margin="22,22,22,12"
                RenderOptions.BitmapScalingMode="HighQuality" />
@@ -64,8 +65,10 @@
             </StackPanel>
           </Button>
           <Button Content="{Binding S[nav.news]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+          <Button Content="{Binding S[nav.my_data]}" Style="{StaticResource NavButton}" Click="OnNavMyData" Tag="{Binding ShowMyData}" />
         </StackPanel>
       </DockPanel>
+      </ScrollViewer>
     </Grid>
 
     <!-- The page area: Home's art behind everything, then the top bar, the page and the status line. -->
@@ -149,6 +152,104 @@
 
         <!-- Content: one panel per step of sign-in -> game -> profile. -->
         <Grid Margin="40,28,40,16">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding ShowMyData, Converter={StaticResource Visible}}">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel>
+              <DockPanel>
+                <Button DockPanel.Dock="Right" Content="{Binding S[data.refresh]}" Click="OnRefreshMyData" IsEnabled="{Binding DataCanRefresh}" MinHeight="44" />
+                <TextBlock Text="{Binding S[data.title]}" Style="{StaticResource PageTitle}" />
+              </DockPanel>
+              <TextBlock Text="{Binding S[data.subtitle]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,6,0,6" />
+              <TextBlock Text="{Binding DataRoot}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" Margin="0,0,0,12" />
+              <TextBlock Text="{Binding S[data.no_install]}" Visibility="{Binding DataNoInstall, Converter={StaticResource Visible}}" TextWrapping="Wrap" Margin="0,0,0,10" />
+              <Button Content="{Binding S[data.cancel_scan]}" HorizontalAlignment="Left" Click="OnCancelDataScan" MinHeight="44"
+                      Visibility="{Binding DataScanning, Converter={StaticResource Visible}}" />
+              <Border Style="{StaticResource Card}" Margin="0,0,0,10" Padding="12" Visibility="{Binding DataPendingRecovery, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[data.recovery_note]}" TextWrapping="Wrap" />
+                  <Button Content="{Binding S[data.recover]}" Tag="recover" Click="OnPrepareDataAction" IsEnabled="{Binding DataIdle}" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                </StackPanel>
+              </Border>
+            </StackPanel>
+            <Grid Grid.Row="1">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <Grid Grid.Column="0" Margin="0,0,6,0" VerticalAlignment="Top">
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <StackPanel Grid.Row="0">
+                  <TextBlock Text="{Binding S[data.saves]}" FontWeight="Bold" Foreground="{StaticResource InfinityAccent}" Margin="0,0,0,8" />
+                  <TextBlock Text="{Binding DataSaveCount}" Foreground="{StaticResource InfinityMuted}" FontSize="12" Margin="0,0,0,8" />
+                  <Expander Header="{Binding S[data.saves_detail]}" Margin="0,0,0,8" FontSize="12"><TextBlock Text="{Binding S[data.saves_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,8,0,0" /></Expander>
+                  <TextBlock Text="{Binding S[data.empty]}" Visibility="{Binding DataEmpty, Converter={StaticResource Visible}}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                </StackPanel>
+                  <ListBox Grid.Row="1" MaxHeight="340" ItemsSource="{Binding DataSaves}" SelectedItem="{Binding DataSelected}" IsEnabled="{Binding DataIdle}"
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"
+                           BorderThickness="0" Background="Transparent" AutomationProperties.Name="{Binding S[data.saves]}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource Card}" Padding="12" Margin="0,0,0,8">
+                          <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding State}" Foreground="{StaticResource InfinityAccent}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,4" />
+                            <TextBlock Text="{Binding Stats}" Foreground="{StaticResource InfinityMuted}" FontSize="12" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Path}" Foreground="{StaticResource InfinityFaint}" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                <StackPanel Grid.Row="2">
+                  <TextBlock Text="{Binding S[data.target]}" Margin="0,12,0,6" />
+                  <ComboBox ItemsSource="{Binding DataTargets}" SelectedItem="{Binding DataTarget}" DisplayMemberPath="Label" MinHeight="40"
+                            IsEnabled="{Binding DataIdle}" AutomationProperties.Name="{Binding S[data.target]}" />
+                  <WrapPanel Margin="-4,10,0,12">
+                    <Button Content="{Binding S[data.backup]}" Tag="backup" Click="OnPrepareDataAction" IsEnabled="{Binding DataCanBackup}" Margin="4" MinHeight="40" />
+                    <Button Content="{Binding S[data.copy]}" Tag="copy" Click="OnPrepareDataAction" IsEnabled="{Binding DataCanInstall}" Margin="4" MinHeight="40" />
+                    <Button Content="{Binding S[data.move]}" Tag="move" Click="OnPrepareDataAction" IsEnabled="{Binding DataCanMove}" Margin="4" MinHeight="40" />
+                    <Button Content="{Binding S[data.swap]}" Tag="swap" Click="OnPrepareDataAction" IsEnabled="{Binding DataCanSwap}" Margin="4" MinHeight="40" />
+                    <Button Content="{Binding S[data.erase]}" Tag="erase" Click="OnPrepareDataAction" IsEnabled="{Binding DataCanErase}" Margin="4" MinHeight="40" />
+                  </WrapPanel>
+                </StackPanel>
+              </Grid>
+              <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[data.caches]}" FontWeight="Bold" Foreground="{StaticResource InfinityAccent}" Margin="0,0,0,8" />
+                  <Expander Header="{Binding S[data.cache_detail]}" Margin="0,0,0,12" FontSize="12"><TextBlock Text="{Binding S[data.cache_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,8,0,0" /></Expander>
+                  <Button Content="{Binding S[data.clear]}" Tag="clear" Click="OnPrepareDataAction" IsEnabled="{Binding DataCanClearCache}" HorizontalAlignment="Left" MinHeight="44" Margin="0,0,0,16" />
+                  <ItemsControl ItemsSource="{Binding DataCaches}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource Card}" Padding="12" Margin="0,0,0,8">
+                          <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Summary}" Foreground="{StaticResource InfinityMuted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding Location}" Foreground="{StaticResource InfinityFaint}" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock Text="{Binding DataOtherCaches}" Foreground="{StaticResource InfinityMuted}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,12" />
+                </StackPanel>
+              </ScrollViewer>
+            </Grid>
+            <StackPanel Grid.Row="2" Margin="0,12,0,0">
+              <TextBlock Text="{Binding DataScanNote}" TextWrapping="Wrap" FontSize="10" Foreground="{StaticResource InfinityFaint}" />
+              <TextBlock Text="{Binding DataStatus}" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="{StaticResource InfinityMuted}" />
+              <Border x:Name="DataConfirmationPanel" Style="{StaticResource Card}" Padding="14" Margin="0,8,0,0" Visibility="{Binding DataHasConfirmation, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding DataConfirmation}" TextWrapping="Wrap" />
+                  <WrapPanel Margin="0,10,0,0">
+                    <Button Content="{Binding S[data.confirm]}" Click="OnConfirmDataAction" IsEnabled="{Binding DataCanConfirm}" Margin="0,0,8,0" MinHeight="44" />
+                    <Button Content="{Binding S[data.cancel]}" Click="OnCancelDataAction" IsEnabled="{Binding DataIdle}" MinHeight="44" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </Grid>
+          </ScrollViewer>
           <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding ShowHelp, Converter={StaticResource Visible}}">
             <StackPanel>
             <StackPanel>

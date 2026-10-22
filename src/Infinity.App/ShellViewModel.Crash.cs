@@ -20,7 +20,7 @@ public sealed partial class ShellViewModel
     private CrashIncidentStore CrashStore => new(_stateDirectory);
 
     public bool HasCrashReport => _crash is not null && SignedIn;
-    public bool ShowCrashReport => HasCrashReport && _crashOpen && !_onHelp && !_onMods && !_onSetup && !_onAccount && !_onBugReport && !ShowPickSave;
+    public bool ShowCrashReport => HasCrashReport && _crashOpen && !_onMyData && !_onHelp && !_onMods && !_onSetup && !_onAccount && !_onBugReport && !ShowPickSave;
     public bool CrashConsent { get => _crashConsent; set { _crashConsent = value; Changed(string.Empty); } }
     public bool CrashManualDumpConsent { get => _crashManualDumpConsent; set { _crashManualDumpConsent = value; Changed(string.Empty); } }
     public bool CanConsentCrash => CrashIdle && !_crashSent;
@@ -49,7 +49,7 @@ public sealed partial class ShellViewModel
         if (_session?.Me?.AccountId != incident.OwnerAccountId) return;
         ClearCrashScreen();
         _crash = incident; _crashOpen = true; _crashConsent = _crashManualDumpConsent = _crashNewMetadataAction = _crashSent = false; _crashStatus = null;
-        _onHelp = _onMods = _onSetup = _onAccount = _onBugReport = false;
+        _onMyData = _onHelp = _onMods = _onSetup = _onAccount = _onBugReport = false;
         try { _crashSubmission = CrashStore.Prepared(incident.Id); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { _crashSubmission = null; }
         if (_crashSubmission is not null && !_crashSubmission.IsCurrentMetadata)
@@ -89,7 +89,7 @@ public sealed partial class ShellViewModel
         _crashStatus = null;
     }
 
-    public void ReviewCrash() { if (HasCrashReport) { _onHelp = _onMods = _onSetup = _onAccount = _onBugReport = false; _crashOpen = true; Changed(string.Empty); } }
+    public void ReviewCrash() { if (HasCrashReport) { _onMyData = _onHelp = _onMods = _onSetup = _onAccount = _onBugReport = false; _crashOpen = true; Changed(string.Empty); } }
     public void LaterCrash() { if (!CrashIdle) return; _crashOpen = _crashConsent = _crashManualDumpConsent = false; Changed(string.Empty); }
 
     public string? CopyableCrashReport() => CanExportCrash && _crash is { } incident

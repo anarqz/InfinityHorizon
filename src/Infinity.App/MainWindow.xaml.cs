@@ -169,6 +169,20 @@ public partial class MainWindow : Window
 
     private void OnNavHelp(object sender, RoutedEventArgs e) => _vm.OpenHelp();
 
+    private async void OnNavMyData(object sender, RoutedEventArgs e) => await _vm.OpenMyDataAsync();
+    private async void OnRefreshMyData(object sender, RoutedEventArgs e) => await _vm.RefreshMyDataAsync();
+    private void OnCancelDataScan(object sender, RoutedEventArgs e) => _vm.CancelDataScan();
+    private void OnCancelDataAction(object sender, RoutedEventArgs e) => _vm.CancelDataAction();
+    private void OnPrepareDataAction(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).Tag is string kind)
+        {
+            _vm.PrepareDataAction(kind);
+            if (_vm.DataHasConfirmation) Dispatcher.BeginInvoke(() => DataConfirmationPanel.BringIntoView());
+        }
+    }
+    private async void OnConfirmDataAction(object sender, RoutedEventArgs e) => await _vm.ConfirmDataActionAsync();
+
     private void OnClearHelpSearch(object sender, RoutedEventArgs e)
     {
         _vm.HelpQuery = string.Empty;
