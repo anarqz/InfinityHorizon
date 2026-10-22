@@ -24,7 +24,7 @@ $cmd = @"
 call "$vcvars" >nul
 cl /nologo /c /MT /O2 /W3 /I"$mh\include" $($csources -join ' ') /Fo"$out\obj\\" || exit /b 1
 rc /nologo /fo "$out\obj\fonts.res" "$here\src\fonts.rc" || exit /b 1
-cl $common $includes /LD $($sources -join ' ') "$out\obj\fonts.res" "$out\obj\buffer.obj" "$out\obj\hook.obj" "$out\obj\trampoline.obj" "$out\obj\hde64.obj" /Fo"$out\obj\\" /Fd"$out\obj\\" /Fe"$out\infinity-overlay.dll" /link /DEBUG /OPT:REF /OPT:ICF user32.lib gdi32.lib ole32.lib || exit /b 1
+cl $common $includes /LD $($sources -join ' ') "$out\obj\fonts.res" "$out\obj\buffer.obj" "$out\obj\hook.obj" "$out\obj\trampoline.obj" "$out\obj\hde64.obj" /Fo"$out\obj\\" /Fd"$out\obj\\" /Fe"$out\infinity-overlay.dll" /link /DEBUG /PDBALTPATH:infinity-overlay.pdb /OPT:REF /OPT:ICF user32.lib gdi32.lib ole32.lib || exit /b 1
 "@
 $bat = Join-Path $out 'build.cmd'
 Set-Content -Path $bat -Value $cmd -Encoding ascii
