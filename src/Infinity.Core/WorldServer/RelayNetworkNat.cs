@@ -26,6 +26,7 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
     private IPEndPoint[] _servers = [];
     private long _lastRound = -1, _answerAt, _lastKeepalive = -1;
     private int _answers, _keepaliveServer;
+    private uint _punchHints, _punchesSent;
     private readonly Dictionary<Guid,(uint Revision,long Window,int Sent,long Seen)> _grantedPunches=[];
     internal void PunchGranted(Guid grant,uint revision,IReadOnlyList<IPEndPoint> endpoints,long now)
     {
@@ -40,8 +41,9 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
             if(sent+2>10)break;
             if(endpoint.AddressFamily==AddressFamily.InterNetworkV6 && !dualStack)continue;
             for(var i=0;i<2;i++)send(new(StunCodec.Canonical(endpoint),StunCodec.BindingRequest(RandomNumberGenerator.GetBytes(12))));
-            sent+=2;
+            sent+=2;if(_punchesSent<=uint.MaxValue-2)_punchesSent+=2;
         }
+        if(_punchHints!=uint.MaxValue)_punchHints++;
         _grantedPunches[grant]=(revision,window,sent,now);
     }
     private RelayUpnpState _upnp = RelayUpnpState.Off;
@@ -134,7 +136,7 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
         var kind = ipv4.Length < 2 ? RelayNatKind.Unknown : ipv4[0].Equals(ipv4[1]) ? RelayNatKind.Cone : RelayNatKind.Symmetric;
         var addresses = _seen.Select(p => p.Seen).DistinctBy(p => p.AddressFamily).Select(RelayNetwork.Value).ToArray();
         return new(kind, Array.AsReadOnly(addresses), _upnp, _upnpAddress is null ? null : RelayNetwork.Value(_upnpAddress),
-            _upnpAddress is not null && RelayNetwork.BehindAnotherNat(_upnpAddress.Address), dualStack);
+            _upnpAddress is not null && RelayNetwork.BehindAnotherNat(_upnpAddress.Address), dualStack, _punchHints, _punchesSent);
     }
 
     internal static async Task<IPEndPoint[]> ResolveAsync(IEnumerable<string> names, CancellationToken cancellation)

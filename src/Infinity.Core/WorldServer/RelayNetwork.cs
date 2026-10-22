@@ -11,8 +11,11 @@ public enum RelayUpnpState { Off, Pending, NotFound, Mapped, Failed }
 public sealed record RelayNetworkAddress(string Address, ushort Port);
 
 /// <summary>Network discovery state for the launcher and hook. Contains no log or disk output.</summary>
+/// <remarks>PunchHints/PunchesSent count granted peer hint revisions accepted and the datagrams handed to the socket
+/// for them; SendErrors counts relay socket sends that failed. Diagnostics only, never routing.</remarks>
 public sealed record RelayNetworkStatus(RelayNatKind Nat, IReadOnlyList<RelayNetworkAddress> PublicAddresses,
-    RelayUpnpState Upnp, RelayNetworkAddress? UpnpAddress, bool BehindAnotherNat, bool DualStack);
+    RelayUpnpState Upnp, RelayNetworkAddress? UpnpAddress, bool BehindAnotherNat, bool DualStack,
+    uint PunchHints = 0, uint PunchesSent = 0, uint SendErrors = 0);
 
 /// <summary>Discovery is optional for isolated local tests; normal hosting enables STUN and UPnP.</summary>
 public sealed record IntegratedRelayOptions
