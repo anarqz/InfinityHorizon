@@ -54,6 +54,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private CancellationTokenSource? _hostStop;
     private string? _hostedWorldId;
     private DateTimeOffset _nextAdmissionsRefresh;
+    private int? _announcedExternalPort;
     private DateTimeOffset _hostLastSuccess;
     private long _hostLastStamp;
     private readonly IMatchmakingApi _mm = mm ?? throw new ArgumentNullException(nameof(mm));
@@ -932,6 +933,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         if (_hostGeneration != operation.Generation) throw new OperationCanceledException(stop.Token);
                         _host.Hosting(openingId, Now);
                         _host.Opened(Now);
+                        _announcedExternalPort = null;
                         _hostLastSuccess = Now;
                         _hostLastStamp = _clock.GetTimestamp();
                         _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
@@ -1021,7 +1023,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                 return _text("worlds.host_ended");
             }
-            if (_host.Next(now).Step != HostStep.Announce)
+            var step = _host.Next(now).Step;
+            if (step != HostStep.Announce && !(step == HostStep.Wait && ExternalPortMoved(relay, now)))
             {
                 if (refreshRelayAdmissions is null || now < _nextAdmissionsRefresh) return null;
                 _nextAdmissionsRefresh = now + TimeSpan.FromSeconds(3);
@@ -1072,7 +1075,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var remaining = TimeSpan.FromSeconds(45) - _clock.GetElapsedTime(_hostLastStamp);
             var wallRemaining = _hostLastSuccess.AddSeconds(45) - Now;
             if (wallRemaining < remaining) remaining = wallRemaining;
-            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers,Endpoint=Announcement(relay) }, token), stop.Token,
+            var endpoint = Announcement(relay);
+            var sentExternalPort = endpoint.External?.Port ?? 0;
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers,Endpoint=endpoint }, token), stop.Token,
                 remaining: remaining).ConfigureAwait(false);
             if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();
@@ -1116,6 +1121,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return _text(afterUpdate.MessageKey);
                 }
                 _host.Announced(Now);
+                _announcedExternalPort = sentExternalPort;
                 _hostLastSuccess = Now;
                 _hostLastStamp = _clock.GetTimestamp();
                 _nextAdmissionsRefresh = Now + TimeSpan.FromSeconds(3);
@@ -1217,6 +1223,12 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         if (relay is IAsyncDisposable asynchronous) await asynchronous.DisposeAsync().ConfigureAwait(false);
         else if (relay is not null) await Task.Run(relay.Dispose).ConfigureAwait(false);
     }
+
+    /// <summary>The relay's mapped port moved since the last heartbeat: announce early so new hints carry
+    /// the live port. Never early to retract one (a moment between STUN answers can read as not cone). At
+    /// most one heartbeat per 12 s keeps the account within mm.announce (6/min).</summary>
+    private bool ExternalPortMoved(IHostRelay relay, DateTimeOffset now) => _announcedExternalPort is { } announced
+        && now - _hostLastSuccess >= TimeSpan.FromSeconds(12) && Announcement(relay).External is { Port: var port } && port != announced;
 
     private AnnouncePort Announcement(IHostRelay relay)=>RelayAnnouncement.Build(relay.Port,_lan(),relay switch
     { IntegratedWorldRelay integrated=>integrated.NetworkStatus,IntegratedHostRelay host=>host.NetworkStatus,_=>null });
