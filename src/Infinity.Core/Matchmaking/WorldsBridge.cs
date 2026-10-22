@@ -61,7 +61,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public static readonly TimeSpan AloneWarnAfter = TimeSpan.FromMinutes(4);
     public static readonly TimeSpan AloneCloseAfter = TimeSpan.FromMinutes(5);
     private bool _hostJoining = true;
-    private DateTimeOffset? _hostAloneSince;
+    // monotonic: a forward wall-clock jump cannot close a world early
+    private long? _hostAloneSince;
     private bool _hostAloneWarned;
     private TimeSpan AdmissionsEvery => _hostJoining ? JoiningAdmissionsEvery : QuietAdmissionsEvery;
     private int? _announcedExternalPort;
@@ -953,7 +954,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _announcedExternalPort = null;
                         _hostLastSuccess = Now;
                         _hostLastStamp = _clock.GetTimestamp();
-                        (_hostJoining, _hostAloneSince, _hostAloneWarned) = (true, Now, false);
+                        (_hostJoining, _hostAloneSince, _hostAloneWarned) = (true, _clock.GetTimestamp(), false);
                         _nextAdmissionsRefresh = Now + AdmissionsEvery;
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
@@ -1152,7 +1153,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 // Only the host, no grant, no held seat (pending invites and requests hold one, §3.4).
                 var alone = peers.Count == 0 && world.Punches.Count == 0 && world.Players <= 1 && world.OpenSeats + 1 >= world.MaxPlayers;
                 if (!alone) { (_hostAloneSince, _hostAloneWarned) = (null, false); return null; }
-                var aloneFor = Now - (_hostAloneSince ??= Now);
+                var aloneFor = _clock.GetElapsedTime(_hostAloneSince ??= _clock.GetTimestamp());
                 if (aloneFor >= AloneCloseAfter)
                 {
                     await CloseCurrentHostAsync(id, CancellationToken.None).ConfigureAwait(false);
@@ -1168,9 +1169,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             }
             if (beat.Error is { } error && _host.Failed(error, Now).Outcome is HostOutcome.WorldGone or HostOutcome.Refused)
             {
+                // The server closes a lonely world from its own open time, usually just before ours (OD-107).
+                var idle = _hostAloneWarned && _hostAloneSince is { } since && _clock.GetElapsedTime(since) >= AloneWarnAfter;
                 await CloseCurrentHostAsync(id, CancellationToken.None).ConfigureAwait(false);
                 _log($"worlds: world {id} ended by the server: {error.Kind}");
-                return _text("worlds.host_ended");
+                return _text(idle && error.Kind == MmErrorKind.WorldNotFound ? "worlds.host_idle_closed" : "worlds.host_ended");
             }
         }
         catch (ApiException error) when (Pause(error))
