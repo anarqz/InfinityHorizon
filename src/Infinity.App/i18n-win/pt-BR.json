@@ -447,5 +447,14 @@
   "online.continue": "Voltar ao launcher",
   "online.view": "Ver status dos serviços",
   "online.updates": "Atualizações do launcher",
-  "native.registration_disabled": "Cadastros desativados"
+  "native.registration_disabled": "Cadastros desativados",
+  "help.title": "Como podemos ajudar?",
+  "help.intro": "Encontre respostas sobre saves, arquivos do jogo e como voltar à estrada.",
+  "help.search": "Digite uma palavra-chave, como “save”",
+  "help.results": "{count} respostas",
+  "help.empty": "Nenhuma resposta encontrada",
+  "help.empty_hint": "Tente outra palavra-chave, como save, travamento ou integridade.",
+  "help.clear": "Limpar busca",
+  "help.discord": "Fale com a equipe no Discord",
+  "help.eyebrow": "AJUDA / PERGUNTAS FREQUENTES"
 }

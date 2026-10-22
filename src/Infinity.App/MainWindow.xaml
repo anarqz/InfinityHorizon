@@ -33,7 +33,7 @@
         <Image DockPanel.Dock="Top" Source="{StaticResource BrandLogo}" Width="172" Margin="22,22,22,12"
                RenderOptions.BitmapScalingMode="HighQuality" />
         <StackPanel DockPanel.Dock="Bottom" Margin="0,0,12,0">
-          <Button Content="{Binding S[nav.help]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+          <Button Content="{Binding S[nav.help]}" Style="{StaticResource NavButton}" Click="OnNavHelp" Tag="{Binding ShowHelp}" />
           <Button Content="{Binding S[nav.bug]}" Style="{StaticResource NavButton}" Click="OnNavBugReport" Tag="{Binding ShowBugReport}" />
           <Button Content="{Binding S[nav.discord]}" Style="{StaticResource NavButton}" Click="OnDiscord" />
           <Border Height="1" Background="{StaticResource InfinityBorder}" Margin="20,8,8,8" />
@@ -149,6 +149,58 @@
 
         <!-- Content: one panel per step of sign-in -> game -> profile. -->
         <Grid Margin="40,28,40,16">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding ShowHelp, Converter={StaticResource Visible}}">
+            <StackPanel>
+            <StackPanel>
+              <TextBlock Text="{Binding S[help.eyebrow]}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource InfinityAccent}" Margin="0,0,0,10" />
+              <TextBlock Text="{Binding S[help.title]}" Style="{StaticResource PageTitle}" />
+              <TextBlock Text="{Binding S[help.intro]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,8,0,24" />
+              <Border Style="{StaticResource Card}" Padding="16,12" Margin="0,0,0,16">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[help.search]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,8" />
+                    <TextBox x:Name="HelpSearch" Text="{Binding HelpQuery, UpdateSourceTrigger=PropertyChanged}" MinHeight="44"
+                             AutomationProperties.Name="{Binding S[help.search]}" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Content="{Binding S[help.clear]}" Click="OnClearHelpSearch" Style="{StaticResource LinkButton}"
+                          Margin="12,18,0,0" MinHeight="44" />
+                </Grid>
+              </Border>
+              <TextBlock Text="{Binding HelpResultCount}" Foreground="{StaticResource InfinityFaint}" FontSize="12" Margin="0,0,0,12" />
+            </StackPanel>
+              <StackPanel>
+                <Border Style="{StaticResource Card}" Visibility="{Binding HelpEmpty, Converter={StaticResource Visible}}" Padding="24">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[help.empty]}" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding S[help.empty_hint]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                  </StackPanel>
+                </Border>
+                <ItemsControl ItemsSource="{Binding HelpItems}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Style="{StaticResource Card}" Padding="0" Margin="0,0,0,10">
+                        <Expander HorizontalContentAlignment="Stretch" Padding="16" Foreground="{StaticResource InfinityText}"
+                                  AutomationProperties.Name="{Binding Title}">
+                          <Expander.Header>
+                            <TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontSize="16" FontWeight="SemiBold" Margin="8,8,12,8" />
+                          </Expander.Header>
+                          <StackPanel Margin="30,14,16,10">
+                            <Border Height="1" Background="{StaticResource InfinityBorder}" Margin="0,0,0,16" />
+                            <local:FaqText Markup="{Binding Description}" TextWrapping="Wrap" FontSize="14" LineHeight="23"
+                                           Foreground="{StaticResource InfinityMuted}" />
+                            <Button Content="{Binding DiscordLabel}" Tag="{Binding DiscordLink}" Click="OnHelpDiscord"
+                                    Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,18,0,0" MinHeight="44"
+                                    Visibility="{Binding HasDiscordLink, Converter={StaticResource Visible}}" />
+                          </StackPanel>
+                        </Expander>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
           <!-- A quiet first screen: the brand and one clear entrance. -->
           <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="520"
                       Visibility="{Binding ShowWelcome, Converter={StaticResource Visible}}">

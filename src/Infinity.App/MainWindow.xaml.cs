@@ -167,6 +167,20 @@ public partial class MainWindow : Window
 
     private void OnNavHome(object sender, RoutedEventArgs e) => _vm.OpenHome();
 
+    private void OnNavHelp(object sender, RoutedEventArgs e) => _vm.OpenHelp();
+
+    private void OnClearHelpSearch(object sender, RoutedEventArgs e)
+    {
+        _vm.HelpQuery = string.Empty;
+        HelpSearch.Focus();
+    }
+
+    private void OnHelpDiscord(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).Tag is string url && Infinity.Core.Help.FaqCatalog.IsDiscordLink(url))
+            OpenCommunityLink(url);
+    }
+
     private void OnOpenSignIn(object sender, RoutedEventArgs e) => _vm.OpenSignIn();
 
     private void OnWelcome(object sender, RoutedEventArgs e)

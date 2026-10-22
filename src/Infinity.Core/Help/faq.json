@@ -1,0 +1,34 @@
+[
+  {
+    "title_en": "Why am I seeing a save conflict?",
+    "title_br": "Por que aparece um conflito de save?",
+    "descr_en": "[b]A conflict means this PC and the cloud both have newer progress.[/b] Infinity stops the launch so it does not choose a version for you.\n\nClose the game on every device. Keep your local saves and backups. Do not delete, rename or overwrite them to bypass the warning.\n\nIf the conflict remains, contact the team on Discord with the exact launcher message and which device you last played on. Ask for help before replacing any save.",
+    "descr_br": "[b]Um conflito significa que este PC e a nuvem têm progresso mais recente.[/b] O Infinity interrompe a inicialização para não escolher uma versão por você.\n\nFeche o jogo em todos os dispositivos. Preserve seus saves locais e backups. Não exclua, renomeie ou sobrescreva arquivos para ignorar o aviso.\n\nSe o conflito continuar, fale com a equipe no Discord e informe a mensagem exata do launcher e em qual dispositivo jogou por último. Peça ajuda antes de substituir qualquer save.",
+    "keywords": ["save", "conflict", "conflito", "cloud", "nuvem", "progress", "progresso"],
+    "discordLink": "https://discord.gg/BqMVftFvXH"
+  },
+  {
+    "title_en": "The game crashes. How do I check its integrity?",
+    "title_br": "O jogo fecha sozinho. Como verifico a integridade?",
+    "descr_en": "[b]Close the game, then open Configure in the launcher.[/b] Check that the selected Azimuth installation and game content folder are correct, then run the integrity check.\n\nRead the listed missing or mismatched files. Restore affected files from your own original installation or backup, then check again. Infinity does not supply game files.\n\nA passing check does not rule out every cause of a crash. If it still crashes, keep the exact error and use Report a bug or ask the team on Discord.",
+    "descr_br": "[b]Feche o jogo e abra Configurar no launcher.[/b] Confira se a instalação do Azimuth e a pasta de conteúdo do jogo estão corretas e execute a verificação de integridade.\n\nLeia a lista de arquivos ausentes ou diferentes. Restaure os arquivos afetados a partir da sua instalação original ou backup e verifique novamente. O Infinity não fornece arquivos do jogo.\n\nUma verificação aprovada não descarta todas as causas de travamento. Se o problema continuar, guarde o erro exato e use Relatar um bug ou fale com a equipe no Discord.",
+    "keywords": ["crash", "crashing", "integrity", "integridade", "travamento", "fecha", "arquivos", "files", "azimuth"],
+    "discordLink": "https://discord.gg/BqMVftFvXH"
+  },
+  {
+    "title_en": "Where are the backups of an imported save?",
+    "title_br": "Onde ficam os backups de um save importado?",
+    "descr_en": "When you select a save from this PC, Infinity backs up the selected save and anything it replaces in [code]fi-launcher-archive[/code] inside the saves folder before copying.\n\n[b]Keep that archive intact.[/b] Close the game before inspecting saves and ask the team for guidance before restoring a backup.",
+    "descr_br": "Ao selecionar um save deste PC, o Infinity faz um backup do save escolhido e do que será substituído em [code]fi-launcher-archive[/code], dentro da pasta de saves, antes de copiar.\n\n[b]Preserve essa pasta de backups.[/b] Feche o jogo antes de inspecionar os saves e peça orientação à equipe antes de restaurar um backup.",
+    "keywords": ["save", "backup", "archive", "import", "importar", "restaurar"],
+    "discordLink": "https://discord.gg/BqMVftFvXH"
+  },
+  {
+    "title_en": "Are all profiles saved to the cloud?",
+    "title_br": "Todos os perfis são salvos na nuvem?",
+    "descr_en": "Noob profiles keep saves on this PC. Cloud saving is available to [b]Infinity Supporter Hardcore profiles[/b].\n\nIf the launcher says synchronization did not complete, keep the local save and read its message before trying again. A local save is not confirmation of a completed cloud upload.",
+    "descr_br": "Perfis Noob mantêm os saves neste PC. O salvamento na nuvem está disponível para [b]perfis Hardcore de Infinity Supporters[/b].\n\nSe o launcher informar que a sincronização não foi concluída, preserve o save local e leia a mensagem antes de tentar novamente. Um save local não confirma que o envio à nuvem foi concluído.",
+    "keywords": ["save", "cloud", "nuvem", "sync", "sincronizacao", "hardcore", "noob"],
+    "discordLink": null
+  }
+]

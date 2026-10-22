@@ -447,5 +447,14 @@
   "online.continue": "Back to launcher",
   "online.view": "View service status",
   "online.updates": "Launcher updates",
-  "native.registration_disabled": "Registrations disabled"
+  "native.registration_disabled": "Registrations disabled",
+  "help.title": "How can we help?",
+  "help.intro": "Find answers about saves, game files and getting back on the road.",
+  "help.search": "Type a keyword, like “save”",
+  "help.results": "{count} answers",
+  "help.empty": "No answers found",
+  "help.empty_hint": "Try another keyword, such as save, crash or integrity.",
+  "help.clear": "Clear search",
+  "help.discord": "Ask the team on Discord",
+  "help.eyebrow": "HELP / FREQUENTLY ASKED QUESTIONS"
 }
