@@ -158,7 +158,9 @@
               <TextBlock Text="BETA" FontSize="11" FontWeight="Bold" Foreground="{StaticResource InfinityGold}" />
             </Border>
             <Button Content="{Binding S[welcome.sign_in]}" Click="OnOpenSignIn" Style="{StaticResource PlayButton}"
-                    HorizontalAlignment="Center" />
+                    HorizontalAlignment="Center" Visibility="{Binding Resuming, Converter={StaticResource Hidden}}" />
+            <TextBlock Text="{Binding S[native.signing_in]}" HorizontalAlignment="Center" FontSize="16"
+                       Foreground="{StaticResource InfinityMuted}" Visibility="{Binding Resuming, Converter={StaticResource Visible}}" />
           </StackPanel>
           <!-- OD-74: native sign-in; the confirmation step owns its temporary credentials. -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowSignIn, Converter={StaticResource Visible}}">

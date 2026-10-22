@@ -42,6 +42,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _config = config;
         config.Validate();
         _stateDirectory = config.StateDirectory(stateDirectory);
+        _resuming = SessionStore.Exists(_stateDirectory);
         _runLog=new(_stateDirectory);
         Version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
@@ -63,6 +64,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public bool CanChangeIdentity => SignedIn && !Playing && !_busy && !LauncherUpdateBusy;
 
     public bool ShowWelcome => !SignedIn && _pending is null && !_loginOpen;
+
+    /// <summary>The kept session is being checked: the welcome screen says so instead of offering sign-in.</summary>
+    public bool Resuming => _resuming;
+    private bool _resuming;
 
     public bool ShowHero => ShowWelcome || ShowHome;
 
@@ -354,7 +359,12 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Signs back in with the session kept from the last run; any refusal falls back to the sign-in screen.</summary>
     public async Task ResumeSessionAsync()
     {
-        if (_session is not null || _busy || !OnlineServiceAllowsPlay || SessionStore.Load(_stateDirectory) is not { } saved) return;
+        if (_session is not null || _busy || !OnlineServiceAllowsPlay || SessionStore.Load(_stateDirectory) is not { } saved)
+        {
+            _resuming = false;
+            Changed(nameof(Resuming));
+            return;
+        }
         Busy = true;
         AccountSession? session = null;
         try
@@ -378,7 +388,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         finally
         {
             session?.Dispose();
+            _resuming = false;
             Busy = false;
+            Changed(nameof(Resuming));
         }
     }
 
