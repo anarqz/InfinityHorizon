@@ -478,10 +478,30 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
         }
     }
 
+    /// <summary>The launcher's installation folder, also for the helper running from a transaction inside it.</summary>
+    private static string InstallBoundary
+    {
+        get
+        {
+            var base_ = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
+            var store = base_.IndexOf(Path.DirectorySeparatorChar + ".infinity-update", StringComparison.OrdinalIgnoreCase);
+            return store > 0 ? base_[..store] : base_;
+        }
+    }
+
+    private static bool Above(string item, string boundary)
+    {
+        var parent = Path.EndsInDirectorySeparator(item) ? item : item + Path.DirectorySeparatorChar;
+        return boundary.StartsWith(parent, StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static void RequireNoReparse(string path)
     {
         for (var item = Path.GetFullPath(path); !string.IsNullOrEmpty(item); item = Path.GetDirectoryName(item))
         {
+            // Under Wine every drive root and Linux mount point reports a reparse point, with no tag or target to tell
+            // it from a link: there, as in ContentPath.SafeWithin, only the installation and what lies inside it count.
+            if (Infinity.Core.Process.WineHost.Detected && Above(item, InstallBoundary)) continue;
             try
             {
                 if ((File.GetAttributes(item) & FileAttributes.ReparsePoint) != 0)
