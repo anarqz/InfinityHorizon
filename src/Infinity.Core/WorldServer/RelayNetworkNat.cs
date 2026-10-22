@@ -6,7 +6,10 @@ using System.Security.Cryptography;
 namespace Infinity.Core.WorldServer;
 
 /// <summary>Actor-owned STUN transactions, rate-limited answers and bounded peer punches.</summary>
-internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<RelayDatagram> send)
+/// <remarks>Between full rounds one IPv4 server per <paramref name="keepaliveMs"/> refreshes the relay's
+/// mapping: routers whose UDP idle timeout is shorter than the round would otherwise hand the world a
+/// new external port while it waits for players, leaving the announced one stale.</remarks>
+internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<RelayDatagram> send, long keepaliveMs = 5000)
 {
     private sealed record Pending(byte[] Transaction, IPEndPoint Server, long Sent);
     private sealed class Punch(IPEndPoint endpoint, long next)
@@ -21,8 +24,8 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
     private readonly List<(IPEndPoint Server, IPEndPoint Seen, long At)> _seen = [];
     private readonly List<Punch> _punches = [];
     private IPEndPoint[] _servers = [];
-    private long _lastRound = -1, _answerAt;
-    private int _answers;
+    private long _lastRound = -1, _answerAt, _lastKeepalive = -1;
+    private int _answers, _keepaliveServer;
     private readonly Dictionary<Guid,(uint Revision,long Window,int Sent,long Seen)> _grantedPunches=[];
     internal void PunchGranted(Guid grant,uint revision,IReadOnlyList<IPEndPoint> endpoints,long now)
     {
@@ -79,8 +82,11 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
                 _pending.RemoveAt(at);
                 if (message.Mapped is { Port: > 0 } mapped)
                 {
+                    mapped = StunCodec.Canonical(mapped);
+                    // A changed mapping re-measures every server now, so the NAT kind never mixes generations.
+                    if (_seen.Any(p => p.Server.Equals(from) && !p.Seen.Equals(mapped)) && now - _lastRound >= 1000) _lastRound = -1;
                     _seen.RemoveAll(p => p.Server.Equals(from));
-                    _seen.Add((from, StunCodec.Canonical(mapped), now));
+                    _seen.Add((from, mapped, now));
                 }
             }
             else _punches.RemoveAll(p => p.Endpoint.Equals(from) && p.Transaction.AsSpan().SequenceEqual(message.Transaction));
@@ -102,6 +108,17 @@ internal sealed class RelayNetworkNat(bool dualStack, long intervalMs, Action<Re
                 _pending.Add(new(transaction, server, now));
                 send(new(server, StunCodec.BindingRequest(transaction)));
             }
+            _lastKeepalive = now;
+        }
+        else if (keepaliveMs > 0 && now - _lastKeepalive >= keepaliveMs
+            && _servers.Where(s => s.AddressFamily == AddressFamily.InterNetwork).ToArray() is { Length: > 0 } ipv4 && _pending.Count < 16)
+        {
+            _lastKeepalive = now;
+            _keepaliveServer = (_keepaliveServer + 1) % ipv4.Length;
+            var server = ipv4[_keepaliveServer];
+            var transaction = RandomNumberGenerator.GetBytes(12);
+            _pending.Add(new(transaction, server, now));
+            send(new(server, StunCodec.BindingRequest(transaction)));
         }
         foreach (var punch in _punches.Where(p => now >= p.Next))
         {
