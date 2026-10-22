@@ -47,7 +47,7 @@ public sealed partial class ShellViewModel
     public void OpenAccount()
     {
         if (!CanChangeIdentity) return;
-        _onHelp = _onMods = _onSetup = _onBugReport = false;
+        _onMyData = _onHelp = _onMods = _onSetup = _onBugReport = false;
         _onAccount = true;
         DeletionEmail = _session?.Email ?? string.Empty;
         DeletionConfirmation = string.Empty;
@@ -57,6 +57,9 @@ public sealed partial class ShellViewModel
 
     private void LeaveAccount()
     {
+        _onMyData = false;
+        _dataScan?.Cancel();
+        CancelDataAction();
         _onHelp = false;
         _onAccount = false;
         DeletionEmail = DeletionConfirmation = string.Empty;

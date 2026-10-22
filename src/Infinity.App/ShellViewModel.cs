@@ -152,11 +152,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowNeedsAccount => _pending is not null;
 
-    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onHelp && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
+    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onMyData && !_onHelp && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
 
-    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onHelp && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
+    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onMyData && !_onHelp && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
 
-    public bool ShowHome => Ready && !ShowPickSave && !_onHelp && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
+    public bool ShowHome => Ready && !ShowPickSave && !_onMyData && !_onHelp && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
 
     public bool Idle => !_busy;
 

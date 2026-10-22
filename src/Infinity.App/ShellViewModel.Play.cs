@@ -56,7 +56,7 @@ public sealed partial class ShellViewModel
 
     public string LeaveQueueLabel => S[_leavingQueue ? "queue.leaving" : "queue.cancel"];
 
-    public string PlayGuidance => SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : "play.ready"];
+    public string PlayGuidance => !DataMaintenanceReady ? S["data.recovery_note"] : SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : "play.ready"];
 
     /// <summary>The detected Azimuth folder (<c>--azimuth</c>, <c>FI_AZIMUTH</c>), or null.</summary>
     public AzimuthInstall? Install
@@ -64,7 +64,7 @@ public sealed partial class ShellViewModel
         get => _install;
         set
         {
-            if (value != _install) { ClearIntegrity(); _install = value; }
+            if (value != _install) { ClearIntegrity(); ResetMyData(); _install = value; }
             if (value is not null)
             {
                 SwitchCaches(value.Root, online: null);
@@ -81,7 +81,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
+    public bool CanPlay => DataMaintenanceReady && Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
 
     public string? PlayStatus => _playStatus;
 
