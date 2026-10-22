@@ -4,6 +4,21 @@ The client that runs on players' computers: a C# WPF launcher with its integrate
 a C hook and a C++ Direct3D 12 overlay. Windows x64; the Windows build also runs through
 Wine/Proton. No game, Azimuth executable, player save or backend service is included.
 
+## Install on Linux and Steam Deck
+
+Debian and SteamOS, with native Steam, a Proton version and its Steam Linux Runtime installed
+(Steam > Library > Tools: Proton 11.0 pulls Steam Linux Runtime 4.0). Run in a terminal
+(Konsole in the Deck's Desktop Mode):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/anarqz/InfinityHorizon/main/tools/install-infinity.sh | bash
+```
+
+The menu installs or updates the latest release, picks Proton, finds the Azimuth folder, adds a
+menu entry and a Steam shortcut, and starts the launcher. Run it again to update, change settings
+or uninstall; `~/.local/share/InfinityHorizon/infinity.sh launch` starts the launcher directly.
+Everything lives in `~/.local/share/InfinityHorizon`, including the launcher's Proton prefix.
+
 ## Build
 
 On Windows, install PowerShell 7, .NET SDK 10.0.401 (or a newer patch in that feature band),
