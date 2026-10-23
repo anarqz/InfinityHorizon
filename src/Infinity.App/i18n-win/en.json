@@ -531,6 +531,7 @@
   "mods.required_enable": "Enable {mod}",
   "mods.required_retry": "Retry",
   "integrity.mediaoverride": "Hardcore needs the game's media overrides to hold only files of your enabled mods that don't affect multiplayer. Remove or restore these files, then play again: {paths}",
+  "mods.runtime_ended": "Your selected mods failed to start, so Infinity closed the game. Open Mods to review them, or disable them to play without mods.",
   "mods.prepare_failed": "Mods could not be prepared for this launch. Open Mods, or disable the mods to play without them.",
   "mods.open": "Open Mods",
   "mods.error.game_running": "Close the game before changing mods.",

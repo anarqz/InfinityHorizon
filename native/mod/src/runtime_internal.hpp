@@ -15,6 +15,7 @@ struct Readiness { std::wstring module, log; std::string success; };
 void configure_readiness(std::vector<Readiness>);
 std::string narrow(const std::wstring&);
 void log_line(const std::string&, const std::string&);
+void log_to(const std::wstring&);
 inline void plog(const std::string& text) { log_line("", text); }
 void fill_hook_api(InfinityModApiV1&);
 void notify_hook_fault();

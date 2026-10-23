@@ -347,11 +347,15 @@ public sealed partial class ShellViewModel
                     false => "mods: runtime report ignored (not this launch's plan)",
                     null => "mods: runtime report ignored (no native plan)",
                 });
+                foreach (var entry in reported.Report.Mods)
+                    Log($"mods: report {entry.Id} {entry.Version} state={entry.State switch { 1 => "ready", 2 => "failed", _ => "starting" }} compat={Convert.ToHexStringLower(entry.CompatibilitySha256)[..16]}");
                 break;
             case SupervisorEvent.ModsFailed failed:
                 // OD-113: no modded matchmaking for this launch; the game itself goes on (or the runtime already ended it)
                 Log("mods: runtime mod set failed (" + failed.Reason + ")");
-                Message = S["mods.online_failed"];
+                var why = RuntimeReason();
+                Message = why is null ? S["mods.online_failed"] : S["mods.online_failed"] + " (" + why + ")";
+                _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
                 SetStatus(Message);
                 break;
             case SupervisorEvent.RequestingAdmission:
@@ -410,10 +414,19 @@ public sealed partial class ShellViewModel
                 Changed(nameof(HookLine));
                 Changed(string.Empty);
                 break;
+            case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed { Code: ModRuntimeExitCode } }:
+                // the hook ended the session on purpose: the selected mods failed after they began loading (N-M4), not a crash
+                _modRuntimeEnded = true;
+                var reason = RuntimeReason();
+                Message = reason is null ? S["mods.runtime_ended"] : S["mods.runtime_ended"] + " (" + reason + ")";
+                _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
+                SetStatus(Message);
+                break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
                 break;
             case SupervisorEvent.CrashCaptured captured:
+                if (_modRuntimeEnded) { _modRuntimeEnded = false; Log("crash: not presented (the mod runtime ended the session)"); break; }
                 PresentCrash(captured.Incident);
                 break;
             case SupervisorEvent.Exited:
@@ -424,7 +437,7 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Ended ended:
                 _waitingForAdmission = _queued = false;
-                if (ended.Reason is not "error") ClearRuntimeConfigurationIssue();
+                if (ended.Reason is not "error") { ClearRuntimeConfigurationIssue(); ClearHookOfflineNotice(); }
                 var text = ended.Reason switch
                 {
                     "queue_cancelled" => S[ended.Left ? "queue.left" : "queue.leave_pending"],
@@ -438,7 +451,10 @@ public sealed partial class ShellViewModel
                 SetStatus(ended.Left || ended.Reason is "queue_cancelled" or "error" ? text : text + " " + S["supervisor.leave_failed"]);
                 break;
             case SupervisorEvent.HookOffline:
+                // The hook closes its pipe whenever the game quits, a moment before the process exit: a real problem only
+                // while the game keeps running, so Ended takes the notice back instead of leaving Configure flagged.
                 ConfigurationMessage(S["supervisor.hook_offline"], error: true);
+                _hookOfflineNotice = true;
                 SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error err when err.Message.StartsWith("save: ", StringComparison.Ordinal):

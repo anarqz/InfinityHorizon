@@ -232,6 +232,7 @@ extern "C" __declspec(dllexport) int InfinityModsPrepareDatabaseV1(const wchar_t
     try {
         wchar_t exe[32768]; DWORD n = GetModuleFileNameW(nullptr, exe, 32768);
         if (!n || n >= 32768 || _wcsicmp(std::filesystem::path(exe).filename().c_str(), L"infinity-mod-prepare.exe")) return 1;
+        if (valid_path(path)) infinity_mod::log_to((std::filesystem::path(path).parent_path() / L"prepare.log").wstring());
         auto file = verify_file(path, hash, std::filesystem::path(path).parent_path().wstring(), false); if (!file || !sql_registrations.empty()) return 1;
         auto bytes = read_bounded(file->file, 1024 * 1024); ParsedPlan plan; parse_plan(bytes, plan);
         prepare_session_database(plan, std::filesystem::path(path).parent_path()); return 0;

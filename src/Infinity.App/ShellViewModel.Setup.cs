@@ -68,6 +68,21 @@ public sealed partial class ShellViewModel
         if (!_configurationHasError && _messageForConfiguration) Message = null;
     }
 
+    /// <summary>Set by the supervisor's HookOffline: the game's own quit closes the hook pipe first, so this is not a setup problem.</summary>
+    private bool _hookOfflineNotice;
+
+    /// <summary>A session that ended without an error takes back its hook-offline notice (and the Configure flag it raised).</summary>
+    private void ClearHookOfflineNotice()
+    {
+        if (!_hookOfflineNotice) return;
+        _hookOfflineNotice = false;
+        // another setup message raised since then owns the flag; a play message (a mod failure) replaced it without being one
+        if (_messageForConfiguration && Message != S["supervisor.hook_offline"]) return;
+        _configurationHasError = false; _configurationErrorFromIntegrity = false;
+        if (_messageForConfiguration) Message = null; // the setter also clears _messageForConfiguration
+        Changed(string.Empty);
+    }
+
     public bool Searching => _searching;
 
     public bool AzimuthFound => _install is not null;
