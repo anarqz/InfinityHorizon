@@ -131,6 +131,12 @@ public sealed partial class ShellViewModel
     {
         if (!IntegrityApplies) return (true, null);
         await _integrityRun;
+        // OD-115: the media overrides hold only files of enabled client-only mods, with their manifests' bytes (launcher-side,
+        // CONTENT_API §1); checked fresh on every Hardcore Play, unchanged files' digests reused.
+        if (await MediaOverrideFindingsAsync() is { Count: > 0 } overrides)
+        {
+            Message = MediaOverrideMessage(overrides); Changed(string.Empty); return (false, null);
+        }
         if (IntegrityPolicy.BeforePlay(IntegrityApplies, _integrity?.State, _integrity?.FilesCurrent == true) == IntegrityStep.Check)
             await RunIntegrityCheck(futureSessionId, automatic: true);
         if (!IntegrityApplies) return (true, null);
@@ -141,6 +147,26 @@ public sealed partial class ShellViewModel
             default: Message = IntegrityStatus; Changed(string.Empty); return (false, null);
         }
     }
+
+    /// <summary>OD-115: the Hardcore media-override findings (ids and paths only); an unreadable folder is itself a finding.</summary>
+    private async Task<IReadOnlyList<Infinity.Core.Mods.MediaOverrideFinding>> MediaOverrideFindingsAsync()
+    {
+        if (ModManagerFactory() is not { } factory || ContentLocation is null) return [];
+        try
+        {
+            var findings = await Task.Run(() => factory().AuditMediaOverrides());
+            foreach (var finding in findings.Take(20)) Log("integrity: media override " + finding.Reason + ": " + finding.Path);
+            return findings;
+        }
+        catch (Exception error) when (Infinity.Core.Mods.ManagedModFiles.IsStateError(error))
+        {
+            Log("integrity: media overrides unreadable: " + Infinity.Core.Mods.ManagedModFiles.Code(error));
+            return [new(Infinity.Core.Mods.ModManifest.MediaOverrideFolder, "unreadable")];
+        }
+    }
+
+    private string MediaOverrideMessage(IReadOnlyList<Infinity.Core.Mods.MediaOverrideFinding> findings) => S.Format("integrity.mediaoverride",
+        ("paths", string.Join(", ", findings.Take(5).Select(f => f.Path)) + (findings.Count > 5 ? ", +" + (findings.Count - 5).ToString(System.Globalization.CultureInfo.CurrentCulture) : "")));
 
     /// <summary>A content refusal of the server during a session (OD-113): only a real mismatch is shown; anything else is re-checked silently.</summary>
     private void IntegrityRefused(string code, bool duringAdmission = false)
@@ -201,6 +227,9 @@ public sealed partial class ShellViewModel
             _integrityStatus = _integrity.Reason == "policy_unavailable" ? S["integrity.policy_unavailable"]
                 : S[_integrity.State == InstallationState.Compatible ? "integrity.compatible"
                     : _integrity.State == InstallationState.Incompatible ? "integrity.incompatible" : "integrity.inconclusive"];
+            // OD-115: the background check also states unexpected media overrides before Play (Play checks them again).
+            if (_integrity.State == InstallationState.Compatible && await MediaOverrideFindingsAsync() is { Count: > 0 } overrides)
+                _integrityStatus = MediaOverrideMessage(overrides);
         }
         catch (Exception error) when (error is ApiException or HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException or OperationCanceledException or ObjectDisposedException)
         {

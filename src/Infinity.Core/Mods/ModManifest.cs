@@ -98,6 +98,8 @@ public sealed class ModManifest
                 || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is < 1 or > 32) throw new ModException("unsupported database capability");
             var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
             ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
+            // OD-115: the runtime's session copy is game data the runtime owns, so it too is an override; the baseline is only read.
+            if (!UnderMediaOverride(target)) throw new ModException("session database must be a media override", ModErrors.Unsupported);
             foreach (var table in db.GetProperty("tables").EnumerateArray())
             {
                 var name = table.GetString()!;
@@ -115,6 +117,12 @@ public sealed class ModManifest
             || blockers.ValueKind != JsonValueKind.Array || blockers.EnumerateArray().Any(b => b.ValueKind != JsonValueKind.String)))
             throw new ModException("invalid custom review", ModErrors.Unsupported);
         Digest = Hash(_bytes);
+        foreach (var output in Document.GetProperty("runtimeOutputs").EnumerateArray())
+            if (output.ValueKind == JsonValueKind.Object && output.TryGetProperty("root", out var outputRoot) && outputRoot.GetString() == "game"
+                && (!output.TryGetProperty("path", out var outputPath) || outputPath.GetString() is not { } written || !UnderMediaOverride(written)))
+                throw new ModException("runtime game output must be a media override", ModErrors.Unsupported);
+        var reviewed = Document.TryGetProperty("review", out var reviewState) && reviewState.ValueKind == JsonValueKind.Object
+            && reviewState.TryGetProperty("status", out var status) && status.GetString() == "reviewed";
         var files = new List<ManifestFile>();
         foreach (var root in new[] { "game", "azimuth" })
             foreach (var file in Document.GetProperty("files").GetProperty(root).EnumerateArray())
@@ -122,8 +130,20 @@ public sealed class ModManifest
                 var item = new ManifestFile(root, file.GetProperty("source").GetString()!, file.GetProperty("destination").GetString()!,
                     file.GetProperty("sha256").GetString()!, file.GetProperty("bytes").GetInt64(),
                     file.GetProperty("role").GetString()!, file.GetProperty("mode").GetString()!,
-                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary");
+                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary",
+                    file.TryGetProperty("loader", out var loader) ? loader.ValueKind switch
+                    {
+                        JsonValueKind.True => true, JsonValueKind.False => false, _ => throw new ModException("invalid loader flag"),
+                    } : false);
                 ValidatePath(item.Source); ValidatePath(item.Destination);
+                // OD-115/OD-111: a loader is a binary the game process loads by itself (a top-level proxy DLL of its root). Only a reviewed
+                // official manifest may declare one; it is the only mapping allowed in the game root outside the media overrides.
+                if (item.Loader && (IsCustom || !reviewed || item.Role != "binary" || item.Mode == "seed" || item.Destination.Contains('/')
+                    || !item.Destination.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+                    throw new ModException("a loader is a top-level binary of a reviewed official manifest", ModErrors.Unsupported);
+                // OD-115: mods never write the game's own files; every game-root change is an override the game reads instead.
+                if (item.Root == "game" && !item.Loader && !UnderMediaOverride(item.Destination))
+                    throw new ModException("game files change only through media overrides", ModErrors.Unsupported);
                 if (item.Bytes is < 0 or > 64 * 1024 * 1024 || (item.Hash.Length != 64 || item.Hash.Any(c => !char.IsAsciiHexDigit(c)))
                     || item.Mode is not ("add" or "replace" or "add-or-replace" or "seed")) throw new ModException("invalid file mapping");
                 if (item.Role is not ("binary" or "config" or "asset" or "user-asset" or "license")
@@ -214,6 +234,15 @@ public sealed class ModManifest
             throw new ModException("invalid manifest text");
     }
 
+    /// <summary>
+    /// OD-115: the game-root folder whose files the game reads in place of its own media (<c>mediaoverride/X</c> over
+    /// <c>media/X</c>). Every game-root mapping, runtime output and session database lives below it, except a declared loader.
+    /// </summary>
+    public const string MediaOverrideFolder = "mediaoverride";
+
+    /// <summary>A game-root relative path strictly below <see cref="MediaOverrideFolder"/> (any letter case, as Windows resolves it).</summary>
+    public static bool UnderMediaOverride(string? path) => path is { Length: > 14 } && path.StartsWith(MediaOverrideFolder + "/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The payload folder of a custom mod, next to its manifest: <c>files/&lt;root&gt;/&lt;destination&gt;</c>.</summary>
     public const string CustomPayloadFolder = "files";
 
@@ -273,6 +302,7 @@ public sealed class ModManifest
     }
 }
 
-public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
+/// <summary>One mapped file. <see cref="Loader"/>: a binary the game process loads by itself (OD-115 game-root exception, reviewed official manifests only).</summary>
+public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary", bool Loader = false);
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 public sealed record ModWineOverride(string Module, bool AppDefaults);
