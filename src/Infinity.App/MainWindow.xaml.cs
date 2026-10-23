@@ -197,6 +197,7 @@ public partial class MainWindow : Window
 
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
 
+    private async void OnModdedOffline(object sender, RoutedEventArgs e) => await _vm.PlayModdedOfflineAsync();
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
     private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);
     private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
@@ -206,13 +207,10 @@ public partial class MainWindow : Window
     private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
     private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
 
-    private async void OnInstallEo(object sender, RoutedEventArgs e) => await _vm.InstallEoAsync();
 
-    private async void OnCheckMods(object sender, RoutedEventArgs e) => await _vm.CheckModsAsync();
 
     private void OnSaveIni(object sender, RoutedEventArgs e) => _vm.SaveIni();
 
-    private void OnToggleModOptions(object sender, RoutedEventArgs e) => _vm.ToggleModOptions();
 
     private void OnNavSetup(object sender, RoutedEventArgs e) => _vm.OpenSetup();
 

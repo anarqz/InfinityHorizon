@@ -38,7 +38,7 @@ public sealed partial class ShellViewModel
 
     public bool IntegrityChecking => _integrityChecking;
     public bool CanCheckIntegrity => SignedIn && ContentLocation is not null && !Playing && !_busy && !_integrityChecking;
-    public bool CanChooseContent => SignedIn && !Playing && !_busy && !_integrityChecking;
+    public bool CanChooseContent => (SignedIn || DevelopmentMods) && !Playing && !_busy && !_integrityChecking;
     public bool IntegrityReady => !_integrityChecking && !_integrityFailed && (_integrity is { State: InstallationState.Compatible, FilesCurrent: true } || CachedIntegrityReady);
     public bool IntegrityCanStart => !_integrityChecking && ContentLocation is not null && (_integrity is null || IntegrityReady);
     public bool ShowPlayBrand => ShowPlayAction;
@@ -65,8 +65,8 @@ public sealed partial class ShellViewModel
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { _configurationHasError = true; _integrityFailed = true; _integrityStatus = S["integrity.local_failed"]; Changed(string.Empty); return; }
-        Changed(string.Empty);
-        await CheckIntegrityAsync();
+        RefreshMods(); Changed(string.Empty);
+        if (SignedIn) await CheckIntegrityAsync();
     }
 
     private void ClearIntegrity(bool preserveConfiguration = false)

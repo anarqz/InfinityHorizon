@@ -31,6 +31,8 @@ typedef struct InfinityModsSnapshotV1 {
 // Call outside DllMain. 0 = accepted asynchronously, 1 = invalid, 2 = already started, 3 = failure.
 typedef int (*InfinityModsStartV1Fn)(const InfinityModsLaunchV1*);
 typedef int (*InfinityModsQueryV1Fn)(InfinityModsSnapshotV1*);
+// FIMOD001 immutable file transport. The hook verifies and pins this runtime before calling.
+typedef int (*InfinityModsStartPlanV1Fn)(void* game_image, const wchar_t* path, const uint8_t sha256[32]);
 #ifdef __cplusplus
 }
 #endif

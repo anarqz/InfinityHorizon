@@ -93,7 +93,7 @@ public sealed partial class ShellViewModel
     };
 
     /// <summary>Install, update or replace with the signed package (Azimuth must be the compatible version).</summary>
-    public bool CanInstallHook => SignedIn && AzimuthVersionOk && ModsIdle && _hook is not null && HookInstaller.CanInstallManually(_hook, _hookPackage);
+    public bool CanInstallHook => (SignedIn || DevelopmentMods) && AzimuthVersionOk && ModsIdle && _hook is not null && HookInstaller.CanInstallManually(_hook, _hookPackage);
 
     public string HookInstallLabel => _hookPackage is null ? string.Empty
         : S.Format(_hook?.Kind != HookKind.Ours ? "setup.hook_install"
@@ -221,6 +221,7 @@ public sealed partial class ShellViewModel
             ConfigurationMessage(S["setup.hook_install_failed"] + " (" + e.Message + ")", error: true);
         }
         RefreshHook();
+        if (DevelopmentMods && _onMods) _messageForConfiguration = false;
         Changed(string.Empty);
     }
 

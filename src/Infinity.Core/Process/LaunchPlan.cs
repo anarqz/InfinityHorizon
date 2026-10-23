@@ -55,6 +55,7 @@ public sealed record LaunchPlan(string Program, IReadOnlyList<string> Args, stri
                 vars[name.ToUpperInvariant()] = (name, value);
             }
         }
+        foreach (var name in Infinity.Core.Mods.NativeModPlan.EnvironmentNames) vars.Remove(name.ToUpperInvariant());
         foreach (var name in EnvRemove)
         {
             vars.Remove(name.ToUpperInvariant());

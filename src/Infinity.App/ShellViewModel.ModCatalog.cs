@@ -51,6 +51,7 @@ public sealed partial class ShellViewModel
         _selectedMod = card;
         _showModInfo = !card.HasOptions;
         _showModOptions = card.HasOptions;
+        if (card.HasOptions && !(_iniDirty && _iniManifest == card.Manifest.Digest)) LoadSelectedOptions();
         Changed(string.Empty);
     }
 
@@ -120,7 +121,8 @@ public sealed partial class ShellViewModel
     }
     // Backups describe game files, so dev and production must see the same ownership records.
     private ManagedModFiles ManagedMods() => new(_install!.Root, ContentLocation?.Mount,
-        _config.Production ? Directory.GetParent(_stateDirectory)!.FullName : _stateDirectory, GameRunning);
+        _config.Production ? Directory.GetParent(_stateDirectory)!.FullName : _stateDirectory, GameRunning,
+        DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null);
 
     public async Task OpenDevelopmentModsAsync(string? azimuth)
     {
@@ -158,20 +160,13 @@ public sealed partial class ShellViewModel
         var current = ModCards.FirstOrDefault(c => c.Manifest.Digest == card.Manifest.Digest);
         if (current is not { CanAct: true }) return;
         var mod = current.Manifest;
-        // Existing legacy installs retain their original control path; no historical original
-        // is inferred from an already modified installation.
-        if (mod.Id == Eo.Id && ManagedMods().Receipt(mod) is null && EoInstalled)
-        {
-            await RunModOperationAsync(() => Task.Run(() => Mods().SetEnabled(Eo, !EoEnabled)),
-                S[EoEnabled ? "mods.turned_off" : "mods.turned_on"]);
-            return;
-        }
         await RunModOperationAsync(async () =>
         {
             var manager = ManagedMods();
             var receipt = manager.Receipt(mod);
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
-            if (receipt is null)
+            if (receipt is null && manager.CanAdopt(mod)) await Task.Run(() => manager.Adopt(mod));
+            else if (receipt is null)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
                 await manager.InstallAsync(ModDownloads, mod, timeout.Token, progress);
@@ -213,8 +208,7 @@ public sealed partial class ShellViewModel
             var badge = status;
             var installed = false;
             var action = S["mods.install"];
-            var canAct = ModsIdle && _install is not null && mod.ApprovedForFileInstall && !mod.NeedsDatabaseCoordination
-                && mod.Dependencies.Count == 0 && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions")
+            var canAct = ModsIdle && _install is not null && mod.SupportedForInstall && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions")
                     .EnumerateArray().Any(v => v.GetString() == _install.Version);
             try
             {
@@ -231,28 +225,23 @@ public sealed partial class ShellViewModel
                         action = S[receipt.Enabled ? "mods.disable_action" : "mods.enable_action"];
                         canAct &= verified;
                     }
-                    else if (mod.Id == Eo.Id && EoInstalled)
+                    else if (manager.CanAdopt(mod)) { status = S["mods.unmanaged"]; badge = status; action = S["mods.adopt"]; }
+                    if (canAct)
                     {
-                        installed = true;
-                        badge = S[!EoOfficial ? "mods.badge_attention" : EoEnabled ? "mods.badge_on" : "mods.badge_off"];
-                        status = EoStatus + " · " + S["mods.legacy"];
-                        action = S[EoEnabled ? "mods.disable_action" : "mods.enable_action"];
-                        canAct &= EoOfficial;
+                        if (manager.Receipt(mod) is { Enabled: true }) manager.CheckDependents(mod.Id);
+                        else manager.CheckDependencies(mod);
                     }
                 }
             }
             catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException or JsonException)
-            { canAct = false; status = S["mods.files_changed"]; badge = S["mods.badge_attention"]; }
-            if (!mod.ApprovedForFileInstall) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; }
+            { canAct = false; status = S["mods.requirements_unmet"]; badge = S["mods.badge_attention"]; }
+            if (!mod.SupportedForInstall) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; }
             var requirements = mod.Dependencies.Count == 0 ? S["mods.no_dependencies"]
                 : S["mods.dependencies"] + " " + string.Join(", ", mod.Dependencies.Select(d =>
                     (_manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id) + " " + string.Join(" / ", d.Versions)));
-            if (mod.NeedsDatabaseCoordination || mod.Id == "fh2-mod-platform") requirements += "\n" + S["mods.database_blocked"];
-            if (mod.Id == "nitrosystem") requirements += "\n" + S["mods.nitro_settings"];
             if (_install is null) requirements += "\n" + S["mods.choose_folder"];
-            else if (mod.ApprovedForFileInstall && EoTarget is null) requirements += "\n" + EoAzimuthText;
             ModCards.Add(new(mod, mod.Text("name", S.Locale), mod.Text("description", S.Locale), status, requirements,
-                action, canAct, mod.Id == Eo.Id && HasIni && installed,
+                action, canAct, mod.ConfigPath is not null && installed,
                 mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version, badge));
         }
         if (_selectedMod is { } selected) _selectedMod = ModCards.FirstOrDefault(card => card.Manifest.Id == selected.Manifest.Id);
