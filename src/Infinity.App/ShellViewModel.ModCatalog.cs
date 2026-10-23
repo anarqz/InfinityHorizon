@@ -51,6 +51,7 @@ public sealed partial class ShellViewModel
         _selectedMod = card;
         _showModInfo = !card.HasOptions;
         _showModOptions = card.HasOptions;
+        _showLobbyPane = false;
         if (card.HasOptions && !(_iniDirty && _iniManifest == card.Manifest.Digest)) LoadSelectedOptions();
         Changed(string.Empty);
     }
@@ -59,7 +60,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         if (!ModsIdle) return;
-        _selectedMod = card; _showModInfo = true; _showModOptions = false;
+        _selectedMod = card; _showModInfo = true; _showModOptions = false; _showLobbyPane = false;
         Changed(string.Empty);
     }
 

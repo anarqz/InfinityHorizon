@@ -47,7 +47,7 @@ public sealed partial class ManagedModFiles
         foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
             if (File.Exists(path + suffix)) throw new ModException("close SQLite writers and checkpoint the database first");
     }
-    private static byte[] DatabaseBytes(string path)
+    private byte[] DatabaseBytes(string path)
     {
         RejectLinks(path); NoDatabaseSidecars(path);
         var size = new FileInfo(path).Length;
@@ -85,7 +85,7 @@ public sealed partial class ManagedModFiles
         {
             foreach (var path in new[] { runtime, helper })
             {
-                RejectLinks(path); locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+                RejectLinks(path, Path.GetDirectoryName(helper)!); locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
                 if (!ReleaseSignature.VerifyFile(path, path + ".sig", verificationKey)) throw new ModException("mod host signature does not verify");
             }
             var enabled = InstalledManifests().Where(m => Receipt(m) is { Enabled: true }).ToArray();
