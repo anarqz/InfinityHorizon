@@ -19,6 +19,8 @@ public sealed record ModInstallation(string Id, ModManifest? Manifest, ManagedMo
 public sealed record ModHealth(bool RecoveryHere, bool RecoveryElsewhere, IReadOnlyList<ModInstallation> Installed,
     IReadOnlyList<string> RelinkCandidates, IReadOnlyList<string> Problems)
 {
+    /// <summary>Receipts recorded for a game folder that moved to the selected one (<see cref="ManagedModFiles.RelinkGame"/>).</summary>
+    public bool GameRelink { get; init; }
     public static ModHealth Empty { get; } = new(false, false, [], [], []);
     public bool BlocksPlay => RecoveryHere;
     public bool HasEnabledNative => Installed.Any(i => i.Enabled && i.Manifest?.IsNative == true);
@@ -52,7 +54,40 @@ public sealed partial class ManagedModFiles
         IReadOnlyList<string> relink = [];
         try { relink = installed.Count == 0 ? RelinkCandidates() : []; }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
-        return new(here, elsewhere, installed, relink, problems);
+        var gameRelink = false;
+        try { gameRelink = GameRelinkCandidates().Count > 0; }
+        catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
+        return new(here, elsewhere, installed, relink, problems) { GameRelink = gameRelink };
+    }
+
+    /// <summary>M9 for the game folder: receipts recorded for a game folder that no longer exists whose game files all match, as recorded, in the selected one.</summary>
+    public IReadOnlyList<string> GameRelinkCandidates()
+    {
+        if (_game is null || !Directory.Exists(BackupRoot)) return [];
+        var result = new List<string>();
+        foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json"))
+        {
+            RejectLinks(path);
+            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path));
+            if (receipt?.GameRoot is not { } old || string.Equals(old, _game, StringComparison.OrdinalIgnoreCase) || Directory.Exists(old)
+                || !string.Equals(receipt.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)) continue;
+            if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => Current(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
+                result.Add(receipt.Id);
+        }
+        return result;
+    }
+
+    /// <summary>Rewrites the game folder of <see cref="GameRelinkCandidates"/> to the selected one (journaled like any receipt change).</summary>
+    public void RelinkGame()
+    {
+        using var gate = Lock();
+        foreach (var id in GameRelinkCandidates())
+        {
+            var path = ReceiptPath(id);
+            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path))!;
+            Execute(new(id + ".receipt.json", receipt with { GameRoot = _game }, []), null);
+        }
+        ReconcileWineOverrides();
     }
 
     private ModInstallation Inspect(string id)
@@ -70,7 +105,7 @@ public sealed partial class ManagedModFiles
     }
 
     public static bool IsStateError(Exception error) => error is ModException or IOException or UnauthorizedAccessException or JsonException
-        or InvalidOperationException or KeyNotFoundException or FormatException or ArgumentException or OverflowException;
+        or InvalidOperationException or KeyNotFoundException or FormatException or ArgumentException or OverflowException or NullReferenceException;
     public static string Code(Exception error) => error is ModException mod ? mod.Code : error is JsonException or KeyNotFoundException or FormatException ? ModErrors.Recovery : ModErrors.Failed;
 
     /// <summary>
@@ -105,21 +140,25 @@ public sealed partial class ManagedModFiles
         using var gate = Lock(allowRecovery: true);
         foreach (var folder in PendingFolders().ToArray())
         {
-            if (ForFolder(folder) is { } manager) manager.ResolveHere();
-            else
-                foreach (var name in new[] { "pending.json", "database-session.json" })
-                {
-                    var path = Path.Combine(folder, name);
-                    RejectLinks(path);
-                    if (File.Exists(path)) File.Move(path, Path.Combine(folder, Path.GetFileNameWithoutExtension(name) + "-unresolved-" + Guid.NewGuid().ToString("N") + ".json"));
-                }
+            try
+            {
+                if (ForFolder(folder) is { } manager) { manager.ResolveHere(); continue; }
+            }
+            catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { } // one folder never stops the others
+            foreach (var name in new[] { "pending.json", "database-session.json" })
+            {
+                var path = Path.Combine(folder, name);
+                RejectLinks(path);
+                if (File.Exists(path)) File.Move(path, Path.Combine(folder, Path.GetFileNameWithoutExtension(name) + "-unresolved-" + Guid.NewGuid().ToString("N") + ".json"));
+            }
         }
         if (!Directory.Exists(BackupRoot)) return;
         foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
         {
             var id = Path.GetFileName(path)[..^".receipt.json".Length];
             try { _ = SnapshotFor(ReadReceipt(id)!); }
-            catch (Exception error) when (error is JsonException || error is ModException { Code: ModErrors.Recovery })
+            catch (ModException error) when (error.Code == ModErrors.Relink) { } // intact record of a moved folder: relink, never archive
+            catch (Exception error) when (error is JsonException || error is ModException { Code: ModErrors.Recovery } || error is NullReferenceException)
             {
                 File.Move(path, Path.Combine(BackupRoot, "corrupt-" + Guid.NewGuid().ToString("N") + ".json"));
             }
@@ -141,7 +180,12 @@ public sealed partial class ManagedModFiles
         if (committed)
         {
             foreach (var change in journal.Changes)
-                if (Current(Target(change.Root, change.Path)) != change.After) throw new ModException("committed files changed", ModErrors.Recovery);
+            {
+                var target = Target(change.Root, change.Path); var actual = Current(target);
+                if (actual == change.After) continue;
+                if (change.After is null && DeletionInProgress(change, actual)) { RemoveFile(target); continue; } // finish an interrupted delete
+                throw new ModException("committed files changed", ModErrors.Recovery);
+            }
         }
         else Rollback(journal);
         ArchiveJournal(path);
@@ -165,9 +209,9 @@ public sealed partial class ManagedModFiles
             var session = Path.Combine(folder, "database-session.json");
             var pending = Path.Combine(folder, "pending.json");
             if (File.Exists(session) && JsonSerializer.Deserialize<SessionDatabaseJournal>(File.ReadAllBytes(session)) is { } s) { azimuth = s.AzimuthRoot; game = s.GameRoot; }
-            if (File.Exists(pending) && JsonSerializer.Deserialize<ModFileJournal>(File.ReadAllBytes(pending)) is { } p) { azimuth ??= p.Receipt.AzimuthRoot; game ??= p.Receipt.GameRoot; }
+            if (File.Exists(pending) && JsonSerializer.Deserialize<ModFileJournal>(File.ReadAllBytes(pending)) is { } p) { azimuth ??= p.Receipt?.AzimuthRoot; game ??= p.Receipt?.GameRoot; }
         }
-        catch (JsonException) { return null; }
+        catch (Exception error) when (IsStateError(error)) { return null; }
         if (azimuth is null || !Directory.Exists(azimuth) || game is not null && !Directory.Exists(game)
             || !string.Equals(Identity(azimuth), Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)), StringComparison.OrdinalIgnoreCase)) return null;
         return new ManagedModFiles(azimuth, game, _state, _gameRunning, _packageCache, _launcherRoots) { FaultPoint = FaultPoint, WineOverrides = WineOverrides };
