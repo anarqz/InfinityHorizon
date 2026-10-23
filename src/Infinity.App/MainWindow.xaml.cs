@@ -198,6 +198,7 @@ public partial class MainWindow : Window
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
 
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
+    private async void OnRequiredMod(object sender, RoutedEventArgs e) => await _vm.ActOnRequiredModAsync();
 
     private async void OnModdedOffline(object sender, RoutedEventArgs e) => await _vm.PlayModdedOfflineAsync();
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();

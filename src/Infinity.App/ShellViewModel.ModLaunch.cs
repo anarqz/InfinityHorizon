@@ -70,7 +70,7 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>DEV: an offline session with the enabled native mods, when every one of them lists this Azimuth version (no version is built in).</summary>
-    public bool CanPlayModdedOffline => DevelopmentMods && ModsIdle && _install?.Version is { } version && !ModPlayBlocked && _modHealth.HasEnabledNative
+    public bool CanPlayModdedOffline => DevelopmentMods && ModsIdle && _install?.Version is { } version && !ModPlayBlocked && !RequiredModBlocked && _modHealth.HasEnabledNative
         && _modHealth.Installed.Where(i => i.Enabled && i.Manifest is not null).All(i => i.Manifest!.Document.GetProperty("compatibility")
             .GetProperty("azimuthVersions").EnumerateArray().Any(v => v.GetString() == version));
 
