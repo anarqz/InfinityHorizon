@@ -17,7 +17,10 @@ struct FileLock {
     std::vector<HANDLE> parents;
     ~FileLock() { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); for (auto h : parents) CloseHandle(h); }
 };
+
+bool none(const wchar_t* path) { return path && path[0] == L'-' && path[1] == 0; }
 struct Entry {
+    bool data = false;
     InfinityMod owner;
     InfinityModApiV1 api{};
     InfinityModReportV1 report{};
@@ -32,7 +35,7 @@ std::mutex state_mutex;
 std::atomic<bool> started{false};
 std::atomic<bool> hook_fault{false};
 bool failed = false, complete = false;
-// what binds a snapshot to this launch (InfinityModsQueryV2), set once under state_mutex
+
 uint32_t plan_version = 0;
 uint8_t plan_nonce[16]{}, plan_digest[32]{};
 std::vector<std::unique_ptr<Entry>> entries;
@@ -195,6 +198,7 @@ void load_selected(uint32_t timeout_ms = 65000) {
                 if (failed) return;
                 for (size_t j = 0; j < i; ++j)
                     if ((e.dependencies & (1u << j)) && entries[j]->report.state != INFINITY_MOD_READY) { fail_locked(); return; }
+                if (e.data) { e.init_returned = true; e.report.state = INFINITY_MOD_READY; continue; }
                 fill_api(e);
                 e.deadline = GetTickCount64() + timeout_ms;
                 e.report.state = INFINITY_MOD_INITIALIZING;
@@ -235,18 +239,20 @@ bool prepare(const InfinityModsLaunchV1& launch) {
     std::vector<std::unique_ptr<Entry>> pending;
     for (uint32_t i=0;i<launch.count;++i) {
         const auto& item = launch.mods[i];
-        if (!identity(item.id, false) || !identity(item.version, true) || !valid_path(item.binary_path)
-            || !valid_path(item.settings_path) || !nonzero(item.binary_sha256) || !nonzero(item.settings_sha256)
+        const bool data = none(item.binary_path), no_settings = none(item.settings_path);
+        if (!identity(item.id, false) || !identity(item.version, true)
+            || (data ? nonzero(item.binary_sha256) : !valid_path(item.binary_path) || !nonzero(item.binary_sha256))
+            || (no_settings ? nonzero(item.settings_sha256) || !data : !valid_path(item.settings_path) || !nonzero(item.settings_sha256))
             || !nonzero(item.compatibility_sha256) || (item.dependency_mask & ~((1u << i) - 1))) return false;
         for (auto& previous : pending)
-            if (previous->owner.name == item.id || !_wcsicmp(previous->binary.c_str(), item.binary_path)
-                || !_wcsicmp(std::filesystem::path(previous->binary).filename().c_str(), std::filesystem::path(item.binary_path).filename().c_str())) return false;
+            if (previous->owner.name == item.id || (!data && !previous->data && (!_wcsicmp(previous->binary.c_str(), item.binary_path)
+                || !_wcsicmp(std::filesystem::path(previous->binary).filename().c_str(), std::filesystem::path(item.binary_path).filename().c_str())))) return false;
         auto e = std::make_unique<Entry>();
+        e->data = data;
         e->owner.name = item.id; e->binary = item.binary_path; e->settings = item.settings_path;
         e->dependencies = item.dependency_mask;
-        e->binary_lock = verify_file(e->binary, item.binary_sha256);
-        e->settings_lock = verify_file(e->settings, item.settings_sha256);
-        if (!e->binary_lock || !e->settings_lock) return false;
+        if (!data && !(e->binary_lock = verify_file(e->binary, item.binary_sha256))) return false;
+        if (!no_settings && !(e->settings_lock = verify_file(e->settings, item.settings_sha256))) return false;
         std::memcpy(e->report.id, item.id, sizeof item.id); std::memcpy(e->report.version, item.version, sizeof item.version);
         std::memcpy(e->report.binary_sha256, item.binary_sha256, 32);
         std::memcpy(e->report.settings_sha256, item.settings_sha256, 32);
@@ -295,7 +301,6 @@ extern "C" __declspec(dllexport) int InfinityModsStartV1(const InfinityModsLaunc
     } catch (...) { failed = true; return 3; }
 }
 namespace {
-// state_mutex held: applies the deadlines, then copies the state out
 template <typename Snapshot> void snapshot_locked(Snapshot& result) {
     if (hook_fault && !failed) fail_locked();
     if (!failed)
@@ -314,7 +319,7 @@ extern "C" __declspec(dllexport) int InfinityModsQueryV1(InfinityModsSnapshotV1*
     snapshot_locked(*result);
     return 0;
 }
-// N-H2: the snapshot with the plan's nonce and digest, for the hook's ModsReport to the launcher.
+
 extern "C" __declspec(dllexport) int InfinityModsQueryV2(InfinityModsSnapshotV2* result) {
     if (!result || result->size != sizeof *result || result->abi_version != 2) return 1;
     std::lock_guard lock(state_mutex);
@@ -349,7 +354,7 @@ struct ParsedPlan {
     uint8_t baseline_hash[32]{}, prepared_hash[32]{}, sql_hash[32]{};
     std::vector<infinity_mod::Readiness> readiness;
     uint32_t count = 0;
-    uint32_t version = 0;   // 2 FIMOD002, 3 FIMOD003 (the launcher's per-launch nonce follows the magic)
+    uint32_t version = 0;
     uint8_t nonce[16]{};
 };
 void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
@@ -390,7 +395,7 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
         for (uint32_t j = 0; j < count; ++j) {
             auto table = infinity_mod::narrow(reader.text());
             if (table.empty() || table.size() > 64 || table.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos
-                || table.starts_with("sqlite_") || table.starts_with("_infinity")) throw std::runtime_error("invalid table scope");
+                || !_strnicmp(table.c_str(), "sqlite_", 7) || !_strnicmp(table.c_str(), "_infinity", 9)) throw std::runtime_error("invalid table scope");
             plan.tables[i].push_back(table);
         }
     }
@@ -402,7 +407,7 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
 extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const wchar_t* path, const uint8_t hash[32]) {
     try {
         if (!hash || !valid_path(path) || !valid_host() || !valid_image(image)) return 1;
-        // FI_LAUNCH by its fields (N-L5): "v1;offline", or "v1;pipe=<32 hex>" (an online launcher session, OD-112)
+
         wchar_t mode[48]{};
         const DWORD mode_length = GetEnvironmentVariableW(L"FI_LAUNCH", mode, 48);
         bool online = false;
@@ -421,7 +426,7 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         std::vector<uint8_t> bytes(size_t(size.QuadPart)); DWORD read = 0;
         if (!ReadFile(locked->file, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size()) return 1;
         ParsedPlan plan; parse_plan(bytes, plan);
-        // online sessions need the plan that binds the launcher's report (FIMOD003); fail closed otherwise
+
         if (online && plan.version < 3) return 1;
         {
             std::lock_guard lock(state_mutex);
@@ -433,13 +438,12 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         if (!length || length >= 32768 || _wcsicmp(std::filesystem::path(exe).parent_path().c_str(), plan.azimuth.c_str())) return 1;
         auto prefix = plan.azimuth + L"\\";
         for (uint32_t i = 0; i < plan.count; ++i)
-            if (_wcsnicmp(plan.binary[i].c_str(), prefix.c_str(), prefix.size()) || _wcsnicmp(plan.settings[i].c_str(), prefix.c_str(), prefix.size())) return 1;
+            if ((!none(plan.binary[i].c_str()) && _wcsnicmp(plan.binary[i].c_str(), prefix.c_str(), prefix.size()))
+                || (!none(plan.settings[i].c_str()) && _wcsnicmp(plan.settings[i].c_str(), prefix.c_str(), prefix.size()))) return 1;
         if (!plan.database.empty()) {
             if (!nonzero(plan.prepared_hash) || !nonzero(plan.sql_hash)) return 1;
             for (auto suffix : { L"-wal", L"-shm", L"-journal" }) if (std::filesystem::exists(plan.database + suffix)) return 1;
-            // N-H3: the game opens its database read-write, so the session pin shares writing (never
-            // deletion or renaming: it stays this file). The launcher re-verifies it when the session ends
-            // (RestoreSessionDatabase) and keeps anything changed outside the runtime for recovery.
+
             session_database_lock = verify_file(plan.database, plan.prepared_hash, FILE_SHARE_READ | FILE_SHARE_WRITE);
             if (!session_database_lock) return 1;
         }

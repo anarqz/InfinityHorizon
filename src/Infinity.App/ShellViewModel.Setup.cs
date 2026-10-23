@@ -36,7 +36,9 @@ public sealed partial class ShellViewModel
 
     public AzimuthStatus SetupStatus => AzimuthSetup.StatusOf(_install, _hook);
 
-    private bool GameConfigurationReady => !_configurationHasError && AzimuthCardReady && IntegrityReady;
+    // OD-113: a pending or expired integrity check never sends the player to Configure; only a Hardcore profile's
+    // missing game folder or a real mismatch does.
+    private bool GameConfigurationReady => !_configurationHasError && AzimuthCardReady && IntegrityConfigurationReady;
 
     private bool HookUpdateNeeded => _hook is not null && _hookPackage is not null
         && HookInstaller.Build(_hookPackage.Version) > HookInstaller.Build(_hook.Version);

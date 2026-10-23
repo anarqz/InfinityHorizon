@@ -1473,6 +1473,7 @@ void *fi_launch_overlay_export(const char *name) {
 static DWORD WINAPI launch_overlay_thread(void *unused) {
     (void)unused;
     int ok = 0;
+    fi_mod_host_wait(80000); /* N-M3: two MinHook copies must not freeze threads at once */
     if (launch_overlay_hash_ok()) {
         HMODULE dll = LoadLibraryExW(launch_overlay_path, 0, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (!dll) {

@@ -16,7 +16,10 @@ public sealed record ModRuntimePackage(string Runtime, string Helper)
     public const string RuntimeFile = "infinity_mod.dll";
     public const string HelperFile = "infinity-mod-prepare.exe";
 
-    /// <summary>The verified package under <paramref name="launcherDirectory"/>, or null (missing file or signature, wrong key, unreadable).</summary>
+    /// <summary>
+    /// The verified package under <paramref name="launcherDirectory"/>, or null (missing file or signature, wrong key, unreadable).
+    /// Both files verify in the mod runtime's own domain (<see cref="ReleaseSignature.ModRuntimePrefix"/>), as the launch plan and the hook do.
+    /// </summary>
     public static ModRuntimePackage? Locate(string launcherDirectory, ReadOnlySpan<byte> key)
     {
         ArgumentNullException.ThrowIfNull(launcherDirectory);
@@ -25,7 +28,7 @@ public sealed record ModRuntimePackage(string Runtime, string Helper)
         var runtime = Path.Combine(folder, RuntimeFile);
         var helper = Path.Combine(folder, HelperFile);
         foreach (var path in new[] { runtime, helper })
-            if (!File.Exists(path) || !File.Exists(path + ".sig") || !ReleaseSignature.VerifyFile(path, path + ".sig", key)) return null;
+            if (!File.Exists(path) || !File.Exists(path + ".sig") || !ReleaseSignature.VerifyFile(path, path + ".sig", key, ReleaseSignature.ModRuntimePrefix)) return null;
         return new(runtime, helper);
     }
 }

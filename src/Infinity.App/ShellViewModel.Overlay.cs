@@ -69,7 +69,8 @@ public sealed partial class ShellViewModel
             return null;
         }
         var session = _session;
-        var integrity = _integrity;
+        var integrityApplies = IntegrityApplies; // OD-113
+        var integrity = integrityApplies ? _integrity : null;
         var relayKeys = IntegratedRelayKeys(mm);
         var devLan = DevLanAdmission(mm);
         return ticket =>
@@ -85,7 +86,7 @@ public sealed partial class ShellViewModel
                 refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
                     ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
                 // OD-109: while this launcher hosts a dedicated lobby, the overlay offers no lobby actions.
-                checkWorldAccess: Infinity.Core.Supervisor.DedicatedHost.GuardPlayWorlds(() => DedicatedActive, ct => CheckWorldAccessAsync(integrity, ct)),
+                checkWorldAccess: Infinity.Core.Supervisor.DedicatedHost.GuardPlayWorlds(() => DedicatedActive, ct => CheckWorldAccessAsync(integrityApplies, integrity, ct)),
                 onlineActivity: onlineActivity, idleWhenNoWorld: session.Me?.Access.Tier != "vip")
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
