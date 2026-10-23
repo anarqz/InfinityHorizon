@@ -7,6 +7,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 #include "../third_party/sqlite/sqlite3.h"
