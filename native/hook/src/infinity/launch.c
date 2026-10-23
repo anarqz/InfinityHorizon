@@ -22,6 +22,7 @@
 #include "../core/logging.h"
 #include "../core/support.h"
 #include "../core/sha256.h"
+#include "../../../mod/include/infinity_mod_host.h"
 #include <tlhelp32.h>
 
 #define LAUNCH_PROTOCOL 1u
@@ -53,6 +54,7 @@ enum {
     FRAME_OVERLAY = 0x14,
     FRAME_ONLINE_SUSPEND = 0x15,
     FRAME_RELAY_CONTEXT = 0x16,
+    FRAME_MODS_REPORT = 0x1b,
 };
 
 /* Where the session stands (launch_state). */
@@ -330,6 +332,84 @@ static size_t launch_frame_end(LaunchWriter *w) {
         w->at[i] = (unsigned char)(body >> (8 * i));
     }
     return w->used;
+}
+
+/* ModsReport (0x1b, N-H2, OD-112): what the native mod runtime actually initialized, bound to
+   this launch by the plan's nonce and SHA-256. {u8 version 1, [16] nonce, [32] planSha256,
+   u8 phase (0 loading, 1 ready, 2 failed), u8 count <= 32, count x {str id, str version,
+   [32] binarySha256, [32] settingsSha256, [32] compatibilitySha256, u8 state (0 pending,
+   1 initialized, 2 failed)}}. The hashes are the ones the runtime verified on disk before loading;
+   compatibility evidence for the launcher, not anti-cheat. Its size, 0 when it does not fit. */
+size_t fi_launch_mods_encode(unsigned char *out, size_t cap, const InfinityModsSnapshotV2 *s) {
+    LaunchWriter w;
+    if (!s || s->count > INFINITY_MOD_MAX_COUNT) return 0;
+    launch_frame_begin(&w, out, cap, FRAME_MODS_REPORT);
+    launch_put_le(&w, 1, 1);
+    launch_put(&w, s->nonce, 16);
+    launch_put(&w, s->plan_sha256, 32);
+    launch_put_le(&w, s->failed ? 2u : s->ready ? 1u : 0u, 1);
+    launch_put_le(&w, s->count, 1);
+    for (unsigned i = 0; i < s->count; ++i) {
+        const InfinityModReportV1 *m = &s->mods[i];
+        size_t id = 0, version = 0;
+        while (id < 64 && m->id[id]) ++id;
+        while (version < 64 && m->version[version]) ++version;
+        if (!id) return 0;
+        launch_put_le(&w, id, 2);
+        launch_put(&w, m->id, id);
+        launch_put_le(&w, version, 2);
+        launch_put(&w, m->version, version);
+        launch_put(&w, m->binary_sha256, 32);
+        launch_put(&w, m->settings_sha256, 32);
+        launch_put(&w, m->compatibility_sha256, 32);
+        launch_put_le(&w, m->state == INFINITY_MOD_READY ? 1u : m->state == INFINITY_MOD_FAILED ? 2u : 0u, 1);
+    }
+    return launch_frame_end(&w);
+}
+
+static int launch_write(const unsigned char *data, size_t size);
+
+/* The latest report, for the session writer: a launch has one control pipe and it never comes
+   back, so the writer sends whatever changed since it last wrote (the first report as soon as
+   the session is live, then every phase change). */
+static SRWLOCK launch_mods_lock = SRWLOCK_INIT;
+static unsigned char launch_mods_frame[8192];
+static size_t launch_mods_size;
+static volatile LONG launch_mods_serial, launch_mods_written;
+
+int fi_launch_mods_report(const InfinityModsSnapshotV2 *s) {
+    static unsigned char frame[8192];
+    if (!fi_launch_protocol()) return 0;
+    AcquireSRWLockExclusive(&launch_mods_lock);
+    size_t n = fi_launch_mods_encode(frame, sizeof(frame), s);
+    int changed = n && (n != launch_mods_size || !memory_equal(frame, launch_mods_frame, n));
+    if (changed) {
+        memory_copy(launch_mods_frame, frame, n);
+        launch_mods_size = n;
+        InterlockedIncrement(&launch_mods_serial);
+    }
+    ReleaseSRWLockExclusive(&launch_mods_lock);
+    return n != 0;
+}
+
+/* Up to `ms` for the current report to be written (before a failure ends the process). */
+void fi_launch_mods_flush(unsigned ms) {
+    for (unsigned waited = 0; waited < ms && launch_connected && launch_mods_written != launch_mods_serial; waited += 20) Sleep(20);
+}
+
+/* The session writer: 0 when the pipe broke. */
+static int launch_write_mods(void) {
+    static unsigned char frame[8192];
+    LONG serial = launch_mods_serial;
+    if (serial == launch_mods_written) return 1;
+    AcquireSRWLockShared(&launch_mods_lock);
+    size_t n = launch_mods_size;
+    memory_copy(frame, launch_mods_frame, n);
+    serial = launch_mods_serial;
+    ReleaseSRWLockShared(&launch_mods_lock);
+    if (n && !launch_write(frame, n)) return 0;
+    InterlockedExchange(&launch_mods_written, serial);
+    return 1;
 }
 
 /* Hello{protocol, pid, version} into `out`: its size, 0 when it does not fit. */
@@ -1253,7 +1333,7 @@ static void launch_session(void) {
             InterlockedExchange(&launch_refresh_wanted, 0);
             launch_log("RefreshRequest: the session token has ", 1, left / 1000u, " s left.");
         }
-        if (!launch_flush()) {
+        if (!launch_flush() || !launch_write_mods()) {
             launch_log("launcher gone (the pipe broke on a write, error ", 1, GetLastError(),
                        "): online authority is discarded.");
             break;

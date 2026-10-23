@@ -118,6 +118,12 @@ public abstract record SupervisorEvent
     /// <summary>The overlay said hello on the UI pipe (its version).</summary>
     public sealed record OverlayConnected(string Version) : SupervisorEvent;
 
+    /// <summary>
+    /// N-H2 (OD-112): the hook forwarded the native mod runtime's report. Unverified here: check the nonce and
+    /// plan digest against this launch's plan and each mod's hashes against what was prepared before using it.
+    /// </summary>
+    public sealed record ModsReported(Session.Frame.ModsReport Report) : SupervisorEvent;
+
     /// <summary>Something the overlay reported (Overlay.UiEventKind: first frame, passthrough, ...).</summary>
     public sealed record OverlayEvent(byte Kind, string Detail) : SupervisorEvent;
 }
@@ -562,6 +568,11 @@ public sealed class PlaySupervisor
                             await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
                         }
                         var frame = received.Frame;
+                        if (frame is Frame.ModsReport mods)
+                        {
+                            if (endpoint.Greeted) _emit(new SupervisorEvent.ModsReported(mods)); // N-H2: lane B verifies and builds the ModSet
+                            continue;
+                        }
                         if(frame is Frame.UdpDiagnostic diagnostic)
                         {
                             if(endpoint.Greeted && !suspended && tokensOpen)worlds?.RecordUdpDiagnostic(diagnostic);
