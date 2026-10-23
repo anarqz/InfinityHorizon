@@ -132,6 +132,14 @@ public sealed class LaunchPlanModSetSource : IModSetSource
 public sealed record RuntimeModReport(byte[] Nonce, byte[] PlanSha256, byte Phase, IReadOnlyList<RuntimeModReportEntry> Mods)
 {
     public const byte Loading = 0, Ready = 1, Failed = 2;
+
+    /// <summary>The decoded hook frame (WINDOWS' <see cref="Session.Frame.ModsReport"/>), field for field.</summary>
+    public static RuntimeModReport From(Session.Frame.ModsReport frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        return new(frame.Nonce, frame.PlanSha256, frame.Phase,
+            frame.Mods.Select(m => new RuntimeModReportEntry(m.Id, m.Version, m.BinarySha256, m.SettingsSha256, m.CompatibilitySha256, m.State)).ToList());
+    }
 }
 
 /// <summary>One reported mod: the plan's manifest id and version, the verified file hashes, the echoed fingerprint and its state (<see cref="Initialized"/>).</summary>
@@ -269,11 +277,36 @@ public static class ModSets
     /// </summary>
     public static bool Modded(IModSetSource? source) => source is not null && source.Planned.Count > 0;
 
-    /// <summary>Whether a mod's multiplayer impact puts it in the lobby set (a cosmetic mod never makes a lobby modded).</summary>
+    /// <summary>
+    /// Whether a mod's multiplayer impact puts it in the lobby set (a cosmetic mod never makes a lobby modded): the one
+    /// classification Hardcore profiles share (<see cref="ModMultiplayer.EntersLobbySet"/>).
+    /// </summary>
     public static bool Relevant(ModMultiplayer multiplayer)
     {
         ArgumentNullException.ThrowIfNull(multiplayer);
-        return multiplayer.Impact != "cosmetic";
+        return multiplayer.EntersLobbySet;
+    }
+
+    /// <summary>
+    /// The session's source (N-H2): with a native plan, a <see cref="RuntimeModSetSource"/> over the launch plan bound to that
+    /// plan's <see cref="NativeModPlan.Nonce"/> and <see cref="NativeModPlan.PlanSha256"/>; without one (or when the launch plan
+    /// failed to build), the launch plan's own source.
+    /// </summary>
+    public static IModSetSource ForLaunch(LaunchPlanModSetSource launchPlan, NativeModPlan? native)
+    {
+        ArgumentNullException.ThrowIfNull(launchPlan);
+        if (native is null || launchPlan.State.Phase == ModSetPhase.Failed) return launchPlan;
+        return new RuntimeModSetSource(launchPlan.Plan, native.Nonce, native.PlanSha256);
+    }
+
+    /// <summary>
+    /// Routes a hook ModsReport to the session's source: null when the source is not a runtime source (no native plan),
+    /// otherwise <see cref="RuntimeModSetSource.Accept"/>'s answer (false: another launch's nonce or plan).
+    /// </summary>
+    public static bool? Report(IModSetSource? source, Session.Frame.ModsReport frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        return source is RuntimeModSetSource runtime ? runtime.Accept(RuntimeModReport.From(frame)) : null;
     }
 
     /// <summary>The set as the contract takes it (≤ 32, valid ids, versions and fingerprints, unique, sorted), or <see cref="ModSetException"/>.</summary>

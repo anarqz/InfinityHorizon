@@ -148,8 +148,13 @@ public sealed partial class ShellViewModel
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods (interim
         // until N-H2's runtime report); the gate's `modded` flag and the overlay's bridge share it.
-        var mods = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
-        if (mods.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed) Log("mods: lobby mod set unavailable (" + mods.State.Reason + ")");
+        var launchModSet = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
+        if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed) Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")");
+        // N-H2: a launch with a native plan uses the runtime source (ready only on a verified ModsReport for this plan's nonce and
+        // digest); otherwise the launch plan's set. Online play refuses enabled native mods above (mods.offline_only), so no
+        // native plan reaches this point yet and the launch plan's set applies; the seam is wired for the online native launch.
+        NativeModPlan? nativePlan = null;
+        var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
@@ -157,8 +162,8 @@ public sealed partial class ShellViewModel
             Overlay = LoadOverlayPackage(),
             NativeDllOverrides = mods.DllOverrides,
             Saves = SessionSavesFor(profile),
-            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, mods),
-            Mods = mods,
+            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, modSet),
+            Mods = modSet,
             OnlineActivity = onlineActivity,
             Text = S,
             CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),
@@ -193,6 +198,7 @@ public sealed partial class ShellViewModel
         // BUG-0001: the online session's drivatar caches never reach offline play.
         var caches = SwitchCaches(_install.Root, online: true);
         _playOnlineActivity = onlineActivity;
+        _playModSet = modSet;
         try
         {
             _playTask = Task.Run(() => supervisor.RunAsync(_play.Token));
@@ -212,6 +218,7 @@ public sealed partial class ShellViewModel
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
+            _playModSet = null;
             RefreshMods();
             Changed(string.Empty);
             if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
@@ -304,6 +311,15 @@ public sealed partial class ShellViewModel
         OverlayOn(e);
         switch (e)
         {
+            case SupervisorEvent.ModsReported reported:
+                // N-H2: the hook's ModsReport (0x1b) feeds this launch's runtime mod set; a report for another nonce or plan is ignored.
+                Log(Infinity.Core.Matchmaking.ModSets.Report(_playModSet, reported.Report) switch
+                {
+                    true => "mods: runtime report accepted (" + _playModSet!.State.Phase + ")",
+                    false => "mods: runtime report ignored (not this launch's plan)",
+                    null => "mods: runtime report ignored (no native plan)",
+                });
+                break;
             case SupervisorEvent.RequestingAdmission:
                 _waitingForAdmission = true;
                 _queued = false;
