@@ -58,8 +58,11 @@ public sealed partial class ShellViewModel
         return text;
     }
 
-    /// <summary>The first hook build with the production mod host (FIMOD003, the N-H2 report and the runtime signature check).</summary>
-    internal const uint NativeModOnlineHookBuild = 82;
+    /// <summary>
+    /// The minimum hook build for native mods online: .82 introduced the production mod host (FIMOD003, the N-H2 report and the
+    /// runtime signature check); .84/.85 bound its link checks at the trusted roots (Proton) and end a failed session without a hang.
+    /// </summary>
+    internal const uint NativeModOnlineHookBuild = 85;
 
     /// <summary>Native mods play online only through a verified hook that hosts the runtime (<see cref="NativeModOnlineHookBuild"/>+).</summary>
     private bool NativeModHookReady => _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= NativeModOnlineHookBuild;
@@ -67,8 +70,9 @@ public sealed partial class ShellViewModel
     /// <summary>
     /// FIMOD004 (data-mod SQL): hook 0.3.0+fh2online.83 (WINDOWS, <c>feature/mods-data-sql</c>) is the first that loads data-only plans,
     /// applies their SQL files and gates mods on the dependency being active; the install/enable gate and the FIMOD004 online minimum.
+    /// Raised to .85 with <see cref="NativeModOnlineHookBuild"/> for the Proton link checks and the failed-session exit.
     /// </summary>
-    internal const uint DataModSqlHookBuild = 83;
+    internal const uint DataModSqlHookBuild = 85;
 
     /// <summary>Data mods with SQL need the verified runtime package and a verified hook of <see cref="DataModSqlHookBuild"/>+.</summary>
     private bool DataModSqlReady => _nativeRuntime is not null && _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild;
