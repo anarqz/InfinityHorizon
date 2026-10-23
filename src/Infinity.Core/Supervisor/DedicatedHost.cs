@@ -596,13 +596,24 @@ public sealed class DedicatedHost : IAsyncDisposable
     private DedicatedStatus StatusUnlocked() => new(_phase, _worldId, _code, _players, _maxPlayers,
         _since is { } since ? _clock.GetElapsedTime(since) : TimeSpan.Zero, _lastError);
 
+    private readonly object _publish = new();
+
+    /// <summary>
+    /// The status as it is now, to every handler. Reading and raising are one step under <c>_publish</c>, so two
+    /// threads never deliver out of order: a stop's own "stopping" read before the run ended can no longer reach
+    /// the shell after the run's final "idle" (every change is followed by a publish, so the last one is current).
+    /// Handlers only post or record and never block.
+    /// </summary>
     private void Publish()
     {
-        var handlers = Changed;
-        if (handlers is null) return;
-        var status = Status;
-        try { handlers(status); }
-        catch (Exception error) when (error is InvalidOperationException or ObjectDisposedException) { }
+        lock (_publish)
+        {
+            var handlers = Changed;
+            if (handlers is null) return;
+            var status = Status;
+            try { handlers(status); }
+            catch (Exception error) when (error is InvalidOperationException or ObjectDisposedException) { }
+        }
     }
 
     private static void Raise(Action? handlers)
