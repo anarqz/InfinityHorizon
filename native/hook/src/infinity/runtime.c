@@ -96,5 +96,6 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     fi_carstate_apply(game_image);
     fi_livery_apply(game_image);
     fi_game_ready_apply(game_image);
+    fi_mod_host_start(game_image);
     return 1;
 }

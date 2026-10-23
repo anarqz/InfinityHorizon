@@ -4,6 +4,7 @@ EXPORTS
     CreateFileW
     FlushInstructionCache
     GetCurrentProcess
+    GetFileInformationByHandle
     GetFileSizeEx
     GetLastError
     GetLocalTime

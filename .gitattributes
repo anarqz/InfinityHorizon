@@ -16,3 +16,5 @@ native/hook/src/** text eol=crlf
 # Preserve upstream notices and sources, including their original whitespace.
 native/overlay/third_party/** -whitespace
 src/Infinity.App/Assets/Fonts/*-LICENSE.txt -whitespace
+
+native/mod/third_party/** -whitespace

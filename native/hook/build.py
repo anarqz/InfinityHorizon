@@ -33,6 +33,7 @@ SOURCES = [
     "src/core/azimuth_host.c",
     # src/infinity: ForzaInfinity's own modules
     "src/infinity/runtime.c",
+    "src/infinity/mod_host.c",
     "src/infinity/cfg.c",
     "src/infinity/eo_detect.c",
     "src/infinity/tier.c",

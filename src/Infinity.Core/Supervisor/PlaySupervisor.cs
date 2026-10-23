@@ -24,6 +24,7 @@ public sealed record SupervisorConfig(
     TicketPolicy Policy,
     string StateDirectory)
 {
+    public IReadOnlyList<string> NativeDllOverrides { get; init; } = [];
     public OnlineActivity? OnlineActivity { get; init; }
     /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
     public uint MinimumOnlineHookBuild { get; init; } = BuildProfile.ProductionOnly ? 79u : 76u;
@@ -316,21 +317,15 @@ public sealed class PlaySupervisor
         var token = new GameToken(new Secret(active.Ticket.Token), Unix(active.Ticket.ExpiresAt));
         var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild);
         List<(string, string)> env = [(Launch.EnvLaunch, handoff.EnvValue), (Launch.EnvLauncherExe, _config.LauncherExe)];
-        // Wine / Proton: ExtraOptions' winmm.dll next to azimuth.exe loads only with winmm=n,b
         if (WineHost.Detected)
         {
-            var winmm = File.Exists(Path.Combine(_config.Install.Root, "winmm.dll"));
-            var inherited = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
-            var overrides = winmm ? WineHost.WithWinmm(inherited) : null;
-            if (overrides is not null)
+            var overrides = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
+            foreach (var module in _config.NativeDllOverrides)
             {
-                env.Add(("WINEDLLOVERRIDES", overrides));
+                overrides = WineHost.WithNativeDll(overrides, module) ?? overrides;
+                _ = WineHost.EnsureNativeDllOverride(module, true);
             }
-            // the environment alone does not reach Wine's loader in the child: the per-app registry override does
-            var appDefaults = WineHost.EnsureWinmmOverride(winmm);
-            _emit(new SupervisorEvent.Note($"wine ({WineHost.How}): winmm.dll next to azimuth.exe {(winmm ? "yes" : "no")}; " +
-                $"AppDefaults azimuth.exe winmm=native,builtin {appDefaults}; " +
-                $"WINEDLLOVERRIDES for the game: {overrides ?? inherited ?? "(unset)"}{(overrides is null ? " (unchanged)" : "")}"));
+            if (overrides is not null) env.Add(("WINEDLLOVERRIDES", overrides));
         }
         var plan = new LaunchPlan(_config.Install.HostExe, [], _config.Install.Root, env, []);
         var crashContext = new CrashContext(_clock);

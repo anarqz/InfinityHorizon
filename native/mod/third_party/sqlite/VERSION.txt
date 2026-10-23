@@ -1,0 +1,4 @@
+SQLite 3.53.4 (check-in bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc, 2026-07-24),
+the amalgamation (sqlite3.c, sqlite3.h) made from https://github.com/sqlite/sqlite tag version-3.53.4
+with `./configure && make sqlite3.c`. Vendored unchanged. SQLite is in the public domain
+(https://sqlite.org/copyright.html), so there is no licence to ship with it.
