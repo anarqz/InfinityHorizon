@@ -11,6 +11,8 @@
 //     the Xbox button, and Steam's desktop layout takes View + Menu, before any game sees them).
 //     The gate owns the trigger: View reaches the game only when it is released before 1 s, as a
 //     short press given back then; a hold that opens or closes the guide never reaches it.
+//   - LB + RB held together for 1 s also toggle it. Both are driving buttons, so the game keeps
+//     seeing them: only the chord held that long toggles, once per hold.
 //   - While the sidebar is open the game reads an idle pad ("connected, neutral", never
 //     "disconnected"); after it closes, until every button is up, so the B that closed it never
 //     reaches the game. The D-pad / left stick / A / B of that reading navigate, with repeat.
@@ -125,6 +127,20 @@ std::atomic<UINT32> g_w_buttons[4]{};
 std::atomic<int> g_w_lx[4]{}, g_w_ly[4]{}; // thumbstick x 32767
 std::atomic<bool> g_trigger_toggle{false};
 
+// A chord held for kTriggerHold: true once per hold, when it gets there.
+struct Chord {
+    bool held = false, fired = false;
+    std::chrono::steady_clock::time_point since{};
+    bool Update(bool down, std::chrono::steady_clock::time_point now) {
+        if (!down) { held = fired = false; return false; }
+        if (!held) { held = true; fired = false; since = now; return false; }
+        if (fired || now - since < kTriggerHold) return false;
+        fired = true;
+        return true;
+    }
+};
+Chord g_xinput_shoulders; // the render thread's, from XInput, until the WGI hook is in
+
 // View long-press state, on the game's input thread only. Several pads share one vtable slot: one state per pad.
 struct Trigger {
     void *pad = nullptr;
@@ -132,6 +148,7 @@ struct Trigger {
     bool fired = false;
     std::chrono::steady_clock::time_point since{};
     std::chrono::steady_clock::time_point replay_until{};
+    Chord shoulders{};
 };
 Trigger g_triggers[4];
 
@@ -178,7 +195,9 @@ HRESULT STDMETHODCALLTYPE HookReading(void *self, GamepadReading *value) {
     g_w_buttons[slot] = raw;
     g_w_lx[slot] = static_cast<int>(value->LeftThumbstickX * 32767);
     g_w_ly[slot] = static_cast<int>(value->LeftThumbstickY * 32767);
-    const bool view = GateView(trigger, (raw & kWView) != 0, std::chrono::steady_clock::now());
+    const auto now = std::chrono::steady_clock::now();
+    const bool view = GateView(trigger, (raw & kWView) != 0, now);
+    if (trigger.shoulders.Update((raw & (kWLB | kWRB)) == (kWLB | kWRB), now)) g_trigger_toggle = true;
     if (g_open_seen.load() || g_hold_until_release.load()) {
         const UINT64 stamp = value->Timestamp;
         *value = GamepadReading{};
@@ -254,7 +273,7 @@ void PollController() {
     g_open_seen = SidebarOpen();
     if (g_trigger_toggle.exchange(false)) {
         ToggleSidebar();
-        Log("guide: %s by holding View", SidebarOpen() ? "opened" : "closed");
+        Log("guide: %s by holding View or LB + RB", SidebarOpen() ? "opened" : "closed");
         g_hold_until_release = true;
         g_open_seen = SidebarOpen();
     }
@@ -267,6 +286,13 @@ void PollController() {
         }
     }
     const bool guide = any && (state.buttons & kGuide) && !(g_previous & kGuide);
+    if (!g_pad_hooked.load() && g_xinput_shoulders.Update(any && (state.buttons & (kLB | kRB)) == (kLB | kRB), std::chrono::steady_clock::now())) {
+        ToggleSidebar();
+        Log("guide: %s by holding LB + RB", SidebarOpen() ? "opened" : "closed");
+        g_hold_until_release = true;
+        g_open_seen = SidebarOpen();
+        return;
+    }
     if (g_pad_hooked.load()) {
         UINT32 w = 0;
         int lx = 0, ly = 0;
