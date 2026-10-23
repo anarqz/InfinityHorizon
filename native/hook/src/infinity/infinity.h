@@ -8,6 +8,7 @@
 #include "../core/infinity_base.h"
 
 void fi_mod_host_start(void *image);
+void fi_mod_host_wait(unsigned ms);
 
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size);
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size);

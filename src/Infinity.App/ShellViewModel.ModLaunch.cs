@@ -17,8 +17,11 @@ public sealed partial class ShellViewModel
 
     private static string LauncherDirectory => AppContext.BaseDirectory;
 
-    /// <summary>Native mods start only through a verified hook that hosts the runtime (build 80+: FIMOD003 and the N-H2 report).</summary>
-    private bool NativeModHookReady => _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= 80;
+    /// <summary>The first hook build with the production mod host (FIMOD003, the N-H2 report and the runtime signature check).</summary>
+    internal const uint NativeModOnlineHookBuild = 82;
+
+    /// <summary>Native mods play online only through a verified hook that hosts the runtime (<see cref="NativeModOnlineHookBuild"/>+).</summary>
+    private bool NativeModHookReady => _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= NativeModOnlineHookBuild;
 
     /// <summary>
     /// OD-113: why an online launch with enabled native mods cannot start (en/pt-BR), or null with the verified runtime package.
