@@ -82,7 +82,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked && !RequiredModBlocked;
 
     public string? PlayStatus => _playStatus;
 
@@ -121,6 +121,11 @@ public sealed partial class ShellViewModel
             Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : ""));
             if (_modHealth.AnyEnabled) { Message = S["mods.prepare_failed"]; await RefreshModsAsync(); return; }
             mods = ModLaunchPreparation.None;
+        }
+        // OD-115: every Play needs the catalog's required mods managed, enabled and with their required settings (the locks above wrote them).
+        if (await RequiredModsForLaunchAsync() is { Blocks: true } requirement)
+        {
+            _modRequirement = requirement; Message = ModPlayNotice; await RefreshModsAsync(); return;
         }
         // OD-113: native mods play online (modded lobbies only) when the signed runtime and a hook that hosts it are present.
         ModRuntimePackage? nativeRuntime = null;

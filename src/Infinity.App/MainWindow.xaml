@@ -476,6 +476,9 @@
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="420" Foreground="{StaticResource InfinityGold}" VerticalAlignment="Center" />
                   <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="12,0,0,0" VerticalAlignment="Center" />
+                  <!-- OD-115: the required mod's own action (install from the signed catalog, adopt, enable, or retry the catalog). -->
+                  <Button Content="{Binding RequiredModAction}" Click="OnRequiredMod" IsEnabled="{Binding CanActOnRequiredMod}" Padding="10,4" Margin="8,0,0,0" VerticalAlignment="Center"
+                          Visibility="{Binding ShowRequiredModAction, Converter={StaticResource Visible}}" />
                 </StackPanel>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />

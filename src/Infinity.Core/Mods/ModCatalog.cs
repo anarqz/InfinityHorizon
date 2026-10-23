@@ -11,6 +11,12 @@ namespace Infinity.Core.Mods;
 public sealed record ModCatalog(string CatalogId, long Sequence, DateTimeOffset? IssuedAt, DateTimeOffset? ExpiresAt,
     IReadOnlyList<string> DownloadHosts, IReadOnlyList<ModManifest> Mods, bool Trusted, bool Cached)
 {
+    /// <summary>
+    /// OD-115: mods every Play needs (a catalog entry's <c>required</c>), each enabled and with the listed settings. Declared by the
+    /// signed catalog, never by launcher code (OD-111). Empty when the catalog requires nothing.
+    /// </summary>
+    public IReadOnlyList<ModRequirement> Required { get; init; } = [];
+
     /// <summary>An expired catalog still lists and manages installed mods; it no longer installs or updates.</summary>
     public bool Expired(DateTimeOffset now) => ExpiresAt is { } expires && now >= expires;
 }
@@ -45,7 +51,7 @@ public static class ModCatalogTrust
     /// <summary>For the signing tool: refuses a catalog the launcher would refuse, before it is signed.</summary>
     public static int Validate(byte[] raw) => Parse(raw ?? throw new ArgumentNullException(nameof(raw)), signed: true).Entries.Count;
 
-    internal sealed record Entry(string Id, string Version, Uri ManifestUrl, string ManifestSha256);
+    internal sealed record Entry(string Id, string Version, Uri ManifestUrl, string ManifestSha256, IReadOnlyList<ModRequiredSetting>? Required = null);
 
     /// <summary>Parses a catalog. <paramref name="signed"/>: every field required, unknown fields refused, only "production" entries kept.</summary>
     internal static (string Id, long Sequence, DateTimeOffset? Issued, DateTimeOffset? Expires, IReadOnlyList<string> Hosts, IReadOnlyList<Entry> Entries) Parse(byte[] raw, bool signed)
@@ -79,9 +85,52 @@ public static class ModCatalogTrust
             var url = new Uri(entry.GetProperty("manifestUrl").GetString()!, UriKind.Absolute);
             if (signed && (url.Scheme != Uri.UriSchemeHttps || !hosts.Contains(url.IdnHost, StringComparer.OrdinalIgnoreCase))) throw new ModException("manifest host not allowed", ModErrors.Catalog);
             if (entries.Any(e => e.Id == entry.GetProperty("id").GetString())) throw new ModException("catalog identity mismatch", ModErrors.Catalog);
-            entries.Add(new(entry.GetProperty("id").GetString()!, entry.GetProperty("version").GetString()!, url, digest));
+            entries.Add(new(entry.GetProperty("id").GetString()!, entry.GetProperty("version").GetString()!, url, digest, Requirement(entry)));
         }
         return (id, sequence, issued, expires, hosts, entries);
+    }
+
+    /// <summary>
+    /// OD-115: an entry's optional <c>required</c> object (<c>{"settings": [{"optionId", "value"}]}</c>), on the entry rather than
+    /// the catalog root so launchers that refuse unknown root fields still read a catalog that requires a mod.
+    /// </summary>
+    private static System.Collections.ObjectModel.ReadOnlyCollection<ModRequiredSetting>? Requirement(JsonElement entry)
+    {
+        if (!entry.TryGetProperty("required", out var required)) return null;
+        if (required.ValueKind != JsonValueKind.Object || required.EnumerateObject().Any(p => p.Name != "settings"))
+            throw new ModException("invalid catalog requirement", ModErrors.Catalog);
+        var settings = new List<ModRequiredSetting>();
+        if (required.TryGetProperty("settings", out var list))
+        {
+            if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 32) throw new ModException("invalid catalog requirement", ModErrors.Catalog);
+            foreach (var setting in list.EnumerateArray())
+            {
+                if (setting.ValueKind != JsonValueKind.Object || setting.EnumerateObject().Any(p => p.Name is not ("optionId" or "value"))
+                    || setting.GetProperty("optionId").GetString() is not { Length: > 0 and <= 64 } option || settings.Any(s => s.OptionId == option))
+                    throw new ModException("invalid catalog requirement", ModErrors.Catalog);
+                settings.Add(new(option, setting.GetProperty("value").Clone()));
+            }
+        }
+        return settings.AsReadOnly();
+    }
+
+    /// <summary>The requirements of the loaded entries; a required setting must name an option of its manifest with a valid value.</summary>
+    internal static IReadOnlyList<ModRequirement> Requirements(IEnumerable<Entry> entries, IReadOnlyList<ModManifest> mods)
+    {
+        var result = new List<ModRequirement>();
+        foreach (var entry in entries.Where(e => e.Required is not null))
+        {
+            if (mods.FirstOrDefault(m => m.Id == entry.Id) is { } manifest)
+                foreach (var setting in entry.Required!)
+                {
+                    var option = manifest.Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
+                        ? config.GetProperty("options").EnumerateArray().FirstOrDefault(o => o.GetProperty("id").GetString() == setting.OptionId) : default;
+                    if (option.ValueKind != JsonValueKind.Object) throw new ModException("catalog requires an unknown setting", ModErrors.Catalog);
+                    ModMultiplayer.ValidateValue(option, setting.Value);
+                }
+            result.Add(new(entry.Id, entry.Required!));
+        }
+        return result.AsReadOnly();
     }
 
     internal static ModManifest Manifest(Entry entry, byte[] raw)
@@ -142,7 +191,8 @@ public sealed class SignedModCatalog
         }
         Write(CatalogPath, raw); Write(CatalogPath + ".sig", signature);
         Write(FloorPath, JsonSerializer.SerializeToUtf8Bytes(new Floor(parsed.Id, parsed.Sequence, digest)));
-        return new(parsed.Id, parsed.Sequence, parsed.Issued, parsed.Expires, parsed.Hosts, mods.AsReadOnly(), Trusted: true, Cached: false);
+        return new(parsed.Id, parsed.Sequence, parsed.Issued, parsed.Expires, parsed.Hosts, mods.AsReadOnly(), Trusted: true, Cached: false)
+        { Required = ModCatalogTrust.Requirements(parsed.Entries, mods) };
     }
 
     /// <summary>The last verified catalog with the manifests cached for it (offline), or null.</summary>
@@ -153,7 +203,8 @@ public sealed class SignedModCatalog
         if (!ModCatalogTrust.Verify(raw, signature, _key)) return null;
         var parsed = ModCatalogTrust.Parse(raw, signed: true);
         var mods = parsed.Entries.Select(e => CachedManifest(e.ManifestSha256) is { } bytes ? ModCatalogTrust.Manifest(e, bytes) : null).OfType<ModManifest>().ToArray();
-        return new(parsed.Id, parsed.Sequence, parsed.Issued, parsed.Expires, parsed.Hosts, mods, Trusted: true, Cached: true);
+        return new(parsed.Id, parsed.Sequence, parsed.Issued, parsed.Expires, parsed.Hosts, mods, Trusted: true, Cached: true)
+        { Required = ModCatalogTrust.Requirements(parsed.Entries, mods) };
     }
 
     private void CheckTime(DateTimeOffset? issued)
@@ -213,7 +264,8 @@ public static class DevelopmentModCatalog
             var raw = await ReadAsync(http, entry.ManifestUrl, 256 * 1024, cancellation).ConfigureAwait(false);
             mods.Add(ModCatalogTrust.Manifest(entry, raw));
         }
-        return new(parsed.Id, parsed.Sequence, parsed.Issued, parsed.Expires, parsed.Hosts, mods.AsReadOnly(), Trusted: false, Cached: false);
+        return new(parsed.Id, parsed.Sequence, parsed.Issued, parsed.Expires, parsed.Hosts, mods.AsReadOnly(), Trusted: false, Cached: false)
+        { Required = ModCatalogTrust.Requirements(parsed.Entries, mods) };
     }
 
     private static async Task<byte[]> ReadAsync(HttpClient http, Uri url, int limit, CancellationToken cancellation)
