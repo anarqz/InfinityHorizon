@@ -112,8 +112,11 @@ public sealed partial class ShellViewModel
 #endif
         }
     }
-    /// <summary>Native (infinity_mod.dll) mods need the runtime and helper, which only development packages carry (review §3).</summary>
-    public bool NativeModsAvailable => DevelopmentMods;
+    /// <summary>
+    /// Native (infinity_mod.dll) mods need the signed runtime and helper next to the launcher (<see cref="ModRuntimePackage"/>): development
+    /// packages carry them; a production package only once WINDOWS ships them with a hook that hosts mods (OD-113, MODS.md §6).
+    /// </summary>
+    public bool NativeModsAvailable => DevelopmentMods || _nativeRuntime is not null;
     public bool HasManifestCatalog => _catalogLoaded;
     public bool ModOperationBusy => _modOperation;
     public bool ModContentEnabled => !_modOperation;
@@ -249,7 +252,9 @@ public sealed partial class ShellViewModel
         var version = ++_modRefresh;
         var factory = ModManagerFactory();
         var catalog = _manifestCatalog;
+        var key = NativeModKey;
         var (health, error, facts) = await Task.Run(() => ReadModState(factory, catalog));
+        _nativeRuntime = await Task.Run(() => ModRuntimePackage.Locate(LauncherDirectory, key));
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts;

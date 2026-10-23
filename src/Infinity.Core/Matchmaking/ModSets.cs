@@ -118,7 +118,8 @@ public sealed class LaunchPlanModSetSource : IModSetSource
             catch (Exception error) when (error is ModException or ModSetException or IOException or UnauthorizedAccessException
                 or JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
             {
-                return Failed(error.GetType().Name);
+                // a ModSetException's message is a bounded reason (ids only, never a path); anything else is named by its type
+                return Failed(error is ModSetException ? error.Message : error.GetType().Name);
             }
         }, cancellation);
     }
@@ -183,6 +184,23 @@ public sealed class RuntimeModSetSource : IModSetSource
 
     public event EventHandler<ModSetState>? Changed;
 
+    /// <summary>
+    /// OD-113: no ready report in time (the supervisor's deadline after the hook's handshake): a set still not ready fails for this
+    /// launch, so a hook without the mod host or a silent runtime never leaves the session waiting. False when it was ready or failed already.
+    /// </summary>
+    public bool Expire(string reason)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+        ModSetState next;
+        lock (_lock)
+        {
+            if (_state.Phase != ModSetPhase.NotReady) return false;
+            _state = next = ModSetState.FailedWith(reason);
+        }
+        Changed?.Invoke(this, next);
+        return true;
+    }
+
     /// <summary>One report; false when it is not this launch's (ignored). Raises <see cref="Changed"/> when the state moved.</summary>
     public bool Accept(RuntimeModReport report)
     {
@@ -235,11 +253,17 @@ public static class ModSets
     /// The plan of the enabled managed mods: every enabled mod with multiplayer metadata whose impact is not
     /// <c>cosmetic</c> (<c>gameplay</c> and <c>unknown</c> count), its fingerprint over the effective settings;
     /// sorted by compatibility id. A mod without multiplayer metadata has no identity to compare and is left out.
+    /// OD-113 (MODS.md §6): the fingerprint names the manifest's file hashes, so each such mod's mapped files must hold
+    /// exactly those bytes now (<see cref="ManagedModFiles.ManifestMismatches"/>), data mods included; otherwise
+    /// <see cref="ModSetException"/> (<c>files_changed:&lt;id&gt;</c>) and the set fails instead of claiming files the game will not load.
     /// </summary>
     public static IReadOnlyList<PlannedMod> Plan(ManagedModFiles mods)
     {
         ArgumentNullException.ThrowIfNull(mods);
-        var enabled = mods.InstalledManifests().Where(m => mods.Receipt(m) is { Enabled: true });
+        var enabled = mods.InstalledManifests().Where(m => mods.Receipt(m) is { Enabled: true }).ToList();
+        foreach (var manifest in enabled)
+            if (manifest.Multiplayer is { } multiplayer && Relevant(multiplayer) && mods.ManifestMismatches(manifest).Count > 0)
+                throw new ModSetException("files_changed:" + manifest.Id);
         return Plan(enabled.Select(m => (m, m.ConfigPath is null ? null : mods.ReadSettings(m))));
     }
 

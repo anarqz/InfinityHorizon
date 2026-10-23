@@ -52,6 +52,18 @@ public sealed record SupervisorConfig(
     /// </summary>
     public Matchmaking.IModSetSource? Mods { get; init; }
 
+    /// <summary>
+    /// OD-113: a native mod launch's plan handoff (<see cref="Infinity.Core.Mods.NativeModPlan.Environment"/>: FI_MOD_PLAN, FI_MOD_PLAN_HASH,
+    /// FI_MOD_RUNTIME, FI_MOD_RUNTIME_HASH), added to the game's environment next to FI_LAUNCH. Only those names; empty: no native mods.
+    /// </summary>
+    public IReadOnlyList<(string Name, string Value)> ModEnvironment { get; init; } = [];
+
+    /// <summary>
+    /// OD-113: how long after the hook's handshake a <see cref="Matchmaking.RuntimeModSetSource"/> may stay not ready. Past it the set
+    /// fails for this launch (no modded matchmaking): a hook without the mod host, or a runtime that never reports, is never waited on forever.
+    /// </summary>
+    public TimeSpan ModReportDeadline { get; init; } = TimeSpan.FromSeconds(90);
+
     /// <summary>The cloud save around the game (OD-52, OD-60); null: no cloud save step.</summary>
     public Saves.SessionSaves? Saves { get; init; }
 
@@ -128,7 +140,17 @@ public abstract record SupervisorEvent
     /// N-H2 (OD-112): the hook forwarded the native mod runtime's report. Unverified here: check the nonce and
     /// plan digest against this launch's plan and each mod's hashes against what was prepared before using it.
     /// </summary>
-    public sealed record ModsReported(Session.Frame.ModsReport Report) : SupervisorEvent;
+    public sealed record ModsReported(Session.Frame.ModsReport Report) : SupervisorEvent
+    {
+        /// <summary>
+        /// OD-113: what the session's mod set made of it (the supervisor routes it, <see cref="Matchmaking.ModSets.Report"/>): true accepted,
+        /// false another launch's nonce or plan (ignored), null no runtime source (no native plan).
+        /// </summary>
+        public bool? Accepted { get; init; }
+    }
+
+    /// <summary>OD-113: the session's runtime mod set failed (a failed report, or no ready report in time): no modded matchmaking for this launch.</summary>
+    public sealed record ModsFailed(string Reason) : SupervisorEvent;
 
     /// <summary>Something the overlay reported (Overlay.UiEventKind: first frame, passthrough, ...).</summary>
     public sealed record OverlayEvent(byte Kind, string Detail) : SupervisorEvent;
@@ -198,6 +220,8 @@ public sealed class PlaySupervisor
     {
         _uiPipes = uiPipes;
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        if (config.ModEnvironment.Any(e => !Infinity.Core.Mods.NativeModPlan.EnvironmentNames.Contains(e.Name, StringComparer.Ordinal)))
+            throw new ArgumentException("only the native mod plan's variables", nameof(config));
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _spawner = spawner ?? throw new ArgumentNullException(nameof(spawner));
         _pipes = pipes ?? throw new ArgumentNullException(nameof(pipes));
@@ -330,6 +354,8 @@ public sealed class PlaySupervisor
         var token = new GameToken(new Secret(active.Ticket.Token), Unix(active.Ticket.ExpiresAt));
         var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild);
         List<(string, string)> env = [(Launch.EnvLaunch, handoff.EnvValue), (Launch.EnvLauncherExe, _config.LauncherExe)];
+        // OD-113: the native plan rides the online launch too; the hook accepts it there only as FIMOD003 (mod_host.c)
+        env.AddRange(_config.ModEnvironment);
         if (WineHost.Detected)
         {
             var overrides = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
@@ -577,7 +603,8 @@ public sealed class PlaySupervisor
                         var frame = received.Frame;
                         if (frame is Frame.ModsReport mods)
                         {
-                            if (endpoint.Greeted) _emit(new SupervisorEvent.ModsReported(mods)); // N-H2: lane B verifies and builds the ModSet
+                            // N-H2/OD-113: the session's set verifies it (nonce, plan digest, hashes) and turns ready or failed
+                            if (endpoint.Greeted) RouteModsReport(mods);
                             continue;
                         }
                         if(frame is Frame.UdpDiagnostic diagnostic)
@@ -912,6 +939,23 @@ public sealed class PlaySupervisor
         }
     }
 
+    private void RouteModsReport(Frame.ModsReport report)
+    {
+        var before = _config.Mods?.State.Phase;
+        var accepted = Matchmaking.ModSets.Report(_config.Mods, report);
+        _emit(new SupervisorEvent.ModsReported(report) { Accepted = accepted });
+        if (accepted == true && before != Matchmaking.ModSetPhase.Failed && _config.Mods!.State.Phase == Matchmaking.ModSetPhase.Failed)
+            _emit(new SupervisorEvent.ModsFailed(_config.Mods.State.Reason ?? "runtime"));
+    }
+
+    /// <summary>OD-113: a runtime set still not ready at the deadline fails for this launch (cancelled when this game process ends).</summary>
+    private async Task ExpireModsAsync(Matchmaking.RuntimeModSetSource mods, CancellationToken cancellation)
+    {
+        try { await Task.Delay(_config.ModReportDeadline, _clock, cancellation).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        if (mods.Expire("timeout")) _emit(new SupervisorEvent.ModsFailed("timeout"));
+    }
+
     private async Task<SessionRecord> OnFrame(Frame frame, LauncherEndpoint endpoint, IControlPipe pipe, GameToken token, SessionRecord state, CancellationToken cancellation)
     {
         var (replies, evt) = endpoint.Handle(frame, token);
@@ -932,6 +976,7 @@ public sealed class PlaySupervisor
                 else
                 {
                     _emit(new SupervisorEvent.Running());
+                    if (_config.Mods is Matchmaking.RuntimeModSetSource runtimeMods) _ = ExpireModsAsync(runtimeMods, cancellation);
                     if (_config.Overlay is { } package)
                     {
                         // right after the handshake: the hook checks the file against this hash and loads it

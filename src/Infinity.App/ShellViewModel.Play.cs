@@ -122,7 +122,14 @@ public sealed partial class ShellViewModel
             if (_modHealth.AnyEnabled) { Message = S["mods.prepare_failed"]; await RefreshModsAsync(); return; }
             mods = ModLaunchPreparation.None;
         }
-        if (mods.HasEnabledNative) { Message = S["mods.offline_only"]; return; }
+        // OD-113: native mods play online (modded lobbies only) when the signed runtime and a hook that hosts it are present.
+        ModRuntimePackage? nativeRuntime = null;
+        if (mods.HasEnabledNative)
+        {
+            var (runtime, refusal) = await NativeModsForOnlineAsync();
+            if (refusal is not null) { Message = refusal; return; }
+            nativeRuntime = runtime;
+        }
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var startingInstall = _install;
         var startingGame = _gate.Game;
@@ -146,21 +153,33 @@ public sealed partial class ShellViewModel
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
-        // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods (interim
-        // until N-H2's runtime report); the gate's `modded` flag and the overlay's bridge share it.
+        // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods, each one's mapped files
+        // checked against its manifest (OD-113: data mods enter it from this verified plan); the gate's `modded` flag and the
+        // overlay's bridge share it.
         var launchModSet = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
-        if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed) Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")");
-        // N-H2: a launch with a native plan uses the runtime source (ready only on a verified ModsReport for this plan's nonce and
-        // digest); otherwise the launch plan's set. Online play refuses enabled native mods above (mods.offline_only), so no
-        // native plan reaches this point yet and the launch plan's set applies; the seam is wired for the online native launch.
-        NativeModPlan? nativePlan = null;
-        var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
+        if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed)
+        {
+            Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")");
+            // never online as vanilla with multiplayer mods enabled: the session would be admitted unmodded
+            if (mods.MultiplayerMods.Count > 0) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
+        }
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
+        // N-H2/OD-113: a launch with native mods carries a FIMOD003 plan (this launch's nonce) to the hook and uses the runtime
+        // source: ready only on a verified ModsReport for that nonce and digest; file mods in it are ready from the verified plan.
+        NativeModPlan? nativePlan = null;
+        if (nativeRuntime is not null)
+        {
+            nativePlan = await PrepareOnlineNativePlanAsync(nativeRuntime);
+            if (nativePlan is null) return;
+            if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
+        }
+        var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
         using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
             NativeDllOverrides = mods.DllOverrides,
+            ModEnvironment = nativePlan?.Environment ?? [],
             Saves = SessionSavesFor(profile),
             Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, modSet),
             Mods = modSet,
@@ -182,6 +201,7 @@ public sealed partial class ShellViewModel
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
             },
         };
+        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild, 82u) };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
         _waitingForAdmission = true;
@@ -206,6 +226,8 @@ public sealed partial class ShellViewModel
         }
         finally
         {
+            // OD-113: the session database restore runs after the game exited, as offline, before Play can start again
+            if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan);
             if (caches)
             {
                 SwitchCaches(_install.Root, online: false);
@@ -312,13 +334,19 @@ public sealed partial class ShellViewModel
         switch (e)
         {
             case SupervisorEvent.ModsReported reported:
-                // N-H2: the hook's ModsReport (0x1b) feeds this launch's runtime mod set; a report for another nonce or plan is ignored.
-                Log(Infinity.Core.Matchmaking.ModSets.Report(_playModSet, reported.Report) switch
+                // N-H2: the supervisor fed the hook's ModsReport (0x1b) to this launch's runtime mod set; a report for another nonce or plan is ignored.
+                Log(reported.Accepted switch
                 {
-                    true => "mods: runtime report accepted (" + _playModSet!.State.Phase + ")",
+                    true => "mods: runtime report accepted (" + _playModSet?.State.Phase + ")",
                     false => "mods: runtime report ignored (not this launch's plan)",
                     null => "mods: runtime report ignored (no native plan)",
                 });
+                break;
+            case SupervisorEvent.ModsFailed failed:
+                // OD-113: no modded matchmaking for this launch; the game itself goes on (or the runtime already ended it)
+                Log("mods: runtime mod set failed (" + failed.Reason + ")");
+                Message = S["mods.online_failed"];
+                SetStatus(Message);
                 break;
             case SupervisorEvent.RequestingAdmission:
                 _waitingForAdmission = true;
