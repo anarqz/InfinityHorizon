@@ -92,10 +92,37 @@ public sealed class ModManifest
                 }
             }
         }
+        if (Document.TryGetProperty("databaseSql", out var sql))
+        {
+            // FIMOD004: a data mod's startup SQL, a file of its own folder pinned like any file. Custom data mods only for now;
+            // a native mod registers its SQL itself (InfinityModRegisterDatabaseV1), never both.
+            if (IsNative || !IsCustom || sql.ValueKind != JsonValueKind.Object || sql.EnumerateObject().Count() != 3
+                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported data mod SQL", ModErrors.Unsupported);
+            var path = sql.GetProperty("path").GetString()!; var hash = sql.GetProperty("sha256").GetString()!; var size = sql.GetProperty("bytes").GetInt64();
+            ValidatePath(path);
+            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || !path.EndsWith(".sql", StringComparison.Ordinal)
+                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c)) || size is < 1 or > DataModSql.MaxBytes)
+                throw new ModException("invalid data mod SQL", ModErrors.Unsupported);
+            DatabaseSql = new(path, hash, size);
+        }
+        if (Document.TryGetProperty("databaseBase", out var baseDb))
+        {
+            // OD-114 follow-up: a car pack's whole database, used as shipped as the session database's base (never the stock file).
+            if (IsNative || !IsCustom || baseDb.ValueKind != JsonValueKind.Object || baseDb.EnumerateObject().Count() != 4
+                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported database base", ModErrors.Unsupported);
+            var path = baseDb.GetProperty("source").GetString()!; var hash = baseDb.GetProperty("sha256").GetString()!;
+            var size = baseDb.GetProperty("bytes").GetInt64(); var violations = baseDb.GetProperty("foreignKeyViolations").GetInt64();
+            ValidatePath(path);
+            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || path.Count(c => c == '/') != 1
+                || !(path.EndsWith(".slt", StringComparison.Ordinal) || path.EndsWith(".db", StringComparison.Ordinal) || path.EndsWith(".sqlite", StringComparison.Ordinal))
+                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c))
+                || size is < 100 or > MaxDatabaseBaseBytes || violations is < 0 or > int.MaxValue) throw new ModException("invalid database base", ModErrors.Unsupported);
+            DatabaseBase = new(path, hash, size, (int)violations);
+        }
         if (Document.TryGetProperty("database", out var db))
         {
-            if (!IsNative || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
-                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is < 1 or > 32) throw new ModException("unsupported database capability");
+            if (!(IsNative || DatabaseSql is not null || DatabaseBase is not null) || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
+                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is var tableCount && (tableCount < (DatabaseBase is not null && DatabaseSql is null ? 0 : 1) || tableCount > (DatabaseSql is null ? DataModSql.MaxNativeTables : DataModSql.MaxTables))) throw new ModException("unsupported database capability");
             var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
             ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
             // OD-115: the runtime's session copy is game data the runtime owns, so it too is an override; the baseline is only read.
@@ -165,6 +192,7 @@ public sealed class ModManifest
             || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !ValidId(d.Id) || IsCustomId(d.Id) && !IsCustom || d.Versions.Count == 0
                 || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
         Multiplayer = ModMultiplayer.Parse(Document);
+        if (DatabaseBase is not null && Multiplayer is not { EntersLobbySet: true }) throw new ModException("a database base affects multiplayer", ModErrors.Unsupported);
         if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => c.GetString() is not { } other || !ValidId(other)))
             throw new ModException("invalid conflicts");
         if (IsCustom)
@@ -245,6 +273,20 @@ public sealed class ModManifest
 
     /// <summary>The payload folder of a custom mod, next to its manifest: <c>files/&lt;root&gt;/&lt;destination&gt;</c>.</summary>
     public const string CustomPayloadFolder = "files";
+    /// <summary>The folder of a custom data mod's startup SQL, next to <see cref="CustomPayloadFolder"/> (never installed into the game).</summary>
+    public const string CustomSqlFolder = "database";
+
+    /// <summary>FIMOD004: the data mod's startup SQL (custom data mods), applied by the runtime to the session database; null when none.</summary>
+    public DataModSqlFile? DatabaseSql { get; }
+    public bool HasDatabaseSql => DatabaseSql is not null;
+    /// <summary>OD-114 follow-up: a car pack's whole replacement database, the session database's base; at most one enabled mod has one.</summary>
+    public DatabaseBaseFile? DatabaseBase { get; }
+    public const long MaxDatabaseBaseBytes = 64L * 1024 * 1024;
+    /// <summary>The session database's write permissions (<c>database.tables</c>), for native and SQL data mods alike.</summary>
+    public IReadOnlyList<string> DatabaseTables => Document.TryGetProperty("database", out var db)
+        ? db.GetProperty("tables").EnumerateArray().Select(t => t.GetString()!).ToArray() : [];
+    /// <summary>Needs the native runtime at launch: a native mod, or a data mod whose SQL the runtime applies.</summary>
+    public bool NeedsRuntime => IsNative || HasDatabaseSql || DatabaseBase is not null;
 
     public static bool IsCustomId(string? id) => id is not null && id.StartsWith(CustomPrefix, StringComparison.Ordinal);
 
@@ -304,5 +346,9 @@ public sealed class ModManifest
 
 /// <summary>One mapped file. <see cref="Loader"/>: a binary the game process loads by itself (OD-115 game-root exception, reviewed official manifests only).</summary>
 public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary", bool Loader = false);
+/// <summary>A data mod's startup SQL file: its path in the mod folder, SHA-256 and size.</summary>
+public sealed record DataModSqlFile(string Path, string Sha256, long Bytes);
+/// <summary>A car pack's whole database: its path in the mod folder, SHA-256, size and the foreign-key violations it ships with (recorded, not refused).</summary>
+public sealed record DatabaseBaseFile(string Path, string Sha256, long Bytes, int ForeignKeyViolations);
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 public sealed record ModWineOverride(string Module, bool AppDefaults);

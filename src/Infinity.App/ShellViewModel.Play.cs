@@ -131,7 +131,7 @@ public sealed partial class ShellViewModel
         ModRuntimePackage? nativeRuntime = null;
         if (mods.HasEnabledNative)
         {
-            var (runtime, refusal) = await NativeModsForOnlineAsync();
+            var (runtime, refusal) = await NativeModsForOnlineAsync(mods.HasEnabledDataSql);
             if (refusal is not null) { Message = refusal; return; }
             nativeRuntime = runtime;
         }
@@ -205,7 +205,8 @@ public sealed partial class ShellViewModel
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
             },
         };
-        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild, NativeModOnlineHookBuild) };
+        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild,
+            mods.HasEnabledDataSql ? DataModSqlHookBuild : NativeModOnlineHookBuild) };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
         _waitingForAdmission = true;

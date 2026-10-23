@@ -23,7 +23,8 @@ public sealed record ModHealth(bool RecoveryHere, bool RecoveryElsewhere, IReadO
     public bool GameRelink { get; init; }
     public static ModHealth Empty { get; } = new(false, false, [], [], []);
     public bool BlocksPlay => RecoveryHere;
-    public bool HasEnabledNative => Installed.Any(i => i.Enabled && i.Manifest?.IsNative == true);
+    /// <summary>An enabled mod needs the native runtime (a native mod, or a data mod with SQL).</summary>
+    public bool HasEnabledNative => Installed.Any(i => i.Enabled && i.Manifest?.NeedsRuntime == true);
     public bool AnyEnabled => Installed.Any(i => i.Enabled);
     public bool HasWarnings => Problems.Count > 0 || RecoveryElsewhere || RelinkCandidates.Count > 0
         || Installed.Any(i => i.Problem is not null || i.Enabled && (i.Drift.Count > 0 || i.SettingsIssues.Count > 0));
