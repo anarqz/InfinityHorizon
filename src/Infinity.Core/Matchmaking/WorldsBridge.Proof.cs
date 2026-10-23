@@ -74,7 +74,13 @@ public sealed partial class WorldsBridge
         {
             await _proofWrites.WaitAsync(cancellation).ConfigureAwait(false);entered=true;
             if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch) || SendRelayContext is null)return false;
-            await SendRelayContext(frame,cancellation).ConfigureAwait(false);
+            try { await SendRelayContext(frame,cancellation).ConfigureAwait(false); }
+            catch(Exception error) when(!NeedsProof && error is not OperationCanceledException)
+            {
+                // development only: a context the hook cannot take (pipe not ready, no clock) never costs the seat
+                _log("worlds: development guest could not push the socket proof context; joining without a socket proof");
+                return true;
+            }
             if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch))
             {
                 await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);return false;
