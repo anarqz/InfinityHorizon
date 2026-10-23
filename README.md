@@ -52,6 +52,46 @@ Development builds show an expected unverified-origin advisory.
 `artifacts/production/win-x64`, with official endpoints and no development trust. Official
 signing and publication are separate maintainer operations; building does not create a release.
 
+## Saves
+
+Infinity keeps no copy of the game's saves outside the Azimuth folder. Saves stay where Azimuth
+writes them:
+
+```text
+<Azimuth>\data\titles\1A96545B\saves\player-1\User_<XUID upper hex>\revisions\<16 lowercase hex>\{commit, data\*}
+```
+
+- **Profiles.** Each Infinity profile has its own XUID, so its own `User_<hex>` folder; several
+  profiles sit side by side in `player-1`. Azimuth's offline career is `User_9000000000000`;
+  "Play offline" always uses it, never an online profile's folder.
+- **Revisions.** The `commit` file lists every data file with its SHA-256 and size. A revision
+  counts only when it is sealed (every file matches its line). Azimuth loads the highest folder
+  and keeps the two newest.
+- **Starting from a local save.** A new profile can start from any `User_*` folder with a sealed
+  revision (listed most recently played first, with level and credits). The source is only read:
+  the picked revision and the target's existing revisions are copied to the archive, a copy is
+  staged in `fi-launcher-incoming`, verified against its commit, then renamed into the target's
+  `revisions` as the newest one. It runs only while the game is closed, and a crash leaves the
+  target as it was.
+- **Nothing is deleted.** Whatever Infinity shadows or moves aside (a clone's target, an unsealed
+  folder, a cloud install, a conflict) is copied first to `saves\fi-launcher-archive\<User_x>\`.
+- **Cloud saves** apply only to profiles whose mode keeps a cloud save line; other profiles are
+  local only. Around each play session of such a profile, the launcher holds the line's lease:
+  before the game starts it resends any unconfirmed upload, moves unsealed folders to the archive
+  and installs a newer cloud revision; a conflict or a folder still being written stops the launch
+  instead of guessing. After the game exits, the newest sealed revision is uploaded as an
+  `FH2SAVE1` bundle with compare-and-swap on the cloud head. A failed upload stays pending and is
+  retried at the next launch.
+- **Launcher state** (in the launcher's state folder): `sync-state.json` (each profile's last
+  synced revision), `pending\<commitId>.fh2save` (uploads not confirmed yet, resent byte for byte)
+  and `pending\set-aside\` (bundles the server refused, kept). A damaged state file is kept aside
+  and never causes an upload.
+- **Creations** (liveries, thumbnails) are PC-wide files in `player-1`, not per profile, and are
+  not synced.
+
+Code: `src/Infinity.Core/Saves/` (`AzimuthSaves`, `CloudSaveFiles`, `CloudSaves`, `SessionSaves`,
+`SaveSyncStore`).
+
 ## Native mods (development)
 
 The launcher reads mod packages, dependencies and settings from manifests. Compatible native
