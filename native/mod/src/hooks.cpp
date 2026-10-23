@@ -1,26 +1,4 @@
 // Adapted from Trinculo54/fh2-mod-platform 6e851d89 hooks.cpp; MIT, see licenses/FH2-hooks-MIT.txt.
-// Hooks: one place where every mod changes game code (API 3).
-//
-// Three kinds, all ending up in the same chain:
-//   function  an inline detour at the start of a function, made with MinHook
-//   call      a CALL rel32 (or JMP rel32) at one call site, retargeted
-//   pointer   a function pointer in memory (a vtable slot, a callback table)
-//
-// Every patched place is a Site. The game is sent to the Site's entry stub,
-// a "jmp [slot]" whose slot holds the newest enabled hook's detour. Each
-// hook's `original` is a stub of its own, pointing at the next older hook's
-// detour, and the oldest one's at the real code (MinHook's trampoline, the
-// call's old target, or the pointer's old value). So several mods can hook
-// the same function, and any of them can come and go in any order: only
-// 8-byte slots change, atomically, and nothing a running thread may be in
-// is ever freed.
-//
-// Before anything is written, the bytes are checked: against every other
-// hook's (no overlaps), and for game code against the exe on disk, so code
-// that a dependency (or a mod patching the game by itself) has already
-// changed is never hooked over. Hooks in game code also wait for Extra
-// Options to finish patching (wait_for_code): it validates all of its sites
-// before writing any, and refuses every patch if one doesn't match.
 #include "runtime_internal.hpp"
 
 
@@ -54,7 +32,6 @@ const char* const kKindName[] = {"function", "call", "pointer", "patch", "instru
 
 std::mutex g_mu;
 
-// ---- small helpers ---------------------------------------------------------------
 
 bool query(const void* p, MEMORY_BASIC_INFORMATION& mbi) {
     return VirtualQuery(p, &mbi, sizeof mbi) == sizeof mbi && mbi.State == MEM_COMMIT &&
@@ -87,7 +64,6 @@ std::string hex(uintptr_t v) {
     return b;
 }
 
-// "game+0xA68870", "WheresMyBuddy.dll+0x1234" or "0x7FF6...".
 std::string where(const void* p) {
     if (!p) return "null";
     if (in_game(p)) return "game+" + hex(static_cast<const char*>(p) - game_base());
@@ -103,11 +79,6 @@ std::string where(const void* p) {
     return hex(reinterpret_cast<uintptr_t>(p));
 }
 
-// ---- stubs -------------------------------------------------------------------------
-//
-// A block is two pages: code (read/execute) with 512 stubs of
-// "jmp [rip+0xFFA]; int3; int3", each reading the qword at the same index
-// in the data page (read/write) right after it.
 
 struct Stub {
     void* code = nullptr;
@@ -125,8 +96,6 @@ struct Block {
 Block g_blocks[kMaxBlocks];
 int g_nblocks = 0;
 
-// Free memory within +-1 GB of `close_to` (anywhere if null), so a rel32 from
-// there reaches it.
 char* alloc_near(const void* close_to, std::size_t size) {
     if (!close_to)
         return static_cast<char*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
@@ -140,7 +109,6 @@ char* alloc_near(const void* close_to, std::size_t size) {
     const uintptr_t hi     = std::min<uintptr_t>(origin + range,
                                                  reinterpret_cast<uintptr_t>(si.lpMaximumApplicationAddress));
     MEMORY_BASIC_INFORMATION mbi{};
-    // Upwards first (past the game image is usually free), then down.
     for (uintptr_t a = (origin + gran - 1) / gran * gran; a + size < hi;) {
         if (VirtualQuery(reinterpret_cast<void*>(a), &mbi, sizeof mbi) != sizeof mbi) break;
         if (mbi.State == MEM_FREE)
@@ -182,7 +150,7 @@ Stub new_stub(const void* close_to) {
         FlushInstructionCache(GetCurrentProcess(), mem, kPage);
         b  = &g_blocks[g_nblocks];
         *b = {mem, 0};
-        ++g_nblocks; // published after the block is ready, for crash reports
+        ++g_nblocks;
     }
     const int i = b->used++;
     return {b->code + 8 * i, reinterpret_cast<void* volatile*>(b->code + kPage + 8 * i)};
@@ -190,7 +158,6 @@ Stub new_stub(const void* close_to) {
 
 void set_slot(void* volatile* slot, void* v) { InterlockedExchangePointer(const_cast<void**>(slot), v); }
 
-// ---- the game exe on disk ----------------------------------------------------------
 
 struct DiskImage {
     bool tried = false;
@@ -204,7 +171,7 @@ void open_disk_image() {
     g_disk.tried = true;
     std::vector<fs::path> candidates;
     if (!game_mount().empty()) candidates.push_back(game_mount() / L"forza_durango_release_final.exe");
-    candidates.push_back(azimuth_dir() / L"forza_durango_release_final.exe"); // Mezcal
+    candidates.push_back(azimuth_dir() / L"forza_durango_release_final.exe");
     for (const auto& c : candidates) {
         HANDLE f = CreateFileW(c.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -235,8 +202,6 @@ void open_disk_image() {
          "was already changed outside the platform");
 }
 
-// Every page of the exe's executable sections is executable in memory. True when the sections
-// aren't known (the exe couldn't be read): there's nothing to check against.
 bool code_sections_executable(std::string* first_bad) {
     const char* base = game_base();
     if (!base || g_disk.sections.empty()) return true;
@@ -259,10 +224,6 @@ bool code_sections_executable(std::string* first_bad) {
     return true;
 }
 
-// 1 if the game's bytes at [p, p+n) are as the exe on disk has them, 0 if
-// not, -1 if that can't be told. `pointer` compares one 8-byte pointer,
-// allowing for the image being mapped somewhere other than its preferred
-// base.
 int matches_disk(const void* p, std::size_t n, bool pointer) {
     open_disk_image();
     if (g_disk.file == INVALID_HANDLE_VALUE) return -1;
@@ -271,7 +232,7 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
     for (const auto& s : g_disk.sections) {
         if (rva < s.VirtualAddress || rva + n > s.VirtualAddress + std::max(s.Misc.VirtualSize, s.SizeOfRawData))
             continue;
-        if (rva + n > s.VirtualAddress + s.SizeOfRawData) return -1; // not in the file (zero-filled)
+        if (rva + n > s.VirtualAddress + s.SizeOfRawData) return -1;
         unsigned char disk[32];
         if (n > sizeof disk) return -1;
         OVERLAPPED ov{};
@@ -281,23 +242,18 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
         DWORD got          = 0;
         if (!ReadFile(g_disk.file, disk, static_cast<DWORD>(n), &got, &ov) || got != n) return -1;
         if (pointer) {
-            // Only a pointer that's an address in the image on disk (a vtable
-            // slot, a callback table) can be compared. Imports hold name
-            // RVAs on disk and are filled in by the loader, and many tables
-            // are zero until the game fills them.
             uint64_t want = 0, have = 0;
             std::memcpy(&want, disk, 8);
             std::memcpy(&have, p, 8);
             if (want < g_disk.image_base || want >= g_disk.image_base + kGameSizeOfImage) return -1;
             return have == want + (reinterpret_cast<uint64_t>(base) - g_disk.image_base) ? 1 : 0;
         }
-        if (reinterpret_cast<uint64_t>(base) != g_disk.image_base) return -1; // relocated code differs anyway
+        if (reinterpret_cast<uint64_t>(base) != g_disk.image_base) return -1;
         return std::memcmp(disk, p, n) == 0 ? 1 : 0;
     }
     return -1;
 }
 
-// ---- manifest-declared dependency readiness -----------------------------------------
 std::atomic<bool> g_code_ready{false};
 std::vector<Readiness> g_readiness;
 bool code_ready() { return g_code_ready.load(std::memory_order_acquire); }
@@ -325,10 +281,6 @@ bool dependencies_ready() {
 void open_disk_image();
 bool code_sections_executable(std::string* first_bad);
 
-// Azimuth maps the game as plain memory and only marks its code executable afterwards; Extra
-// Options can be done before that. Hooking in between fails ("it isn't code"), which happened
-// once: six of WreckingBall's hooks and WheresMyBuddy's within a few milliseconds of "ready".
-// So "ready" also waits until every executable section of the exe on disk is executable here.
 bool wait_for_executable_code() {
     {
         std::scoped_lock lk{g_mu};
@@ -348,7 +300,6 @@ bool wait_for_executable_code() {
     return true;
 }
 
-// Wait until manifest-declared dependencies settle and code pages are executable.
 void watch_for_code() {
     std::thread([] {
         while (!find_game()) Sleep(50);
@@ -363,57 +314,54 @@ void watch_for_code() {
     }).detach();
 }
 
-// ---- records, for crash reports ------------------------------------------------------
-// Plain fixed-size data, readable from the crash handler.
 
 struct Record {
-    char text[160]; // "WheresMyBuddy: pointer game+0x2D44F30 (ChampionshipDrivatarsState::Serialize)"
+    char text[160];
     uintptr_t tramp;
-    uintptr_t code_lo, code_hi; // an instruction hook's stub (saving registers, the moved instructions)
+    uintptr_t code_lo, code_hi;
     volatile LONG enabled;
 };
 constexpr int kMaxRecords = 256;
 Record g_records[kMaxRecords];
 volatile LONG g_nrecords = 0;
 
-// ---- sites -------------------------------------------------------------------------
 
-struct InstrList; // an instruction hook site's callbacks, newest first (see below)
+struct InstrList;
 
 struct Site {
     Kind kind;
-    char* at;            // function start, call instruction, pointer, patched bytes or hooked instruction
-    void* original;      // trampoline, the call's old target, the pointer's old value
+    char* at;
+    void* original;
     Stub entry;
-    char* lo;            // bytes this site changes or depends on
+    char* lo;
     char* hi;
-    std::vector<unsigned char> before; // [lo, hi) before the first patch
+    std::vector<unsigned char> before;
     bool live = false;
-    std::vector<InfinityHook*> chain; // in the order they were last enabled
-    std::vector<unsigned char> patch; // kPatch: the new bytes; kInstruction: the jump to `thunk`
-    char* thunk = nullptr;            // kInstruction: saves the registers, calls the hooks, runs the moved code
+    std::vector<InfinityHook*> chain;
+    std::vector<unsigned char> patch;
+    char* thunk = nullptr;
     std::size_t thunk_size = 0;
-    std::atomic<InstrList*> list{nullptr}; // kInstruction: what the thunk calls
+    std::atomic<InstrList*> list{nullptr};
 };
 std::vector<std::unique_ptr<Site>> g_sites;
 bool g_minhook = false;
 
-} // namespace
+}
 
 void configure_readiness(std::vector<Readiness> requirements) { g_readiness = std::move(requirements); }
 
-} // namespace infinity_mod
+}
 
 struct InfinityHook {
     InfinityMod* mod;
     std::string name;
     infinity_mod::Site* site;
-    void* detour;          // kInstruction: the mod's InfinityInstructionFn
-    void* user = nullptr;  // kInstruction: its argument
+    void* detour;
+    void* user = nullptr;
     infinity_mod::Stub next;
     bool enabled = false;
     int record   = -1;
-    std::atomic<bool> crashed{false}; // kInstruction: its fn crashed, so it's skipped
+    std::atomic<bool> crashed{false};
 };
 
 namespace infinity_mod {
@@ -433,25 +381,21 @@ bool is_padding(const unsigned char* p, std::size_t n) {
     return true;
 }
 
-// The bytes MinHook will copy into the trampoline or overwrite, as it
-// decides them (trampoline.c): instructions up to 5 bytes, or up to a return
-// or jump out, with the jump written over padding after it or above the
-// function. False if MinHook couldn't hook it.
 bool function_range(const unsigned char* t, char** lo, char** hi) {
     const auto start = reinterpret_cast<uintptr_t>(t);
     std::size_t pos  = 0;
-    uintptr_t jmp_dest = 0; // the furthest jump target inside the first 5 bytes
+    uintptr_t jmp_dest = 0;
     bool finished      = false;
     do {
         if (!readable(t + pos, 16)) return false;
         hde64s hs{};
         hde64_disasm(t + pos, &hs);
         if (hs.flags & F_ERROR) return false;
-        if (pos >= 5) break; // long enough: MinHook jumps back here, this instruction isn't copied
+        if (pos >= 5) break;
         const uintptr_t inst = start + pos;
-        bool resized         = false; // MinHook rewrites it as a longer, absolute form
+        bool resized         = false;
         if ((hs.modrm & 0xC7) == 0x05) {
-            if (hs.opcode == 0xFF && hs.modrm_reg == 4) finished = true; // jmp [rip+x]
+            if (hs.opcode == 0xFF && hs.modrm_reg == 4) finished = true;
         } else if (hs.opcode == 0xE8) {
             resized = true;
         } else if ((hs.opcode & 0xFD) == 0xE9) {
@@ -468,7 +412,7 @@ bool function_range(const unsigned char* t, char** lo, char** hi) {
             const uintptr_t dest  = inst + hs.len + (short_form ? static_cast<int8_t>(hs.imm.imm8)
                                                                 : static_cast<int32_t>(hs.imm.imm32));
             if (start <= dest && dest < start + 5) jmp_dest = std::max(jmp_dest, dest);
-            else if ((hs.opcode & 0xFC) == 0xE0) return false; // LOOP/JECXZ out: MinHook can't
+            else if ((hs.opcode & 0xFC) == 0xE0) return false;
             else resized = true;
         } else if ((hs.opcode & 0xFE) == 0xC2) {
             finished = inst >= jmp_dest;
@@ -478,7 +422,6 @@ bool function_range(const unsigned char* t, char** lo, char** hi) {
     } while (!finished);
     auto* c = reinterpret_cast<char*>(const_cast<unsigned char*>(t));
     if (pos < 5 && !is_padding(t + pos, 5 - pos)) {
-        // Too short: a short jmp at the start, to a long one in the padding above it.
         if (pos < 2 && !is_padding(t + pos, 2 - pos)) return false;
         if (!executable(t - 5) || !is_padding(t - 5, 5)) return false;
         *lo = c - 5;
@@ -496,7 +439,6 @@ Site* find_site(Kind k, const void* at) {
     return nullptr;
 }
 
-// A hook of another kind (or another place) whose bytes overlap these.
 const Site* overlapping(const char* lo, const char* hi) {
     for (auto& s : g_sites)
         if (lo < s->hi && s->lo < hi) return s.get();
@@ -543,7 +485,6 @@ bool common_checks(InfinityMod* m, const char* what, void* at, void* detour, voi
     return true;
 }
 
-// Patches and instruction hooks have no `original` to call: no stub of their own.
 InfinityHook* add_hook(InfinityMod* m, const char* name, Site* s, void* detour, void** original, void* user = nullptr) {
     auto h    = std::make_unique<InfinityHook>();
     h->mod    = m;
@@ -591,12 +532,7 @@ Site* new_site(Kind k, char* at, void* original, char* lo, char* hi) {
     return raw;
 }
 
-// ---- writing patches ------------------------------------------------------------------
 
-// For a rel32 that straddles a 16-byte boundary, which no single atomic
-// write covers: pause every other thread (as MinHook does), make sure none
-// of them is on the instruction, write, and let them go. Nothing may
-// allocate or lock while they're paused, so the list is made first.
 bool frozen_write(char* site, int32_t rel) {
     std::vector<HANDLE> threads;
     threads.reserve(256);
@@ -631,9 +567,6 @@ bool frozen_write(char* site, int32_t rel) {
     return done;
 }
 
-// Writes `n` bytes of code at `at` with every other thread paused and none of them inside
-// (at, at+n): one may be about to run the instruction at `at`, but none half way through the
-// bytes being changed. Nothing may allocate or lock while they're paused.
 bool frozen_write_bytes(char* at, const unsigned char* bytes, std::size_t n) {
     std::vector<HANDLE> threads;
     threads.reserve(256);
@@ -676,7 +609,6 @@ bool frozen_write_bytes(char* at, const unsigned char* bytes, std::size_t n) {
     return done;
 }
 
-// Atomically rewrites the rel32 of the 5-byte CALL/JMP at `site`.
 bool write_rel32(char* site, int32_t rel) {
     DWORD old = 0;
     if (!VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -715,7 +647,6 @@ bool write_rel32(char* site, int32_t rel) {
 }
 
 bool write_pointer(void** slot, void* expect, void* value) {
-    // Keep the page executable if it was: the slot may share it with code.
     MEMORY_BASIC_INFORMATION mbi{};
     if (!query(slot, mbi)) return false;
     const DWORD cur      = mbi.Protect & 0xFF;
@@ -732,12 +663,9 @@ bool write_pointer(void** slot, void* expect, void* value) {
     return ok;
 }
 
-// What a site has to do once its chain has changed.
 enum class Change { none, patch, unpatch };
 
-// Rewires the stubs of `s` for its enabled hooks, and says whether the
-// patch has to go in or come out.
-void publish_list(Site* s, const std::vector<InfinityHook*>& on); // instruction hooks (below)
+void publish_list(Site* s, const std::vector<InfinityHook*>& on);
 
 Change rewire(Site* s) {
     if (s->kind == kPatch || s->kind == kInstruction) {
@@ -751,20 +679,16 @@ Change rewire(Site* s) {
     std::vector<InfinityHook*> on;
     for (InfinityHook* h : s->chain)
         if (h->enabled) on.push_back(h);
-        else set_slot(h->next.slot, s->original); // an off hook's `original` skips every detour
+        else set_slot(h->next.slot, s->original);
     if (on.empty()) {
         set_slot(s->entry.slot, s->original);
         return s->live ? Change::unpatch : Change::none;
     }
-    // Inner links first, then the entry, so a thread already in a detour
-    // always finds a complete chain.
     for (std::size_t i = 0; i < on.size(); ++i) set_slot(on[i]->next.slot, i ? on[i - 1]->detour : s->original);
     set_slot(s->entry.slot, on.back()->detour);
     return s->live ? Change::none : Change::patch;
 }
 
-// Puts the patch of a call or pointer site in or out. Function sites are
-// done through MinHook's queue by the caller.
 bool apply_simple(Site* s, bool in) {
     if (s->kind == kPatch || s->kind == kInstruction)
         return frozen_write_bytes(s->lo, in ? s->patch.data() : s->before.data(), s->before.size());
@@ -781,7 +705,6 @@ void set_records(Site* s) {
         if (h->record >= 0) g_records[h->record].enabled = h->enabled && s->live;
 }
 
-// Enables or disables `hook`, or every hook of `m` if it's null.
 int switch_hooks(InfinityMod* m, InfinityHook* hook, bool on) {
     if (!m) return 0;
     std::scoped_lock lk{g_mu};
@@ -796,12 +719,11 @@ int switch_hooks(InfinityMod* m, InfinityHook* hook, bool on) {
         log_line(m->name, "can't switch another mod's hook");
         return 0;
     }
-    if (hook && mine.empty()) return 1; // already that way
+    if (hook && mine.empty()) return 1;
     std::vector<Site*> sites;
     for (InfinityHook* h : mine) {
         h->enabled = on;
         if (on) {
-            // The most recently enabled detour runs first: move it to the end.
             auto& ch = h->site->chain;
             ch.erase(std::find(ch.begin(), ch.end(), h));
             ch.push_back(h);
@@ -839,14 +761,11 @@ int switch_hooks(InfinityMod* m, InfinityHook* hook, bool on) {
         }
     }
     if (!queued.empty()) {
-        // One pass: MinHook suspends the other threads once for all of them.
         const MH_STATUS st = MH_ApplyQueued();
         if (st != MH_OK) {
             log_line(m->name, std::string("MinHook couldn't apply all the hooks: ") + MH_StatusToString(st));
             ok = 0;
         }
-        // MinHook stops at the first failure, keeping what it did before it.
-        // Go by the bytes, and leave nothing queued for the next caller.
         for (Site* s : queued) {
             const bool was = s->live;
             s->live        = std::memcmp(s->before.data(), s->lo, s->before.size()) != 0;
@@ -859,7 +778,6 @@ int switch_hooks(InfinityMod* m, InfinityHook* hook, bool on) {
         if (!s->live)
             for (InfinityHook* h : s->chain)
                 if (h->enabled) {
-                    // Couldn't go live: put the chain back as it is.
                     h->enabled = false;
                 }
         if (!s->live) rewire(s);
@@ -873,9 +791,7 @@ int switch_hooks(InfinityMod* m, InfinityHook* hook, bool on) {
     return ok;
 }
 
-// ---- the API -------------------------------------------------------------------------
 
-// A target in the game that isn't executable yet gets up to 2 seconds (see wait_for_executable_code).
 void settle(const void* code) {
     if (!in_game(code)) return;
     for (int i = 0; i < 200 && !executable(code); ++i) Sleep(10);
@@ -982,7 +898,6 @@ InfinityHook* api_hook_pointer(InfinityMod* m, const char* name, void** slot, vo
     return add_hook(m, name, s, detour, original);
 }
 
-// ---- API 7: byte patches -------------------------------------------------------------
 
 InfinityHook* api_patch_bytes(InfinityMod* m, const char* name, void* at, const void* expect, const void* bytes, uint32_t size) {
     const std::string what = "patch " + where(at) + (name ? std::string(" (") + name + ")" : "");
@@ -1012,27 +927,6 @@ InfinityHook* api_patch_bytes(InfinityMod* m, const char* name, void* at, const 
     return add_hook(m, name, s, nullptr, nullptr);
 }
 
-// ---- API 7: instruction hooks --------------------------------------------------------
-//
-// The hooked instruction (and as many after it as make 5 bytes) is replaced with a JMP to the
-// site's thunk, in memory near the game:
-//
-//   pad      256 bytes of int3 (see the unwind info below)
-//   save     pushfq; sub rsp, 0x190 (+0x100 for ymm upper halves, with AVX); the registers into
-//            an InfinityContext at rsp; rbx = rsp
-//   call     rsp aligned, dispatch(ctx, site): every enabled hook's fn, newest first
-//   restore  the registers (with the hooks' changes) and flags; rsp as it was; jmp over:
-//   pad      256 bytes of int3
-//   moved    the replaced instructions, rewritten for their new address
-//   back     jmp [rip]; dq the instruction after them
-//   unwind   two RUNTIME_FUNCTIONs, registered relative to the game's base: the save/call
-//            part undoes its frame (rbx is the frame register) and chains to the game
-//            function's own unwind info, and the moved code chains to it directly. Their unwind
-//            info has no prolog, so the 256-byte pads keep the chained game info's prolog out
-//            of the way (every code of it applies, as at the hooked instruction, which has to
-//            be past the prolog). Stack walks through a hook, for crash reports and for
-//            exceptions thrown inside a hook's fn (caught by dispatch), see the game's
-//            callers as before.
 
 struct InstrEntry {
     InfinityInstructionFn fn;
@@ -1044,7 +938,7 @@ struct InstrList {
     InstrEntry e[1];
 };
 
-constexpr uint32_t kCtxSize = 0x190; // sizeof(InfinityContext)
+constexpr uint32_t kCtxSize = 0x190;
 static_assert(sizeof(InfinityContext) == kCtxSize, "InfinityContext's layout is what the thunk writes");
 static_assert(offsetof(InfinityContext, rflags) == 0x80 && offsetof(InfinityContext, xmm) == 0x90, "InfinityContext's layout");
 
@@ -1065,7 +959,6 @@ bool call_instr(const InstrEntry& e, InfinityContext* ctx, DWORD* code) {
     }
 }
 
-// Called by every instruction hook's thunk, on the game's thread.
 void dispatch(InfinityContext* ctx, Site* s) {
     const InstrList* l = s->list.load(std::memory_order_acquire);
     if (!l) return;
@@ -1080,25 +973,22 @@ void dispatch(InfinityContext* ctx, Site* s) {
 }
 
 void publish_list(Site* s, const std::vector<InfinityHook*>& on) {
-    // Never freed: a thread may still be reading the old list (a few bytes per change).
     auto* l = static_cast<InstrList*>(std::calloc(1, sizeof(InstrList) + sizeof(InstrEntry) * (on.size() + 1)));
     if (!l) return;
     l->n = on.size();
     for (std::size_t i = 0; i < on.size(); ++i) {
-        InfinityHook* h = on[on.size() - 1 - i]; // the most recently enabled first
+        InfinityHook* h = on[on.size() - 1 - i];
         l->e[i]    = {reinterpret_cast<InfinityInstructionFn>(h->detour), h->user, h};
     }
     s->list.store(l, std::memory_order_release);
 }
 
-// -- the game's function table
 
 struct UnwindHead {
     uint8_t version_flags, prolog, count, frame;
 };
 constexpr uint8_t kUnwChain = 4;
 
-// The image (the game, or a loaded DLL) that `p` is in: its base and size, or null.
 const char* image_of(const void* p, uint32_t* size) {
     if (in_game(p)) return *size = kGameSizeOfImage, game_base();
     HMODULE m = nullptr;
@@ -1135,7 +1025,7 @@ const RUNTIME_FUNCTION* find_function(const RUNTIME_FUNCTION* t, std::size_t n, 
 
 const UnwindHead* unwind_of(const char* base, const RUNTIME_FUNCTION* f) {
     uint32_t u       = f->UnwindData;
-    if (u & 1) u = reinterpret_cast<const RUNTIME_FUNCTION*>(base + (u & ~1u))->UnwindData; // shared entry
+    if (u & 1) u = reinterpret_cast<const RUNTIME_FUNCTION*>(base + (u & ~1u))->UnwindData;
     return reinterpret_cast<const UnwindHead*>(base + u);
 }
 
@@ -1153,7 +1043,6 @@ const RUNTIME_FUNCTION* primary_of(const char* base, const RUNTIME_FUNCTION* f) 
     return f;
 }
 
-// -- decoding
 
 struct Insn {
     const unsigned char* at;
@@ -1175,7 +1064,6 @@ bool rip_relative(const hde64s& hs) { return (hs.flags & F_MODRM) && hs.modrm_mo
 
 enum class Branch { none, call, jmp, jcc, loop };
 
-// A relative CALL/JMP/Jcc/LOOP and where it goes.
 Branch branch_of(const unsigned char* ip, const hde64s& hs, const unsigned char** target) {
     const unsigned char* next = ip + hs.len;
     if (hs.opcode == 0xE8) return *target = next + static_cast<int32_t>(hs.imm.imm32), Branch::call;
@@ -1188,10 +1076,6 @@ Branch branch_of(const unsigned char* ip, const hde64s& hs, const unsigned char*
     return Branch::none;
 }
 
-// The instructions an instruction hook at `at` replaces (5 bytes or more), after checking it can
-// go there: `at` starts an instruction (decoding the function from its start reaches it), it's
-// past the prolog, the replaced bytes stay inside the function, and no relative jump in the
-// function lands inside them (only `at` itself). `fn_out` is the function table entry for `at`.
 bool instruction_range(const char* base, const unsigned char* at, std::vector<Insn>* out,
                        const RUNTIME_FUNCTION** fn_out, std::string* why) {
     std::size_t n               = 0;
@@ -1203,7 +1087,6 @@ bool instruction_range(const char* base, const unsigned char* at, std::vector<In
     *fn_out                     = f;
     const UnwindHead* u         = unwind_of(base, f);
     if (rva < f->BeginAddress + u->prolog) return *why = "it's in the function's prolog", false;
-    // from the start of the function (or this part of it) to `at`
     const auto* p   = reinterpret_cast<const unsigned char*>(base + f->BeginAddress);
     const auto* end = reinterpret_cast<const unsigned char*>(base + f->EndAddress);
     hde64s hs{};
@@ -1212,7 +1095,6 @@ bool instruction_range(const char* base, const unsigned char* at, std::vector<In
         p += hs.len;
     }
     if (p != at) return *why = "it isn't the start of an instruction", false;
-    // the replaced instructions
     while (p < at + 5) {
         if (!decode(p, &hs) || p + hs.len > end) return *why = "the 5 bytes it needs run past the end of the function", false;
         const unsigned char* t = nullptr;
@@ -1221,7 +1103,6 @@ bool instruction_range(const char* base, const unsigned char* at, std::vector<In
         p += hs.len;
     }
     const unsigned char* last = p;
-    // no jump into (at, last) from anywhere in the function (every part of it)
     const RUNTIME_FUNCTION* prim = primary_of(base, f);
     for (std::size_t i = 0; i < n; ++i) {
         const RUNTIME_FUNCTION* g = &tab[i];
@@ -1229,7 +1110,7 @@ bool instruction_range(const char* base, const unsigned char* at, std::vector<In
         const auto* q    = reinterpret_cast<const unsigned char*>(base + g->BeginAddress);
         const auto* qend = reinterpret_cast<const unsigned char*>(base + g->EndAddress);
         while (q < qend) {
-            if (!decode(q, &hs)) break; // data or padding at the end: nothing more to learn here
+            if (!decode(q, &hs)) break;
             const unsigned char* t = nullptr;
             if (branch_of(q, hs, &t) != Branch::none && t > at && t < last) {
                 return *why = "the function jumps into the bytes the hook would replace (from " + where(q) + ")", false;
@@ -1240,9 +1121,7 @@ bool instruction_range(const char* base, const unsigned char* at, std::vector<In
     return true;
 }
 
-// -- the thunk
 
-// Memory for thunks, near the game (rel32 and the game's RVAs reach it), above its base.
 struct Arena {
     char* mem;
     std::size_t used;
@@ -1258,7 +1137,7 @@ char* arena_alloc(std::size_t size, const void* near_to, const char* base, uint3
             a.used += size;
             return p;
         }
-    char* mem = alloc_near(base + image_size, kArenaSize); // just past the image: above its base
+    char* mem = alloc_near(base + image_size, kArenaSize);
     if (!mem || mem < base || !reaches(near_to, mem) || mem + kArenaSize - base > 0x7FFF0000) return nullptr;
     DWORD old = 0;
     std::memset(mem, 0xCC, kArenaSize);
@@ -1279,32 +1158,28 @@ struct Code {
     void u64(uint64_t v) {
         for (int i = 0; i < 8; ++i) u8((v >> (8 * i)) & 0xFF);
     }
-    // mov [rsp+off], reg / mov reg, [rsp+off] (reg 0-15, off < 0x80)
     void gpr(bool store, int reg, uint8_t off) {
         u8(0x48 | (reg >= 8 ? 4 : 0));
         u8(store ? 0x89 : 0x8B);
         if (off == 0) bytes({static_cast<unsigned>(0x04 | ((reg & 7) << 3)), 0x24});
         else bytes({static_cast<unsigned>(0x44 | ((reg & 7) << 3)), 0x24, off});
     }
-    // movdqu [rsp+off32], xmmN / movdqu xmmN, [rsp+off32]
     void xmm(bool store, int reg, uint32_t off) {
         u8(0xF3);
         if (reg >= 8) u8(0x44);
         bytes({0x0F, store ? 0x7Fu : 0x6Fu, static_cast<unsigned>(0x84 | ((reg & 7) << 3)), 0x24});
         u32(off);
     }
-    void jmp_abs(const void* to) { // jmp [rip+0]; dq to
+    void jmp_abs(const void* to) {
         bytes({0xFF, 0x25, 0, 0, 0, 0});
         u64(reinterpret_cast<uint64_t>(to));
     }
 };
 
-// GPR numbers in InfinityContext order: rax rcx rdx rbx rsp rbp rsi rdi r8..r15 (the encoding's own).
 constexpr uint8_t kGprOff(int r) { return static_cast<uint8_t>(8 * r); }
 
-// The replaced instructions, rewritten to run at `at_new` (where `code` will be copied).
 bool relocate(const std::vector<Insn>& insns, char* at_new, Code* code, std::string* why) {
-    const std::size_t start = code->b.size(); // at_new is where this offset lands
+    const std::size_t start = code->b.size();
     for (const Insn& in : insns) {
         const auto* ip   = in.at;
         const hde64s& hs = in.hs;
@@ -1315,7 +1190,7 @@ bool relocate(const std::vector<Insn>& insns, char* at_new, Code* code, std::str
             if (reaches(here + 5, t)) {
                 code->u8(0xE8);
                 code->u32(static_cast<uint32_t>(reinterpret_cast<const char*>(t) - (here + 5)));
-            } else { // call [rip+2]; jmp +8; dq t
+            } else {
                 code->bytes({0xFF, 0x15, 2, 0, 0, 0, 0xEB, 8});
                 code->u64(reinterpret_cast<uint64_t>(t));
             }
@@ -1323,7 +1198,7 @@ bool relocate(const std::vector<Insn>& insns, char* at_new, Code* code, std::str
             code->jmp_abs(t);
         } else if (br == Branch::jcc) {
             const unsigned cc = hs.opcode == 0x0F ? (hs.opcode2 & 0x0F) : (hs.opcode & 0x0F);
-            code->bytes({0x70u | (cc ^ 1), 14}); // the opposite condition skips the jump
+            code->bytes({0x70u | (cc ^ 1), 14});
             code->jmp_abs(t);
         } else if (rip_relative(hs)) {
             const int disp_at = hs.len - imm_size(hs) - 4;
@@ -1343,27 +1218,20 @@ bool relocate(const std::vector<Insn>& insns, char* at_new, Code* code, std::str
     return true;
 }
 
-// Builds the thunk for an instruction hook at `at`; `s` is its site (its address is in the code).
 bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint32_t image_size,
                  const RUNTIME_FUNCTION* fn, std::string* why) {
     constexpr std::size_t kPad = 256;
     char* const at   = s->at;
     const std::size_t replaced = static_cast<std::size_t>(insns.back().at + insns.back().hs.len - insns.front().at);
-    // An upper bound: pads, save/restore (~500), moved code (each instruction at most 16 bytes,
-    // or 16 for a rewritten branch), the jump back, unwind info.
     const std::size_t size = 2 * kPad + 1024 + 24 * insns.size() + 16 + 128;
     char* mem = arena_alloc(size, at, base, image_size);
     if (!mem) return *why = "no memory for its stub near that code", false;
 
-    // With AVX, the upper halves of ymm0-15 are kept too (above the InfinityContext): the game may
-    // hold 256-bit values across the hooked instruction, and a fn compiled for AVX may clobber
-    // them (its 128-bit VEX instructions zero them).
 #ifndef PF_AVX_INSTRUCTIONS_AVAILABLE
 #define PF_AVX_INSTRUCTIONS_AVAILABLE 39
 #endif
     const bool avx       = IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE) != 0;
     const uint32_t frame = kCtxSize + (avx ? 0x100 : 0);
-    // vextractf128 [rsp+off], ymmN, 1 / vinsertf128 ymmN, ymmN, [rsp+off], 1
     auto ymm_hi = [](Code& k, bool store, int n, uint32_t off) {
         k.u8(0xC4);
         k.u8((n >= 8 ? 0x00 : 0x80) | 0x60 | 0x03);
@@ -1377,7 +1245,6 @@ bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint
     Code c;
     for (std::size_t i = 0; i < kPad; ++i) c.u8(0xCC);
     const std::size_t save_at = c.b.size();
-    // prolog: pushfq; sub rsp, frame; mov [rsp+0x18], rbx; mov rbx, rsp
     c.u8(0x9C);
     c.bytes({0x48, 0x81, 0xEC});
     c.u32(frame);
@@ -1385,7 +1252,6 @@ bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint
     c.bytes({0x48, 0x89, 0xE3});
     for (int r = 0; r < 16; ++r)
         if (r != 3 && r != 4) c.gpr(true, r, kGprOff(r));
-    // ctx.rsp = rsp + frame + 8; ctx.rflags = the pushed flags
     c.bytes({0x48, 0x8D, 0x84, 0x24});
     c.u32(frame + 8);
     c.gpr(true, 0, kGprOff(4));
@@ -1396,13 +1262,11 @@ bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint
     for (int x = 0; x < 16; ++x) c.xmm(true, x, 0x90 + 16 * x);
     if (avx)
         for (int x = 0; x < 16; ++x) ymm_hi(c, true, x, kCtxSize + 16 * x);
-    // and rsp, -16; sub rsp, 0x20; rcx = ctx; rdx = site; call dispatch
     c.bytes({0x48, 0x83, 0xE4, 0xF0, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD9, 0x48, 0xBA});
     c.u64(reinterpret_cast<uint64_t>(s));
     c.bytes({0x48, 0xB8});
     c.u64(reinterpret_cast<uint64_t>(&dispatch));
     c.bytes({0xFF, 0xD0});
-    // restore: rsp = rbx; xmm; flags back into the pushed slot; GPRs; add rsp; popfq
     c.bytes({0x48, 0x89, 0xDC});
     for (int x = 0; x < 16; ++x) c.xmm(false, x, 0x90 + 16 * x);
     if (avx)
@@ -1418,7 +1282,6 @@ bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint
     c.bytes({0x48, 0x81, 0xC4});
     c.u32(frame);
     c.u8(0x9D);
-    // jmp over the pad to the moved code (rel32; patched in below)
     c.u8(0xE9);
     const std::size_t jmp_rel = c.b.size();
     c.u32(0);
@@ -1433,18 +1296,15 @@ bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint
     c.jmp_abs(at + replaced);
     const std::size_t moved_end = c.b.size();
     while (c.b.size() & 3) c.u8(0xCC);
-    // unwind info for the save/call part: no prolog; frame register rbx at offset 0; codes, in
-    // the order they're undone: SET_FPREG, SAVE_NONVOL rbx at 0x18, ALLOC_LARGE 0x190, ALLOC_SMALL 8
     const std::size_t unw1 = c.b.size();
     c.bytes({0x01 | (kUnwChain << 3), 0, 6, 0x03});
-    c.bytes({0, 0x03});        // UWOP_SET_FPREG
-    c.bytes({0, 0x34, 3, 0});  // UWOP_SAVE_NONVOL rbx, offset 0x18 / 8
-    c.bytes({0, 0x01, frame / 8 & 0xFF, frame / 8 >> 8}); // UWOP_ALLOC_LARGE (info 0), size / 8
-    c.bytes({0, 0x02});        // UWOP_ALLOC_SMALL (info 0): 8 bytes
-    c.u32(fn->BeginAddress);   // chained: the game function's entry
+    c.bytes({0, 0x03});
+    c.bytes({0, 0x34, 3, 0});
+    c.bytes({0, 0x01, frame / 8 & 0xFF, frame / 8 >> 8});
+    c.bytes({0, 0x02});
+    c.u32(fn->BeginAddress);
     c.u32(fn->EndAddress);
     c.u32(fn->UnwindData);
-    // the moved code: no codes of its own, chained the same way
     const std::size_t unw2 = c.b.size();
     c.bytes({0x01 | (kUnwChain << 3), 0, 0, 0});
     c.u32(fn->BeginAddress);
@@ -1469,7 +1329,6 @@ bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint
              " (stack walks through it may stop there)");
     s->thunk      = mem;
     s->thunk_size = moved_end;
-    // the patch: jmp rel32 to the save part, then int3s over the rest of the replaced bytes
     s->patch.assign(replaced, 0xCC);
     s->patch[0]    = 0xE9;
     const auto rel = static_cast<int32_t>(mem + save_at - (at + 5));
@@ -1527,7 +1386,7 @@ void* api_wait_for_code(uint32_t timeout_ms) {
     }
 }
 
-} // namespace
+}
 
 void fill_hook_api(InfinityModApiV1& api) {
     watch_for_code();
@@ -1541,7 +1400,6 @@ void fill_hook_api(InfinityModApiV1& api) {
     api.hook_instruction = api_hook_instruction;
 }
 
-// For crash reports: which hook's trampoline or stub `p` is in.
 bool hook_at(const void* p, char* out, std::size_t n) {
     const auto a  = reinterpret_cast<uintptr_t>(p);
     const LONG nr = g_nrecords;
@@ -1572,4 +1430,4 @@ const char* hook_line(int i, bool* enabled) {
     return g_records[i].text;
 }
 
-} // namespace infinity_mod
+}

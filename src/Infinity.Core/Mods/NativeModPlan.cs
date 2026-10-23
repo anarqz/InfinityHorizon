@@ -8,7 +8,6 @@ namespace Infinity.Core.Mods;
 
 public sealed record SessionDatabaseJournal(string AzimuthRoot, string GameRoot, string Target, string Baseline, string Prepared, bool Existed);
 
-/// <summary>Immutable launch selection and file locks retained until the child exits.</summary>
 public sealed class NativeModPlan : IDisposable
 {
     public static IReadOnlyList<string> EnvironmentNames { get; } = ["FI_MOD_PLAN", "FI_MOD_PLAN_HASH", "FI_MOD_RUNTIME", "FI_MOD_RUNTIME_HASH"];
@@ -72,7 +71,7 @@ public sealed partial class ManagedModFiles
             throw new ModException("session database changed outside the runtime; preserved for recovery");
         var original = ObjectBytes(journal.Baseline); _ = ObjectBytes(journal.Prepared);
         CheckGame();
-        Atomic(target, original); // A newly seeded override is retained as a valid baseline, never deleted.
+        Atomic(target, original);
         File.Move(SessionJournal, Path.Combine(BackupRoot, "database-session-" + Guid.NewGuid().ToString("N") + ".json"));
     }
     public NativeModPlan PrepareNativeLaunch(string runtime, string helper, byte[] verificationKey)
@@ -90,7 +89,6 @@ public sealed partial class ManagedModFiles
                 if (!ReleaseSignature.VerifyFile(path, path + ".sig", verificationKey)) throw new ModException("mod host signature does not verify");
             }
             var enabled = InstalledManifests().Where(m => Receipt(m) is { Enabled: true }).ToArray();
-            // Stable topological order for native dependencies; standalone dependencies are checked too.
             var remaining = enabled.Where(m => m.IsNative).OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
             var selected = new List<ModManifest>();
             while (remaining.Count > 0)

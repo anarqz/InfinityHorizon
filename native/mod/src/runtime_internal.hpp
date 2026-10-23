@@ -17,5 +17,5 @@ std::string narrow(const std::wstring&);
 void log_line(const std::string&, const std::string&);
 inline void plog(const std::string& text) { log_line("", text); }
 void fill_hook_api(InfinityModApiV1&);
-void notify_hook_fault(); // Nonblocking; failure is consumed by host status queries.
+void notify_hook_fault();
 }

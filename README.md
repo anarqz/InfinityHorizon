@@ -43,62 +43,21 @@ to compile. Build just the managed projects with `dotnet build Infinity.sln -c R
 pwsh -File run.ps1 -Server http://127.0.0.1:8480 -Portal http://127.0.0.1:3120
 ```
 
-The launcher opens even when no server is available. Sign-in and online play require a compatible
-backend and the player's own game/Azimuth installation. `--server` / `FI_SERVER` and
-`--portal` / `FI_PORTAL` select a deployment; the defaults are loopback development addresses.
-Development signature trust is accepted only with development origins.
-Development builds keep development as their default. `--environment production` (or `FI_ENVIRONMENT=production`)
-explicitly selects the official HTTPS bootstrap and isolated local state; it never restores a
-development session. Production discovery validates each service origin and the native Identity
-Platform project, with no emulator or fallback to LAN. `run.ps1` always selects development.
-The local signing seed stays in the user's LocalAppData, outside this checkout; the build stores
-only its public verification key in the output. Starting the launcher does not start a game.
+Local builds default to development. Online play requires a compatible backend and your own
+game/Azimuth installation. Starting the launcher does not start the game. Keep the launcher
+in its own directory, separate from Azimuth, and retain detached `.sig` files beside binaries.
+Development builds show an expected unverified-origin advisory.
 
-`build.ps1 -Zig <path> -Version <semver> -Production` compiles without development trust and leaves all four binaries
-unsigned. It never uses an official private key. Maintainers sign official distribution artifacts
-separately. Production launch-ticket and relay public trust are embedded separately from the
-release/update signing key; development builds of the hook keep only local ticket trust.
-Binary builds belong in versioned releases, rather than in the source tree.
+`build.ps1 -Zig <path> -Version <semver> -Production` builds unsigned production binaries in
+`artifacts/production/win-x64`, with official endpoints and no development trust. Official
+signing and publication are separate maintainer operations; building does not create a release.
 
-`-Production` uses a separate `artifacts/production/win-x64` output and compiles the official
-production-only profile: launching without arguments uses the official HTTPS bootstrap and
-isolated production state. Ambient development endpoint variables are ignored and development
-CLI selections are refused. `-Output <new-empty-directory>` selects an isolated staging path;
-production builds cannot overwrite the development runtime. Local ticket/relay trust is omitted
-from the production managed binaries. Maintainers still sign all production bytes separately.
+## Native mods (development)
 
-The launcher checks its executable, bundled hook/overlay and any installed Infinity hook against
-the official release public key. Keep each detached `.sig` beside its binary. Missing, modified
-or development-signed files show a caution with a link to
-[official releases](https://github.com/anarqz/InfinityHorizon/releases). This advisory does not add
-a play restriction; the existing hook/overlay signature checks still apply. The caution is
-expected when building from source. A binary's signature proves its signed bytes, not that a
-running client is unmodified.
-
-At startup, the launcher checks the latest stable release and backend version policy. Online
-play requires reachable backend version policy and a compatible version. Unavailable release
-discovery is advisory; a known required update has its own screen;
-account and support actions remain accessible. Compatible newer builds from source are not
-downgraded. Version compatibility is separate from the build-origin advisory above.
-
-Official updates authenticate a signed descriptor and every runtime file before a separate
-helper replaces the launcher after it exits. The helper verifies the package again, keeps a
-rollback journal and waits for the replacement to initialize before committing. Updates wait
-until the game and save cleanup have finished. Keep the launcher in its own directory, outside
-the Azimuth game directory, so runtime updates can be applied there.
-
-## Native mod runtime (development)
-
-`native/mod/build.ps1` builds `native/mod/build/infinity_mod.dll` with MSVC x64.
-The separate runtime verifies an explicit native mod selection, coordinates hooks,
-and reports initialization state through `include/infinity_mod_host.h`.
-Compatible mods implement `InfinityModInitializeV1` using the MIT SDK in
-`native/mod/include/infinity_mod.h`. The NitroSystem Infinity adapter uses this API.
-
-This component is not yet part of the shipped launcher runtime: launch-plan
-transport, migration acceptance and game/Proton validation precede activation.
-It does not install itself, discover DLLs in folders, alter databases or enforce
-server lobby policies. Native mods are trusted code, not sandboxed plugins.
+The launcher reads mod packages, dependencies and settings from manifests. Compatible native
+mods use the MIT headers in `native/mod/include/`. The development runtime supports offline
+initialization and startup SQLite sessions with launcher-managed restoration. Production
+catalog admission, live database updates and online lobby enforcement are not available.
 
 ## License
 

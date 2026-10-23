@@ -1,4 +1,3 @@
-// Included by runtime.cpp: SQLite ownership belongs to infinity_mod.dll, not to mods.
 namespace {
 struct SqlRegistration {
     InfinityMod owner;

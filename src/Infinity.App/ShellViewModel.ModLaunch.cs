@@ -11,7 +11,6 @@ public sealed partial class ShellViewModel
 {
     public bool CanPlayModdedOffline => DevelopmentMods && ModsIdle && _install?.Version == "0.9.10" && !ModRecoveryRequired;
 
-    /// <summary>Development-only session. Native mod admission online awaits the lobby-policy contract.</summary>
     public async Task PlayModdedOfflineAsync()
     {
         if (!CanPlayModdedOffline || _install is null || !OperatingSystem.IsWindows()) return;
@@ -47,7 +46,7 @@ public sealed partial class ShellViewModel
             using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, []));
             _modOperation = false; Busy = false; SetStatus(S["supervisor.starting"]);
             var wait = child.WaitForExitAsync(); _playTask = wait;
-            var code = await wait; // Recovery only after the process handle is signalled, never on cancellation.
+            var code = await wait;
             SetStatus(code == 0 ? S["status.ended"] : S["mods.runtime_failed"]);
         }
         catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException or InvalidOperationException

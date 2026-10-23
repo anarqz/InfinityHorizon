@@ -7,9 +7,9 @@ extern "C" {
 typedef struct InfinityModSelectionV1 {
     char id[65], version[65];
     const wchar_t* binary_path;
-    const wchar_t* settings_path; // Required, existing INI; launcher seeds it before launch.
+    const wchar_t* settings_path;
     uint8_t binary_sha256[32], settings_sha256[32], compatibility_sha256[32];
-    uint32_t dependency_mask; // Only earlier native entries; launcher resolves file dependencies.
+    uint32_t dependency_mask;
 } InfinityModSelectionV1;
 typedef struct InfinityModsLaunchV1 {
     uint32_t size, abi_version;
@@ -28,10 +28,8 @@ typedef struct InfinityModsSnapshotV1 {
     uint32_t size, abi_version, count, ready, failed;
     InfinityModReportV1 mods[INFINITY_MOD_MAX_COUNT];
 } InfinityModsSnapshotV1;
-// Call outside DllMain. 0 = accepted asynchronously, 1 = invalid, 2 = already started, 3 = failure.
 typedef int (*InfinityModsStartV1Fn)(const InfinityModsLaunchV1*);
 typedef int (*InfinityModsQueryV1Fn)(InfinityModsSnapshotV1*);
-// FIMOD001 immutable file transport. The hook verifies and pins this runtime before calling.
 typedef int (*InfinityModsStartPlanV1Fn)(void* game_image, const wchar_t* path, const uint8_t sha256[32]);
 #ifdef __cplusplus
 }

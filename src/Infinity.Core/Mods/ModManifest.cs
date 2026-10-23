@@ -4,7 +4,6 @@ using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
-/// <summary>Immutable manifest snapshot. Installation approval belongs to the launcher, not the JSON.</summary>
 public sealed class ModManifest
 {
     private readonly byte[] _bytes;
@@ -24,7 +23,6 @@ public sealed class ModManifest
         ? config.GetProperty("path").GetString() : null;
 
     public bool IsNative => Document.TryGetProperty("runtime", out var value) && value.GetString() == "infinity-native";
-    // Capability support is independent of mod identity. Catalog trust is a separate boundary.
     public bool SupportedForInstall => !NeedsDatabaseCoordination
         && Document.TryGetProperty("runtime", out var value) && value.GetString() is "standalone" or "infinity-native";
 
@@ -201,7 +199,6 @@ public sealed class ModManifest
 public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 
-/// <summary>Unsigned development discovery. Production must use a separate signed catalog policy.</summary>
 public static class DevelopmentModCatalog
 {
     public static async Task<IReadOnlyList<ModManifest>> LoadAsync(HttpClient http, Uri url, CancellationToken cancellation)
@@ -216,7 +213,6 @@ public static class DevelopmentModCatalog
         foreach (var entry in entries.EnumerateArray())
         {
             var address = new Uri(entry.GetProperty("manifestUrl").GetString()!, UriKind.Absolute);
-            // A network catalog may never cause local-file reads, even in development.
             if (address.IsFile && !url.IsFile) throw new ModException("remote catalog references a local file");
             var raw = await ReadAsync(http, address, 256 * 1024, cancellation).ConfigureAwait(false);
             if (ModManifest.Hash(raw) != entry.GetProperty("manifestSha256").GetString()) throw new ModException("manifest digest mismatch");
