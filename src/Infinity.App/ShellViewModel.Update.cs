@@ -164,7 +164,9 @@ public sealed partial class ShellViewModel
     private void RequireLauncherUpdate()
     {
         _launcherUpdatePhase = UpdatePhase.Required; _updateSupport = false;
-        _integrity?.Revoke(); Changed(string.Empty);
+        _integrity?.Revoke();
+        StopDedicated("lobby.update_required");
+        Changed(string.Empty);
     }
 
     public async Task<bool> RecoverInterruptedUpdateAsync(string[] arguments)

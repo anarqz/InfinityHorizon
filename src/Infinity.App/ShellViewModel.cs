@@ -61,7 +61,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public int SidebarWidth => SignedIn ? 220 : 0;
 
-    public bool CanChangeIdentity => SignedIn && !Playing && !_busy && !LauncherUpdateBusy;
+    public bool CanChangeIdentity => SignedIn && !Playing && !_busy && !LauncherUpdateBusy && !DedicatedActive;
 
     public bool ShowWelcome => !SignedIn && _pending is null && !_loginOpen;
 
@@ -241,7 +241,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Re-opens the game picker (top bar "change").</summary>
     public void ChangeGame()
     {
-        if (Playing || _busy) return;
+        if (Playing || _busy || DedicatedActive) return;
         OpenHome();
         if (_session is not null)
         {
@@ -252,7 +252,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Re-opens the profile picker (top bar "change").</summary>
     public void ChangeProfile()
     {
-        if (Playing || _busy) return;
+        if (Playing || _busy || DedicatedActive) return;
         OpenHome();
         if (_gate.Game is not null)
         {
@@ -285,7 +285,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void SignOut()
     {
-        if (Playing || _busy) return;
+        // A dedicated lobby is stopped first (its gate leave needs this session's tokens): CanChangeIdentity hides sign-out meanwhile.
+        if (Playing || _busy || DedicatedActive) return;
         _nativeFlow.Clear();
         LeaveAccount();
         _onMods = _onSetup = _onBugReport = _loginOpen = false;
@@ -463,6 +464,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        // OD-109: the dedicated lobby's DELETE and gate leave start first and run beside the play
+        // session's own cleanup; both finish (bounded) before the session's token manager is disposed.
+        var dedicated = _dedicated is { Active: true } host ? Task.Run(host.StopAsync) : Task.CompletedTask;
         _integrityLifetime.Cancel();
         DisposeOnlineStatus();
         _updateStop.Cancel();
@@ -479,9 +483,18 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             // it ended with an error: nothing more to wait for
         }
+        try
+        {
+            dedicated.Wait(TimeSpan.FromSeconds(12));
+        }
+        catch (AggregateException)
+        {
+            // the stop is bounded and logged; the world lapses 45 s after its last announce
+        }
         _signIn?.Cancel();
         _nativeFlow.Dispose();
         LeaveAccount();
         _session?.Dispose();
+        ReleaseInstanceLock();
     }
 }

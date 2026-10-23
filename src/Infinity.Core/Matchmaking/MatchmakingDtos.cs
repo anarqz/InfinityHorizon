@@ -83,6 +83,13 @@ public record WorldView : World
 
     /// <summary>Only to the host of a <c>friends</c> or <c>private</c> world: 8 digits.</summary>
     public string? Code { get; init; }
+
+    /// <summary>
+    /// OD-109: hosted by a dedicated lobby (a launcher with no game). Its host is not a player:
+    /// <see cref="World.Players"/> and <see cref="World.MaxPlayers"/> count guests only. Servers without
+    /// dedicated support omit it, so it is not <c>required</c> here (absent reads as false).
+    /// </summary>
+    public bool Dedicated { get; init; }
 }
 
 public sealed record ListViewer

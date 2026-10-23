@@ -33,6 +33,8 @@ public partial class MainWindow : Window
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
+        // One launcher per state folder (launcher.lock): a second one cannot host a dedicated lobby (OD-109).
+        _ = vm.AcquireInstanceLockAsync();
         ContentRendered += async (_, _) => await vm.ConfirmUpdatedStartupAsync(cli);
         var azimuth = Array.IndexOf(cli, "--azimuth") is var i and >= 0 && i + 1 < cli.Length ? cli[i + 1] : Environment.GetEnvironmentVariable("FI_AZIMUTH");
         // OD-46: --azimuth / FI_AZIMUTH, else the saved choice, the launcher's folder, then a look around.
@@ -197,6 +199,47 @@ public partial class MainWindow : Window
     private void OnSaveIni(object sender, RoutedEventArgs e) => _vm.SaveIni();
 
     private void OnToggleModOptions(object sender, RoutedEventArgs e) => _vm.ToggleModOptions();
+
+    // OD-109: the dedicated lobby pane. Opening focuses its first field (or Stop while running) for the
+    // controller; Escape (the controller's B) closes it and returns focus to the globe.
+    private void OnToggleLobbyPane(object sender, RoutedEventArgs e)
+    {
+        _vm.ToggleLobbyPane();
+        if (_vm.ShowLobbyPane)
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_vm.DedicatedActive) LobbyStopButton.Focus();
+                else LobbyNameBox.Focus();
+            }, System.Windows.Threading.DispatcherPriority.Input);
+        else LobbyButton.Focus();
+    }
+
+    private void OnLobbyPaneKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape || !_vm.ShowLobbyPane) return;
+        _vm.CloseLobbyPane();
+        LobbyButton.Focus();
+        e.Handled = true;
+    }
+
+    private async void OnStartLobby(object sender, RoutedEventArgs e)
+    {
+        await _vm.StartLobbyAsync();
+        // After the bindings have shown or hidden the buttons.
+        _ = Dispatcher.BeginInvoke(() => { if (_vm.DedicatedActive && _vm.ShowLobbyPane) LobbyStopButton.Focus(); },
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private async void OnStopLobby(object sender, RoutedEventArgs e)
+    {
+        await _vm.StopLobbyAsync();
+        _ = Dispatcher.BeginInvoke(() => { if (_vm.ShowLobbyPane) LobbyCreateButton.Focus(); },
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnLobbyFewer(object sender, RoutedEventArgs e) => _vm.LobbyFewer();
+
+    private void OnLobbyMore(object sender, RoutedEventArgs e) => _vm.LobbyMore();
 
     private void OnNavSetup(object sender, RoutedEventArgs e) => _vm.OpenSetup();
 

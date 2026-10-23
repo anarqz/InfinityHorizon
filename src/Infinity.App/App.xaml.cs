@@ -21,6 +21,8 @@ public partial class App : Application
         // A fault in one action never takes the launcher (and the play session it supervises) down:
         // it is written to launcher.log and the shell keeps running.
         DispatcherUnhandledException += OnDispatcherUnhandled;
+        // OD-109: a Windows sign-out or shutdown closes the dedicated lobby (DELETE, then the gate leave), bounded.
+        SessionEnding += (_, _) => (Current?.MainWindow?.DataContext as ShellViewModel)?.StopDedicatedForExit(TimeSpan.FromSeconds(4));
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             Log("unobserved task: " + e.Exception);

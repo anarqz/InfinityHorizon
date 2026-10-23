@@ -185,6 +185,7 @@ public sealed partial class ShellViewModel
             RefreshHook();
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
+            _playWorlds = null;
             Changed(string.Empty);
             if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
                 await RefreshIntegrityAutomaticallyAsync();

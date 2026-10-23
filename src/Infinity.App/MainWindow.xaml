@@ -23,7 +23,8 @@
     </Grid.ColumnDefinitions>
 
     <!-- Sidebar: the wordmark, HOME, AZIMUTH, MODS, NEWS, HELP ... ACCOUNT, DONATE, server, version.
-         Worlds live only in the in-game overlay (OD-54): the launcher has no Servers page. -->
+         Players browse and join worlds only in the in-game overlay (OD-54): the launcher has no Servers
+         page. The one exception is the admins' dedicated lobby (OD-109): the top bar's globe and its pane. -->
     <Grid Grid.Row="1" Grid.Column="0" Background="{StaticResource InfinitySidebar}" IsEnabled="{Binding Idle}"
           Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
       <Image Source="{StaticResource BrandLines}" Stretch="UniformToFill" VerticalAlignment="Bottom" Height="150"
@@ -133,6 +134,20 @@
               <TextBlock Text="{Binding ProfileLabel}" FontWeight="Bold" VerticalAlignment="Center" />
               <Button Content="{Binding S[shell.change]}" Style="{StaticResource LinkButton}" Click="OnChangeProfile" />
             </StackPanel>
+            <!-- OD-109: the dedicated lobby, top right (admins). A Path, not an icon font: Proton has none. -->
+            <Button x:Name="LobbyButton" DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Margin="14,0,0,0" Padding="4"
+                    Click="OnToggleLobbyPane" VerticalAlignment="Center"
+                    ToolTip="{Binding S[lobby.open]}" AutomationProperties.Name="{Binding S[lobby.open]}"
+                    Visibility="{Binding ShowLobbyButton, Converter={StaticResource Visible}}">
+              <Grid Width="22" Height="22">
+                <Path Stretch="Uniform" StrokeThickness="1.6" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      Data="M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 Z M2,12 L22,12 M12,2 C7.5,6.5 7.5,17.5 12,22 M12,2 C16.5,6.5 16.5,17.5 12,22 M4,7 L20,7 M4,17 L20,17" />
+                <Ellipse Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-2,-2,0"
+                         Fill="{StaticResource InfinityAccent}" Effect="{StaticResource InfinityGlow}"
+                         Visibility="{Binding DedicatedActive, Converter={StaticResource Visible}}" />
+              </Grid>
+            </Button>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                         IsEnabled="{Binding CanChangeIdentity}"
                         Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
@@ -140,6 +155,105 @@
                          VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
               <Button Content="{Binding S[shell.exit]}" Style="{StaticResource LinkButton}" Click="OnSignOut" />
             </StackPanel>
+          </DockPanel>
+        </Border>
+
+        <!-- OD-109: the dedicated lobby pane, modelled on the Mods options sidebar. Escape (B) closes it. -->
+        <Border x:Name="LobbyPane" DockPanel.Dock="Right" Width="400" Padding="22,22,8,16" Background="{StaticResource InfinitySurface}"
+                BorderBrush="#3365184D" BorderThickness="1,0,0,0" KeyDown="OnLobbyPaneKey"
+                Visibility="{Binding ShowLobbyPane, Converter={StaticResource Visible}}">
+          <DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,12,0">
+              <Button DockPanel.Dock="Right" Content="{Binding S[lobby.close]}" Style="{StaticResource LinkButton}"
+                      Click="OnToggleLobbyPane" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding S[lobby.title]}" FontSize="20" FontWeight="Bold" />
+            </DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{Binding S[lobby.subtitle]}" Style="{StaticResource PageSubtitle}" Margin="0,2,12,0" />
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+              <Button x:Name="LobbyCreateButton" Content="{Binding S[lobby.create]}" Click="OnStartLobby" IsEnabled="{Binding CanCreateLobby}"
+                      Style="{StaticResource AccentButtonStyle}" Visibility="{Binding DedicatedActive, Converter={StaticResource Hidden}}" />
+              <Button x:Name="LobbyStopButton" Content="{Binding S[lobby.stop]}" Click="OnStopLobby" IsEnabled="{Binding CanStopLobby}"
+                      Visibility="{Binding DedicatedActive, Converter={StaticResource Visible}}" />
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+              <StackPanel Margin="0,0,12,0">
+                <TextBlock Text="{Binding LobbyHint}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}" Margin="0,0,0,10"
+                           Visibility="{Binding HasLobbyHint, Converter={StaticResource Visible}}" />
+                <StackPanel IsEnabled="{Binding CanEditLobby}">
+                  <TextBlock Text="{Binding S[lobby.name]}" Style="{StaticResource SectionTag}" />
+                  <TextBox x:Name="LobbyNameBox" Text="{Binding LobbyName, UpdateSourceTrigger=PropertyChanged}" MaxLength="48" Margin="0,6,0,14" />
+                  <TextBlock Text="{Binding S[lobby.audience]}" Style="{StaticResource SectionTag}" />
+                  <WrapPanel Margin="0,6,0,14">
+                    <RadioButton Content="{Binding S[lobby.audience_everyone]}" IsChecked="{Binding LobbyAudienceEveryone}" GroupName="LobbyAudience" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.audience_supporters]}" IsChecked="{Binding LobbyAudienceSupporters}" GroupName="LobbyAudience" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.audience_friends]}" IsChecked="{Binding LobbyAudienceFriends}" GroupName="LobbyAudience" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.audience_private]}" IsChecked="{Binding LobbyAudiencePrivate}" GroupName="LobbyAudience" Margin="0,0,14,6" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding S[lobby.max_players]}" Style="{StaticResource SectionTag}" />
+                  <StackPanel Orientation="Horizontal" Margin="0,6,0,2">
+                    <Button Content="-" Click="OnLobbyFewer" IsEnabled="{Binding CanLobbyFewer}" MinWidth="36" AutomationProperties.Name="-" />
+                    <TextBlock Text="{Binding LobbyMaxPlayersText}" FontSize="18" FontWeight="Bold" MinWidth="44" TextAlignment="Center" VerticalAlignment="Center" />
+                    <Button Content="+" Click="OnLobbyMore" IsEnabled="{Binding CanLobbyMore}" MinWidth="36" AutomationProperties.Name="+" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding S[lobby.max_players_hint]}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,0,0,14" />
+                  <TextBlock Text="{Binding S[lobby.latency]}" Style="{StaticResource SectionTag}" />
+                  <WrapPanel Margin="0,6,0,14">
+                    <RadioButton Content="{Binding S[lobby.latency_any]}" IsChecked="{Binding LobbyLatencyAny}" GroupName="LobbyLatency" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.latency_150]}" IsChecked="{Binding LobbyLatency150}" GroupName="LobbyLatency" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.latency_100]}" IsChecked="{Binding LobbyLatency100}" GroupName="LobbyLatency" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.latency_60]}" IsChecked="{Binding LobbyLatency60}" GroupName="LobbyLatency" Margin="0,0,14,6" />
+                  </WrapPanel>
+                  <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding S[lobby.races]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,4" />
+                    <TextBlock Grid.Column="1" Text="{Binding LobbyRaces}" FontWeight="Bold" />
+                    <TextBlock Grid.Row="1" Text="{Binding S[lobby.mode]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,0" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LobbyMode}" FontWeight="Bold" />
+                  </Grid>
+                </StackPanel>
+                <Border Style="{StaticResource Card}" Margin="0,14,0,0" Padding="16,12">
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding S[lobby.status]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,4" />
+                    <TextBlock Grid.Column="1" Text="{Binding LobbyStateText}" FontWeight="Bold" AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock Grid.Row="1" Text="{Binding S[lobby.code]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,4"
+                               Visibility="{Binding ShowLobbyCode, Converter={StaticResource Visible}}" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LobbyCode}" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding ShowLobbyCode, Converter={StaticResource Visible}}" />
+                    <TextBlock Grid.Row="2" Text="{Binding S[lobby.players]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,4" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding LobbyPlayers}" />
+                    <TextBlock Grid.Row="3" Text="{Binding S[lobby.uptime]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,0" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding LobbyUptime}" />
+                  </Grid>
+                </Border>
+                <Border Margin="0,10,0,0" Padding="12,8" CornerRadius="8" Background="{StaticResource InfinityDangerSurface}"
+                        BorderBrush="{StaticResource InfinityDangerBorder}" BorderThickness="1"
+                        Visibility="{Binding HasLobbyError, Converter={StaticResource Visible}}">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[lobby.last_error]}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource InfinityRose}" />
+                    <TextBlock Text="{Binding LobbyLastError}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" AutomationProperties.LiveSetting="Assertive" />
+                  </StackPanel>
+                </Border>
+                <TextBlock Text="{Binding S[lobby.running_hint]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,12,0,0" />
+                <TextBlock Text="{Binding S[lobby.close_hint]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0" />
+              </StackPanel>
+            </ScrollViewer>
           </DockPanel>
         </Border>
 
