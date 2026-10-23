@@ -35,6 +35,7 @@ int sql_authorize(void* context, int action, const char* table, const char* deta
     if (action == SQLITE_SELECT) return SQLITE_OK;
     if (action != SQLITE_READ && action != SQLITE_UPDATE && action != SQLITE_INSERT && (r.data || action != SQLITE_DELETE)) return SQLITE_DENY;
     if (!table) return SQLITE_DENY;
+    if (r.data && action == SQLITE_READ && sqlite3_strnicmp(table, "sqlite_", 7) && sqlite3_strnicmp(table, "_infinity", 9)) return SQLITE_OK;
     for (const auto& allowed : r.tables) if (sqlite3_stricmp(table, allowed.c_str()) == 0) return SQLITE_OK;
     return SQLITE_DENY;
 }
@@ -70,6 +71,23 @@ bool utf8_text(const std::vector<uint8_t>& bytes) {
         i += extra + 1;
     }
     return true;
+}
+std::set<std::string> foreign_key_violations(sqlite3* db) {
+    std::set<std::string> rows; sqlite3_stmt* check = nullptr;
+    if (sqlite3_prepare_v2(db, "PRAGMA foreign_key_check", -1, &check, nullptr) != SQLITE_OK) throw std::runtime_error("foreign keys failed");
+    int step;
+    while ((step = sqlite3_step(check)) == SQLITE_ROW) {
+        std::string row;
+        for (int column = 0; column < 4; ++column) {
+            auto value = sqlite3_column_text(check, column);
+            row += value ? reinterpret_cast<const char*>(value) : "\x01"; row += '\x1f';
+        }
+        if (rows.size() >= 100000) { sqlite3_finalize(check); throw std::runtime_error("foreign keys failed"); }
+        rows.insert(std::move(row));
+    }
+    sqlite3_finalize(check);
+    if (step != SQLITE_DONE) throw std::runtime_error("foreign keys failed");
+    return rows;
 }
 bool table_exists(sqlite3* db, const std::string& table) {
     sqlite3_stmt* query = nullptr;
@@ -126,6 +144,8 @@ void apply_registered_sql(const std::filesystem::path& input, const std::filesys
     sql_exec(target.handle, "PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON;");
     std::vector<uint8_t> transcript;
     auto append = [&](const std::string& s) { uint32_t size = static_cast<uint32_t>(s.size()); auto p = reinterpret_cast<uint8_t*>(&size); transcript.insert(transcript.end(), p, p + 4); transcript.insert(transcript.end(), s.begin(), s.end()); };
+    const auto baseline_violations = foreign_key_violations(target.handle);
+    append("foreign-key-baseline"); append(std::to_string(baseline_violations.size()));
     for (auto& r : sql_registrations) {
         if (r->data && r->script.empty()) continue;
         append(r->data ? "data" : "mod"); append(r->owner.name); append(std::to_string(r->tables.size()));
@@ -150,9 +170,8 @@ void apply_registered_sql(const std::filesystem::path& input, const std::filesys
     if (sqlite3_prepare_v2(target.handle, "PRAGMA integrity_check", -1, &check, nullptr) != SQLITE_OK) throw std::runtime_error("integrity failed");
     bool ok = sqlite3_step(check) == SQLITE_ROW && std::strcmp(reinterpret_cast<const char*>(sqlite3_column_text(check, 0)), "ok") == 0;
     sqlite3_finalize(check); if (!ok) throw std::runtime_error("integrity failed");
-    if (sqlite3_prepare_v2(target.handle, "PRAGMA foreign_key_check", -1, &check, nullptr) != SQLITE_OK) throw std::runtime_error("foreign keys failed");
-    ok = sqlite3_step(check) == SQLITE_DONE; sqlite3_finalize(check);
-    if (!ok) throw std::runtime_error("foreign keys failed");
+    for (auto& row : foreign_key_violations(target.handle))
+        if (!baseline_violations.contains(row)) throw std::runtime_error("foreign keys failed");
     hash_bytes(transcript.data(), transcript.size(), sql_hash);
 }
 void prepare_session_database(ParsedPlan& plan, const std::filesystem::path& folder) {
