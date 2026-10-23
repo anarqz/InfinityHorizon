@@ -351,6 +351,7 @@ struct ParsedPlan {
     std::array<std::wstring, INFINITY_MOD_MAX_COUNT> binary, settings;
     std::array<InfinityModSelectionV1, INFINITY_MOD_MAX_COUNT> mods{};
     std::array<std::vector<std::string>, INFINITY_MOD_MAX_COUNT> tables;
+    std::array<std::array<uint8_t, 32>, INFINITY_MOD_MAX_COUNT> sql{};
     uint8_t baseline_hash[32]{}, prepared_hash[32]{}, sql_hash[32]{};
     std::vector<infinity_mod::Readiness> readiness;
     uint32_t count = 0;
@@ -359,8 +360,8 @@ struct ParsedPlan {
 };
 void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
     PlanReader reader{bytes}; char magic[8]; reader.read(magic, 8);
-    if (!std::memcmp(magic, "FIMOD003", 8)) {
-        plan.version = 3; reader.read(plan.nonce, 16);
+    if (!std::memcmp(magic, "FIMOD003", 8) || !std::memcmp(magic, "FIMOD004", 8)) {
+        plan.version = magic[7] == '4' ? 4 : 3; reader.read(plan.nonce, 16);
         uint8_t any = 0; for (auto b : plan.nonce) any |= b;
         if (!any) throw std::runtime_error("missing launch nonce");
     } else if (!std::memcmp(magic, "FIMOD002", 8)) {
@@ -397,6 +398,16 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
             if (table.empty() || table.size() > 64 || table.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos
                 || !_strnicmp(table.c_str(), "sqlite_", 7) || !_strnicmp(table.c_str(), "_infinity", 9)) throw std::runtime_error("invalid table scope");
             plan.tables[i].push_back(table);
+        }
+        if (plan.version < 4) continue;
+        reader.read(plan.sql[i].data(), 32);
+        const bool data = none(plan.binary[i].c_str()), sql = nonzero(plan.sql[i].data());
+        if (sql && (!data || plan.tables[i].empty() || database_count != 1)) throw std::runtime_error("invalid data SQL");
+        if (data && !plan.tables[i].empty() && !sql) throw std::runtime_error("data tables without SQL");
+        for (uint32_t j = 0; j < i; ++j) {
+            if (plan.mods[i].dependency_mask & (1u << j)) continue;
+            for (auto& a : plan.tables[i]) for (auto& b : plan.tables[j])
+                if (!_stricmp(a.c_str(), b.c_str())) throw std::runtime_error("table overlap without dependency");
         }
     }
     if (reader.at != bytes.size()) throw std::runtime_error("trailing plan data");
