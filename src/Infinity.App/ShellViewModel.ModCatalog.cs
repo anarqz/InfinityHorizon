@@ -69,6 +69,7 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binds to instance properties")]
     public bool DevelopmentMods
     {
         get
