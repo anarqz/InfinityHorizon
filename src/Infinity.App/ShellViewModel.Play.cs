@@ -138,17 +138,16 @@ public sealed partial class ShellViewModel
         if (!await RefreshLauncherPolicyAsync()) return;
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var futureSessionId = Guid.CreateVersion7().ToString();
-        await CheckIntegrityAsync(futureSessionId);
-        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
-            || !CanPlay || !IntegrityReady || _integrity is null)
-        { ConfigurationMessage(IntegrityStatus, error: true, integrity: true); return; }
+        // OD-113: only a Supporter + Hardcore profile is checked, silently; any other declares no car database.
+        var (integrityProceed, integrity) = await IntegrityForPlayAsync(futureSessionId);
+        if (!integrityProceed || !ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
+            || !CanPlay) return;
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
         if (profile is null)
         {
             return;
         }
-        var integrity = _integrity!;
-        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { ConfigurationMessage(S["integrity.inconclusive"], error: true, integrity: true); return; }
+        var carDb = integrity?.CarDbSha256 ?? string.Empty;
         var development = DevServer;
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
@@ -193,8 +192,8 @@ public sealed partial class ShellViewModel
                     ? matchmakingOrigin.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped) : S["connection.unavailable"]),
             CarDbSha256 = carDb,
             InitialSessionId = futureSessionId,
-            OnlineAccessLost = integrity.Revoke,
-            PrepareAdmission = async (id, ct) =>
+            OnlineAccessLost = integrity is null ? null : integrity.Revoke,
+            PrepareAdmission = integrity is null ? null : async (id, ct) =>
             {
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
                 await integrity.PrepareAdmissionAsync(id, ct).ConfigureAwait(false);
@@ -458,12 +457,7 @@ public sealed partial class ShellViewModel
                 SetStatus(S["updater.session_required"]);
                 break;
             case SupervisorEvent.Error content when content.Message is ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged or ErrorCodes.ContentPolicyUnavailable:
-                _integrity?.Revoke();
-                VerificationCache.Invalidate();
-                _integrityFailed = true;
-                _integrityStatus = S[content.Message == ErrorCodes.ContentPolicyUnavailable ? "integrity.policy_unavailable"
-                    : content.Message == ErrorCodes.ContentIncompatible ? "integrity.incompatible" : "integrity.inconclusive"];
-                ConfigurationMessage(_integrityStatus, error: true, integrity: true);
+                IntegrityRefused(content.Message, content.DuringAdmission); // OD-113: a mismatch is shown; any other refusal is re-checked silently
                 SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error { DuringAdmission: true }:
