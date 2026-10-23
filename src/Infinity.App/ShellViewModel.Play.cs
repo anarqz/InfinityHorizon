@@ -11,6 +11,7 @@ using Infinity.Core.Shell;
 using Infinity.Core.Supervisor;
 using Infinity.Core.Windows;
 using Infinity.Core.Online;
+using Infinity.Core.Mods;
 
 namespace Infinity.App;
 
@@ -81,7 +82,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModRecoveryRequired;
 
     public string? PlayStatus => _playStatus;
 
@@ -103,6 +104,13 @@ public sealed partial class ShellViewModel
             return;
         }
         var startingSession = _session;
+        try
+        {
+            ValidateManagedMods();
+            if (ManagedMods().HasEnabledNativeMods) { Message = S["mods.offline_only"]; return; }
+        }
+        catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException)
+        { Message = S["mods.requirements_unmet"]; return; }
         var startingInstall = _install;
         var startingGame = _gate.Game;
         if (!await RefreshOnlineServiceForPlayAsync()) return;
@@ -129,6 +137,7 @@ public sealed partial class ShellViewModel
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
+            NativeDllOverrides = ManagedMods().NativeDllOverrides(),
             Saves = SessionSavesFor(profile),
             Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity),
             OnlineActivity = onlineActivity,
@@ -162,8 +171,6 @@ public sealed partial class ShellViewModel
             handoff => new WindowsPipe(PipeServer.Create(handoff.PipeName)),
             e => _ui.Post(_ => Render(e), null), _commands.Reader,
             uiPipes: handoff => new WindowsPipe(PipeServer.Create(handoff.UiPipeName)));
-        // OD-45: ExtraOptions' switches that conflict with Infinity stay off.
-        EnforceModLocks();
         // BUG-0001: the online session's drivatar caches never reach offline play.
         var caches = SwitchCaches(_install.Root, online: true);
         _playOnlineActivity = onlineActivity;

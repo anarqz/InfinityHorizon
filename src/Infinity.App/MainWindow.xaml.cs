@@ -29,6 +29,7 @@ public partial class MainWindow : Window
         _ = new GamepadNavigator(this, () => vm.Playing);
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
         vm.UpdateRestartRequested += () => Application.Current.Shutdown();
+        Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
@@ -41,6 +42,12 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             if (await vm.RecoverInterruptedUpdateAsync(cli)) return;
+            if (vm.DevelopmentMods && cli.Contains("--mods", StringComparer.Ordinal))
+            {
+                await vm.VerifyBuildOriginAsync();
+                await vm.OpenDevelopmentModsAsync(azimuth);
+                return;
+            }
             var onlineCheck = vm.CheckOnlineStatusAsync(manual: false);
             // Production bootstrap respects global closure before requesting discovery.
             if (config.Production) await onlineCheck;
@@ -192,13 +199,20 @@ public partial class MainWindow : Window
 
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
 
-    private async void OnInstallEo(object sender, RoutedEventArgs e) => await _vm.InstallEoAsync();
+    private async void OnModdedOffline(object sender, RoutedEventArgs e) => await _vm.PlayModdedOfflineAsync();
+    private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
+    private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);
+    private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
+    private void OnSelectedModOptions(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) _vm.SelectMod(card); }
+    private void OnCloseModPanel(object sender, RoutedEventArgs e) => _vm.CloseModPanel();
+    private void OnClearModSearch(object sender, RoutedEventArgs e) => _vm.ModSearch = "";
+    private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
+    private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
 
-    private async void OnCheckMods(object sender, RoutedEventArgs e) => await _vm.CheckModsAsync();
+
 
     private void OnSaveIni(object sender, RoutedEventArgs e) => _vm.SaveIni();
 
-    private void OnToggleModOptions(object sender, RoutedEventArgs e) => _vm.ToggleModOptions();
 
     // OD-109: the dedicated lobby pane. Opening focuses its first field (or Stop while running) for the
     // controller; Escape (the controller's B) closes it and returns focus to the globe.

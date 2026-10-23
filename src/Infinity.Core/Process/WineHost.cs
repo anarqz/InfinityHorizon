@@ -3,11 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Infinity.Core.Process;
 
-/// <summary>
-/// Running under Wine / Proton (SteamOS, Linux): ntdll exports <c>wine_get_version</c>. There a
-/// DLL next to azimuth.exe is not loaded over the built-in one unless WINEDLLOVERRIDES says so,
-/// so ExtraOptions' <c>winmm.dll</c> needs <c>winmm=n,b</c> in the game's environment.
-/// </summary>
+/// <summary>Wine detection and manifest-selected native DLL overrides.</summary>
 public static class WineHost
 {
     public static bool Detected => How is not null;
@@ -16,34 +12,36 @@ public static class WineHost
     public static string? How { get; } = Detect();
 
     /// <summary>
-    /// The game's <c>WINEDLLOVERRIDES</c> with <c>winmm=n,b</c> added to <paramref name="inherited"/>
+    /// The game's <c>WINEDLLOVERRIDES</c> with <c>native-first</c> added to <paramref name="inherited"/>
     /// (Proton's own entries kept); null when nothing needs to change.
     /// </summary>
-    public static string? WithWinmm(string? inherited)
+    public static string? WithNativeDll(string? inherited, string module)
     {
+        ValidateModule(module);
         var entries = (inherited ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (entries.Any(e => e.StartsWith("winmm=", StringComparison.OrdinalIgnoreCase) || e.Split('=')[0].Split(',').Any(n => n.Equals("winmm", StringComparison.OrdinalIgnoreCase))))
+        if (entries.Any(e => e.StartsWith(module + "=", StringComparison.OrdinalIgnoreCase) || e.Split('=')[0].Split(',').Any(n => n.Equals(module, StringComparison.OrdinalIgnoreCase))))
         {
-            return null; // the player (or Proton) already decided for winmm
+            return null; // the player (or Proton) already decided for the module
         }
-        return string.Join(';', entries.Append("winmm=n,b"));
+        return string.Join(';', entries.Append(module + "=n,b"));
     }
 
     /// <summary>The per-application override key Wine reads when azimuth.exe loads (HKCU, the prefix's registry).</summary>
     public const string AppDefaultsKey = @"Software\Wine\AppDefaults\azimuth.exe\DllOverrides";
 
-    /// <summary>What the launcher writes for winmm: ExtraOptions' DLL first, Wine's own if it is gone.</summary>
+    /// <summary>What the launcher writes for the module: the selected proxy DLL first, Wine's own if it is gone.</summary>
     public const string NativeFirst = "native,builtin";
 
     /// <summary>
     /// SAURON (2026-10-19): a CreateProcess environment block does not reach Wine's load-order code
-    /// in the child, so WINEDLLOVERRIDES alone never loads ExtraOptions' winmm.dll. The per-app
-    /// registry override does, and only for azimuth.exe: set when <paramref name="want"/> (winmm.dll
+    /// in the child, so WINEDLLOVERRIDES alone never loads the selected proxy DLL. The per-app
+    /// registry override does, and only for azimuth.exe: set when <paramref name="want"/> (the proxy DLL
     /// is next to azimuth.exe), removed when not, if it is the launcher's own value. Returns what
     /// happened, for the log.
     /// </summary>
-    public static string EnsureWinmmOverride(bool want)
+    public static string EnsureNativeDllOverride(string module, bool want)
     {
+        ValidateModule(module);
         if (!OperatingSystem.IsWindows())
         {
             return "not windows";
@@ -51,19 +49,19 @@ public static class WineHost
         try
         {
             using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(AppDefaultsKey, writable: true);
-            var now = key.GetValue("winmm") as string;
+            var now = key.GetValue(module) as string;
             if (want)
             {
                 if (string.Equals(now, NativeFirst, StringComparison.OrdinalIgnoreCase))
                 {
                     return "already";
                 }
-                key.SetValue("winmm", NativeFirst, Microsoft.Win32.RegistryValueKind.String);
+                key.SetValue(module, NativeFirst, Microsoft.Win32.RegistryValueKind.String);
                 return now is null ? "set" : $"set (was {now})";
             }
             if (string.Equals(now, NativeFirst, StringComparison.OrdinalIgnoreCase))
             {
-                key.DeleteValue("winmm", throwOnMissingValue: false);
+                key.DeleteValue(module, throwOnMissingValue: false);
                 return "removed";
             }
             return now is null ? "none" : $"left ({now}, not ours)";
@@ -74,6 +72,10 @@ public static class WineHost
         }
     }
 
+    private static void ValidateModule(string module)
+    {
+        if (module.Length is < 1 or > 64 || module.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')) throw new ArgumentException("invalid native module", nameof(module));
+    }
     private static string? Detect()
     {
         if (!OperatingSystem.IsWindows())

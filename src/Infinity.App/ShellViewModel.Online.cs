@@ -24,7 +24,7 @@ public sealed partial class ShellViewModel
     public bool CanStartOnlineAccount => OnlineServiceAllowsPlay && !Busy && !LauncherUpdateBusy;
     public bool OnlineServicePaused => _onlinePause is not null;
     public bool CanCheckOnlineStatus => !_onlineChecking && OnlineRetryRemaining <= TimeSpan.Zero;
-    public bool ShowOnlineStatusPage => (!OnlineServiceAllowsPlay || _onlineViewing) && !Playing && !_onlineSupport
+    public bool ShowOnlineStatusPage => (!OnlineServiceAllowsPlay || _onlineViewing) && !Playing && !_onlineSupport && !(DevelopmentMods && ShowMods)
         && !_updateAwaitingCommit && _launcherUpdatePhase is not (UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying or UpdatePhase.RecoveryRequired);
     public bool ShowOnlineStatusBanner => !OnlineServiceAllowsPlay && !ShowOnlineStatusPage;
     public string OnlineServiceTitle => S[_onlinePause?.Reason switch
