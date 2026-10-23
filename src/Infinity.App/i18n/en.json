@@ -414,7 +414,6 @@
  "worlds.title": "Worlds",
  "mods.adopt": "Manage existing installation",
  "mods.unmanaged": "Existing installation",
- "mods.requirements_unmet": "Check dependencies and installation files",
  "mods.offline_play": "Play offline with selected mods",
  "mods.offline_only": "Native mods currently require an offline session.",
  "mods.runtime_failed": "The mod session could not start or ended unexpectedly.",

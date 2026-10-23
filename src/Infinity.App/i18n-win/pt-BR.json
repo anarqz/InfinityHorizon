@@ -470,7 +470,7 @@
   "mods.badge_review": "Revisão necessária",
   "mods.badge_attention": "Requer atenção",
   "mods.folder_short": "Pasta…",
-  "mods.catalog_count": "{count} mods · Catálogo de desenvolvimento",
+  "mods.catalog_count": "{count} mods",
   "mods.adopt": "Gerenciar instalação existente",
   "mods.unmanaged": "Instalação existente",
   "mods.offline_play": "Jogar offline com os mods selecionados",

@@ -470,7 +470,7 @@
   "mods.badge_review": "Review required",
   "mods.badge_attention": "Needs attention",
   "mods.folder_short": "Folder…",
-  "mods.catalog_count": "{count} mods · Development catalog",
+  "mods.catalog_count": "{count} mods",
   "mods.adopt": "Manage existing installation",
   "mods.unmanaged": "Existing installation",
   "mods.offline_play": "Play offline with selected mods",

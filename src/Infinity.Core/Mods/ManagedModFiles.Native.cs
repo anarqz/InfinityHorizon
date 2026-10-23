@@ -185,12 +185,21 @@ public sealed partial class ManagedModFiles
         if (!Directory.Exists(BackupRoot) || !RecoveryRequiredHere && !Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Any()) return ModLaunchPreparation.None;
         if (RecoveryRequiredHere) throw new ModException("interrupted mod operation needs recovery", ModErrors.Recovery);
         var warnings = new List<string>();
+        var enabled = new List<ModManifest>();
         using (var gate = Lock(allowRecovery: true))
         {
-            foreach (var manifest in InstalledManifests())
+            foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
             {
-                var receipt = Receipt(manifest)!;
+                var id = Path.GetFileName(path)[..^".receipt.json".Length];
+                ManagedModReceipt receipt; ModManifest manifest;
+                try
+                {
+                    receipt = ReadReceipt(id) ?? throw new ModException("receipt vanished", ModErrors.Recovery);
+                    manifest = SnapshotFor(receipt);
+                }
+                catch (Exception error) when (IsStateError(error)) { warnings.Add(id + ": unreadable " + Code(error)); continue; } // shown on Mods, never a Play blocker
                 if (!receipt.Enabled) continue;
+                enabled.Add(manifest);
                 if (DriftOf(receipt).Count > 0) warnings.Add(manifest.Id + ": drift");
                 if (manifest.ConfigPath is not { } config || !File.Exists(Target("azimuth", config))) continue;
                 var settings = ReadSettings(manifest);
@@ -201,8 +210,9 @@ public sealed partial class ManagedModFiles
                 Execute(new(manifest.Id + ".receipt.json", receipt, [new("azimuth", config, settings.SourceHash, Store(after))]), null);
             }
         }
+        if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))
+            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.IsNative), warnings);
         ReconcileWineOverrides();
-        var enabled = InstalledManifests().Where(m => Receipt(m) is { Enabled: true }).ToArray();
         return new(NativeDllOverrides(), enabled.Any(m => m.IsNative), warnings);
     }
 }
