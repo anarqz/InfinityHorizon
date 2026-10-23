@@ -319,6 +319,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _nativeFlow.Clear();
         _session = session;
         LoadPendingCrash();
+        if (_install is not null && !_catalogLoaded) _ = LoadModCatalogQuietlyAsync(); // OD-45: updates checked when the launcher opens
         _loginOpen = false;
         LeaveAccount();
         _onMods = _onSetup = _onBugReport = false;

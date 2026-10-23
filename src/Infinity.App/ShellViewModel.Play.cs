@@ -82,7 +82,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModRecoveryRequired;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked;
 
     public string? PlayStatus => _playStatus;
 
@@ -104,13 +104,26 @@ public sealed partial class ShellViewModel
             return;
         }
         var startingSession = _session;
-        try
+        // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
+        // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
+        ModLaunchPreparation mods;
+        try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
+        catch (ModHardcoreException error)
         {
-            ValidateManagedMods();
-            if (ManagedMods().HasEnabledNativeMods) { Message = S["mods.offline_only"]; return; }
+            // OD-112 follow-up: refused before anything is written; the Mods page offers Disable.
+            Message = HardcoreRefusal(error.Mods.Select(m => m.Text("name", S.Locale)));
+            await RefreshModsAsync(); return;
         }
-        catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException)
-        { Message = S["mods.requirements_unmet"]; return; }
+        catch (ModException error) when (error.Code == ModErrors.Recovery)
+        { Message = S["mods.play_blocked"]; await RefreshModsAsync(); return; }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error))
+        {
+            Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : ""));
+            if (_modHealth.AnyEnabled) { Message = S["mods.prepare_failed"]; await RefreshModsAsync(); return; }
+            mods = ModLaunchPreparation.None;
+        }
+        if (mods.HasEnabledNative) { Message = S["mods.offline_only"]; return; }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var startingInstall = _install;
         var startingGame = _gate.Game;
         if (!await RefreshOnlineServiceForPlayAsync()) return;
@@ -137,7 +150,7 @@ public sealed partial class ShellViewModel
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
-            NativeDllOverrides = ManagedMods().NativeDllOverrides(),
+            NativeDllOverrides = mods.DllOverrides,
             Saves = SessionSavesFor(profile),
             Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity),
             OnlineActivity = onlineActivity,
@@ -193,6 +206,7 @@ public sealed partial class ShellViewModel
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
+            RefreshMods();
             Changed(string.Empty);
             if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
                 await RefreshIntegrityAutomaticallyAsync();

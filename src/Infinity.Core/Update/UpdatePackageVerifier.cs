@@ -27,6 +27,8 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
         "i18n/en.json", "i18n/pt-BR.json", "i18n-win/en.json", "i18n-win/pt-BR.json", "LICENSE", "NOTICE",
         "licenses/BouncyCastle-LICENSE.md", "licenses/fh2-mods-LICENSE.txt", "licenses/Hook-NOTICE.md", "licenses/ImGui-LICENSE.txt",
         "licenses/MinHook-LICENSE.txt", "licenses/Selawik-LICENSE.txt", "licenses/FluentSystemIcons-LICENSE.txt", "SHA256SUMS", "SHA256SUMS.sig"];
+    /// <summary>The top-level names of the launcher's release layout (files and folders next to infinity.exe).</summary>
+    public static IReadOnlyList<string> PayloadRoots { get; } = Required.Select(path => path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Append("mod").ToArray();
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false, NumberHandling = JsonNumberHandling.Strict,
