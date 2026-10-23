@@ -11,6 +11,8 @@ public enum InstallationState { Compatible, Incompatible, Inconclusive }
 public sealed record InstallationFinding(string Root, string Path, string Reason, string? Sha256 = null, long? ByteLength = null);
 public sealed record CriticalFile(string FileId, string Path, long? ExpectedByteLength = null);
 public sealed record CriticalObservation(string FileId, long? ByteLength, string? Sha256);
+/// <summary>A listed file's digest with the size and modification time it was hashed at (OD-113: an unchanged file is not rehashed).</summary>
+public sealed record KnownDigest(string Path, long Length, long ModifiedTicks, string Sha256);
 
 /// <summary>Hashes only the short explicit game-relative list. Never enumerates directories or modules.</summary>
 public static class CriticalFileReader
@@ -18,7 +20,16 @@ public static class CriticalFileReader
     public const int MaxFiles = 16;
     public const long MaxFileBytes = 256L * 1024 * 1024;
 
-    public static async Task<CriticalFileSnapshot> ReadAsync(string mount, IReadOnlyList<CriticalFile> files, CancellationToken cancellation = default)
+    public static Task<CriticalFileSnapshot> ReadAsync(string mount, IReadOnlyList<CriticalFile> files, CancellationToken cancellation = default)
+        => ReadAsync(mount, files, known: null, cancellation);
+
+    /// <summary>
+    /// As <see cref="ReadAsync(string, IReadOnlyList{CriticalFile}, CancellationToken)"/>; a listed file whose size and
+    /// modification time equal a <paramref name="known"/> entry of its path reuses that digest instead of being rehashed
+    /// (local evidence only: the server still compares every submitted digest).
+    /// </summary>
+    public static async Task<CriticalFileSnapshot> ReadAsync(string mount, IReadOnlyList<CriticalFile> files, IReadOnlyCollection<KnownDigest>? known,
+        CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(files);
         if (files.Count is < 1 or > MaxFiles) throw new InvalidDataException("Invalid critical-file list");
@@ -34,6 +45,8 @@ public static class CriticalFileReader
         var observations = ImmutableArray.CreateBuilder<CriticalObservation>();
         var findings = ImmutableArray.CreateBuilder<InstallationFinding>();
         var held = new List<HeldFile>();
+        var digests = ImmutableArray.CreateBuilder<KnownDigest>();
+        var reused = 0;
         try
         {
             foreach (var file in files)
@@ -56,9 +69,13 @@ public static class CriticalFileReader
                             continue;
                         }
                         var modified = File.GetLastWriteTimeUtc(full);
-                        var sha = Convert.ToHexStringLower(await SHA256.HashDataAsync(input, cancellation).ConfigureAwait(false));
+                        var cached = known?.FirstOrDefault(k => k is not null && k.Path == file.Path && k.Length == length
+                            && k.ModifiedTicks == modified.Ticks && Digest(k.Sha256));
+                        var sha = cached?.Sha256 ?? Convert.ToHexStringLower(await SHA256.HashDataAsync(input, cancellation).ConfigureAwait(false));
                         if (input.Length != length || File.GetLastWriteTimeUtc(full) != modified) { Absent(file, "changed_during_scan"); continue; }
+                        if (cached is not null) reused++;
                         observations.Add(new(file.FileId, length, sha));
+                        digests.Add(new(file.Path, length, modified.Ticks, sha));
                         held.Add(new(full, input, length, modified)); retained = true;
                     }
                     finally { if (!retained) await input.DisposeAsync().ConfigureAwait(false); }
@@ -67,7 +84,7 @@ public static class CriticalFileReader
                 catch (DirectoryNotFoundException) { Absent(file, "missing"); }
                 catch (Exception error) when (FileError(error)) { Absent(file, "unreadable"); }
             }
-            var result = new CriticalFileSnapshot(root, observations.ToImmutable(), findings.ToImmutable(), held);
+            var result = new CriticalFileSnapshot(root, observations.ToImmutable(), findings.ToImmutable(), held, digests.ToImmutable(), reused);
             held = [];
             return result;
         }
@@ -115,8 +132,13 @@ public sealed class CriticalFileSnapshot : IDisposable
     private readonly string _root;
     public ImmutableArray<CriticalObservation> Files { get; }
     public ImmutableArray<InstallationFinding> Findings { get; }
-    internal CriticalFileSnapshot(string root, ImmutableArray<CriticalObservation> files, ImmutableArray<InstallationFinding> findings, List<CriticalFileReader.HeldFile> held)
-    { _root = root; Files = files; Findings = findings; _held = held; }
+    /// <summary>The hashed files' digests with the stamps they were taken at, for <see cref="GameVerificationCache"/>.</summary>
+    public ImmutableArray<KnownDigest> Digests { get; }
+    /// <summary>How many listed files reused a known digest instead of being rehashed.</summary>
+    public int ReusedDigests { get; }
+    internal CriticalFileSnapshot(string root, ImmutableArray<CriticalObservation> files, ImmutableArray<InstallationFinding> findings, List<CriticalFileReader.HeldFile> held,
+        ImmutableArray<KnownDigest> digests = default, int reusedDigests = 0)
+    { _root = root; Files = files; Findings = findings; _held = held; Digests = digests.IsDefault ? [] : digests; ReusedDigests = reusedDigests; }
     public bool IsCurrent()
     {
         lock (_sync)
