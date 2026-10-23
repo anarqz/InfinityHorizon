@@ -133,6 +133,9 @@ static DWORD WINAPI mod_worker(void *unused) {
     (void)unused;
 
     fi_eo_settle(10000);
+    fi_game_callback_from("the mod host");
+    const FiEo *eo = fi_eo();
+    if (!eo || eo->state != FI_EO_0298_OK) { mod_refuse("ExtraOptions not active"); return 0; }
     const char *why = mod_lock_runtime();
     if (why) { mod_refuse(why); return 0; }
     if (GetModuleHandleW(L"infinity_mod.dll")) { mod_refuse("another infinity_mod.dll is already loaded"); return 0; }
