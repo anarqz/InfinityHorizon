@@ -133,13 +133,19 @@ public sealed partial class ShellViewModel
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
+        // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods (interim
+        // until N-H2's runtime report); the gate's `modded` flag and the overlay's bridge share it.
+        var mods = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
+        if (mods.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed) Log("mods: lobby mod set unavailable (" + mods.State.Reason + ")");
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
             NativeDllOverrides = ManagedMods().NativeDllOverrides(),
             Saves = SessionSavesFor(profile),
-            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity),
+            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, mods),
+            Mods = mods,
             OnlineActivity = onlineActivity,
             Text = S,
             CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),

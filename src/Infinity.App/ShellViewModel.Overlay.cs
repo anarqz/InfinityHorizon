@@ -60,7 +60,8 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>The overlay's Worlds tab against this server's matchmaking (OD-54), with the session's game ticket.</summary>
-    private Func<Func<string>, Infinity.Core.Matchmaking.WorldsBridge>? WorldsFor(string mode, string xuid, Infinity.Core.Online.OnlineActivity onlineActivity)
+    private Func<Func<string>, Infinity.Core.Matchmaking.WorldsBridge>? WorldsFor(string mode, string xuid, Infinity.Core.Online.OnlineActivity onlineActivity,
+        Infinity.Core.Matchmaking.IModSetSource mods)
     {
         if (_session?.Info.Services?.Matchmaking is not { } origin || !Uri.TryCreate(origin, UriKind.Absolute, out var mm))
         {
@@ -88,6 +89,7 @@ public sealed partial class ShellViewModel
                 onlineActivity: onlineActivity, idleWhenNoWorld: session.Me?.Access.Tier != "vip")
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
+                ModSet = mods,
                 SocketProofRequired=_config.Production,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
             };
