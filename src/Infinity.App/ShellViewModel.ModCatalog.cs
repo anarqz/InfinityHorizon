@@ -143,8 +143,16 @@ public sealed partial class ShellViewModel
         _modStateError is not null ? S["mods.state_unreadable"] : null,
         HasModRelink ? S["mods.relink_hint"] : null,
     }.OfType<string>());
+    /// <summary>OD-112 follow-up: the selected profile is Hardcore, which allows no mod that affects multiplayer.</summary>
+    private bool ProfileHardcore => LobbyProfile?.Mode == "hardcore";
+    /// <summary>Enabled mods a Hardcore profile refuses (<see cref="ModMultiplayer.AffectsMultiplayer"/>, the lobby-set rule), by name.</summary>
+    private IReadOnlyList<string> HardcoreRefusedMods => !ProfileHardcore ? [] : _modHealth.Installed
+        .Where(i => i.Enabled && i.Manifest is { } m && ModMultiplayer.AffectsMultiplayer(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
+    private string HardcoreRefusal(IEnumerable<string> names) => S.Format("mods.hardcore_refused", ("mods", string.Join(", ", names)));
+
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
     public string? ModPlayNotice => _install is null ? null : ModPlayBlocked ? S["mods.play_blocked"]
+        : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
         : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
 
@@ -326,6 +334,13 @@ public sealed partial class ShellViewModel
             if (fact.Blocker is not null && installed?.Problem is null && fact.Next is null && !(installed is { Enabled: true } && installed.Drift.Count > 0))
             { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
             if (!mod.SupportedForInstall && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
+            if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
+            {
+                // Hardcore: unavailable on this profile; an enabled one keeps its Disable action and its files.
+                status = S["mods.hardcore_unavailable"]; badge = S["mods.badge_attention"];
+                if (installed is { Enabled: true } && fact.Next is null) action = S["mods.disable_action"];
+                else canAct = false;
+            }
             canAct &= ModsIdle && _install is not null && !ModRecoveryRequired;
             var requirements = mod.Dependencies.Count == 0 ? S["mods.no_dependencies"]
                 : S["mods.dependencies"] + " " + string.Join(", ", mod.Dependencies.Select(d =>
@@ -381,30 +396,31 @@ public sealed partial class ShellViewModel
         var mod = current.Manifest;
         var factory = ModManagerFactory()!;
         var hosts = _catalog?.DownloadHosts ?? [];
+        var hardcore = ProfileHardcore;
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
             var manager = await Task.Run(factory);
-            if (!current.Installed && current.Action == S["mods.adopt"]) await Task.Run(() => manager.Adopt(mod));
+            if (!current.Installed && current.Action == S["mods.adopt"]) await Task.Run(() => manager.Adopt(mod, hardcore));
             else if (!current.Installed)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-                await manager.InstallAsync(ModDownloads, mod, hosts, timeout.Token, progress);
+                await manager.InstallAsync(ModDownloads, mod, hosts, timeout.Token, progress, hardcore: hardcore);
             }
-            else await Task.Run(() => manager.SetEnabled(mod, !current.Enabled, progress));
+            else await Task.Run(() => manager.SetEnabled(mod, !current.Enabled, progress, hardcore));
         }, S["mods.action_done"]);
     }
 
     public Task ConfirmModUpdateAsync()
     {
         if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next }) return Task.CompletedTask;
-        var factory = ModManagerFactory()!; var hosts = _catalog?.DownloadHosts ?? [];
+        var factory = ModManagerFactory()!; var hosts = _catalog?.DownloadHosts ?? []; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             var manager = await Task.Run(factory);
-            await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true);
+            await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
         }, S["mods.updated"]);
     }
 

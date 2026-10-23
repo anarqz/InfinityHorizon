@@ -107,7 +107,13 @@ public sealed partial class ShellViewModel
         // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
         // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
         ModLaunchPreparation mods;
-        try { mods = await PrepareModsForLaunchAsync(); }
+        try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
+        catch (ModHardcoreException error)
+        {
+            // OD-112 follow-up: refused before anything is written; the Mods page offers Disable.
+            Message = HardcoreRefusal(error.Mods.Select(m => m.Text("name", S.Locale)));
+            await RefreshModsAsync(); return;
+        }
         catch (ModException error) when (error.Code == ModErrors.Recovery)
         { Message = S["mods.play_blocked"]; await RefreshModsAsync(); return; }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))

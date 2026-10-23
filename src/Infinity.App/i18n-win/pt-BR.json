@@ -526,5 +526,8 @@
   "mods.error.locked": "Esta configuração é bloqueada pelo Infinity.",
   "mods.error.catalog": "O catálogo de mods não pôde ser verificado.",
   "mods.error.settings": "Um valor de configuração não é válido. Verifique números e opções.",
-  "mods.error.relink": "Os registros desta instalação pertencem a outra pasta. Use Vincular a instalação movida."
+  "mods.error.relink": "Os registros desta instalação pertencem a outra pasta. Use Vincular a instalação movida.",
+  "mods.hardcore_refused": "Perfis Hardcore não podem usar mods que afetam o multiplayer: {mods}. Desative-os ou jogue com um perfil Noob.",
+  "mods.hardcore_unavailable": "Indisponível neste perfil Hardcore: este mod afeta o multiplayer.",
+  "mods.error.hardcore": "Perfis Hardcore não podem ativar mods que afetam o multiplayer. Jogue com um perfil Noob para usar este mod."
 }

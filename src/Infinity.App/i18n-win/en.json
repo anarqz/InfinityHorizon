@@ -526,5 +526,8 @@
   "mods.error.locked": "This setting is locked by Infinity.",
   "mods.error.catalog": "The mod catalog could not be verified.",
   "mods.error.settings": "A setting value is not valid. Check numbers and choices.",
-  "mods.error.relink": "This installation's records belong to another folder. Use Link the moved installation."
+  "mods.error.relink": "This installation's records belong to another folder. Use Link the moved installation.",
+  "mods.hardcore_refused": "Hardcore profiles can't use mods that affect multiplayer: {mods}. Disable them or play a Noob profile.",
+  "mods.hardcore_unavailable": "Unavailable on this Hardcore profile: this mod affects multiplayer.",
+  "mods.error.hardcore": "Hardcore profiles can't enable mods that affect multiplayer. Play a Noob profile to use this mod."
 }

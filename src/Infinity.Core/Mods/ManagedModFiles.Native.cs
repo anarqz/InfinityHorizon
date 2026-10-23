@@ -7,6 +7,14 @@ namespace Infinity.Core.Mods;
 public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, bool HasEnabledNative, IReadOnlyList<string> Warnings)
 {
     public static ModLaunchPreparation None { get; } = new([], false, []);
+    /// <summary>Enabled mods that affect multiplayer (<see cref="ModMultiplayer.AffectsMultiplayer"/>): what a Hardcore launch refuses.</summary>
+    public IReadOnlyList<ModManifest> MultiplayerMods { get; init; } = [];
+}
+
+/// <summary>A Hardcore launch with enabled mods that affect multiplayer; nothing was changed.</summary>
+public sealed class ModHardcoreException(IReadOnlyList<ModManifest> mods) : Exception("Hardcore profiles cannot use mods that affect multiplayer")
+{
+    public IReadOnlyList<ModManifest> Mods { get; } = mods;
 }
 
 public sealed partial class ManagedModFiles
@@ -42,10 +50,11 @@ public sealed partial class ManagedModFiles
     /// <summary>A parked legacy copy: read-only, inside the Azimuth folder, never written or deleted.</summary>
     private string Parked(string relative) => Safe(_azimuth, relative);
 
-    public void Adopt(ModManifest manifest)
+    public void Adopt(ModManifest manifest, bool hardcore = false)
     {
         using var gate = Lock();
         var enabled = AdoptionState(manifest) ?? throw new ModException("existing files cannot be adopted", ModErrors.Conflict);
+        if (enabled) CheckProfile(manifest, hardcore);
         if (enabled) CheckDependencies(manifest);
         var files = new List<ManagedModFile>(); var changes = new List<ModFileChange>();
         foreach (var file in manifest.Files)
@@ -182,10 +191,25 @@ public sealed partial class ManagedModFiles
     /// written. Drift and settings issues are warnings; only an interrupted operation of this Azimuth
     /// folder throws (<see cref="ModErrors.Recovery"/>).
     /// </summary>
-    public ModLaunchPreparation PrepareForLaunch()
+    public ModLaunchPreparation PrepareForLaunch(bool hardcore = false)
     {
         if (!Directory.Exists(BackupRoot) || !RecoveryRequiredHere && !Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Any()) return ModLaunchPreparation.None;
         if (RecoveryRequiredHere) throw new ModException("interrupted mod operation needs recovery", ModErrors.Recovery);
+        if (hardcore)
+        {
+            // OD-112 follow-up: refused before anything is written; the files stay exactly as they are.
+            var refused = new List<ModManifest>();
+            foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
+            {
+                try
+                {
+                    var receipt = ReadReceipt(Path.GetFileName(path)[..^".receipt.json".Length]);
+                    if (receipt is { Enabled: true } && SnapshotFor(receipt) is var manifest && ModMultiplayer.AffectsMultiplayer(manifest)) refused.Add(manifest);
+                }
+                catch (Exception error) when (IsStateError(error)) { }
+            }
+            if (refused.Count > 0) throw new ModHardcoreException(refused);
+        }
         var warnings = new List<string>();
         var enabled = new List<ModManifest>();
         using (var gate = Lock(allowRecovery: true))
@@ -212,9 +236,10 @@ public sealed partial class ManagedModFiles
                 Execute(new(manifest.Id + ".receipt.json", receipt, [new("azimuth", config, settings.SourceHash, Store(after))]), null);
             }
         }
+        var multiplayer = enabled.Where(ModMultiplayer.AffectsMultiplayer).ToArray();
         if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))
-            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.IsNative), warnings);
+            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.IsNative), warnings) { MultiplayerMods = multiplayer };
         ReconcileWineOverrides();
-        return new(NativeDllOverrides(), enabled.Any(m => m.IsNative), warnings);
+        return new(NativeDllOverrides(), enabled.Any(m => m.IsNative), warnings) { MultiplayerMods = multiplayer };
     }
 }
