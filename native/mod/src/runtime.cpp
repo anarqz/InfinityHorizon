@@ -392,7 +392,7 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
         plan.mods[i].binary_path = plan.binary[i].c_str(); plan.mods[i].settings_path = plan.settings[i].c_str();
         reader.read(plan.mods[i].binary_sha256, 32); reader.read(plan.mods[i].settings_sha256, 32);
         reader.read(plan.mods[i].compatibility_sha256, 32); plan.mods[i].dependency_mask = reader.number();
-        auto count = reader.number(); if (count > 32) throw std::runtime_error("too many tables");
+        auto count = reader.number(); if (count > (none(plan.binary[i].c_str()) ? 64u : 32u)) throw std::runtime_error("too many tables");
         for (uint32_t j = 0; j < count; ++j) {
             auto table = infinity_mod::narrow(reader.text());
             if (table.empty() || table.size() > 64 || table.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos
