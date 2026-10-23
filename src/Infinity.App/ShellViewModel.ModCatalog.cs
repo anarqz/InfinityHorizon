@@ -19,10 +19,15 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     public string UpdateSummary { get; init; } = "";
     public ModManifest? Next { get; init; }
     public bool CanUninstall => Installed && !Drift;
+    /// <summary>OD-114: a custom, unofficial mod from the player's custom folder (shown with its badge).</summary>
+    public bool Custom => Manifest.IsCustom;
+    public string CustomBadge { get; init; } = "";
+    /// <summary>The player still has to confirm this exact custom manifest (the update's, when one is pending) before acting.</summary>
+    public bool NeedsConfirmation { get; init; }
 }
 
 /// <summary>What the background refresh learned about one manifest (M10: no disk access while building cards).</summary>
-internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Installed, bool CanAdopt, string? Blocker, ModManifest? Next);
+internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Installed, bool CanAdopt, string? Blocker, ModManifest? Next, bool Confirmed = false);
 
 public sealed partial class ShellViewModel
 {
@@ -39,6 +44,7 @@ public sealed partial class ShellViewModel
     private ModHealth _modHealth = ModHealth.Empty;
     private string? _modStateError;
     private IReadOnlyList<ModCardFacts> _modFacts = [];
+    private int _customProblems;
     private int _modRefresh;
     public ObservableCollection<ModCard> ModCards { get; } = [];
     public IEnumerable<ModCard> FilteredModCards => ModCards.Where(card => string.IsNullOrWhiteSpace(_modSearch)
@@ -63,7 +69,12 @@ public sealed partial class ShellViewModel
     public bool SelectedModCanDisableKeeping => ModsIdle && _selectedMod is { Drift: true, Enabled: true };
     public bool SelectedModSettingsIssues => ModsIdle && _selectedMod is { SettingsIssues: true };
     public bool SelectedModCanUninstall => ModsIdle && _selectedMod is { CanUninstall: true } && !ModRecoveryRequired;
-    public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true };
+    public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true, NeedsConfirmation: false };
+    /// <summary>OD-114: the confirmation an unreviewed custom mod needs before its first install or enable (and each new digest).</summary>
+    public bool SelectedModNeedsConfirmation => _selectedMod is { Custom: true, NeedsConfirmation: true };
+    public string SelectedModConfirmation => _selectedMod is not { Custom: true } selected ? ""
+        : S["mods.custom_confirm_text"] + ((selected.Next ?? selected.Manifest).HasExecutableCode ? "\n\n" + S["mods.custom_executable"] : "");
+    public bool CanConfirmCustomMod => ModsIdle && _install is not null && !ModRecoveryRequired && SelectedModNeedsConfirmation;
     public bool CanConfirmModUpdate => ModsIdle && _selectedMod is { UpdateAvailable: true, CanAct: true };
 
     public async Task SelectModAsync(ModCard card)
@@ -126,7 +137,10 @@ public sealed partial class ShellViewModel
         : CatalogExpired ? S["mods.catalog_expired"] : _catalog is { Trusted: false } ? S["mods.catalog_dev"]
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
     public string ModCatalogSummary => S.Format(_catalog is { Trusted: true } ? "mods.catalog_count_signed" : "mods.catalog_count",
-        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "");
+        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
+        + (_customProblems > 0 ? " · " + S.Format("mods.custom_problems", ("count", _customProblems.ToString(CultureInfo.CurrentCulture))) : "");
+    /// <summary>OD-114: where the player puts custom mods, one folder per mod (shown on the Mods page).</summary>
+    public string CustomModsFolderText => S.Format("mods.custom_folder", ("path", ManagedModFiles.CustomModsFolder(ModHome)));
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
 
     /// <summary>Any interrupted operation in the bucket: mod changes wait for it (Play only for this folder, <see cref="ModPlayBlocked"/>).</summary>
@@ -161,12 +175,15 @@ public sealed partial class ShellViewModel
 
     public string ModFolder => _install?.Root ?? S["setup.not_found"];
 
+    /// <summary>The stable launcher data home: the bucket (game_backup) and the custom mods folder live here, shared by every profile.</summary>
+    private string ModHome => _config.Production ? Directory.GetParent(_stateDirectory)!.FullName : _stateDirectory;
+
     /// <summary>The bucket lives in the stable launcher data home (shared by development and production profiles).</summary>
     private Func<ManagedModFiles>? ModManagerFactory()
     {
         if (_install is null) return null;
         var azimuth = _install.Root; var game = ContentLocation?.Mount;
-        var state = _config.Production ? Directory.GetParent(_stateDirectory)!.FullName : _stateDirectory;
+        var state = ModHome;
         var cache = DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null;
         return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache);
     }
@@ -253,23 +270,34 @@ public sealed partial class ShellViewModel
         var factory = ModManagerFactory();
         var catalog = _manifestCatalog;
         var key = NativeModKey;
-        var (health, error, facts) = await Task.Run(() => ReadModState(factory, catalog));
+        var home = ModHome;
+        var (health, error, facts, problems) = await Task.Run(() => ReadModState(factory, catalog, home));
         _nativeRuntime = await Task.Run(() => ModRuntimePackage.Locate(LauncherDirectory, key));
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts;
+        if (problems.Count > 0 && problems.Count != _customProblems)
+            Log("mods: custom folders skipped: " + string.Join(", ", problems.Select(p => p.Folder + " " + p.Reason)));
+        _customProblems = problems.Count;
         RefreshModCards();
         if (_selectedMod is { HasOptions: true } && !_iniDirty) await LoadSelectedOptionsAsync();
         Changed(string.Empty);
     }
 
-    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> catalog)
+    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts, IReadOnlyList<CustomModProblem> Problems) ReadModState(
+        Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official, string home)
     {
-        if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray());
+        // OD-114: custom mods are rescanned on every refresh and listed with the official catalog (their ids can never collide).
+        CustomModScan custom;
+        try { custom = ManagedModFiles.ScanCustomMods(home); }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { custom = new([], [new("", ManagedModFiles.Code(error))]); }
+        var catalog = official.Concat(custom.Mods.Where(m => official.All(o => o.Id != m.Id))).ToArray();
+        if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray(), custom.Problems);
         ManagedModFiles manager;
         try { manager = factory(); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
-        { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray()); }
+        { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray(), custom.Problems); }
+        bool Confirmed(ModManifest m) { try { return m.IsCustom && manager.CustomConfirmed(m); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return false; } }
         var health = manager.Inspect();
         var facts = new List<ModCardFacts>();
         foreach (var manifest in catalog)
@@ -277,7 +305,7 @@ public sealed partial class ShellViewModel
             var installed = health.Installed.FirstOrDefault(i => i.Id == manifest.Id);
             if (installed?.Manifest is { } current && current.Digest != manifest.Digest)
             {
-                facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest));
+                facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest, Confirmed(manifest)));
                 continue;
             }
             var adopt = false;
@@ -286,11 +314,11 @@ public sealed partial class ShellViewModel
             {
                 if (installed is { Enabled: true }) manager.CheckDependents(manifest.Id);
                 else if (installed is null || installed.Drift.Count == 0) manager.CheckDependencies(manifest);
-            }), null));
+            }), null, Confirmed(manifest)));
         }
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
-            facts.Add(new(installed.Manifest!, installed, false, Blocker(() => { if (installed.Enabled) manager.CheckDependents(installed.Id); else manager.CheckDependencies(installed.Manifest!); }), null));
-        return (health, null, facts);
+            facts.Add(new(installed.Manifest!, installed, false, Blocker(() => { if (installed.Enabled) manager.CheckDependents(installed.Id); else manager.CheckDependencies(installed.Manifest!); }), null, Confirmed(installed.Manifest!)));
+        return (health, null, facts, custom.Problems);
     }
 
     private static string? Blocker(Action check)
@@ -307,7 +335,9 @@ public sealed partial class ShellViewModel
         {
             var mod = fact.Manifest; var installed = fact.Installed;
             var compatible = _install is not null && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray().Any(v => v.GetString() == _install.Version);
-            var nativeBlocked = mod.IsNative && !NativeModsAvailable;
+            // Custom executable code runs only through the development runtime until custom signing is designed (OD-114).
+            var nativeBlocked = mod.IsNative && !(mod.IsCustom ? DevelopmentMods : NativeModsAvailable);
+            var custom = mod.IsCustom;
             string status, badge, action; bool canAct;
             if (_modHealth.RecoveryHere) { status = S["mods.recovery_needed"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
             else if (installed?.Problem is not null) { status = S["mods.recovery_problems"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
@@ -315,7 +345,8 @@ public sealed partial class ShellViewModel
             {
                 status = S.Format("mods.update_available", ("from", mod.Version), ("to", next.Version));
                 badge = S["mods.update"]; action = S["mods.review_update"];
-                canAct = !expired && next.SupportedForInstall && !(next.IsNative && !NativeModsAvailable) && fact.Blocker is null && installed!.Drift.Count == 0;
+                canAct = (custom ? !next.CustomBlocked : !expired) && next.SupportedForInstall && !(next.IsNative && !(custom ? DevelopmentMods : NativeModsAvailable))
+                    && fact.Blocker is null && installed!.Drift.Count == 0;
             }
             else if (installed is not null)
             {
@@ -334,11 +365,12 @@ public sealed partial class ShellViewModel
             {
                 status = expired ? S["mods.catalog_expired"] : nativeBlocked ? S["mods.native_unavailable"] : S["mods.not_installed"];
                 badge = S["mods.not_installed"]; action = S["mods.install"];
-                canAct = compatible && !expired && !nativeBlocked && fact.Blocker is null && _catalog is not null;
+                // A custom mod needs no catalog (it has no download); an official one waits for a fresh catalog.
+                canAct = compatible && !nativeBlocked && fact.Blocker is null && (custom ? !mod.CustomBlocked : !expired && _catalog is not null);
             }
             if (fact.Blocker is not null && installed?.Problem is null && fact.Next is null && !(installed is { Enabled: true } && installed.Drift.Count > 0))
             { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
-            if (!mod.SupportedForInstall && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
+            if ((!mod.SupportedForInstall || mod.CustomBlocked) && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
                 // Hardcore: unavailable on this profile; an enabled one keeps its Disable action and its files.
@@ -358,6 +390,9 @@ public sealed partial class ShellViewModel
                 Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
                 UpdateAvailable = fact.Next is not null, Next = fact.Next, UpdateSummary = fact.Next is { } upcoming ? UpdateSummary(mod, upcoming) : "",
+                CustomBadge = custom ? S["mods.custom_badge"] : "",
+                // Disabling never needs it; installing, enabling and each update's new digest do.
+                NeedsConfirmation = custom && !fact.Confirmed && !(installed is { Enabled: true } && fact.Next is null),
             });
         }
         if (_selectedMod is { } selected) _selectedMod = ModCards.FirstOrDefault(card => card.Manifest.Id == selected.Manifest.Id);
@@ -397,7 +432,7 @@ public sealed partial class ShellViewModel
         await RefreshModsAsync();
         var current = ModCards.FirstOrDefault(c => c.Manifest.Digest == card.Manifest.Digest);
         if (current is not { CanAct: true }) return;
-        if (current.UpdateAvailable) { ShowModInformation(current); return; } // reviewed first: the information pane shows the change
+        if (current.UpdateAvailable || current.NeedsConfirmation) { ShowModInformation(current); return; } // reviewed (and a custom mod confirmed) first, in the information pane
         var mod = current.Manifest;
         var factory = ModManagerFactory()!;
         var hosts = _catalog?.DownloadHosts ?? [];
@@ -407,6 +442,7 @@ public sealed partial class ShellViewModel
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
             var manager = await Task.Run(factory);
             if (!current.Installed && current.Action == S["mods.adopt"]) await Task.Run(() => manager.Adopt(mod, hardcore));
+            else if (!current.Installed && mod.IsCustom) await Task.Run(() => manager.InstallCustom(mod, progress, hardcore: hardcore));
             else if (!current.Installed)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -425,8 +461,24 @@ public sealed partial class ShellViewModel
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             var manager = await Task.Run(factory);
-            await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
+            if (next.IsCustom) await Task.Run(() => manager.InstallCustom(next, progress, update: true, hardcore: hardcore));
+            else await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
         }, S["mods.updated"]);
+    }
+
+    /// <summary>
+    /// OD-114: the player's explicit confirmation of an unreviewed custom mod, recorded for its exact manifest digest (the pending
+    /// update's when there is one); then the card's action continues (an update still shows its reviewed change first).
+    /// </summary>
+    public async Task ConfirmCustomModAsync()
+    {
+        if (!CanConfirmCustomMod || _selectedMod is not { } selected || ModManagerFactory() is not { } factory) return;
+        var target = selected.Next ?? selected.Manifest;
+        var confirmed = false;
+        await RunModOperationAsync(async () => { await Task.Run(() => factory().ConfirmCustom(target)); confirmed = true; }, S["mods.custom_confirmed"]);
+        if (!confirmed || ModCards.FirstOrDefault(c => c.Manifest.Id == selected.Manifest.Id) is not { } card) return;
+        if (card.UpdateAvailable) ShowModInformation(card);
+        else { _showModInfo = false; await ActOnModAsync(card); }
     }
 
     private Task SelectedModOperation(Action<ManagedModFiles, ModManifest> operation, string done)
