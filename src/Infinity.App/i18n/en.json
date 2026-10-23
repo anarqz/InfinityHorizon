@@ -415,7 +415,6 @@
  "mods.adopt": "Manage existing installation",
  "mods.unmanaged": "Existing installation",
  "mods.offline_play": "Play offline with selected mods",
- "mods.offline_only": "Native mods currently require an offline session.",
  "mods.runtime_failed": "The mod session could not start or ended unexpectedly.",
  "mods.session_prepare": "Preparing the session database…"
 }

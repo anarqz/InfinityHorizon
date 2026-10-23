@@ -95,6 +95,19 @@ public sealed partial class ManagedModFiles
 
     public bool Verified(ModManifest manifest) => !RecoveryRequiredHere && Receipt(manifest) is not null && Drift(manifest).Count == 0;
 
+    /// <summary>
+    /// OD-113: the mapped files a multiplayer fingerprint names (every file but licences, the settings file and seeded files) whose
+    /// current bytes are not the manifest's, as <c>root/path</c>. The lobby set is built only when this is empty, so a data mod's
+    /// entry stands for the exact files the game will read; an accepted re-baseline (H3) of such a file counts as a mismatch.
+    /// </summary>
+    public IReadOnlyList<string> ManifestMismatches(ModManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return manifest.Files.Where(f => f.Role is not ("license" or "config") && f.Mode != "seed")
+            .Where(f => !string.Equals(Current(Target(f.Root, f.Destination)), f.Hash, StringComparison.OrdinalIgnoreCase))
+            .Select(f => f.Root + "/" + f.Destination).ToList();
+    }
+
     /// <summary>Managed files that differ from the receipt's expected state.</summary>
     public IReadOnlyList<ModDrift> Drift(ModManifest manifest)
     {
