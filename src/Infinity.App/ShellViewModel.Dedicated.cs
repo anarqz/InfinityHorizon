@@ -29,6 +29,8 @@ public sealed partial class ShellViewModel
     private LauncherLock? _instanceLock;
     // The play session's overlay bridge (OD-54), read off the UI thread.
     private volatile WorldsBridge? _playWorlds;
+    /// <summary>The running online launch's lobby mod set (N-H2 reports go to it when it is a runtime source).</summary>
+    private IModSetSource? _playModSet;
 
     /// <summary>The in-game overlay hosts (or is opening) a world: both would need the relay's UDP port.</summary>
     private bool PlayHostsWorld => _playWorlds?.HostsOrOpensWorld == true;
