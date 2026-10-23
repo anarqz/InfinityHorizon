@@ -47,6 +47,10 @@ Existing third-party copyright and permission notices remain applicable:
   licenses/fh2-mods-LICENSE.txt. The intermediate Rust port is not distributed here.
 - BouncyCastle.Cryptography 2.6.2: licenses/BouncyCastle-LICENSE.md.
 - Dear ImGui 1.91.8 (MIT) and MinHook 1.3.3 (BSD notices): native/overlay/third_party/.
+- The native mod runtime (native/mod; package licenses/Mod-NOTICE.md): its hook coordination
+  derives from Trinculo54/fh2-mod-platform (MIT, licenses/FH2-hooks-MIT.txt); it bundles its own
+  MinHook (BSD notices, licenses/Mod-MinHook-LICENSE.txt) and SQLite (public domain,
+  licenses/SQLite-VERSION.txt); its two C SDK headers are MIT (licenses/Mod-SDK-LICENSE.txt).
 - Selawik 1.01 (SIL OFL 1.1) and Fluent UI System Icons (MIT): native/overlay/third_party/fonts/.
 - TweetNaCl verification code in the hook is public domain.
 - The synthesized notification chime is original project material, GPL-3.0-or-later;

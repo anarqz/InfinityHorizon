@@ -10,11 +10,22 @@ public static class ReleaseSignature
 {
     public const long MaxFileBytes = 512L * 1024 * 1024;
 
+    /// <summary>
+    /// The native mod runtime and its helper (<c>mod/</c>): <c>"fi-mod-runtime-v1 " + SHA-256 lowercase hex</c>,
+    /// the line the hook verifies before it loads the runtime (native/hook mod_host.c, sign.h). Its own domain, so a
+    /// runtime signature never stands for a hook update and the other way round.
+    /// </summary>
+    public const string ModRuntimePrefix = "fi-mod-runtime-v1 ";
+
     public static bool IsOfficialFile(string? path, string? signaturePath = null) =>
         path is not null && VerifyFile(path, signaturePath ?? path + ".sig", HookInstaller.ReleaseKey);
 
-    public static bool VerifyFile(string path, string signaturePath, ReadOnlySpan<byte> publicKey)
+    public static bool VerifyFile(string path, string signaturePath, ReadOnlySpan<byte> publicKey) =>
+        VerifyFile(path, signaturePath, publicKey, HookInstaller.SignPrefix);
+
+    public static bool VerifyFile(string path, string signaturePath, ReadOnlySpan<byte> publicKey, string prefix)
     {
+        ArgumentNullException.ThrowIfNull(prefix);
         if (publicKey.Length != 32 || !Ed25519.ValidatePublicKeyFull(publicKey.ToArray(), 0)) return false;
         try
         {
@@ -25,7 +36,7 @@ public static class ReleaseSignature
             using var file = File.OpenRead(path);
             if (file.Length is <= 0 or > MaxFileBytes) return false;
             var digest = SHA256.HashData(file);
-            var message = Encoding.ASCII.GetBytes(HookInstaller.SignPrefix + Convert.ToHexStringLower(digest));
+            var message = Encoding.ASCII.GetBytes(prefix + Convert.ToHexStringLower(digest));
             return Ed25519.Verify(signature, 0, publicKey.ToArray(), 0, message, 0, message.Length);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
