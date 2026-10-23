@@ -323,7 +323,7 @@ public sealed class PlaySupervisor
             foreach (var module in _config.NativeDllOverrides)
             {
                 overrides = WineHost.WithNativeDll(overrides, module) ?? overrides;
-                _ = WineHost.EnsureNativeDllOverride(module, true);
+                // The AppDefaults registry entry is set and removed by ManagedModFiles.ReconcileWineOverrides (L12).
             }
             if (overrides is not null) env.Add(("WINEDLLOVERRIDES", overrides));
         }
