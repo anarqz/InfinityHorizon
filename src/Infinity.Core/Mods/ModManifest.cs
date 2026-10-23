@@ -16,6 +16,10 @@ public sealed class ModManifest
     public long PackageBytes => Document.GetProperty("package").GetProperty("bytes").GetInt64();
     public IReadOnlyList<ManifestFile> Files { get; }
     public IReadOnlyList<ManifestDependency> Dependencies { get; }
+    /// <summary>Wine/Proton native-first overrides applied while the mod is enabled (launch.wineDllOverrides).</summary>
+    public IReadOnlyList<ModWineOverride> WineDllOverrides { get; }
+    /// <summary>Legacy parked copies (adoption.parkedFiles): mapped binary destination to its parked Azimuth-relative path.</summary>
+    public IReadOnlyDictionary<string, string> ParkedFiles { get; }
     public ModMultiplayer? Multiplayer { get; }
     public bool NeedsDatabaseCoordination => Document.GetProperty("databaseMigrations").GetArrayLength() > 0
         || Document.GetProperty("runtimeOutputs").GetArrayLength() > 0;
@@ -70,6 +74,13 @@ public sealed class ModManifest
                     }
                     ModMultiplayer.ValidateValue(option, option.GetProperty("default"));
                     if (option.TryGetProperty("lockedValue", out var locked)) ModMultiplayer.ValidateValue(option, locked);
+                    foreach (var field in new[] { "label", "description", "lockReason" })
+                        if (option.TryGetProperty(field, out var text))
+                        {
+                            if (text.ValueKind != JsonValueKind.Object) throw new ModException("invalid localized text");
+                            foreach (var value in text.EnumerateObject()) ValidateText(value.Value);
+                        }
+                    if (option.TryGetProperty("lockReason", out _) && !option.TryGetProperty("lockedValue", out _)) throw new ModException("lock reason without a locked value");
                 }
             }
         }
@@ -131,14 +142,32 @@ public sealed class ModManifest
                 ValidatePackage(p.Value);
             }
         if (Files.Any(f => !packageNames.Contains(f.Package))) throw new ModException("unknown package mapping");
+        var wine = new List<ModWineOverride>();
         if (Document.TryGetProperty("launch", out var launch) && launch.TryGetProperty("wineDllOverrides", out var overrides))
             foreach (var item in overrides.EnumerateArray())
             {
-                var name = item.GetString()!;
+                // A bare module name is shorthand for { "module": name, "appDefaults": true }.
+                var name = item.ValueKind == JsonValueKind.String ? item.GetString()! : item.GetProperty("module").GetString()!;
+                var appDefaults = item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("appDefaults", out var flag) || flag.GetBoolean();
+                if (item.ValueKind == JsonValueKind.Object && item.EnumerateObject().Any(p => p.Name is not ("module" or "appDefaults")))
+                    throw new ModException("unsupported DLL override field");
                 if (name.Length is < 1 or > 64 || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
+                    || wine.Any(w => w.Module.Equals(name, StringComparison.OrdinalIgnoreCase))
                     || !Files.Any(f => f.Root == "azimuth" && f.Role == "binary" && f.Destination.Equals(name + ".dll", StringComparison.OrdinalIgnoreCase)))
                     throw new ModException("DLL override must name a mapped binary");
+                wine.Add(new(name, appDefaults));
             }
+        WineDllOverrides = wine.AsReadOnly();
+        var parked = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (Document.TryGetProperty("adoption", out var adoption) && adoption.TryGetProperty("parkedFiles", out var parkedFiles))
+            foreach (var item in parkedFiles.EnumerateArray())
+            {
+                var path = item.GetProperty("path").GetString()!; var destination = item.GetProperty("destination").GetString()!;
+                ValidatePath(path);
+                if (parked.Count >= 16 || !Files.Any(f => f.Root == "azimuth" && f.Role == "binary" && f.Destination == destination) || !parked.TryAdd(destination, path))
+                    throw new ModException("parked legacy files must name a mapped azimuth binary");
+            }
+        ParkedFiles = parked;
         if (Document.TryGetProperty("incompatibleFiles", out var incompatible))
             foreach (var file in incompatible.EnumerateArray())
             {
@@ -174,6 +203,9 @@ public sealed class ModManifest
         foreach (var part in path.Split('/'))
         {
             var stem = part.Split('.')[0];
+            var tilde = part.IndexOf('~', StringComparison.Ordinal);
+            // An 8.3 short-name alias (DATA~1, AZIMUT~1.EXE) could name a protected path under another spelling.
+            if (tilde >= 0 && tilde + 1 < part.Length && char.IsAsciiDigit(part[tilde + 1])) throw new ModException("invalid mod path");
             if (part is "" or "." or ".." || part.EndsWith('.') || part.EndsWith(' ')
                 || new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(stem, StringComparer.OrdinalIgnoreCase))
                 throw new ModException("invalid mod path");
@@ -198,58 +230,4 @@ public sealed class ModManifest
 
 public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
-
-public static class DevelopmentModCatalog
-{
-    public static async Task<IReadOnlyList<ModManifest>> LoadAsync(HttpClient http, Uri url, CancellationToken cancellation)
-    {
-        var bytes = await ReadAsync(http, url, 256 * 1024, cancellation).ConfigureAwait(false);
-        using var json = JsonDocument.Parse(bytes);
-        ModManifest.RejectDuplicates(json.RootElement);
-        if (json.RootElement.GetProperty("schemaVersion").GetInt32() != 1) throw new ModException("unsupported catalog");
-        var entries = json.RootElement.GetProperty("mods");
-        if (entries.GetArrayLength() > 64) throw new ModException("catalog too large");
-        var mods = new List<ModManifest>();
-        foreach (var entry in entries.EnumerateArray())
-        {
-            var address = new Uri(entry.GetProperty("manifestUrl").GetString()!, UriKind.Absolute);
-            if (address.IsFile && !url.IsFile) throw new ModException("remote catalog references a local file");
-            var raw = await ReadAsync(http, address, 256 * 1024, cancellation).ConfigureAwait(false);
-            if (ModManifest.Hash(raw) != entry.GetProperty("manifestSha256").GetString()) throw new ModException("manifest digest mismatch");
-            var mod = new ModManifest(raw);
-            if (mod.Id != entry.GetProperty("id").GetString() || mod.Version != entry.GetProperty("version").GetString()
-                || mods.Any(m => m.Id == mod.Id)) throw new ModException("catalog identity mismatch");
-            mods.Add(mod);
-        }
-        return mods.AsReadOnly();
-    }
-
-    private static async Task<byte[]> ReadAsync(HttpClient http, Uri url, int limit, CancellationToken cancellation)
-    {
-        if (url.IsFile)
-        {
-            if (url.IsUnc || new FileInfo(url.LocalPath).Length > limit) throw new ModException("invalid local catalog file");
-            return await File.ReadAllBytesAsync(url.LocalPath, cancellation).ConfigureAwait(false);
-        }
-        if (url.Scheme != "https" && !(url.Scheme == "http" && url.IsLoopback)
-            || url.UserInfo.Length > 0 || url.Fragment.Length > 0) throw new ModException("invalid catalog URL");
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        if (response.RequestMessage?.RequestUri != url) throw new ModException("catalog redirects are not supported");
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
-        return await ReadBoundedAsync(stream, limit, cancellation).ConfigureAwait(false);
-    }
-
-    internal static async Task<byte[]> ReadBoundedAsync(Stream stream, long limit, CancellationToken cancellation)
-    {
-        using var result = new MemoryStream();
-        var buffer = new byte[81920];
-        int count;
-        while ((count = await stream.ReadAsync(buffer, cancellation).ConfigureAwait(false)) > 0)
-        {
-            if (result.Length + count > limit) throw new ModException("download too large");
-            result.Write(buffer, 0, count);
-        }
-        return result.ToArray();
-    }
-}
+public sealed record ModWineOverride(string Module, bool AppDefaults);

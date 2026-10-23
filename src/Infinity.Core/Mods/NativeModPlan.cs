@@ -6,7 +6,8 @@ using Infinity.Core.Process;
 
 namespace Infinity.Core.Mods;
 
-public sealed record SessionDatabaseJournal(string AzimuthRoot, string GameRoot, string Target, string Baseline, string Prepared, bool Existed);
+public sealed record SessionDatabaseJournal(string AzimuthRoot, string GameRoot, string Target, string Baseline, string Prepared, bool Existed,
+    IReadOnlyList<string>? CreatedDirectories = null);
 
 public sealed class NativeModPlan : IDisposable
 {
@@ -38,9 +39,6 @@ public sealed class NativeModPlan : IDisposable
 public sealed partial class ManagedModFiles
 {
     public bool HasEnabledNativeMods => InstalledManifests().Any(m => m.IsNative && Receipt(m) is { Enabled: true });
-    public IReadOnlyList<string> NativeDllOverrides() => InstalledManifests().Where(m => Receipt(m) is { Enabled: true })
-        .SelectMany(m => m.Document.TryGetProperty("launch", out var launch) && launch.TryGetProperty("wineDllOverrides", out var list)
-            ? list.EnumerateArray().Select(v => v.GetString()!) : []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     private string SessionJournal => Path.Combine(BackupRoot, "database-session.json");
     private static void NoDatabaseSidecars(string path)
     {
@@ -57,22 +55,75 @@ public sealed partial class ManagedModFiles
             throw new ModException("database requires a standalone checkpointed SQLite file");
         return bytes;
     }
+    private SessionDatabaseJournal ReadSessionJournal()
+    {
+        RejectLinks(SessionJournal);
+        var journal = JsonSerializer.Deserialize<SessionDatabaseJournal>(File.ReadAllBytes(SessionJournal)) ?? throw new ModException("invalid database session journal", ModErrors.Recovery);
+        if (!string.Equals(journal.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(journal.GameRoot, _game, StringComparison.OrdinalIgnoreCase)) throw new ModException("database session belongs to another installation", ModErrors.Recovery);
+        return journal;
+    }
+
+    /// <summary>
+    /// Ends a session database: the baseline returns when an override existed before; otherwise the
+    /// session's own copy is removed with the folders the session created (M11), so nothing shadows
+    /// the stock database afterwards. The stock source is never touched.
+    /// </summary>
     private void RestoreSessionDatabase()
     {
         CheckGame();
         if (!File.Exists(SessionJournal)) return;
-        RejectLinks(SessionJournal);
-        var journal = JsonSerializer.Deserialize<SessionDatabaseJournal>(File.ReadAllBytes(SessionJournal)) ?? throw new ModException("invalid database session journal");
-        if (!string.Equals(journal.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(journal.GameRoot, _game, StringComparison.OrdinalIgnoreCase)) throw new ModException("database session belongs to another installation");
+        var journal = ReadSessionJournal();
         var target = Safe(_game!, journal.Target); NoDatabaseSidecars(target);
         var current = Current(target);
         if (current != journal.Baseline && current != journal.Prepared && !(current is null && !journal.Existed))
-            throw new ModException("session database changed outside the runtime; preserved for recovery");
+            throw new ModException("session database changed outside the runtime; preserved for recovery", ModErrors.Recovery);
         var original = ObjectBytes(journal.Baseline); _ = ObjectBytes(journal.Prepared);
         CheckGame();
-        Atomic(target, original);
+        FinishSessionDatabase(journal, target, original);
+    }
+
+    private void FinishSessionDatabase(SessionDatabaseJournal journal, string target, byte[] original)
+    {
+        if (journal.Existed) Atomic(target, original);
+        else
+        {
+            RemoveFile(target);
+            foreach (var directory in (journal.CreatedDirectories ?? []).OrderByDescending(d => d.Length))
+            {
+                var path = Safe(_game!, directory);
+                if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any()) Directory.Delete(path, recursive: false);
+            }
+        }
         File.Move(SessionJournal, Path.Combine(BackupRoot, "database-session-" + Guid.NewGuid().ToString("N") + ".json"));
+    }
+
+    /// <summary>
+    /// H4c resolution for a refused restore: the current database and its SQLite sidecars are kept as
+    /// backup objects (listed in the archived record), then the original state returns as above.
+    /// </summary>
+    private void ResolveSessionDatabase()
+    {
+        CheckGame();
+        if (!File.Exists(SessionJournal)) return;
+        SessionDatabaseJournal journal;
+        try { journal = ReadSessionJournal(); }
+        catch (Exception error) when (error is ModException or JsonException)
+        {
+            File.Move(SessionJournal, Path.Combine(BackupRoot, "database-session-unreadable-" + Guid.NewGuid().ToString("N") + ".json"));
+            return;
+        }
+        var target = Safe(_game!, journal.Target);
+        var kept = new List<string>();
+        foreach (var path in new[] { target, target + "-wal", target + "-shm", target + "-journal" })
+        {
+            if (!File.Exists(path)) continue;
+            if (new FileInfo(path).Length > 512L * 1024 * 1024) throw new ModException("database too large to keep a backup", ModErrors.Recovery);
+            kept.Add(Path.GetFileName(path) + "=" + Store(File.ReadAllBytes(path)));
+        }
+        Atomic(Path.Combine(BackupRoot, "database-session-kept-" + Guid.NewGuid().ToString("N") + ".json"), JsonSerializer.SerializeToUtf8Bytes(kept));
+        foreach (var sidecar in new[] { "-wal", "-shm", "-journal" }) RemoveFile(target + sidecar);
+        FinishSessionDatabase(journal, target, ObjectBytes(journal.Baseline));
     }
     public NativeModPlan PrepareNativeLaunch(string runtime, string helper, byte[] verificationKey)
     {
@@ -111,6 +162,7 @@ public sealed partial class ManagedModFiles
             }
             var policies = selected.Where(m => m.Document.TryGetProperty("database", out _)).Select(m => m.Document.GetProperty("database")).ToArray();
             string? relative = null, targetDatabase = null, baseline = null, before = null;
+            var createdDirectories = new List<string>();
             var hashes = new byte[64];
             var folder = Safe(BackupRoot, "sessions/" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
             if (policies.Length > 0)
@@ -123,6 +175,8 @@ public sealed partial class ManagedModFiles
                 targetDatabase = Safe(_game ?? throw new ModException("game folder missing"), relative);
                 before = Current(targetDatabase);
                 var source = before is null ? Safe(_game!, seed) : targetDatabase;
+                for (var parent = Path.GetDirectoryName(relative.Replace('/', Path.DirectorySeparatorChar)); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
+                    if (!Directory.Exists(Path.Combine(_game!, parent))) createdDirectories.Add(parent.Replace(Path.DirectorySeparatorChar, '/'));
                 var bytes = DatabaseBytes(source); baseline = Store(bytes);
                 if (before is not null && before != baseline) throw new ModException("database changed during snapshot");
                 Atomic(Path.Combine(folder, "baseline.sqlite"), bytes);
@@ -171,7 +225,7 @@ public sealed partial class ManagedModFiles
                     throw new ModException("prepared database result differs");
                 CheckGame(); NoDatabaseSidecars(targetDatabase);
                 if (Current(targetDatabase) != before) throw new ModException("database changed before publication");
-                Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, baseline!, after, before is not null), Json));
+                Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, baseline!, after, before is not null, createdDirectories), Json));
                 Atomic(targetDatabase, prepared);
             }
             return new(Path.Combine(folder, "launch.bin"), Plan(), runtime, locks, RestoreSessionDatabase);
