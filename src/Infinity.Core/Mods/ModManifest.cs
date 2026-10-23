@@ -108,7 +108,7 @@ public sealed class ModManifest
         if (Document.TryGetProperty("database", out var db))
         {
             if (!(IsNative || DatabaseSql is not null) || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
-                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is < 1 or > 32) throw new ModException("unsupported database capability");
+                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is var tableCount && (tableCount < 1 || tableCount > (DatabaseSql is null ? DataModSql.MaxNativeTables : DataModSql.MaxTables))) throw new ModException("unsupported database capability");
             var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
             ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
             foreach (var table in db.GetProperty("tables").EnumerateArray())

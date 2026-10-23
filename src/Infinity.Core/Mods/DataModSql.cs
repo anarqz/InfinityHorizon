@@ -13,6 +13,9 @@ public static class DataModSql
     public const int MaxBytes = 8 * 1024 * 1024;
     public const int MaxStatements = 50_000;
     public const int MaxStatementBytes = 64 * 1024;
+    /// <summary>Tables a data (SQL) entry may list (FIMOD004, raised with WINDOWS for car packs); native entries stay at <see cref="MaxNativeTables"/>.</summary>
+    public const int MaxTables = 64;
+    public const int MaxNativeTables = 32;
 
     /// <summary>The statements (trimmed), or <see cref="ModException"/> (<see cref="ModErrors.Unsupported"/>).</summary>
     public static IReadOnlyList<string> Statements(byte[] bytes)
