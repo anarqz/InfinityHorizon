@@ -17,6 +17,9 @@ std::string narrow(const std::wstring&);
 void log_line(const std::string&, const std::string&);
 void log_to(const std::wstring&);
 inline void plog(const std::string& text) { log_line("", text); }
+struct Fixup { uint32_t rva; uint8_t width; };
+bool parse_relocations(const uint8_t* data, std::size_t size, uint32_t image_size, std::vector<Fixup>& out);
+int compare_relocated(const uint8_t* disk, const uint8_t* live, std::size_t n, uint32_t rva, int64_t delta, const std::vector<Fixup>& fixups);
 void fill_hook_api(InfinityModApiV1&);
 void notify_hook_fault();
 }
