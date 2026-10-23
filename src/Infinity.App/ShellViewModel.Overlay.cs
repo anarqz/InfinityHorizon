@@ -75,14 +75,16 @@ public sealed partial class ShellViewModel
         {
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
                 _config.Production?ProductionMatchmakingHttp.Value:Http, mm, ClientHeader, ticket);
-            return new Infinity.Core.Matchmaking.WorldsBridge(
+            // OD-109: kept so the dedicated lobby is not created while this session hosts a world.
+            return _playWorlds = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], _config.Production?session.Api.TrustedTimeProvider():null, mode,
                 players => StartRelay(players, xuid, relayKeys, devLan, _config.Production?session.Api.TrustedTimeProvider():null), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
                 updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
                     ? integrated.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
                 refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
                     ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
-                checkWorldAccess: ct => CheckWorldAccessAsync(integrity, ct),
+                // OD-109: while this launcher hosts a dedicated lobby, the overlay offers no lobby actions.
+                checkWorldAccess: Infinity.Core.Supervisor.DedicatedHost.GuardPlayWorlds(() => DedicatedActive, ct => CheckWorldAccessAsync(integrity, ct)),
                 onlineActivity: onlineActivity, idleWhenNoWorld: session.Me?.Access.Tier != "vip")
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
@@ -119,7 +121,8 @@ public sealed partial class ShellViewModel
     private bool DevLanAdmission(Uri matchmaking) => DevServer && Infinity.Core.DevNet.PlainHttpUrl(matchmaking.OriginalString);
 
     /// <summary>The world's relay, inside the launcher (the Rust infinity-relay.exe was retired on 2026-10-20).</summary>
-    private Infinity.Core.Matchmaking.IntegratedWorldRelay? StartRelay(uint players, string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys, bool devLan, TimeProvider? clock=null)
+    private Infinity.Core.Matchmaking.IntegratedWorldRelay? StartRelay(uint players, string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys, bool devLan, TimeProvider? clock=null,
+        Action<System.Net.Sockets.SocketError>? bindFailed = null)
     {
         try
         {
@@ -131,6 +134,7 @@ public sealed partial class ShellViewModel
         }
         catch (Exception exception) when (exception is IOException or System.Net.Sockets.SocketException or InvalidOperationException or UnauthorizedAccessException)
         {
+            if (exception is System.Net.Sockets.SocketException socket) bindFailed?.Invoke(socket.SocketErrorCode);
             Log("worlds: relay could not start (" + exception.GetType().Name + ")");
             return null;
         }

@@ -108,7 +108,13 @@ public sealed record Refresh(string RefreshToken);
 /// <summary><c>POST /launcher/v1/token</c> → 200: the old refresh token is dead.</summary>
 public sealed record TokenPair(string AccessToken, string AccessExpiresAt, string RefreshToken);
 
-/// <summary><c>POST /gate/v1/sessions</c> (SAVES_API.md §3.1's body).</summary>
+/// <summary>
+/// <c>POST /gate/v1/sessions</c> (TypeScript <c>GateSessionCreate</c>: SAVES_API.md §3.1's body plus
+/// OD-109's optional <c>dedicated</c>). <c>dedicated: true</c> asks for a dedicated lobby host session
+/// (admins only, no game, no content scan): <c>carDbSha256</c> is then absent and <c>hookSha256</c> is the
+/// empty-input digest. Both are left out of the body when unset, so an ordinary session's body is
+/// unchanged for servers without dedicated support. Never sent to the legacy <c>/launcher/v1/sessions</c>.
+/// </summary>
 public sealed record PlaySessionCreate(
     string SessionId,
     string Game,
@@ -116,9 +122,10 @@ public sealed record PlaySessionCreate(
     string Nonce,
     string LauncherVersion,
     string HookSha256,
-    string CarDbSha256,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CarDbSha256,
     ulong BaseRevision,
-    bool TakeOver);
+    bool TakeOver,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Dedicated = false);
 
 /// <summary>The game access ticket (PASETO <c>v4.public</c>; the hook sends it as <c>X-Fi-Session</c>).</summary>
 public sealed record GateTicket(string Token, string ExpiresAt, uint HeartbeatEveryMs);

@@ -35,8 +35,36 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     string relayUnavailableKey = "worlds.integrated_unavailable", Func<IHostRelay, WorldAnnounced, CancellationToken, Task>? updateRelayWorld = null,
     Func<IHostRelay, CancellationToken, Task>? refreshRelayAdmissions = null, Session.GameReadiness? gameReadiness = null,
     Func<CancellationToken, Task<WorldAccessDecision>>? checkWorldAccess = null, Action<string>? worldAccessDenied = null,
-    OnlineActivity? onlineActivity = null, bool idleWhenNoWorld = false, Func<double>? retryJitter = null)
+    OnlineActivity? onlineActivity = null, bool idleWhenNoWorld = false, Func<double>? retryJitter = null,
+    bool requireGameReadiness = true, bool closeWhenAlone = true)
 {
+    // OD-109: a dedicated host (the launcher with no game) opens a world without a loaded game and
+    // never applies the client alone-close; the overlay's bridge keeps both defaults.
+    private readonly bool _requireGameReadiness = requireGameReadiness;
+    private readonly bool _closeWhenAlone = closeWhenAlone;
+    private string? _hostedCode;
+    private uint _hostedPlayers;
+
+    /// <summary>The hosted world's join code (friends/private audiences only), as the last PUT answered.</summary>
+    public string? HostedCode => HostedWorldId is null ? null : Volatile.Read(ref _hostedCode);
+
+    private int _creating;
+
+    /// <summary>
+    /// A world is hosted or being opened by this bridge (OD-109: the launcher's dedicated lobby is not
+    /// created meanwhile, so the two never race for the relay's UDP port).
+    /// </summary>
+    public bool HostsOrOpensWorld => Volatile.Read(ref _creating) > 0 || HostingOrOpening;
+
+    /// <summary>
+    /// The catalog key for a relay that could not start, chosen after the attempt (e.g. its port is in
+    /// use); null keeps the constructor's <c>relayUnavailableKey</c>.
+    /// </summary>
+    public Func<string?>? RelayFailureKey { get; init; }
+
+    /// <summary>The hosted world's players as the last successful PUT or announce answered (no extra read).</summary>
+    public uint HostedPlayers => HostedWorldId is null ? 0 : Volatile.Read(ref _hostedPlayers);
+
     // the world's open and close in the launcher's log (ids only, never addresses)
     private readonly Action<string> _log = log ?? (_ => { });
     private readonly Diagnostics.UdpDiagnostics _udpDiagnostics=new(log??(_=>{}),clock);
@@ -883,12 +911,25 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public async Task<UiFrame.Hosted> CreateAsync(UiFrame.CreateWorld request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
+        Interlocked.Increment(ref _creating);
+        try { return await CreateCoreAsync(request, cancellation).ConfigureAwait(false); }
+        finally { Interlocked.Decrement(ref _creating); }
+    }
+
+    private async Task<UiFrame.Hosted> CreateCoreAsync(UiFrame.CreateWorld request, CancellationToken cancellation)
+    {
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
         if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
             return new(1, string.Empty, string.Empty, DeniedMessage(denied, "create"));
-        if (GameReadiness.CurrentGeneration is not { } generation)
-            return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+        uint? generation = null;
+        if (_requireGameReadiness)
+        {
+            if (GameReadiness.CurrentGeneration is not { } current)
+                return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+            generation = current;
+        }
+        bool GameStillReady() => generation is not { } loaded || GameReadiness.Matches(loaded);
         InvalidateMine(reset: true);
         var operation = QueueHostOperation(replace: true, create: true);
         await operation.Previous.ConfigureAwait(false);
@@ -899,14 +940,14 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         {
             if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } changed)
                 return new(1, string.Empty, string.Empty, DeniedMessage(changed, "create"));
-            if (!GameReadiness.Matches(generation)) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+            if (!GameStillReady()) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
             await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
             if (!IsCurrent(operation) || stop.IsCancellationRequested) return HostingFailed();
             if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } beforeRelay)
                 return new(1, string.Empty, string.Empty, DeniedMessage(beforeRelay, "create"));
             var players = (uint)Math.Clamp((int)request.MaxPlayers, 2, 12);
             _relay = _startRelay?.Invoke(players);
-            if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(relayUnavailableKey));
+            if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(RelayFailureKey?.Invoke() ?? relayUnavailableKey));
             if (_relay is IntegratedWorldRelay integrated) {integrated.CrashContext = CrashContext;integrated.DiagnosticLog=_log;}
             var relay = _relay;
             var settings = new WorldSettings
@@ -924,7 +965,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 stop.Token.ThrowIfCancellationRequested();
                 if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } beforePut)
                     return new(1, string.Empty, string.Empty, DeniedMessage(beforePut, "create"));
-                if (!GameReadiness.Matches(generation)) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+                if (!GameStillReady()) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
                 openingId = WorldHostScheduler.NewWorldId();
                 var minted = openingId;
                 var pending = OperationAsync(_createRetry, token => _mm.PutWorldAsync(minted, settings, token), stop.Token,
@@ -936,16 +977,16 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 {
                     if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } afterPut)
                         return new(1, string.Empty, string.Empty, DeniedMessage(afterPut, "create"));
-                    if (!GameReadiness.Matches(generation)) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+                    if (!GameStillReady()) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
                     if (world.Id != openingId)
                         return new(1, string.Empty, string.Empty, DeniedMessage(WorldAccessDecision.Inconclusive, "create"));
-                    if (!GameReadiness.Matches(generation)) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+                    if (!GameStillReady()) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
                     if (updateRelayWorld is not null)
                         await updateRelayWorld(relay, world, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false);
                     stop.Token.ThrowIfCancellationRequested();
                     if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } afterPolicy)
                         return new(1, string.Empty, string.Empty, DeniedMessage(afterPolicy, "create"));
-                    if (!GameReadiness.Matches(generation)) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
+                    if (!GameStillReady()) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
                     lock (_hostState)
                     {
                         if (_hostGeneration != operation.Generation) throw new OperationCanceledException(stop.Token);
@@ -956,6 +997,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _hostLastStamp = _clock.GetTimestamp();
                         (_hostJoining, _hostAloneSince, _hostAloneWarned) = (true, _clock.GetTimestamp(), false);
                         _nextAdmissionsRefresh = Now + AdmissionsEvery;
+                        Volatile.Write(ref _hostedCode, world.Code);
+                        Volatile.Write(ref _hostedPlayers, world.Players);
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
@@ -1150,6 +1193,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 // A granted player who is not synced yet is still connecting: keep the fast cadence for them.
                 _hostJoining = world.Punches.Any(p => !p.Kicked && !peers.Contains(p.Xuid, StringComparer.Ordinal));
                 _nextAdmissionsRefresh = Now + AdmissionsEvery;
+                Volatile.Write(ref _hostedPlayers, world.Players);
+                // A dedicated host has no game of its own and stays open while empty (OD-109).
+                if (!_closeWhenAlone) return null;
                 // Only the host, no grant, no held seat (pending invites and requests hold one, §3.4).
                 var alone = peers.Count == 0 && world.Punches.Count == 0 && world.Players <= 1 && world.OpenSeats + 1 >= world.MaxPlayers;
                 if (!alone) { (_hostAloneSince, _hostAloneWarned) = (null, false); return null; }
@@ -1170,7 +1216,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (beat.Error is { } error && _host.Failed(error, Now).Outcome is HostOutcome.WorldGone or HostOutcome.Refused)
             {
                 // The server closes a lonely world from its own open time, usually just before ours (OD-107).
-                var idle = _hostAloneWarned && _hostAloneSince is { } since && _clock.GetElapsedTime(since) >= AloneWarnAfter;
+                var idle = _closeWhenAlone && _hostAloneWarned && _hostAloneSince is { } since && _clock.GetElapsedTime(since) >= AloneWarnAfter;
                 await CloseCurrentHostAsync(id, CancellationToken.None).ConfigureAwait(false);
                 _log($"worlds: world {id} ended by the server: {error.Kind}");
                 return _text(idle && error.Kind == MmErrorKind.WorldNotFound ? "worlds.host_idle_closed" : "worlds.host_ended");

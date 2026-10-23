@@ -22,6 +22,10 @@ public static class ErrorCodes
     public const string AuthRefreshInvalid = "AUTH.REFRESH_INVALID";
     public const string AuthRefreshReused = "AUTH.REFRESH_REUSED";
     public const string AuthForbidden = "AUTH.FORBIDDEN";
+    /// <summary>403 <c>{role}</c>: e.g. a dedicated lobby session without <c>role = admin</c> (OD-109).</summary>
+    public const string AuthRoleRequired = "AUTH.ROLE_REQUIRED";
+    /// <summary>400: also what a server without dedicated lobby support answers to <c>dedicated</c> (OD-109).</summary>
+    public const string RequestInvalid = "REQUEST.INVALID";
     public const string AuthReauthRequired = "AUTH.REAUTH_REQUIRED";
     public const string AccountsNotPendingDeletion = "ACCOUNTS.NOT_PENDING_DELETION";
     public const string AccountsConfirmationMismatch = "ACCOUNTS.CONFIRMATION_MISMATCH";
