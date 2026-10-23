@@ -217,6 +217,7 @@ public sealed partial class ShellViewModel
 
     public void ToggleModOptions()
     {
+        _showModInfo = false;
         _showModOptions = !_showModOptions;
         if (_showModOptions)
         {
@@ -329,7 +330,7 @@ public sealed partial class ShellViewModel
             }
         }
         _ini.EnforceInfinityLocks();
-        ModAction(() => Mods().SaveIni(Eo, _ini, DateTime.UtcNow), S["mods.options_saved"]);
+        ModAction(() => Mods().SaveIni(Eo, _ini, DateTime.UtcNow), S["mods.options_saved"], preserveOptionsOnFailure: true);
     }
 
     public void RevertIni()
@@ -339,8 +340,8 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
-    private void ModAction(Action action, string done) =>
-        _ = RunModOperationAsync(() => Task.Run(action), done);
+    private void ModAction(Action action, string done, bool preserveOptionsOnFailure = false) =>
+        _ = RunModOperationAsync(() => Task.Run(action), done, preserveOptionsOnFailure);
 
     private ModManager Mods() => new(_install!.Root, GameRunning);
 

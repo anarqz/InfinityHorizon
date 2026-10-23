@@ -3,6 +3,9 @@ using System.Text;
 
 namespace Infinity.Core.Mods;
 
+/// <summary>The settings file changed since this editing session loaded it.</summary>
+public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");
+
 /// <summary>
 /// One switch of <c>FH2_ExtraOptions.ini</c> (0 = off, 1 = on), as the official 0.2.98 file
 /// documents it. <see cref="Advanced"/> options change how the game treats saves or online
@@ -55,6 +58,7 @@ public sealed class ExtraOptionsIni
     private readonly List<string> _endings;
     private readonly string _newline;
     private Encoding _encoding = new UTF8Encoding(false);
+    public string? SourceHash { get; private set; }
 
     private ExtraOptionsIni(List<string> lines, List<string> endings, string newline)
     {
@@ -121,6 +125,7 @@ public sealed class ExtraOptionsIni
         }
         var ini = Parse(encoding.GetString(bytes, skip, bytes.Length - skip));
         ini._encoding = encoding;
+        ini.SourceHash = ModManifest.Hash(bytes);
         return ini;
     }
 
@@ -226,6 +231,8 @@ public sealed class ExtraOptionsIni
     /// <summary>Writes atomically, after copying the current file to <paramref name="backupPath"/> when given.</summary>
     public void Save(string path, string? backupPath)
     {
+        if (SourceHash is not null && (!File.Exists(path) || ModManifest.Hash(File.ReadAllBytes(path)) != SourceHash))
+            throw new ModSettingsChangedException();
         if (backupPath is not null && File.Exists(path))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
@@ -233,7 +240,13 @@ public sealed class ExtraOptionsIni
         }
         var temp = path + ".fi-tmp";
         File.WriteAllText(temp, ToString(), _encoding); // the file's own encoding (and BOM)
+        if (SourceHash is not null && (!File.Exists(path) || ModManifest.Hash(File.ReadAllBytes(path)) != SourceHash))
+        {
+            File.Delete(temp);
+            throw new ModSettingsChangedException();
+        }
         File.Move(temp, path, overwrite: true);
+        SourceHash = ModManifest.Hash(ToBytes());
     }
 
     private static bool? ParseBool(string value) => value switch
