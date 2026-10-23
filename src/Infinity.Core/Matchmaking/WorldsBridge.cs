@@ -513,7 +513,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         }
                         var proofInstalled=false;
                         try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation).ConfigureAwait(false);}
-                        catch(Exception error) when(HostFailure(error)) { }
+                        catch(Exception error) when(HostFailure(error)) { _log($"worlds: socket proof context failed: {error.GetType().Name}"); }
                         if(!proofInstalled || joinEpoch!=Volatile.Read(ref _mineEpoch))
                         {
                             await ReleaseGrantAsync(grant.Id,CancellationToken.None).ConfigureAwait(false);

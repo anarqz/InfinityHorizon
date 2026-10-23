@@ -91,9 +91,7 @@ public sealed partial class ShellViewModel
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 ModSet = mods,
                 SocketProofRequired=_config.Production,SocketProofKeys=relayKeys,
-                // A plain-http development stack has no trusted (HTTPS-sampled) server time; there this PC's
-                // clock stands in, so a development guest can arm its socket proof and network hints.
-                TrustedServerNow=_config.Production || !DevServer ? session.Api.TrustedServerNow : () => session.Api.TrustedServerNow() ?? DateTimeOffset.UtcNow,
+                TrustedServerNow=session.Api.TrustedServerNow,
             };
         };
     }
