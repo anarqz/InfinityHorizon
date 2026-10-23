@@ -44,6 +44,18 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         return new(impact, id, revision, Array.AsReadOnly(settings));
     }
 
+    /// <summary>
+    /// The one classification shared by the lobby mod set (OD-112, ModSets) and Hardcore profiles (OD-112
+    /// follow-up): a mod affects multiplayer exactly when its manifest declares <c>multiplayer</c> with an
+    /// impact other than <c>cosmetic</c> (<c>gameplay</c> and <c>unknown</c> count). A manifest without
+    /// <c>multiplayer</c> (a client-only mod; native mods must declare it) does not.
+    /// </summary>
+    public bool EntersLobbySet => Impact != "cosmetic";
+
+    /// <summary>See <see cref="EntersLobbySet"/>: a Hardcore profile refuses exactly these mods.</summary>
+    public static bool AffectsMultiplayer(ModManifest manifest) =>
+        (manifest ?? throw new ArgumentNullException(nameof(manifest))).Multiplayer is { EntersLobbySet: true };
+
     private static bool Identifier(string? value) => value is { Length: > 0 and <= 64 }
         && value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 

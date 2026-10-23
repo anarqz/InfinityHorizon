@@ -113,14 +113,14 @@ public sealed partial class ShellViewModel
     /// Before every launch, off the UI thread (H4d, §1.3): locked settings enforced and Wine overrides
     /// reconciled. Nothing installed: nothing read or written.
     /// </summary>
-    private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync()
+    private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync(bool hardcore = false)
     {
         if (ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
         ModLaunchPreparation prepared;
         for (var attempt = 0; ; attempt++)
         {
             // Startup retention may hold the bucket lock for a moment: wait for it rather than refuse the launch.
-            try { prepared = await Task.Run(() => factory().PrepareForLaunch()); break; }
+            try { prepared = await Task.Run(() => factory().PrepareForLaunch(hardcore)); break; }
             catch (ModException error) when (error.Code == ModErrors.Busy && attempt < 20) { await Task.Delay(250); }
         }
         foreach (var warning in prepared.Warnings) Log("mods: " + warning);

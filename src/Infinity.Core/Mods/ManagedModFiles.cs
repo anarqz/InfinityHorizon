@@ -106,10 +106,18 @@ public sealed partial class ManagedModFiles
         .Select(f => (File: f, Actual: Current(Target(f.Root, f.Path)), Expected: receipt.Enabled ? f.After : f.Before))
         .Where(x => x.Actual != x.Expected).Select(x => new ModDrift(x.File.Root, x.File.Path, x.Expected, x.Actual)).ToList();
 
+    /// <summary>OD-112 follow-up: on a Hardcore profile no mod that affects multiplayer may become enabled.</summary>
+    private static void CheckProfile(ModManifest manifest, bool hardcore)
+    {
+        if (hardcore && ModMultiplayer.AffectsMultiplayer(manifest))
+            throw new ModException("Hardcore profiles cannot enable mods that affect multiplayer", ModErrors.Hardcore);
+    }
+
     public async Task InstallAsync(HttpClient http, ModManifest manifest, IReadOnlyCollection<string> downloadHosts, CancellationToken cancellation,
-        IProgress<string>? progress = null, bool update = false)
+        IProgress<string>? progress = null, bool update = false, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(downloadHosts);
+        if (!update) CheckProfile(manifest, hardcore);
         if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported);
         var packages = new Dictionary<string, byte[]>();
         foreach (var (name, spec) in PackageSpecs(manifest))
@@ -135,13 +143,13 @@ public sealed partial class ManagedModFiles
             packages.Add(name, bytes);
         }
         progress?.Report("verify");
-        await Task.Run(() => InstallVerifiedPackages(manifest, packages, progress, update), cancellation).ConfigureAwait(false);
+        await Task.Run(() => InstallVerifiedPackages(manifest, packages, progress, update, hardcore), cancellation).ConfigureAwait(false);
     }
 
-    public void InstallVerifiedPackage(ModManifest manifest, byte[] package, IProgress<string>? progress = null, bool update = false)
+    public void InstallVerifiedPackage(ModManifest manifest, byte[] package, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(package);
-        InstallVerifiedPackages(manifest, new Dictionary<string, byte[]> { ["primary"] = package }, progress, update);
+        InstallVerifiedPackages(manifest, new Dictionary<string, byte[]> { ["primary"] = package }, progress, update, hardcore);
     }
 
     private static Dictionary<ManifestFile, byte[]> VerifyPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages)
@@ -168,7 +176,7 @@ public sealed partial class ManagedModFiles
         return verified;
     }
 
-    internal void InstallVerifiedPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages, IProgress<string>? progress = null, bool update = false)
+    internal void InstallVerifiedPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
     {
         if (!manifest.SupportedForInstall)
             throw new ModException("runtime or dependencies require coordination", ModErrors.Unsupported);
@@ -176,7 +184,12 @@ public sealed partial class ManagedModFiles
         var installed = ReadReceipt(manifest.Id);
         if (installed is not null && !update) throw new ModException("already managed; use enable or disable", installed.ManifestHash == manifest.Digest ? ModErrors.Failed : ModErrors.Unsupported);
         if (installed is not null && installed.ManifestHash == manifest.Digest) throw new ModException("this version is already installed");
-        if (installed is not null) { Update(manifest, installed, VerifyPackages(manifest, packages), progress); return; }
+        if (installed is not null)
+        {
+            if (installed.Enabled) CheckProfile(manifest, hardcore); // an enabled mod stays enabled across its update
+            Update(manifest, installed, VerifyPackages(manifest, packages), progress); return;
+        }
+        CheckProfile(manifest, hardcore);
         CheckDependencies(manifest);
         var verified = VerifyPackages(manifest, packages);
         var owned = new List<ManagedModFile>();
@@ -284,9 +297,10 @@ public sealed partial class ManagedModFiles
     /// update, H3) takes the current files as the new originals, backed up first. Disabling refuses
     /// drift: the player chooses <see cref="AcceptCurrentFiles"/> or <see cref="DisableKeepingCurrentFiles"/>.
     /// </summary>
-    public void SetEnabled(ModManifest manifest, bool enabled, IProgress<string>? progress = null)
+    public void SetEnabled(ModManifest manifest, bool enabled, IProgress<string>? progress = null, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(manifest);
+        if (enabled) CheckProfile(manifest, hardcore); // disabling is always allowed
         using var gate = Lock();
         var receipt = Receipt(manifest) ?? throw new ModException("mod has no installation receipt");
         if (receipt.Enabled == enabled) return;

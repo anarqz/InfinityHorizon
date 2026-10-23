@@ -226,6 +226,12 @@ public sealed partial class ShellViewModel
                 _lobbyLocalError = LobbyBlocker is not null ? LobbyHint : S["lobby.start_failed"];
                 return;
             }
+            if (profile.Mode == "hardcore")
+            {
+                // OD-112 follow-up: a Hardcore lobby carries no mod that affects multiplayer (its set would make it modded).
+                await RefreshModsAsync();
+                if (HardcoreRefusedMods is { Count: > 0 } refused) { _lobbyLocalError = HardcoreRefusal(refused); return; }
+            }
             var host = NewDedicatedHost(profile);
             if (host is null) { _lobbyLocalError = S["lobby.unavailable"]; return; }
             _dedicated = host;

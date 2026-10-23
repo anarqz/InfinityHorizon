@@ -30,6 +30,8 @@ public static class ModErrors
     public const string Catalog = "catalog";
     public const string Settings = "settings";
     public const string Relink = "relink";
+    /// <summary>A Hardcore profile with a mod that affects multiplayer (OD-112 follow-up).</summary>
+    public const string Hardcore = "hardcore";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");
