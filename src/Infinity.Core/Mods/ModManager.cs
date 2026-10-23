@@ -190,7 +190,7 @@ public sealed class ModManager(string azimuthRoot, Func<bool> gameRunning)
 
     // The supplied client must disable automatic redirects and carry no credentials/cookies.
     // GitHub serves release bytes through its CDN; validate each hop before sending it.
-    private static async Task<HttpResponseMessage> DownloadAsync(HttpClient http, Uri location, CancellationToken cancellation)
+    internal static async Task<HttpResponseMessage> DownloadAsync(HttpClient http, Uri location, CancellationToken cancellation)
     {
         if (http.DefaultRequestHeaders.Any())
             throw new ModException("a dedicated download client is required");

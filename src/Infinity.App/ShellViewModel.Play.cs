@@ -81,7 +81,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModRecoveryRequired;
 
     public string? PlayStatus => _playStatus;
 
