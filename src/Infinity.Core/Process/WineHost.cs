@@ -6,7 +6,10 @@ namespace Infinity.Core.Process;
 /// <summary>Wine detection and manifest-selected native DLL overrides.</summary>
 public static class WineHost
 {
-    public static bool Detected => How is not null;
+    public static bool Detected => DetectedOverride.Value ?? How is not null;
+
+    /// <summary>Tests only: Wine-mode rules on any host, scoped to the calling async flow.</summary>
+    internal static readonly AsyncLocal<bool?> DetectedOverride = new();
 
     /// <summary>How Wine was recognised (for the log), or null on Windows.</summary>
     public static string? How { get; } = Detect();
