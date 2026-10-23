@@ -113,13 +113,48 @@ static void mod_refuse(const char *why) {
     log_append("); this session plays without its selected mods.\r\n");
 }
 
+static void mod_runtime_reason(void) {
+    static wchar_t path[PATH_CAPACITY];
+    size_t n = 0, slash = 0;
+    while (mod_plan[n] && n + 1 < PATH_CAPACITY) { path[n] = mod_plan[n]; if (path[n] == L'\\') slash = n; ++n; }
+    if (!slash || slash + 12 >= PATH_CAPACITY) return;
+    memory_copy(path + slash + 1, L"runtime.log", sizeof(L"runtime.log"));
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, 0);
+    if (file == INVALID_HANDLE_VALUE) return;
+    static char tail[2049], chunk[1024];
+    DWORD read = 0, kept = 0;
+    for (unsigned rounds = 0; rounds < 1100 && ReadFile(file, chunk, sizeof chunk, &read, 0) && read; ++rounds) {
+        if (kept + read > 2048) {
+            DWORD drop = kept + read - 2048;
+            for (DWORD i = drop; i < kept; ++i) tail[i - drop] = tail[i];
+            kept -= drop;
+        }
+        memory_copy(tail + kept, chunk, read);
+        kept += read;
+    }
+    CloseHandle(file);
+    tail[kept] = 0;
+    char *line = 0;
+    for (char *p = tail; *p; ++p) {
+        if (*p == '\r' || *p == '\n') { *p = 0; continue; }
+        if ((p == tail || !p[-1]) && (p[0] == '[')) line = p;
+        if (*p < 0x20 || *p > 0x7e) *p = '?';
+    }
+    if (!line) return;
+    log_append("MODS: the runtime said: ");
+    log_append(line);
+    log_append("\r\n");
+}
+
 static void mod_failure(void) {
+    mod_runtime_reason();
     InterlockedExchange(&mod_busy, 0);
     if (mod_online && mod_query2) {
         static InfinityModsSnapshotV2 last; last.size = sizeof last; last.abi_version = 2;
         if (!mod_query2(&last)) { last.failed = 1; fi_launch_mods_report(&last); fi_launch_mods_flush(1000); }
     }
     log_append(mod_online ? "MODS: selected runtime failed; ending the session.\r\n" : "MODS: selected runtime failed; ending the offline session.\r\n");
+    TerminateProcess(GetCurrentProcess(), 0x46490004);
     ExitProcess(0x46490004);
 }
 
@@ -151,7 +186,7 @@ static DWORD WINAPI mod_worker(void *unused) {
     memory_copy(&mod_query2, &query2_address, sizeof mod_query2);
 
     if (!start || !query || (mod_online && !mod_query2)) { mod_refuse("the runtime lacks its entry points"); return 0; }
-    if (start(mod_game, mod_plan, mod_plan_hash)) { mod_refuse("the runtime refused the plan"); return 0; }
+    if (start(mod_game, mod_plan, mod_plan_hash)) { mod_runtime_reason(); mod_refuse("the runtime refused the plan"); return 0; }
     if (!mod_report()) { mod_failure(); return 0; }
     ULONGLONG deadline = GetTickCount64() + 70000;
     int ready = 0;

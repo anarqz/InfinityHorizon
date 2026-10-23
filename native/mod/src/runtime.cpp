@@ -169,7 +169,7 @@ void report(InfinityMod* mod, uint32_t state) {
     std::lock_guard lock(state_mutex);
     auto e = owned(mod);
     if (!e || failed) return;
-    if (state == INFINITY_MOD_FAILED) fail_locked();
+    if (state == INFINITY_MOD_FAILED) { infinity_mod::plog("failed: " + e->owner.name + " reported itself failed"); fail_locked(); }
     else if (state == INFINITY_MOD_READY && e->report.state == INFINITY_MOD_INITIALIZING)
     {
         if (GetTickCount64() >= e->deadline) fail_locked();
@@ -220,35 +220,36 @@ void load_selected(uint32_t timeout_ms = 65000) {
                 if (hook_fault && !failed) fail_locked();
                 if (failed) return;
                 for (size_t j = 0; j < i; ++j)
-                    if ((e.dependencies & (1u << j)) && entries[j]->report.state != INFINITY_MOD_READY) { fail_locked(); return; }
+                    if ((e.dependencies & (1u << j)) && entries[j]->report.state != INFINITY_MOD_READY) { infinity_mod::plog("failed: " + e.owner.name + " needs " + entries[j]->owner.name + ", which is not ready"); fail_locked(); return; }
                 if (e.data) { e.init_returned = true; e.report.state = INFINITY_MOD_READY; continue; }
                 fill_api(e);
                 e.deadline = GetTickCount64() + timeout_ms;
                 e.report.state = INFINITY_MOD_INITIALIZING;
             }
             if (GetModuleHandleW(e.binary.c_str()) || GetModuleHandleW(std::filesystem::path(e.binary).filename().c_str()))
-                throw std::runtime_error("preloaded mod");
+                throw std::runtime_error(e.owner.name + " was already loaded");
             e.library = LoadLibraryExW(e.binary.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-            if (!e.library) throw std::runtime_error("load failed");
+            if (!e.library) throw std::runtime_error("loading " + e.owner.name + " failed (error " + std::to_string(GetLastError()) + ")");
             {
                 std::lock_guard lock(state_mutex);
                 if (hook_fault && !failed) fail_locked();
                 if (failed) return;
             }
             auto init = reinterpret_cast<InfinityModInitializeV1Fn>(GetProcAddress(e.library, "InfinityModInitializeV1"));
-            if (!init || guarded_initialize(init, &e.api) != 0) throw std::runtime_error("initialization failed");
+            if (!init) throw std::runtime_error(e.owner.name + " has no InfinityModInitializeV1");
+            if (const int rc = guarded_initialize(init, &e.api); rc != 0) throw std::runtime_error(e.owner.name + "'s initializer returned " + std::to_string(rc));
             {
                 std::lock_guard lock(state_mutex);
                 e.init_returned = true;
-                if (GetTickCount64() >= e.deadline && !failed) fail_locked();
+                if (GetTickCount64() >= e.deadline && !failed) { infinity_mod::plog("failed: " + e.owner.name + " took longer than its deadline to initialize"); fail_locked(); }
             }
             for (;;) {
                 {
                     std::lock_guard lock(state_mutex);
                     if (failed) return;
-                    if (hook_fault) { fail_locked(); return; }
+                    if (hook_fault) { infinity_mod::plog("failed: a hook faulted while " + e.owner.name + " was starting"); fail_locked(); return; }
                     if (e.report.state == INFINITY_MOD_READY) break;
-                    if (GetTickCount64() >= e.deadline) { fail_locked(); return; }
+                    if (GetTickCount64() >= e.deadline) { infinity_mod::plog("failed: " + e.owner.name + " did not report ready in time"); fail_locked(); return; }
                 }
                 Sleep(20);
             }
@@ -256,7 +257,8 @@ void load_selected(uint32_t timeout_ms = 65000) {
         std::lock_guard lock(state_mutex);
         if (hook_fault && !failed) fail_locked();
         if (!failed) complete = true;
-    } catch (...) { std::lock_guard lock(state_mutex); fail_locked(); }
+    } catch (const std::exception& error) { infinity_mod::plog(std::string("failed: ") + error.what()); std::lock_guard lock(state_mutex); fail_locked(); }
+    catch (...) { infinity_mod::plog("failed: an unexpected error"); std::lock_guard lock(state_mutex); fail_locked(); }
 }
 bool prepare(const InfinityModsLaunchV1& launch) {
     std::vector<std::unique_ptr<Entry>> pending;
@@ -302,9 +304,21 @@ std::string narrow(const std::wstring& value) {
     WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), out.data(), count, nullptr, nullptr);
     return out;
 }
+std::mutex log_mutex;
+std::wstring log_path;
+void log_to(const std::wstring& path) { std::lock_guard lock(log_mutex); log_path = path; }
 void log_line(const std::string& who, const std::string& text) {
-    auto line = "[infinity_mod:" + who.substr(0,64) + "] " + text.substr(0,1024) + "\n";
+    auto line = "[infinity_mod:" + who.substr(0,64) + "] " + text.substr(0,1024) + "\r\n";
     OutputDebugStringA(line.c_str());
+    std::lock_guard lock(log_mutex);
+    if (log_path.empty()) return;
+    HANDLE file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER size{}; DWORD wrote = 0;
+    if (plain(file, false) && GetFileSizeEx(file, &size) && size.QuadPart < 1024 * 1024)
+        WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &wrote, nullptr);
+    CloseHandle(file);
 }
 }
 
@@ -315,7 +329,7 @@ extern "C" __declspec(dllexport) int InfinityModsStartV1(const InfinityModsLaunc
     std::lock_guard lock(state_mutex);
     if (started.exchange(true)) return 2;
     try {
-        if (!prepare(*launch)) { failed = true; return 1; }
+        if (!prepare(*launch)) { infinity_mod::plog("refused: a selected mod's files do not match the plan"); failed = true; return 1; }
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(&InfinityModsStartV1), &pinned)) { failed = true; return 3; }
@@ -453,7 +467,9 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         } else {
             return 1;
         }
-        auto locked = verify_file(path, hash, std::filesystem::path(path).parent_path().wstring(), false); if (!locked) return 1;
+        infinity_mod::log_to((std::filesystem::path(path).parent_path() / L"runtime.log").wstring());
+        auto locked = verify_file(path, hash, std::filesystem::path(path).parent_path().wstring(), false);
+        if (!locked) { infinity_mod::plog("refused: the plan does not verify"); return 1; }
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(locked->file, &size) || size.QuadPart < 12 || size.QuadPart > 1024 * 1024) return 1;
         LARGE_INTEGER zero{}; if (!SetFilePointerEx(locked->file, zero, nullptr, FILE_BEGIN)) return 1;

@@ -531,6 +531,7 @@
   "mods.required_enable": "Ativar {mod}",
   "mods.required_retry": "Tentar de novo",
   "integrity.mediaoverride": "O Hardcore exige que as substituições de mídia do jogo tenham apenas arquivos dos seus mods ativados que não afetam o multiplayer. Remova ou restaure estes arquivos e jogue de novo: {paths}",
+  "mods.runtime_ended": "Os mods selecionados falharam ao iniciar, então o Infinity fechou o jogo. Abra Mods para revisá-los ou desative-os para jogar sem mods.",
   "mods.prepare_failed": "Os mods não puderam ser preparados para esta execução. Abra Mods ou desative os mods para jogar sem eles.",
   "mods.open": "Abrir Mods",
   "mods.error.game_running": "Feche o jogo antes de alterar mods.",

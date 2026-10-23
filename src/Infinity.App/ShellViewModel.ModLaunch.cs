@@ -20,6 +20,35 @@ public sealed partial class ShellViewModel
     /// <summary>Why the last launch could not prepare its mods (with the reason), shown on Play until the next attempt.</summary>
     private string? _modLaunchFailure;
 
+    /// <summary>The hook's exit when selected mods failed after they began loading (mod_host.c, N-M4): never a crash report.</summary>
+    internal const uint ModRuntimeExitCode = 0x46490004;
+
+    /// <summary>The current session ended through <see cref="ModRuntimeExitCode"/>; its crash capture is not presented.</summary>
+    private bool _modRuntimeEnded;
+
+    /// <summary>This launch's plan file (FI_MOD_PLAN); the runtime writes runtime.log beside it.</summary>
+    private string? _nativePlanPath;
+
+    /// <summary>
+    /// The runtime's own log for this launch, copied into launcher.log (its last 40 lines), and its last failure or refusal
+    /// ("failed: …" / "refused: …"), or null.
+    /// </summary>
+    private string? RuntimeReason()
+    {
+        if (_nativePlanPath is not { } plan) return null;
+        try
+        {
+            var path = Path.Combine(Path.GetDirectoryName(plan)!, "runtime.log");
+            if (!File.Exists(path) || new FileInfo(path).Length > 1024 * 1024) return null;
+            var lines = File.ReadAllLines(path).Select(l => new string(l.Select(c => c is >= ' ' and <= '~' ? c : '?').ToArray())).ToArray();
+            foreach (var line in lines.TakeLast(40)) Log("mod runtime: " + line);
+            var reason = lines.LastOrDefault(l => l.Contains("] failed: ", StringComparison.Ordinal) || l.Contains("] refused: ", StringComparison.Ordinal));
+            return reason is null ? null : reason[(reason.IndexOf("] ", StringComparison.Ordinal) + 2)..];
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
     /// <summary>A failed mod preparation: logged with its message, shown on Play (never only the status line) and returned for <see cref="Message"/>.</summary>
     private string ModLaunchFailed(string where, Exception error)
     {
@@ -70,7 +99,12 @@ public sealed partial class ShellViewModel
         if (GameRunning()) { Message = S["mods.close_game"]; return null; }
         var key = NativeModKey;
         _modOperation = true; _modProgress = S["mods.session_prepare"]; Busy = true; Changed(string.Empty);
-        try { return await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key)); }
+        try
+        {
+            var plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
+            _nativePlanPath = plan.Environment.FirstOrDefault(v => v.Name == "FI_MOD_PLAN").Value;
+            return plan;
+        }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is System.ComponentModel.Win32Exception)
         {
             Message = ModLaunchFailed("online native plan", error);
