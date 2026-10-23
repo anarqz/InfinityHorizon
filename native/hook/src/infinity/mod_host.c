@@ -64,9 +64,25 @@ static int mod_lock_runtime(void) {
     sha256_finalize(&context, actual);
     return memory_equal(actual, mod_runtime_hash, 32);
 }
+static InfinityModsQueryV2Fn mod_query2;
+static int mod_online; /* a launcher session (FI_LAUNCH v1;pipe=): native mods inside a modded lobby (OD-112) */
 static void mod_failure(void) {
-    log_append("MODS: selected runtime failed; ending the offline session.\r\n");
+    if (mod_online && mod_query2) {
+        /* the launcher learns that the mods failed before the session ends (N-H2) */
+        static InfinityModsSnapshotV2 last; last.size = sizeof last; last.abi_version = 2;
+        if (!mod_query2(&last)) { last.failed = 1; fi_launch_mods_report(&last); fi_launch_mods_flush(1000); }
+    }
+    log_append(mod_online ? "MODS: selected runtime failed; ending the session.\r\n" : "MODS: selected runtime failed; ending the offline session.\r\n");
     ExitProcess(0x46490004);
+}
+/* V2's snapshot to the launcher: 0 when an online session lacks the plan that binds it (FIMOD003). */
+static int mod_report(void) {
+    if (!mod_query2) return !mod_online;
+    static InfinityModsSnapshotV2 snapshot; snapshot.size = sizeof snapshot; snapshot.abi_version = 2;
+    if (mod_query2(&snapshot)) return 0;
+    if (mod_online && snapshot.plan_version < 3) return 0;
+    if (mod_online) fi_launch_mods_report(&snapshot);
+    return 1;
 }
 static DWORD WINAPI mod_worker(void *unused) {
     (void)unused;
@@ -77,13 +93,20 @@ static DWORD WINAPI mod_worker(void *unused) {
     memory_copy(&start, &start_address, sizeof start);
     InfinityModsQueryV1Fn query; FARPROC query_address = GetProcAddress(library, "InfinityModsQueryV1");
     memory_copy(&query, &query_address, sizeof query);
-    if (!start || !query || start(mod_game, mod_plan, mod_plan_hash)) { mod_failure(); return 0; }
+    FARPROC query2_address = GetProcAddress(library, "InfinityModsQueryV2");
+    memory_copy(&mod_query2, &query2_address, sizeof mod_query2);
+    /* online: only a runtime that reports what it loaded, for this launch's plan */
+    if (!start || !query || (mod_online && !mod_query2) || start(mod_game, mod_plan, mod_plan_hash) || !mod_report()) { mod_failure(); return 0; }
     ULONGLONG deadline = GetTickCount64() + 70000;
     int ready = 0;
     for (;;) {
         static InfinityModsSnapshotV1 snapshot; snapshot.size = sizeof snapshot; snapshot.abi_version = 1;
         if (query(&snapshot) || snapshot.failed || (!snapshot.ready && GetTickCount64() >= deadline)) { mod_failure(); return 0; }
-        if (snapshot.ready && !ready) { ready = 1; log_append("MODS: selected native mods ready (offline session).\r\n"); }
+        if (!mod_report()) { mod_failure(); return 0; }
+        if (snapshot.ready && !ready) {
+            ready = 1;
+            log_append(mod_online ? "MODS: selected native mods ready (launcher session; reported).\r\n" : "MODS: selected native mods ready (offline session).\r\n");
+        }
         Sleep(250);
     }
 }
@@ -93,7 +116,9 @@ void fi_mod_host_start(void *image) {
 #ifdef FI_DEV
     DWORD n = GetEnvironmentVariableW(L"FI_MOD_PLAN", mod_plan, PATH_CAPACITY);
     if (!n) return;
-    if (n >= PATH_CAPACITY || fi_cfg()->launch != FI_LAUNCH_OFFLINE
+    /* offline as before; a launcher session too (OD-112), where the runtime must report a FIMOD003 plan */
+    mod_online = fi_cfg()->launch == FI_LAUNCH_PROTOCOL;
+    if (n >= PATH_CAPACITY || (fi_cfg()->launch != FI_LAUNCH_OFFLINE && !mod_online)
         || !mod_hash_env(L"FI_MOD_PLAN_HASH", mod_plan_hash) || !mod_hash_env(L"FI_MOD_RUNTIME_HASH", mod_runtime_hash)) { mod_failure(); return; }
     n = GetEnvironmentVariableW(L"FI_MOD_RUNTIME", mod_runtime, PATH_CAPACITY);
     if (!n || n >= PATH_CAPACITY) { mod_failure(); return; }
