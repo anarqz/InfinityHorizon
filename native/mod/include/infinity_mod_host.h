@@ -28,9 +28,7 @@ typedef struct InfinityModsSnapshotV1 {
     uint32_t size, abi_version, count, ready, failed;
     InfinityModReportV1 mods[INFINITY_MOD_MAX_COUNT];
 } InfinityModsSnapshotV1;
-/* V2 adds what binds the snapshot to one launch: the plan's format (2 FIMOD002, 3 FIMOD003),
-   the launcher's per-launch nonce (FIMOD003; zero for FIMOD002) and the plan's SHA-256. The hook
-   forwards it to the launcher (control frame ModsReport) as compatibility evidence, not anti-cheat. */
+
 typedef struct InfinityModsSnapshotV2 {
     uint32_t size, abi_version, plan_version, count, ready, failed;
     uint8_t nonce[16], plan_sha256[32];

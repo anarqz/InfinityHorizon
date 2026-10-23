@@ -140,7 +140,7 @@ public sealed partial class ManagedModFiles
             foreach (var path in new[] { runtime, helper })
             {
                 RejectLinks(path, Path.GetDirectoryName(helper)!, linkedBoundary: false); locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
-                if (!ReleaseSignature.VerifyFile(path, path + ".sig", verificationKey)) throw new ModException("mod host signature does not verify");
+                if (!ReleaseSignature.VerifyFile(path, path + ".sig", verificationKey, ReleaseSignature.ModRuntimePrefix)) throw new ModException("mod host signature does not verify");
             }
             var enabled = InstalledManifests().Where(m => Receipt(m) is { Enabled: true }).ToArray();
             var remaining = enabled.Where(m => m.IsNative).OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
