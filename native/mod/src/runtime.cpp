@@ -88,7 +88,7 @@ bool plain(HANDLE handle, bool directory) {
         && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
         && ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == directory;
 }
-std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32]) {
+std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32], DWORD share = FILE_SHARE_READ) {
     if (!valid_path(path.c_str())) return {};
     auto lock = std::make_unique<FileLock>();
     auto parent = std::filesystem::path(path).parent_path();
@@ -101,7 +101,7 @@ std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t ex
         if (parent == parent.root_path()) break;
         parent = parent.parent_path();
     }
-    lock->file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    lock->file = CreateFileW(path.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     LARGE_INTEGER length{};
     if (lock->file == INVALID_HANDLE_VALUE || !plain(lock->file, false) || !GetFileSizeEx(lock->file, &length)
@@ -437,7 +437,10 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         if (!plan.database.empty()) {
             if (!nonzero(plan.prepared_hash) || !nonzero(plan.sql_hash)) return 1;
             for (auto suffix : { L"-wal", L"-shm", L"-journal" }) if (std::filesystem::exists(plan.database + suffix)) return 1;
-            session_database_lock = verify_file(plan.database, plan.prepared_hash);
+            // N-H3: the game opens its database read-write, so the session pin shares writing (never
+            // deletion or renaming: it stays this file). The launcher re-verifies it when the session ends
+            // (RestoreSessionDatabase) and keeps anything changed outside the runtime for recovery.
+            session_database_lock = verify_file(plan.database, plan.prepared_hash, FILE_SHARE_READ | FILE_SHARE_WRITE);
             if (!session_database_lock) return 1;
         }
         infinity_mod::configure_readiness(std::move(plan.readiness));
