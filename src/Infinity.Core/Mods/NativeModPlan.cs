@@ -55,7 +55,8 @@ public sealed class NativeModPlan : IDisposable
         foreach (var entry in entries)
         {
             if (entry.BinarySha256.Length != 32 || entry.SettingsSha256.Length != 32 || entry.CompatibilitySha256.Length != 32
-                || entry.SqlSha256 is { Length: not 32 } || entry.Tables.Count > 32) throw new ModException("invalid mod plan entry");
+                || entry.SqlSha256 is { Length: not 32 }
+                || entry.Tables.Count > (entry.SqlSha256 is null ? DataModSql.MaxNativeTables : DataModSql.MaxTables)) throw new ModException("invalid mod plan entry");
             Text(writer, entry.Id); Text(writer, entry.Version); Text(writer, entry.Binary); Text(writer, entry.Config);
             writer.Write(entry.BinarySha256); writer.Write(entry.SettingsSha256); writer.Write(entry.CompatibilitySha256);
             writer.Write(entry.DependencyMask);
