@@ -201,6 +201,10 @@ public sealed partial class ManagedModFiles
                         throw new ModException("two mods write the same database table without a dependency", ModErrors.Conflict);
                 }
             var sqlFiles = selected.Select(m => m.HasDatabaseSql ? InstalledSql(m) : null).ToArray();
+            // OD-114 follow-up: at most one car pack replaces the whole database; it becomes the plan's baseline (never the stock file).
+            var bases = selected.Where(m => m.DatabaseBase is not null).ToArray();
+            if (bases.Length > 1) throw new ModException("two enabled mods replace the game database", ModErrors.DatabaseBase) { Detail = bases[0].Id };
+            var baseMod = bases.FirstOrDefault();
             foreach (var mod in enabled)
             {
                 if (!Verified(mod)) throw new ModException("mod installation changed");
@@ -213,7 +217,7 @@ public sealed partial class ManagedModFiles
                 if (mod.ConfigPath is { } config) locks.Add(new FileStream(Target("azimuth", config), FileMode.Open, FileAccess.Read, FileShare.Read));
             }
             var policies = selected.Where(m => m.Document.TryGetProperty("database", out _)).Select(m => m.Document.GetProperty("database")).ToArray();
-            string? relative = null, targetDatabase = null, baseline = null, before = null;
+            string? relative = null, targetDatabase = null, baseline = null, before = null, restore = null;
             var createdDirectories = new List<string>();
             var hashes = new byte[64];
             var folder = Safe(BackupRoot, "sessions/" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
@@ -230,8 +234,11 @@ public sealed partial class ManagedModFiles
                 var source = before is null ? Safe(_game!, seed) : targetDatabase;
                 for (var parent = Path.GetDirectoryName(relative.Replace('/', Path.DirectorySeparatorChar)); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
                     if (!Directory.Exists(Path.Combine(_game!, parent))) createdDirectories.Add(parent.Replace(Path.DirectorySeparatorChar, '/'));
-                var bytes = DatabaseBytes(source); baseline = Store(bytes);
-                if (before is not null && before != baseline) throw new ModException("database changed during snapshot");
+                var bytes = baseMod is null ? DatabaseBytes(source) : InstalledBase(baseMod); baseline = Store(bytes);
+                if (baseMod is null && before is not null && before != baseline) throw new ModException("database changed during snapshot");
+                // what returns after play: the override that existed before (unchanged by a base), else nothing
+                restore = baseMod is null || before is null ? baseline : Store(DatabaseBytes(targetDatabase));
+                if (before is not null && restore != before) throw new ModException("database changed during snapshot");
                 Atomic(Path.Combine(folder, "baseline.sqlite"), bytes);
                 for (var i = 0; i < selected.Count; i++)
                     if (sqlFiles[i] is { } sql) Atomic(Path.Combine(folder, NativeModPlan.DataSqlName(i)), sql);
@@ -256,7 +263,7 @@ public sealed partial class ManagedModFiles
                     else
                         entries.Add(new(mod.Id, mod.Version, "-", mod.ConfigPath is { } config ? Target("azimuth", config) : "-", new byte[32],
                             settings is null ? new byte[32] : Convert.FromHexString(settings.SourceHash), fingerprint, masks[i], mod.DatabaseTables,
-                            Convert.FromHexString(mod.DatabaseSql!.Sha256)));
+                            mod.DatabaseSql is { } sql ? Convert.FromHexString(sql.Sha256) : null));
                 }
                 return NativeModPlan.Serialize(nonce, _azimuth, _game ?? _azimuth, targetDatabase, baseline, hashes, readiness, entries);
             }
@@ -275,7 +282,7 @@ public sealed partial class ManagedModFiles
                     throw new ModException("prepared database result differs");
                 CheckGame(); NoDatabaseSidecars(targetDatabase);
                 if (Current(targetDatabase) != before) throw new ModException("database changed before publication");
-                Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, baseline!, after, before is not null, createdDirectories), Json));
+                Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, restore!, after, before is not null, createdDirectories), Json));
                 Atomic(targetDatabase, prepared);
             }
             return new(Path.Combine(folder, "launch.bin"), Plan(), runtime, locks, RestoreSessionDatabase, nonce);

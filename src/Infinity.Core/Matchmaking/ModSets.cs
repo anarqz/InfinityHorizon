@@ -292,7 +292,7 @@ public static class ModSets
             if (manifest.IsNative && manifest.Document.TryGetProperty("nativeHost", out var host)
                 && host.TryGetProperty("binary", out var path) && path.GetString() is { } destination)
                 binary = manifest.Files.FirstOrDefault(f => f.Role == "binary" && f.Destination == destination)?.Hash;
-            if (!manifest.IsNative && manifest.HasDatabaseSql)
+            if (!manifest.IsNative && (manifest.HasDatabaseSql || manifest.DatabaseBase is not null))
             {
                 // FIMOD004 data entry: the runtime reports a zero binary hash and the planned settings hash (or zero).
                 var zero = new string('0', 64);

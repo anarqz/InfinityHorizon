@@ -242,8 +242,8 @@ public sealed partial class ManagedModFiles
         }
         var multiplayer = enabled.Where(ModMultiplayer.AffectsMultiplayer).ToArray();
         if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))
-            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql) };
+            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql || m.DatabaseBase is not null) };
         ReconcileWineOverrides();
-        return new(NativeDllOverrides(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql) };
+        return new(NativeDllOverrides(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql || m.DatabaseBase is not null) };
     }
 }
