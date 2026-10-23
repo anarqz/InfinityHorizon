@@ -34,6 +34,8 @@ public static class ModErrors
     public const string Hardcore = "hardcore";
     /// <summary>A custom mod whose exact manifest digest the player has not confirmed yet (OD-114).</summary>
     public const string Unconfirmed = "unconfirmed";
+    /// <summary>A data mod whose SQL needs the mod runtime with data-mod support (FIMOD004), which this launcher does not have.</summary>
+    public const string RuntimeRequired = "runtime_required";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");

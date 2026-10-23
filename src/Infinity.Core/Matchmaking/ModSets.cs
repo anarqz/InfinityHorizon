@@ -56,7 +56,13 @@ public interface IModSetSource
 /// version, whether the native runtime initializes it, its binary's SHA-256 (native mods) and the
 /// SHA-256 of the settings file the fingerprint was computed over (null without settings).
 /// </summary>
-public sealed record PlannedMod(ModEntry Entry, string ModId, string ModVersion, bool Native, string? BinarySha256, string? SettingsSha256);
+/// <param name="DataSql">FIMOD004: a data mod whose SQL the runtime applies; like a native mod it is in the set only once the runtime reports
+/// it (zero binary hash, its planned settings hash or zero, its fingerprint).</param>
+public sealed record PlannedMod(ModEntry Entry, string ModId, string ModVersion, bool Native, string? BinarySha256, string? SettingsSha256, bool DataSql = false)
+{
+    /// <summary>Entered into the set from the runtime's report (native and SQL data mods), not from the verified launch plan alone.</summary>
+    public bool Reported => Native || DataSql;
+}
 
 /// <summary>A session without mods: always ready and vanilla.</summary>
 public sealed class VanillaModSet : IModSetSource
@@ -175,7 +181,7 @@ public sealed class RuntimeModSetSource : IModSetSource
         _nonce = (byte[])nonce.Clone();
         _planSha256 = Convert.FromHexString(planSha256);
         Planned = ModSets.Checked(plan.Select(m => m.Entry).ToList());
-        _state = plan.Any(m => m.Native) ? ModSetState.NotReady : ModSetState.ReadyWith(Planned);
+        _state = plan.Any(m => m.Reported) ? ModSetState.NotReady : ModSetState.ReadyWith(Planned);
     }
 
     public IReadOnlyList<ModEntry> Planned { get; }
@@ -229,7 +235,7 @@ public sealed class RuntimeModSetSource : IModSetSource
         var ready = new List<ModEntry>();
         foreach (var planned in _plan)
         {
-            if (!planned.Native) { ready.Add(planned.Entry); continue; }
+            if (!planned.Reported) { ready.Add(planned.Entry); continue; } // data mods without SQL: the verified launch plan
             var mod = report.Mods.FirstOrDefault(m => string.Equals(m.Id, planned.ModId, StringComparison.Ordinal));
             if (mod is null || mod.State != RuntimeModReportEntry.Initialized || !string.Equals(mod.Version, planned.ModVersion, StringComparison.Ordinal)
                 || !Hex(mod.BinarySha256, planned.BinarySha256) || (planned.SettingsSha256 is not null && !Hex(mod.SettingsSha256, planned.SettingsSha256))
@@ -286,6 +292,13 @@ public static class ModSets
             if (manifest.IsNative && manifest.Document.TryGetProperty("nativeHost", out var host)
                 && host.TryGetProperty("binary", out var path) && path.GetString() is { } destination)
                 binary = manifest.Files.FirstOrDefault(f => f.Role == "binary" && f.Destination == destination)?.Hash;
+            if (!manifest.IsNative && manifest.HasDatabaseSql)
+            {
+                // FIMOD004 data entry: the runtime reports a zero binary hash and the planned settings hash (or zero).
+                var zero = new string('0', 64);
+                plan.Add(new PlannedMod(entry, manifest.Id, manifest.Version, false, zero, settings?.SourceHash ?? zero, DataSql: true));
+                continue;
+            }
             plan.Add(new PlannedMod(entry, manifest.Id, manifest.Version, manifest.IsNative, binary, settings?.SourceHash));
         }
         plan.Sort((a, b) => string.CompareOrdinal(a.Entry.Id, b.Entry.Id));

@@ -185,7 +185,8 @@ public sealed partial class ShellViewModel
         var azimuth = _install.Root; var game = ContentLocation?.Mount;
         var state = ModHome;
         var cache = DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null;
-        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache);
+        var dataSql = DataModSqlReady;
+        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache) { DataSqlRuntimeAvailable = () => dataSql };
     }
 
     /// <summary>Constructs the manager; only for code already off the UI thread or the harness.</summary>
@@ -371,6 +372,9 @@ public sealed partial class ShellViewModel
             if (fact.Blocker is not null && installed?.Problem is null && fact.Next is null && !(installed is { Enabled: true } && installed.Drift.Count > 0))
             { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
             if ((!mod.SupportedForInstall || mod.CustomBlocked) && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
+            // FIMOD004: a data mod's SQL needs the runtime and hook that apply it; until then listed, never installed or enabled.
+            if ((fact.Next ?? mod).HasDatabaseSql && !DataModSqlReady && !(installed is { Enabled: true } && fact.Next is null))
+            { status = S["mods.data_sql_runtime"]; badge = S["mods.badge_review"]; canAct = false; }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
                 // Hardcore: unavailable on this profile; an enabled one keeps its Disable action and its files.
