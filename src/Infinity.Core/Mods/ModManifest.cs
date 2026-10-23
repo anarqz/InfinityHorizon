@@ -11,6 +11,14 @@ public sealed class ModManifest
     public string Id => Document.GetProperty("id").GetString()!;
     public string Version => Document.GetProperty("version").GetString()!;
     public string Digest { get; }
+    /// <summary>The reserved prefix of custom (player-supplied, unreviewed) mod ids (OD-114); official ids never contain a dot.</summary>
+    public const string CustomPrefix = "custom.";
+    /// <summary>A custom mod (OD-114): loaded from the player's custom folder, never from a catalog; its payload is a local <c>files/</c> tree.</summary>
+    public bool IsCustom => IsCustomId(Id);
+    /// <summary>A custom mod that maps executable code (a native binary): only a development native runtime may load it.</summary>
+    public bool HasExecutableCode => Files.Any(f => f.Role == "binary" || ExecutableExtension(f.Destination));
+    /// <summary>A custom mod whose manifest still lists review blockers: listed, never installed or enabled.</summary>
+    public bool CustomBlocked => IsCustom && Document.GetProperty("review").GetProperty("blockers").GetArrayLength() > 0;
     public string PackageUrl => Document.GetProperty("package").GetProperty("url").GetString()!;
     public string PackageHash => Document.GetProperty("package").GetProperty("sha256").GetString()!;
     public long PackageBytes => Document.GetProperty("package").GetProperty("bytes").GetInt64();
@@ -102,8 +110,10 @@ public sealed class ModManifest
             ValidatePath(readiness.GetProperty("module").GetString()!); ValidatePath(readiness.GetProperty("log").GetString()!);
             if (readiness.GetProperty("contains").GetString() is not { Length: > 0 and <= 512 }) throw new ModException("invalid readiness marker");
         }
-        if (Id.Length is < 1 or > 64 || Id.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')))
-            throw new ModException("invalid mod id");
+        if (!ValidId(Id)) throw new ModException("invalid mod id");
+        if (IsCustom && (!Document.TryGetProperty("review", out var review) || !review.TryGetProperty("blockers", out var blockers)
+            || blockers.ValueKind != JsonValueKind.Array || blockers.EnumerateArray().Any(b => b.ValueKind != JsonValueKind.String)))
+            throw new ModException("invalid custom review", ModErrors.Unsupported);
         Digest = Hash(_bytes);
         var files = new List<ManifestFile>();
         foreach (var root in new[] { "game", "azimuth" })
@@ -121,6 +131,9 @@ public sealed class ModManifest
                     || item.Role == "config" && (item.Root != "azimuth" || item.Mode != "seed" || item.Destination != ConfigPath)
                     || item.Root == "azimuth" && item.Destination.Equals(ConfigPath, StringComparison.OrdinalIgnoreCase) && item.Role != "config")
                     throw new ModException("invalid file role or settings mapping");
+                if (IsCustom && (item.Source != item.Root + "/" + item.Destination
+                    || (item.Role == "binary" || ExecutableExtension(item.Destination)) && !IsNative))
+                    throw new ModException("custom mods map their files tree and carry no executable code", ModErrors.Unsupported);
                 files.Add(item);
             }
         if (files.Count > 512 || files.Select(f => f.Root + "/" + f.Destination).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Count)
@@ -129,11 +142,21 @@ public sealed class ModManifest
         Dependencies = Document.GetProperty("dependencies").EnumerateArray().Select(d => new ManifestDependency(
             d.GetProperty("id").GetString()!, d.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray())).ToArray();
         if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
-            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || d.Id.Length is < 1 or > 64
-                || d.Id.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')) || d.Versions.Count == 0
+            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !ValidId(d.Id) || IsCustomId(d.Id) && !IsCustom || d.Versions.Count == 0
                 || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
         Multiplayer = ModMultiplayer.Parse(Document);
-        ValidatePackage(Document.GetProperty("package"));
+        if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => c.GetString() is not { } other || !ValidId(other)))
+            throw new ModException("invalid conflicts");
+        if (IsCustom)
+        {
+            // A custom mod has no download: its payload is the player's own files tree next to its manifest.
+            if (Document.TryGetProperty("package", out _) || Document.TryGetProperty("additionalPackages", out _)
+                || !Document.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object
+                || payload.EnumerateObject().Count() != 2 || payload.GetProperty("format").GetString() != "folder"
+                || payload.GetProperty("path").GetString() != CustomPayloadFolder) throw new ModException("invalid custom payload", ModErrors.Unsupported);
+        }
+        else if (Document.TryGetProperty("payload", out _)) throw new ModException("only custom mods use a local payload", ModErrors.Unsupported);
+        else ValidatePackage(Document.GetProperty("package"));
         var packageNames = new HashSet<string>(StringComparer.Ordinal) { "primary" };
         if (Document.TryGetProperty("additionalPackages", out var additional))
             foreach (var p in additional.EnumerateObject())
@@ -190,6 +213,28 @@ public sealed class ModManifest
         if (value.ValueKind != JsonValueKind.String || value.GetString() is not { Length: > 0 and <= 4096 })
             throw new ModException("invalid manifest text");
     }
+
+    /// <summary>The payload folder of a custom mod, next to its manifest: <c>files/&lt;root&gt;/&lt;destination&gt;</c>.</summary>
+    public const string CustomPayloadFolder = "files";
+
+    public static bool IsCustomId(string? id) => id is not null && id.StartsWith(CustomPrefix, StringComparison.Ordinal);
+
+    /// <summary>Official ids: <c>^[a-z][a-z0-9-]{0,63}$</c> (no dot). Custom ids: <c>custom.</c> + <c>[a-z0-9][a-z0-9-]{0,56}</c>. The two never collide.</summary>
+    public static bool ValidId(string? id)
+    {
+        if (id is null) return false;
+        if (IsCustomId(id))
+        {
+            var rest = id[CustomPrefix.Length..];
+            return rest.Length is >= 1 and <= 57 && (char.IsAsciiLetterLower(rest[0]) || char.IsAsciiDigit(rest[0]))
+                && rest.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+        }
+        return id.Length is >= 1 and <= 64 && char.IsAsciiLetterLower(id[0]) && id.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+    }
+
+    private static readonly string[] Executables = [".dll", ".exe", ".asi", ".sys", ".com", ".bat", ".cmd", ".ps1", ".scr", ".msi", ".cpl", ".ocx", ".drv", ".vbs"];
+    /// <summary>A file Windows or a loader would execute, by extension.</summary>
+    public static bool ExecutableExtension(string path) => Executables.Any(e => path.EndsWith(e, StringComparison.OrdinalIgnoreCase));
 
     public byte[] Snapshot() => (byte[])_bytes.Clone();
     public string Text(string field, string locale) => Document.GetProperty(field).TryGetProperty(locale, out var text)

@@ -1,0 +1,142 @@
+// Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Security.Cryptography;
+using System.Text.Json;
+
+namespace Infinity.Core.Mods;
+
+/// <summary>A custom mod folder that could not be listed: its folder name and a stable reason (logged, never shown raw).</summary>
+public sealed record CustomModProblem(string Folder, string Reason);
+
+/// <summary>The custom mods found in the player's custom folder (OD-114).</summary>
+public sealed record CustomModScan(IReadOnlyList<ModManifest> Mods, IReadOnlyList<CustomModProblem> Problems)
+{
+    public static CustomModScan Empty { get; } = new([], []);
+}
+
+/// <summary>
+/// Custom (player-supplied, unreviewed) mods, OD-114. Each lives in its own folder under the launcher's stable data home,
+/// <c>&lt;home&gt;/mods/custom/&lt;id&gt;/</c>, with <c>infinity-mod.json</c> (the ordinary manifest schema, an id with the
+/// reserved <c>custom.</c> prefix and <c>payload: {format: "folder", path: "files"}</c>) and the payload as a plain
+/// <c>files/&lt;root&gt;/&lt;destination&gt;</c> tree. They need no catalog signature; instead the player confirms each exact
+/// manifest digest before its first install or enable, and the confirmation is recorded outside the mod's folder so a
+/// folder cannot arrive pre-confirmed.
+/// </summary>
+public sealed partial class ManagedModFiles
+{
+    public const string CustomManifestName = "infinity-mod.json";
+    public const int MaxCustomMods = 64;
+
+    /// <summary>The folder custom mods are read from: <c>&lt;home&gt;/mods/custom</c>.</summary>
+    public static string CustomModsFolder(string home) => Path.Combine(Path.GetFullPath(home), "mods", "custom");
+
+    private string CustomConfirmationsPath => Path.Combine(_state, "mods", "custom-confirmations.json");
+
+    /// <summary>
+    /// Lists the custom folder: every subfolder named exactly like its manifest's custom id with a valid manifest. Anything else
+    /// (a linked folder, a missing or invalid manifest, an official id, a name mismatch) is a problem, never a listed mod.
+    /// Reads only; a missing folder is an empty list.
+    /// </summary>
+    public static CustomModScan ScanCustomMods(string home)
+    {
+        var root = CustomModsFolder(home);
+        if (!Directory.Exists(root)) return CustomModScan.Empty;
+        var mods = new List<ModManifest>(); var problems = new List<CustomModProblem>();
+        foreach (var folder in Directory.EnumerateDirectories(root).Order(StringComparer.Ordinal))
+        {
+            var name = Path.GetFileName(folder);
+            if (name.StartsWith('.')) continue;
+            if (mods.Count >= MaxCustomMods) { problems.Add(new(name, "too_many")); continue; }
+            try
+            {
+                var manifestPath = Path.Combine(folder, CustomManifestName);
+                if (IsLink(folder) || IsLink(manifestPath)) throw new ModException("linked custom mod folder", ModErrors.Linked);
+                if (!File.Exists(manifestPath)) throw new ModException("custom mod manifest missing", ModErrors.Unsupported);
+                if (new FileInfo(manifestPath).Length > ModCatalogTrust.MaxManifestBytes) throw new ModException("custom mod manifest too large", ModErrors.Unsupported);
+                var manifest = new ModManifest(File.ReadAllBytes(manifestPath));
+                if (!manifest.IsCustom) throw new ModException("a custom folder may hold only custom ids", ModErrors.Unsupported);
+                if (!string.Equals(manifest.Id, name, StringComparison.Ordinal)) throw new ModException("custom folder name differs from its id", ModErrors.Unsupported);
+                mods.Add(manifest);
+            }
+            catch (Exception error) when (IsStateError(error) || error is KeyNotFoundException or InvalidOperationException or FormatException)
+            {
+                problems.Add(new(name, Code(error)));
+            }
+        }
+        return new(mods.AsReadOnly(), problems.AsReadOnly());
+    }
+
+    /// <summary>Whether the player confirmed this exact custom manifest (id and digest).</summary>
+    public bool CustomConfirmed(ModManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return manifest.IsCustom && ReadConfirmations().Any(c => c.Id == manifest.Id && c.Digest == manifest.Digest);
+    }
+
+    /// <summary>Records the player's explicit confirmation of this exact custom manifest digest; another digest needs its own.</summary>
+    public void ConfirmCustom(ModManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (!manifest.IsCustom) throw new ModException("not a custom mod", ModErrors.Unsupported);
+        var confirmed = ReadConfirmations();
+        if (confirmed.Any(c => c.Id == manifest.Id && c.Digest == manifest.Digest)) return;
+        confirmed.Add(new(manifest.Id, manifest.Digest));
+        var path = CustomConfirmationsPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        RejectLinks(path);
+        // Bounded: the newest 1024 confirmations stay.
+        Atomic(path, JsonSerializer.SerializeToUtf8Bytes(new CustomConfirmations(1, confirmed.TakeLast(1024).ToList()), Json));
+    }
+
+    private void RequireCustomConfirmation(ModManifest manifest)
+    {
+        // Executable code from a custom mod runs only through the development native runtime until custom signing is designed.
+        if (manifest.IsNative && BuildProfile.ProductionOnly) throw new ModException("custom native mods are development only", ModErrors.Unsupported);
+        if (manifest.CustomBlocked) throw new ModException("custom mod lists unresolved blockers", ModErrors.Unsupported);
+        if (!CustomConfirmed(manifest)) throw new ModException("custom mod not confirmed by the player", ModErrors.Unconfirmed);
+    }
+
+    private sealed record CustomConfirmation(string Id, string Digest);
+    private sealed record CustomConfirmations(int SchemaVersion, List<CustomConfirmation> Confirmed);
+
+    private List<CustomConfirmation> ReadConfirmations()
+    {
+        var path = CustomConfirmationsPath;
+        if (!File.Exists(path)) return [];
+        RejectLinks(path);
+        var document = JsonSerializer.Deserialize<CustomConfirmations>(File.ReadAllBytes(path));
+        if (document is not { SchemaVersion: 1, Confirmed: { } list } || list.Any(c => c?.Id is null || c.Digest is not { Length: 64 }))
+            throw new ModException("custom confirmations unreadable", ModErrors.Recovery);
+        return list;
+    }
+
+    /// <summary>
+    /// The custom mod's files, checked before any write: its folder still holds this exact manifest, and every mapped file under
+    /// <c>files/</c> has the manifest's size and SHA-256. Each is re-read and re-checked when it is installed, one at a time.
+    /// </summary>
+    private Dictionary<ManifestFile, Func<byte[]>> VerifyCustomFiles(ModManifest manifest)
+    {
+        var folder = Safe(_state, "mods/custom/" + manifest.Id);
+        var manifestPath = Safe(folder, CustomManifestName);
+        if (!File.Exists(manifestPath) || new FileInfo(manifestPath).Length > ModCatalogTrust.MaxManifestBytes
+            || ModManifest.Hash(File.ReadAllBytes(manifestPath)) != manifest.Digest)
+            throw new ModException("the custom mod folder holds another manifest", ModErrors.Digest);
+        var payload = Path.Combine(folder, ModManifest.CustomPayloadFolder);
+        var verified = new Dictionary<ManifestFile, Func<byte[]>>();
+        foreach (var file in manifest.Files)
+        {
+            var path = Safe(payload, file.Source);
+            if (!File.Exists(path)) throw new ModException("custom mod file missing", ModErrors.Digest);
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                if (stream.Length != file.Bytes || Convert.ToHexStringLower(SHA256.HashData(stream)) != file.Hash)
+                    throw new ModException("custom mod file digest mismatch", ModErrors.Digest);
+            verified.Add(file, () =>
+            {
+                RejectLinks(path);
+                var bytes = File.ReadAllBytes(path);
+                if (bytes.LongLength != file.Bytes || ModManifest.Hash(bytes) != file.Hash) throw new ModException("custom mod file changed while installing", ModErrors.Digest);
+                return bytes;
+            });
+        }
+        return verified;
+    }
+}
