@@ -95,17 +95,36 @@ bool plain(HANDLE handle, bool directory) {
         && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
         && ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == directory;
 }
-std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32], DWORD share = FILE_SHARE_READ) {
-    if (!valid_path(path.c_str())) return {};
+bool wine_host() {
+    static const bool wine = [] { auto ntdll = GetModuleHandleW(L"ntdll.dll"); return ntdll && GetProcAddress(ntdll, "wine_get_version"); }();
+    return wine;
+}
+bool wine_override = false;
+bool within(const std::wstring& root, const std::wstring& path) {
+    if (root.size() < 3 || path.size() < root.size() || _wcsnicmp(root.c_str(), path.c_str(), root.size())) return false;
+    return path.size() == root.size() || root.back() == L'\\' || path[root.size()] == L'\\';
+}
+std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32], const std::wstring& boundary, bool linked_root, DWORD share = FILE_SHARE_READ) {
+    if (!valid_path(path.c_str()) || !valid_path(boundary.c_str())) return {};
+    std::wstring trimmed = boundary;
+    while (trimmed.size() > 3 && trimmed.back() == L'\\') trimmed.pop_back();
+    const std::filesystem::path root(trimmed);
+    if (!within(root.wstring(), path) || _wcsicmp(root.wstring().c_str(), path.c_str()) == 0) return {};
     auto lock = std::make_unique<FileLock>();
     auto parent = std::filesystem::path(path).parent_path();
     for (;;) {
+        const bool at_root = _wcsicmp(parent.wstring().c_str(), root.wstring().c_str()) == 0;
         auto h = CreateFileW(parent.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         if (h == INVALID_HANDLE_VALUE) return {};
         lock->parents.push_back(h);
-        if (!plain(h, true)) return {};
-        if (parent == parent.root_path()) break;
+        if (!plain(h, true)) {
+            BY_HANDLE_FILE_INFORMATION info{};
+            if (!(at_root && linked_root && (wine_host() || wine_override) && GetFileInformationByHandle(h, &info)
+                  && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))) return {};
+        }
+        if (at_root) break;
+        if (parent == parent.root_path()) return {};
         parent = parent.parent_path();
     }
     lock->file = CreateFileW(path.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING,
@@ -255,8 +274,8 @@ bool prepare(const InfinityModsLaunchV1& launch) {
         e->data = data;
         e->owner.name = item.id; e->binary = item.binary_path; e->settings = item.settings_path;
         e->dependencies = item.dependency_mask;
-        if (!data && !(e->binary_lock = verify_file(e->binary, item.binary_sha256))) return false;
-        if (!no_settings && !(e->settings_lock = verify_file(e->settings, item.settings_sha256))) return false;
+        if (!data && !(e->binary_lock = verify_file(e->binary, item.binary_sha256, launch.azimuth_directory, true))) return false;
+        if (!no_settings && !(e->settings_lock = verify_file(e->settings, item.settings_sha256, launch.azimuth_directory, true))) return false;
         std::memcpy(e->report.id, item.id, sizeof item.id); std::memcpy(e->report.version, item.version, sizeof item.version);
         std::memcpy(e->report.binary_sha256, item.binary_sha256, 32);
         std::memcpy(e->report.settings_sha256, item.settings_sha256, 32);
@@ -434,7 +453,7 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         } else {
             return 1;
         }
-        auto locked = verify_file(path, hash); if (!locked) return 1;
+        auto locked = verify_file(path, hash, std::filesystem::path(path).parent_path().wstring(), false); if (!locked) return 1;
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(locked->file, &size) || size.QuadPart < 12 || size.QuadPart > 1024 * 1024) return 1;
         LARGE_INTEGER zero{}; if (!SetFilePointerEx(locked->file, zero, nullptr, FILE_BEGIN)) return 1;
@@ -459,7 +478,7 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
             if (!nonzero(plan.prepared_hash) || !nonzero(plan.sql_hash)) return 1;
             for (auto suffix : { L"-wal", L"-shm", L"-journal" }) if (std::filesystem::exists(plan.database + suffix)) return 1;
 
-            session_database_lock = verify_file(plan.database, plan.prepared_hash, FILE_SHARE_READ | FILE_SHARE_WRITE);
+            session_database_lock = verify_file(plan.database, plan.prepared_hash, plan.game, true, FILE_SHARE_READ | FILE_SHARE_WRITE);
             if (!session_database_lock) return 1;
         }
         infinity_mod::configure_readiness(std::move(plan.readiness));

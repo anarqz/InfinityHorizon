@@ -178,7 +178,7 @@ void prepare_session_database(ParsedPlan& plan, const std::filesystem::path& fol
     if (!valid_path(plan.azimuth.c_str()) || !valid_path(plan.game.c_str()) || nonzero(plan.prepared_hash) || nonzero(plan.sql_hash)) throw std::runtime_error("invalid preparation plan");
     sql_registration_thread = GetCurrentThreadId();
     auto input = folder / L"baseline.sqlite", output = folder / L"session.sqlite";
-    auto source = verify_file(input.wstring(), plan.baseline_hash); if (!source) throw std::runtime_error("baseline mismatch");
+    auto source = verify_file(input.wstring(), plan.baseline_hash, folder.wstring(), false); if (!source) throw std::runtime_error("baseline mismatch");
     auto header = read_bounded(source->file, 64 * 1024 * 1024);
     if (header.size() < 100 || std::memcmp(header.data(), "SQLite format 3\0", 16) || header[18] != 1 || header[19] != 1) throw std::runtime_error("unsupported journal mode");
     for (auto suffix : { L"-wal", L"-shm", L"-journal" }) if (std::filesystem::exists(input.wstring() + suffix)) throw std::runtime_error("database sidecar present");
@@ -191,8 +191,8 @@ void prepare_session_database(ParsedPlan& plan, const std::filesystem::path& fol
         if ((!data && _wcsnicmp(item.binary_path, prefix.c_str(), prefix.size())) || (!no_settings && _wcsnicmp(item.settings_path, prefix.c_str(), prefix.size())))
             throw std::runtime_error("mod outside installation");
         if ((data && nonzero(item.binary_sha256)) || (no_settings && (!data || nonzero(item.settings_sha256)))) throw std::runtime_error("invalid data entry");
-        if (!data) { auto binary = verify_file(item.binary_path, item.binary_sha256); if (!binary) throw std::runtime_error("mod input mismatch"); locks.push_back(std::move(binary)); }
-        if (!no_settings) { auto settings = verify_file(item.settings_path, item.settings_sha256); if (!settings) throw std::runtime_error("mod input mismatch"); locks.push_back(std::move(settings)); }
+        if (!data) { auto binary = verify_file(item.binary_path, item.binary_sha256, plan.azimuth, true); if (!binary) throw std::runtime_error("mod input mismatch"); locks.push_back(std::move(binary)); }
+        if (!no_settings) { auto settings = verify_file(item.settings_path, item.settings_sha256, plan.azimuth, true); if (!settings) throw std::runtime_error("mod input mismatch"); locks.push_back(std::move(settings)); }
     }
     for (uint32_t i = 0; i < plan.count; ++i) {
         auto& item = plan.mods[i];
@@ -202,7 +202,7 @@ void prepare_session_database(ParsedPlan& plan, const std::filesystem::path& fol
             registration->data = true;
             if (registration->tables.empty() != !nonzero(plan.sql[i].data())) throw std::runtime_error("invalid data SQL");
             if (registration->tables.empty()) continue;
-            auto script = verify_file((folder / (L"data-" + std::to_wstring(i) + L".sql")).wstring(), plan.sql[i].data());
+            auto script = verify_file((folder / (L"data-" + std::to_wstring(i) + L".sql")).wstring(), plan.sql[i].data(), folder.wstring(), false);
             if (!script) throw std::runtime_error("data SQL mismatch");
             auto bytes = read_bounded(script->file, 8 * 1024 * 1024);
             if (!utf8_text(bytes)) throw std::runtime_error("data SQL is not UTF-8 text");
@@ -232,7 +232,7 @@ extern "C" __declspec(dllexport) int InfinityModsPrepareDatabaseV1(const wchar_t
     try {
         wchar_t exe[32768]; DWORD n = GetModuleFileNameW(nullptr, exe, 32768);
         if (!n || n >= 32768 || _wcsicmp(std::filesystem::path(exe).filename().c_str(), L"infinity-mod-prepare.exe")) return 1;
-        auto file = verify_file(path, hash); if (!file || !sql_registrations.empty()) return 1;
+        auto file = verify_file(path, hash, std::filesystem::path(path).parent_path().wstring(), false); if (!file || !sql_registrations.empty()) return 1;
         auto bytes = read_bounded(file->file, 1024 * 1024); ParsedPlan plan; parse_plan(bytes, plan);
         prepare_session_database(plan, std::filesystem::path(path).parent_path()); return 0;
     } catch (const std::exception& error) {

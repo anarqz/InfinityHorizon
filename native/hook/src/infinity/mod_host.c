@@ -75,9 +75,11 @@ static const char *mod_lock_runtime(void) {
     static wchar_t absolute[PATH_CAPACITY];
     DWORD n = GetFullPathNameW(mod_runtime, PATH_CAPACITY, absolute, 0);
     if (n < 4 || n >= PATH_CAPACITY || !memory_equal(absolute, mod_runtime, ((size_t)n + 1) * sizeof(wchar_t)) || absolute[1] != L':' || absolute[2] != L'\\') return "the runtime path is not plain";
+    DWORD folder = n;
+    while (folder > 3 && absolute[folder - 1] != L'\\') --folder;
     for (DWORD i = 3; i < n; ++i) {
         if (absolute[i] == L':' || absolute[i] == L'/') return "the runtime path is not plain";
-        if (absolute[i] != L'\\') continue;
+        if (absolute[i] != L'\\' || i + 1 < folder) continue;
         if (absolute[i - 1] == L'.' || absolute[i - 1] == L' ' || mod_parent_count >= 256) return "the runtime path is not plain";
         absolute[i] = 0;
         HANDLE parent = CreateFileW(absolute, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING,
