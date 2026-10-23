@@ -211,6 +211,7 @@ public partial class MainWindow : Window
     private async void OnResolveMods(object sender, RoutedEventArgs e) => await _vm.ResolveModRecoveryAsync();
     private async void OnRelinkMods(object sender, RoutedEventArgs e) => await _vm.RelinkModsAsync();
     private async void OnConfirmModUpdate(object sender, RoutedEventArgs e) => await _vm.ConfirmModUpdateAsync();
+    private async void OnConfirmCustomMod(object sender, RoutedEventArgs e) => await _vm.ConfirmCustomModAsync();
     private async void OnAcceptModFiles(object sender, RoutedEventArgs e) => await _vm.AcceptModFilesAsync();
     private async void OnDisableModKeeping(object sender, RoutedEventArgs e) => await _vm.DisableModKeepingFilesAsync();
     private async void OnRepairModSettings(object sender, RoutedEventArgs e) => await _vm.RepairModSettingsAsync();

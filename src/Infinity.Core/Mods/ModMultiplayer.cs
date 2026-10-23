@@ -21,7 +21,9 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         var id = value.GetProperty("compatibilityId").GetString()!;
         var revision = value.GetProperty("revision").GetInt32();
         var settings = value.GetProperty("settings").EnumerateArray().Select(s => s.GetString()!).ToArray();
-        if (impact is not ("gameplay" or "cosmetic" or "unknown") || !Identifier(id) || revision < 1
+        // A custom mod's compatibility id carries the reserved custom prefix, so no custom lobby entry can pose as an official one (OD-114).
+        var custom = ModManifest.IsCustomId(document.GetProperty("id").GetString());
+        if (impact is not ("gameplay" or "cosmetic" or "unknown") || (custom ? !ModManifest.IsCustomId(id) || !ModManifest.ValidId(id) : !Identifier(id)) || revision < 1
             || settings.Length > 64 || settings.Any(s => !Identifier(s)) || settings.Distinct(StringComparer.Ordinal).Count() != settings.Length)
             throw new ModException("invalid multiplayer metadata");
         var options = document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
@@ -75,6 +77,8 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
             writer.WriteString("runtime", document.TryGetProperty("runtime", out var runtime) ? runtime.GetString() : "unknown");
             writer.WriteString("compatibilityId", CompatibilityId); writer.WriteNumber("revision", Revision);
             writer.WriteString("impact", Impact);
+            // OD-114: a custom mod is matched by its exact manifest too, so only the identical pack joins.
+            if (manifest.IsCustom) writer.WriteString("manifestSha256", manifest.Digest);
             writer.WritePropertyName("game"); Canonical(writer, document.GetProperty("compatibility"));
             writer.WritePropertyName("nativeHost");
             if (document.TryGetProperty("nativeHost", out var host)) Canonical(writer, host); else writer.WriteNullValue();

@@ -132,6 +132,7 @@ public sealed partial class ManagedModFiles
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(downloadHosts);
         if (!update) CheckProfile(manifest, hardcore);
         if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported);
+        if (manifest.IsCustom) throw new ModException("custom mods install from their local folder", ModErrors.Unsupported);
         var packages = new Dictionary<string, byte[]>();
         foreach (var (name, spec) in PackageSpecs(manifest))
         {
@@ -165,9 +166,10 @@ public sealed partial class ManagedModFiles
         InstallVerifiedPackages(manifest, new Dictionary<string, byte[]> { ["primary"] = package }, progress, update, hardcore);
     }
 
-    private static Dictionary<ManifestFile, byte[]> VerifyPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages)
+    private static Dictionary<ManifestFile, Func<byte[]>> VerifyPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages)
     {
-        var verified = new Dictionary<ManifestFile, byte[]>();
+        if (manifest.IsCustom) throw new ModException("custom mods install from their local folder", ModErrors.Unsupported);
+        var verified = new Dictionary<ManifestFile, Func<byte[]>>();
         foreach (var (name, spec) in PackageSpecs(manifest))
         {
             if (!packages.TryGetValue(name, out var package) || package.LongLength != spec.GetProperty("bytes").GetInt64()
@@ -182,14 +184,30 @@ public sealed partial class ManagedModFiles
                 using var stream = entry.Open();
                 var content = new byte[checked((int)file.Bytes)]; stream.ReadExactly(content);
                 if (stream.ReadByte() != -1 || ModManifest.Hash(content) != file.Hash) throw new ModException("file digest mismatch", ModErrors.Digest);
-                verified.Add(file, content);
+                verified.Add(file, () => content);
             }
         }
         if (verified.Count != manifest.Files.Count) throw new ModException("unresolved package mapping", ModErrors.Digest);
         return verified;
     }
 
-    internal void InstallVerifiedPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
+    internal void InstallVerifiedPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages, IProgress<string>? progress = null, bool update = false, bool hardcore = false) =>
+        InstallFrom(manifest, () => VerifyPackages(manifest, packages), progress, update, hardcore);
+
+    /// <summary>
+    /// The files of a custom mod (OD-114) from its own folder, <c>&lt;home&gt;/mods/custom/&lt;id&gt;/files/&lt;root&gt;/&lt;destination&gt;</c>,
+    /// installed like a package once the player confirmed this exact manifest digest. Every file's size and SHA-256 is checked
+    /// before anything is written and again as it is read, one file at a time.
+    /// </summary>
+    public void InstallCustom(ModManifest manifest, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (!manifest.IsCustom) throw new ModException("not a custom mod", ModErrors.Unsupported);
+        RequireCustomConfirmation(manifest);
+        InstallFrom(manifest, () => VerifyCustomFiles(manifest), progress, update, hardcore);
+    }
+
+    private void InstallFrom(ModManifest manifest, Func<Dictionary<ManifestFile, Func<byte[]>>> verify, IProgress<string>? progress, bool update, bool hardcore)
     {
         if (!manifest.SupportedForInstall)
             throw new ModException("runtime or dependencies require coordination", ModErrors.Unsupported);
@@ -200,14 +218,14 @@ public sealed partial class ManagedModFiles
         if (installed is not null)
         {
             if (installed.Enabled) CheckProfile(manifest, hardcore); // an enabled mod stays enabled across its update
-            Update(manifest, installed, VerifyPackages(manifest, packages), progress); return;
+            Update(manifest, installed, verify(), progress); return;
         }
         CheckProfile(manifest, hardcore);
         CheckDependencies(manifest);
-        var verified = VerifyPackages(manifest, packages);
+        var verified = verify();
         var owned = new List<ManagedModFile>();
         var changes = new List<ModFileChange>();
-        foreach (var (file, bytes) in verified)
+        foreach (var (file, source) in verified)
         {
             var target = Target(file.Root, file.Destination);
             var before = Current(target);
@@ -215,6 +233,7 @@ public sealed partial class ManagedModFiles
             if (file.Mode == "add" && before is not null || file.Mode == "replace" && before is null) throw new ModException("file precondition failed", ModErrors.Conflict);
             if (before == file.Hash && file.Role == "binary") throw new ModException("existing installation needs explicit adoption", ModErrors.Conflict);
             if (before is not null) Store(File.ReadAllBytes(target));
+            var bytes = source();
             var afterBytes = bytes;
             if (file.Role == "config" && manifest.ConfigPath == file.Destination)
             {
@@ -252,13 +271,13 @@ public sealed partial class ManagedModFiles
     /// stay the originals, removed mappings are restored, new ones are backed up first, and the
     /// player's settings and seeded files are kept (new locks applied). A disabled mod stays disabled.
     /// </summary>
-    private void Update(ModManifest manifest, ManagedModReceipt installed, Dictionary<ManifestFile, byte[]> verified, IProgress<string>? progress)
+    private void Update(ModManifest manifest, ManagedModReceipt installed, Dictionary<ManifestFile, Func<byte[]>> verified, IProgress<string>? progress)
     {
         if (installed.Enabled) { CheckDependencies(manifest); CheckDependents(manifest.Id, manifest); }
         if (DriftOf(installed) is { Count: > 0 }) throw new ModException("files changed outside the launcher", ModErrors.Drift);
         var old = installed.Files.ToDictionary(f => f.Root + "/" + f.Path, StringComparer.OrdinalIgnoreCase);
         var owned = new List<ManagedModFile>(); var changes = new List<ModFileChange>();
-        foreach (var (file, bytes) in verified)
+        foreach (var (file, source) in verified)
         {
             var key = file.Root + "/" + file.Destination;
             var target = Target(file.Root, file.Destination);
@@ -268,7 +287,7 @@ public sealed partial class ManagedModFiles
                 owned.Add(previous with { Preserve = true }); // settings and seeded player files stay as they are
                 continue;
             }
-            var after = Store(bytes);
+            var after = Store(source());
             if (previous is not null)
             {
                 owned.Add(previous with { After = after, Preserve = false });
@@ -314,6 +333,7 @@ public sealed partial class ManagedModFiles
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (enabled) CheckProfile(manifest, hardcore); // disabling is always allowed
+        if (enabled && manifest.IsCustom) RequireCustomConfirmation(manifest);
         using var gate = Lock();
         var receipt = Receipt(manifest) ?? throw new ModException("mod has no installation receipt");
         if (receipt.Enabled == enabled) return;
