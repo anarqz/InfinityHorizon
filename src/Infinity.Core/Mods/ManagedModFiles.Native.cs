@@ -4,8 +4,11 @@ using System.Text.Json;
 namespace Infinity.Core.Mods;
 
 /// <summary>What a launch needs from mod state, gathered off the UI thread; warnings never block Play.</summary>
+/// <param name="HasEnabledNative">An enabled mod needs the native runtime: a native mod or a data mod with SQL (FIMOD004).</param>
 public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, bool HasEnabledNative, IReadOnlyList<string> Warnings)
 {
+    /// <summary>An enabled data mod carries SQL for the runtime (FIMOD004): the runtime and hook must support data-mod SQL.</summary>
+    public bool HasEnabledDataSql { get; init; }
     public static ModLaunchPreparation None { get; } = new([], false, []);
     /// <summary>Enabled mods that affect multiplayer (<see cref="ModMultiplayer.AffectsMultiplayer"/>): what a Hardcore launch refuses.</summary>
     public IReadOnlyList<ModManifest> MultiplayerMods { get; init; } = [];
@@ -239,8 +242,8 @@ public sealed partial class ManagedModFiles
         }
         var multiplayer = enabled.Where(ModMultiplayer.AffectsMultiplayer).ToArray();
         if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))
-            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.IsNative), warnings) { MultiplayerMods = multiplayer };
+            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql || m.DatabaseBase is not null) };
         ReconcileWineOverrides();
-        return new(NativeDllOverrides(), enabled.Any(m => m.IsNative), warnings) { MultiplayerMods = multiplayer };
+        return new(NativeDllOverrides(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql || m.DatabaseBase is not null) };
     }
 }

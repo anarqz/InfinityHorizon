@@ -31,6 +31,44 @@ public sealed class NativeModPlan : IDisposable
         if (_disposed) return; _disposed = true;
         try { _restore(); } finally { foreach (var item in _locks.AsEnumerable().Reverse()) item.Dispose(); }
     }
+    /// <summary>One plan entry: a native mod, or (FIMOD004) a data mod whose SQL the runtime applies.</summary>
+    internal sealed record Entry(string Id, string Version, string Binary, string Config, byte[] BinarySha256, byte[] SettingsSha256,
+        byte[] CompatibilitySha256, uint DependencyMask, IReadOnlyList<string> Tables, byte[]? SqlSha256);
+
+    /// <summary>
+    /// The launch/prepare plan: FIMOD003, or FIMOD004 exactly when an entry carries data-mod SQL (FIMOD003 plus one per-entry
+    /// <c>sql_sha256[32]</c> after the entry's table list; zero for entries without SQL). A data entry names binary <c>-</c> with a
+    /// zero binary hash and settings <c>-</c> (or its settings file).
+    /// </summary>
+    internal static byte[] Serialize(byte[] nonce, string azimuth, string game, string? database, string? baseline, byte[] hashes,
+        IReadOnlyList<(string Module, string Log, string Contains)> readiness, IReadOnlyList<Entry> entries)
+    {
+        if (nonce.Length != 16 || hashes.Length != 64 || entries.Count is < 1 or > 32) throw new ModException("invalid mod plan");
+        var sql = entries.Any(e => e.SqlSha256 is not null);
+        using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes, Encoding.Unicode, leaveOpen: true);
+        writer.Write(sql ? "FIMOD004"u8 : "FIMOD003"u8); writer.Write(nonce); writer.Write((uint)entries.Count);
+        Text(writer, azimuth); Text(writer, game);
+        writer.Write(database is null ? 0u : 1u); if (database is not null) Text(writer, database);
+        writer.Write(baseline is null ? new byte[32] : Convert.FromHexString(baseline)); writer.Write(hashes);
+        writer.Write((uint)readiness.Count);
+        foreach (var (module, log, contains) in readiness) { Text(writer, module); Text(writer, log); Text(writer, contains); }
+        foreach (var entry in entries)
+        {
+            if (entry.BinarySha256.Length != 32 || entry.SettingsSha256.Length != 32 || entry.CompatibilitySha256.Length != 32
+                || entry.SqlSha256 is { Length: not 32 }
+                || entry.Tables.Count > (entry.SqlSha256 is null ? DataModSql.MaxNativeTables : DataModSql.MaxTables)) throw new ModException("invalid mod plan entry");
+            Text(writer, entry.Id); Text(writer, entry.Version); Text(writer, entry.Binary); Text(writer, entry.Config);
+            writer.Write(entry.BinarySha256); writer.Write(entry.SettingsSha256); writer.Write(entry.CompatibilitySha256);
+            writer.Write(entry.DependencyMask);
+            writer.Write((uint)entry.Tables.Count); foreach (var table in entry.Tables) Text(writer, table);
+            if (sql) writer.Write(entry.SqlSha256 ?? new byte[32]);
+        }
+        writer.Flush(); return bytes.ToArray();
+    }
+
+    /// <summary>FIMOD004: where a data entry's SQL is copied in the session plan folder (plan position, decimal).</summary>
+    public static string DataSqlName(int index) => "data-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".sql";
+
     internal static void Text(BinaryWriter writer, string text)
     {
         var bytes = Encoding.Unicode.GetBytes(text);
@@ -143,7 +181,8 @@ public sealed partial class ManagedModFiles
                 if (!ReleaseSignature.VerifyFile(path, path + ".sig", verificationKey, ReleaseSignature.ModRuntimePrefix)) throw new ModException("mod host signature does not verify");
             }
             var enabled = InstalledManifests().Where(m => Receipt(m) is { Enabled: true }).ToArray();
-            var remaining = enabled.Where(m => m.IsNative).OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
+            // Native mods and (FIMOD004) data mods with SQL, dependencies first.
+            var remaining = enabled.Where(m => m.NeedsRuntime).OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
             var selected = new List<ModManifest>();
             while (remaining.Count > 0)
             {
@@ -152,6 +191,20 @@ public sealed partial class ManagedModFiles
                 selected.Add(next); remaining.Remove(next);
             }
             if (selected.Count is < 1 or > 32) throw new ModException("invalid selected native mod count");
+            var masks = new uint[selected.Count];
+            for (var i = 0; i < selected.Count; i++)
+                for (var j = 0; j < i; j++)
+                {
+                    if (selected[i].Dependencies.Any(d => d.Id == selected[j].Id)) masks[i] |= 1u << j;
+                    // Two entries may write the same table only through a declared dependency, applied in that order.
+                    else if (selected[i].DatabaseTables.Intersect(selected[j].DatabaseTables, StringComparer.OrdinalIgnoreCase).Any())
+                        throw new ModException("two mods write the same database table without a dependency", ModErrors.Conflict);
+                }
+            var sqlFiles = selected.Select(m => m.HasDatabaseSql ? InstalledSql(m) : null).ToArray();
+            // OD-114 follow-up: at most one car pack replaces the whole database; it becomes the plan's baseline (never the stock file).
+            var bases = selected.Where(m => m.DatabaseBase is not null).ToArray();
+            if (bases.Length > 1) throw new ModException("two enabled mods replace the game database", ModErrors.DatabaseBase) { Detail = bases[0].Id };
+            var baseMod = bases.FirstOrDefault();
             foreach (var mod in enabled)
             {
                 if (!Verified(mod)) throw new ModException("mod installation changed");
@@ -164,7 +217,7 @@ public sealed partial class ManagedModFiles
                 if (mod.ConfigPath is { } config) locks.Add(new FileStream(Target("azimuth", config), FileMode.Open, FileAccess.Read, FileShare.Read));
             }
             var policies = selected.Where(m => m.Document.TryGetProperty("database", out _)).Select(m => m.Document.GetProperty("database")).ToArray();
-            string? relative = null, targetDatabase = null, baseline = null, before = null;
+            string? relative = null, targetDatabase = null, baseline = null, before = null, restore = null;
             var createdDirectories = new List<string>();
             var hashes = new byte[64];
             var folder = Safe(BackupRoot, "sessions/" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
@@ -181,38 +234,38 @@ public sealed partial class ManagedModFiles
                 var source = before is null ? Safe(_game!, seed) : targetDatabase;
                 for (var parent = Path.GetDirectoryName(relative.Replace('/', Path.DirectorySeparatorChar)); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
                     if (!Directory.Exists(Path.Combine(_game!, parent))) createdDirectories.Add(parent.Replace(Path.DirectorySeparatorChar, '/'));
-                var bytes = DatabaseBytes(source); baseline = Store(bytes);
-                if (before is not null && before != baseline) throw new ModException("database changed during snapshot");
+                var bytes = baseMod is null ? DatabaseBytes(source) : InstalledBase(baseMod); baseline = Store(bytes);
+                if (baseMod is null && before is not null && before != baseline) throw new ModException("database changed during snapshot");
+                // what returns after play: the override that existed before (unchanged by a base), else nothing
+                restore = baseMod is null || before is null ? baseline : Store(DatabaseBytes(targetDatabase));
+                if (before is not null && restore != before) throw new ModException("database changed during snapshot");
                 Atomic(Path.Combine(folder, "baseline.sqlite"), bytes);
+                for (var i = 0; i < selected.Count; i++)
+                    if (sqlFiles[i] is { } sql) Atomic(Path.Combine(folder, NativeModPlan.DataSqlName(i)), sql);
             }
+            else if (sqlFiles.Any(f => f is not null)) throw new ModException("data mod SQL needs a session database", ModErrors.Unsupported);
             byte[] Plan()
             {
-                using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes, Encoding.Unicode, leaveOpen: true);
-                writer.Write("FIMOD003"u8); writer.Write(nonce); writer.Write((uint)selected.Count);
-                NativeModPlan.Text(writer, _azimuth); NativeModPlan.Text(writer, _game ?? _azimuth);
-                writer.Write(targetDatabase is null ? 0u : 1u); if (targetDatabase is not null) NativeModPlan.Text(writer, targetDatabase);
-                writer.Write(baseline is null ? new byte[32] : Convert.FromHexString(baseline)); writer.Write(hashes);
-                var readiness = enabled.Where(m => m.Document.TryGetProperty("readiness", out _)).Select(m => m.Document.GetProperty("readiness")).ToArray();
-                writer.Write((uint)readiness.Length);
-                foreach (var r in readiness)
-                {
-                    NativeModPlan.Text(writer, Target("azimuth", r.GetProperty("module").GetString()!));
-                    NativeModPlan.Text(writer, Target("azimuth", r.GetProperty("log").GetString()!));
-                    NativeModPlan.Text(writer, r.GetProperty("contains").GetString()!);
-                }
+                var readiness = enabled.Where(m => m.Document.TryGetProperty("readiness", out _)).Select(m => m.Document.GetProperty("readiness"))
+                    .Select(r => (Target("azimuth", r.GetProperty("module").GetString()!), Target("azimuth", r.GetProperty("log").GetString()!), r.GetProperty("contains").GetString()!)).ToArray();
+                var entries = new List<NativeModPlan.Entry>();
                 for (var i = 0; i < selected.Count; i++)
                 {
-                    var mod = selected[i]; var binary = Target("azimuth", mod.Document.GetProperty("nativeHost").GetProperty("binary").GetString()!);
-                    var settings = ReadSettings(mod);
-                    NativeModPlan.Text(writer, mod.Id); NativeModPlan.Text(writer, mod.Version); NativeModPlan.Text(writer, binary); NativeModPlan.Text(writer, Target("azimuth", mod.ConfigPath!));
-                    writer.Write(Convert.FromHexString(Current(binary)!)); writer.Write(Convert.FromHexString(settings.SourceHash));
-                    writer.Write(Convert.FromHexString(mod.Multiplayer!.Fingerprint(mod, settings.Values)));
-                    uint mask = 0; for (var j = 0; j < i; j++) if (mod.Dependencies.Any(d => d.Id == selected[j].Id)) mask |= 1u << j;
-                    writer.Write(mask);
-                    var tables = mod.Document.TryGetProperty("database", out var db) ? db.GetProperty("tables").EnumerateArray().Select(t => t.GetString()!).ToArray() : [];
-                    writer.Write((uint)tables.Length); foreach (var table in tables) NativeModPlan.Text(writer, table);
+                    var mod = selected[i];
+                    var settings = mod.ConfigPath is null ? null : ReadSettings(mod);
+                    var fingerprint = Convert.FromHexString(mod.Multiplayer!.Fingerprint(mod, settings?.Values ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal)));
+                    if (mod.IsNative)
+                    {
+                        var binary = Target("azimuth", mod.Document.GetProperty("nativeHost").GetProperty("binary").GetString()!);
+                        entries.Add(new(mod.Id, mod.Version, binary, Target("azimuth", mod.ConfigPath!), Convert.FromHexString(Current(binary)!),
+                            Convert.FromHexString(settings!.SourceHash), fingerprint, masks[i], mod.DatabaseTables, null));
+                    }
+                    else
+                        entries.Add(new(mod.Id, mod.Version, "-", mod.ConfigPath is { } config ? Target("azimuth", config) : "-", new byte[32],
+                            settings is null ? new byte[32] : Convert.FromHexString(settings.SourceHash), fingerprint, masks[i], mod.DatabaseTables,
+                            mod.DatabaseSql is { } sql ? Convert.FromHexString(sql.Sha256) : null));
                 }
-                writer.Flush(); return bytes.ToArray();
+                return NativeModPlan.Serialize(nonce, _azimuth, _game ?? _azimuth, targetDatabase, baseline, hashes, readiness, entries);
             }
             if (targetDatabase is not null)
             {
@@ -229,7 +282,7 @@ public sealed partial class ManagedModFiles
                     throw new ModException("prepared database result differs");
                 CheckGame(); NoDatabaseSidecars(targetDatabase);
                 if (Current(targetDatabase) != before) throw new ModException("database changed before publication");
-                Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, baseline!, after, before is not null, createdDirectories), Json));
+                Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, restore!, after, before is not null, createdDirectories), Json));
                 Atomic(targetDatabase, prepared);
             }
             return new(Path.Combine(folder, "launch.bin"), Plan(), runtime, locks, RestoreSessionDatabase, nonce);

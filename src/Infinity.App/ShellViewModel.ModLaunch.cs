@@ -24,16 +24,26 @@ public sealed partial class ShellViewModel
     private bool NativeModHookReady => _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= NativeModOnlineHookBuild;
 
     /// <summary>
+    /// FIMOD004 (data-mod SQL): hook 0.3.0+fh2online.83 (WINDOWS, <c>feature/mods-data-sql</c>) is the first that loads data-only plans,
+    /// applies their SQL files and gates mods on the dependency being active; the install/enable gate and the FIMOD004 online minimum.
+    /// </summary>
+    internal const uint DataModSqlHookBuild = 83;
+
+    /// <summary>Data mods with SQL need the verified runtime package and a verified hook of <see cref="DataModSqlHookBuild"/>+.</summary>
+    private bool DataModSqlReady => _nativeRuntime is not null && _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild;
+
+    /// <summary>
     /// OD-113: why an online launch with enabled native mods cannot start (en/pt-BR), or null with the verified runtime package.
     /// Checked off the UI thread right before the launch, so a package changed since the Mods page looked is seen.
     /// </summary>
-    private async Task<(ModRuntimePackage? Runtime, string? Refusal)> NativeModsForOnlineAsync()
+    private async Task<(ModRuntimePackage? Runtime, string? Refusal)> NativeModsForOnlineAsync(bool dataSql = false)
     {
         var key = NativeModKey;
         var runtime = await Task.Run(() => ModRuntimePackage.Locate(LauncherDirectory, key));
         _nativeRuntime = runtime;
         if (runtime is null) return (null, S["mods.native_unavailable_play"]);
         RefreshHook();
+        if (dataSql && !DataModSqlReady) return (null, S["mods.data_sql_runtime"]);
         return NativeModHookReady ? (runtime, null) : (null, S["mods.native_hook_required"]);
     }
 

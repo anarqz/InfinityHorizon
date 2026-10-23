@@ -9,6 +9,8 @@ namespace Infinity.Core.Mods;
 public sealed class ModException(string message, string code = ModErrors.Failed) : Exception(message)
 {
     public string Code { get; } = code;
+    /// <summary>A mod id the localized message names (for example the enabled mod that already replaces the database); never a path.</summary>
+    public string? Detail { get; init; }
 }
 
 /// <summary>The stable categories of <see cref="ModException.Code"/>.</summary>
@@ -34,6 +36,10 @@ public static class ModErrors
     public const string Hardcore = "hardcore";
     /// <summary>A custom mod whose exact manifest digest the player has not confirmed yet (OD-114).</summary>
     public const string Unconfirmed = "unconfirmed";
+    /// <summary>A data mod whose SQL needs the mod runtime with data-mod support (FIMOD004), which this launcher does not have.</summary>
+    public const string RuntimeRequired = "runtime_required";
+    /// <summary>Another enabled mod already replaces the game database (<see cref="ModException.Detail"/> names it); one base at a time.</summary>
+    public const string DatabaseBase = "database_base";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");
