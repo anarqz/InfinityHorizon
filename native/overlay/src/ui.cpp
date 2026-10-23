@@ -240,7 +240,7 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, const Mod
     for (int i = 0; i < static_cast<int>(tiles.size()); ++i) {
         const Tile &tile = tiles[i];
         const ImVec2 ta(x0 + pad, y), tb(x0 + pw - pad, y + th);
-        if (ImGui::IsMouseHoveringRect(ta, tb)) {
+        if (!PaneModal() && ImGui::IsMouseHoveringRect(ta, tb)) { // a modal pane holds the input
             g_focus = i;
             if (ImGui::IsMouseClicked(0)) {
                 Activate(tile);
@@ -335,7 +335,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         if (active) {
             dl->AddRectFilled(ImVec2(tx + tw * 0.25f, y + 34 * s), ImVec2(tx + tw * 0.75f, y + 37 * s), kPinkU, 2 * s);
         }
-        if (ImGui::IsMouseHoveringRect(ImVec2(tx, y - 6 * s), ImVec2(tx + tw, y + 40 * s)) && ImGui::IsMouseClicked(0)) {
+        if (!PaneModal() && ImGui::IsMouseHoveringRect(ImVec2(tx, y - 6 * s), ImVec2(tx + tw, y + 40 * s)) && ImGui::IsMouseClicked(0)) {
             g_tab = i;
             g_focus = 0;
         }

@@ -29,6 +29,44 @@ namespace fi {
 constexpr uint16_t kUiProtocol = 2;
 constexpr size_t kMaxLobbyRows = 16, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxPaneSections = 8, kMaxPaneEntries = 32, kMaxPaneActions = 4;
+// UiFrame.cs' text limits in UTF-8 bytes: the launcher refuses anything longer, so neither side sends it
+constexpr size_t kMaxGamertag = 64, kMaxModId = 64, kMaxModVersion = 16, kMaxPaneText = 512, kMaxPaneId = 64;
+
+// Strict UTF-8 (no overlong forms, surrogates or code points past U+10FFFF), as the launcher decodes.
+inline bool Utf8(const std::string &s) {
+    const auto *p = reinterpret_cast<const unsigned char *>(s.data());
+    for (size_t i = 0, n = s.size(); i < n;) {
+        const unsigned c = p[i];
+        size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (!len || i + len > n) return false;
+        unsigned cp = len == 1 ? c : len == 2 ? c & 0x1F : len == 3 ? c & 0x0F : c & 0x07;
+        for (size_t k = 1; k < len; ++k) {
+            if ((p[i + k] & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (p[i + k] & 0x3F);
+        }
+        if ((len == 2 && cp < 0x80) || (len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000) || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+            return false;
+        i += len;
+    }
+    return true;
+}
+
+// At most `max` bytes of valid UTF-8, cut on a code point; empty when `s` is not valid UTF-8.
+inline std::string Utf8Cut(const std::string &s, size_t max) {
+    if (!Utf8(s)) return {};
+    if (s.size() <= max) return s;
+    size_t n = max;
+    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
+    return s.substr(0, n);
+}
+
+// A pane or action id: [A-Za-z0-9:._-]{1,64} (UiFrame.PaneKey).
+inline bool PaneKey(const std::string &id) {
+    if (id.empty() || id.size() > kMaxPaneId) return false;
+    for (char c : id)
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ':' || c == '.' || c == '_' || c == '-')) return false;
+    return true;
+}
 
 enum class PaneIcon : uint8_t { None, Player, Host, Supporter, Mod, Warning, Check };
 constexpr uint8_t kPaneIconMax = static_cast<uint8_t>(PaneIcon::Check);
@@ -115,6 +153,12 @@ struct Reader {
         left -= n;
         return s;
     }
+    // A protocol 2 string: strict UTF-8 and at most `max` bytes (the launcher's own rules)
+    std::string Text(size_t max = 0xFFFF) {
+        std::string s = Str();
+        if (ok && (s.size() > max || !Utf8(s))) ok = false;
+        return s;
+    }
     bool Done() const { return ok && left == 0; }
 };
 
@@ -128,10 +172,12 @@ inline std::vector<uint8_t> EncodeWorldsQueryV2(uint8_t filter, bool not_full, b
     wire::Flag(b, modded);
     return b;
 }
+// The game's gamertag is untrusted text: cut to the launcher's 512 bytes on a code point, or dropped
+// when it is not UTF-8, so it can never be the frame that closes the pipe.
 inline std::vector<uint8_t> EncodePlayerDetailsQuery(const std::string &xuid, const std::string &gamertag) {
     std::vector<uint8_t> b;
     wire::Str(b, xuid);
-    wire::Str(b, gamertag);
+    wire::Str(b, Utf8Cut(gamertag, kMaxPaneText));
     return b;
 }
 inline std::vector<uint8_t> EncodePaneActionClick(const std::string &pane, const std::string &action) {
@@ -156,13 +202,13 @@ inline bool DecodeWorldsListV2(const uint8_t *body, size_t size, WorldsListV2 &o
     l.filter = r.U8();
     l.modded = r.Flag();
     l.status = r.U8();
-    l.message = r.Str();
+    l.message = r.Text();
     const size_t count = r.Count(kMaxLobbyRows);
     for (size_t i = 0; i < count && r.ok; ++i) {
         WorldRow w;
-        w.id = r.Str();
-        w.name = r.Str();
-        w.host = r.Str();
+        w.id = r.Text();
+        w.name = r.Text();
+        w.host = r.Text();
         w.players = r.U8();
         w.max = r.U8();
         w.kind = r.U8();
@@ -175,7 +221,7 @@ inline bool DecodeWorldsListV2(const uint8_t *body, size_t size, WorldsListV2 &o
         const size_t members = r.Count(kMaxLobbyMembers);
         for (size_t m = 0; m < members && r.ok; ++m) {
             LobbyMember p;
-            p.gamertag = r.Str();
+            p.gamertag = r.Text(kMaxGamertag);
             p.tier = r.U8();
             p.role = r.U8();
             if (p.tier > 1 || p.role > 2) r.ok = false;
@@ -184,8 +230,8 @@ inline bool DecodeWorldsListV2(const uint8_t *body, size_t size, WorldsListV2 &o
         const size_t mods = r.Count(kMaxLobbyMods);
         for (size_t m = 0; m < mods && r.ok; ++m) {
             LobbyMod mod;
-            mod.id = r.Str();
-            mod.version = r.Str();
+            mod.id = r.Text(kMaxModId);
+            mod.version = r.Text(kMaxModVersion);
             w.mods.push_back(std::move(mod));
         }
         if (!w.modded && !w.mods.empty()) r.ok = false;
@@ -234,21 +280,22 @@ inline std::vector<uint8_t> EncodeWorldsListV2(const WorldsListV2 &l) {
 inline bool DecodeDetailPane(const uint8_t *body, size_t size, DetailPane &out) {
     wire::Reader r{body, size};
     DetailPane p;
-    p.id = r.Str();
-    p.title = r.Str();
-    p.subtitle = r.Str();
-    p.avatar = r.Str();
+    p.id = r.Text(kMaxPaneId);
+    p.title = r.Text(kMaxPaneText);
+    p.subtitle = r.Text(kMaxPaneText);
+    p.avatar = r.Text(kMaxPaneId);
+    if (!p.id.empty() && !PaneKey(p.id)) r.ok = false;
     const size_t sections = r.Count(kMaxPaneSections);
     for (size_t i = 0; i < sections && r.ok; ++i) {
         PaneSection s;
         s.kind = r.U8();
         if (s.kind > 1) r.ok = false;
-        s.heading = r.Str();
+        s.heading = r.Text(kMaxPaneText);
         const size_t entries = r.Count(kMaxPaneEntries);
         for (size_t e = 0; e < entries && r.ok; ++e) {
             PaneEntry entry;
-            entry.primary = r.Str();
-            entry.secondary = r.Str();
+            entry.primary = r.Text(kMaxPaneText);
+            entry.secondary = r.Text(kMaxPaneText);
             const uint8_t icon = r.U8();
             if (icon > kPaneIconMax) r.ok = false;
             entry.icon = static_cast<PaneIcon>(icon);
@@ -259,10 +306,10 @@ inline bool DecodeDetailPane(const uint8_t *body, size_t size, DetailPane &out) 
     const size_t actions = r.Count(kMaxPaneActions);
     for (size_t i = 0; i < actions && r.ok; ++i) {
         PaneAction a;
-        a.id = r.Str();
-        a.label = r.Str();
+        a.id = r.Text(kMaxPaneId);
+        a.label = r.Text(kMaxPaneText);
         a.enabled = r.Flag();
-        if (a.id.empty()) r.ok = false;
+        if (!PaneKey(a.id)) r.ok = false;
         p.actions.push_back(std::move(a));
     }
     if (!r.Done()) return false;

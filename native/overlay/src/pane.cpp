@@ -10,10 +10,16 @@
 //   player card opens at once with what the game gave (the gamertag, an avatar placeholder and a
 //   disabled "Add friend") and asks the launcher (0x17); its answer for the same player replaces
 //   it, an answer for a player card already closed is dropped.
+// - Who opens the guide: only the player card (the game's PLAYER DETAILS, through the hook). A
+//   launcher pane of another kind is shown while the guide is open and waits otherwise.
+// - Threads: the pane state belongs to the render thread. Input (the window procedure) and the
+//   pipe only queue requests here, applied by PaneTick before the frame is drawn.
 #include "overlay.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <deque>
 #include <mutex>
 
 #include "imgui.h"
@@ -25,10 +31,15 @@ using namespace ui;
 
 namespace {
 
+struct Pending {
+    DetailPane pane;
+    bool local = false; // the player card's placeholder (not the launcher's answer)
+};
 std::mutex g_lock;
-DetailPane g_pending;      // from the launcher or the player card, for the render thread
-bool g_pending_set = false;
-bool g_pending_local = false; // the player card's placeholder (not the launcher's answer)
+std::deque<Pending> g_pending; // in arrival order: a placeholder and its answer both survive
+std::deque<Nav> g_navs;        // controller and keyboard input for the modal pane
+std::atomic<bool> g_modal_shown{false}; // what other threads may read of g_modal_open
+std::atomic<bool> g_close{false};       // ClosePane from any thread
 
 // render thread
 DetailPane g_modal;
@@ -40,10 +51,17 @@ bool g_accept = false;
 float g_dev_reply = -1; // the dev host's launcher answers the player card
 std::string g_dev_xuid, g_dev_gamertag;
 
+void Queue(Pending item) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    if (g_pending.size() >= 8) g_pending.pop_front();
+    g_pending.push_back(std::move(item));
+}
+
 DetailPane PlayerPlaceholder(const std::string &xuid, const std::string &gamertag) {
     DetailPane p;
     p.id = "player:" + xuid;
-    p.title = gamertag.empty() ? T("Player", "Jogador") : gamertag;
+    const std::string name = Utf8Cut(gamertag, kMaxGamertag);
+    p.title = name.empty() ? T("Player", "Jogador") : name;
     p.subtitle = T("Loading profile...", "Carregando perfil...");
     p.actions.push_back({"friend.add", T("Add friend", "Adicionar amigo"), false});
     return p;
@@ -105,7 +123,8 @@ void Avatar(ImDrawList *dl, ImVec2 centre, float radius, const DetailPane &p, fl
 }
 
 void Activate(const DetailPane &p, const PaneAction &a) {
-    if (!a.enabled) return; // a disabled action is shown, never sent
+    // a disabled action is shown, never sent; ids the launcher would refuse never leave (they close the pipe)
+    if (!a.enabled || !PaneKey(p.id) || !PaneKey(a.id)) return;
     if (DevHost()) {
         PushToast(ToastKind::Info, a.label, p.title);
     } else {
@@ -113,23 +132,33 @@ void Activate(const DetailPane &p, const PaneAction &a) {
     }
 }
 
+void CloseNow() {
+    g_modal_open = false;
+    g_modal_shown = false;
+    g_modal = DetailPane{};
+    g_focus = 0;
+    g_accept = false;
+}
+
+// render thread: one queued input on the open pane
+void Apply(Nav nav) {
+    const int count = static_cast<int>(g_modal.actions.size());
+    switch (nav) {
+    case Nav::Up: if (g_focus > 0) --g_focus; break;
+    case Nav::Down: if (g_focus + 1 < count) ++g_focus; break;
+    case Nav::Accept: g_accept = true; break;
+    case Nav::Back: CloseNow(); break;
+    default: break;
+    }
+}
+
 } // namespace
 
-void SetDetailPane(DetailPane pane) {
-    std::lock_guard<std::mutex> lock(g_lock);
-    g_pending = std::move(pane);
-    g_pending_set = true;
-    g_pending_local = false;
-}
+void SetDetailPane(DetailPane pane) { Queue({std::move(pane), false}); }
 
 void OpenPlayerCard(const std::string &xuid, const std::string &gamertag) {
     if (xuid.empty() || xuid.size() > 20 || !std::all_of(xuid.begin(), xuid.end(), [](char c) { return c >= '0' && c <= '9'; })) return;
-    {
-        std::lock_guard<std::mutex> lock(g_lock);
-        g_pending = PlayerPlaceholder(xuid, gamertag);
-        g_pending_set = true;
-        g_pending_local = true;
-    }
+    Queue({PlayerPlaceholder(xuid, gamertag), true});
     if (!DevHost()) SendPlayerDetailsQuery(xuid, gamertag); // the dev host answers in PaneTick
 }
 
@@ -138,56 +167,64 @@ void SetHoverPane(const DetailPane *pane) {
     if (pane) g_hover = *pane;
 }
 
-bool PaneModal() { return g_modal_open; }
+bool PaneModal() { return g_modal_shown; }
 
 void ClosePane() {
-    g_modal_open = false;
-    g_modal = DetailPane{};
-    g_focus = 0;
+    g_modal_shown = false; // other input goes back to the guide at once
+    g_close = true;
 }
 
-// Render thread, once a frame before the guide: applies what arrived, opens the guide for it.
+// Render thread, once a frame before the guide: applies the queued input and panes in order.
 void PaneTick(float dt) {
     if (g_dev_reply >= 0) {
         g_dev_reply -= dt;
         if (g_dev_reply < 0) SetDetailPane(DevPlayer(g_dev_xuid, g_dev_gamertag));
     }
-    DetailPane pane;
-    bool local = false;
+    std::deque<Pending> pending;
+    std::deque<Nav> navs;
     {
         std::lock_guard<std::mutex> lock(g_lock);
-        if (!g_pending_set) return;
-        pane = std::move(g_pending);
-        local = g_pending_local;
-        g_pending_set = false;
+        pending.swap(g_pending);
+        navs.swap(g_navs);
     }
-    if (pane.id.empty()) {
-        ClosePane();
-        return;
+    if (g_close.exchange(false)) CloseNow();
+    for (Nav nav : navs) {
+        if (g_modal_open) Apply(nav);
     }
-    // the launcher's player pane only updates the card that asked for it
-    if (!local && pane.id.rfind("player:", 0) == 0 && !(g_modal_open && g_modal.id == pane.id)) return;
-    if (!g_modal_open || g_modal.id != pane.id) g_focus = 0;
-    if (local && DevHost()) {
-        g_dev_xuid = pane.id.substr(7);
-        g_dev_gamertag = pane.title;
-        g_dev_reply = 0.4f;
+    for (auto &item : pending) {
+        DetailPane &pane = item.pane;
+        if (pane.id.empty()) {
+            CloseNow();
+            continue;
+        }
+        const bool player = pane.id.rfind("player:", 0) == 0;
+        // the launcher's player pane only updates the card that asked for it
+        if (!item.local && player && !(g_modal_open && g_modal.id == pane.id)) continue;
+        // only the player card opens the guide; any other launcher pane waits for it to be open
+        if (!item.local && !player && !SidebarOpen()) continue;
+        if (!g_modal_open || g_modal.id != pane.id) g_focus = 0;
+        if (item.local && DevHost()) {
+            g_dev_xuid = pane.id.substr(7);
+            g_dev_gamertag = pane.title;
+            g_dev_reply = 0.4f;
+        }
+        g_modal = std::move(pane);
+        g_modal_open = true;
+        g_modal_shown = true;
+        if (item.local && !SidebarOpen()) ToggleSidebar();
     }
-    g_modal = std::move(pane);
-    g_modal_open = true;
-    if (!SidebarOpen()) ToggleSidebar();
 }
 
+// Any thread (the window procedure): queued for the render thread while a modal pane is open.
 bool PaneNavigate(Nav nav) {
-    if (!g_modal_open) return false;
-    const int count = static_cast<int>(g_modal.actions.size());
-    switch (nav) {
-    case Nav::Up: if (g_focus > 0) --g_focus; return true;
-    case Nav::Down: if (g_focus + 1 < count) ++g_focus; return true;
-    case Nav::Accept: g_accept = true; return true;
-    case Nav::Back: ClosePane(); return true;
-    default: return true; // the pane holds the controller while it is open
+    if (!g_modal_shown) return false;
+    if (nav == Nav::Back) {
+        ClosePane();
+        return true;
     }
+    std::lock_guard<std::mutex> lock(g_lock);
+    if (g_navs.size() < 16) g_navs.push_back(nav);
+    return true; // the pane holds the controller while it is open
 }
 
 void DrawPane(ImDrawList *dl, float x, float y0, float w, float height, float alpha) {

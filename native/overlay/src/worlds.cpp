@@ -413,7 +413,8 @@ float WrappedHeight(ImFont *font, float width, const char *text) {
     return font->CalcTextSizeA(font->FontSize, FLT_MAX, width, text).y;
 }
 
-bool Clicked(ImVec2 a, ImVec2 b) { return ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0); }
+// a modal right pane holds the input: the tab underneath takes no clicks
+bool Clicked(ImVec2 a, ImVec2 b) { return !PaneModal() && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0); }
 
 struct Item {
     enum Kind { Chips, CreateTile, CodeTile, Row, LockedRow } kind;
@@ -462,7 +463,7 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
     if (locked) sub += std::string(" · ") + LockName(w.lock);
     if (!GameReady()) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
-    const bool mismatch = w.modded && !w.mods_match;
+    const bool mismatch = !w.mods_match; // a vanilla row too, for a player with mods
     if (mismatch && GameReady()) sub += std::string(" · ") + T("Mods differ", "Mods diferentes");
     TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), w.lock == 1 ? kPinkU : mismatch && GameReady() ? kAmber : kTextDim, sub.c_str());
     dl->PopClipRect();
@@ -487,6 +488,16 @@ std::string ModList(const WorldRow &w) {
     return out;
 }
 
+// Why a row whose mods differ from the player's cannot be joined (modsMatch false; vanilla rows too).
+std::string MismatchText(const WorldRow &w) {
+    if (!w.modded) return T("This lobby has no mods; turn your mods off in the launcher to join.",
+                            "Este lobby não tem mods; desligue seus mods no launcher para entrar.");
+    const std::string list = ModList(w);
+    return (list.empty() ? std::string(T("This lobby uses other mods.", "Este lobby usa outros mods."))
+                         : std::string(T("This lobby uses: ", "Este lobby usa: ")) + list + ".") +
+           T(" Use the same mods in the launcher to join.", " Use os mesmos mods no launcher para entrar.");
+}
+
 // The right pane for a lobby (OD-112): built here from the row, so hovering costs no request.
 const DetailPane &LobbyPane(const WorldRow &w) {
     DetailPane &p = g_lobby_pane;
@@ -495,9 +506,11 @@ const DetailPane &LobbyPane(const WorldRow &w) {
     p.title = w.name;
     p.subtitle = w.host + " · " + AudienceName(w.audience) + " · " + std::to_string(w.players) + "/" + std::to_string(w.max) + T(" players", " jogadores");
     p.avatar = "icon:world";
-    if (w.modded && !w.mods_match) {
+    if (!w.mods_match) {
         p.sections.push_back({1, "", {{T("Your mods don't match this lobby", "Seus mods não batem com os deste lobby"),
-                                       T("Use the same mods in the launcher to join", "Use os mesmos mods no launcher para entrar"), PaneIcon::Warning}}});
+                                       w.modded ? T("Use the same mods in the launcher to join", "Use os mesmos mods no launcher para entrar")
+                                                : T("This lobby has no mods; turn your mods off to join", "Este lobby não tem mods; desligue seus mods para entrar"),
+                                       PaneIcon::Warning}}});
     }
     PaneSection players{1, T("PLAYERS", "JOGADORES"), {}};
     for (const auto &m : w.members) {
@@ -610,8 +623,6 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
         g_items.push_back({Item::Row, static_cast<int>(i)});
         y += wh + gap;
     }
-    // the right pane: the row under the mouse, else the focused one (before A joins it)
-    if (const WorldRow *shown = hovered ? hovered : focused) SetHoverPane(&LobbyPane(*shown));
     if (!locked.empty() && y + 40 * s < bottom) {
         y += 10 * s;
         TextAt(dl, f.tag, ImVec2(x, y), kPinkU, T("INFINITY SUPPORTER LOBBIES", "LOBBIES INFINITY SUPPORTER"));
@@ -621,10 +632,14 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
             const ImVec2 a(x, y), b(x + w, y + wh);
             WorldTile(dl, a, b, focus_of(index), locked[i]);
             if (Clicked(a, b)) { g_focus = index; g_accept = true; }
+            if (ImGui::IsMouseHoveringRect(a, b)) hovered = &locked[i];
+            if (focus_of(index)) focused = &locked[i];
             g_items.push_back({Item::LockedRow, static_cast<int>(i)});
             y += wh + gap;
         }
     }
+    // the right pane: the row under the mouse, else the focused one (before A joins it)
+    if (const WorldRow *shown = hovered ? hovered : focused) SetHoverPane(&LobbyPane(*shown));
 }
 
 void AcceptList(bool supporter, const Shared &sh) {
@@ -648,13 +663,9 @@ void AcceptList(bool supporter, const Shared &sh) {
         const auto rows = Joinable(sh.rows);
         if (item.row < static_cast<int>(rows.size())) {
             const WorldRow &r = rows[item.row];
-            if (r.modded && !r.mods_match) {
-                // OD-112: only the exact same mods join; the server refuses it too
-                const std::string list = ModList(r);
-                PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"),
-                          (list.empty() ? std::string(T("This lobby uses other mods.", "Este lobby usa outros mods."))
-                                        : std::string(T("This lobby uses: ", "Este lobby usa: ")) + list + ".") +
-                              T(" Use the same mods in the launcher to join.", " Use os mesmos mods no launcher para entrar."));
+            if (!r.mods_match) {
+                // OD-112: only the exact same mods join (a vanilla lobby: none); the server refuses it too
+                PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"), MismatchText(r));
             } else if (r.lock == 4) {
                 PushToast(ToastKind::Info, r.name, T("This lobby is full. Try another one.", "Esse lobby está cheio. Tente outro."));
             } else if (r.lock == 3) {
