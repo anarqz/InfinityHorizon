@@ -15,7 +15,7 @@ public sealed partial class WorldsBridge
     /// <summary>One bounded request off the supervisor loop; no address or credential logging.</summary>
     public async Task NetworkHintAsync(Frame.RelayNetworkHint hint,CancellationToken cancellation)
     {
-        if(!NeedsProof || Interlocked.CompareExchange(ref _networkRunning,1,0)!=0)return;
+        if(!NeedsProof && !ProofInstalled || Interlocked.CompareExchange(ref _networkRunning,1,0)!=0)return;
         using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation,_onlineStop.Token);
         bound.CancelAfter(TimeSpan.FromSeconds(8));
         var started=_clock.GetTimestamp();
