@@ -587,7 +587,7 @@
                   </WrapPanel>
                   <TextBlock Text="{Binding ModCatalogSummary}" ToolTip="{Binding ModCatalogStatus}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                   <Button Content="{Binding S[mods.recover]}" Click="OnRecoverMods" Margin="0,8,0,0"
-                          Visibility="{Binding ModRecoveryRequired, Converter={StaticResource Visible}}" />
+                          Visibility="{Binding ShowModRecovery, Converter={StaticResource Visible}}" />
                 </StackPanel>
               </StackPanel>
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">

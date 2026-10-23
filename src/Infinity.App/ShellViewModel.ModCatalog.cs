@@ -88,6 +88,7 @@ public sealed partial class ShellViewModel
     public string ModCatalogSummary => _catalogFailure ?? S.Format("mods.catalog_count",
         ("count", _manifestCatalog.Count.ToString(System.Globalization.CultureInfo.CurrentCulture)));
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
+    public bool ShowModRecovery => ModsIdle && ModRecoveryRequired;
     public bool ModRecoveryRequired
     {
         get
