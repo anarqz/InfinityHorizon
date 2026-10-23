@@ -12,7 +12,7 @@ namespace Infinity.Core.Update;
 public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> supervisedGameActive,
     Action<UpdateInstallProgress>? progress = null)
 {
-    private static readonly string[] RuntimeDirectories = ["hook", "overlay", "i18n", "i18n-win", "licenses"];
+    private static readonly string[] RuntimeDirectories = ["hook", "overlay", "mod", "i18n", "i18n-win", "licenses"];
     private static readonly HashSet<string> RuntimeNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "infinity.exe", "infinity.exe.sig", "infinity-updater.exe", "infinity-updater.exe.sig",
@@ -21,6 +21,10 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
         "i18n/en.json", "i18n/pt-BR.json", "i18n-win/en.json", "i18n-win/pt-BR.json",
         "licenses/BouncyCastle-LICENSE.md", "licenses/fh2-mods-LICENSE.txt", "licenses/FluentSystemIcons-LICENSE.txt",
         "licenses/Hook-NOTICE.md", "licenses/ImGui-LICENSE.txt", "licenses/MinHook-LICENSE.txt", "licenses/Selawik-LICENSE.txt",
+        // the native mod runtime (OD-112) and its notices
+        "mod/infinity_mod.dll", "mod/infinity_mod.dll.sig", "mod/infinity-mod-prepare.exe", "mod/infinity-mod-prepare.exe.sig",
+        "licenses/SQLite-VERSION.txt", "licenses/Mod-NOTICE.md", "licenses/Mod-SDK-LICENSE.txt", "licenses/FH2-hooks-MIT.txt",
+        "licenses/Mod-MinHook-LICENSE.txt",
     };
     public const int MaxFiles = 128;
     public const long MaxPackageBytes = 1024L * 1024 * 1024;

@@ -20,14 +20,22 @@ switch (args)
         Console.WriteLine(Convert.ToHexStringLower(key));
         return 0;
     case ["sign", var file]:
-        var line = Encoding.ASCII.GetBytes("fh2online-update-v1 " + Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(file))));
-        var signature = new byte[64];
-        Ed25519.Sign(seed, 0, line, 0, line.Length, signature, 0);
-        if (!Ed25519.Verify(signature, 0, key, 0, line, 0, line.Length))
-            throw new CryptographicException("Development signature verification failed.");
-        File.WriteAllBytes(file + ".sig", signature);
-        return 0;
+        return Sign(file, "fh2online-update-v1 ");
+    case ["sign-mod", var file]:
+        // the native mod runtime and helper: their own domain (the hook's mod_host.c verifies it)
+        return Sign(file, "fi-mod-runtime-v1 ");
     default:
-        Console.Error.WriteLine("usage: devsign key | sign <file>");
+        Console.Error.WriteLine("usage: devsign key | sign <file> | sign-mod <file>");
         return 2;
+}
+
+int Sign(string file, string prefix)
+{
+    var line = Encoding.ASCII.GetBytes(prefix + Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(file))));
+    var signature = new byte[64];
+    Ed25519.Sign(seed, 0, line, 0, line.Length, signature, 0);
+    if (!Ed25519.Verify(signature, 0, key, 0, line, 0, line.Length))
+        throw new CryptographicException("Development signature verification failed.");
+    File.WriteAllBytes(file + ".sig", signature);
+    return 0;
 }
