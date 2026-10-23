@@ -165,6 +165,12 @@ int fi_livery_run_current(unsigned timeout_ms);
 /* OD-54: the launcher's relay port while this PC hosts in a launcher session (0: not hosting). */
 void azimuth_world_launcher_host(unsigned port);
 void fi_launch_capture(unsigned what, int ok);
+/* N-H2: the native mod runtime's snapshot as a ModsReport (0x1b) for the launcher; the session
+   writer sends it once it changed. 0 outside a launcher session. */
+struct InfinityModsSnapshotV2;
+int fi_launch_mods_report(const struct InfinityModsSnapshotV2 *snapshot);
+size_t fi_launch_mods_encode(unsigned char *out, size_t cap, const struct InfinityModsSnapshotV2 *snapshot);
+void fi_launch_mods_flush(unsigned ms);
 /* RelaunchRequest{reason}, then ExitProcess(0x46490001): the launcher starts the game again
    (never returns). */
 void fi_launch_relaunch(unsigned reason);

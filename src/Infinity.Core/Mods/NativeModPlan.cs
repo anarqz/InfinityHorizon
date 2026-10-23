@@ -15,9 +15,12 @@ public sealed class NativeModPlan : IDisposable
     private readonly Action _restore;
     private bool _disposed;
     public IReadOnlyList<(string Name, string Value)> Environment { get; }
-    internal NativeModPlan(string path, byte[] bytes, string runtime, List<IDisposable> locks, Action restore)
+    /// <summary>N-H2: the per-launch nonce in the plan (FIMOD003) and the plan's SHA-256; a ModsReport counts only when both match.</summary>
+    public byte[] Nonce { get; }
+    public string PlanSha256 { get; }
+    internal NativeModPlan(string path, byte[] bytes, string runtime, List<IDisposable> locks, Action restore, byte[] nonce)
     {
-        _locks = locks; _restore = restore;
+        _locks = locks; _restore = restore; Nonce = nonce; PlanSha256 = ModManifest.Hash(bytes);
         using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { file.Write(bytes); file.Flush(true); }
         locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
         Environment = [("FI_MOD_PLAN", path), ("FI_MOD_PLAN_HASH", ModManifest.Hash(bytes)), ("FI_MOD_RUNTIME", runtime), ("FI_MOD_RUNTIME_HASH", ModManifest.Hash(File.ReadAllBytes(runtime)))];
@@ -113,6 +116,7 @@ public sealed partial class ManagedModFiles
             string? relative = null, targetDatabase = null, baseline = null, before = null;
             var hashes = new byte[64];
             var folder = Safe(BackupRoot, "sessions/" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
+            var nonce = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
             if (policies.Length > 0)
             {
                 relative = policies[0].GetProperty("path").GetString()!;
@@ -130,7 +134,7 @@ public sealed partial class ManagedModFiles
             byte[] Plan()
             {
                 using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes, Encoding.Unicode, leaveOpen: true);
-                writer.Write("FIMOD002"u8); writer.Write((uint)selected.Count);
+                writer.Write("FIMOD003"u8); writer.Write(nonce); writer.Write((uint)selected.Count);
                 NativeModPlan.Text(writer, _azimuth); NativeModPlan.Text(writer, _game ?? _azimuth);
                 writer.Write(targetDatabase is null ? 0u : 1u); if (targetDatabase is not null) NativeModPlan.Text(writer, targetDatabase);
                 writer.Write(baseline is null ? new byte[32] : Convert.FromHexString(baseline)); writer.Write(hashes);
@@ -174,7 +178,7 @@ public sealed partial class ManagedModFiles
                 Atomic(SessionJournal, JsonSerializer.SerializeToUtf8Bytes(new SessionDatabaseJournal(_azimuth, _game!, relative!, baseline!, after, before is not null), Json));
                 Atomic(targetDatabase, prepared);
             }
-            return new(Path.Combine(folder, "launch.bin"), Plan(), runtime, locks, RestoreSessionDatabase);
+            return new(Path.Combine(folder, "launch.bin"), Plan(), runtime, locks, RestoreSessionDatabase, nonce);
         }
         catch
         {

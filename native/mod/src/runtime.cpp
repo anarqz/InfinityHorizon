@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes. GPL-3.0-only; see repository LICENSE.
 #include "runtime_internal.hpp"
 #include <bcrypt.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -31,6 +32,9 @@ std::mutex state_mutex;
 std::atomic<bool> started{false};
 std::atomic<bool> hook_fault{false};
 bool failed = false, complete = false;
+// what binds a snapshot to this launch (InfinityModsQueryV2), set once under state_mutex
+uint32_t plan_version = 0;
+uint8_t plan_nonce[16]{}, plan_digest[32]{};
 std::vector<std::unique_ptr<Entry>> entries;
 void* game_image = nullptr;
 std::filesystem::path azimuth, mount;
@@ -290,18 +294,34 @@ extern "C" __declspec(dllexport) int InfinityModsStartV1(const InfinityModsLaunc
         return 0;
     } catch (...) { failed = true; return 3; }
 }
-extern "C" __declspec(dllexport) int InfinityModsQueryV1(InfinityModsSnapshotV1* result) {
-    if (!result || result->size != sizeof *result || result->abi_version != 1) return 1;
-    std::lock_guard lock(state_mutex);
+namespace {
+// state_mutex held: applies the deadlines, then copies the state out
+template <typename Snapshot> void snapshot_locked(Snapshot& result) {
     if (hook_fault && !failed) fail_locked();
     if (!failed)
         for (const auto& e : entries)
             if ((e->report.state == INFINITY_MOD_INITIALIZING || (e->report.state == INFINITY_MOD_READY && !e->init_returned))
                 && GetTickCount64() >= e->deadline) { fail_locked(); break; }
+    result.count = static_cast<uint32_t>(entries.size()); result.failed = failed;
+    result.ready = started && complete && !failed;
+    for (size_t i=0;i<entries.size();++i) result.mods[i] = entries[i]->report;
+}
+}
+extern "C" __declspec(dllexport) int InfinityModsQueryV1(InfinityModsSnapshotV1* result) {
+    if (!result || result->size != sizeof *result || result->abi_version != 1) return 1;
+    std::lock_guard lock(state_mutex);
     *result = {}; result->size = sizeof *result; result->abi_version = 1;
-    result->count = static_cast<uint32_t>(entries.size()); result->failed = failed;
-    result->ready = started && complete && !failed;
-    for (size_t i=0;i<entries.size();++i) result->mods[i] = entries[i]->report;
+    snapshot_locked(*result);
+    return 0;
+}
+// N-H2: the snapshot with the plan's nonce and digest, for the hook's ModsReport to the launcher.
+extern "C" __declspec(dllexport) int InfinityModsQueryV2(InfinityModsSnapshotV2* result) {
+    if (!result || result->size != sizeof *result || result->abi_version != 2) return 1;
+    std::lock_guard lock(state_mutex);
+    *result = {}; result->size = sizeof *result; result->abi_version = 2;
+    result->plan_version = plan_version;
+    std::memcpy(result->nonce, plan_nonce, sizeof plan_nonce); std::memcpy(result->plan_sha256, plan_digest, sizeof plan_digest);
+    snapshot_locked(*result);
     return 0;
 }
 
@@ -329,10 +349,20 @@ struct ParsedPlan {
     uint8_t baseline_hash[32]{}, prepared_hash[32]{}, sql_hash[32]{};
     std::vector<infinity_mod::Readiness> readiness;
     uint32_t count = 0;
+    uint32_t version = 0;   // 2 FIMOD002, 3 FIMOD003 (the launcher's per-launch nonce follows the magic)
+    uint8_t nonce[16]{};
 };
 void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
     PlanReader reader{bytes}; char magic[8]; reader.read(magic, 8);
-    if (std::memcmp(magic, "FIMOD002", 8)) throw std::runtime_error("unknown plan format");
+    if (!std::memcmp(magic, "FIMOD003", 8)) {
+        plan.version = 3; reader.read(plan.nonce, 16);
+        uint8_t any = 0; for (auto b : plan.nonce) any |= b;
+        if (!any) throw std::runtime_error("missing launch nonce");
+    } else if (!std::memcmp(magic, "FIMOD002", 8)) {
+        plan.version = 2;
+    } else {
+        throw std::runtime_error("unknown plan format");
+    }
     plan.count = reader.number();
     if (!plan.count || plan.count > INFINITY_MOD_MAX_COUNT) throw std::runtime_error("invalid selection count");
     plan.azimuth = reader.text(); plan.game = reader.text();
@@ -372,8 +402,18 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
 extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const wchar_t* path, const uint8_t hash[32]) {
     try {
         if (!hash || !valid_path(path) || !valid_host() || !valid_image(image)) return 1;
-        wchar_t mode[32]{};
-        if (GetEnvironmentVariableW(L"FI_LAUNCH", mode, 32) != 10 || wcscmp(mode, L"v1;offline")) return 1;
+        // FI_LAUNCH by its fields (N-L5): "v1;offline", or "v1;pipe=<32 hex>" (an online launcher session, OD-112)
+        wchar_t mode[48]{};
+        const DWORD mode_length = GetEnvironmentVariableW(L"FI_LAUNCH", mode, 48);
+        bool online = false;
+        if (mode_length == 10 && !wcscmp(mode, L"v1;offline")) {
+            online = false;
+        } else if (mode_length == 40 && !wcsncmp(mode, L"v1;pipe=", 8)
+            && std::all_of(mode + 8, mode + 40, [](wchar_t c) { return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'); })) {
+            online = true;
+        } else {
+            return 1;
+        }
         auto locked = verify_file(path, hash); if (!locked) return 1;
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(locked->file, &size) || size.QuadPart < 12 || size.QuadPart > 1024 * 1024) return 1;
@@ -381,6 +421,14 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         std::vector<uint8_t> bytes(size_t(size.QuadPart)); DWORD read = 0;
         if (!ReadFile(locked->file, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size()) return 1;
         ParsedPlan plan; parse_plan(bytes, plan);
+        // online sessions need the plan that binds the launcher's report (FIMOD003); fail closed otherwise
+        if (online && plan.version < 3) return 1;
+        {
+            std::lock_guard lock(state_mutex);
+            if (started) return 2;
+            plan_version = plan.version;
+            std::memcpy(plan_nonce, plan.nonce, sizeof plan_nonce); std::memcpy(plan_digest, hash, sizeof plan_digest);
+        }
         wchar_t exe[32768]; auto length = GetModuleFileNameW(nullptr, exe, 32768);
         if (!length || length >= 32768 || _wcsicmp(std::filesystem::path(exe).parent_path().c_str(), plan.azimuth.c_str())) return 1;
         auto prefix = plan.azimuth + L"\\";
