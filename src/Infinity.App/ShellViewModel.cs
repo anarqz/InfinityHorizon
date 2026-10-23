@@ -63,7 +63,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool CanChangeIdentity => SignedIn && !Playing && !_busy && !LauncherUpdateBusy;
 
-    public bool ShowWelcome => !SignedIn && _pending is null && !_loginOpen;
+    public bool ShowWelcome => !SignedIn && _pending is null && !_loginOpen && !_onMods;
 
     /// <summary>The kept session is being checked: the welcome screen says so instead of offering sign-in.</summary>
     public bool Resuming => _resuming;

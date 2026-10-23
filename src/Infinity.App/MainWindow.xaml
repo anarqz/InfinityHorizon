@@ -11,6 +11,16 @@
     <local:InverseVisibility x:Key="Hidden" />
   </Window.Resources>
   <Grid>
+  <Grid x:Name="ShellContent" IsEnabled="{Binding ModContentEnabled}">
+    <Grid.Style>
+      <Style TargetType="Grid">
+        <Style.Triggers>
+          <DataTrigger Binding="{Binding ModOperationBusy}" Value="True">
+            <Setter Property="Effect"><Setter.Value><BlurEffect Radius="9" /></Setter.Value></Setter>
+          </DataTrigger>
+        </Style.Triggers>
+      </Style>
+    </Grid.Style>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
@@ -161,6 +171,8 @@
                     HorizontalAlignment="Center" Visibility="{Binding Resuming, Converter={StaticResource Hidden}}" />
             <TextBlock Text="{Binding S[native.signing_in]}" HorizontalAlignment="Center" FontSize="16"
                        Foreground="{StaticResource InfinityMuted}" Visibility="{Binding Resuming, Converter={StaticResource Visible}}" />
+            <Button Content="{Binding S[mods.dev_open]}" Click="OnNavMods" Margin="0,16,0,0"
+                    Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}" HorizontalAlignment="Center" />
           </StackPanel>
           <!-- OD-74: native sign-in; the confirmation step owns its temporary credentials. -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowSignIn, Converter={StaticResource Visible}}">
@@ -534,9 +546,41 @@
             <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
               <StackPanel MaxWidth="780" HorizontalAlignment="Left" Margin="0,0,18,0">
                 <TextBlock Text="{Binding S[mods.title]}" Style="{StaticResource PageTitle}" />
-                <TextBlock Text="{Binding S[mods.subtitle]}" Margin="0,6,0,18" Style="{StaticResource PageSubtitle}" />
+                <TextBlock Text="{Binding ModsSubtitle}" Margin="0,6,0,18" Style="{StaticResource PageSubtitle}" />
 
-                <Border Style="{StaticResource Card}" Padding="22">
+                <StackPanel Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}">
+                  <WrapPanel Margin="0,0,0,12">
+                    <Button Content="{Binding S[welcome.back]}" Click="OnNavHome" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[mods.refresh_catalog]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[mods.choose_folder]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding ModCatalogStatus}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,0,0,8" />
+                  <TextBlock Text="{Binding ModFolder}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,4" />
+                  <TextBlock Text="{Binding ModBackupFolder}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,14" />
+                  <Button Content="{Binding S[mods.recover]}" Click="OnRecoverMods" Margin="0,0,0,14"
+                          Visibility="{Binding ModRecoveryRequired, Converter={StaticResource Visible}}" />
+                </StackPanel>
+                <ItemsControl ItemsSource="{Binding ModCards}" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Visible}}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Style="{StaticResource Card}" Padding="20" Margin="0,0,0,14">
+                        <StackPanel>
+                          <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="Bold" />
+                          <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource InfinityMuted}" />
+                          <TextBlock Text="{Binding Status}" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}" Margin="0,12,0,0" TextWrapping="Wrap" />
+                          <TextBlock Text="{Binding Requirements}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                          <WrapPanel Margin="0,14,0,0">
+                            <Button Content="{Binding Action}" Click="OnActOnMod" IsEnabled="{Binding CanAct}" Style="{StaticResource AccentButtonStyle}" Margin="0,0,10,6" />
+                            <Button Content="{Binding DataContext.S[mods.options], RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Click="OnToggleModOptions" IsEnabled="{Binding HasOptions}" Margin="0,0,0,6" />
+                          </WrapPanel>
+                          <TextBlock Text="{Binding Credits}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,8,0,0" />
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Border Style="{StaticResource Card}" Padding="22" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Hidden}}">
                   <StackPanel>
                     <DockPanel>
                       <CheckBox DockPanel.Dock="Right" Content="{Binding S[mods.enabled]}" IsChecked="{Binding EoEnabled}"
@@ -723,6 +767,8 @@
             <Button Content="{Binding S[updater.exit]}" Click="OnExitLauncherUpdate" Margin="0,0,10,10" />
           </WrapPanel>
           <TextBlock Text="{Binding OnlineServiceHelp}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+          <Button Content="{Binding S[mods.dev_open]}" Click="OnNavMods" HorizontalAlignment="Left" Margin="0,16,0,0"
+                  Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}" IsEnabled="{Binding ModsIdle}" />
           <Button Content="{Binding S[nav.discord]}" Click="OnDiscord" HorizontalAlignment="Left" Margin="0,16,0,0" />
         </StackPanel>
       </ScrollViewer>
@@ -751,6 +797,39 @@
         <TextBlock Text="{Binding S[beta.notice]}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
                    Foreground="{StaticResource InfinityMuted}" />
       </DockPanel>
+    </Border>
+  </Grid>
+    <Border x:Name="ModProgressOverlay" Background="#B20E0B16" Panel.ZIndex="100"
+            Visibility="{Binding ModOperationBusy, Converter={StaticResource Visible}}"
+            Focusable="True" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"
+              CornerRadius="18" Padding="40,32" MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel>
+          <Grid Width="48" Height="48" Margin="0,0,0,22">
+            <Ellipse Stroke="{StaticResource InfinityBorder}" StrokeThickness="4" />
+            <Path Data="M 24,2 A 22,22 0 0 1 46,24" Stroke="{StaticResource InfinityPink}" StrokeThickness="4"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" RenderTransformOrigin="0.5,0.5">
+              <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
+              <Path.Style>
+                <Style TargetType="Path">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding ModOperationBusy}" Value="True">
+                      <DataTrigger.EnterActions><BeginStoryboard x:Name="ModSpinner"><Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                         From="0" To="360" Duration="0:0:1" RepeatBehavior="Forever" />
+                      </Storyboard></BeginStoryboard></DataTrigger.EnterActions>
+                      <DataTrigger.ExitActions><StopStoryboard BeginStoryboardName="ModSpinner" /></DataTrigger.ExitActions>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Path.Style>
+            </Path>
+          </Grid>
+          <TextBlock Text="{Binding S[mods.progress.title]}" FontSize="22" FontWeight="Bold" TextAlignment="Center" />
+          <TextBlock Text="{Binding ModProgress}" Margin="0,10,0,0" TextWrapping="Wrap" TextAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{Binding S[mods.progress.hint]}" Margin="0,18,0,0" TextWrapping="Wrap" TextAlignment="Center" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+        </StackPanel>
+      </Border>
     </Border>
   </Grid>
 </Window>

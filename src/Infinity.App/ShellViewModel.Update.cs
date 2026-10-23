@@ -26,7 +26,9 @@ public sealed partial class ShellViewModel
     public bool LauncherUpdateAllowsPlay => !_updateAwaitingCommit && !_updateRecoveryBlocked && _launcherUpdatePhase is UpdatePhase.Current or UpdatePhase.ReleaseUnavailable;
     public bool LauncherReleaseUnavailable => _launcherUpdatePhase == UpdatePhase.ReleaseUnavailable;
     public bool LauncherUpdateBusy => _updateAwaitingCommit || _updateChecking || _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying;
-    public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport;
+    public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport
+        && !(DevelopmentMods && ShowMods && !_updateAwaitingCommit && !_updateRecoveryBlocked
+            && _launcherUpdatePhase is not (UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying or UpdatePhase.RecoveryRequired));
     public bool ShowLauncherUpdateBanner => !ShowOnlineStatusBanner && !ShowOnlineStatusPage && (LauncherReleaseUnavailable && LauncherUpdateAllowsPlay || !LauncherUpdateAllowsPlay && !ShowLauncherUpdate);
     public string LauncherUpdateBannerAction => S[LauncherReleaseUnavailable ? "updater.retry" : "updater.open"];
     public bool CanRetryLauncherUpdate => !LauncherUpdateBusy && !Playing;

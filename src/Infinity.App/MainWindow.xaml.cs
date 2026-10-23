@@ -29,6 +29,7 @@ public partial class MainWindow : Window
         _ = new GamepadNavigator(this, () => vm.Playing);
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
         vm.UpdateRestartRequested += () => Application.Current.Shutdown();
+        Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
@@ -39,6 +40,12 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             if (await vm.RecoverInterruptedUpdateAsync(cli)) return;
+            if (vm.DevelopmentMods && cli.Contains("--mods", StringComparer.Ordinal))
+            {
+                await vm.VerifyBuildOriginAsync();
+                await vm.OpenDevelopmentModsAsync(azimuth);
+                return;
+            }
             var onlineCheck = vm.CheckOnlineStatusAsync(manual: false);
             // Production bootstrap respects global closure before requesting discovery.
             if (config.Production) await onlineCheck;
@@ -189,6 +196,10 @@ public partial class MainWindow : Window
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
 
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
+
+    private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
+    private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
+    private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
 
     private async void OnInstallEo(object sender, RoutedEventArgs e) => await _vm.InstallEoAsync();
 

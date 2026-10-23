@@ -73,9 +73,9 @@ public sealed partial class ShellViewModel
 
     public bool OnMods => _onMods;
 
-    public bool ShowMods => SignedIn && _onMods && !ShowPickSave;
+    public bool ShowMods => (SignedIn || DevelopmentMods) && _onMods && !ShowPickSave;
 
-    public bool CanOpenMods => SignedIn && _install is not null;
+    public bool CanOpenMods => (SignedIn && _install is not null || DevelopmentMods) && !ModOperationBusy;
 
     /// <summary>The options sidebar is open on the Mods screen.</summary>
     public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null;
@@ -101,16 +101,16 @@ public sealed partial class ShellViewModel
     public ModRelease? EoTarget => Eo.For(_install?.Version);
 
     /// <summary>A change is safe now: no game, no session starting, nothing else running.</summary>
-    public bool ModsIdle => !_busy && !Playing;
+    public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking;
 
-    public bool CanToggleEo => EoInstalled && ModsIdle;
+    public bool CanToggleEo => EoInstalled && ModsIdle && !HasManagedModState;
 
     public bool EoEnabled
     {
         get => _eo?.Enabled == true;
         set
         {
-            if (_eo is null || !_eo.Installed || value == _eo.Enabled)
+            if (!CanToggleEo || _eo is null || !_eo.Installed || value == _eo.Enabled)
             {
                 return;
             }
@@ -175,7 +175,7 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>Install, update, or repair (an unrecognized binary) to the vetted release for this Azimuth.</summary>
-    public bool CanInstallEo => ModsIdle && EoTarget is { } target && _eo is not null && NeedsInstall(_eo, target);
+    public bool CanInstallEo => ModsIdle && !HasManagedModState && EoTarget is { } target && _eo is not null && NeedsInstall(_eo, target);
 
     public string EoInstallLabel => _eo is { Installed: true, Official: true } ? S["mods.update"] : _eo is { Installed: true } ? S["mods.repair"] : S["mods.install"];
 
@@ -199,6 +199,7 @@ public sealed partial class ShellViewModel
         RefreshMods();
         MarkNewsSeen();
         Changed(string.Empty);
+        if (DevelopmentMods && !_catalogLoaded) _ = LoadModCatalogAsync();
         if (!_eoChecked && !_eoChecking)
         {
             _ = CheckModsAsync();
@@ -228,7 +229,7 @@ public sealed partial class ShellViewModel
     private void StartMods()
     {
         RefreshMods();
-        _ = CheckModsAsync();
+        if (!DevelopmentMods) _ = CheckModsAsync();
     }
 
     public async Task CheckModsAsync()
@@ -277,6 +278,7 @@ public sealed partial class ShellViewModel
         }
         // Always start at the catalog's official release URL, then verify the downloaded bytes.
         var url = release.DownloadUrl(Eo);
+        _modOperation = true; _modProgress = S["mods.progress.download"];
         Busy = true;
         Message = S.Format("mods.installing", ("version", release.Version));
         try
@@ -300,6 +302,7 @@ public sealed partial class ShellViewModel
         }
         finally
         {
+            _modOperation = false;
             Busy = false;
             RefreshMods();
             Changed(string.Empty);
@@ -312,7 +315,7 @@ public sealed partial class ShellViewModel
         {
             return;
         }
-        if (GameRunning() || !ModsIdle)
+        if (GameRunning() || !ModsIdle || ModRecoveryRequired)
         {
             // the player's switches stay on screen; nothing is written
             Message = S["mods.close_game"];
@@ -336,26 +339,8 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
-    private void ModAction(Action action, string done)
-    {
-        if (GameRunning() || !ModsIdle)
-        {
-            Message = S["mods.close_game"];
-            Changed(string.Empty);
-            return;
-        }
-        try
-        {
-            action();
-            Message = done;
-        }
-        catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException)
-        {
-            Message = S["mods.action_failed"] + " (" + e.Message + ")";
-        }
-        RefreshMods();
-        Changed(string.Empty);
-    }
+    private void ModAction(Action action, string done) =>
+        _ = RunModOperationAsync(() => Task.Run(action), done);
 
     private ModManager Mods() => new(_install!.Root, GameRunning);
 
@@ -404,9 +389,16 @@ public sealed partial class ShellViewModel
         }
         _iniDirty = false;
         IniGroups.Clear();
+        RefreshModCards();
         if (_ini is { } ini)
         {
-            foreach (var section in ExtraOptionsIni.Schema.GroupBy(o => o.Section))
+            var manifest = _manifestCatalog.FirstOrDefault(m => m.Id == Eo.Id && m.ApprovedForFileInstall);
+            var options = manifest is null ? ExtraOptionsIni.Schema : manifest.Document.GetProperty("config").GetProperty("options")
+                .EnumerateArray().Select(o => new IniOption(o.GetProperty("section").GetString()!, o.GetProperty("key").GetString()!,
+                    o.GetProperty("default").GetBoolean(), o.GetProperty("advanced").GetBoolean(),
+                    ExtraOptionsIni.Schema.Any(policy => policy.LockedOff && policy.Section == o.GetProperty("section").GetString()
+                        && policy.Key == o.GetProperty("key").GetString()))).ToArray();
+            foreach (var section in options.GroupBy(o => o.Section))
             {
                 var advanced = section.Any(o => o.Advanced);
                 IniGroups.Add(new IniGroup(

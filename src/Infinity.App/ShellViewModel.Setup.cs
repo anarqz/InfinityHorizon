@@ -173,7 +173,7 @@ public sealed partial class ShellViewModel
     /// <summary>The folder the player picked: kept only when it holds azimuth.exe.</summary>
     public void ChooseAzimuthFolder(string folder)
     {
-        if (!SignedIn || !ModsIdle) return;
+        if ((!SignedIn && !DevelopmentMods) || !ModsIdle) return;
         if (!AzimuthSetup.SaveChoice(_stateDirectory, folder))
         {
             _azimuthChoiceFailed = true;

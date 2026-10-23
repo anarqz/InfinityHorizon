@@ -220,6 +220,9 @@ public sealed class ExtraOptionsIni
         InsertLine(end, $"{option.Key}={text}");
     }
 
+    /// <summary>Serialized settings in their original encoding, including any BOM.</summary>
+    public byte[] ToBytes() => [.. _encoding.GetPreamble(), .. _encoding.GetBytes(ToString())];
+
     /// <summary>Writes atomically, after copying the current file to <paramref name="backupPath"/> when given.</summary>
     public void Save(string path, string? backupPath)
     {
