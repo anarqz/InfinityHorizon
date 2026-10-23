@@ -3,7 +3,7 @@
 // the reference codec, with the same envelope as the control pipe: u32 LE length of type + body,
 // u8 type, little-endian fields, strings as u16 LE length + UTF-8, at most 64 KiB).
 //
-// Overlay -> launcher: 0x01 UiHello{u16 protocol = 1, u32 pid, str version} first; 0x04
+// Overlay -> launcher: 0x01 UiHello{u16 protocol = 2, u32 pid, str version} first; 0x04
 // Panel{u8 open} when the guide opens or closes; 0x05 UiEvent{u8 kind, str detail}; 0x06 Bye.
 // Launcher -> overlay: 0x02 Status{str account, u8 tier (0 free, 1 Infinity Supporter), u8 state
 // (0 queued, 1 running, 2 offline, 3 exiting), str detail}; 0x03 Toast{u8 level, u8 icon, u16 ttl
@@ -31,6 +31,11 @@
 // 1 seated, 2 reserved), u8 friend (0 none, 1 friends, 2 outgoing, 3 incoming, 4 self)}};
 // 0x10 ActionResult{u8 action, u8 status (0 done, 1 refused), str message}.
 //
+// Protocol 2 (OD-112; layouts in ui_frames.h): this overlay asks with 0x14 WorldsQueryV2 (the
+// modded filter) instead of 0x07 and still reads a 0x08 answer as vanilla; 0x15 WorldsListV2 rows
+// carry modded, modsMatch, players and mods; 0x16 DetailPane is the right pane; 0x17
+// PlayerDetailsQuery and 0x18 PaneActionClick go to the launcher.
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
@@ -52,20 +57,13 @@ std::deque<std::vector<uint8_t>> g_out; // whole frames, waiting for the pipe th
 HANDLE g_out_event = nullptr;           // set when g_out has something
 bool g_connected = false;
 
-void PutU16(std::vector<uint8_t> &b, uint16_t v) { b.push_back(v & 0xFF); b.push_back(v >> 8); }
-void PutU32(std::vector<uint8_t> &b, uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back((v >> (8 * i)) & 0xFF); }
-void PutStr(std::vector<uint8_t> &b, const std::string &s) {
-    const size_t n = s.size() > 0xFFFF ? 0xFFFF : s.size();
-    PutU16(b, static_cast<uint16_t>(n));
-    b.insert(b.end(), s.begin(), s.begin() + n);
-}
+void PutU16(std::vector<uint8_t> &b, uint16_t v) { wire::U16(b, v); }
+void PutU32(std::vector<uint8_t> &b, uint32_t v) { wire::U32(b, v); }
+void PutStr(std::vector<uint8_t> &b, const std::string &s) { wire::Str(b, s); }
 
 // Any thread: queue a frame (never blocks on the pipe).
 void Queue(uint8_t type, const std::vector<uint8_t> &body) {
-    std::vector<uint8_t> frame;
-    PutU32(frame, static_cast<uint32_t>(1 + body.size()));
-    frame.push_back(type);
-    frame.insert(frame.end(), body.begin(), body.end());
+    std::vector<uint8_t> frame = wire::Frame(type, body);
     {
         std::lock_guard<std::mutex> lock(g_out_lock);
         if (!g_connected) {
@@ -79,25 +77,26 @@ void Queue(uint8_t type, const std::vector<uint8_t> &body) {
     SetEvent(g_out_event);
 }
 
-struct Reader {
-    const uint8_t *p;
-    size_t left;
-    bool ok = true;
-    uint8_t U8() { if (left < 1) { ok = false; return 0; } --left; return *p++; }
-    uint16_t U16() { const uint16_t lo = U8(); return static_cast<uint16_t>(lo | (U8() << 8)); }
-    std::string Str() {
-        const uint16_t n = U16();
-        if (!ok || left < n) { ok = false; return {}; }
-        std::string s(reinterpret_cast<const char *>(p), n);
-        p += n;
-        left -= n;
-        return s;
-    }
-};
+using Reader = wire::Reader;
 
 void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
     Reader r{body, size};
     switch (type) {
+    case 0x15: {
+        WorldsListV2 list;
+        if (DecodeWorldsListV2(body, size, list)) {
+            SetWorlds(static_cast<WorldFilter>(list.filter), list.modded, list.status, list.message, std::move(list.rows));
+        } else {
+            Log("ui pipe: malformed WorldsListV2 ignored");
+        }
+        break;
+    }
+    case 0x16: {
+        DetailPane pane;
+        if (DecodeDetailPane(body, size, pane)) SetDetailPane(std::move(pane));
+        else Log("ui pipe: malformed DetailPane ignored");
+        break;
+    }
     case 0x13: {
         const uint8_t state = r.U8();
         const std::string text = r.Str();
@@ -156,7 +155,7 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
             w.friend_host = r.U8() != 0;
             rows.push_back(std::move(w));
         }
-        if (r.ok) SetWorlds(filter, status, message, std::move(rows));
+        if (r.ok) SetWorlds(filter, false, status, message, std::move(rows)); // a protocol 1 answer: vanilla
         break;
     }
     case 0x0A: {
@@ -241,9 +240,9 @@ void Session(HANDLE pipe) {
         g_connected = true;
     }
     std::vector<uint8_t> hello;
-    PutU16(hello, 1);
+    PutU16(hello, kUiProtocol);
     PutU32(hello, GetCurrentProcessId());
-    PutStr(hello, "0.1.0");
+    PutStr(hello, "0.2.0");
     Queue(0x01, hello);
     Log("ui pipe: connected");
 
@@ -347,7 +346,13 @@ void SendEvent(uint8_t kind, const std::string &detail) {
 
 void SendPanel(bool open) { Queue(0x04, {static_cast<uint8_t>(open ? 1 : 0)}); }
 
-void SendWorldsQuery(WorldFilter filter, bool not_full) { Queue(0x07, {static_cast<uint8_t>(filter), static_cast<uint8_t>(not_full ? 1 : 0)}); }
+void SendWorldsQuery(WorldFilter filter, bool not_full, bool modded) {
+    Queue(0x14, EncodeWorldsQueryV2(static_cast<uint8_t>(filter), not_full, modded));
+}
+
+void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag) { Queue(0x17, EncodePlayerDetailsQuery(xuid, gamertag)); }
+
+void SendPaneAction(const std::string &pane, const std::string &action) { Queue(0x18, EncodePaneActionClick(pane, action)); }
 
 void SendJoinWorld(const std::string &world, const std::string &code) {
     std::vector<uint8_t> body;

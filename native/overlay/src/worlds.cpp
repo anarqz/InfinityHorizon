@@ -23,6 +23,10 @@
 //   the current car's paint so world mates fetch it, behind a "Syncing cars" screen that takes no
 //   input (the game already sees an idle pad while the guide is open), for at most 5 s; a timeout
 //   or a failure is a warning, never a block. Then the prompt to go to Free Roam Online.
+// - Modded lobbies (OD-112): the "Modded" chip shows modded worlds only, off shows vanilla only. A
+//   world whose mods differ from the player's carries a warning icon and is never joined from
+//   here: the player is told which mods it uses. The focused or hovered world fills the right pane
+//   (pane.cpp) with its players and mods, from the list's own rows.
 #include "overlay.h"
 
 #include <algorithm>
@@ -50,6 +54,7 @@ struct Shared {
     WorldAccessLease access;
     std::string access_message;
     WorldFilter filter = WorldFilter::None;
+    bool modded = false;     // the modded toggle the list was asked with
     uint8_t list_status = 0; // WorldsStatus
     std::string list_message;
     std::vector<WorldRow> rows;
@@ -86,9 +91,12 @@ Screen g_screen = Screen::List;
 WorldFilter g_filter = WorldFilter::Near; // the default filter (Alex, 2026-10-19)
 bool g_queried = false;                    // the list was asked since the guide opened
 bool g_hide_full = false;
+bool g_modded = false; // OD-112: off vanilla worlds only, on modded only
 bool g_warned = false; // the online-play warning, once per game session
 int g_focus = 0;       // the list's focus: 0 the filter row, then the tiles
-int g_chip = 1;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full
+int g_chip = 1;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full, 4 Modded
+constexpr int kLastChip = 4;
+DetailPane g_lobby_pane; // the focused or hovered row's details, rebuilt every frame
 uint64_t g_seen_list = 0, g_seen_join = 0, g_seen_hosted = 0;
 std::string g_busy;    // what Busy says
 bool g_world_action_busy = false;
@@ -221,6 +229,7 @@ void Query() {
     {
         std::lock_guard<std::mutex> lock(g_lock);
         g_shared.filter = g_filter;
+        g_shared.modded = g_modded;
         g_shared.list_status = 1; // loading
         g_shared.rows.clear();
         ++g_shared.list_serial;
@@ -229,7 +238,7 @@ void Query() {
         g_dev_wait = 0.5f;
         g_dev_kind = 1;
     } else {
-        SendWorldsQuery(g_filter, g_hide_full);
+        SendWorldsQuery(g_filter, g_hide_full, g_modded);
     }
 }
 
@@ -302,9 +311,28 @@ void DevAnswer() {
     case 1: {
         g_shared.list_status = 0;
         g_shared.rows.clear();
-        const bool free_player = true; // the demo plays a free player when the profile says so
-        (void)free_player;
+        const auto members = [](std::initializer_list<LobbyMember> list) { return std::vector<LobbyMember>(list); };
+        if (g_modded) {
+            WorldRow a{"m1", "Nitro drift night", "Synthetic#00117", 4, 8, 0, 0, 0, 1, false};
+            a.modded = true;
+            a.mods_match = false;
+            a.members = members({{"Synthetic#00117", 1, 0}, {"Synthetic#00230", 0, 1}, {"RallyFox98", 0, 1}, {"Synthetic#00042", 1, 2}});
+            a.mods = {{"extraoptions", "2"}, {"nitrosystem", "3"}};
+            WorldRow b{"m2", "Extra Options cruise", "RallyFox98", 2, 6, 0, 0, 0, 2, true};
+            b.modded = true;
+            b.members = members({{"RallyFox98", 0, 0}, {"Synthetic#00301", 1, 1}});
+            b.mods = {{"extraoptions", "2"}};
+            WorldRow c{"m3", "Modded Italia tour", "Synthetic#00302", 7, 10, 0, 0, 0, 1, false};
+            c.modded = true;
+            c.mods_match = false;
+            c.members = members({{"Synthetic#00302", 1, 0}, {"Synthetic#00303", 0, 1}});
+            c.mods = {{"nitrosystem", "3"}};
+            g_shared.rows = {a, b, c};
+            ++g_shared.list_serial;
+            break;
+        }
         g_shared.rows.push_back({"w1", "Sunset Cruise", "RallyFox98", 5, 8, 0, 0, 0, 1, true});
+        g_shared.rows.back().members = members({{"RallyFox98", 0, 0}, {"Synthetic#00117", 1, 1}, {"Synthetic#00230", 0, 1}, {"Synthetic#00042", 0, 1}, {"Synthetic#00301", 1, 2}});
         g_shared.rows.push_back({"w2", "Nice coastline run", "Synthetic#00117", 3, 6, 0, 0, 0, 0, false});
         g_shared.rows.push_back({"w3", "Drift crew", "Synthetic#00230", 11, 12, 0, 0, 0, 2, false});
         if (!g_hide_full) {
@@ -434,7 +462,9 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
     if (locked) sub += std::string(" · ") + LockName(w.lock);
     if (!GameReady()) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
-    TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), w.lock == 1 ? kPinkU : kTextDim, sub.c_str());
+    const bool mismatch = w.modded && !w.mods_match;
+    if (mismatch && GameReady()) sub += std::string(" · ") + T("Mods differ", "Mods diferentes");
+    TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), w.lock == 1 ? kPinkU : mismatch && GameReady() ? kAmber : kTextDim, sub.c_str());
     dl->PopClipRect();
     const std::string count = std::to_string(w.players) + "/" + std::to_string(w.max);
     const ImVec2 cs = Measure(f.body, count.c_str());
@@ -442,7 +472,49 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     PingBars(dl, ImVec2(b.x - 38 * s, a.y + 14 * s), w.ping);
     if (w.lock == 1) {
         dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 40 * s), kPinkU, kIconLock);
+    } else if (mismatch) {
+        // OD-112: the small "your mods don't match" mark
+        dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 38 * s), kAmber, kIconWarning);
     }
+}
+
+std::string ModList(const WorldRow &w) {
+    std::string out;
+    for (const auto &m : w.mods) {
+        if (!out.empty()) out += ", ";
+        out += m.id + " " + m.version;
+    }
+    return out;
+}
+
+// The right pane for a lobby (OD-112): built here from the row, so hovering costs no request.
+const DetailPane &LobbyPane(const WorldRow &w) {
+    DetailPane &p = g_lobby_pane;
+    p = DetailPane{};
+    p.id = "lobby:" + w.id;
+    p.title = w.name;
+    p.subtitle = w.host + " · " + AudienceName(w.audience) + " · " + std::to_string(w.players) + "/" + std::to_string(w.max) + T(" players", " jogadores");
+    p.avatar = "icon:world";
+    if (w.modded && !w.mods_match) {
+        p.sections.push_back({1, "", {{T("Your mods don't match this lobby", "Seus mods não batem com os deste lobby"),
+                                       T("Use the same mods in the launcher to join", "Use os mesmos mods no launcher para entrar"), PaneIcon::Warning}}});
+    }
+    PaneSection players{1, T("PLAYERS", "JOGADORES"), {}};
+    for (const auto &m : w.members) {
+        std::string role = m.role == 0 ? T("Host", "Anfitrião") : m.role == 1 ? T("In the lobby", "No lobby") : T("On the way", "Chegando");
+        if (m.tier == 1) role += " · Infinity Supporter";
+        players.entries.push_back({m.gamertag, role, m.role == 0 ? PaneIcon::Host : m.tier == 1 ? PaneIcon::Supporter : PaneIcon::Player});
+    }
+    if (players.entries.empty()) players.entries.push_back({w.host, T("Host", "Anfitrião"), PaneIcon::Host});
+    p.sections.push_back(std::move(players));
+    if (w.modded) {
+        PaneSection mods{1, T("MODS", "MODS"), {}};
+        for (const auto &m : w.mods) mods.entries.push_back({m.id, std::string(T("Version ", "Versão ")) + m.version, PaneIcon::Mod});
+        p.sections.push_back(std::move(mods));
+    } else {
+        p.sections.push_back({0, T("MODS", "MODS"), {{T("Mods", "Mods"), T("None · vanilla", "Nenhum · vanilla"), PaneIcon::None}}});
+    }
+    return p;
 }
 
 // ---------------------------------------------------------------- screens
@@ -455,18 +527,24 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
     const bool ready = GameReady();
     const char *load_hint = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
     // filter chips
-    const char *chips[4] = {FilterName(WorldFilter::Friends), FilterName(WorldFilter::Near), FilterName(WorldFilter::Global), T("Hide full", "Sem cheios")};
+    const char *chips[kLastChip + 1] = {FilterName(WorldFilter::Friends), FilterName(WorldFilter::Near), FilterName(WorldFilter::Global),
+                                        T("Hide full", "Sem cheios"), T("Modded", "Com mods")};
     float cx = x;
     const float ch = 36 * s;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i <= kLastChip; ++i) {
         const ImVec2 ts = Measure(f.small, chips[i]);
         const float cw = ts.x + 26 * s;
+        const bool wrapped = i > 0 && cx + cw > x + w;
+        if (wrapped) {
+            cx = x;
+            y += ch + 8 * s;
+        }
         const ImVec2 a(cx, y), b(cx + cw, y + ch);
-        const bool on = i < 3 ? g_filter == static_cast<WorldFilter>(i + 1) : g_hide_full;
+        const bool on = i < 3 ? g_filter == static_cast<WorldFilter>(i + 1) : i == 3 ? g_hide_full : g_modded;
         const bool focus = g_focus == 0 && g_chip == i;
         dl->AddRectFilled(a, b, on ? kPinkU : kTile, ch / 2);
         if (focus) FocusRing(dl, a, b, ch / 2);
-        if (i == 3) {
+        if (i == 3 && !wrapped) {
             dl->AddLine(ImVec2(a.x - 7 * s, y + 6 * s), ImVec2(a.x - 7 * s, b.y - 6 * s), Rgba(255, 255, 255, 0.12f));
         }
         TextAt(dl, f.small, ImVec2(a.x + 13 * s, y + (ch - ts.y) / 2), kText, chips[i]);
@@ -521,14 +599,19 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
         TextAt(dl, f.body, ImVec2(x, y), kTextDim, T("No lobbies here right now. Create your own!", "Nenhum lobby aqui agora. Crie o seu!"));
         y += 36 * s;
     }
+    const WorldRow *hovered = nullptr, *focused = nullptr;
     for (size_t i = 0; i < joinable.size() && y + wh < bottom; ++i) {
         const int index = static_cast<int>(g_items.size());
         const ImVec2 a(x, y), b(x + w, y + wh);
         WorldTile(dl, a, b, focus_of(index), joinable[i]);
         if (Clicked(a, b)) { g_focus = index; g_accept = true; }
+        if (ImGui::IsMouseHoveringRect(a, b)) hovered = &joinable[i];
+        if (focus_of(index)) focused = &joinable[i];
         g_items.push_back({Item::Row, static_cast<int>(i)});
         y += wh + gap;
     }
+    // the right pane: the row under the mouse, else the focused one (before A joins it)
+    if (const WorldRow *shown = hovered ? hovered : focused) SetHoverPane(&LobbyPane(*shown));
     if (!locked.empty() && y + 40 * s < bottom) {
         y += 10 * s;
         TextAt(dl, f.tag, ImVec2(x, y), kPinkU, T("INFINITY SUPPORTER LOBBIES", "LOBBIES INFINITY SUPPORTER"));
@@ -552,8 +635,10 @@ void AcceptList(bool supporter, const Shared &sh) {
     case Item::Chips:
         if (g_chip < 3) {
             g_filter = static_cast<WorldFilter>(g_chip + 1);
-        } else {
+        } else if (g_chip == 3) {
             g_hide_full = !g_hide_full;
+        } else {
+            g_modded = !g_modded;
         }
         Query();
         break;
@@ -563,7 +648,14 @@ void AcceptList(bool supporter, const Shared &sh) {
         const auto rows = Joinable(sh.rows);
         if (item.row < static_cast<int>(rows.size())) {
             const WorldRow &r = rows[item.row];
-            if (r.lock == 4) {
+            if (r.modded && !r.mods_match) {
+                // OD-112: only the exact same mods join; the server refuses it too
+                const std::string list = ModList(r);
+                PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"),
+                          (list.empty() ? std::string(T("This lobby uses other mods.", "Este lobby usa outros mods."))
+                                        : std::string(T("This lobby uses: ", "Este lobby usa: ")) + list + ".") +
+                              T(" Use the same mods in the launcher to join.", " Use os mesmos mods no launcher para entrar."));
+            } else if (r.lock == 4) {
                 PushToast(ToastKind::Info, r.name, T("This lobby is full. Try another one.", "Esse lobby está cheio. Tente outro."));
             } else if (r.lock == 3) {
                 JoinByCode();
@@ -890,9 +982,9 @@ void SetWorldAccess(bool allowed, const std::string &message) {
     g_shared.access_message = message;
 }
 
-void SetWorlds(WorldFilter filter, uint8_t status, const std::string &message, std::vector<WorldRow> rows) {
+void SetWorlds(WorldFilter filter, bool modded, uint8_t status, const std::string &message, std::vector<WorldRow> rows) {
     std::lock_guard<std::mutex> lock(g_lock);
-    if (filter != g_shared.filter) {
+    if (filter != g_shared.filter || modded != g_shared.modded) {
         return; // an answer to a filter the player already left
     }
     g_shared.list_status = status;
@@ -958,7 +1050,7 @@ bool WorldsNavigate(Nav nav) {
             if (g_focus == 0 && g_chip > 0) { --g_chip; return true; }
             return false; // the tabs
         case Nav::Right:
-            if (g_focus == 0 && g_chip < 3) { ++g_chip; return true; }
+            if (g_focus == 0 && g_chip < kLastChip) { ++g_chip; return true; }
             return false;
         case Nav::Accept: g_accept = true; return true;
         case Nav::Y: Query(); return true; // refresh

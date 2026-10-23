@@ -748,6 +748,11 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Worlds w when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.ListAsync(w.Query, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
+                            case Overlay.UiIncoming.WorldsV2 w when worlds is not null && !suspended:
+                                // OD-112 interim until matchmaking carries mods: vanilla worlds only, without details.
+                                _ = ReplyAsync(overlay, async () => Overlay.UiFrame.WorldsListV2.FromVanilla(w.Query,
+                                    w.Query.Modded ? null : await worlds.ListAsync(new(w.Query.Filter, w.Query.NotFull), stop.Token).ConfigureAwait(false)), stop.Token);
+                                break;
                             case Overlay.UiIncoming.Join j when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.JoinAsync(j.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
