@@ -1461,6 +1461,15 @@ static int launch_overlay_hash_ok(void) {
     return ok;
 }
 
+/* The overlay DLL once fi_overlay_start accepted it (it is never unloaded). */
+static void *volatile launch_overlay_module;
+
+/* An optional export of the started overlay (gamer_card.c: fi_overlay_player_card), or 0. */
+void *fi_launch_overlay_export(const char *name) {
+    HMODULE dll = (HMODULE)launch_overlay_module;
+    return dll ? (void *)GetProcAddress(dll, name) : 0;
+}
+
 static DWORD WINAPI launch_overlay_thread(void *unused) {
     (void)unused;
     int ok = 0;
@@ -1477,6 +1486,7 @@ static DWORD WINAPI launch_overlay_thread(void *unused) {
                                           launch_overlay_log, 0, fi_livery_sync};
                 int result = start(&host);
                 ok = result == 0;
+                if (ok) InterlockedExchangePointer((void *volatile *)&launch_overlay_module, dll);
                 launch_log(ok ? "overlay started (hotkey F4)." : "overlay: fi_overlay_start refused (",
                            !ok, (unsigned long long)(long long)result, ok ? "" : ").");
             }
