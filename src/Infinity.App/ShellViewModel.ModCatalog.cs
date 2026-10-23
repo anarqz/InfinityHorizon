@@ -120,7 +120,6 @@ public sealed partial class ShellViewModel
             catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException) { return S["mods.files_changed"]; }
         }
     }
-    // Backups describe game files, so dev and production must see the same ownership records.
     private ManagedModFiles ManagedMods() => new(_install!.Root, ContentLocation?.Mount,
         _config.Production ? Directory.GetParent(_stateDirectory)!.FullName : _stateDirectory, GameRunning,
         DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null);

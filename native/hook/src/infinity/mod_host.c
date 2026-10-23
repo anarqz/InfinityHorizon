@@ -100,7 +100,7 @@ void fi_mod_host_start(void *image) {
     mod_game = image;
     HANDLE thread = CreateThread(0, 0, mod_worker, 0, 0, 0);
     if (!thread) { mod_failure(); return; }
-    CloseHandle(thread); /* Thread executes after loader lock is released. */
+    CloseHandle(thread);
 #else
     (void)image;
 #endif

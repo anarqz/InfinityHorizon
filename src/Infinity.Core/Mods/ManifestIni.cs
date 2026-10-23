@@ -5,7 +5,6 @@ using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
-/// <summary>Strict, manifest-bound INI editor. Preserves unknown lines; rejects ambiguous known keys.</summary>
 public sealed class ManifestIni
 {
     private readonly ModManifest _manifest;

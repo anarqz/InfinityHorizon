@@ -4,7 +4,6 @@ using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
-/// <summary>Local compatibility metadata, not an approved-online classification or network DTO.</summary>
 public sealed record ModMultiplayer(string Impact, string CompatibilityId, int Revision, IReadOnlyList<string> Settings)
 {
     internal static ModMultiplayer? Parse(JsonElement document)
@@ -13,7 +12,7 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         if (!document.TryGetProperty("multiplayer", out var value))
         {
             if (isNative) throw new ModException("native mod needs multiplayer metadata");
-            return null; // Legacy entries remain unknown, never implicitly cosmetic.
+            return null;
         }
         if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Count() != 6
             || value.GetProperty("schemaVersion").GetInt32() != 1 || value.GetProperty("match").GetString() != "exact")
@@ -48,7 +47,6 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
     private static bool Identifier(string? value) => value is { Length: > 0 and <= 64 }
         && value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 
-    /// <summary>Caller supplies typed effective INI values, after defaults and validation. All relevant values are required.</summary>
     public string Fingerprint(ModManifest manifest, IReadOnlyDictionary<string, JsonElement> effectiveSettings)
     {
         if (manifest.Multiplayer != this) throw new ModException("multiplayer metadata does not belong to manifest");

@@ -10,11 +10,6 @@ public sealed record ManagedModReceipt(string Id, string ManifestHash, bool Enab
 public sealed record ModFileChange(string Root, string Path, string? Before, string? After);
 public sealed record ModFileJournal(string ReceiptName, ManagedModReceipt Receipt, IReadOnlyList<ModFileChange> Changes);
 
-/// <summary>
-/// File-only transactions. Immutable SHA-256 objects live in game_backup, scoped to this exact
-/// installation. A durable journal precedes the first write; interrupted work blocks new work
-/// until explicitly recovered. SQLite changes use the separate native session coordinator.
-/// </summary>
 public sealed partial class ManagedModFiles
 {
     private readonly string _azimuth;
@@ -61,7 +56,6 @@ public sealed partial class ManagedModFiles
     public async Task InstallAsync(HttpClient http, ModManifest manifest, CancellationToken cancellation, IProgress<string>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        // This is deliberately independent of remote review.status and catalog availability.
         if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities");
         var packages = new Dictionary<string, byte[]>();
         foreach (var (name, spec) in PackageSpecs(manifest))
@@ -90,7 +84,6 @@ public sealed partial class ManagedModFiles
         await Task.Run(() => InstallVerifiedPackages(manifest, packages, progress), cancellation).ConfigureAwait(false);
     }
 
-    /// <summary>Verifies all archive bytes before touching any installation file.</summary>
     public void InstallVerifiedPackage(ModManifest manifest, byte[] package, IProgress<string>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(package);
@@ -131,8 +124,6 @@ public sealed partial class ManagedModFiles
             var before = Current(target);
             if (file.Mode == "seed" && before is not null && file.Role != "config") continue;
             if (file.Mode == "add" && before is not null || file.Mode == "replace" && before is null) throw new ModException("file precondition failed");
-            // An existing identical binary has no known predecessor. Do not invent an original
-            // that would leave the mod loaded after Off.
             if (before == file.Hash && file.Role == "binary") throw new ModException("existing installation needs explicit adoption");
             if (before is not null) Store(File.ReadAllBytes(target));
             var afterBytes = bytes;
@@ -175,7 +166,6 @@ public sealed partial class ManagedModFiles
         Execute(new(manifest.Id + ".receipt.json", receipt with { Enabled = enabled }, changes), progress);
     }
 
-    /// <summary>Conservative rollback: refuses any target changed by another writer since the interruption.</summary>
     public void Recover()
     {
         using var gate = Lock(allowRecovery: true);
@@ -184,7 +174,6 @@ public sealed partial class ManagedModFiles
         if (!File.Exists(path)) return;
         var journal = JsonSerializer.Deserialize<ModFileJournal>(File.ReadAllBytes(path)) ?? throw new ModException("invalid journal");
         ValidateGameRoot(journal.Receipt);
-        // If the receipt was durably committed, complete the commit rather than rolling it back.
         var receiptPath = Safe(BackupRoot, journal.ReceiptName);
         if (File.Exists(receiptPath) && File.ReadAllText(receiptPath) == JsonSerializer.Serialize(journal.Receipt, Json))
         {
@@ -220,8 +209,6 @@ public sealed partial class ManagedModFiles
         }
         catch
         {
-            // Keep the journal if rollback fails (for example an antivirus lock), so another
-            // operation cannot silently continue with a partly changed installation.
             Rollback(journal);
             ArchiveJournal(pending);
             throw;

@@ -84,7 +84,6 @@ bool plain(HANDLE handle, bool directory) {
         && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
         && ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == directory;
 }
-// Deny writes/deletes to the file, and renames of every parent directory while it is loaded.
 std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32]) {
     if (!valid_path(path.c_str())) return {};
     auto lock = std::make_unique<FileLock>();
@@ -196,7 +195,6 @@ void load_selected(uint32_t timeout_ms = 65000) {
                 e.deadline = GetTickCount64() + timeout_ms;
                 e.report.state = INFINITY_MOD_INITIALIZING;
             }
-            // Do not search adjacent folders for unselected dependency DLLs. Mods statically link the CRT.
             if (GetModuleHandleW(e.binary.c_str()) || GetModuleHandleW(std::filesystem::path(e.binary).filename().c_str()))
                 throw std::runtime_error("preloaded mod");
             e.library = LoadLibraryExW(e.binary.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -228,9 +226,7 @@ void load_selected(uint32_t timeout_ms = 65000) {
         if (hook_fault && !failed) fail_locked();
         if (!failed) complete = true;
     } catch (...) { std::lock_guard lock(state_mutex); fail_locked(); }
-    // No unload: mod workers and trampoline addresses may still exist, even after failure.
 }
-// Validates and locks the entire selection before loading even the first mod.
 bool prepare(const InfinityModsLaunchV1& launch) {
     std::vector<std::unique_ptr<Entry>> pending;
     for (uint32_t i=0;i<launch.count;++i) {
@@ -274,7 +270,6 @@ std::string narrow(const std::wstring& value) {
     return out;
 }
 void log_line(const std::string& who, const std::string& text) {
-    // Bounded debug diagnostics; no settings, absolute paths or online identity are logged.
     auto line = "[infinity_mod:" + who.substr(0,64) + "] " + text.substr(0,1024) + "\n";
     OutputDebugStringA(line.c_str());
 }
@@ -388,7 +383,6 @@ extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const 
         ParsedPlan plan; parse_plan(bytes, plan);
         wchar_t exe[32768]; auto length = GetModuleFileNameW(nullptr, exe, 32768);
         if (!length || length >= 32768 || _wcsicmp(std::filesystem::path(exe).parent_path().c_str(), plan.azimuth.c_str())) return 1;
-        // Only contained selected DLLs/configs. A copied plan cannot retarget another installation.
         auto prefix = plan.azimuth + L"\\";
         for (uint32_t i = 0; i < plan.count; ++i)
             if (_wcsnicmp(plan.binary[i].c_str(), prefix.c_str(), prefix.size()) || _wcsnicmp(plan.settings[i].c_str(), prefix.c_str(), prefix.size())) return 1;

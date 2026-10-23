@@ -9,7 +9,6 @@ public sealed partial class ManagedModFiles
         && manifest.Files.Any(f => f.Role == "binary") && Receipt(manifest) is null
         && manifest.Files.Where(f => f.Mode != "seed").All(f => Current(Target(f.Root, f.Destination)) == f.Hash);
 
-    /// <summary>Explicitly take ownership of a verified standalone installation; never infer game-asset predecessors.</summary>
     public void Adopt(ModManifest manifest)
     {
         using var gate = Lock();
