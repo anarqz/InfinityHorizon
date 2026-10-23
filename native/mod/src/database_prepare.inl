@@ -15,9 +15,22 @@ int queue_startup_sql(InfinityMod* mod, const char* sql) {
     }
     return 0;
 }
-int sql_authorize(void* context, int action, const char* table, const char*, const char* database, const char* trigger) {
+
+bool sql_function_allowed(const char* name) {
+    static const char* const allowed[] = {"abs", "coalesce", "ifnull", "iif", "nullif", "length", "octet_length", "lower", "upper",
+        "substr", "substring", "trim", "ltrim", "rtrim", "replace", "instr", "round", "min", "max", "typeof", "hex", "unhex",
+        "quote", "printf", "format", "char", "unicode", "sign", "likely", "unlikely", "likelihood", "count", "sum", "total", "avg",
+        "group_concat", "string_agg"};
+    if (!name) return false;
+    for (auto candidate : allowed) if (sqlite3_stricmp(name, candidate) == 0) return true;
+    return false;
+}
+int sql_authorize(void* context, int action, const char* table, const char* detail, const char* database, const char* trigger) {
     const auto& r = *static_cast<SqlRegistration*>(context);
-    if (trigger || (database && std::strcmp(database, "main"))) return SQLITE_DENY;
+    if (database && std::strcmp(database, "main")) return SQLITE_DENY;
+    if (action == SQLITE_FUNCTION) return sql_function_allowed(detail) ? SQLITE_OK : SQLITE_DENY;
+
+    (void)trigger;
     if (action == SQLITE_SELECT) return SQLITE_OK;
     if (action != SQLITE_READ && action != SQLITE_UPDATE && action != SQLITE_INSERT && action != SQLITE_DELETE) return SQLITE_DENY;
     if (!table) return SQLITE_DENY;
