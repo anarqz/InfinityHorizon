@@ -480,5 +480,19 @@
   "mods.progress.download": "Downloading the verified release…",
   "mods.progress.verify": "Verifying package and file hashes…",
   "mods.progress.apply": "Applying file changes and recording backups…",
-  "mods.catalog_subtitle": "Browse mod files, dependencies and settings. Only reviewed releases can be installed."
+  "mods.catalog_subtitle": "Browse mod files, dependencies and settings. Only reviewed releases can be installed.",
+  "mods.settings_changed": "Settings changed outside the launcher. Your edits are kept. Use Undo to reload the current file.",
+  "mods.search": "Search mods by name or author…",
+  "mods.search_clear": "Clear search",
+  "mods.search_none": "No mods match your search.",
+  "mods.information": "Information",
+  "mods.file_summary": "{game} game files · {azimuth} Azimuth files",
+  "mods.settings_file": "Settings:",
+  "mods.files": "Included files",
+  "mods.badge_on": "Installed · On",
+  "mods.badge_off": "Installed · Off",
+  "mods.badge_review": "Review required",
+  "mods.badge_attention": "Needs attention",
+  "mods.folder_short": "Folder…",
+  "mods.catalog_count": "{count} mods · Development catalog"
 }

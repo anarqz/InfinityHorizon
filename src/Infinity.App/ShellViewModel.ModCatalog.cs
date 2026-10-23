@@ -8,7 +8,7 @@ using Infinity.Core.Mods;
 namespace Infinity.App;
 
 public sealed record ModCard(ModManifest Manifest, string Name, string Description, string Status, string Requirements,
-    string Action, bool CanAct, bool HasOptions, string Credits);
+    string Action, bool CanAct, bool HasOptions, string Credits, string Badge);
 
 public sealed partial class ShellViewModel
 {
@@ -17,7 +17,56 @@ public sealed partial class ShellViewModel
     private bool _catalogLoaded;
     private string _modProgress = "";
     private string? _catalogFailure;
+    private string _modSearch = "";
+    private ModCard? _selectedMod;
+    private bool _showModInfo;
     public ObservableCollection<ModCard> ModCards { get; } = [];
+    public IEnumerable<ModCard> FilteredModCards => ModCards.Where(card => string.IsNullOrWhiteSpace(_modSearch)
+        || card.Name.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase)
+        || card.Manifest.Id.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase)
+        || card.Credits.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase));
+    public string ModSearch
+    {
+        get => _modSearch;
+        set { _modSearch = value ?? ""; Changed(); Changed(nameof(FilteredModCards)); Changed(nameof(ModSearchEmpty)); Changed(nameof(NoMatchingMods)); }
+    }
+    public bool ModSearchEmpty => string.IsNullOrWhiteSpace(_modSearch);
+    public bool NoMatchingMods => HasManifestCatalog && !FilteredModCards.Any();
+    public ModCard? SelectedMod => _selectedMod;
+    public bool ShowModInfo => _showModInfo && ShowMods && _selectedMod is not null;
+    public string SelectedModFiles => _selectedMod is not { } selected ? "" :
+        S.Format("mods.file_summary", ("game", selected.Manifest.Files.Count(f => f.Root == "game").ToString(System.Globalization.CultureInfo.CurrentCulture)),
+            ("azimuth", selected.Manifest.Files.Count(f => f.Root == "azimuth").ToString(System.Globalization.CultureInfo.CurrentCulture)))
+        + (selected.Manifest.ConfigPath is { } config ? "\n" + S["mods.settings_file"] + " " + config : "");
+
+    public void SelectMod(ModCard card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+        if (!ModsIdle) return;
+        if (card.HasOptions && !_showModOptions && !_iniDirty)
+        {
+            RefreshMods();
+            card = ModCards.FirstOrDefault(current => current.Manifest.Id == card.Manifest.Id) ?? card;
+        }
+        _selectedMod = card;
+        _showModInfo = !card.HasOptions;
+        _showModOptions = card.HasOptions;
+        Changed(string.Empty);
+    }
+
+    public void ShowModInformation(ModCard card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+        if (!ModsIdle) return;
+        _selectedMod = card; _showModInfo = true; _showModOptions = false;
+        Changed(string.Empty);
+    }
+
+    public void CloseModPanel()
+    {
+        _showModInfo = false; _showModOptions = false;
+        Changed(string.Empty);
+    }
 
     public bool DevelopmentMods
     {
@@ -35,6 +84,8 @@ public sealed partial class ShellViewModel
     public bool ModContentEnabled => !_modOperation;
     public string ModProgress => _modProgress;
     public string ModCatalogStatus => _catalogFailure ?? S[_catalogLoaded ? "mods.catalog_dev" : "mods.catalog_unloaded"];
+    public string ModCatalogSummary => _catalogFailure ?? S.Format("mods.catalog_count",
+        ("count", _manifestCatalog.Count.ToString(System.Globalization.CultureInfo.CurrentCulture)));
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
     public bool ModRecoveryRequired
     {
@@ -131,22 +182,25 @@ public sealed partial class ShellViewModel
 
     public Task RecoverModsAsync() => RunModOperationAsync(() => Task.Run(() => ManagedMods().Recover()), S["mods.recovered"]);
 
-    private async Task RunModOperationAsync(Func<Task> operation, string done)
+    private async Task RunModOperationAsync(Func<Task> operation, string done, bool preserveOptionsOnFailure = false)
     {
         if (!ModsIdle) return;
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         _modOperation = true; _modProgress = S["mods.progress.prepare"]; Busy = true;
-        try { await operation(); Message = done; }
+        var succeeded = false;
+        try { await operation(); Message = done; succeeded = true; }
         catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException or HttpRequestException
             or OperationCanceledException or JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or OverflowException or FormatException)
         {
             Log("mods: operation failed: " + error.GetType().Name);
-            Message = S[error is HttpRequestException or OperationCanceledException ? "mods.download_failed" : "mods.transaction_failed"];
+            Message = S[error is ModSettingsChangedException ? "mods.settings_changed"
+                : error is HttpRequestException or OperationCanceledException ? "mods.download_failed" : "mods.transaction_failed"];
         }
         finally
         {
             _modOperation = false; Busy = false;
-            RefreshMods(); RefreshModCards(); Changed(string.Empty);
+            if (succeeded || !preserveOptionsOnFailure) RefreshMods();
+            RefreshModCards(); Changed(string.Empty);
         }
     }
 
@@ -156,6 +210,8 @@ public sealed partial class ShellViewModel
         foreach (var mod in _manifestCatalog)
         {
             var status = S["mods.not_installed"];
+            var badge = status;
+            var installed = false;
             var action = S["mods.install"];
             var canAct = ModsIdle && _install is not null && mod.ApprovedForFileInstall && !mod.NeedsDatabaseCoordination
                 && mod.Dependencies.Count == 0 && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions")
@@ -165,16 +221,20 @@ public sealed partial class ShellViewModel
                 if (_install is not null)
                 {
                     var manager = ManagedMods();
-                    if (manager.RecoveryRequired) { status = S["mods.recovery_needed"]; canAct = false; }
+                    if (manager.RecoveryRequired) { status = S["mods.recovery_needed"]; badge = S["mods.badge_attention"]; canAct = false; }
                     else if (manager.Receipt(mod) is { } receipt)
                     {
                         var verified = manager.Verified(mod);
+                        installed = true;
+                        badge = S[!verified ? "mods.badge_attention" : receipt.Enabled ? "mods.badge_on" : "mods.badge_off"];
                         status = verified ? S[receipt.Enabled ? "mods.managed_on" : "mods.managed_off"] : S["mods.files_changed"];
                         action = S[receipt.Enabled ? "mods.disable_action" : "mods.enable_action"];
                         canAct &= verified;
                     }
                     else if (mod.Id == Eo.Id && EoInstalled)
                     {
+                        installed = true;
+                        badge = S[!EoOfficial ? "mods.badge_attention" : EoEnabled ? "mods.badge_on" : "mods.badge_off"];
                         status = EoStatus + " · " + S["mods.legacy"];
                         action = S[EoEnabled ? "mods.disable_action" : "mods.enable_action"];
                         canAct &= EoOfficial;
@@ -182,8 +242,8 @@ public sealed partial class ShellViewModel
                 }
             }
             catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException or JsonException)
-            { canAct = false; status = S["mods.files_changed"]; }
-            if (!mod.ApprovedForFileInstall) status = S["mods.review_blocked"];
+            { canAct = false; status = S["mods.files_changed"]; badge = S["mods.badge_attention"]; }
+            if (!mod.ApprovedForFileInstall) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; }
             var requirements = mod.Dependencies.Count == 0 ? S["mods.no_dependencies"]
                 : S["mods.dependencies"] + " " + string.Join(", ", mod.Dependencies.Select(d =>
                     (_manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id) + " " + string.Join(" / ", d.Versions)));
@@ -192,8 +252,10 @@ public sealed partial class ShellViewModel
             if (_install is null) requirements += "\n" + S["mods.choose_folder"];
             else if (mod.ApprovedForFileInstall && EoTarget is null) requirements += "\n" + EoAzimuthText;
             ModCards.Add(new(mod, mod.Text("name", S.Locale), mod.Text("description", S.Locale), status, requirements,
-                action, canAct, mod.Id == Eo.Id && HasIni,
-                mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version));
+                action, canAct, mod.Id == Eo.Id && HasIni && installed,
+                mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version, badge));
         }
+        if (_selectedMod is { } selected) _selectedMod = ModCards.FirstOrDefault(card => card.Manifest.Id == selected.Manifest.Id);
+        Changed(nameof(FilteredModCards)); Changed(nameof(NoMatchingMods)); Changed(nameof(SelectedMod)); Changed(nameof(SelectedModFiles));
     }
 }

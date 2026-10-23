@@ -198,6 +198,11 @@ public partial class MainWindow : Window
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
 
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
+    private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);
+    private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
+    private void OnSelectedModOptions(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) _vm.SelectMod(card); }
+    private void OnCloseModPanel(object sender, RoutedEventArgs e) => _vm.CloseModPanel();
+    private void OnClearModSearch(object sender, RoutedEventArgs e) => _vm.ModSearch = "";
     private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
     private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
 

@@ -480,5 +480,19 @@
   "mods.progress.download": "Baixando a versão verificada…",
   "mods.progress.verify": "Verificando os hashes do pacote e dos arquivos…",
   "mods.progress.apply": "Aplicando alterações nos arquivos e registrando backups…",
-  "mods.catalog_subtitle": "Veja arquivos, dependências e configurações dos mods. Apenas versões revisadas podem ser instaladas."
+  "mods.catalog_subtitle": "Veja arquivos, dependências e configurações dos mods. Apenas versões revisadas podem ser instaladas.",
+  "mods.settings_changed": "As configurações foram alteradas fora do launcher. Suas edições foram mantidas. Use Desfazer para recarregar o arquivo atual.",
+  "mods.search": "Buscar mods por nome ou autor…",
+  "mods.search_clear": "Limpar busca",
+  "mods.search_none": "Nenhum mod corresponde à busca.",
+  "mods.information": "Informações",
+  "mods.file_summary": "{game} arquivos do jogo · {azimuth} arquivos do Azimuth",
+  "mods.settings_file": "Configurações:",
+  "mods.files": "Arquivos incluídos",
+  "mods.badge_on": "Instalado · Ativado",
+  "mods.badge_off": "Instalado · Desativado",
+  "mods.badge_review": "Revisão necessária",
+  "mods.badge_attention": "Requer atenção",
+  "mods.folder_short": "Pasta…",
+  "mods.catalog_count": "{count} mods · Catálogo de desenvolvimento"
 }
