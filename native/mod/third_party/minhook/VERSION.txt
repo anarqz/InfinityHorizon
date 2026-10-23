@@ -1,0 +1,1 @@
+MinHook 8af6b4a from https://github.com/TsudaKageyu/minhook (BSD 2-Clause, see LICENSE.txt). Vendored unchanged.

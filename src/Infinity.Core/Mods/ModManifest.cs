@@ -17,6 +17,7 @@ public sealed class ModManifest
     public long PackageBytes => Document.GetProperty("package").GetProperty("bytes").GetInt64();
     public IReadOnlyList<ManifestFile> Files { get; }
     public IReadOnlyList<ManifestDependency> Dependencies { get; }
+    public ModMultiplayer? Multiplayer { get; }
     public bool NeedsDatabaseCoordination => Document.GetProperty("databaseMigrations").GetArrayLength() > 0
         || Document.GetProperty("runtimeOutputs").GetArrayLength() > 0;
     public string? ConfigPath => Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
@@ -67,6 +68,7 @@ public sealed class ModManifest
         Dependencies = Document.GetProperty("dependencies").EnumerateArray().Select(d => new ManifestDependency(
             d.GetProperty("id").GetString()!, d.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray())).ToArray();
         if (Dependencies.Count > 64) throw new ModException("too many dependencies");
+        Multiplayer = ModMultiplayer.Parse(Document);
         if (PackageBytes is <= 0 or > 64 * 1024 * 1024 || PackageHash.Length != 64
             || !Uri.TryCreate(PackageUrl, UriKind.Absolute, out _)) throw new ModException("invalid package");
     }
