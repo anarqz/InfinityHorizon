@@ -14,6 +14,7 @@ public sealed partial class ManagedModFiles
 {
     private readonly string _azimuth;
     private readonly string? _game;
+    private readonly string _state;
     private readonly Func<bool> _gameRunning;
     private readonly string _bucket;
     private readonly string? _packageCache;
@@ -27,7 +28,8 @@ public sealed partial class ManagedModFiles
         _gameRunning = gameRunning;
         _packageCache = packageCache;
         var identity = ModManifest.Hash(Encoding.UTF8.GetBytes(_azimuth.TrimEnd('\\', '/').ToUpperInvariant()));
-        _bucket = Path.GetFullPath(Path.Combine(stateDirectory, "game_backup"));
+        _state = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stateDirectory));
+        _bucket = Path.Combine(_state, "game_backup");
         BackupRoot = Path.Combine(_bucket, identity);
         RejectLinks(_azimuth); RejectLinks(BackupRoot);
     }
@@ -296,14 +298,34 @@ public sealed partial class ManagedModFiles
         ModManifest.ValidatePath(relative);
         var target = Path.GetFullPath(Path.Combine(root, relative));
         if (!target.StartsWith(root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ModException("path escaped root");
-        RejectLinks(target);
+        RejectLinks(target, root);
         return target;
     }
-    private static void RejectLinks(string path)
+    private void RejectLinks(string path)
     {
+        var full = Path.GetFullPath(path);
+        var boundary = new[] { _azimuth, _game, _state, _packageCache }.Where(root => root is not null && Within(root, full))
+            .MaxBy(root => root!.Length) ?? throw new ModException("path escaped root");
+        RejectLinks(full, boundary);
+    }
+    private static void RejectLinks(string path, string boundary)
+    {
+        boundary = Path.TrimEndingDirectorySeparator(Path.GetFullPath(boundary));
         for (var current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
-            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+        {
+            var root = string.Equals(Path.TrimEndingDirectorySeparator(current), boundary, StringComparison.OrdinalIgnoreCase);
+            if (!(root && Process.WineHost.Detected) && (File.Exists(current) || Directory.Exists(current))
+                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
                 throw new ModException("linked paths are not supported for managed mods");
+            if (root) return;
+        }
+        throw new ModException("path escaped root");
+    }
+    private static bool Within(string root, string path)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return string.Equals(Path.TrimEndingDirectorySeparator(path), root, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
     private static string? Current(string path) => File.Exists(path) ? ModManifest.Hash(File.ReadAllBytes(path)) : null;
     private string Store(byte[] bytes)
@@ -326,7 +348,7 @@ public sealed partial class ManagedModFiles
         if (digest is null) File.Delete(path);
         else Atomic(path, ObjectBytes(digest));
     }
-    private static void Atomic(string path, byte[] bytes)
+    private void Atomic(string path, byte[] bytes)
     {
         RejectLinks(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
