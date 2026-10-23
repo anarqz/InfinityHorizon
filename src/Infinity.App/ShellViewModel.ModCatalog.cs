@@ -134,7 +134,7 @@ public sealed partial class ShellViewModel
         || _modStateError is not null || HasModRelink);
     public bool CanRecoverMods => ModsIdle && ModRecoveryRequired;
     public bool CanResolveMods => ModsIdle && (ModRecoveryRequired || _modHealth.Installed.Any(i => i.Problem is not null));
-    public bool HasModRelink => _modHealth.RelinkCandidates.Count > 0;
+    public bool HasModRelink => _modHealth.RelinkCandidates.Count > 0 || _modHealth.GameRelink;
     public string ModRecoveryText => string.Join("\n", new[]
     {
         _modHealth.RecoveryHere ? S["mods.recovery_here"] : null,
@@ -424,7 +424,11 @@ public sealed partial class ShellViewModel
 
     public Task RecoverModsAsync() => ManagerOperation(m => m.Recover(), S["mods.recovered"]);
     public Task ResolveModRecoveryAsync() => ManagerOperation(m => m.ResolveRecovery(), S["mods.resolved"]);
-    public Task RelinkModsAsync() => ManagerOperation(m => { foreach (var folder in m.RelinkCandidates().Take(1)) m.Relink(folder); }, S["mods.relinked"]);
+    public Task RelinkModsAsync() => ManagerOperation(m =>
+    {
+        foreach (var folder in m.RelinkCandidates().Take(1)) m.Relink(folder);
+        if (m.GameRelinkCandidates().Count > 0) m.RelinkGame();
+    }, S["mods.relinked"]);
 
     /// <summary>Retention at startup (M5): in the background, only while nothing else runs; a refusal is only logged.</summary>
     private async Task MaintainModsAsync()

@@ -196,7 +196,7 @@ public sealed partial class ManagedModFiles
                 ini.EnforceLocks(); afterBytes = ini.ToBytes();
             }
             var after = Store(afterBytes);
-            var preserve = file.Role == "config";
+            var preserve = file.Role == "config" || file.Mode == "seed"; // seeded player files are the player's once written
             owned.Add(new(file.Root, file.Destination, before, after, preserve));
             changes.Add(new(file.Root, file.Destination, before, after));
         }
@@ -252,7 +252,7 @@ public sealed partial class ManagedModFiles
             if (file.Mode == "seed" && current is not null && file.Role != "config") continue;
             if (file.Mode == "add" && current is not null && installed.Enabled || file.Mode == "replace" && current is null) throw new ModException("file precondition failed", ModErrors.Conflict);
             if (current is not null) Store(File.ReadAllBytes(target));
-            owned.Add(new(file.Root, file.Destination, current, after, file.Role == "config"));
+            owned.Add(new(file.Root, file.Destination, current, after, file.Role == "config" || file.Mode == "seed"));
             if (installed.Enabled && current != after) changes.Add(new(file.Root, file.Destination, current, after));
         }
         foreach (var removed in old.Values)
@@ -425,7 +425,8 @@ public sealed partial class ManagedModFiles
         foreach (var change in journal.Changes)
         {
             var actual = Current(Target(change.Root, change.Path));
-            if (actual != change.Before && actual != change.After) throw new ModException("recovery conflicts with external changes", ModErrors.Recovery);
+            if (actual != change.Before && actual != change.After && !DeletionInProgress(change, actual))
+                throw new ModException("recovery conflicts with external changes", ModErrors.Recovery);
             if (change.Before is not null) _ = ObjectBytes(change.Before);
         }
         var index = 0;
@@ -437,6 +438,10 @@ public sealed partial class ManagedModFiles
             FaultPoint?.Invoke("rollback:" + index++);
         }
     }
+
+    /// <summary>The empty file <see cref="RemoveFile"/> leaves when it is interrupted between its replace and its delete.</summary>
+    private static readonly string EmptyHash = ModManifest.Hash([]);
+    private static bool DeletionInProgress(ModFileChange change, string? actual) => actual == EmptyHash && (change.Before is null || change.After is null);
 
     private void ArchiveJournal(string pending)
     {
@@ -458,7 +463,8 @@ public sealed partial class ManagedModFiles
     /// </summary>
     private void RejectOverlaps(IReadOnlyList<ManagedModFile> proposed, string ownId)
     {
-        var targets = proposed.Select(f => Target(f.Root, f.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Canonical forms too: one Azimuth folder selected through a junction and through its real path is one folder.
+        var targets = proposed.Select(f => Target(f.Root, f.Path)).SelectMany(t => new[] { t, Canonical(t) }).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (!Directory.Exists(_bucket)) return;
         foreach (var folder in Directory.EnumerateDirectories(_bucket))
         {
@@ -477,7 +483,8 @@ public sealed partial class ManagedModFiles
                         _ => throw new ModException("invalid receipt root"),
                     };
                     if (existing.Root == "azimuth" && !Directory.Exists(root)) continue;
-                    if (targets.Contains(Resolve(root, existing.Path))) throw new ModException("another mod owns this path", ModErrors.Conflict);
+                    var owned = Resolve(root, existing.Path);
+                    if (targets.Contains(owned) || targets.Contains(Canonical(owned))) throw new ModException("another mod owns this path", ModErrors.Conflict);
                 }
             }
         }

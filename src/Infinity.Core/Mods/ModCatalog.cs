@@ -42,6 +42,9 @@ public static class ModCatalogTrust
         return Ed25519.Verify(signature.ToArray(), 0, publicKey.ToArray(), 0, message, 0, message.Length);
     }
 
+    /// <summary>For the signing tool: refuses a catalog the launcher would refuse, before it is signed.</summary>
+    public static int Validate(byte[] raw) => Parse(raw ?? throw new ArgumentNullException(nameof(raw)), signed: true).Entries.Count;
+
     internal sealed record Entry(string Id, string Version, Uri ManifestUrl, string ManifestSha256);
 
     /// <summary>Parses a catalog. <paramref name="signed"/>: every field required, unknown fields refused, only "production" entries kept.</summary>
@@ -123,7 +126,8 @@ public sealed class SignedModCatalog
         var parsed = ModCatalogTrust.Parse(raw, signed: true);
         CheckTime(parsed.Issued);
         var digest = ModManifest.Hash(raw);
-        if (ReadFloor() is { } floor && floor.Id == parsed.Id && (parsed.Sequence < floor.Sequence || parsed.Sequence == floor.Sequence && floor.Digest != digest))
+        // One floor for the production URL, whatever catalogId a signed catalog names.
+        if (ReadFloor() is { } floor && (parsed.Sequence < floor.Sequence || parsed.Sequence == floor.Sequence && floor.Digest != digest))
             throw new ModException("catalog is older than one already seen", ModErrors.Catalog);
         var mods = new List<ModManifest>();
         foreach (var entry in parsed.Entries)

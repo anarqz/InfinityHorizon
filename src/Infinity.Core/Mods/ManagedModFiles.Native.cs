@@ -22,6 +22,8 @@ public sealed partial class ManagedModFiles
         if (!manifest.SupportedForInstall || !manifest.Files.All(f => f.Root == "azimuth") || !manifest.Files.Any(f => f.Role == "binary")
             || ReadReceipt(manifest.Id) is not null) return null;
         var mapped = manifest.Files.Where(f => f.Mode != "seed").ToArray();
+        // Adoption records no original; a mapping that replaces one cannot be adopted without losing it.
+        if (mapped.Any(f => f.Mode == "replace")) return null;
         if (mapped.All(f => Current(Target(f.Root, f.Destination)) == f.Hash)) return true;
         var parked = manifest.ParkedFiles;
         if (parked.Count == 0) return null;

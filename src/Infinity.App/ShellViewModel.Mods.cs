@@ -116,7 +116,13 @@ public sealed partial class ShellViewModel
     private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync()
     {
         if (ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
-        var prepared = await Task.Run(() => factory().PrepareForLaunch());
+        ModLaunchPreparation prepared;
+        for (var attempt = 0; ; attempt++)
+        {
+            // Startup retention may hold the bucket lock for a moment: wait for it rather than refuse the launch.
+            try { prepared = await Task.Run(() => factory().PrepareForLaunch()); break; }
+            catch (ModException error) when (error.Code == ModErrors.Busy && attempt < 20) { await Task.Delay(250); }
+        }
         foreach (var warning in prepared.Warnings) Log("mods: " + warning);
         return prepared;
     }
