@@ -17,7 +17,7 @@
 //
 // Before anything is written, the bytes are checked: against every other
 // hook's (no overlaps), and for game code against the exe on disk, so code
-// that Extra Options (or a mod patching the game by itself) has already
+// that a dependency (or a mod patching the game by itself) has already
 // changed is never hooked over. Hooks in game code also wait for Extra
 // Options to finish patching (wait_for_code): it validates all of its sites
 // before writing any, and refuses every patch if one doesn't match.
@@ -297,67 +297,29 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
     return -1;
 }
 
-// ---- waiting for Extra Options -----------------------------------------------------
-
+// ---- manifest-declared dependency readiness -----------------------------------------
 std::atomic<bool> g_code_ready{false};
-constexpr ULONGLONG kExtraOptionsTimeout = 20000;
-
-FILETIME process_start() {
-    FILETIME c{}, e{}, k{}, u{};
-    GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
-    return c;
-}
-
-// Extra Options patches the game while Azimuth loads its TLS helper, right
-// after mapping it. Once patch_engine_apply is done, it rewrites
-// FH2_ExtraOptions.log (CREATE_ALWAYS) with its status on the second line:
-// "OK: ...", "REFUSED: ..." or "DISABLED: ...", and under Azimuth then adds
-// "AZIMUTH: winmm proxy initialized". Before that, it writes nothing this
-// launch. Returns "" while it's still to come, or what settled it.
-std::string extra_options_state() {
-    const fs::path dir = extra_options_dir();
-    if (dir.empty()) return "no Extra Options";
-    const fs::path log = dir / L"FH2_ExtraOptions.log";
-    HANDLE f = CreateFileW(log.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return "";
-    std::string text;
-    FILETIME written{};
-    const FILETIME started = process_start();
-    if (GetFileTime(f, nullptr, nullptr, &written) && CompareFileTime(&written, &started) >= 0) {
-        text.resize(64 * 1024);
-        DWORD got = 0;
-        if (ReadFile(f, text.data(), static_cast<DWORD>(text.size()), &got, nullptr)) text.resize(got);
-        else text.clear();
-    }
-    CloseHandle(f);
-    if (text.find("\nAZIMUTH: winmm proxy initialized") != std::string::npos)
-        return "Extra Options has applied its patches";
-    const auto nl = text.find('\n');
-    const std::string status = nl == std::string::npos ? std::string{} : text.substr(nl + 1, 10);
-    if (status.rfind("OK:", 0) == 0) return "Extra Options has applied its patches";
-    if (status.rfind("REFUSED:", 0) == 0 || status.rfind("DISABLED:", 0) == 0)
-        return "Extra Options made no patches this time";
-    return "";
-}
-
+std::vector<Readiness> g_readiness;
 bool code_ready() { return g_code_ready.load(std::memory_order_acquire); }
-
-// Extra Options' winmm.dll is next to azimuth.exe, but the winmm.dll loaded isn't it: Wine and
-// Proton use their own unless WINEDLLOVERRIDES="winmm=n,b" says otherwise. (Windows always takes
-// the one in the program's folder.) The file is recognised by its export's name in it.
-bool extra_options_left_out_by_wine() {
-    HMODULE n = GetModuleHandleW(L"ntdll.dll");
-    if (!n || !GetProcAddress(n, "wine_get_version") || !extra_options_dir().empty()) return false;
-    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    std::string data(4 * 1024 * 1024, '\0');
-    DWORD got = 0;
-    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
-    CloseHandle(f);
-    data.resize(got);
-    return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
+bool dependencies_ready() {
+    FILETIME started{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &started, &exited, &kernel, &user)) return false;
+    for (const auto& requirement : g_readiness) {
+        auto module = GetModuleHandleW(requirement.module.c_str());
+        if (!module) return false;
+        wchar_t module_path[32768]; auto n = GetModuleFileNameW(module, module_path, 32768);
+        if (!n || n >= 32768 || _wcsicmp(module_path, requirement.module.c_str())) return false;
+        HANDLE f = CreateFileW(requirement.log.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (f == INVALID_HANDLE_VALUE) return false;
+        BY_HANDLE_FILE_INFORMATION info{}; FILETIME written{}; std::string text(65536, '\0'); DWORD got = 0;
+        bool ok = GetFileInformationByHandle(f, &info) && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            && GetFileTime(f, nullptr, nullptr, &written) && CompareFileTime(&written, &started) >= 0
+            && ReadFile(f, text.data(), static_cast<DWORD>(text.size()), &got, nullptr);
+        CloseHandle(f); text.resize(got);
+        if (!ok || text.find(requirement.success) == std::string::npos) return false;
+    }
+    return true;
 }
 
 void open_disk_image();
@@ -386,27 +348,17 @@ bool wait_for_executable_code() {
     return true;
 }
 
-// Watches for the game being mapped, then for Extra Options to finish.
+// Wait until manifest-declared dependencies settle and code pages are executable.
 void watch_for_code() {
     std::thread([] {
         while (!find_game()) Sleep(50);
-        const ULONGLONG seen = GetTickCount64();
-        std::string why;
-        while ((why = extra_options_state()).empty()) {
-            if (GetTickCount64() - seen >= kExtraOptionsTimeout) {
-                why = "Extra Options didn't say it had finished within 20 seconds of the game being mapped; "
-                      "refusing hooks";
-                plog(why);
-                return;
-            }
+        const ULONGLONG deadline = GetTickCount64() + 20000;
+        while (!dependencies_ready()) {
+            if (GetTickCount64() >= deadline) { plog("dependency readiness timed out; refusing hooks"); return; }
             Sleep(50);
         }
-        if (why == "no Extra Options" && extra_options_left_out_by_wine())
-            plog("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own "
-                 "winmm.dll instead. Set WINEDLLOVERRIDES=\"winmm=n,b\" for Azimuth (the FH2 Mod Platform's "
-                 "docs/linux.md); until then, text, file and database changes don't reach the game");
         if (!wait_for_executable_code()) return;
-        plog("hooks: game code is ready (" + why + ")");
+        plog("hooks: game code and declared dependencies are ready");
         g_code_ready.store(true, std::memory_order_release);
     }).detach();
 }
@@ -448,14 +400,7 @@ bool g_minhook = false;
 
 } // namespace
 
-fs::path extra_options_dir() {
-    HMODULE w = GetModuleHandleW(L"winmm.dll");
-    if (!w || !GetProcAddress(w, "Fh2TweaksStatus")) return {};
-    wchar_t path[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(w, path, MAX_PATH);
-    if (!n || n >= MAX_PATH) return {};
-    return fs::path{path}.parent_path();
-}
+void configure_readiness(std::vector<Readiness> requirements) { g_readiness = std::move(requirements); }
 
 } // namespace infinity_mod
 
@@ -588,7 +533,7 @@ bool common_checks(InfinityMod* m, const char* what, void* at, void* detour, voi
     }
     if (in_game(at) && !code_ready()) {
         log_line(m->name, std::string("can't hook ") + what +
-                              " yet: call wait_for_code first, so Extra Options can patch the game before you do");
+                              " yet: call wait_for_code first, so declared dependencies can finish before you patch the game");
         return false;
     }
     if (!executable(detour)) {
@@ -1048,7 +993,7 @@ InfinityHook* api_patch_bytes(InfinityMod* m, const char* name, void* at, const 
     }
     if (in_game(at) && !code_ready()) {
         log_line(m->name, "can't make " + what +
-                              " yet: call wait_for_code first, so Extra Options can patch the game before you do");
+                              " yet: call wait_for_code first, so declared dependencies can finish before you patch the game");
         return nullptr;
     }
     std::scoped_lock lk{g_mu};

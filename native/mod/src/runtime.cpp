@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include "../third_party/sqlite/sqlite3.h"
 
 namespace {
 struct FileLock {
@@ -34,6 +35,7 @@ std::vector<std::unique_ptr<Entry>> entries;
 void* game_image = nullptr;
 std::filesystem::path azimuth, mount;
 std::wstring azimuth_text;
+std::unique_ptr<FileLock> session_database_lock;
 InfinityModApiV1 hooks{};
 
 bool valid_image(void* image) {
@@ -306,6 +308,100 @@ extern "C" __declspec(dllexport) int InfinityModsQueryV1(InfinityModsSnapshotV1*
     result->ready = started && complete && !failed;
     for (size_t i=0;i<entries.size();++i) result->mods[i] = entries[i]->report;
     return 0;
+}
+
+namespace {
+struct PlanReader {
+    const std::vector<uint8_t>& bytes;
+    size_t at = 0;
+    void read(void* out, size_t n) {
+        if (at > bytes.size() || n > bytes.size() - at) throw std::runtime_error("truncated plan");
+        std::memcpy(out, bytes.data() + at, n); at += n;
+    }
+    uint32_t number() { uint32_t n; read(&n, sizeof n); return n; }
+    std::wstring text() {
+        auto n = number(); if (!n || n > 32767) throw std::runtime_error("invalid text length");
+        std::wstring value(n, L'\0'); read(value.data(), size_t(n) * 2);
+        if (value.find(L'\0') != std::wstring::npos) throw std::runtime_error("embedded null");
+        return value;
+    }
+};
+struct ParsedPlan {
+    std::wstring azimuth, game, database;
+    std::array<std::wstring, INFINITY_MOD_MAX_COUNT> binary, settings;
+    std::array<InfinityModSelectionV1, INFINITY_MOD_MAX_COUNT> mods{};
+    std::array<std::vector<std::string>, INFINITY_MOD_MAX_COUNT> tables;
+    uint8_t baseline_hash[32]{}, prepared_hash[32]{}, sql_hash[32]{};
+    std::vector<infinity_mod::Readiness> readiness;
+    uint32_t count = 0;
+};
+void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
+    PlanReader reader{bytes}; char magic[8]; reader.read(magic, 8);
+    if (std::memcmp(magic, "FIMOD002", 8)) throw std::runtime_error("unknown plan format");
+    plan.count = reader.number();
+    if (!plan.count || plan.count > INFINITY_MOD_MAX_COUNT) throw std::runtime_error("invalid selection count");
+    plan.azimuth = reader.text(); plan.game = reader.text();
+    auto database_count = reader.number(); if (database_count > 1) throw std::runtime_error("unsupported database count");
+    if (database_count) { plan.database = reader.text(); auto prefix = plan.game + L"\\"; if (!valid_path(plan.database.c_str()) || _wcsnicmp(plan.database.c_str(), prefix.c_str(), prefix.size())) throw std::runtime_error("database outside game folder"); }
+    reader.read(plan.baseline_hash, 32); reader.read(plan.prepared_hash, 32); reader.read(plan.sql_hash, 32);
+    auto requirements = reader.number(); if (requirements > 32) throw std::runtime_error("too many readiness checks");
+    for (uint32_t i = 0; i < requirements; ++i) {
+        auto module = reader.text(), log = reader.text(), success = reader.text();
+        auto prefix = plan.azimuth + L"\\";
+        if (!valid_path(module.c_str()) || !valid_path(log.c_str()) || success.size() > 512
+            || _wcsnicmp(module.c_str(), prefix.c_str(), prefix.size()) || _wcsnicmp(log.c_str(), prefix.c_str(), prefix.size())) throw std::runtime_error("invalid readiness path");
+        plan.readiness.push_back({module, log, infinity_mod::narrow(success)});
+    }
+    for (uint32_t i = 0; i < plan.count; ++i) {
+        auto id = reader.text(), version = reader.text();
+        if (id.size() > 64 || version.size() > 64) throw std::runtime_error("invalid identity");
+        for (size_t j = 0; j < id.size(); ++j) { if (id[j] > 127) throw std::runtime_error("invalid id"); plan.mods[i].id[j] = char(id[j]); }
+        for (size_t j = 0; j < version.size(); ++j) { if (version[j] > 127) throw std::runtime_error("invalid version"); plan.mods[i].version[j] = char(version[j]); }
+        plan.binary[i] = reader.text(); plan.settings[i] = reader.text();
+        plan.mods[i].binary_path = plan.binary[i].c_str(); plan.mods[i].settings_path = plan.settings[i].c_str();
+        reader.read(plan.mods[i].binary_sha256, 32); reader.read(plan.mods[i].settings_sha256, 32);
+        reader.read(plan.mods[i].compatibility_sha256, 32); plan.mods[i].dependency_mask = reader.number();
+        auto count = reader.number(); if (count > 32) throw std::runtime_error("too many tables");
+        for (uint32_t j = 0; j < count; ++j) {
+            auto table = infinity_mod::narrow(reader.text());
+            if (table.empty() || table.size() > 64 || table.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos
+                || table.starts_with("sqlite_") || table.starts_with("_infinity")) throw std::runtime_error("invalid table scope");
+            plan.tables[i].push_back(table);
+        }
+    }
+    if (reader.at != bytes.size()) throw std::runtime_error("trailing plan data");
+}
+}
+#include "database_prepare.inl"
+
+extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const wchar_t* path, const uint8_t hash[32]) {
+    try {
+        if (!hash || !valid_path(path) || !valid_host() || !valid_image(image)) return 1;
+        wchar_t mode[32]{};
+        if (GetEnvironmentVariableW(L"FI_LAUNCH", mode, 32) != 10 || wcscmp(mode, L"v1;offline")) return 1;
+        auto locked = verify_file(path, hash); if (!locked) return 1;
+        LARGE_INTEGER size{};
+        if (!GetFileSizeEx(locked->file, &size) || size.QuadPart < 12 || size.QuadPart > 1024 * 1024) return 1;
+        LARGE_INTEGER zero{}; if (!SetFilePointerEx(locked->file, zero, nullptr, FILE_BEGIN)) return 1;
+        std::vector<uint8_t> bytes(size_t(size.QuadPart)); DWORD read = 0;
+        if (!ReadFile(locked->file, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size()) return 1;
+        ParsedPlan plan; parse_plan(bytes, plan);
+        wchar_t exe[32768]; auto length = GetModuleFileNameW(nullptr, exe, 32768);
+        if (!length || length >= 32768 || _wcsicmp(std::filesystem::path(exe).parent_path().c_str(), plan.azimuth.c_str())) return 1;
+        // Only contained selected DLLs/configs. A copied plan cannot retarget another installation.
+        auto prefix = plan.azimuth + L"\\";
+        for (uint32_t i = 0; i < plan.count; ++i)
+            if (_wcsnicmp(plan.binary[i].c_str(), prefix.c_str(), prefix.size()) || _wcsnicmp(plan.settings[i].c_str(), prefix.c_str(), prefix.size())) return 1;
+        if (!plan.database.empty()) {
+            if (!nonzero(plan.prepared_hash) || !nonzero(plan.sql_hash)) return 1;
+            for (auto suffix : { L"-wal", L"-shm", L"-journal" }) if (std::filesystem::exists(plan.database + suffix)) return 1;
+            session_database_lock = verify_file(plan.database, plan.prepared_hash);
+            if (!session_database_lock) return 1;
+        }
+        infinity_mod::configure_readiness(std::move(plan.readiness));
+        InfinityModsLaunchV1 launch{sizeof launch, 1, image, plan.azimuth.c_str(), plan.game.c_str(), plan.count, plan.mods.data()};
+        return InfinityModsStartV1(&launch);
+    } catch (...) { return 1; }
 }
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(instance);

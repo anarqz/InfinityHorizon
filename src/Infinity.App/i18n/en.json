@@ -75,11 +75,6 @@
  "diag.read_help": "Read help",
  "diag.rerun": "Run checks again",
  "diag.subtitle": "What is wrong, why, and how to fix it.",
- "eo.absent": "ExtraOptions not installed: everything works except headlight and roof sync",
- "eo.not_loaded": "ExtraOptions is installed but did not load. Start the game from the launcher.",
- "eo.ok": "ExtraOptions v0.2.98 found: headlight and roof sync on",
- "eo.other": "ExtraOptions {version} found; v0.2.98 is required to play online",
- "eo.unchecked": "ExtraOptions found; its version is checked once the next hook update lands",
  "feed.kind_maintenance": "MAINTENANCE",
  "feed.kind_news": "NEWS",
  "feed.kind_notice": "NOTICE",
@@ -416,5 +411,12 @@
  "worlds.signed_out": "Sign in to see worlds.",
  "worlds.subtitle_free": "Free worlds, with other free players. Join asks the server for a seat.",
  "worlds.subtitle_vip": "Every world. Join asks the server for a seat.",
- "worlds.title": "Worlds"
+ "worlds.title": "Worlds",
+ "mods.adopt": "Manage existing installation",
+ "mods.unmanaged": "Existing installation",
+ "mods.requirements_unmet": "Check dependencies and installation files",
+ "mods.offline_play": "Play offline with selected mods",
+ "mods.offline_only": "Native mods currently require an offline session.",
+ "mods.runtime_failed": "The mod session could not start or ended unexpectedly.",
+ "mods.session_prepare": "Preparing the session database…"
 }

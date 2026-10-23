@@ -6,36 +6,38 @@ using System.Text.Json;
 namespace Infinity.Core.Mods;
 
 public sealed record ManagedModFile(string Root, string Path, string? Before, string After, bool Preserve);
-public sealed record ManagedModReceipt(string Id, string ManifestHash, bool Enabled, IReadOnlyList<ManagedModFile> Files, string? GameRoot = null, string? AzimuthRoot = null);
+public sealed record ManagedModReceipt(string Id, string ManifestHash, bool Enabled, IReadOnlyList<ManagedModFile> Files, string? GameRoot = null, string? AzimuthRoot = null, string? TransactionId = null);
 public sealed record ModFileChange(string Root, string Path, string? Before, string? After);
 public sealed record ModFileJournal(string ReceiptName, ManagedModReceipt Receipt, IReadOnlyList<ModFileChange> Changes);
 
 /// <summary>
 /// File-only transactions. Immutable SHA-256 objects live in game_backup, scoped to this exact
 /// installation. A durable journal precedes the first write; interrupted work blocks new work
-/// until explicitly recovered. Database writers are refused until runtime coordination exists.
+/// until explicitly recovered. SQLite changes use the separate native session coordinator.
 /// </summary>
-public sealed class ManagedModFiles
+public sealed partial class ManagedModFiles
 {
     private readonly string _azimuth;
     private readonly string? _game;
     private readonly Func<bool> _gameRunning;
     private readonly string _bucket;
+    private readonly string? _packageCache;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
     public string BackupRoot { get; }
 
-    public ManagedModFiles(string azimuth, string? game, string stateDirectory, Func<bool> gameRunning)
+    public ManagedModFiles(string azimuth, string? game, string stateDirectory, Func<bool> gameRunning, string? packageCache = null)
     {
         _azimuth = Path.TrimEndingDirectorySeparator(Path.GetFullPath(azimuth));
         _game = game is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(game));
         _gameRunning = gameRunning;
+        _packageCache = packageCache;
         var identity = ModManifest.Hash(Encoding.UTF8.GetBytes(_azimuth.TrimEnd('\\', '/').ToUpperInvariant()));
         _bucket = Path.GetFullPath(Path.Combine(stateDirectory, "game_backup"));
         BackupRoot = Path.Combine(_bucket, identity);
         RejectLinks(_azimuth); RejectLinks(BackupRoot);
     }
 
-    public bool RecoveryRequired => File.Exists(Path.Combine(BackupRoot, "pending.json"));
+    public bool RecoveryRequired => File.Exists(Path.Combine(BackupRoot, "pending.json")) || File.Exists(SessionJournal);
 
     public ManagedModReceipt? Receipt(ModManifest manifest)
     {
@@ -60,63 +62,100 @@ public sealed class ManagedModFiles
     {
         ArgumentNullException.ThrowIfNull(manifest);
         // This is deliberately independent of remote review.status and catalog availability.
-        if (!manifest.ApprovedForFileInstall) throw new ModException("this manifest is not approved for installation");
-        progress?.Report("download");
-        using var response = await ModManager.DownloadAsync(http, new Uri(manifest.PackageUrl), cancellation).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var body = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
-        var bytes = await DevelopmentModCatalog.ReadBoundedAsync(body, Math.Min(manifest.PackageBytes, 64 * 1024 * 1024), cancellation).ConfigureAwait(false);
-        cancellation.ThrowIfCancellationRequested();
+        if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities");
+        var packages = new Dictionary<string, byte[]>();
+        foreach (var (name, spec) in PackageSpecs(manifest))
+        {
+            progress?.Report("download");
+            var hash = spec.GetProperty("sha256").GetString()!;
+            var size = spec.GetProperty("bytes").GetInt64();
+            var cached = _packageCache is null ? null : Safe(_packageCache, hash + ".zip");
+            byte[] bytes;
+            if (cached is not null && File.Exists(cached))
+            {
+                if (new FileInfo(cached).Length != size) throw new ModException("cached package size mismatch");
+                bytes = await File.ReadAllBytesAsync(cached, cancellation).ConfigureAwait(false);
+            }
+            else
+            {
+                using var response = await ModDownloads.DownloadAsync(http, new Uri(spec.GetProperty("url").GetString()!), cancellation).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                await using var body = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
+                bytes = await DevelopmentModCatalog.ReadBoundedAsync(body, Math.Min(size, 64 * 1024 * 1024), cancellation).ConfigureAwait(false);
+            }
+            if (bytes.LongLength != size || ModManifest.Hash(bytes) != hash) throw new ModException("package digest mismatch");
+            packages.Add(name, bytes);
+        }
         progress?.Report("verify");
-        await Task.Run(() => InstallVerifiedPackage(manifest, bytes, progress), cancellation).ConfigureAwait(false);
+        await Task.Run(() => InstallVerifiedPackages(manifest, packages, progress), cancellation).ConfigureAwait(false);
     }
 
     /// <summary>Verifies all archive bytes before touching any installation file.</summary>
     public void InstallVerifiedPackage(ModManifest manifest, byte[] package, IProgress<string>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(package);
-        if (manifest.NeedsDatabaseCoordination || manifest.Dependencies.Count > 0) throw new ModException("runtime or dependencies require coordination");
-        if (manifest.PackageBytes != package.Length || ModManifest.Hash(package) != manifest.PackageHash) throw new ModException("package digest mismatch");
+        InstallVerifiedPackages(manifest, new Dictionary<string, byte[]> { ["primary"] = package }, progress);
+    }
+
+    internal void InstallVerifiedPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages, IProgress<string>? progress = null)
+    {
+        if (!manifest.SupportedForInstall)
+            throw new ModException("runtime or dependencies require coordination");
         using var gate = Lock();
         if (Receipt(manifest) is not null) throw new ModException("already managed; use enable or disable");
-        using var zip = new ZipArchive(new MemoryStream(package), ZipArchiveMode.Read);
-        if (zip.Entries.Count > 4096 || zip.Entries.Select(e => e.FullName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != zip.Entries.Count)
-            throw new ModException("duplicate or excessive archive entries");
+        CheckDependencies(manifest);
         var verified = new Dictionary<ManifestFile, byte[]>();
-        foreach (var file in manifest.Files)
+        foreach (var (name, spec) in PackageSpecs(manifest))
         {
-            var entry = zip.GetEntry(file.Source) ?? throw new ModException("archive entry missing");
-            if (entry.Length != file.Bytes) throw new ModException("archive entry length mismatch");
-            using var stream = entry.Open();
-            var content = new byte[checked((int)file.Bytes)];
-            stream.ReadExactly(content);
-            if (stream.ReadByte() != -1 || ModManifest.Hash(content) != file.Hash) throw new ModException("file digest mismatch");
-            verified.Add(file, content);
+            if (!packages.TryGetValue(name, out var package) || package.LongLength != spec.GetProperty("bytes").GetInt64()
+                || ModManifest.Hash(package) != spec.GetProperty("sha256").GetString()) throw new ModException("package digest mismatch");
+            using var zip = new ZipArchive(new MemoryStream(package), ZipArchiveMode.Read);
+            if (zip.Entries.Count > 4096 || zip.Entries.Select(e => e.FullName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != zip.Entries.Count)
+                throw new ModException("duplicate or excessive archive entries");
+            foreach (var file in manifest.Files.Where(f => f.Package == name))
+            {
+                var entry = zip.GetEntry(file.Source) ?? throw new ModException("archive entry missing");
+                if (entry.Length != file.Bytes) throw new ModException("archive entry length mismatch");
+                using var stream = entry.Open();
+                var content = new byte[checked((int)file.Bytes)]; stream.ReadExactly(content);
+                if (stream.ReadByte() != -1 || ModManifest.Hash(content) != file.Hash) throw new ModException("file digest mismatch");
+                verified.Add(file, content);
+            }
         }
+        if (verified.Count != manifest.Files.Count) throw new ModException("unresolved package mapping");
         var owned = new List<ManagedModFile>();
         var changes = new List<ModFileChange>();
         foreach (var (file, bytes) in verified)
         {
             var target = Target(file.Root, file.Destination);
             var before = Current(target);
-            if (file.Mode == "seed" && before is not null && !(manifest.Id == ModCatalog.ExtraOptionsId && file.Role == "config")) continue;
+            if (file.Mode == "seed" && before is not null && file.Role != "config") continue;
             if (file.Mode == "add" && before is not null || file.Mode == "replace" && before is null) throw new ModException("file precondition failed");
             // An existing identical binary has no known predecessor. Do not invent an original
-            // that would leave the mod loaded after Off. Legacy management remains available.
-            if (before == file.Hash && file.Role == "binary") throw new ModException("existing mod requires legacy management");
+            // that would leave the mod loaded after Off.
+            if (before == file.Hash && file.Role == "binary") throw new ModException("existing installation needs explicit adoption");
             if (before is not null) Store(File.ReadAllBytes(target));
             var afterBytes = bytes;
-            if (manifest.Id == ModCatalog.ExtraOptionsId && file.Role == "config")
+            if (file.Role == "config" && manifest.ConfigPath == file.Destination)
             {
-                var ini = before is not null ? ExtraOptionsIni.Load(target) : ExtraOptionsIni.Parse(Encoding.UTF8.GetString(bytes));
-                ini.EnforceInfinityLocks();
-                // Preserve a pre-existing INI's exact encoding through its own serializer.
-                afterBytes = ini.ToBytes();
+                var ini = new ManifestIni(manifest, before is null ? bytes : File.ReadAllBytes(target));
+                ini.EnforceLocks(); afterBytes = ini.ToBytes();
             }
             var after = Store(afterBytes);
             var preserve = file.Role == "config";
             owned.Add(new(file.Root, file.Destination, before, after, preserve));
             changes.Add(new(file.Root, file.Destination, before, after));
+        }
+        if (manifest.ConfigPath is not null && !owned.Any(f => f.Root == "azimuth" && f.Path == manifest.ConfigPath))
+        {
+            var config = Target("azimuth", manifest.ConfigPath!);
+            var before = Current(config);
+            var iniBytes = before is null ? ManifestIni.Defaults(manifest) : File.ReadAllBytes(config);
+            var ini = new ManifestIni(manifest, iniBytes);
+            ini.EnforceLocks(); iniBytes = ini.ToBytes();
+            if (before is not null) Store(File.ReadAllBytes(config));
+            if (before != ModManifest.Hash(iniBytes)) changes.Add(new("azimuth", manifest.ConfigPath!, before, Store(iniBytes)));
+            owned.Add(new("azimuth", manifest.ConfigPath!, before, Store(iniBytes), true));
         }
         RejectOverlaps(owned);
         Atomic(Path.Combine(BackupRoot, manifest.Id + ".manifest.json"), manifest.Snapshot());
@@ -130,8 +169,9 @@ public sealed class ManagedModFiles
         using var gate = Lock();
         var receipt = Receipt(manifest) ?? throw new ModException("mod has no installation receipt");
         if (receipt.Enabled == enabled) return;
+        if (enabled) CheckDependencies(manifest); else CheckDependents(manifest.Id);
         var changes = receipt.Files.Where(f => !f.Preserve).Select(f => new ModFileChange(f.Root, f.Path,
-            enabled ? f.Before : f.After, enabled ? f.After : f.Before)).ToArray();
+            enabled ? f.Before : f.After, enabled ? f.After : f.Before)).ToList();
         Execute(new(manifest.Id + ".receipt.json", receipt with { Enabled = enabled }, changes), progress);
     }
 
@@ -139,6 +179,7 @@ public sealed class ManagedModFiles
     public void Recover()
     {
         using var gate = Lock(allowRecovery: true);
+        RestoreSessionDatabase();
         var path = Path.Combine(BackupRoot, "pending.json");
         if (!File.Exists(path)) return;
         var journal = JsonSerializer.Deserialize<ModFileJournal>(File.ReadAllBytes(path)) ?? throw new ModException("invalid journal");
@@ -156,6 +197,7 @@ public sealed class ManagedModFiles
 
     private void Execute(ModFileJournal journal, IProgress<string>? progress)
     {
+        journal = journal with { Receipt = journal.Receipt with { TransactionId = Guid.NewGuid().ToString("N") } };
         CheckGame();
         foreach (var change in journal.Changes)
         {
@@ -243,7 +285,7 @@ public sealed class ManagedModFiles
             foreach (var folder in Directory.EnumerateDirectories(_bucket))
             {
                 RejectLinks(folder);
-                if (File.Exists(Path.Combine(folder, "pending.json"))
+                if ((File.Exists(Path.Combine(folder, "pending.json")) || File.Exists(Path.Combine(folder, "database-session.json")))
                     && !(allowRecovery && string.Equals(folder, BackupRoot, StringComparison.OrdinalIgnoreCase)))
                     throw new ModException("interrupted mod operation needs recovery");
             }
@@ -256,7 +298,7 @@ public sealed class ManagedModFiles
     {
         if (relative.EndsWith(".slt", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
             || relative.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".sqlite3", StringComparison.OrdinalIgnoreCase))
-            throw new ModException("databases require migrations");
+            throw new ModException("databases require session coordination");
         if (root == "azimuth" && (relative.StartsWith("data/", StringComparison.OrdinalIgnoreCase)
             || relative.Equals("azimuth.exe", StringComparison.OrdinalIgnoreCase) || relative.Equals("infinity.dll", StringComparison.OrdinalIgnoreCase)))
             throw new ModException("protected launcher path");

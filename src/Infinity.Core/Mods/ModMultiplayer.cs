@@ -78,6 +78,8 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
             writer.WriteStartArray("dependencies");
             foreach (var dependency in document.GetProperty("dependencies").EnumerateArray().OrderBy(d => d.GetProperty("id").GetString(), StringComparer.Ordinal)) Canonical(writer, dependency);
             writer.WriteEndArray();
+            foreach (var field in new[] { "database", "launch", "readiness", "incompatibleFiles" })
+                if (document.TryGetProperty(field, out var capability)) { writer.WritePropertyName(field); Canonical(writer, capability); }
             writer.WritePropertyName("migrations"); Canonical(writer, document.GetProperty("databaseMigrations"));
             writer.WriteStartObject("config");
             if (document.GetProperty("config") is { ValueKind: JsonValueKind.Object } settingsConfig)
@@ -110,7 +112,7 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         return ModManifest.Hash(output.ToArray());
     }
 
-    private static void ValidateValue(JsonElement option, JsonElement value)
+    internal static void ValidateValue(JsonElement option, JsonElement value)
     {
         var type = option.GetProperty("type").GetString();
         if (type == "boolean" && value.ValueKind is JsonValueKind.True or JsonValueKind.False) return;

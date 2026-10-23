@@ -577,6 +577,9 @@
                 <StackPanel Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}">
                   <WrapPanel>
                     <Button Content="{Binding S[welcome.back]}" Click="OnNavHome" Padding="10,6" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" ToolTip="{Binding IntegrityLocationLabel}" Padding="10,6" Margin="0,0,8,8" />
+                    <Button Content="{Binding HookInstallLabel}" Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[mods.offline_play]}" Click="OnModdedOffline" IsEnabled="{Binding CanPlayModdedOffline}" Padding="10,6" Margin="0,0,8,8" />
                     <Button Content="↻" Click="OnLoadModCatalog" Padding="10,3" FontSize="20" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
                             ToolTip="{Binding S[mods.refresh_catalog]}" AutomationProperties.Name="{Binding S[mods.refresh_catalog]}" />
                     <Button Content="{Binding S[mods.folder_short]}" Click="OnChooseAzimuth" Padding="10,6" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
@@ -617,48 +620,7 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <Border Style="{StaticResource Card}" Padding="22" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Hidden}}">
-                  <StackPanel>
-                    <DockPanel>
-                      <CheckBox DockPanel.Dock="Right" Content="{Binding S[mods.enabled]}" IsChecked="{Binding EoEnabled}"
-                                IsEnabled="{Binding CanToggleEo}" VerticalAlignment="Center" FontWeight="Bold" />
-                      <StackPanel>
-                        <TextBlock Text="{Binding Eo.Name}" FontSize="20" FontWeight="Bold" />
-                        <TextBlock Text="{Binding EoStatus}" Margin="0,2,0,0" Style="{StaticResource PageSubtitle}" />
-                      </StackPanel>
-                    </DockPanel>
-
-                    <!-- Integrity: official build by MD5, or a warning. -->
-                    <Border Margin="0,14,0,0" Padding="12,7" CornerRadius="8" Background="{StaticResource InfinityGoodSurface}"
-                            Visibility="{Binding EoOfficial, Converter={StaticResource Visible}}">
-                      <TextBlock Text="{Binding EoIntegrity}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGood}" FontSize="12" />
-                    </Border>
-                    <Border Margin="0,14,0,0" Padding="12,7" CornerRadius="8" Background="{StaticResource InfinityWarnSurface}"
-                            Visibility="{Binding EoWarning, Converter={StaticResource Visible}}">
-                      <TextBlock Text="{Binding EoIntegrity}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" FontSize="12" />
-                    </Border>
-                    <TextBlock Text="{Binding S[play.setup_needed]}" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
-                               Visibility="{Binding EoAzimuthMismatch, Converter={StaticResource Visible}}" />
-
-                    <DockPanel Margin="0,14,0,0">
-                      <Button DockPanel.Dock="Right" Content="{Binding EoInstallLabel}" Margin="10,0,0,0" Click="OnInstallEo"
-                              Visibility="{Binding CanInstallEo, Converter={StaticResource Visible}}" Style="{StaticResource AccentButtonStyle}" />
-                      <Button DockPanel.Dock="Right" Content="{Binding S[mods.check]}" Click="OnCheckMods" IsEnabled="{Binding Idle}" />
-                      <Button DockPanel.Dock="Right" Content="{Binding S[mods.options]}" Margin="0,0,10,0" Click="OnToggleModOptions"
-                              IsEnabled="{Binding HasIni}" />
-                      <TextBlock Text="{Binding EoUpdateText}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                    </DockPanel>
-
-                    <!-- Credits and the official repository, under the mod (owner's request). -->
-                    <TextBlock Margin="0,16,0,0" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap">
-                      <Run Text="{Binding EoCredits, Mode=OneWay}" />
-                      <Run Text=" · " />
-                      <Hyperlink NavigateUri="{Binding EoRepository}" RequestNavigate="OnOpenLink">
-                        <Run Text="{Binding EoRepository, Mode=OneWay}" />
-                      </Hyperlink>
-                    </TextBlock>
-                  </StackPanel>
-                </Border>
+                <TextBlock Text="{Binding ModCatalogStatus}" TextWrapping="Wrap" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Hidden}}" />
               </StackPanel>
               </ScrollViewer>
             </DockPanel>
@@ -673,7 +635,7 @@
                           Click="OnCloseModPanel" VerticalAlignment="Center" />
                   <TextBlock Text="{Binding S[mods.options_title]}" FontSize="20" FontWeight="Bold" />
                 </DockPanel>
-                <TextBlock DockPanel.Dock="Top" Text="{Binding Eo.Name}" Style="{StaticResource PageSubtitle}" Margin="0,2,12,0" />
+                <TextBlock DockPanel.Dock="Top" Text="{Binding SelectedMod.Name}" Style="{StaticResource PageSubtitle}" Margin="0,2,12,0" />
                 <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
                   <Button Content="{Binding S[mods.save_options]}" Click="OnSaveIni" IsEnabled="{Binding IniDirty}"
                           Style="{StaticResource AccentButtonStyle}" />
@@ -682,30 +644,16 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                   <StackPanel Margin="0,0,12,0">
                     <TextBlock Text="{Binding S[mods.options_hint]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                    <ItemsControl ItemsSource="{Binding IniGroups}" Margin="0,8,0,0">
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                          <Border CornerRadius="10" Padding="16,12" Margin="0,6" Background="{StaticResource InfinitySurfaceHigh}">
-                            <StackPanel>
-                              <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{StaticResource InfinityPink}" />
-                              <TextBlock Text="{Binding Warning}" FontSize="11" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                         Visibility="{Binding HasWarning, Converter={StaticResource Visible}}" />
-                              <ItemsControl ItemsSource="{Binding Options}">
-                                <ItemsControl.ItemTemplate>
-                                  <DataTemplate>
-                                    <CheckBox IsChecked="{Binding Value}" Margin="0,10,0,0" IsEnabled="{Binding Editable}">
-                                      <StackPanel>
-                                        <TextBlock Text="{Binding Label}" />
-                                        <TextBlock Text="{Binding Help}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" MaxWidth="250" />
-                                      </StackPanel>
-                                    </CheckBox>
-                                  </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                              </ItemsControl>
-                            </StackPanel>
-                          </Border>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
+                    <ItemsControl ItemsSource="{Binding ModOptions}" Margin="0,8,0,0">
+                      <ItemsControl.ItemTemplate><DataTemplate>
+                        <StackPanel Margin="0,8,0,10" IsEnabled="{Binding Editable}">
+                          <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding Help}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="11" Margin="0,4,0,6" />
+                          <CheckBox IsChecked="{Binding Checked}" Visibility="{Binding IsBoolean, Converter={StaticResource Visible}}" />
+                          <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding IsNumber, Converter={StaticResource Visible}}" />
+                          <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" Visibility="{Binding IsChoice, Converter={StaticResource Visible}}" />
+                        </StackPanel>
+                      </DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>

@@ -39,6 +39,15 @@ typedef struct InfinityModApiV1 {
 // Export exactly this entry point from a compatible mod. Return 0 after scheduling init.
 // Do not initialize in DllMain. Report READY/FAILED once asynchronous work completes.
 typedef int (*InfinityModInitializeV1Fn)(const InfinityModApiV1*);
+// Separate startup preparation phase, in a non-game helper process. No hooks or game memory.
+// Register synchronous SQL only; the host copies it and executes after all registrations succeed.
+typedef struct InfinityModDatabaseApiV1 {
+    uint32_t size, abi_version;
+    InfinityMod* mod;
+    const wchar_t* settings_path;
+    int (*queue_sql)(InfinityMod*, const char* sql);
+} InfinityModDatabaseApiV1;
+typedef int (*InfinityModRegisterDatabaseV1Fn)(const InfinityModDatabaseApiV1*);
 #ifdef __cplusplus
 }
 #endif

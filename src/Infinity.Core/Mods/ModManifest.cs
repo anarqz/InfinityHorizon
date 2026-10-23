@@ -23,9 +23,10 @@ public sealed class ModManifest
     public string? ConfigPath => Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
         ? config.GetProperty("path").GetString() : null;
 
-    // Development rollout: the reviewed ExtraOptions snapshot alone may write files. Other entries
-    // are discoverable, but changing a remote review.status cannot grant installation authority.
-    public bool ApprovedForFileInstall => Digest == "67f44d71e6b3c2023dc71c6252461873f4546ebb688c62b16d9f8e477fed163a";
+    public bool IsNative => Document.TryGetProperty("runtime", out var value) && value.GetString() == "infinity-native";
+    // Capability support is independent of mod identity. Catalog trust is a separate boundary.
+    public bool SupportedForInstall => !NeedsDatabaseCoordination
+        && Document.TryGetProperty("runtime", out var value) && value.GetString() is "standalone" or "infinity-native";
 
     public ModManifest(byte[] bytes)
     {
@@ -46,8 +47,53 @@ public sealed class ModManifest
         foreach (var field in new[] { "version", "author", "license" }) ValidateText(Document.GetProperty(field));
         foreach (var version in Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray()) ValidateText(version);
         _ = NeedsDatabaseCoordination;
-        _ = ConfigPath;
-        if (Id.Length is < 1 or > 64 || Id.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-'))
+        if (ConfigPath is { } configPath)
+        {
+            ValidatePath(configPath);
+            if (!configPath.EndsWith(".ini", StringComparison.OrdinalIgnoreCase)) throw new ModException("INI configuration must use an ini file");
+            var config = Document.GetProperty("config");
+            if (config.TryGetProperty("root", out var configRoot) && configRoot.GetString() != "azimuth"
+                || config.TryGetProperty("format", out var configFormat) && configFormat.GetString() != "ini") throw new ModException("unsupported configuration format");
+            if (config.TryGetProperty("options", out var options))
+            {
+                if (options.GetArrayLength() > 128) throw new ModException("too many settings");
+                var ids = new HashSet<string>(StringComparer.Ordinal); var bindings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var option in options.EnumerateArray())
+                {
+                    var id = option.GetProperty("id").GetString()!; var section = option.GetProperty("section").GetString()!; var key = option.GetProperty("key").GetString()!;
+                    if (!ids.Add(id) || !bindings.Add(section + "\0" + key) || section.Length is < 1 or > 128 || key.Length is < 1 or > 128
+                        || section.IndexOfAny(['\r','\n',']','[','\0']) >= 0 || key.IndexOfAny(['\r','\n','=','\0']) >= 0) throw new ModException("invalid setting binding");
+                    if (option.GetProperty("type").GetString() == "enum")
+                    {
+                        var choices = option.GetProperty("choices").EnumerateArray().Select(c => c.GetProperty("value").GetString()!).ToArray();
+                        if (choices.Length is < 1 or > 64 || choices.Distinct(StringComparer.Ordinal).Count() != choices.Length
+                            || choices.Any(v => v.Length is < 1 or > 64 || v.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-'))))
+                            throw new ModException("invalid enum token");
+                    }
+                    ModMultiplayer.ValidateValue(option, option.GetProperty("default"));
+                    if (option.TryGetProperty("lockedValue", out var locked)) ModMultiplayer.ValidateValue(option, locked);
+                }
+            }
+        }
+        if (Document.TryGetProperty("database", out var db))
+        {
+            if (!IsNative || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
+                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is < 1 or > 32) throw new ModException("unsupported database capability");
+            var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
+            ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
+            foreach (var table in db.GetProperty("tables").EnumerateArray())
+            {
+                var name = table.GetString()!;
+                if (name.Length is < 1 or > 64 || name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("_infinity", StringComparison.OrdinalIgnoreCase) || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')) throw new ModException("invalid database table permission");
+            }
+        }
+        if (Document.TryGetProperty("readiness", out var readiness))
+        {
+            ValidatePath(readiness.GetProperty("module").GetString()!); ValidatePath(readiness.GetProperty("log").GetString()!);
+            if (readiness.GetProperty("contains").GetString() is not { Length: > 0 and <= 512 }) throw new ModException("invalid readiness marker");
+        }
+        if (Id.Length is < 1 or > 64 || Id.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')))
             throw new ModException("invalid mod id");
         Digest = Hash(_bytes);
         var files = new List<ManifestFile>();
@@ -56,10 +102,16 @@ public sealed class ModManifest
             {
                 var item = new ManifestFile(root, file.GetProperty("source").GetString()!, file.GetProperty("destination").GetString()!,
                     file.GetProperty("sha256").GetString()!, file.GetProperty("bytes").GetInt64(),
-                    file.GetProperty("role").GetString()!, file.GetProperty("mode").GetString()!);
+                    file.GetProperty("role").GetString()!, file.GetProperty("mode").GetString()!,
+                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary");
                 ValidatePath(item.Source); ValidatePath(item.Destination);
-                if (item.Bytes is < 0 or > 64 * 1024 * 1024 || item.Hash.Length != 64
+                if (item.Bytes is < 0 or > 64 * 1024 * 1024 || (item.Hash.Length != 64 || item.Hash.Any(c => !char.IsAsciiHexDigit(c)))
                     || item.Mode is not ("add" or "replace" or "add-or-replace" or "seed")) throw new ModException("invalid file mapping");
+                if (item.Role is not ("binary" or "config" or "asset" or "user-asset" or "license")
+                    || item.Mode == "seed" && item.Role is not ("config" or "user-asset")
+                    || item.Role == "config" && (item.Root != "azimuth" || item.Mode != "seed" || item.Destination != ConfigPath)
+                    || item.Root == "azimuth" && item.Destination.Equals(ConfigPath, StringComparison.OrdinalIgnoreCase) && item.Role != "config")
+                    throw new ModException("invalid file role or settings mapping");
                 files.Add(item);
             }
         if (files.Count > 512 || files.Select(f => f.Root + "/" + f.Destination).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Count)
@@ -67,10 +119,43 @@ public sealed class ModManifest
         Files = files.AsReadOnly();
         Dependencies = Document.GetProperty("dependencies").EnumerateArray().Select(d => new ManifestDependency(
             d.GetProperty("id").GetString()!, d.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray())).ToArray();
-        if (Dependencies.Count > 64) throw new ModException("too many dependencies");
+        if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
+            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || d.Id.Length is < 1 or > 64
+                || d.Id.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')) || d.Versions.Count == 0
+                || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
         Multiplayer = ModMultiplayer.Parse(Document);
-        if (PackageBytes is <= 0 or > 64 * 1024 * 1024 || PackageHash.Length != 64
-            || !Uri.TryCreate(PackageUrl, UriKind.Absolute, out _)) throw new ModException("invalid package");
+        ValidatePackage(Document.GetProperty("package"));
+        var packageNames = new HashSet<string>(StringComparer.Ordinal) { "primary" };
+        if (Document.TryGetProperty("additionalPackages", out var additional))
+            foreach (var p in additional.EnumerateObject())
+            {
+                if (!packageNames.Add(p.Name) || packageNames.Count > 16) throw new ModException("invalid additional package");
+                ValidatePackage(p.Value);
+            }
+        if (Files.Any(f => !packageNames.Contains(f.Package))) throw new ModException("unknown package mapping");
+        if (Document.TryGetProperty("launch", out var launch) && launch.TryGetProperty("wineDllOverrides", out var overrides))
+            foreach (var item in overrides.EnumerateArray())
+            {
+                var name = item.GetString()!;
+                if (name.Length is < 1 or > 64 || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
+                    || !Files.Any(f => f.Root == "azimuth" && f.Role == "binary" && f.Destination.Equals(name + ".dll", StringComparison.OrdinalIgnoreCase)))
+                    throw new ModException("DLL override must name a mapped binary");
+            }
+        if (Document.TryGetProperty("incompatibleFiles", out var incompatible))
+            foreach (var file in incompatible.EnumerateArray())
+            {
+                if (file.GetProperty("root").GetString() is not ("game" or "azimuth")) throw new ModException("invalid incompatible file root");
+                ValidatePath(file.GetProperty("path").GetString()!);
+            }
+    }
+
+    private static void ValidatePackage(JsonElement package)
+    {
+        var hash = package.GetProperty("sha256").GetString()!;
+        if (package.GetProperty("bytes").GetInt64() is <= 0 or > 64 * 1024 * 1024 || hash.Length != 64
+            || hash.Any(c => !char.IsAsciiHexDigit(c) || char.IsUpper(c))
+            || !Uri.TryCreate(package.GetProperty("url").GetString(), UriKind.Absolute, out var url)
+            || url.Scheme != "https" || url.UserInfo.Length > 0 || url.Fragment.Length > 0) throw new ModException("invalid package");
     }
 
     private static void ValidateText(JsonElement value)
@@ -113,7 +198,7 @@ public sealed class ModManifest
     }
 }
 
-public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode);
+public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 
 /// <summary>Unsigned development discovery. Production must use a separate signed catalog policy.</summary>

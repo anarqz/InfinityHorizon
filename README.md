@@ -23,7 +23,7 @@ Everything lives in `~/.local/share/InfinityHorizon`, including the launcher's P
 
 On Windows, install PowerShell 7, .NET SDK 10.0.401 (or a newer patch in that feature band),
 Visual Studio C++ build tools with a Windows SDK, Python 3.10+ and Zig 0.15.2.
-NuGet restores the pinned BouncyCastle package; ImGui, MinHook and the embedded fonts are vendored.
+NuGet restores the pinned BouncyCastle package; ImGui, MinHook, SQLite and the embedded fonts are vendored.
 
 ```powershell
 git clone https://github.com/anarqz/InfinityHorizon.git
@@ -32,7 +32,8 @@ pwsh -File build.ps1 -Zig C:\tools\zig\zig.exe
 ```
 
 The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
-`hook/infinity.dll`, `overlay/infinity-overlay.dll`, their development signatures,
+`hook/infinity.dll`, `overlay/infinity-overlay.dll`, `mod/infinity_mod.dll`,
+`mod/infinity-mod-prepare.exe`, their development signatures,
 English/pt-BR catalogs and license notices. No private repository or game installation is needed
 to compile. Build just the managed projects with `dotnet build Infinity.sln -c Release`.
 
