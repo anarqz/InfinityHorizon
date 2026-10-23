@@ -86,6 +86,19 @@ rollback journal and waits for the replacement to initialize before committing. 
 until the game and save cleanup have finished. Keep the launcher in its own directory, outside
 the Azimuth game directory, so runtime updates can be applied there.
 
+## Native mod runtime (development)
+
+`native/mod/build.ps1` builds `native/mod/build/infinity_mod.dll` with MSVC x64.
+The separate runtime verifies an explicit native mod selection, coordinates hooks,
+and reports initialization state through `include/infinity_mod_host.h`.
+Compatible mods implement `InfinityModInitializeV1` using the MIT SDK in
+`native/mod/include/infinity_mod.h`. The NitroSystem Infinity adapter uses this API.
+
+This component is not yet part of the shipped launcher runtime: launch-plan
+transport, migration acceptance and game/Proton validation precede activation.
+It does not install itself, discover DLLs in folders, alter databases or enforce
+server lobby policies. Native mods are trusted code, not sandboxed plugins.
+
 ## License
 
 Infinity Launcher is free software, licensed under the
