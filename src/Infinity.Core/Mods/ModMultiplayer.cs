@@ -92,7 +92,7 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
             writer.WriteStartArray("dependencies");
             foreach (var dependency in document.GetProperty("dependencies").EnumerateArray().OrderBy(d => d.GetProperty("id").GetString(), StringComparer.Ordinal)) Canonical(writer, dependency);
             writer.WriteEndArray();
-            foreach (var field in new[] { "database", "launch", "readiness", "incompatibleFiles" })
+            foreach (var field in new[] { "database", "databaseSql", "launch", "readiness", "incompatibleFiles" })
                 if (document.TryGetProperty(field, out var capability)) { writer.WritePropertyName(field); Canonical(writer, capability); }
             writer.WritePropertyName("migrations"); Canonical(writer, document.GetProperty("databaseMigrations"));
             writer.WriteStartObject("config");

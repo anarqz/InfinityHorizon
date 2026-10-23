@@ -92,9 +92,22 @@ public sealed class ModManifest
                 }
             }
         }
+        if (Document.TryGetProperty("databaseSql", out var sql))
+        {
+            // FIMOD004: a data mod's startup SQL, a file of its own folder pinned like any file. Custom data mods only for now;
+            // a native mod registers its SQL itself (InfinityModRegisterDatabaseV1), never both.
+            if (IsNative || !IsCustom || sql.ValueKind != JsonValueKind.Object || sql.EnumerateObject().Count() != 3
+                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported data mod SQL", ModErrors.Unsupported);
+            var path = sql.GetProperty("path").GetString()!; var hash = sql.GetProperty("sha256").GetString()!; var size = sql.GetProperty("bytes").GetInt64();
+            ValidatePath(path);
+            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || !path.EndsWith(".sql", StringComparison.Ordinal)
+                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c)) || size is < 1 or > DataModSql.MaxBytes)
+                throw new ModException("invalid data mod SQL", ModErrors.Unsupported);
+            DatabaseSql = new(path, hash, size);
+        }
         if (Document.TryGetProperty("database", out var db))
         {
-            if (!IsNative || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
+            if (!(IsNative || DatabaseSql is not null) || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
                 || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is < 1 or > 32) throw new ModException("unsupported database capability");
             var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
             ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
@@ -216,6 +229,17 @@ public sealed class ModManifest
 
     /// <summary>The payload folder of a custom mod, next to its manifest: <c>files/&lt;root&gt;/&lt;destination&gt;</c>.</summary>
     public const string CustomPayloadFolder = "files";
+    /// <summary>The folder of a custom data mod's startup SQL, next to <see cref="CustomPayloadFolder"/> (never installed into the game).</summary>
+    public const string CustomSqlFolder = "database";
+
+    /// <summary>FIMOD004: the data mod's startup SQL (custom data mods), applied by the runtime to the session database; null when none.</summary>
+    public DataModSqlFile? DatabaseSql { get; }
+    public bool HasDatabaseSql => DatabaseSql is not null;
+    /// <summary>The session database's write permissions (<c>database.tables</c>), for native and SQL data mods alike.</summary>
+    public IReadOnlyList<string> DatabaseTables => Document.TryGetProperty("database", out var db)
+        ? db.GetProperty("tables").EnumerateArray().Select(t => t.GetString()!).ToArray() : [];
+    /// <summary>Needs the native runtime at launch: a native mod, or a data mod whose SQL the runtime applies.</summary>
+    public bool NeedsRuntime => IsNative || HasDatabaseSql;
 
     public static bool IsCustomId(string? id) => id is not null && id.StartsWith(CustomPrefix, StringComparison.Ordinal);
 
@@ -274,5 +298,7 @@ public sealed class ModManifest
 }
 
 public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
+/// <summary>A data mod's startup SQL file: its path in the mod folder, SHA-256 and size.</summary>
+public sealed record DataModSqlFile(string Path, string Sha256, long Bytes);
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 public sealed record ModWineOverride(string Module, bool AppDefaults);

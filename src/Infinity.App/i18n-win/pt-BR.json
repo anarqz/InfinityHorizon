@@ -542,6 +542,8 @@
   "mods.hardcore_unavailable": "Indisponível neste perfil Hardcore: este mod afeta o multiplayer.",
   "mods.error.hardcore": "Perfis Hardcore não podem ativar mods que afetam o multiplayer. Jogue com um perfil Noob para usar este mod.",
   "mods.error.unconfirmed": "Confirme este mod personalizado primeiro: ele não é revisado pelo Infinity.",
+  "mods.data_sql_runtime": "Precisa do runtime de mods do Infinity com suporte a mods de dados (alterações no banco de dados), que este launcher ainda não tem.",
+  "mods.error.runtime_required": "Este mod altera o banco de dados do jogo e precisa do runtime de mods do Infinity com suporte a mods de dados, que este launcher ainda não tem.",
   "mods.custom_badge": "Personalizado · não oficial",
   "mods.custom_confirm_title": "Mod personalizado não oficial",
   "mods.custom_confirm_text": "Este mod não é revisado pelo Infinity. Ele vem de arquivos que você colocou na pasta de mods personalizados; o Infinity só confere se eles batem com o manifesto antes de instalá-los, com backup de tudo o que substituírem. Ele pode quebrar seu jogo ou seus saves, e marca seus lobbies online como modificados: só entra quem tiver o pacote idêntico. Continue apenas se confiar na origem. Cada nova versão do mod pede confirmação de novo.",

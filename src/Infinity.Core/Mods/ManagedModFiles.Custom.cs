@@ -26,6 +26,12 @@ public sealed partial class ManagedModFiles
     public const string CustomManifestName = "infinity-mod.json";
     public const int MaxCustomMods = 64;
 
+    /// <summary>
+    /// Whether this launcher can apply a data mod's SQL (FIMOD004): a verified runtime package and a hook that support it. A SQL data
+    /// mod is installed and enabled only then; until the runtime ships it, the mod is listed but refused (<see cref="ModErrors.RuntimeRequired"/>).
+    /// </summary>
+    public Func<bool> DataSqlRuntimeAvailable { get; init; } = () => false;
+
     /// <summary>The folder custom mods are read from: <c>&lt;home&gt;/mods/custom</c>.</summary>
     public static string CustomModsFolder(string home) => Path.Combine(Path.GetFullPath(home), "mods", "custom");
 
@@ -91,6 +97,7 @@ public sealed partial class ManagedModFiles
     {
         // Executable code from a custom mod runs only through the development native runtime until custom signing is designed.
         if (manifest.IsNative && BuildProfile.ProductionOnly) throw new ModException("custom native mods are development only", ModErrors.Unsupported);
+        if (manifest.HasDatabaseSql && !DataSqlRuntimeAvailable()) throw new ModException("data mod SQL needs the mod runtime", ModErrors.RuntimeRequired);
         if (manifest.CustomBlocked) throw new ModException("custom mod lists unresolved blockers", ModErrors.Unsupported);
         if (!CustomConfirmed(manifest)) throw new ModException("custom mod not confirmed by the player", ModErrors.Unconfirmed);
     }
@@ -137,6 +144,31 @@ public sealed partial class ManagedModFiles
                 return bytes;
             });
         }
+        if (manifest.DatabaseSql is { } sql)
+        {
+            // Kept as a backup object (named by the manifest snapshot), so a launch never depends on the folder staying in place.
+            var bytes = CustomSqlBytes(Safe(folder, sql.Path), sql);
+            if (Store(bytes) != sql.Sha256) throw new ModException("data mod SQL changed while installing", ModErrors.Digest);
+        }
         return verified;
+    }
+
+    private static byte[] CustomSqlBytes(string path, DataModSqlFile sql)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length != sql.Bytes) throw new ModException("data mod SQL missing or resized", ModErrors.Digest);
+        var bytes = File.ReadAllBytes(path);
+        if (bytes.LongLength != sql.Bytes || ModManifest.Hash(bytes) != sql.Sha256) throw new ModException("data mod SQL digest mismatch", ModErrors.Digest);
+        _ = DataModSql.Statements(bytes);
+        return bytes;
+    }
+
+    /// <summary>The installed data mod's SQL, from the backup object store, checked again (FIMOD004 launch).</summary>
+    private byte[] InstalledSql(ModManifest manifest)
+    {
+        var sql = manifest.DatabaseSql ?? throw new ModException("no data mod SQL");
+        var bytes = ObjectBytes(sql.Sha256);
+        if (bytes.LongLength != sql.Bytes) throw new ModException("data mod SQL damaged", ModErrors.Digest);
+        _ = DataModSql.Statements(bytes);
+        return bytes;
     }
 }
