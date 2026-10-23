@@ -200,7 +200,7 @@ public sealed partial class ShellViewModel
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
             },
         };
-        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild, 82u) };
+        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild, NativeModOnlineHookBuild) };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
         _waitingForAdmission = true;
