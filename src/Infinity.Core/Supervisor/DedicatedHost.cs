@@ -55,6 +55,12 @@ public sealed record DedicatedHostOptions(string Game, string Xuid, string Launc
 
     /// <summary>The launcher's log: ids, phases and codes only.</summary>
     public Action<string>? Log { get; init; }
+
+    /// <summary>
+    /// OD-112: the launcher's enabled set for this lobby's launch plan (no game runs, so no runtime report);
+    /// a non-empty plan admits the session as <c>modded</c>. The bridges get the same instance.
+    /// </summary>
+    public Matchmaking.IModSetSource? Mods { get; init; }
 }
 
 /// <summary>
@@ -312,7 +318,8 @@ public sealed class DedicatedHost : IAsyncDisposable
             try
             {
                 admitted = await new GateAdmission(_gate, Note, _clock).WaitAsync(id => new PlaySessionCreate(id, _options.Game, _options.Xuid,
-                    Hex.Encode(Launch.NewNonce()), _options.LauncherVersion, EmptyHookSha256, null, 0, false, Dedicated: true), run.Token).ConfigureAwait(false);
+                    Hex.Encode(Launch.NewNonce()), _options.LauncherVersion, EmptyHookSha256, null, 0, false, Dedicated: true,
+                    Modded: Matchmaking.ModSets.Modded(_options.Mods)), run.Token).ConfigureAwait(false);
             }
             catch (ApiException error)
             {

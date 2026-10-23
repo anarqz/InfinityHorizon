@@ -125,7 +125,10 @@ public sealed record PlaySessionCreate(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CarDbSha256,
     ulong BaseRevision,
     bool TakeOver,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Dedicated = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Dedicated = false,
+    // OD-112 follow-up (GATE_API.md §2 "Modded sessions"): the launch plan's multiplayer mod set is
+    // not empty; left out when false so an ordinary body is unchanged byte for byte.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Modded = false);
 
 /// <summary>The game access ticket (PASETO <c>v4.public</c>; the hook sends it as <c>X-Fi-Session</c>).</summary>
 public sealed record GateTicket(string Token, string ExpiresAt, uint HeartbeatEveryMs);

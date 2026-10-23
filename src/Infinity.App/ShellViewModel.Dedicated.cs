@@ -226,7 +226,11 @@ public sealed partial class ShellViewModel
                 _lobbyLocalError = LobbyBlocker is not null ? LobbyHint : S["lobby.start_failed"];
                 return;
             }
-            var host = NewDedicatedHost(profile);
+            // OD-112: a dedicated host runs no game, so its lobby set is the enabled set of its launch plan (off the UI thread).
+            var mods = await LaunchPlanModSetSource.FromManagedModsAsync(() => _install is null ? null : ManagedMods());
+            if (mods.State.Phase == ModSetPhase.Failed) Log("lobby: mod set unavailable (" + mods.State.Reason + ")");
+            if (!ReferenceEquals(_session, session) || LobbyProfile != profile) { _lobbyLocalError = S["lobby.start_failed"]; return; }
+            var host = NewDedicatedHost(profile, mods);
             if (host is null) { _lobbyLocalError = S["lobby.unavailable"]; return; }
             _dedicated = host;
             Log($"lobby: start requested (audience {_lobbyAudience}, {_lobbyMaxPlayers} guests, latency {_lobbyLatency})");
@@ -278,7 +282,7 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>A world bridge for the dedicated session: the overlay's (WorldsFor) without social, integrity or game readiness.</summary>
-    private DedicatedHost? NewDedicatedHost(Profile profile)
+    private DedicatedHost? NewDedicatedHost(Profile profile, IModSetSource mods)
     {
         if (_session is not { } session || LobbyMatchmaking is not { } mm) return null;
         var relayKeys = IntegratedRelayKeys(mm);
@@ -302,15 +306,18 @@ public sealed partial class ShellViewModel
                 SocketProofRequired = _config.Production, SocketProofKeys = relayKeys,
                 TrustedServerNow = session.Api.TrustedServerNow,
                 RelayFailureKey = () => portInUse ? "lobby.port_in_use" : null,
+                ModSet = mods,
             };
-        }, profile);
+        }, profile, mods);
     }
 
     /// <summary>The host and its shell wiring (the harness's lifecycle check passes synthetic gate and bridges).</summary>
-    private DedicatedHost CreateDedicatedHost(IGate gate, Func<Func<string>, Infinity.Core.Online.OnlineActivity, WorldsBridge> bridges, Profile profile)
+    private DedicatedHost CreateDedicatedHost(IGate gate, Func<Func<string>, Infinity.Core.Online.OnlineActivity, WorldsBridge> bridges, Profile profile,
+        IModSetSource? mods = null)
     {
         var host = new DedicatedHost(gate, bridges, key => S[key], new DedicatedHostOptions(profile.Game, profile.Xuid, Version)
         {
+            Mods = mods,
             HostingDenied = DedicatedHostingDeniedForStart,
             Log = Log,
         });
