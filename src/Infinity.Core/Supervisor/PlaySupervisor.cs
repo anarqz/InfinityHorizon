@@ -46,6 +46,12 @@ public sealed record SupervisorConfig(
     /// <summary>The overlay's Worlds tab (OD-54): the bridge for a session, given its current game ticket; null: none.</summary>
     public Func<Func<string>, Matchmaking.WorldsBridge>? Worlds { get; init; }
 
+    /// <summary>
+    /// OD-112: the session's multiplayer mod set (the same instance the <see cref="Worlds"/> bridge uses).
+    /// A non-empty <see cref="Matchmaking.IModSetSource.Planned"/> admits the session as <c>modded</c> (GATE_API.md §2).
+    /// </summary>
+    public Matchmaking.IModSetSource? Mods { get; init; }
+
     /// <summary>The cloud save around the game (OD-52, OD-60); null: no cloud save step.</summary>
     public Saves.SessionSaves? Saves { get; init; }
 
@@ -261,7 +267,8 @@ public sealed class PlaySupervisor
         using var uiPipe = _config.Overlay is not null && _uiPipes is not null ? _uiPipes(handoff) : null;
         _admissionPending = true;
         var admission = await new GateAdmission(_gate, _emit, _clock).WaitAsync(
-            id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false),
+            id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false,
+                Modded: Matchmaking.ModSets.Modded(_config.Mods)),
             preparing.Token, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
         if (admission is null)
         {
@@ -748,6 +755,23 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Worlds w when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.ListAsync(w.Query, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
+                            case Overlay.UiIncoming.WorldsV2 w when worlds is not null && !suspended:
+                                // OD-112: the modded filter, each row's players and mods, and whether they match this session's set.
+                                _ = ReplyAsync(overlay, async () => await worlds.ListV2Async(w.Query, stop.Token).ConfigureAwait(false), stop.Token,
+                                    () => new Overlay.UiFrame.WorldsListV2(w.Query.Filter, w.Query.Modded, 2, _config.Text?["worlds.list_failed"] ?? "The lobby list is unavailable.", []));
+                                break;
+                            case Overlay.UiIncoming.PlayerDetails details when worlds is not null:
+                                // OD-112: the player card's pane, from what this launcher already holds (no request); a pane
+                                // that cannot be encoded closes instead of leaving the overlay waiting.
+                                _ = ReplyAsync(overlay, () => Task.FromResult<Overlay.UiFrame>(worlds.PlayerDetails(details.Request)), stop.Token,
+                                    () => new Overlay.UiFrame.DetailPane(string.Empty, string.Empty, string.Empty, string.Empty, [], []), always: true);
+                                break;
+                            case Overlay.UiIncoming.PaneClick click when worlds is not null:
+                                worlds.PaneClick(click.Request);
+                                break;
+                            case Overlay.UiIncoming.PaneClick click:
+                                _emit(new SupervisorEvent.Note($"overlay: pane action {click.Request.ActionId} ignored"));
+                                break;
                             case Overlay.UiIncoming.Join j when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.JoinAsync(j.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
@@ -817,17 +841,35 @@ public sealed class PlaySupervisor
         catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException) { }
     }
 
-    private async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation)
+    /// <summary>
+    /// One answer to the overlay. A frame that cannot be encoded (<see cref="ProtocolException"/>: past a cap, a bad
+    /// pane) is logged and replaced by <paramref name="fallback"/> (a failed list, a closed pane) so the overlay never
+    /// waits forever. <paramref name="always"/>: answered while online is paused too (no network behind it).
+    /// </summary>
+    private async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation,
+        Func<Overlay.UiFrame>? fallback = null, bool always = false)
     {
         try
         {
             var frame = await work().ConfigureAwait(false);
-            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
-            await overlay.SendFrameAsync(frame, cancellation).ConfigureAwait(false);
+            if ((_online.IsPaused && !always) || cancellation.IsCancellationRequested) return;
+            try
+            {
+                await overlay.SendFrameAsync(frame, cancellation).ConfigureAwait(false);
+            }
+            catch (ProtocolException error)
+            {
+                _emit(new SupervisorEvent.Note($"overlay: answer type 0x{frame.Type:x2} not sent: {error.Message}"));
+                if (fallback is not null) await overlay.SendFrameAsync(fallback(), cancellation).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
             // the session ended first
+        }
+        catch (ProtocolException error)
+        {
+            _emit(new SupervisorEvent.Note("overlay: answer not sent: " + error.Message));
         }
     }
 

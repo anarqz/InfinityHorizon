@@ -240,7 +240,7 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, const Mod
     for (int i = 0; i < static_cast<int>(tiles.size()); ++i) {
         const Tile &tile = tiles[i];
         const ImVec2 ta(x0 + pad, y), tb(x0 + pw - pad, y + th);
-        if (ImGui::IsMouseHoveringRect(ta, tb)) {
+        if (!PaneModal() && ImGui::IsMouseHoveringRect(ta, tb)) { // a modal pane holds the input
             g_focus = i;
             if (ImGui::IsMouseClicked(0)) {
                 Activate(tile);
@@ -335,7 +335,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         if (active) {
             dl->AddRectFilled(ImVec2(tx + tw * 0.25f, y + 34 * s), ImVec2(tx + tw * 0.75f, y + 37 * s), kPinkU, 2 * s);
         }
-        if (ImGui::IsMouseHoveringRect(ImVec2(tx, y - 6 * s), ImVec2(tx + tw, y + 40 * s)) && ImGui::IsMouseClicked(0)) {
+        if (!PaneModal() && ImGui::IsMouseHoveringRect(ImVec2(tx, y - 6 * s), ImVec2(tx + tw, y + 40 * s)) && ImGui::IsMouseClicked(0)) {
             g_tab = i;
             g_focus = 0;
         }
@@ -344,6 +344,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     TextAt(dl, f.title, ImVec2(x0 + pad, y), kText, names[g_tab]);
     y += 38 * s;
 
+    SetHoverPane(nullptr); // the worlds tab sets it again for its focused row
     if (g_tab == kTabWorlds) {
         DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, height - 80 * s, supporter, dt);
     } else if (g_tab == kTabFriends) {
@@ -377,6 +378,9 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     const char *brand = "INFINITY";
     const ImVec2 bsz = Measure(f.tag, brand);
     TextAt(dl, f.tag, ImVec2(x0 + pw - pad - bsz.x, hy + 4 * s), kPinkU, brand);
+
+    // the right pane (OD-112), beside the guide and sliding with it
+    DrawPane(dl, b.x, 0, std::min(420 * s, width - b.x), height, ease);
 }
 
 } // namespace
@@ -418,6 +422,7 @@ void ToggleSidebar() {
     }
     g_confirm_quit = false;
     g_connection_open = false;
+    if (!g_open) ClosePane();
     SendPanel(g_open);
 }
 void CloseSidebar() {
@@ -425,6 +430,7 @@ void CloseSidebar() {
         g_open = false;
         g_confirm_quit = false;
         g_connection_open = false;
+        ClosePane();
         SendPanel(false);
     }
 }
@@ -446,6 +452,9 @@ void Navigate(Nav nav) {
     }
     if (!g_open) {
         return;
+    }
+    if (PaneNavigate(nav)) {
+        return; // an open player or launcher pane holds the controller
     }
     if (g_tab == kTabWorlds && nav != Nav::TabLeft && nav != Nav::TabRight && WorldsNavigate(nav)) {
         return;
@@ -532,6 +541,7 @@ void DrawUi(float width, float height, float dt) {
             Log("code: %s, %zu characters", join ? "join" : "back", code.size());
         });
     }
+    PaneTick(dt);
     Model snapshot;
     {
         std::lock_guard<std::mutex> lock(g_lock);

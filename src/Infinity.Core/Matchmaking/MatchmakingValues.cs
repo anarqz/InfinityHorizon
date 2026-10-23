@@ -26,9 +26,10 @@ public static class NotAllowedReasons
     public const string Tier = "tier";
     public const string Host = "host";
     public const string Friends = "friends";
+    public const string Mods = "mods";
     public const string Latency = "latency";
 
-    public static IReadOnlyList<string> All { get; } = [OwnWorld, Mode, Tier, Host, Friends, Latency];
+    public static IReadOnlyList<string> All { get; } = [OwnWorld, Mode, Tier, Host, Friends, Mods, Latency];
 }
 
 /// <summary><c>WorldView.why</c>, in the order the server decides them.</summary>
@@ -154,6 +155,9 @@ public static class MatchmakingLimits
     public const int InviteTtlSecs = 120;
     public const uint MaxPending = 4;
     public const string RelayGrantPrefix = "fi-relay-grant-v1\n";
+
+    /// <summary>Entries of a mod set (OD-112, §2.7).</summary>
+    public const int ModsMax = 32;
 }
 
 /// <summary>A world code (OD-57): 8 decimal digits on the wire, shown <c>XXXX-XXXX</c>.</summary>
