@@ -314,7 +314,7 @@ public sealed partial class ShellViewModel
             facts.Add(new(manifest, installed, adopt, installed?.Problem ?? Blocker(() =>
             {
                 if (installed is { Enabled: true }) manager.CheckDependents(manifest.Id);
-                else if (installed is null || installed.Drift.Count == 0) manager.CheckDependencies(manifest);
+                else if (installed is null || installed.Drift.Count == 0) { manager.CheckDependencies(manifest); manager.CheckDatabaseBase(manifest); }
             }), null, Confirmed(manifest)));
         }
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
@@ -373,7 +373,7 @@ public sealed partial class ShellViewModel
             { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
             if ((!mod.SupportedForInstall || mod.CustomBlocked) && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
             // FIMOD004: a data mod's SQL needs the runtime and hook that apply it; until then listed, never installed or enabled.
-            if ((fact.Next ?? mod).HasDatabaseSql && !DataModSqlReady && !(installed is { Enabled: true } && fact.Next is null))
+            if (((fact.Next ?? mod).HasDatabaseSql || (fact.Next ?? mod).DatabaseBase is not null) && !DataModSqlReady && !(installed is { Enabled: true } && fact.Next is null))
             { status = S["mods.data_sql_runtime"]; badge = S["mods.badge_review"]; canAct = false; }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
@@ -425,6 +425,9 @@ public sealed partial class ShellViewModel
     {
         ModSettingsChangedException => S["mods.settings_changed"],
         HttpRequestException or OperationCanceledException => S["mods.download_failed"],
+        // OD-114 follow-up: one database base at a time, naming the enabled mod that already replaces it
+        ModException { Code: ModErrors.DatabaseBase, Detail: { } other } => S.Format("mods.error.database_base_named", ("mod",
+            _modFacts.FirstOrDefault(f => f.Manifest.Id == other)?.Manifest.Text("name", S.Locale) ?? other)),
         ModException mod => ModErrorText(mod.Code),
         _ => S["mods.transaction_failed"],
     };

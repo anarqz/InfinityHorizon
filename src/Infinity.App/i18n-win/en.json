@@ -544,6 +544,8 @@
   "mods.error.unconfirmed": "Confirm this custom mod first: it isn't reviewed by Infinity.",
   "mods.data_sql_runtime": "Needs the Infinity mod runtime with data-mod support (database changes), which this launcher doesn't have yet.",
   "mods.error.runtime_required": "This mod changes the game database and needs the Infinity mod runtime with data-mod support, which this launcher doesn't have yet.",
+  "mods.error.database_base": "Another enabled mod already replaces the game database. Only one car pack that replaces the database can be on at a time.",
+  "mods.error.database_base_named": "{mod} already replaces the game database. Only one car pack that replaces the database can be on at a time: disable it first.",
   "mods.custom_badge": "Custom · unofficial",
   "mods.custom_confirm_title": "Unofficial custom mod",
   "mods.custom_confirm_text": "This mod is not reviewed by Infinity. It comes from files you placed in the custom mods folder; Infinity only checks that they match its manifest before installing them, with backups of anything they replace. It can break your game or your saves, and it marks your online lobbies as modded: only players with the identical pack can join. Continue only if you trust where it came from. Each new version of the mod asks again.",
