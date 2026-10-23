@@ -232,7 +232,7 @@ public sealed partial class ShellViewModel
     private IReadOnlyList<ModRequirement>? RequiredCatalog => _catalog?.Required ?? (_config.Production ? null : []);
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
-    public string? ModPlayNotice => _install is null ? null : ModPlayBlocked ? S["mods.play_blocked"]
+    public string? ModPlayNotice => _install is null ? null : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
         : RequiredModNotice is { } required ? required
         : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
         : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;

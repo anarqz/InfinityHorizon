@@ -78,10 +78,13 @@ bool valid_path(const wchar_t* value) {
 bool identity(const char* value, bool version) {
     auto n = strnlen_s(value, 65);
     if (!n || n > 64) return false;
+    if (!version && (!((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= '0' && value[0] <= '9')) || value[n - 1] == '.')) return false;
     for (size_t i = 0; i < n; ++i) {
         auto c = value[i];
         if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-'
+            && !(!version && (c == '.' || c == '_'))
             && !(version && (c == '.' || c == '+' || (c >= 'A' && c <= 'Z')))) return false;
+        if (!version && c == '.' && i + 1 < n && value[i + 1] == '.') return false;
     }
     return true;
 }

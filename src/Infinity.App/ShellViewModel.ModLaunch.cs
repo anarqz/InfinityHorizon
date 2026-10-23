@@ -17,6 +17,18 @@ public sealed partial class ShellViewModel
 
     private static string LauncherDirectory => AppContext.BaseDirectory;
 
+    /// <summary>Why the last launch could not prepare its mods (with the reason), shown on Play until the next attempt.</summary>
+    private string? _modLaunchFailure;
+
+    /// <summary>A failed mod preparation: logged with its message, shown on Play (never only the status line) and returned for <see cref="Message"/>.</summary>
+    private string ModLaunchFailed(string where, Exception error)
+    {
+        Log("mods: " + where + " failed: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "") + ": " + error.Message);
+        var text = error is ModException code && code.Code != ModErrors.Failed ? ModErrorText(code) : S["mods.prepare_failed"] + " (" + error.Message + ")";
+        _modLaunchFailure = text; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
+        return text;
+    }
+
     /// <summary>The first hook build with the production mod host (FIMOD003, the N-H2 report and the runtime signature check).</summary>
     internal const uint NativeModOnlineHookBuild = 82;
 
@@ -61,8 +73,7 @@ public sealed partial class ShellViewModel
         try { return await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key)); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is System.ComponentModel.Win32Exception)
         {
-            Log("mods: online native plan failed: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : ""));
-            Message = error is ModException code && code.Code != ModErrors.Failed ? ModErrorText(code) : S["mods.prepare_failed"];
+            Message = ModLaunchFailed("online native plan", error);
             return null;
         }
         finally { _modOperation = false; Busy = false; Changed(string.Empty); }
@@ -87,6 +98,7 @@ public sealed partial class ShellViewModel
     public async Task PlayModdedOfflineAsync()
     {
         if (!CanPlayModdedOffline || _install is null || !OperatingSystem.IsWindows() || ModManagerFactory() is not { } factory) return;
+        _modLaunchFailure = null;
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         RefreshHook();
         if (_hook is not { Verified: true } || HookInstaller.Build(_hook.Version) < 80 || DevHookKey is not { } key)
@@ -124,7 +136,7 @@ public sealed partial class ShellViewModel
             SetStatus(code == 0 ? S["status.ended"] : S["mods.runtime_failed"]);
         }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is System.ComponentModel.Win32Exception)
-        { Log("mod session: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "")); Message = error is ModException m ? ModErrorText(m) : S["mods.runtime_failed"]; }
+        { Message = ModLaunchFailed("offline mod session", error); }
         finally
         {
             _modOperation = true; Busy = true; _modProgress = S["mods.session_prepare"]; Changed(string.Empty);

@@ -166,6 +166,20 @@ public sealed partial class ManagedModFiles
         foreach (var sidecar in new[] { "-wal", "-shm", "-journal" }) RemoveFile(target + sidecar);
         FinishSessionDatabase(journal, target, ObjectBytes(journal.Baseline));
     }
+    /// <summary>The helper's refusal (prepare.error, printable ASCII, at most 200 characters), or "no reason given".</summary>
+    internal static string HelperReason(string folder)
+    {
+        try
+        {
+            var path = Path.Combine(folder, "prepare.error");
+            if (!File.Exists(path) || new FileInfo(path).Length is 0 or > 200) return "no reason given";
+            var text = new string(File.ReadAllBytes(path).Select(b => b is >= 0x20 and < 0x7f ? (char)b : '?').ToArray());
+            return text;
+        }
+        catch (IOException) { return "no reason given"; }
+        catch (UnauthorizedAccessException) { return "no reason given"; }
+    }
+
     public NativeModPlan PrepareNativeLaunch(string runtime, string helper, byte[] verificationKey)
     {
         runtime = Path.GetFullPath(runtime); helper = Path.GetFullPath(helper);
@@ -275,7 +289,7 @@ public sealed partial class ManagedModFiles
                 start.ArgumentList.Add(prepare); start.ArgumentList.Add(ModManifest.Hash(plan));
                 using var process = System.Diagnostics.Process.Start(start) ?? throw new ModException("database preparation did not start");
                 if (!process.WaitForExit(60000)) { process.Kill(entireProcessTree: true); process.WaitForExit(); throw new ModException("database preparation timed out"); }
-                if (process.ExitCode != 0) throw new ModException("native database preparation failed");
+                if (process.ExitCode != 0) throw new ModException("native database preparation failed: " + HelperReason(folder));
                 hashes = File.ReadAllBytes(Safe(folder, "database.hashes"));
                 var prepared = DatabaseBytes(Safe(folder, "session.sqlite")); var after = Store(prepared);
                 if (hashes.Length != 64 || Convert.ToHexStringLower(hashes.AsSpan(0, 32)) != after || hashes.AsSpan(32).IndexOfAnyExcept((byte)0) < 0)

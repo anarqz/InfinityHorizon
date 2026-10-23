@@ -235,5 +235,11 @@ extern "C" __declspec(dllexport) int InfinityModsPrepareDatabaseV1(const wchar_t
         auto file = verify_file(path, hash); if (!file || !sql_registrations.empty()) return 1;
         auto bytes = read_bounded(file->file, 1024 * 1024); ParsedPlan plan; parse_plan(bytes, plan);
         prepare_session_database(plan, std::filesystem::path(path).parent_path()); return 0;
+    } catch (const std::exception& error) {
+        try {
+            std::string why = error.what(); if (why.size() > 200) why.resize(200);
+            durable_file(std::filesystem::path(path).parent_path() / L"prepare.error", reinterpret_cast<const uint8_t*>(why.data()), static_cast<DWORD>(why.size()));
+        } catch (...) {}
+        return 1;
     } catch (...) { return 1; }
 }

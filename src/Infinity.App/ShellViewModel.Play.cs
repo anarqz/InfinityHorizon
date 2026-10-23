@@ -90,6 +90,7 @@ public sealed partial class ShellViewModel
 
     public async Task PlayAsync()
     {
+        _modLaunchFailure = null;
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         RefreshHook(); // the hook as it is now, not as it was when the screen last looked
@@ -118,8 +119,8 @@ public sealed partial class ShellViewModel
         { Message = S["mods.play_blocked"]; await RefreshModsAsync(); return; }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
         {
-            Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : ""));
-            if (_modHealth.AnyEnabled) { Message = S["mods.prepare_failed"]; await RefreshModsAsync(); return; }
+            if (_modHealth.AnyEnabled) { Message = ModLaunchFailed("launch preparation", error); await RefreshModsAsync(); return; }
+            Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : "") + ": " + error.Message);
             mods = ModLaunchPreparation.None;
         }
         // OD-115: every Play needs the catalog's required mods managed, enabled and with their required settings (the locks above wrote them).
