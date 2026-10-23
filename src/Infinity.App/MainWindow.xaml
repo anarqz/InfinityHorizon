@@ -658,7 +658,8 @@
                   <TextBlock Text="{Binding IntegrityLocationLabel}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,8" Foreground="{StaticResource InfinityMuted}" />
                   <WrapPanel>
                     <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[setup.recheck]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[setup.recheck]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8"
+                            Visibility="{Binding ShowIntegrityCheck, Converter={StaticResource Visible}}" />
                     <Button Content="{Binding S[integrity.cancel]}" Click="OnCancelIntegrity" Visibility="{Binding IntegrityChecking, Converter={StaticResource Visible}}" Margin="0,0,8,8" />
                   </WrapPanel>
                   <StackPanel Visibility="{Binding ShowIntegritySupport, Converter={StaticResource Visible}}">

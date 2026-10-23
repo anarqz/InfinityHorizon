@@ -236,6 +236,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ArgumentNullException.ThrowIfNull(profile);
         Gate = _gate.ChooseProfile(profile.Gamertag);
         Message = null;
+        _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a Supporter + Hardcore profile is checked in the background
     }
 
     /// <summary>Re-opens the game picker (top bar "change").</summary>
@@ -258,6 +259,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             Gate = _gate with { ProfileTag = null };
             FillProfiles();
+            _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: clears a previous profile's integrity result
         }
     }
 
