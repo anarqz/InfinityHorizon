@@ -32,6 +32,8 @@ public static class ModErrors
     public const string Relink = "relink";
     /// <summary>A Hardcore profile with a mod that affects multiplayer (OD-112 follow-up).</summary>
     public const string Hardcore = "hardcore";
+    /// <summary>A custom mod whose exact manifest digest the player has not confirmed yet (OD-114).</summary>
+    public const string Unconfirmed = "unconfirmed";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");

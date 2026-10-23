@@ -55,6 +55,7 @@ public sealed partial class ManagedModFiles
         using var gate = Lock();
         var enabled = AdoptionState(manifest) ?? throw new ModException("existing files cannot be adopted", ModErrors.Conflict);
         if (enabled) CheckProfile(manifest, hardcore);
+        if (manifest.IsCustom) RequireCustomConfirmation(manifest);
         if (enabled) CheckDependencies(manifest);
         var files = new List<ManagedModFile>(); var changes = new List<ModFileChange>();
         foreach (var file in manifest.Files)
