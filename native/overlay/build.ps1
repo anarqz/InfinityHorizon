@@ -15,7 +15,7 @@ $mh = "$here\third_party\minhook"
 $common = "/nologo /std:c++20 /utf-8 /EHsc /MT /W4 /permissive- $opt /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX"
 $includes = "/I`"$here\include`" /I`"$imgui`" /I`"$mh\include`""
 $sources = @(
-    "$here\src\main.cpp", "$here\src\dx12.cpp", "$here\src\input.cpp", "$here\src\ui.cpp", "$here\src\pipe.cpp", "$here\src\keyboard.cpp", "$here\src\code_entry.cpp", "$here\src\worlds.cpp", "$here\src\toast_audio.cpp",
+    "$here\src\main.cpp", "$here\src\dx12.cpp", "$here\src\input.cpp", "$here\src\ui.cpp", "$here\src\pipe.cpp", "$here\src\keyboard.cpp", "$here\src\code_entry.cpp", "$here\src\worlds.cpp", "$here\src\pane.cpp", "$here\src\toast_audio.cpp",
     "$imgui\imgui.cpp", "$imgui\imgui_draw.cpp", "$imgui\imgui_tables.cpp", "$imgui\imgui_widgets.cpp",
     "$imgui\backends\imgui_impl_dx12.cpp", "$imgui\backends\imgui_impl_win32.cpp"
 ) | ForEach-Object { "`"$_`"" }

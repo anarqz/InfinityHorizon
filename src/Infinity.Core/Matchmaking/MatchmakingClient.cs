@@ -35,6 +35,10 @@ public interface IMatchmakingApi
     void EndCleanup() { }
     Task<MmResult<WorldList>> ListAsync(string filter, bool notFull = false, CancellationToken cancellation = default);
 
+    /// <summary>OD-112: the list with the <c>modded</c> filter (false: vanilla worlds only, the server's default).</summary>
+    Task<MmResult<WorldList>> ListAsync(string filter, bool notFull, bool modded, CancellationToken cancellation) =>
+        ListAsync(filter, notFull, cancellation);
+
     Task<MmResult<WorldView>> GetAsync(string worldId, CancellationToken cancellation = default);
 
     Task<MmResult<WorldView>> ByCodeAsync(string code, CancellationToken cancellation = default);
@@ -53,9 +57,17 @@ public interface IMatchmakingApi
 
     Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default);
 
+    /// <summary>OD-112: a request to join with the caller's mod set (null: vanilla, no body).</summary>
+    Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
+        RequestAsync(worldId, cancellation);
+
     Task<MmResult<Invite>> AcceptRequestAsync(string worldId, string requestId, CancellationToken cancellation = default);
 
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default);
+
+    /// <summary>OD-112: a join with the caller's mod set (null: vanilla, left out of the body).</summary>
+    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
+        JoinAsync(worldId, code, cancellation);
 
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
 
@@ -125,13 +137,20 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     public Uri Matchmaking { get; } = ApiClient.CheckOrigin(matchmaking);
 
     /// <summary><c>GET /mm/v1/worlds?filter=</c>: <paramref name="filter"/> one of <see cref="WorldFilters"/> (required, OD-58).</summary>
-    public Task<MmResult<WorldList>> ListAsync(string filter, bool notFull = false, CancellationToken cancellation = default)
+    public Task<MmResult<WorldList>> ListAsync(string filter, bool notFull = false, CancellationToken cancellation = default) =>
+        ListAsync(filter, notFull, false, cancellation);
+
+    /// <summary>
+    /// OD-112: <c>&amp;modded=true</c> only when asked: an older server refuses any unknown parameter, and
+    /// <c>false</c> is the default (vanilla worlds only), so a vanilla list stays the same request.
+    /// </summary>
+    public Task<MmResult<WorldList>> ListAsync(string filter, bool notFull, bool modded, CancellationToken cancellation)
     {
         if (filter is null || !WorldFilters.All.Contains(filter))
         {
             throw new ArgumentException("one of global, near, friends", nameof(filter));
         }
-        var query = "?filter=" + filter + (notFull ? "&notFull=true" : "");
+        var query = "?filter=" + filter + (notFull ? "&notFull=true" : "") + (modded ? "&modded=true" : "");
         return SendAsync<WorldList>(HttpMethod.Get, "/mm/v1/worlds" + query, null, cancellation);
     }
 
@@ -179,7 +198,11 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     }
 
     public Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default) =>
-        SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests", null, cancellation);
+        RequestAsync(worldId, null, cancellation);
+
+    /// <summary>OD-112: the asker's set as <c>{mods}</c>; a vanilla request keeps the empty body.</summary>
+    public Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
+        SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests", mods is { Count: > 0 } ? new RequestToJoin { Mods = mods } : null, cancellation);
 
     public Task<MmResult<Invite>> AcceptRequestAsync(string worldId, string requestId, CancellationToken cancellation = default) =>
         SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests/" + Id(requestId, nameof(requestId)) + "/accept", null, cancellation);
@@ -190,7 +213,11 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     /// <c>status: "rate_limited"</c> with <c>retryAfterSeconds</c> (from <c>Retry-After</c> when
     /// the body is the generic error body).
     /// </summary>
-    public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default)
+    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default) =>
+        JoinAsync(worldId, code, null, cancellation);
+
+    /// <summary>OD-112: <paramref name="mods"/> is the caller's set (null or empty: vanilla, left out of the body).</summary>
+    public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation)
     {
         if (worldId is null && code is null)
         {
@@ -200,6 +227,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         {
             WorldId = worldId is null ? null : Id(worldId, nameof(worldId)),
             Code = code is null ? null : Code(code),
+            Mods = mods is { Count: > 0 } ? mods : null,
         };
         var result = await SendAsync<JoinAnswer>(HttpMethod.Post, "/mm/v1/join", body, cancellation).ConfigureAwait(false);
         if (result.Error is { Kind: MmErrorKind.RateLimited } limited)

@@ -163,8 +163,19 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
     case 17: DevRequest(3); break; // the world code
     case 18: Navigate(Nav::Back); break;
     case 19: Navigate(Nav::TabRight); break;
+    case 20: OpenPlayerCard("2535100000000042", "RallyFox98"); break; // as the game's PLAYER DETAILS would
     default: break;
     }
+}
+
+// The game's player card (OD-112): the hook calls this, on any thread, when the player opens
+// PLAYER DETAILS on someone; the guide opens on that player's pane. xuid: decimal, NUL-terminated
+// UTF-8 like gamertag (which may be NULL or empty).
+extern "C" __declspec(dllexport) void fi_overlay_player_card(const char *xuid, const char *gamertag) {
+    if (!xuid || fi::InPassthrough()) {
+        return;
+    }
+    fi::OpenPlayerCard(xuid, gamertag ? gamertag : "");
 }
 
 BOOL WINAPI DllMain(HINSTANCE, DWORD, LPVOID) { return TRUE; }

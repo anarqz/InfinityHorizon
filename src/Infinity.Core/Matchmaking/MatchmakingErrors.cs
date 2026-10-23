@@ -39,7 +39,10 @@ public static class ConflictReasons
     public const string SeatedElsewhere = "seated_elsewhere";
     public const string NotAllowed = "not_allowed";
 
-    public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed];
+    /// <summary>OD-112: another mod set on an open world, or a request to join with another set.</summary>
+    public const string Mods = "mods";
+
+    public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods];
 }
 
 /// <summary><c>PORTAL.VIP_REQUIRED {capability}</c> values of §8.</summary>

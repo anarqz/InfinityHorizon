@@ -90,6 +90,54 @@ public record WorldView : World
     /// dedicated support omit it, so it is not <c>required</c> here (absent reads as false).
     /// </summary>
     public bool Dedicated { get; init; }
+
+    /// <summary>OD-112 (§2.7): the world has a mod set. Absent on older servers (reads as vanilla).</summary>
+    public bool Modded { get; init; }
+
+    /// <summary>OD-112: the host's mod set, sorted by id; empty for a vanilla world (and from older servers).</summary>
+    public IReadOnlyList<ModEntry> Mods { get; init; } = [];
+
+    /// <summary>OD-112: the players embedded on the list's rows, one world and by-code (≤ 12, host first unless dedicated); absent elsewhere.</summary>
+    public IReadOnlyList<ListMember>? Members { get; init; }
+}
+
+/// <summary>
+/// One mod of a mod set (OD-112, MATCHMAKING_API.md §2.7): <c>id</c> the manifest's multiplayer
+/// <c>compatibilityId</c>, <c>version</c> its revision (decimal), <c>fingerprint</c> 64 lowercase hex
+/// digits (<c>infinity-mod-compatibility-v1</c>). A set is sorted by id, unique, at most 32.
+/// </summary>
+public sealed record ModEntry
+{
+    public required string Id { get; init; }
+
+    public required string Version { get; init; }
+
+    public required string Fingerprint { get; init; }
+}
+
+/// <summary>A player embedded in a listed world (OD-112): no XUID, no relation (<c>tier</c> free | vip; <c>role</c> host | seated | reserved).</summary>
+public sealed record ListMember
+{
+    public required string Gamertag { get; init; }
+
+    public required string Tier { get; init; }
+
+    public required string Role { get; init; }
+}
+
+/// <summary><c>not_allowed {reason: "mods"}</c>: the world's set (<c>expected</c>) and the caller's (<c>actual</c>).</summary>
+public sealed record ModsMismatch
+{
+    public required IReadOnlyList<ModEntry> Expected { get; init; }
+
+    public required IReadOnlyList<ModEntry> Actual { get; init; }
+}
+
+/// <summary><c>POST /mm/v1/worlds/{worldId}/requests</c> optional body (OD-112; absent: vanilla).</summary>
+public sealed record RequestToJoin
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ModEntry>? Mods { get; init; }
 }
 
 public sealed record ListViewer
@@ -155,6 +203,10 @@ public sealed record WorldSettings
     public IReadOnlyList<string>? Allow { get; init; }
 
     public required AnnouncePort Endpoint { get; init; }
+
+    /// <summary>OD-112: the host's mod set (null: vanilla, left out); fixed once the world opens (another set is 409 <c>PORTAL.CONFLICT {reason: "mods"}</c>).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ModEntry>? Mods { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/worlds/{worldId}/announce</c> body, every 15 s: <c>peers</c> are who is in the world now (≤ 11).</summary>
@@ -256,6 +308,10 @@ public sealed record JoinRequest
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Code { get; init; }
+
+    /// <summary>OD-112: the caller's mod set (null: vanilla, left out; every launcher up to 1.0.8 sends none).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ModEntry>? Mods { get; init; }
 }
 
 /// <summary>A reserved seat (<c>expiresAt</c> ≤ 60 s away, renewable up to <c>holdUntil</c>).</summary>
@@ -319,6 +375,9 @@ public sealed record JoinAnswer
     public string? Reason { get; init; }
 
     public LatencyRefusal? Latency { get; init; }
+
+    /// <summary>With <c>not_allowed {reason: "mods"}</c> (OD-112).</summary>
+    public ModsMismatch? Details { get; init; }
 
     public uint? RetryAfterSeconds { get; init; }
 }
