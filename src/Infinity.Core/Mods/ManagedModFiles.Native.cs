@@ -3,21 +3,58 @@ using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
+/// <summary>What a launch needs from mod state, gathered off the UI thread; warnings never block Play.</summary>
+public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, bool HasEnabledNative, IReadOnlyList<string> Warnings)
+{
+    public static ModLaunchPreparation None { get; } = new([], false, []);
+}
+
 public sealed partial class ManagedModFiles
 {
-    public bool CanAdopt(ModManifest manifest) => manifest.SupportedForInstall && manifest.Files.All(f => f.Root == "azimuth")
-        && manifest.Files.Any(f => f.Role == "binary") && Receipt(manifest) is null
-        && manifest.Files.Where(f => f.Mode != "seed").All(f => Current(Target(f.Root, f.Destination)) == f.Hash);
+    /// <summary>
+    /// An existing installation matching the manifest exactly: every binary live with its hash, or
+    /// (legacy launchers, <c>adoption.parkedFiles</c>) every binary parked with its hash and absent live.
+    /// </summary>
+    public bool CanAdopt(ModManifest manifest) => AdoptionState(manifest) is not null;
+
+    private bool? AdoptionState(ModManifest manifest)
+    {
+        if (!manifest.SupportedForInstall || !manifest.Files.All(f => f.Root == "azimuth") || !manifest.Files.Any(f => f.Role == "binary")
+            || ReadReceipt(manifest.Id) is not null) return null;
+        var mapped = manifest.Files.Where(f => f.Mode != "seed").ToArray();
+        if (mapped.All(f => Current(Target(f.Root, f.Destination)) == f.Hash)) return true;
+        var parked = manifest.ParkedFiles;
+        if (parked.Count == 0) return null;
+        foreach (var file in mapped)
+        {
+            var live = Current(Target(file.Root, file.Destination));
+            if (file.Role == "binary")
+            {
+                if (live is not null || !parked.TryGetValue(file.Destination, out var path) || Current(Parked(path)) != file.Hash) return null;
+            }
+            else if (live is not null && live != file.Hash) return null;
+        }
+        return false;
+    }
+
+    /// <summary>A parked legacy copy: read-only, inside the Azimuth folder, never written or deleted.</summary>
+    private string Parked(string relative) => Safe(_azimuth, relative);
 
     public void Adopt(ModManifest manifest)
     {
         using var gate = Lock();
-        if (!CanAdopt(manifest)) throw new ModException("existing files cannot be adopted");
-        CheckDependencies(manifest);
+        var enabled = AdoptionState(manifest) ?? throw new ModException("existing files cannot be adopted", ModErrors.Conflict);
+        if (enabled) CheckDependencies(manifest);
         var files = new List<ManagedModFile>(); var changes = new List<ModFileChange>();
         foreach (var file in manifest.Files)
         {
             var path = Target(file.Root, file.Destination);
+            if (!enabled && file.Role == "binary")
+            {
+                // OD-45 parked binary: its bytes become the enabled state; the parked copy stays where it is.
+                files.Add(new(file.Root, file.Destination, null, Store(File.ReadAllBytes(Parked(manifest.ParkedFiles[file.Destination]))), false));
+                continue;
+            }
             if (!File.Exists(path)) continue;
             var hash = Store(File.ReadAllBytes(path));
             files.Add(new(file.Root, file.Destination, file.Role == "binary" ? null : hash, hash, file.Role == "config" || file.Mode == "seed"));
@@ -31,9 +68,12 @@ public sealed partial class ManagedModFiles
             if (before != after) changes.Add(new("azimuth", config, before, after));
             if (!files.Any(f => f.Path == config)) files.Add(new("azimuth", config, before, after, true));
         }
-        RejectOverlaps(files);
-        Atomic(Path.Combine(BackupRoot, manifest.Id + ".manifest.json"), manifest.Snapshot());
-        Execute(new(manifest.Id + ".receipt.json", new(manifest.Id, manifest.Digest, true, files, null, _azimuth), changes), null);
+        RejectOverlaps(files, manifest.Id);
+        SaveSnapshot(manifest);
+        Execute(new(manifest.Id + ".receipt.json", new(manifest.Id, manifest.Digest, enabled, files, null, _azimuth), changes), null);
+        // The earlier launcher set this mod's Wine overrides itself: they are the launcher's to remove when the mod is off.
+        AdoptWineOverrides(manifest.WineDllOverrides);
+        ReconcileWineOverrides();
     }
 
     private static IEnumerable<(string Name, JsonElement Spec)> PackageSpecs(ModManifest manifest)
@@ -47,40 +87,42 @@ public sealed partial class ManagedModFiles
 
     private void CheckDependencies(ModManifest manifest, HashSet<string> visiting)
     {
-        if (!visiting.Add(manifest.Id)) throw new ModException("cyclic mod dependencies");
+        if (!visiting.Add(manifest.Id)) throw new ModException("cyclic mod dependencies", ModErrors.Dependency);
         var installed = InstalledManifests();
         foreach (var dependency in manifest.Document.GetProperty("dependencies").EnumerateArray())
         {
             var id = dependency.GetProperty("id").GetString();
-            var target = installed.SingleOrDefault(m => m.Id == id) ?? throw new ModException("required dependency is not managed");
+            var target = installed.SingleOrDefault(m => m.Id == id) ?? throw new ModException("required dependency is not managed", ModErrors.Dependency);
             if (!dependency.GetProperty("versions").EnumerateArray().Any(v => v.GetString() == target.Version)
-                || Receipt(target) is not { Enabled: true } || !Verified(target)) throw new ModException("required dependency is disabled or incompatible");
+                || Receipt(target) is not { Enabled: true } || !Verified(target)) throw new ModException("required dependency is disabled or incompatible", ModErrors.Dependency);
             CheckDependencies(target, visiting);
             if (dependency.TryGetProperty("settings", out var settings) && settings.GetArrayLength() > 0)
             {
                 var values = ReadSettings(target).Values;
                 foreach (var setting in settings.EnumerateArray())
                     if (!values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
-                        || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw new ModException("required dependency settings differ");
+                        || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw new ModException("required dependency settings differ", ModErrors.Dependency);
             }
         }
         if (manifest.Document.TryGetProperty("conflicts", out var conflicts))
             foreach (var conflict in conflicts.EnumerateArray())
-                if (installed.Any(m => m.Id == conflict.GetString() && Receipt(m) is { Enabled: true })) throw new ModException("conflicting mod enabled");
+                if (installed.Any(m => m.Id == conflict.GetString() && Receipt(m) is { Enabled: true })) throw new ModException("conflicting mod enabled", ModErrors.Conflict);
         if (manifest.Document.TryGetProperty("incompatibleFiles", out var files))
             foreach (var file in files.EnumerateArray())
-                if (File.Exists(Target(file.GetProperty("root").GetString()!, file.GetProperty("path").GetString()!))) throw new ModException("incompatible unmanaged file present");
-        foreach (var other in installed.Where(m => Receipt(m) is { Enabled: true }))
+                if (File.Exists(Target(file.GetProperty("root").GetString()!, file.GetProperty("path").GetString()!))) throw new ModException("incompatible unmanaged file present", ModErrors.Conflict);
+        foreach (var other in installed.Where(m => m.Id != manifest.Id && Receipt(m) is { Enabled: true }))
             if (other.Document.TryGetProperty("conflicts", out var reverse) && reverse.EnumerateArray().Any(c => c.GetString() == manifest.Id))
-                throw new ModException("an enabled mod conflicts with this mod");
+                throw new ModException("an enabled mod conflicts with this mod", ModErrors.Conflict);
         visiting.Remove(manifest.Id);
     }
 
-    public void CheckDependents(string id)
+    /// <summary>Enabled mods depending on <paramref name="id"/> block its removal; with <paramref name="replacement"/>, only those that do not accept that version.</summary>
+    public void CheckDependents(string id, ModManifest? replacement = null)
     {
         foreach (var manifest in InstalledManifests())
-            if (Receipt(manifest) is { Enabled: true } && manifest.Dependencies.Any(d => d.Id == id))
-                throw new ModException("disable dependent mods first");
+            if (Receipt(manifest) is { Enabled: true } && manifest.Dependencies.FirstOrDefault(d => d.Id == id) is { } dependency
+                && (replacement is null || !dependency.Versions.Contains(replacement.Version)))
+                throw new ModException("disable dependent mods first", ModErrors.Dependency);
     }
 
     public IReadOnlyList<ModManifest> InstalledManifests()
@@ -89,21 +131,22 @@ public sealed partial class ManagedModFiles
         return Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Select(path =>
         {
             RejectLinks(path);
-            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path)) ?? throw new ModException("invalid receipt");
-            var manifest = new ModManifest(File.ReadAllBytes(Safe(BackupRoot, receipt.Id + ".manifest.json")));
-            if (!manifest.SupportedForInstall) throw new ModException("installed manifest uses unsupported capabilities");
+            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path)) ?? throw new ModException("invalid receipt", ModErrors.Recovery);
+            var manifest = SnapshotFor(receipt);
+            if (!manifest.SupportedForInstall) throw new ModException("installed manifest uses unsupported capabilities", ModErrors.Unsupported);
             _ = Receipt(manifest);
             return manifest;
         }).ToArray();
     }
 
-    public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing"))));
+    public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))));
 
     public void SaveSettings(ModManifest manifest, ManifestIni settings)
     {
+        ArgumentNullException.ThrowIfNull(settings);
         using var gate = Lock();
-        if (settings.ManifestDigest != manifest.Digest) throw new ModException("settings belong to another manifest");
-        if (manifest.ConfigPath is null) throw new ModException("mod has no settings");
+        if (settings.ManifestDigest != manifest.Digest) throw new ModException("settings belong to another manifest", ModErrors.Settings);
+        if (manifest.ConfigPath is null) throw new ModException("mod has no settings", ModErrors.Settings);
         var receipt = Receipt(manifest) ?? throw new ModException("mod is not installed");
         var config = Target("azimuth", manifest.ConfigPath!);
         if (Current(config) != settings.SourceHash) throw new ModSettingsChangedException();
@@ -116,9 +159,50 @@ public sealed partial class ManagedModFiles
                 if (dependency.TryGetProperty("settings", out var required))
                     foreach (var setting in required.EnumerateArray())
                         if (!parsed.Values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
-                            || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw new ModException("enabled dependent requires this setting");
+                            || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw new ModException("enabled dependent requires this setting", ModErrors.Dependency);
         Store(File.ReadAllBytes(config));
         var changes = new List<ModFileChange> { new("azimuth", manifest.ConfigPath!, settings.SourceHash, Store(bytes)) };
         Execute(new(manifest.Id + ".receipt.json", receipt, changes), null);
+    }
+
+    /// <summary>M6: out-of-schema values back to their defaults, later duplicate keys commented out; nothing else changes.</summary>
+    public void RepairSettings(ModManifest manifest)
+    {
+        var settings = ReadSettings(manifest);
+        if (settings.Issues.Count == 0) return;
+        settings.Repair();
+        SaveSettings(manifest, settings);
+    }
+
+    /// <summary>
+    /// Before every launch, off the UI thread: locked settings of enabled mods are written back
+    /// (journaled, OD-45/§1.3) and Wine overrides reconciled. No receipts means nothing is read or
+    /// written. Drift and settings issues are warnings; only an interrupted operation of this Azimuth
+    /// folder throws (<see cref="ModErrors.Recovery"/>).
+    /// </summary>
+    public ModLaunchPreparation PrepareForLaunch()
+    {
+        if (!Directory.Exists(BackupRoot) || !RecoveryRequiredHere && !Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Any()) return ModLaunchPreparation.None;
+        if (RecoveryRequiredHere) throw new ModException("interrupted mod operation needs recovery", ModErrors.Recovery);
+        var warnings = new List<string>();
+        using (var gate = Lock(allowRecovery: true))
+        {
+            foreach (var manifest in InstalledManifests())
+            {
+                var receipt = Receipt(manifest)!;
+                if (!receipt.Enabled) continue;
+                if (DriftOf(receipt).Count > 0) warnings.Add(manifest.Id + ": drift");
+                if (manifest.ConfigPath is not { } config || !File.Exists(Target("azimuth", config))) continue;
+                var settings = ReadSettings(manifest);
+                if (settings.Issues.Count > 0) warnings.Add(manifest.Id + ": settings");
+                var before = settings.ToBytes(); settings.EnforceLocks(); var after = settings.ToBytes();
+                if (before.SequenceEqual(after)) continue;
+                Store(before);
+                Execute(new(manifest.Id + ".receipt.json", receipt, [new("azimuth", config, settings.SourceHash, Store(after))]), null);
+            }
+        }
+        ReconcileWineOverrides();
+        var enabled = InstalledManifests().Where(m => Receipt(m) is { Enabled: true }).ToArray();
+        return new(NativeDllOverrides(), enabled.Any(m => m.IsNative), warnings);
     }
 }
