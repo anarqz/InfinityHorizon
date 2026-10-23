@@ -38,8 +38,16 @@ public sealed partial class ManagedModFiles
         foreach (var root in launcherRoots)
         {
             var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-            // A launcher folder that holds the selected Azimuth or game folder protects only its own files outside them.
-            if (Within(full, azimuth) || game is not null && Within(full, game)) continue;
+            var selected = new[] { azimuth, game }.OfType<string>().ToArray();
+            if (selected.Any(r => string.Equals(Path.TrimEndingDirectorySeparator(r), full, StringComparison.OrdinalIgnoreCase)))
+            {
+                // The launcher extracted into the Azimuth (or game) folder itself: its own release layout stays protected.
+                paths.AddRange(Infinity.Core.Update.UpdatePackageVerifier.PayloadRoots.Select(name => Path.Combine(full, name)));
+                if (Environment.ProcessPath is { } process && string.Equals(Path.GetDirectoryName(process), full, StringComparison.OrdinalIgnoreCase)) paths.Add(process);
+                continue;
+            }
+            // A launcher folder that holds the selected folders protects only its own files outside them (checked by the other roots' rules).
+            if (selected.Any(r => Within(full, r))) continue;
             paths.Add(full);
         }
         return paths.SelectMany(p => new[] { p, Canonical(p) }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();

@@ -414,7 +414,6 @@
  "worlds.title": "Mundos",
  "mods.adopt": "Gerenciar instalação existente",
  "mods.unmanaged": "Instalação existente",
- "mods.requirements_unmet": "Verifique as dependências e os arquivos instalados",
  "mods.offline_play": "Jogar offline com os mods selecionados",
  "mods.offline_only": "Mods nativos exigem uma sessão offline no momento.",
  "mods.runtime_failed": "A sessão de mods não iniciou ou terminou inesperadamente.",
