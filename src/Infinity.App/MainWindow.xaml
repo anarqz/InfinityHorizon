@@ -797,7 +797,9 @@
                     <WrapPanel Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}">
                       <Button Click="OnNavHome" Padding="10,6" Margin="0,0,8,8" AutomationProperties.Name="{Binding S[welcome.back]}"><StackPanel Orientation="Horizontal"><Path Data="{StaticResource IconBack}" Style="{StaticResource InlineIcon}" Margin="0,0,6,0" /><TextBlock Text="{Binding S[welcome.back]}" VerticalAlignment="Center" /></StackPanel></Button>
                       <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" ToolTip="{Binding IntegrityLocationLabel}" Padding="10,6" Margin="0,0,8,8" />
-                      <Button Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" AutomationProperties.Name="{Binding HookInstallLabel}"><TextBlock Text="{Binding HookInstallLabel}" TextWrapping="Wrap" TextAlignment="Center" /></Button>
+                      <!-- Hidden (as on Configure) when there is no hook package to install: an empty label is no button. -->
+                      <Button Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" AutomationProperties.Name="{Binding HookInstallLabel}"
+                              Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}"><TextBlock Text="{Binding HookInstallLabel}" TextWrapping="Wrap" TextAlignment="Center" /></Button>
                       <Button Content="{Binding S[mods.offline_play]}" Click="OnModdedOffline" IsEnabled="{Binding CanPlayModdedOffline}" Padding="10,6" Margin="0,0,8,8" />
                     </WrapPanel>
                     <Button Click="OnLoadModCatalog" Padding="10,8" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
