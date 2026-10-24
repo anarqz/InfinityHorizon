@@ -18,7 +18,10 @@ public sealed record ExternalSourceCheck(string SourceId, string Picked, string?
     public int Found => Files.Count(f => f.State == ExternalFileState.Ok);
     public int Missing => Files.Count(f => f.State == ExternalFileState.Missing);
     public int Different => Files.Count(f => f.State == ExternalFileState.Different);
-    public bool Ok => Files.Count > 0 && Found == Files.Count;
+    /// <summary>Files this pick itself provided (the rest, if Ok, are an earlier verified copy of an update's unchanged files).</summary>
+    public int FromSource { get; init; }
+    /// <summary>Every file verifies, and the pick provided at least one: a folder without any of the files is never "found".</summary>
+    public bool Ok => Files.Count > 0 && Found == Files.Count && FromSource > 0;
 }
 
 /// <summary>Checking progress: files and bytes looked at, of the totals.</summary>
@@ -34,6 +37,8 @@ public readonly record struct ExternalProgress(int Files, int TotalFiles, long B
 public sealed partial class ManagedModFiles
 {
     private const int MaxSourceEntries = 50_000;
+    /// <summary>Stable reasons a chosen source cannot be used (the <see cref="ModException"/> message; the launcher shows external.reason.&lt;reason&gt;).</summary>
+    public const string SourceGone = "source_gone", SourceTooLarge = "source_too_large", SourceNotZip = "source_not_zip";
     private const int MaxSourceDepth = 16;
 
     /// <summary>Every file an external mod reads from its sources: its mappings and its database base.</summary>
@@ -57,6 +62,54 @@ public sealed partial class ManagedModFiles
         return File.Exists(path) && new FileInfo(path).Length == bytes;
     }
 
+    /// <summary>The stored copy's bytes still hash to its pin; a damaged one is removed so a fresh pick can store it again.</summary>
+    private bool ObjectVerified(string digest, long bytes)
+    {
+        var path = Safe(BackupRoot, "objects/" + digest);
+        if (!File.Exists(path)) return false;
+        if (new FileInfo(path).Length == bytes)
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.SequentialScan))
+                if (Convert.ToHexStringLower(SHA256.HashData(stream)) == digest) return true;
+        RemoveFile(path);
+        return false;
+    }
+
+    /// <summary>
+    /// "Check files again" for an installed external mod: every stored copy is hashed (damaged ones removed); the files that no longer
+    /// verify, which a new pick must provide. Reads only the store.
+    /// </summary>
+    public IReadOnlyList<ExternalFile> VerifyStoredExternal(ModManifest manifest, IProgress<ExternalProgress>? progress, CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        using var gate = Lock();
+        var files = ExternalFiles(manifest); var failed = new List<ExternalFile>(); long done = 0; var total = files.Sum(f => f.Bytes); var count = 0;
+        foreach (var file in files)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!ObjectVerified(file.Sha256, file.Bytes)) failed.Add(file);
+            done += file.Bytes; progress?.Report(new(++count, files.Count, done, total));
+        }
+        return failed.AsReadOnly();
+    }
+
+    /// <summary>
+    /// The checked files of a mod not installed yet, as a top-level record of the backup folder: retention (<see cref="Prune"/>) keeps
+    /// every object a record names, so a restart between the check and Install never throws the copies away.
+    /// </summary>
+    private void RememberCheckedObjects(ModManifest manifest)
+    {
+        var digests = ExternalFiles(manifest).Where(f => ObjectStored(f.Sha256, f.Bytes)).Select(f => f.Sha256).ToHashSet(StringComparer.Ordinal);
+        var path = Safe(BackupRoot, "external-" + manifest.Id + ".json");
+        try
+        {
+            if (File.Exists(path) && JsonSerializer.Deserialize<CheckedObjects>(File.ReadAllBytes(path)) is { } earlier) digests.UnionWith(earlier.Objects);
+        }
+        catch (JsonException) { }
+        Atomic(path, JsonSerializer.SerializeToUtf8Bytes(new CheckedObjects(manifest.Id, digests.Order(StringComparer.Ordinal).ToList()), Json));
+    }
+
+    private sealed record CheckedObjects(string Id, List<string> Objects);
+
     /// <summary>
     /// Looks for <paramref name="sourceId"/>'s files in <paramref name="picked"/> (a folder or a file; a <c>.zip</c> is read as an
     /// archive), checks each found file's size and SHA-256 and stores every verified one. Reads only from the source.
@@ -66,30 +119,32 @@ public sealed partial class ManagedModFiles
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(picked);
         if (manifest.ExternalSources.All(s => s.Id != sourceId)) throw new ModException("unknown external source", ModErrors.Unsupported);
         var expected = ExternalFiles(manifest).Where(f => f.SourceId == sourceId).ToArray();
+        using var gate = Lock(); // retention never prunes objects while they are being checked and stored
         using var source = SourceEntries.Open(picked);
         var (prefix, matched) = Match(source.Entries, expected);
         var bySize = source.Entries.ToLookup(e => e.Bytes);
-        var results = new List<ExternalFileCheck>(); long done = 0; var total = expected.Sum(f => f.Bytes);
+        var results = new List<ExternalFileCheck>(); long done = 0; var total = expected.Sum(f => f.Bytes); var fromSource = 0;
         foreach (var file in expected)
         {
             cancellation.ThrowIfCancellationRequested();
             var state = ExternalFileState.Missing;
-            if (ObjectStored(file.Sha256, file.Bytes)) state = ExternalFileState.Ok; // an update: already copied before
-            else
-            {
-                if (matched.TryGetValue(file, out var entry))
-                    state = entry.Bytes == file.Bytes && StoreIfMatches(entry, file) ? ExternalFileState.Ok : ExternalFileState.Different;
-                // Renamed or moved inside the pack: the same size, then the same bytes.
-                if (state != ExternalFileState.Ok)
-                    foreach (var candidate in bySize[file.Bytes])
-                        if (!ReferenceEquals(candidate, entry) && StoreIfMatches(candidate, file)) { state = ExternalFileState.Ok; break; }
-            }
+            // Every pick is checked against itself: a file is Ok when this pick holds it (by its path, else renamed: same size, same bytes).
+            if (matched.TryGetValue(file, out var entry))
+                state = entry.Bytes == file.Bytes && StoreIfMatches(entry, file) ? ExternalFileState.Ok : ExternalFileState.Different;
+            if (state != ExternalFileState.Ok)
+                foreach (var candidate in bySize[file.Bytes])
+                    if (!ReferenceEquals(candidate, entry) && StoreIfMatches(candidate, file)) { state = ExternalFileState.Ok; break; }
+            if (state == ExternalFileState.Ok) fromSource++;
+            // An update's unchanged file may come from the earlier copy, only while its stored bytes still verify.
+            else if (ObjectVerified(file.Sha256, file.Bytes)) state = ExternalFileState.Ok;
             results.Add(new(file, state));
             done += file.Bytes;
             progress?.Report(new(results.Count, expected.Length, done, total));
         }
+        RememberCheckedObjects(manifest);
+        if (fromSource > 0) RememberExternalChoice(manifest.Id, sourceId, picked); // under the lock: two rows never lose each other's pick
         var root = prefix is null ? null : source.Describe(prefix);
-        return new(sourceId, picked, root, results.AsReadOnly());
+        return new(sourceId, picked, root, results.AsReadOnly()) { FromSource = fromSource };
     }
 
     private bool StoreIfMatches(SourceEntry entry, ExternalFile file)
@@ -99,6 +154,7 @@ public sealed partial class ManagedModFiles
         try { bytes = entry.Read(file.Bytes); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException) { return false; }
         if (bytes.LongLength != file.Bytes || ModManifest.Hash(bytes) != file.Sha256) return false;
+        _ = ObjectVerified(file.Sha256, file.Bytes); // a damaged earlier copy goes, so the good bytes can take its place
         if (Store(bytes) != file.Sha256) throw new ModException("stored file changed", ModErrors.Digest);
         return true;
     }
@@ -211,22 +267,30 @@ public sealed partial class ManagedModFiles
                 var entries = new List<SourceEntry>();
                 foreach (var file in new DirectoryInfo(full).EnumerateFiles("*", options))
                 {
-                    if (entries.Count >= MaxSourceEntries) throw new ModException("the chosen folder holds too many files; choose the pack's own folder", ModErrors.ExternalFiles);
+                    if (entries.Count >= MaxSourceEntries) throw new ModException(SourceTooLarge, ModErrors.ExternalFiles);
                     var path = file.FullName;
                     entries.Add(new(Path.GetRelativePath(full, path).Replace('\\', '/'), file.Length, limit => ReadFile(path, limit)));
                 }
                 return new(full, null, entries);
             }
-            if (!File.Exists(full)) throw new ModException("the chosen folder or file no longer exists", ModErrors.ExternalFiles);
+            if (!File.Exists(full)) throw new ModException(SourceGone, ModErrors.ExternalFiles);
             if (full.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
-                ZipArchive zip;
-                try { zip = ZipFile.OpenRead(full); }
-                catch (InvalidDataException) { throw new ModException("the chosen file is not a readable ZIP", ModErrors.ExternalFiles); }
-                if (zip.Entries.Count > MaxSourceEntries) { zip.Dispose(); throw new ModException("the ZIP holds too many files", ModErrors.ExternalFiles); }
-                var entries = zip.Entries.Where(e => !e.FullName.EndsWith('/') && !e.FullName.EndsWith('\\'))
-                    .Select(e => new SourceEntry(e.FullName.Replace('\\', '/'), e.Length, limit => ReadEntry(e, limit))).ToArray();
-                return new(full, zip, entries);
+                ZipArchive? zip = null;
+                try
+                {
+                    // A corrupt central directory surfaces only when the entries are read: it is the same "not a readable ZIP".
+                    zip = ZipFile.OpenRead(full);
+                    if (zip.Entries.Count > MaxSourceEntries) throw new ModException(SourceTooLarge, ModErrors.ExternalFiles);
+                    var entries = zip.Entries.Where(e => !e.FullName.EndsWith('/') && !e.FullName.EndsWith('\\'))
+                        .Select(e => new SourceEntry(e.FullName.Replace('\\', '/'), e.Length, limit => ReadEntry(e, limit))).ToArray();
+                    return new(full, zip, entries);
+                }
+                catch (Exception error) when (error is InvalidDataException or ModException)
+                {
+                    zip?.Dispose();
+                    throw error as ModException ?? new ModException(SourceNotZip, ModErrors.ExternalFiles);
+                }
             }
             var single = new FileInfo(full);
             return new(Path.GetDirectoryName(full)!, null, [new(single.Name, single.Length, limit => ReadFile(full, limit))]);
