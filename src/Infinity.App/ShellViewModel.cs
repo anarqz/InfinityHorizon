@@ -91,6 +91,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Games.Add(OfflineGame);
         Gate = _gate.PlayOffline().ChooseGame(OfflineGame.Id);
         FillProfiles();
+        // OD-118 T1c: the profile last chosen offline is chosen again (top bar no longer says "no profile" after a restart).
+        if (LaunchModeStore.ReadLastProfile(_stateDirectory) is { } last
+            && Profiles.FirstOrDefault(p => _rowLocals.TryGetValue(p.ProfileId, out var local) && local.Id == last) is { } row)
+            ChooseProfile(row);
     }
 
     /// <summary>The game an offline launcher plays (the server's list needs an account): Forza Horizon 2.</summary>
@@ -114,7 +118,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     private async Task EngagedChecksAsync()
     {
         await CheckOnlineStatusAsync(manual: false);
-        if (!_config.Production || OnlineServiceAllowsPlay) await CheckLauncherUpdatesAsync();
+        // OD-118 T1c: strictly in order; the release floor (/launcher/v1/info) only once the service answered open.
+        if (_onlineEngaged && OnlineServiceAllowsPlay) await CheckLauncherUpdatesAsync();
     }
 
     public void OpenWelcome()
@@ -214,7 +219,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// The top bar: signed in, or the server's state before sign-in (checked at start, so
     /// "OFFLINE" means the server did not answer, never just "not signed in").
     /// </summary>
-    public string Connection => OnlineServicePaused ? S["online.paused_label"] : _session is not null ? S["shell.connected"]
+    // OD-118 T1c: offline (before SIGN IN, or Play offline) nothing is checked, so the pill says so, never "checking".
+    public string Connection => !_onlineEngaged && _session is null ? S["shell.offline"]
+        : OnlineServicePaused ? S["online.paused_label"] : _session is not null ? S["shell.connected"]
         : _serverReachable switch { true => S["shell.reachable"], false => S["shell.offline"], null => S["shell.checking"] };
 
     /// <summary>The server answers (or a session is open): the top bar's status dot.</summary>
@@ -280,6 +287,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         ArgumentNullException.ThrowIfNull(profile);
         _chosenLocal = _rowLocals.GetValueOrDefault(profile.ProfileId);
+        if (OfflineMode && _chosenLocal is { } chosen) RememberLastLocalProfile(chosen.Id);
         Gate = _gate.ChooseProfile(profile.Gamertag);
         Message = null;
         _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a Supporter + Hardcore profile is checked in the background

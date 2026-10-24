@@ -83,14 +83,15 @@ public sealed partial class ShellViewModel
         {
             using var bound = CancellationTokenSource.CreateLinkedTokenSource(_updateStop.Token);
             bound.CancelAfter(TimeSpan.FromSeconds(25));
-            if (!_onlineEngaged)
+            if (!_onlineEngaged || !OnlineServiceAllowsPlay)
             {
-                // OD-118 (G1): before SIGN IN only GitHub's release list is read; the release floor (/launcher/v1/info) waits for Sign in.
+                // OD-118 (G1, T1c): before SIGN IN, or while the service is not open, only GitHub's release list is read; the release
+                // floor (/launcher/v1/info) waits for Sign in and an open service.
                 await DiscoverLauncherReleaseAsync(bound.Token);
                 if (_updateRecoveryBlocked) return;
                 _launcherUpdatePhase = UpdatePhase.Current; _updateTarget = null;
                 ObserveDiscoveredRelease(_updater.DiscoveredVersion);
-                Log("update: release floor deferred to Sign in (offline)");
+                Log("update: release floor deferred (" + (_onlineEngaged ? "service not open" : "offline") + ")");
                 return;
             }
             var infoTask = UpdateServerInfoAsync(bound.Token);
@@ -102,7 +103,20 @@ public sealed partial class ShellViewModel
         }
         catch (Exception error) when (UpdateFailure(error))
         { _launcherUpdatePhase = UpdatePhase.Unavailable; Log("update: check unavailable (" + error.GetType().Name + ")"); }
-        finally { _updateChecking = false; Changed(string.Empty); }
+        finally { _updateChecking = false; KeepOfflineUpdatePhase(); Changed(string.Empty); }
+    }
+
+    /// <summary>
+    /// OD-118 T1c: offline the release floor does not apply, so a server-side verdict (unavailable, required, checking) never gates the
+    /// offline launcher, even one that arrives after the player chose Play offline. Local install states (download, apply, recovery) stay.
+    /// </summary>
+    private void KeepOfflineUpdatePhase()
+    {
+        if (!_onlineEngaged && !_updateAwaitingCommit && !_updateRecoveryBlocked
+            && _launcherUpdatePhase is UpdatePhase.Unavailable or UpdatePhase.Required or UpdatePhase.ReleaseUnavailable or UpdatePhase.Checking)
+        {
+            _launcherUpdatePhase = UpdatePhase.Current; _updateTarget = null; _updateSupport = false;
+        }
     }
 
     private async Task DiscoverLauncherReleaseAsync(CancellationToken cancellation)

@@ -22,6 +22,30 @@ public static class LaunchModeStore
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
+    /// <summary>OD-118 T1c: the local profile last chosen offline (its id), selected again on the next offline start.</summary>
+    public static string? ReadLastProfile(string stateDirectory)
+    {
+        try
+        {
+            var path = Path.Combine(stateDirectory, LastProfileName);
+            if (!File.Exists(path) || new FileInfo(path).Length > 128) return null;
+            var id = File.ReadAllText(path).Trim();
+            return Guid.TryParse(id, out _) ? id : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public static void WriteLastProfile(string stateDirectory, string id)
+    {
+        if (!Guid.TryParse(id, out _)) throw new ArgumentException("not a local profile id", nameof(id));
+        Directory.CreateDirectory(stateDirectory);
+        var path = Path.Combine(stateDirectory, LastProfileName);
+        File.WriteAllText(path + ".tmp", id);
+        File.Move(path + ".tmp", path, overwrite: true);
+    }
+
+    private const string LastProfileName = "last-local-profile";
+
     public static void Write(string stateDirectory, string mode)
     {
         if (mode is not (Online or Offline)) throw new ArgumentOutOfRangeException(nameof(mode));

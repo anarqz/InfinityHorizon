@@ -63,7 +63,15 @@ public sealed partial class ShellViewModel
         _onlineAnswered = false;
         _onlineStarted = false;
         _onlineStatus = null;
+        _onlineViewing = _onlineSupport = false;
+        KeepOfflineUpdatePhase(); // T1c: a failed or pending /info never holds the offline launcher at the update gate
         Changed(string.Empty);
+    }
+
+    private void RememberLastLocalProfile(string id)
+    {
+        try { LaunchModeStore.WriteLastProfile(_stateDirectory, id); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { Log("shell: last profile not kept: " + e.GetType().Name); }
     }
 
     private void RememberLaunchMode(string mode)
@@ -83,10 +91,10 @@ public sealed partial class ShellViewModel
         if (online) ResumeOnline();
         // A run that chose Play offline opens offline at once, before any check, so a SIGN IN click meanwhile is never undone.
         else if (StartsOffline) PlayOffline();
-        var onlineCheck = online ? CheckOnlineStatusAsync(manual: false) : Task.CompletedTask;
-        // Production bootstrap respects global closure before requesting discovery.
-        if (_config.Production) await onlineCheck;
-        var updateCheck = !online || !_config.Production || OnlineServiceAllowsPlay ? ProbeServerAsync() : Task.CompletedTask;
+        // T1c: the status first; the update check after it (it reads /launcher/v1/info only when engaged and the service is open).
+        if (online) await CheckOnlineStatusAsync(manual: false);
+        var onlineCheck = Task.CompletedTask;
+        var updateCheck = ProbeServerAsync();
         await VerifyBuildOriginAsync();
         if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
         else await FindAzimuthAsync(null, openSetupWhenNeeded: true);
