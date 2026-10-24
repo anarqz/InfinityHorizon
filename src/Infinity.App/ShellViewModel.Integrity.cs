@@ -55,7 +55,7 @@ public sealed partial class ShellViewModel
     public bool CanCheckIntegrity => SignedIn && IntegrityApplies && ContentLocation is not null && !Playing && !_busy && !_integrityChecking;
     /// <summary>The manual re-check is offered only where the check applies (OD-113); it is never required.</summary>
     public bool ShowIntegrityCheck => IntegrityApplies;
-    public bool CanChooseContent => (SignedIn || DevelopmentMods) && !Playing && !_busy && !_integrityChecking;
+    public bool CanChooseContent => (InShell || DevelopmentMods) && !Playing && !_busy && !_integrityChecking;
     public bool IntegrityReady => !IntegrityApplies
         || !_integrityChecking && !_integrityFailed && (_integrity is { State: InstallationState.Compatible, FilesCurrent: true } || CachedIntegrityReady);
     // OD-113: a pending or running background check never blocks Play (Play waits for it); only a real mismatch does.

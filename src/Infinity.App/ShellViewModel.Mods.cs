@@ -39,8 +39,8 @@ public sealed partial class ShellViewModel
     private string? _iniManifest;
     public ObservableCollection<ManifestOptionItem> ModOptions { get; } = [];
     public bool OnMods => _onMods;
-    public bool ShowMods => (SignedIn || DevelopmentMods) && _onMods && !ShowPickSave;
-    public bool CanOpenMods => (SignedIn && _install is not null || DevelopmentMods) && !ModOperationBusy;
+    public bool ShowMods => (InShell || DevelopmentMods) && _onMods && !ShowPickSave;
+    public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy;
     public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null;
     public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking;
     public bool ModsNews => _catalogLoaded && !_onMods && ModCards.Any(c => c.CanAct && (c.UpdateAvailable || c.Action == S["mods.install"]));
@@ -67,7 +67,7 @@ public sealed partial class ShellViewModel
     private async Task StartModsOnceAsync()
     {
         await MaintainModsAsync();
-        if (SignedIn || DevelopmentMods) await LoadModCatalogQuietlyAsync();
+        if (InShell || DevelopmentMods) await LoadModCatalogQuietlyAsync();
     }
 
     private void RefreshMods() => _ = RefreshModsAsync();

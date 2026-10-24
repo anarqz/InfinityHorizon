@@ -55,7 +55,7 @@
          Players browse and join worlds only in the in-game overlay (OD-54): the launcher has no Servers
          page. The one exception is the admins' dedicated lobby (OD-109): the top bar's globe and its pane. -->
     <Grid Grid.Row="1" Grid.Column="0" Background="{StaticResource InfinitySidebar}" IsEnabled="{Binding Idle}"
-          Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+          Visibility="{Binding InShell, Converter={StaticResource Visible}}">
       <Image Source="{StaticResource BrandLines}" Stretch="UniformToFill" VerticalAlignment="Bottom" Height="150"
              Opacity="0.18" IsHitTestVisible="False" />
       <Border BorderBrush="#3365184D" BorderThickness="0,0,1,0" />
@@ -133,7 +133,7 @@
       <DockPanel>
         <!-- Top bar: connection / GAME (change) / profile (change) ... e-mail (exit). -->
         <Border DockPanel.Dock="Top" Padding="22,14" BorderThickness="0,0,0,1" BorderBrush="#1FF9EAEE"
-                Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+                Visibility="{Binding InShell, Converter={StaticResource Visible}}">
           <DockPanel LastChildFill="False">
             <Border DockPanel.Dock="Left" Padding="10,4" CornerRadius="12" Background="#26F9EAEE" VerticalAlignment="Center">
               <StackPanel Orientation="Horizontal">
@@ -156,7 +156,7 @@
             </Border>
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center"
                         IsEnabled="{Binding CanChangeIdentity}"
-                        Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+                        Visibility="{Binding InShell, Converter={StaticResource Visible}}">
               <TextBlock Text="{Binding GameLabel}" FontWeight="Bold" VerticalAlignment="Center" />
               <Button Content="{Binding S[shell.change]}" Style="{StaticResource LinkButton}" Click="OnChangeGame" />
               <TextBlock Text="/" Margin="10,0" Foreground="{StaticResource InfinityFaint}" VerticalAlignment="Center" />
@@ -184,6 +184,9 @@
                          VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
               <Button Content="{Binding S[shell.exit]}" Style="{StaticResource LinkButton}" Click="OnSignOut" />
             </StackPanel>
+            <!-- OD-118: on the offline path the top right keeps Sign in. -->
+            <Button DockPanel.Dock="Right" Content="{Binding S[offline.sign_in]}" Style="{StaticResource AccentButtonStyle}" Click="OnOpenSignIn" Padding="14,6"
+                    VerticalAlignment="Center" IsEnabled="{Binding Idle}" Visibility="{Binding OfflineMode, Converter={StaticResource Visible}}" />
           </DockPanel>
         </Border>
 
@@ -304,6 +307,13 @@
                     HorizontalAlignment="Center" Visibility="{Binding Resuming, Converter={StaticResource Hidden}}" />
             <TextBlock Text="{Binding S[native.signing_in]}" HorizontalAlignment="Center" FontSize="16"
                        Foreground="{StaticResource InfinityMuted}" Visibility="{Binding Resuming, Converter={StaticResource Visible}}" />
+            <!-- OD-118: the launcher without an account; signing in is only needed for online play. -->
+            <StackPanel HorizontalAlignment="Center" Visibility="{Binding Resuming, Converter={StaticResource Hidden}}">
+              <Button x:Name="PlayOfflineLink" Content="{Binding S[offline.play_offline_link]}" Click="OnPlayOfflineLink" Style="{StaticResource LinkButton}"
+                      HorizontalAlignment="Center" Margin="0,14,0,0" FontSize="15" AutomationProperties.Name="{Binding S[offline.play_offline_link]}" />
+              <TextBlock Text="{Binding S[offline.sign_in_needed]}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                         Margin="0,10,0,0" FontSize="13" Foreground="{StaticResource InfinityMuted}" />
+            </StackPanel>
             <Button Content="{Binding S[mods.dev_open]}" Click="OnNavMods" Margin="0,16,0,0"
                     Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}" HorizontalAlignment="Center" />
           </StackPanel>

@@ -180,6 +180,9 @@ public partial class MainWindow : Window
 
     private void OnOpenSignIn(object sender, RoutedEventArgs e) => _vm.OpenSignIn();
 
+    // OD-118: the welcome screen's Play offline link.
+    private void OnPlayOfflineLink(object sender, RoutedEventArgs e) => _vm.PlayOffline();
+
     private void OnWelcome(object sender, RoutedEventArgs e)
     {
         PasswordBox.Clear();
