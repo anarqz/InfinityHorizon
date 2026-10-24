@@ -539,12 +539,15 @@
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
                 <!-- §1.1: mods never block Play silently; the reason and the way to Mods are shown here. -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="420" Foreground="{StaticResource InfinityGold}" VerticalAlignment="Center" />
-                  <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="12,0,0,0" VerticalAlignment="Center" />
-                  <!-- OD-115: the required mod's own action (install from the signed catalog, adopt, enable, or retry the catalog). -->
-                  <Button Content="{Binding RequiredModAction}" Click="OnRequiredMod" IsEnabled="{Binding CanActOnRequiredMod}" Padding="10,4" Margin="8,0,0,0" VerticalAlignment="Center"
-                          Visibility="{Binding ShowRequiredModAction, Converter={StaticResource Visible}}" />
+                <!-- OD-118 T1c: the notice above its buttons, which wrap, so neither is clipped at 1172x746 in pt-BR. -->
+                <StackPanel Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Left" Foreground="{StaticResource InfinityGold}" />
+                  <WrapPanel Margin="0,8,0,0">
+                    <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="0,0,8,6" />
+                    <!-- OD-115: the required mod's own action (install from the signed catalog, adopt, enable, or retry the catalog). -->
+                    <Button Content="{Binding RequiredModAction}" Click="OnRequiredMod" IsEnabled="{Binding CanActOnRequiredMod}" Padding="10,4" Margin="0,0,8,6"
+                            Visibility="{Binding ShowRequiredModAction, Converter={StaticResource Visible}}" />
+                  </WrapPanel>
                 </StackPanel>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
