@@ -274,7 +274,8 @@ public partial class MainWindow : Window
     {
         var row = (ExternalSourceRow)((FrameworkElement)sender).DataContext;
         string? picked = null;
-        if (row.PicksFolder)
+        // "either" sources offer both dialogs: the link's Tag says which one the player chose.
+        if (((FrameworkElement)sender).Tag as string == "folder" && row.PicksFolder)
         {
             var dialog = new Microsoft.Win32.OpenFolderDialog { Title = row.Label };
             if (dialog.ShowDialog(this) == true) picked = dialog.FolderName;
