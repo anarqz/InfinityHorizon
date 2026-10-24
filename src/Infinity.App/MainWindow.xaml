@@ -1057,9 +1057,13 @@
                                         Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFolder, Converter={StaticResource Visible}}" />
                                 <Button Content="{Binding DataContext.S[external.choose_file], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                         Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" />
-                                <Button Content="{Binding DataContext.S[external.system_dialog], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                        Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6"
-                                        Visibility="{Binding DataContext.CanUseSystemPicker, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource Visible}}" />
+                                <!-- The Windows dialogs (not under Wine or Steam's gamepad UI): one per kind the source accepts, both for "either" (REVIEW_LOG OD-117). -->
+                                <StackPanel Orientation="Horizontal" Visibility="{Binding DataContext.CanUseSystemPicker, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource Visible}}">
+                                  <Button Content="{Binding DataContext.S[external.system_folder], RelativeSource={RelativeSource AncestorType=ItemsControl}}" Tag="folder"
+                                          Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6" Visibility="{Binding PicksFolder, Converter={StaticResource Visible}}" />
+                                  <Button Content="{Binding DataContext.S[external.system_file], RelativeSource={RelativeSource AncestorType=ItemsControl}}" Tag="file"
+                                          Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" />
+                                </StackPanel>
                               </WrapPanel>
                             </StackPanel>
                           </Border>
