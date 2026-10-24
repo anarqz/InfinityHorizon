@@ -47,7 +47,7 @@ Existing third-party copyright and permission notices remain applicable:
   licenses/fh2-mods-LICENSE.txt. The intermediate Rust port is not distributed here.
 - BouncyCastle.Cryptography 2.6.2: licenses/BouncyCastle-LICENSE.md.
 - Markdig 0.40.0 (BSD-2-Clause, Alexandre Mutel), the news feed's markdown: licenses/Markdig-LICENSE.txt.
-- Noto Emoji 3.002 (SIL OFL 1.1, Google), a static Regular instance bundled as the emoji fallback:
+- Noto Emoji 3.002 (SIL OFL 1.1, Google): its monochrome outlines, extracted by tools/emoji into the news emoji shapes:
   licenses/NotoEmoji-LICENSE.txt.
 - Dear ImGui 1.91.8 (MIT) and MinHook 1.3.3 (BSD notices): native/overlay/third_party/.
 - The native mod runtime (native/mod; package licenses/Mod-NOTICE.md): its hook coordination

@@ -23,7 +23,7 @@
        are resources inside infinity.exe, so nothing goes missing on Windows or under Wine/Proton; a
        256 px icon is also copied next to it for Linux shortcuts (.desktop, Steam). -->
   <ItemGroup>
-    <Resource Include="Assets\*.png;Assets\*.jpg;Assets\*.ico;Assets\Fonts\*.ttf;Assets\Fonts\*.CompositeFont" />
+    <Resource Include="Assets\*.png;Assets\*.jpg;Assets\*.ico;Assets\Fonts\*.ttf;Assets\Emoji\*.gz" />
     <Content Include="Assets\infinity-256.png" Link="infinity.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Fonts\Selawik-LICENSE.txt" Link="licenses\Selawik-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Fonts\NotoEmoji-LICENSE.txt" Link="licenses\NotoEmoji-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />

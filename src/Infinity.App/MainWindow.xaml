@@ -39,14 +39,14 @@
           <DockPanel>
             <Ellipse DockPanel.Dock="Right" Width="8" Height="8" Fill="{StaticResource InfinityPink}" VerticalAlignment="Top" Margin="8,6,0,0"
                      Visibility="{Binding Unread, Converter={StaticResource Visible}}" />
-            <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="15" TextWrapping="Wrap" />
+            <TextBlock FontWeight="Bold" FontSize="15" TextWrapping="Wrap" local:EmojiText.Text="{Binding Title}" />
           </DockPanel>
           <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
             <TextBlock Text="{Binding Date}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
             <TextBlock Text="{Binding PinnedLabel, StringFormat='  ·  {0}'}" FontSize="11" Foreground="{StaticResource InfinityGold}"
                        Visibility="{Binding Pinned, Converter={StaticResource Visible}}" />
           </StackPanel>
-          <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" FontSize="13" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0"
+          <TextBlock TextWrapping="Wrap" FontSize="13" local:EmojiText.Text="{Binding Summary}" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0"
                      MaxHeight="60" TextTrimming="CharacterEllipsis" />
         </StackPanel>
       </Button>
@@ -663,7 +663,7 @@
                   <TextBlock Text="{Binding S[news.back]}" />
                 </StackPanel>
               </Button>
-              <TextBlock DockPanel.Dock="Top" Text="{Binding NewsOpen.Title}" Style="{StaticResource PageTitle}" TextWrapping="Wrap" MaxWidth="760"
+              <TextBlock DockPanel.Dock="Top" Style="{StaticResource PageTitle}" TextWrapping="Wrap" MaxWidth="760" local:EmojiText.Text="{Binding NewsOpen.Title}"
                          HorizontalAlignment="Left" Foreground="{StaticResource NewsReadingHeading}" />
               <TextBlock DockPanel.Dock="Top" Text="{Binding NewsOpen.Date}" Foreground="{StaticResource NewsReadingMuted}" Margin="0,8,0,20" />
               <FlowDocumentScrollViewer x:Name="NewsDocumentViewer" Document="{Binding NewsDocument}" VerticalScrollBarVisibility="Auto"

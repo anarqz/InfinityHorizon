@@ -28,7 +28,7 @@ public static class NewsRenderer
         var document = new FlowDocument
         {
             // T3b (Alex): reading on black: near-white body at a comfortable size and line height, white headings, quiet links.
-            FontFamily = (FontFamily)resources["InfinityFont"], FontSize = 17, LineHeight = 28, PagePadding = new Thickness(0), TextAlignment = TextAlignment.Left,
+            FontFamily = (FontFamily)resources["InfinityFont"], FontSize = BodySize, LineHeight = 28, PagePadding = new Thickness(0), TextAlignment = TextAlignment.Left,
             Foreground = (Brush)resources["NewsReadingText"], Background = Brushes.Transparent, MaxPageWidth = 760,
         };
         MarkdownDocument parsed;
@@ -45,6 +45,8 @@ public static class NewsRenderer
 
     private sealed record Context(Func<string, Task<byte[]?>> Image, Action<Uri> Open, ResourceDictionary Resources)
     {
+        /// <summary>The font size of the paragraph being built (emoji are drawn at it).</summary>
+        public double Size { get; init; } = BodySize;
         public Brush Muted => (Brush)Resources["NewsReadingMuted"];
         public Brush Heading => (Brush)Resources["NewsReadingHeading"];
         public Brush LinkBrush => (Brush)Resources["NewsReadingLink"];
@@ -98,10 +100,23 @@ public static class NewsRenderer
         }
     }
 
+    /// <summary>T3c: text with its emoji drawn as shapes (no font fallback, which Wine leaves blank).</summary>
+    private static System.Windows.Documents.Inline Text(string text, Context context)
+    {
+        var parts = EmojiText.Inlines(text, context.Size).ToArray();
+        if (parts is [Run single]) return single;
+        var span = new Span();
+        span.Inlines.AddRange(parts);
+        return span;
+    }
+
     private static System.Windows.Documents.Block Tight(System.Windows.Documents.Block block) { if (block is Paragraph p) p.Margin = new Thickness(0, 0, 0, 4); return block; }
+
+    private const double BodySize = 17;
 
     private static Paragraph Inlines(Paragraph paragraph, ContainerInline? inlines, Context context)
     {
+        context = context with { Size = paragraph.ReadLocalValue(TextElement.FontSizeProperty) is double size ? size : BodySize };
         if (inlines is not null) foreach (var inline in inlines) if (Inline(inline, context) is { } converted) paragraph.Inlines.Add(converted);
         return paragraph;
     }
@@ -116,11 +131,11 @@ public static class NewsRenderer
     {
         switch (inline)
         {
-            case LiteralInline literal: return new Run(literal.Content.ToString());
+            case LiteralInline literal: return Text(literal.Content.ToString(), context);
             case EmphasisInline emphasis: return Children(emphasis.DelimiterCount >= 2 ? new Bold() : new Italic(), emphasis, context);
             case CodeInline code: return new Run(code.Content) { FontFamily = Mono, FontSize = 15, Background = context.CodeSurface };
             case LineBreakInline lineBreak: return lineBreak.IsHard ? new LineBreak() : new Run(" ");
-            case HtmlEntityInline entity: return new Run(entity.Transcoded.ToString());
+            case HtmlEntityInline entity: return Text(entity.Transcoded.ToString(), context);
             case HtmlInline html: return new Run(html.Tag); // shown as text
             case AutolinkInline auto: return Link(auto.Url, new Span(new Run(auto.Url)), context);
             case LinkInline { IsImage: true } picture: return Image(picture, context);

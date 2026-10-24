@@ -69,8 +69,7 @@
         <GradientStop Color="#00F01864" Offset="1" />
       </LinearGradientBrush>
 
-      <!-- OD-119: composite fonts (Assets/Fonts/*.CompositeFont): Selawik for text, the bundled Noto Emoji for emoji. -->
-    <!-- T3b (Alex): the news reading surface: black, an almost invisible bundled vector pattern, white type. No bitmap, no system
+      <!-- T3b (Alex): the news reading surface: black, an almost invisible bundled vector pattern, white type. No bitmap, no system
          resource, so it is the same under Proton. -->
     <SolidColorBrush x:Key="NewsReadingBackground" Color="#000000" />
     <SolidColorBrush x:Key="NewsReadingText" Color="#EDEDED" />
@@ -93,8 +92,8 @@
         </GeometryDrawing>
       </DrawingBrush.Drawing>
     </DrawingBrush>
-    <FontFamily x:Key="InfinityFont">pack://application:,,,/Assets/Fonts/#Infinity</FontFamily>
-      <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Infinity Semibold</FontFamily>
+    <FontFamily x:Key="InfinityFont">pack://application:,,,/Assets/Fonts/#Selawik</FontFamily>
+      <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Selawik Semibold</FontFamily>
 
       <BitmapImage x:Key="BrandLogo" UriSource="pack://application:,,,/Assets/logo.png" />
       <!-- OD-118: the "Offline mode" icon, a disconnected plug drawn as our own vector (24x24 grid, stroked), never a system
