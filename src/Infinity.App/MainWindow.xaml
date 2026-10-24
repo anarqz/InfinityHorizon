@@ -562,11 +562,12 @@
           </ScrollViewer>
 
           <!-- PLAY: admission happens here; the game starts only with a verified active ticket. -->
-          <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}"
-                        SizeChanged="OnHomeSized">
-            <!-- OD-119: the news column beside PLAY on a wide window, below it at 1280x800 and smaller (PLAY keeps its width). -->
+          <!-- OD-119: the news column beside PLAY on a wide window, below it at 1280x800 and smaller (PLAY keeps its width).
+               T3d (Alex): beside PLAY the news scrolls on its own and PLAY stays put; stacked, the page scrolls as one. -->
+          <Grid x:Name="HomeArea" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}" SizeChanged="OnHomeSized">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+          <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto">
             <Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <StackPanel MaxWidth="600" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,8,0,8">
               <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
@@ -632,12 +633,16 @@
                         Click="OnOpenSavePicker" IsEnabled="{Binding CanPickSave}" />
               </WrapPanel>
             </StackPanel>
-            <ContentControl x:Name="NewsColumnBeside" Grid.Column="1" Width="340" Margin="32,8,0,8" VerticalAlignment="Top" Focusable="False"
-                            Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" Visibility="{Binding NewsBeside, Converter={StaticResource Visible}}" />
             <ContentControl x:Name="NewsColumnBelow" Grid.Row="1" MaxWidth="600" HorizontalAlignment="Left" Margin="0,24,0,8" Focusable="False"
                             Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" Visibility="{Binding NewsBelow, Converter={StaticResource Visible}}" />
             </Grid>
           </ScrollViewer>
+          <ScrollViewer x:Name="NewsScroll" Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="32,0,0,0"
+                        Visibility="{Binding NewsBeside, Converter={StaticResource Visible}}">
+            <ContentControl x:Name="NewsColumnBeside" Width="340" Margin="0,8,8,8" VerticalAlignment="Top" Focusable="False"
+                            Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" />
+          </ScrollViewer>
+          </Grid>
 
           <!-- OD-119: News, the same feed (offline too); an item opens here with Back. T3b (Alex): read on black, with an almost
                invisible bundled pattern, full-bleed over the content area. -->
