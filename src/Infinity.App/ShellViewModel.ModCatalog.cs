@@ -91,7 +91,7 @@ public sealed partial class ShellViewModel
             await RefreshModsAsync();
             card = ModCards.FirstOrDefault(current => current.Manifest.Id == card.Manifest.Id) ?? card;
         }
-        _selectedMod = card;
+        _selectedMod = card; _externalMod = null; // the set-up pane gives way to the chosen card
         _showModInfo = !card.HasOptions;
         _showModOptions = card.HasOptions;
         _showLobbyPane = false;
@@ -105,7 +105,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         if (!ModsIdle) return;
-        _selectedMod = card; _showModInfo = true; _showModOptions = false; _showLobbyPane = false;
+        _selectedMod = card; _showModInfo = true; _showModOptions = false; _showLobbyPane = false; _externalMod = null;
         Changed(string.Empty);
     }
 
@@ -685,7 +685,7 @@ public sealed partial class ShellViewModel
     public Task ConfirmModUpdateAsync()
     {
         if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next } card) return Task.CompletedTask;
-        if (next.IsExternal) return OpenExternalSetupAsync(card); // only the files whose pins changed are asked for again
+        if (next.IsExternal) return OpenExternalSetupAsync(card, update: true); // after its review; only files whose pins changed are asked for again
         var factory = ModManagerFactory()!; var hosts = CatalogHosts; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
         {

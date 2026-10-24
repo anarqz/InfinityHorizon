@@ -999,7 +999,7 @@
             </Border>
             <!-- OD-117: set up a mod made of the player's own files; one row per source, then the notice and Install. -->
             <Border Grid.Column="1" Width="400" Margin="0,-28,-40,-16" Padding="22,22,16,16" Background="{StaticResource InfinitySurface}"
-                    BorderBrush="#3365184D" BorderThickness="1,0,0,0" Visibility="{Binding ShowExternalSetup, Converter={StaticResource Visible}}"
+                    x:Name="ExternalPane" BorderBrush="#3365184D" BorderThickness="1,0,0,0" Visibility="{Binding ShowExternalSetup, Converter={StaticResource Visible}}"
                     KeyDown="OnExternalPaneKey">
               <DockPanel>
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
@@ -1039,7 +1039,7 @@
                                 <Button Content="{Binding DataContext.S[external.choose_folder], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                         Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFolder, Converter={StaticResource Visible}}" />
                                 <Button Content="{Binding DataContext.S[external.choose_file], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                        Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" Tag="file" />
+                                        Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" />
                                 <Button Content="{Binding DataContext.S[external.system_dialog], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                         Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6"
                                         Visibility="{Binding DataContext.CanUseSystemPicker, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource Visible}}" />
@@ -1050,7 +1050,7 @@
                       </ItemsControl>
                     </StackPanel>
                     <!-- The in-launcher browser: controller-friendly, quick locations, the path box opens the Steam keyboard. -->
-                    <StackPanel Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
+                    <StackPanel x:Name="BrowserPanel" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
                       <TextBlock Text="{Binding S[external.browse_title]}" FontWeight="Bold" Margin="0,0,0,8" />
                       <ItemsControl ItemsSource="{Binding BrowserPlaces}" Margin="0,0,0,8">
                         <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
@@ -1064,7 +1064,7 @@
                                  AutomationProperties.Name="{Binding S[external.path]}" />
                       </DockPanel>
                       <WrapPanel Margin="0,0,0,8">
-                        <Button Content="{Binding S[external.up]}" Click="OnBrowseUp" Padding="10,6" Margin="0,0,8,6" />
+                        <Button x:Name="BrowserUpButton" Content="{Binding S[external.up]}" Click="OnBrowseUp" Padding="10,6" Margin="0,0,8,6" />
                         <Button Content="{Binding S[external.pick_this]}" Click="OnPickBrowserFolder" IsEnabled="{Binding BrowserCanPickFolder}"
                                 Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,6" />
                         <Button Content="{Binding S[external.cancel]}" Click="OnStopBrowsing" Padding="10,6" Margin="0,0,8,6" />

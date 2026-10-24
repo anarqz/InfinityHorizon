@@ -64,7 +64,7 @@ public sealed partial class ShellViewModel
 
     public bool ShowLobbyButton => SignedIn && (IsAdmin || DedicatedActive);
 
-    public bool ShowLobbyPane => _showLobbyPane && ShowLobbyButton;
+    public bool ShowLobbyPane => _showLobbyPane && ShowLobbyButton && _externalMod is null;
 
     public string LobbyName
     {
@@ -190,7 +190,7 @@ public sealed partial class ShellViewModel
         _showLobbyPane = !_showLobbyPane;
         if (_showLobbyPane && _lobbyName.Length == 0) _lobbyName = "Infinity";
         // One right sidebar at a time: next to a mod panel the centre column is squeezed (the draft settings survive).
-        if (_showLobbyPane) { _showModInfo = false; _showModOptions = false; }
+        if (_showLobbyPane) { _showModInfo = false; _showModOptions = false; _externalMod = null; }
         Changed(string.Empty);
     }
 

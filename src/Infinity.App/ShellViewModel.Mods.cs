@@ -41,7 +41,7 @@ public sealed partial class ShellViewModel
     public bool OnMods => _onMods;
     public bool ShowMods => (InShell || DevelopmentMods) && _onMods && !ShowPickSave;
     public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy;
-    public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null;
+    public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null && _externalMod is null;
     public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking;
     public bool ModsNews => _catalogLoaded && !_onMods && ModCards.Any(c => c.CanAct && (c.UpdateAvailable || c.Action == S["mods.install"]));
     public string ModsTag => S["mods.tag_new"];

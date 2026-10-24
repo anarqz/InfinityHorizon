@@ -29,6 +29,18 @@ public partial class MainWindow : Window
         var vm = new ShellViewModel(strings, config, state);
         DataContext = vm;
         _gamepad = new GamepadNavigator(this, () => vm.Playing);
+        // OD-117: the set-up pane and its browser take the focus when they open, so the controller's D-pad and B act there.
+        bool setupShown = false, browserShown = false;
+        vm.PropertyChanged += (_, _) =>
+        {
+            if (vm.ShowExternalSetup == setupShown && vm.ShowBrowser == browserShown) return;
+            var intoBrowser = vm.ShowBrowser && !browserShown;
+            var intoPane = vm.ShowExternalSetup && (!setupShown || browserShown && !vm.ShowBrowser);
+            setupShown = vm.ShowExternalSetup; browserShown = vm.ShowBrowser;
+            if (intoBrowser) FocusBrowser();
+            else if (intoPane) _ = Dispatcher.InvokeAsync(() => ExternalPane.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.First)),
+                System.Windows.Threading.DispatcherPriority.Loaded);
+        };
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
         vm.UpdateRestartRequested += () => Application.Current.Shutdown();
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
@@ -242,12 +254,21 @@ public partial class MainWindow : Window
     private void OnCloseExternalSetup(object sender, RoutedEventArgs e) => _vm.CloseExternalSetup();
     private async void OnInstallExternal(object sender, RoutedEventArgs e) => await _vm.InstallExternalAsync();
 
-    private void OnBrowseExternal(object sender, RoutedEventArgs e)
+    private void OnBrowseExternal(object sender, RoutedEventArgs e) => _vm.StartBrowsing((ExternalSourceRow)((FrameworkElement)sender).DataContext);
+
+    /// <summary>After the listing changes: the first entry takes the focus (else Up), never a collapsed button outside the pane.</summary>
+    private void FocusBrowser() => _ = Dispatcher.InvokeAsync(() =>
     {
-        _vm.StartBrowsing((ExternalSourceRow)((FrameworkElement)sender).DataContext);
-        // The first entry takes the focus for the controller; the path box opens the Steam keyboard when chosen.
-        _ = Dispatcher.InvokeAsync(() => BrowserPathBox.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)),
-            System.Windows.Threading.DispatcherPriority.Input);
+        if (BrowserList.Items.Count > 0 && BrowserList.ItemContainerGenerator.ContainerFromIndex(0) is DependencyObject first && FindButton(first) is { } button) button.Focus();
+        else BrowserUpButton.Focus();
+    }, System.Windows.Threading.DispatcherPriority.Loaded);
+
+    private static System.Windows.Controls.Button? FindButton(DependencyObject node)
+    {
+        if (node is System.Windows.Controls.Button button) return button;
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++)
+            if (FindButton(System.Windows.Media.VisualTreeHelper.GetChild(node, i)) is { } found) return found;
+        return null;
     }
 
     private async void OnSystemPickExternal(object sender, RoutedEventArgs e)
@@ -267,17 +288,17 @@ public partial class MainWindow : Window
         if (picked is not null) await _vm.PickWithSystemDialogAsync(row, picked);
     }
 
-    private void OnBrowsePlace(object sender, RoutedEventArgs e) => _vm.Browse(((BrowserPlace)((FrameworkElement)sender).DataContext).Path);
-    private void OnBrowseDraft(object sender, RoutedEventArgs e) => _vm.BrowseDraft();
-    private void OnBrowseUp(object sender, RoutedEventArgs e) => _vm.BrowseUp();
+    private void OnBrowsePlace(object sender, RoutedEventArgs e) { _vm.Browse(((BrowserPlace)((FrameworkElement)sender).DataContext).Path); FocusBrowser(); }
+    private void OnBrowseDraft(object sender, RoutedEventArgs e) { _vm.BrowseDraft(); FocusBrowser(); }
+    private void OnBrowseUp(object sender, RoutedEventArgs e) { _vm.BrowseUp(); FocusBrowser(); }
     private void OnStopBrowsing(object sender, RoutedEventArgs e) => _vm.StopBrowsing();
     private async void OnPickBrowserFolder(object sender, RoutedEventArgs e) => await _vm.PickBrowserFolderAsync();
-    private async void OnBrowserEntry(object sender, RoutedEventArgs e) => await _vm.OpenBrowserEntryAsync((BrowserEntry)((FrameworkElement)sender).DataContext);
+    private async void OnBrowserEntry(object sender, RoutedEventArgs e) { await _vm.OpenBrowserEntryAsync((BrowserEntry)((FrameworkElement)sender).DataContext); if (_vm.ShowBrowser) FocusBrowser(); }
 
     private void OnBrowserPathKey(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Enter) return;
-        e.Handled = true; _vm.BrowseDraft();
+        e.Handled = true; _vm.BrowseDraft(); FocusBrowser();
     }
 
     // Escape (the controller's B): back out of the browser first, then close the pane.

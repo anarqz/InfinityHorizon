@@ -55,7 +55,7 @@ public sealed partial class ShellViewModel
     private ExternalSourceRow? _browsingRow;
     private string _browserPath = "";
     private string _browserDraft = "";
-    private CancellationTokenSource? _externalCheck;
+    private readonly Dictionary<ExternalSourceRow, CancellationTokenSource> _externalChecks = [];
     public ObservableCollection<ExternalSourceRow> ExternalRows { get; } = [];
     public ObservableCollection<BrowserEntry> BrowserEntries { get; } = [];
     public ObservableCollection<BrowserPlace> BrowserPlaces { get; } = [];
@@ -78,12 +78,15 @@ public sealed partial class ShellViewModel
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binds to instance properties")]
     public bool CanUseSystemPicker => !WineHost.Detected && !GamepadNavigator.SteamGamepadUi;
 
-    /// <summary>Opens the pane for <paramref name="card"/>'s mod: rows already in the store show as checked; a remembered pick is re-checked.</summary>
-    public async Task OpenExternalSetupAsync(ModCard card)
+    /// <summary>
+    /// Opens the pane for <paramref name="card"/>'s mod (<paramref name="update"/>: its reviewed pending update, from the update's own
+    /// confirmation only): rows already copied show so; a remembered pick is checked again. "Check files again" never applies an update.
+    /// </summary>
+    public async Task OpenExternalSetupAsync(ModCard card, bool update = false)
     {
         ArgumentNullException.ThrowIfNull(card);
-        var mod = card.Next ?? card.Manifest;
-        if (!mod.IsExternal || ModManagerFactory() is not { } factory || !ModsIdle) return;
+        var mod = update ? card.Next : card.Manifest;
+        if (mod is not { IsExternal: true } || ModManagerFactory() is not { } factory || !ModsIdle || update && !card.CanAct) return;
         _externalMod = mod; _showModInfo = false; _showModOptions = false; _showLobbyPane = false; _browsing = false; _selectedMod = card;
         ExternalRows.Clear();
         foreach (var source in mod.ExternalSources)
@@ -111,7 +114,7 @@ public sealed partial class ShellViewModel
 
     public void CloseExternalSetup()
     {
-        _externalCheck?.Cancel();
+        foreach (var check in _externalChecks.Values) check.Cancel();
         _externalMod = null; _browsing = false; _browsingRow = null;
         ExternalRows.Clear(); BrowserEntries.Clear();
         Changed(string.Empty);
@@ -122,8 +125,8 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(row);
         if (_externalMod is not { } mod || ModManagerFactory() is not { } factory) return;
-        _externalCheck?.Cancel();
-        using var cancel = _externalCheck = new CancellationTokenSource();
+        if (_externalChecks.Remove(row, out var earlier)) earlier.Cancel(); // a new pick for the same row replaces its check; other rows go on
+        using var cancel = new CancellationTokenSource(); _externalChecks[row] = cancel;
         row.Picked = picked; row.Checking = true; row.Ok = false; row.Problems = false; row.Details = ""; row.Progress = 0;
         row.Status = S["external.checking_start"]; Changed(nameof(CanInstallExternal));
         var progress = new Progress<ExternalProgress>(p =>
@@ -137,9 +140,7 @@ public sealed partial class ShellViewModel
             var check = await Task.Run(() =>
             {
                 var manager = factory();
-                var result = manager.CheckExternalSource(mod, row.Source.Id, picked, progress, cancel.Token);
-                manager.RememberExternalChoice(mod.Id, row.Source.Id, picked);
-                return result;
+                return manager.CheckExternalSource(mod, row.Source.Id, picked, progress, cancel.Token); // remembers a useful pick itself
             }, cancel.Token);
             ShowCheck(row, check);
         }
@@ -148,9 +149,9 @@ public sealed partial class ShellViewModel
         {
             Log("mods: external source check failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : ""));
             row.Problems = true;
-            row.Status = error is ModException { Code: ModErrors.ExternalFiles } failure ? S.Format("external.unusable", ("reason", failure.Message)) : ModErrorText(error);
+            row.Status = error is ModException { Code: ModErrors.ExternalFiles } failure ? S.Format("external.unusable", ("reason", S["external.reason." + failure.Message] is var reason && reason != "external.reason." + failure.Message ? reason : S["external.reason.other"])) : ModErrorText(error);
         }
-        finally { row.Checking = false; if (ReferenceEquals(_externalCheck, cancel)) _externalCheck = null; Changed(nameof(CanInstallExternal)); Changed(nameof(ExternalAllOk)); }
+        finally { row.Checking = false; if (_externalChecks.TryGetValue(row, out var current) && ReferenceEquals(current, cancel)) _externalChecks.Remove(row); Changed(nameof(CanInstallExternal)); Changed(nameof(ExternalAllOk)); }
     }
 
     private void ShowCheck(ExternalSourceRow row, ExternalSourceCheck check)
@@ -159,9 +160,11 @@ public sealed partial class ShellViewModel
         row.Ok = check.Ok; row.Problems = !check.Ok; row.Progress = 1;
         if (check.Ok)
         {
-            row.Status = S.Format("external.found", ("count", N(check.Found)), ("where", check.MatchedRoot ?? check.Picked));
+            row.Status = S.Format("external.found", ("count", N(check.FromSource)), ("where", check.MatchedRoot ?? check.Picked))
+                + (check.FromSource < check.Found ? "\n" + S.Format("external.kept", ("count", N(check.Found - check.FromSource))) : "");
             return;
         }
+        if (check.FromSource == 0) { row.Status = S["external.nothing_found"]; return; } // a pick without any of the files, whatever is stored
         var parts = new List<string>();
         if (check.Missing > 0) parts.Add(S.Format("external.missing", ("count", N(check.Missing))));
         if (check.Different > 0) parts.Add(S.Format("external.different", ("count", N(check.Different))));
@@ -177,7 +180,25 @@ public sealed partial class ShellViewModel
     {
         if (!CanInstallExternal || _externalMod is not { } mod) return;
         if (ExternalInstalled && _modHealth.Installed.FirstOrDefault(i => i.Id == mod.Id)?.Manifest?.SameContent(mod) == true)
-        { Message = S["external.recheck_ok"]; CloseExternalSetup(); return; }
+        {
+            // "Check files again": every stored copy is hashed; any that no longer matches must come from a new pick.
+            IReadOnlyList<ExternalFile> failed = [];
+            await RunModOperationAsync(async () =>
+            {
+                var manager = await Task.Run(ModManagerFactory()!);
+                failed = await Task.Run(() => manager.VerifyStoredExternal(mod, null, CancellationToken.None));
+            }, S["external.recheck_ok"]);
+            if (failed.Count == 0) { if (Message == S["external.recheck_ok"]) CloseExternalSetup(); return; }
+            foreach (var row in ExternalRows.Where(r => failed.Any(f => f.SourceId == r.Source.Id)))
+            {
+                var lost = failed.Where(f => f.SourceId == row.Source.Id).ToArray();
+                row.Ok = false; row.Problems = true;
+                row.Status = S.Format("external.stored_damaged", ("count", lost.Length.ToString(CultureInfo.CurrentCulture)));
+                row.Details = string.Join("\n", lost.Take(200).Select(f => S["external.file_missing"] + "  " + f.Path));
+            }
+            Message = S["mods.error.external_files"]; Changed(string.Empty);
+            return;
+        }
         var update = ExternalInstalled; var hardcore = ProfileHardcore;
         await RunModOperationAsync(async () =>
         {
@@ -210,17 +231,22 @@ public sealed partial class ShellViewModel
         if (_browsingRow is not { } row) return;
         string full;
         try { full = Path.GetFullPath(path); } catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { Message = S["external.browse_failed"]; return; }
-        if (!Directory.Exists(full)) { if (File.Exists(full) && row.PicksFile) { _ = PickAsync(full); return; } full = Home(); }
+        if (!Directory.Exists(full))
+        {
+            if (File.Exists(full) && row.PicksFile) { _ = PickAsync(full); return; }
+            if (_browserPath.Length > 0) Message = S["external.browse_failed"]; // a typed path that does not exist says so; the first open falls back quietly
+            full = Home();
+        }
         var entries = new List<BrowserEntry>();
         try
         {
             var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.System | FileAttributes.Hidden };
-            entries.AddRange(new DirectoryInfo(full).EnumerateDirectories("*", options).OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase).Take(500)
+            entries.AddRange(new DirectoryInfo(full).EnumerateDirectories("*", options).Take(2000).OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase).Take(500)
                 .Select(d => new BrowserEntry(d.Name, d.FullName, true)));
             if (row.PicksFile)
                 entries.AddRange(new DirectoryInfo(full).EnumerateFiles("*", options)
                     .Where(f => row.PicksFolder ? f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) : true)
-                    .OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).Take(500).Select(f => new BrowserEntry(f.Name, f.FullName, false)));
+                    .Take(2000).OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).Take(500).Select(f => new BrowserEntry(f.Name, f.FullName, false)));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
@@ -283,14 +309,16 @@ public sealed partial class ShellViewModel
                     {
                         // /run/media/<user>/<card> on SteamOS and most desktops; /run/media/<card> elsewhere.
                         var children = Directory.EnumerateDirectories(level).ToArray();
-                        foreach (var card in children.Length > 0 ? children : [level])
+                        // /run/media/<user>/<card> (SteamOS 3.5+, desktops) or /run/media/<card> (older SteamOS): only a user folder holds cards.
+                        var user = Environment.GetEnvironmentVariable("USER");
+                        foreach (var card in user is { Length: > 0 } && Path.GetFileName(level) == user ? children : [level])
                             Add("", card, S.Format("external.place_card", ("name", Path.GetFileName(card))));
                     }
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         }
         foreach (var drive in DriveInfo.GetDrives())
-            try { if (drive.IsReady && !(WineHost.Detected && drive.Name.StartsWith("Z", StringComparison.OrdinalIgnoreCase))) Add("", drive.RootDirectory.FullName, S.Format("external.place_drive", ("name", drive.Name.TrimEnd('\\')))); }
+            try { if (drive.DriveType is DriveType.Fixed or DriveType.Removable && drive.IsReady && !(WineHost.Detected && drive.Name.StartsWith("Z", StringComparison.OrdinalIgnoreCase))) Add("", drive.RootDirectory.FullName, S.Format("external.place_drive", ("name", drive.Name.TrimEnd('\\')))); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 }

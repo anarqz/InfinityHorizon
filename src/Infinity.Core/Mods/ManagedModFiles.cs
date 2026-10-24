@@ -342,6 +342,12 @@ public sealed partial class ManagedModFiles
         ArgumentNullException.ThrowIfNull(manifest);
         if (enabled) CheckProfile(manifest, hardcore); // disabling is always allowed
         if (enabled && manifest.IsCustom) RequireCustomConfirmation(manifest);
+        // OD-117: an external mod's database base obeys the same rules on enable as on install (runtime, one base at a time).
+        if (enabled && manifest.IsExternal && manifest.DatabaseBase is not null)
+        {
+            if (!DataSqlRuntimeAvailable()) throw new ModException("a database base needs the mod runtime", ModErrors.RuntimeRequired);
+            CheckDatabaseBase(manifest);
+        }
         using var gate = Lock();
         var receipt = Receipt(manifest) ?? throw new ModException("mod has no installation receipt");
         if (receipt.Enabled == enabled) return;
