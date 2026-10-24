@@ -277,6 +277,8 @@
         <Setter Property="SelectionBrush" Value="{StaticResource InfinityAccent}" />
         <Setter Property="Padding" Value="10,7" />
       </Style>
+      <!-- OD-118: every icon ships with the launcher. Fluent's own PasswordBox, ComboBox, Expander and ScrollBar templates draw
+           glyphs with Segoe Fluent Icons, which Wine/Proton does not have; these templates draw the same parts as geometry. -->
       <Style TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
         <Setter Property="Background" Value="{StaticResource InfinitySurfaceHigh}" />
         <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
@@ -284,6 +286,169 @@
         <Setter Property="CaretBrush" Value="{StaticResource InfinityPink}" />
         <Setter Property="SelectionBrush" Value="{StaticResource InfinityAccent}" />
         <Setter Property="Padding" Value="10,7" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="PasswordBox">
+              <Border x:Name="Frame" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6">
+                <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" Focusable="False" />
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Frame" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <Geometry x:Key="ChevronDown">M 0,0 L 5,5 L 10,0</Geometry>
+
+      <Style TargetType="ComboBox">
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="Background" Value="{StaticResource InfinitySurfaceHigh}" />
+        <Setter Property="BorderBrush" Value="{StaticResource InfinityBorder}" />
+        <Setter Property="Padding" Value="10,7" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ComboBox">
+              <Grid>
+                <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
+                              IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                  <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                      <Border x:Name="Frame" Background="{Binding Background, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                              BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource AncestorType=ComboBox}}" BorderThickness="1" CornerRadius="6">
+                        <Path Data="{StaticResource ChevronDown}" Stroke="{StaticResource InfinityMuted}" StrokeThickness="1.6" HorizontalAlignment="Right"
+                              VerticalAlignment="Center" Margin="0,0,12,0" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Frame" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </ToggleButton.Template>
+                </ToggleButton>
+                <ContentPresenter Margin="{TemplateBinding Padding}" IsHitTestVisible="False" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                  Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
+                <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade"
+                       IsOpen="{TemplateBinding IsDropDownOpen}">
+                  <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1" CornerRadius="6"
+                          MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ComboBox}}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                    <ScrollViewer><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" /></ScrollViewer>
+                  </Border>
+                </Popup>
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="Toggle" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+      <Style TargetType="ComboBoxItem">
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="Padding" Value="10,7" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ComboBoxItem">
+              <Border x:Name="Row" Background="Transparent" Padding="{TemplateBinding Padding}"><ContentPresenter /></Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Row" Property="Background" Value="{StaticResource InfinitySurfaceHigh}" /></Trigger>
+                <Trigger Property="IsSelected" Value="True"><Setter Property="Foreground" Value="{StaticResource InfinityPink}" /></Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <Style TargetType="Expander">
+        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Expander">
+              <DockPanel>
+                <ToggleButton DockPanel.Dock="Top" IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                              Cursor="Hand" HorizontalAlignment="Left" Focusable="True">
+                  <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                      <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <Path x:Name="Chevron" Data="{StaticResource ChevronDown}" Stroke="{StaticResource InfinityMuted}" StrokeThickness="1.6" Width="10" Height="6"
+                              Margin="0,0,8,0" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                          <Path.RenderTransform><RotateTransform x:Name="Turn" Angle="-90" /></Path.RenderTransform>
+                        </Path>
+                        <ContentPresenter Content="{Binding Header, RelativeSource={RelativeSource AncestorType=Expander}}" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Chevron" Property="RenderTransform"><Setter.Value><RotateTransform Angle="0" /></Setter.Value></Setter></Trigger>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource InfinityPink}" /></Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </ToggleButton.Template>
+                </ToggleButton>
+                <ContentPresenter x:Name="Body" Margin="18,6,0,0" Visibility="Collapsed" />
+              </DockPanel>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsExpanded" Value="True"><Setter TargetName="Body" Property="Visibility" Value="Visible" /></Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <!-- Scroll bars: a thin thumb on its track, no arrow buttons (Fluent draws those with an icon font). -->
+      <Style x:Key="InfinityThumb" TargetType="Thumb">
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Thumb">
+              <Border x:Name="Bar" Background="#55F9EAEE" CornerRadius="3" />
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bar" Property="Background" Value="#99F9EAEE" /></Trigger>
+                <Trigger Property="IsDragging" Value="True"><Setter TargetName="Bar" Property="Background" Value="{StaticResource InfinityPink}" /></Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+      <Style x:Key="InfinityPageButton" TargetType="RepeatButton">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+          <Setter.Value><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" /></ControlTemplate></Setter.Value>
+        </Setter>
+      </Style>
+      <Style TargetType="ScrollBar">
+        <Setter Property="Width" Value="8" />
+        <Setter Property="MinWidth" Value="8" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ScrollBar">
+              <Track x:Name="PART_Track" IsDirectionReversed="True" Margin="0,2">
+                <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource InfinityPageButton}" Command="ScrollBar.PageUpCommand" /></Track.DecreaseRepeatButton>
+                <Track.Thumb><Thumb Style="{StaticResource InfinityThumb}" Margin="1,0" /></Track.Thumb>
+                <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource InfinityPageButton}" Command="ScrollBar.PageDownCommand" /></Track.IncreaseRepeatButton>
+              </Track>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+          <Trigger Property="Orientation" Value="Horizontal">
+            <Setter Property="Width" Value="Auto" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Height" Value="8" />
+            <Setter Property="MinHeight" Value="8" />
+            <Setter Property="Template">
+              <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                  <Track x:Name="PART_Track" Margin="2,0">
+                    <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource InfinityPageButton}" Command="ScrollBar.PageLeftCommand" /></Track.DecreaseRepeatButton>
+                    <Track.Thumb><Thumb Style="{StaticResource InfinityThumb}" Margin="0,1" /></Track.Thumb>
+                    <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource InfinityPageButton}" Command="ScrollBar.PageRightCommand" /></Track.IncreaseRepeatButton>
+                  </Track>
+                </ControlTemplate>
+              </Setter.Value>
+            </Setter>
+          </Trigger>
+        </Style.Triggers>
       </Style>
 
       <!-- Fluent draws the check with Segoe Fluent Icons, which Wine/Proton does not have (and its
