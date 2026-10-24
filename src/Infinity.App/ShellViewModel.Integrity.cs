@@ -76,7 +76,8 @@ public sealed partial class ShellViewModel
         VerificationCache.Invalidate();
         ClearIntegrity();
         var location = GameContentLocation.Detect(folder);
-        if (location is null) { _configurationHasError = true; _integrityFailed = true; _integrityStatus = S["integrity.invalid_content"]; Changed(string.Empty); return; }
+        // Refused where the player is looking too (the message bar), not only on the Configure card.
+        if (location is null) { _configurationHasError = true; _integrityFailed = true; _integrityStatus = S["integrity.invalid_content"]; Message = _integrityStatus; Changed(string.Empty); return; }
         try
         {
             location.Save(_stateDirectory);
