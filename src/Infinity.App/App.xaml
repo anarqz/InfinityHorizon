@@ -302,8 +302,27 @@
       </Style>
 
       <Geometry x:Key="ChevronDown">M 0,0 L 5,5 L 10,0</Geometry>
+      <!-- OD-118 T1d: icons Selawik lacks (✓ ↻ ↗ ←) as bundled geometry on a 24-unit grid; Wine has no fallback font for them. -->
+      <Geometry x:Key="IconCheck">M 5,12.5 L 10,17 L 19,7</Geometry>
+      <Geometry x:Key="IconRefresh">M 19,12 A 7,7 0 1 1 16.95,7.05 M 17.5,2.5 L 17.2,7.3 L 12.4,7</Geometry>
+      <Geometry x:Key="IconExternal">M 7,17 L 17,7 M 9,7 L 17,7 L 17,15</Geometry>
+      <Geometry x:Key="IconBack">M 19,12 L 5,12 M 11,6 L 5,12 L 11,18</Geometry>
+      <Style x:Key="InlineIcon" TargetType="Path">
+        <Setter Property="Width" Value="12" />
+        <Setter Property="Height" Value="12" />
+        <Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="StrokeThickness" Value="1.8" />
+        <Setter Property="StrokeStartLineCap" Value="Round" />
+        <Setter Property="StrokeEndLineCap" Value="Round" />
+        <Setter Property="StrokeLineJoin" Value="Round" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Control}}" />
+      </Style>
 
       <Style TargetType="ComboBox">
+        <Setter Property="MinWidth" Value="180" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
         <Setter Property="Background" Value="{StaticResource InfinitySurfaceHigh}" />
         <Setter Property="BorderBrush" Value="{StaticResource InfinityBorder}" />
@@ -312,7 +331,7 @@
           <Setter.Value>
             <ControlTemplate TargetType="ComboBox">
               <Grid>
-                <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
+                <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Padding="0"
                               IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                   <ToggleButton.Template>
                     <ControlTemplate TargetType="ToggleButton">
@@ -327,7 +346,7 @@
                     </ControlTemplate>
                   </ToggleButton.Template>
                 </ToggleButton>
-                <ContentPresenter Margin="{TemplateBinding Padding}" IsHitTestVisible="False" VerticalAlignment="Center" HorizontalAlignment="Left"
+                <ContentPresenter Margin="10,7,36,7" IsHitTestVisible="False" VerticalAlignment="Center" HorizontalAlignment="Left"
                                   Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
                 <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade"
                        IsOpen="{TemplateBinding IsDropDownOpen}">

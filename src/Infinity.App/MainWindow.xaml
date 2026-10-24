@@ -59,13 +59,15 @@
       <Image Source="{StaticResource BrandLines}" Stretch="UniformToFill" VerticalAlignment="Bottom" Height="150"
              Opacity="0.18" IsHitTestVisible="False" />
       <Border BorderBrush="#3365184D" BorderThickness="0,0,1,0" />
-      <DockPanel Margin="0,0,0,14">
+      <!-- OD-118 T1d: short windows (952x606) scroll the sidebar instead of drawing the nav over its bottom group. -->
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+      <DockPanel MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
         <Image DockPanel.Dock="Top" Source="{StaticResource BrandLogo}" Width="172" Margin="22,22,22,12"
                RenderOptions.BitmapScalingMode="HighQuality" />
-        <StackPanel DockPanel.Dock="Bottom" Margin="0,0,12,0">
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,0,12,14">
           <Button Content="{Binding S[nav.help]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
           <Button Content="{Binding S[nav.bug]}" Style="{StaticResource NavButton}" Click="OnNavBugReport" Tag="{Binding ShowBugReport}" />
-          <Button Content="{Binding S[nav.discord]}" Style="{StaticResource NavButton}" Click="OnDiscord" />
+          <Button Style="{StaticResource NavButton}" Click="OnDiscord" AutomationProperties.Name="{Binding S[nav.discord]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[nav.discord]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
           <Border Height="1" Background="{StaticResource InfinityBorder}" Margin="20,8,8,8" />
           <Button Content="{Binding S[nav.account]}" Style="{StaticResource NavButton}" IsEnabled="{Binding CanChangeIdentity}" Click="OnNavAccount" Tag="{Binding ShowAccount}" />
           <Button Content="{Binding S[nav.donate]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
@@ -96,6 +98,7 @@
           <Button Content="{Binding S[nav.news]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
         </StackPanel>
       </DockPanel>
+      </ScrollViewer>
     </Grid>
 
     <!-- The page area: Home's art behind everything, then the top bar, the page and the status line. -->
@@ -322,8 +325,8 @@
           <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
             <Border Style="{StaticResource Card}" Padding="28,24">
               <StackPanel>
-                <Button Content="{Binding S[welcome.back]}" Click="OnWelcome" Style="{StaticResource LinkButton}"
-                        HorizontalAlignment="Left" Margin="-6,0,0,14" IsEnabled="{Binding Idle}" />
+                <Button Click="OnWelcome" Style="{StaticResource LinkButton}"
+                        HorizontalAlignment="Left" Margin="-6,0,0,14" IsEnabled="{Binding Idle}" AutomationProperties.Name="{Binding S[welcome.back]}"><StackPanel Orientation="Horizontal"><Path Data="{StaticResource IconBack}" Style="{StaticResource InlineIcon}" Margin="0,0,6,0" /><TextBlock Text="{Binding S[welcome.back]}" VerticalAlignment="Center" /></StackPanel></Button>
                 <TextBlock Text="{Binding S[signin.title]}" Style="{StaticResource PageTitle}" FontSize="24" />
                 <TextBlock Text="{Binding S[native.subtitle]}" Margin="0,6,0,20" Style="{StaticResource PageSubtitle}" />
                 <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Hidden}}">
@@ -649,8 +652,8 @@
                   <TextBlock Text="{Binding S[bugs.step3]}" FontWeight="Bold" FontSize="16" />
                   <TextBlock Text="{Binding S[bugs.step3_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
                   <TextBlock Text="{Binding VersionLabel}" FontSize="12" Foreground="{StaticResource InfinityGold}" />
-                  <Button Content="{Binding S[bugs.open]}" Click="OnGitHubIssues" Style="{StaticResource AccentButtonStyle}"
-                          HorizontalAlignment="Left" Margin="0,18,0,0" />
+                  <Button Click="OnGitHubIssues" Style="{StaticResource AccentButtonStyle}"
+                          HorizontalAlignment="Left" Margin="0,18,0,0" AutomationProperties.Name="{Binding S[bugs.open]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[bugs.open]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
                   <TextBlock Text="github.com/anarqz/InfinityHorizon" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,10,0,0" />
                 </StackPanel>
               </Border>
@@ -674,26 +677,26 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                     <TextBlock Text="AZIMUTH" FontWeight="Bold" FontSize="18" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite">
-                      <TextBlock Text="✓" FontSize="20" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Margin="0,0,6,0" Visibility="{Binding AzimuthCardReady, Converter={StaticResource Visible}}" />
+                      <Path Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="18" Height="18" StrokeThickness="2.6" Stroke="{StaticResource InfinityGood}" Margin="0,0,8,0" Visibility="{Binding AzimuthCardReady, Converter={StaticResource Visible}}" />
                       <TextBlock Text="{Binding AzimuthCardStatus}" VerticalAlignment="Center" FontSize="12" />
                     </StackPanel>
                   </Grid>
                   <TextBlock Text="{Binding SetupSummary}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding HookLine}" TextWrapping="Wrap" Margin="0,0,0,8" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                   <DockPanel Margin="0,4">
-                    <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding AzimuthFound, Converter={StaticResource Visible}}" />
+                    <Path DockPanel.Dock="Left" Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="14" Height="14" Margin="0,0,10,0" StrokeThickness="2.4" Stroke="{StaticResource InfinityGood}" Visibility="{Binding AzimuthFound, Converter={StaticResource Visible}}" />
                     <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
                                Visibility="{Binding AzimuthFound, Converter={StaticResource Hidden}}" />
                     <TextBlock Text="{Binding SetupFoundLine}" TextWrapping="Wrap" />
                   </DockPanel>
                   <DockPanel Margin="0,4">
-                    <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding AzimuthVersionOk, Converter={StaticResource Visible}}" />
+                    <Path DockPanel.Dock="Left" Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="14" Height="14" Margin="0,0,10,0" StrokeThickness="2.4" Stroke="{StaticResource InfinityGood}" Visibility="{Binding AzimuthVersionOk, Converter={StaticResource Visible}}" />
                     <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
                                Visibility="{Binding AzimuthVersionOk, Converter={StaticResource Hidden}}" />
                     <TextBlock Text="{Binding SetupVersionLine}" TextWrapping="Wrap" />
                   </DockPanel>
                   <DockPanel Margin="0,4">
-                    <TextBlock DockPanel.Dock="Left" Width="24" Text="✓" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Visibility="{Binding HookOk, Converter={StaticResource Visible}}" />
+                    <Path DockPanel.Dock="Left" Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="14" Height="14" Margin="0,0,10,0" StrokeThickness="2.4" Stroke="{StaticResource InfinityGood}" Visibility="{Binding HookOk, Converter={StaticResource Visible}}" />
                     <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
                                Visibility="{Binding HookOk, Converter={StaticResource Hidden}}" />
                     <TextBlock Text="{Binding SetupHookLine}" TextWrapping="Wrap" />
@@ -703,12 +706,13 @@
                   <TextBlock Text="{Binding EoAzimuthText}" Margin="24,4,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
                              Visibility="{Binding EoAzimuthMismatch, Converter={StaticResource Visible}}" />
                   <WrapPanel Margin="0,16,0,0">
-                    <Button Content="{Binding HookInstallLabel}" Margin="0,0,10,0" Click="OnInstallHook"
-                            Style="{StaticResource AccentButtonStyle}" Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}" />
+                    <Button Margin="0,0,10,0" Click="OnInstallHook" AutomationProperties.Name="{Binding HookInstallLabel}"
+                            Style="{StaticResource AccentButtonStyle}" Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}">
+                            <TextBlock Text="{Binding HookInstallLabel}" TextWrapping="Wrap" TextAlignment="Center" /></Button>
                     <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8" />
                     <Button Content="{Binding S[setup.recheck]}" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,0,8" />
                   </WrapPanel>
-                  <Button Content="{Binding S[setup.grab]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,8,0,0" Click="OnOpenAzimuthPage" />
+                  <Button Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,8,0,0" Click="OnOpenAzimuthPage" AutomationProperties.Name="{Binding S[setup.grab]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[setup.grab]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
                 </StackPanel>
               </Border>
 
@@ -721,7 +725,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                     <TextBlock Text="{Binding S[integrity.title]}" FontWeight="Bold" FontSize="18" TextWrapping="Wrap" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite">
-                      <TextBlock Text="✓" FontSize="20" FontWeight="Bold" Foreground="{StaticResource InfinityGood}" Margin="0,0,6,0" Visibility="{Binding IntegrityReady, Converter={StaticResource Visible}}" />
+                      <Path Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="18" Height="18" StrokeThickness="2.6" Stroke="{StaticResource InfinityGood}" Margin="0,0,8,0" Visibility="{Binding IntegrityReady, Converter={StaticResource Visible}}" />
                       <TextBlock Text="{Binding IntegrityCardStatus}" VerticalAlignment="Center" FontSize="12" />
                     </StackPanel>
                   </Grid>
@@ -770,13 +774,15 @@
                   <WrapPanel>
                     <!-- Development tools only: the DEV catalog override and the native offline session. -->
                     <WrapPanel Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}">
-                      <Button Content="{Binding S[welcome.back]}" Click="OnNavHome" Padding="10,6" Margin="0,0,8,8" />
+                      <Button Click="OnNavHome" Padding="10,6" Margin="0,0,8,8" AutomationProperties.Name="{Binding S[welcome.back]}"><StackPanel Orientation="Horizontal"><Path Data="{StaticResource IconBack}" Style="{StaticResource InlineIcon}" Margin="0,0,6,0" /><TextBlock Text="{Binding S[welcome.back]}" VerticalAlignment="Center" /></StackPanel></Button>
                       <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" ToolTip="{Binding IntegrityLocationLabel}" Padding="10,6" Margin="0,0,8,8" />
-                      <Button Content="{Binding HookInstallLabel}" Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" />
+                      <Button Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" AutomationProperties.Name="{Binding HookInstallLabel}"><TextBlock Text="{Binding HookInstallLabel}" TextWrapping="Wrap" TextAlignment="Center" /></Button>
                       <Button Content="{Binding S[mods.offline_play]}" Click="OnModdedOffline" IsEnabled="{Binding CanPlayModdedOffline}" Padding="10,6" Margin="0,0,8,8" />
                     </WrapPanel>
-                    <Button Content="↻" Click="OnLoadModCatalog" Padding="10,3" FontSize="20" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
-                            ToolTip="{Binding S[mods.refresh_catalog]}" AutomationProperties.Name="{Binding S[mods.refresh_catalog]}" />
+                    <Button Click="OnLoadModCatalog" Padding="10,8" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
+                            ToolTip="{Binding S[mods.refresh_catalog]}" AutomationProperties.Name="{Binding S[mods.refresh_catalog]}">
+                            <Path Data="{StaticResource IconRefresh}" Style="{StaticResource InlineIcon}" Width="16" Height="16" StrokeThickness="2" />
+                        </Button>
                     <Button Content="{Binding S[mods.folder_short]}" Click="OnChooseAzimuth" Padding="10,6" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
                             ToolTip="{Binding ModFolder}" AutomationProperties.Name="{Binding S[mods.choose_folder]}" />
                   </WrapPanel>
@@ -1041,7 +1047,7 @@
           <TextBlock Text="{Binding OnlineServiceHelp}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
           <Button Content="{Binding S[mods.dev_open]}" Click="OnNavMods" HorizontalAlignment="Left" Margin="0,16,0,0"
                   Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}" IsEnabled="{Binding ModsIdle}" />
-          <Button Content="{Binding S[nav.discord]}" Click="OnDiscord" HorizontalAlignment="Left" Margin="0,16,0,0" />
+          <Button Click="OnDiscord" HorizontalAlignment="Left" Margin="0,16,0,0" AutomationProperties.Name="{Binding S[nav.discord]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[nav.discord]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
         </StackPanel>
       </ScrollViewer>
     </Border>
