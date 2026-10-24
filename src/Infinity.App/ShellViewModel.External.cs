@@ -185,6 +185,7 @@ public sealed partial class ShellViewModel
             if (mod.NeedsRuntime) await RequireRuntimeAsync();
             var manager = await Task.Run(ModManagerFactory()!);
             await Task.Run(() => manager.InstallExternal(mod, progress, update, hardcore));
+            RecordModSource(mod.Id);
         }, S[update ? "mods.updated" : "mods.action_done"]);
         if (_modHealth.Installed.Any(i => i.Id == mod.Id && i.Manifest?.SameContent(mod) == true)) CloseExternalSetup();
     }

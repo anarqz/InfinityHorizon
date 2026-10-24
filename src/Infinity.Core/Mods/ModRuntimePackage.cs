@@ -22,6 +22,7 @@ public sealed record ModRuntimePackage(string Runtime, string Helper)
     public const string RuntimeFile = "infinity_mod.dll";
     public const string HelperFile = "infinity-mod-prepare.exe";
     private const string CurrentFile = "current.json";
+    private const long MaxExpandedBytes = 128L * 1024 * 1024;
     private static readonly string[] PackageFiles = [RuntimeFile, RuntimeFile + ".sig", HelperFile, HelperFile + ".sig"];
 
     /// <summary>The installed package's catalog version and download SHA-256 (null for a bundled development package).</summary>
@@ -69,6 +70,44 @@ public sealed record ModRuntimePackage(string Runtime, string Helper)
             return Verify(folder, key) is { } package ? package with { Version = current.Version, PackageSha256 = current.Sha256 } : null;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    /// <summary>
+    /// The update from 1.0.9: its launcher folder still holds the bundled, release-signed <c>mod\</c> (the update leaves it). When no
+    /// catalog runtime is installed yet and that one verifies with <paramref name="key"/>, it is copied in as the installed runtime, so
+    /// enabled native mods keep playing before the catalog is reachable. The catalog's runtime replaces it at the next native action.
+    /// </summary>
+    public static ModRuntimePackage? AdoptBundled(string launcherDirectory, string home, ReadOnlySpan<byte> key)
+    {
+        if (LocateInstalled(home, key) is { } installed) return installed;
+        var bundled = Path.Combine(launcherDirectory, Folder);
+        if (Verify(bundled, key) is null) return null;
+        try
+        {
+            var root = InstalledRoot(home);
+            Directory.CreateDirectory(root);
+            if (IsLink(root)) return null;
+            var digest = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(bundled, RuntimeFile))));
+            var name = digest[..16]; var folder = Path.Combine(root, name);
+            if (Verify(folder, key) is null)
+            {
+                var staging = Path.Combine(root, "." + Guid.NewGuid().ToString("N") + ".staging");
+                try
+                {
+                    Directory.CreateDirectory(staging);
+                    foreach (var file in PackageFiles) File.Copy(Path.Combine(bundled, file), Path.Combine(staging, file));
+                    if (Verify(staging, key) is null) return null;
+                    if (Directory.Exists(folder)) Directory.Move(folder, Path.Combine(root, "." + Guid.NewGuid().ToString("N") + ".damaged"));
+                    Directory.Move(staging, folder);
+                }
+                finally { if (Directory.Exists(staging)) Remove(staging); }
+            }
+            var current = Path.Combine(root, CurrentFile);
+            File.WriteAllBytes(current + ".tmp", JsonSerializer.SerializeToUtf8Bytes(new Current("bundled", digest, name)));
+            File.Move(current + ".tmp", current, overwrite: true);
+            return LocateInstalled(home, key.ToArray());
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>Whether the catalog's runtime differs from the installed one (none, another download, or not verifying).</summary>
@@ -133,13 +172,16 @@ public sealed record ModRuntimePackage(string Runtime, string Helper)
         using (zip)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            long expanded = 0; var licenses = 0;
             foreach (var entry in zip.Entries)
             {
                 var name = entry.FullName.Replace('\\', '/');
                 if (name.EndsWith('/')) continue;
                 var license = name.StartsWith("licenses/", StringComparison.Ordinal) && name.Count(c => c == '/') == 1
                     && (name.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
-                if (!PackageFiles.Contains(name, StringComparer.Ordinal) && !license || !seen.Add(name) || entry.Length > 64L * 1024 * 1024)
+                // Bounded before anything is written: the two binaries, their signatures and a handful of notices.
+                if (!PackageFiles.Contains(name, StringComparer.Ordinal) && !license || !seen.Add(name) || entry.Length > 64L * 1024 * 1024
+                    || license && ++licenses > 16 || (expanded += entry.Length) > MaxExpandedBytes)
                     throw new ModException("unexpected runtime package entry", ModErrors.Digest);
                 ModManifest.ValidatePath(name);
                 var target = Path.Combine(staging, name.Replace('/', Path.DirectorySeparatorChar));
@@ -183,7 +225,10 @@ public sealed record ModRuntimePackage(string Runtime, string Helper)
 
     private static bool PlainFolder(string? name) => name is { Length: 16 } && name.All(c => char.IsAsciiDigit(c) || c is >= 'a' and <= 'f');
 
+    /// <summary>
+    /// A link or junction (never followed or removed through). Under Wine every mount point reports the reparse attribute, so there
+    /// only a resolvable link target counts. The hook itself checks only the runtime's own folder and file for links (mod_host.c).
+    /// </summary>
     private static bool IsLink(string path) => Directory.Exists(path)
-        && (new DirectoryInfo(path).LinkTarget is not null || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-        && !WineHost.Detected; // Wine reports mount points as links; the hook re-checks every parent of the runtime itself
+        && (new DirectoryInfo(path).LinkTarget is not null || !WineHost.Detected && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0);
 }

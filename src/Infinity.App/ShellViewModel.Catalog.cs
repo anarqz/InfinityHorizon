@@ -40,6 +40,34 @@ public sealed partial class ShellViewModel
     public bool CanUseCustomCatalog => ModsIdle && !DevelopmentMods && DraftUri is { } url && !OfficialModCatalog.IsOfficial(url) && url != CustomCatalog;
     public bool CanUseOfficialCatalog => ModsIdle && UsingCustomCatalog;
 
+    private Dictionary<string, string>? _modSources;
+    private string ModSourcesPath => Path.Combine(_stateDirectory, "mod-sources.json");
+
+    /// <summary>The unofficial catalog a mod was installed or updated from, or null (official, custom folder, unknown).</summary>
+    private string? UnofficialSource(string id)
+    {
+        if (_modSources is null)
+            try { _modSources = File.Exists(ModSourcesPath) ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllBytes(ModSourcesPath)) ?? [] : []; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { _modSources = []; }
+        return _modSources.GetValueOrDefault(id);
+    }
+
+    /// <summary>
+    /// After an install or update from the catalog: remembers that it came from an unofficial one (or forgets it), so the card keeps
+    /// its warning after the player returns to the official catalog.
+    /// </summary>
+    private void RecordModSource(string id)
+    {
+        _ = UnofficialSource(id);
+        if (UsingCustomCatalog) _modSources![id] = CustomCatalog!.AbsoluteUri; else if (!_modSources!.Remove(id)) return;
+        try
+        {
+            File.WriteAllBytes(ModSourcesPath + ".tmp", System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(_modSources));
+            File.Move(ModSourcesPath + ".tmp", ModSourcesPath, overwrite: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Log("mods: mod source not saved: " + error.GetType().Name); }
+    }
+
     public Task UseCustomCatalogAsync() => CanUseCustomCatalog ? SwitchCatalogAsync(DraftUri) : Task.CompletedTask;
     public Task UseOfficialCatalogAsync() => CanUseOfficialCatalog ? SwitchCatalogAsync(null) : Task.CompletedTask;
 

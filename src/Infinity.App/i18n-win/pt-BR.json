@@ -632,6 +632,7 @@
   "mods.error.archive_no_manifest": "Este ZIP não tem infinity-mod.json, então o Infinity não consegue instalá-lo. Peça ao autor do mod para adaptá-lo ao esquema de mods do Infinity: {url}",
   "mods.error.custom_full": "A pasta de mods personalizados já tem o máximo de mods. Remova um antes de adicionar outro.",
   "mods.error.external_files": "Alguns arquivos deste mod vindos da sua cópia estão faltando, são diferentes ou ainda não foram conferidos. Abra Configurar no card dele e escolha a sua cópia de novo.",
+  "mods.runtime_catalog_needed": "Mods nativos precisam do runtime de mods do Infinity, que vem do catálogo de mods, e o catálogo não pôde ser acessado. Confira sua conexão e tente de novo, ou desative-os em Mods para jogar online.",
   "mods.error.runtime_missing": "Este mod precisa do runtime de mods do Infinity, e não foi possível instalá-lo. Confira sua conexão e o catálogo e tente de novo.",
   "mods.runtime_with_mod": "Não instalado · instala junto o runtime de mods do Infinity",
   "mods.progress.runtime": "Instalando o runtime de mods do Infinity…",
