@@ -71,6 +71,7 @@ public partial class MainWindow : Window
     private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesAsync();
     private async void OnCheckOnlineStatus(object sender, RoutedEventArgs e) => await _vm.CheckOnlineStatusAsync();
     private void OnOnlineSupport(object sender, RoutedEventArgs e) => _vm.OpenOnlineSupport();
+    private async void OnConfirmInstall(object sender, RoutedEventArgs e) => await _vm.ConfirmInstallAsync();
     private void OnDismissGitHubAdvisory(object sender, RoutedEventArgs e) => _vm.DismissGitHubAdvisory();
     private void OnPlayOfflineFromStatus(object sender, RoutedEventArgs e) => _vm.PlayOfflineFromStatus();
     private void OnOpenOnlineStatus(object sender, RoutedEventArgs e) => _vm.OpenOnlineStatus();
@@ -217,7 +218,6 @@ public partial class MainWindow : Window
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
 
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
-    private async void OnRequiredMod(object sender, RoutedEventArgs e) => await _vm.ActOnRequiredModAsync();
 
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
     private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);

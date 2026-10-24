@@ -547,12 +547,9 @@
                   <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Left" Foreground="{StaticResource InfinityGold}" />
                   <WrapPanel Margin="0,8,0,0">
                     <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="0,0,8,6" />
-                    <!-- OD-115: the required mod's own action (install from the signed catalog, adopt, enable, or retry the catalog). -->
                     <!-- OD-118 T1f: the catalog failed: retry it here (GitHub, never Infinity). -->
                     <Button Content="{Binding S[updater.retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,4" Margin="0,0,8,6"
                             Visibility="{Binding ShowCatalogRetry, Converter={StaticResource Visible}}" />
-                    <Button Content="{Binding RequiredModAction}" Click="OnRequiredMod" IsEnabled="{Binding CanActOnRequiredMod}" Padding="10,4" Margin="0,0,8,6"
-                            Visibility="{Binding ShowRequiredModAction, Converter={StaticResource Visible}}" />
                   </WrapPanel>
                 </StackPanel>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
@@ -960,6 +957,14 @@
                                 Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,10,0,0" />
                       </StackPanel>
                     </Border>
+                    <!-- Alex (1.0.11): every Install first says where the mod goes and which existing files it replaces (backed up, restored later). -->
+                    <StackPanel Margin="0,14,0,0" Visibility="{Binding SelectedModInstallPreview, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding InstallPreviewText}" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite" />
+                      <TextBlock Text="{Binding InstallPreviewFiles}" TextWrapping="Wrap" FontSize="11" Margin="0,6,0,0" Foreground="{StaticResource InfinityMuted}"
+                                 Visibility="{Binding InstallPreviewHasFiles, Converter={StaticResource Visible}}" />
+                      <Button x:Name="InstallPreviewButton" Content="{Binding InstallPreviewLabel}" Click="OnConfirmInstall" IsEnabled="{Binding CanConfirmInstall}"
+                              Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,10,0,0" />
+                    </StackPanel>
                     <!-- M5 reviewed update: the change first, then the confirmation. -->
                     <StackPanel Margin="0,14,0,0" Visibility="{Binding SelectedModUpdate, Converter={StaticResource Visible}}">
                       <TextBlock Text="{Binding SelectedMod.UpdateSummary}" TextWrapping="Wrap" FontSize="12" />
