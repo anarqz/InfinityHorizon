@@ -42,7 +42,7 @@ public partial class MainWindow : Window
                 System.Windows.Threading.DispatcherPriority.Loaded);
         };
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
-        vm.UpdateRestartRequested += () => Application.Current.Shutdown();
+        vm.UpdateRestartRequested += () => { App.ExitReason = "update restart"; Application.Current.Shutdown(); };
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         var handled = false;
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
         if (_vm.LauncherReleaseUnavailable) await _vm.CheckLauncherUpdatesAsync();
         else _vm.OpenLauncherUpdate();
     }
-    private void OnExitLauncherUpdate(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
+    private void OnExitLauncherUpdate(object sender, RoutedEventArgs e) { App.ExitReason = "exit button (launcher update)"; Application.Current.Shutdown(); }
 
     private void OnOfficialReleases(object sender, RoutedEventArgs e) => OpenCommunityLink("https://github.com/anarqz/InfinityHorizon/releases");
 
