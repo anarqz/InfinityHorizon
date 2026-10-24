@@ -35,7 +35,8 @@
       <Style TargetType="Grid">
         <Style.Triggers>
           <DataTrigger Binding="{Binding ModOperationBusy}" Value="True">
-            <Setter Property="Effect"><Setter.Value><BlurEffect Radius="9" /></Setter.Value></Setter>
+            <!-- T2b: a plain dim, not a BlurEffect (under Wine the blur drew text boxes as solid grey bars). -->
+            <Setter Property="Opacity" Value="0.45" />
           </DataTrigger>
         </Style.Triggers>
       </Style>
@@ -750,7 +751,7 @@
               </Grid>
 
               <!-- OD-116: "Use a different catalog"; an unofficial catalog is always shown with its warning. -->
-              <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+              <Border x:Name="CatalogCard" Style="{StaticResource Card}" Margin="0,18,0,0">
                 <StackPanel>
                   <TextBlock Text="{Binding S[catalog.title]}" FontWeight="Bold" FontSize="18" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding CatalogSourceText}" TextWrapping="Wrap" />
@@ -892,6 +893,11 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Text="{Binding ModCatalogStatus}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource InfinityMuted}" />
+                <!-- T2b: a catalog that failed offers a retry and the way to another catalog (the card is on Configure). -->
+                <WrapPanel Margin="0,8,0,0" Visibility="{Binding ModCatalogFailed, Converter={StaticResource Visible}}">
+                  <Button Content="{Binding S[mods.catalog_retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,6" Margin="0,0,8,8" />
+                  <Button Content="{Binding S[mods.catalog_other]}" Click="OnOpenCatalogSetting" Padding="10,6" Margin="0,0,8,8" />
+                </WrapPanel>
               </StackPanel>
               </ScrollViewer>
             </DockPanel>
@@ -1044,9 +1050,9 @@
                               <TextBlock Text="{Binding Help}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,8" />
                               <DockPanel>
                                 <Path DockPanel.Dock="Left" Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="14" Height="14" StrokeThickness="2.4" Margin="0,0,8,0" Stroke="{StaticResource InfinityGood}"
-                                           Visibility="{Binding Ok, Converter={StaticResource Visible}}" />
+                                           Visibility="{Binding ShowCheckMark, Converter={StaticResource Visible}}" />
                                 <Path DockPanel.Dock="Left" Data="{StaticResource IconWarning}" Style="{StaticResource InlineIcon}" Width="14" Height="14" StrokeThickness="2" Margin="0,0,8,0" Stroke="{StaticResource InfinityGold}"
-                                           Visibility="{Binding Problems, Converter={StaticResource Visible}}" />
+                                           Visibility="{Binding ShowWarningMark, Converter={StaticResource Visible}}" />
                                 <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                               </DockPanel>
                               <ProgressBar Value="{Binding Progress, Mode=OneWay}" Maximum="1" Height="4" Margin="0,8,0,0"

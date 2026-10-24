@@ -22,8 +22,13 @@ public sealed class ExternalSourceRow(ExternalSource source, string label, strin
     /// <summary>The per-file list behind a problem summary (hashes only here, never first).</summary>
     public string Details { get => _details; set { Set(ref _details, value); Changed(nameof(HasDetails)); } }
     public bool HasDetails => _details.Length > 0;
-    public bool Ok { get => _ok; set => Set(ref _ok, value); }
-    public bool Problems { get => _problems; set => Set(ref _problems, value); }
+    public bool Ok { get => _ok; set { Set(ref _ok, value); Changed(nameof(ShowCheckMark)); } }
+    public bool Problems { get => _problems; set { Set(ref _problems, value); Changed(nameof(ShowWarningMark)); } }
+    private bool _notice;
+    /// <summary>Usable, but something in the pick needs the player's eye (another version of a file the store already holds).</summary>
+    public bool Notice { get => _notice; set { Set(ref _notice, value); Changed(nameof(ShowCheckMark)); Changed(nameof(ShowWarningMark)); } }
+    public bool ShowCheckMark => _ok && !_notice;
+    public bool ShowWarningMark => _problems || _notice;
     public bool Checking { get => _checking; set => Set(ref _checking, value); }
     public double Progress { get => _progress; set => Set(ref _progress, value); }
     public string? Picked { get; set; }
@@ -177,7 +182,18 @@ public sealed partial class ShellViewModel
     private void ShowCheck(ExternalSourceRow row, ExternalSourceCheck check)
     {
         string N(int n) => n.ToString(CultureInfo.CurrentCulture);
-        row.Ok = check.Ok; row.Problems = !check.Ok; row.Progress = 1;
+        row.Ok = check.Ok; row.Problems = !check.Ok; row.Progress = 1; row.Notice = false; row.Details = "";
+        if (check.Ok && check.DifferentInPick is { Count: > 0 } other)
+        {
+            // T2b: the install uses the stored, verified bytes; the pick's other version is named, never a plain check mark.
+            row.Notice = true;
+            row.Status = Counted("external.different_kept", other.Count)
+                + "\n" + S.Format("external.found", ("count", N(check.FromSource)), ("where", check.MatchedRoot ?? check.Picked))
+                + (check.Found - check.FromSource - other.Count is var kept and > 0 ? "\n" + S.Format("external.kept", ("count", N(kept))) : "");
+            row.Details = string.Join("\n", other.Take(200).Select(f => S["external.file_different"] + "  " + f.Path
+                + "\n    " + S.Format("external.file_expected", ("bytes", f.Bytes.ToString("N0", CultureInfo.CurrentCulture)), ("sha", f.Sha256))));
+            return;
+        }
         if (check.Ok)
         {
             row.Status = S.Format("external.found", ("count", N(check.FromSource)), ("where", check.MatchedRoot ?? check.Picked))

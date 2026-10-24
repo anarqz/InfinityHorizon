@@ -252,6 +252,9 @@ public sealed partial class ShellViewModel
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
 
     /// <summary>OD-118 T1f: the catalog failed and is not loading: PLAY offers a retry next to the reason.</summary>
+    /// <summary>Mods: the catalog failed (and none is shown): Try again and "Use a different catalog…" (T2b).</summary>
+    public bool ModCatalogFailed => _catalogFailure is not null && !_catalogLoaded && !DevelopmentMods;
+
     public bool ShowCatalogRetry => _install is not null && !_catalogLoaded && !_catalogLoading && _catalogFailure is not null && !Playing;
 
     public string ModFolder => _install?.Root ?? S["setup.not_found"];
@@ -283,6 +286,9 @@ public sealed partial class ShellViewModel
         await LoadModCatalogAsync();
     }
 
+    /// <summary>The catalog could not be loaded, naming the host it was read from (the official one is GitHub; a custom one is its own).</summary>
+    private string CatalogFailureText => S.Format("mods.catalog_failed_host", ("host", CatalogUri.IsFile ? "file" : CatalogUri.Host));
+
     /// <summary>Explicit refresh (the ↻ button): shows progress and the result.</summary>
     public async Task LoadModCatalogAsync()
     {
@@ -294,7 +300,11 @@ public sealed partial class ShellViewModel
             await FetchCatalogAsync();
             loaded = true;
         }, S["mods.catalog_loaded"]);
-        if (!loaded) _catalogFailure = S["mods.catalog_failed"];
+        if (!loaded)
+        {
+            _catalogFailure = CatalogFailureText;
+            if (Message == S["mods.download_failed"]) Message = _catalogFailure; // T2b: a network failure names the catalog's host; a refusal keeps its reason
+        }
         Changed(string.Empty);
     }
 
@@ -316,7 +326,7 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)
         {
             Log("mods: catalog unavailable: " + ErrorChain(error) + (error is ModException mod ? " " + mod.Code : ""));
-            _catalogFailure = S["mods.catalog_failed"];
+            _catalogFailure = CatalogFailureText;
             if (!_catalogLoaded) _ = RetryCatalogOnceAsync(); // T1f: a first-start fetch failure (seen under Proton) gets one more try
         }
         finally { _catalogLoading = false; Changed(string.Empty); }
