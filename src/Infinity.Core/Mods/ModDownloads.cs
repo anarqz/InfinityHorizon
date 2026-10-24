@@ -40,6 +40,14 @@ public static class ModErrors
     public const string RuntimeRequired = "runtime_required";
     /// <summary>Another enabled mod already replaces the game database (<see cref="ModException.Detail"/> names it); one base at a time.</summary>
     public const string DatabaseBase = "database_base";
+    /// <summary>Add from URL: the address could not be downloaded (not HTTPS, unreachable, not found).</summary>
+    public const string UrlDownload = "url_download";
+    /// <summary>Add from URL: the download is not a readable ZIP, is too large, or lacks a file its manifest maps.</summary>
+    public const string Archive = "archive";
+    /// <summary>Add from URL: the ZIP has no, several, or an invalid <c>infinity-mod.json</c>, or one that is not a custom mod.</summary>
+    public const string ArchiveManifest = "archive_manifest";
+    /// <summary>Add from URL: the custom folder already holds the most custom mods the launcher lists.</summary>
+    public const string CustomFull = "custom_full";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");
@@ -51,7 +59,11 @@ internal static class ModDownloads
     /// port, no credentials or fragment, and a host from <paramref name="hosts"/> (the signed catalog's
     /// download hosts, or the catalog transport's own bootstrap set). No host is built in.
     /// </summary>
-    internal static async Task<HttpResponseMessage> DownloadAsync(HttpClient http, Uri location, IReadOnlyCollection<string> hosts, CancellationToken cancellation)
+    internal static Task<HttpResponseMessage> DownloadAsync(HttpClient http, Uri location, IReadOnlyCollection<string> hosts, CancellationToken cancellation) =>
+        DownloadAsync(http, location, host => hosts.Contains(host, StringComparer.OrdinalIgnoreCase), cancellation);
+
+    /// <summary>The same rules with a host predicate: a player-supplied custom mod address allows any HTTPS host.</summary>
+    internal static async Task<HttpResponseMessage> DownloadAsync(HttpClient http, Uri location, Func<string, bool> allowHost, CancellationToken cancellation)
     {
         if (http.DefaultRequestHeaders.Any())
             throw new ModException("a dedicated download client is required", ModErrors.Download);
@@ -60,7 +72,7 @@ internal static class ModDownloads
         {
             if (!location.IsAbsoluteUri || location.Scheme != Uri.UriSchemeHttps || !location.IsDefaultPort
                 || location.UserInfo.Length != 0 || location.Fragment.Length != 0
-                || !hosts.Contains(location.IdnHost, StringComparer.OrdinalIgnoreCase)
+                || !allowHost(location.IdnHost)
                 || !visited.Add(location))
                 throw new ModException("the mod download destination is not supported", ModErrors.Download);
             using var request = new HttpRequestMessage(HttpMethod.Get, location);

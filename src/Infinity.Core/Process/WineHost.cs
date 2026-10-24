@@ -75,6 +75,23 @@ public static class WineHost
         }
     }
 
+    /// <summary>
+    /// Where a Windows path of this Wine prefix lives on the Linux host, for the player's own file manager: <c>Z:</c> is the host
+    /// root, <c>C:</c> the prefix's <c>drive_c</c> (Proton's <c>STEAM_COMPAT_DATA_PATH/pfx</c>, else <c>WINEPREFIX</c>). Null when unknown.
+    /// </summary>
+    public static string? UnixPath(string windowsPath, Func<string, string?>? environment = null)
+    {
+        environment ??= Environment.GetEnvironmentVariable;
+        var full = windowsPath.Replace('/', '\\');
+        if (full.Length < 3 || full[1] != ':' || full[2] != '\\') return null;
+        var rest = full[3..].Replace('\\', '/');
+        var drive = char.ToUpperInvariant(full[0]);
+        if (drive == 'Z') return "/" + rest;
+        if (drive != 'C') return null;
+        var prefix = environment("STEAM_COMPAT_DATA_PATH") is { Length: > 0 } compat ? compat.TrimEnd('/') + "/pfx" : environment("WINEPREFIX")?.TrimEnd('/');
+        return prefix is { Length: > 0 } && prefix.StartsWith('/') ? prefix + "/drive_c/" + rest : null;
+    }
+
     private static void ValidateModule(string module)
     {
         if (module.Length is < 1 or > 64 || module.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')) throw new ArgumentException("invalid native module", nameof(module));

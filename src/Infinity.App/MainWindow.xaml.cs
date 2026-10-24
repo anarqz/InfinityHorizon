@@ -222,6 +222,21 @@ public partial class MainWindow : Window
     private async void OnDisableModKeeping(object sender, RoutedEventArgs e) => await _vm.DisableModKeepingFilesAsync();
     private async void OnRepairModSettings(object sender, RoutedEventArgs e) => await _vm.RepairModSettingsAsync();
     private async void OnUninstallMod(object sender, RoutedEventArgs e) => await _vm.UninstallModAsync();
+    private void OnOpenCustomModsFolder(object sender, RoutedEventArgs e) => _vm.OpenCustomModsFolder();
+    private async void OnAddModFromUrl(object sender, RoutedEventArgs e) => await _vm.AddModFromUrlAsync();
+
+    private void OnToggleModUrl(object sender, RoutedEventArgs e)
+    {
+        _vm.ToggleModUrl();
+        if (_vm.ShowModUrl) _ = Dispatcher.InvokeAsync(() => ModUrlBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    // Enter adds, Escape (the controller's B) closes the address field.
+    private async void OnModUrlKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Escape) { _vm.ToggleModUrl(); e.Handled = true; }
+        else if (e.Key == System.Windows.Input.Key.Enter) { e.Handled = true; await _vm.AddModFromUrlAsync(); }
+    }
 
 
 
