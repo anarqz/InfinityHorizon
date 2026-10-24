@@ -65,7 +65,10 @@ public sealed partial class ShellViewModel
     public string ExternalNotice => _externalMod is { ExternalSources: [var first, ..] }
         ? S.Format("external.notice", ("hint", first.Hint ?? first.LabelText(S.Locale))) : "";
     public bool ExternalAllOk => ExternalRows.Count > 0 && ExternalRows.All(r => r.Ok);
-    public bool CanInstallExternal => ModsIdle && ExternalAllOk && !ExternalRows.Any(r => r.Checking) && _externalMod is not null && _install is not null && !ModRecoveryRequired;
+    public bool CanInstallExternal => ModsIdle && ExternalAllOk && !ExternalRows.Any(r => r.Checking) && _externalMod is not null && _install is not null && !ModRecoveryRequired
+        && !ExternalNeedsGameFolder;
+    /// <summary>The mod writes game files and no game folder is chosen: the pane asks for it before Install (never a refusal after it).</summary>
+    public bool ExternalNeedsGameFolder => _externalMod is { } mod && ContentLocation is null && mod.Files.Any(f => f.Root == "game");
     public bool ExternalInstalled => _externalMod is { } mod && _modHealth.Installed.Any(i => i.Id == mod.Id);
     public string ExternalInstallLabel => S[ExternalInstalled ? "external.recheck_done" : "external.install"];
 

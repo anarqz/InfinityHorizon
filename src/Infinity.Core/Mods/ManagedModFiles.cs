@@ -603,7 +603,7 @@ public sealed partial class ManagedModFiles
     private string RootPath(string root) => root switch
     {
         "azimuth" => _azimuth,
-        "game" => _game ?? throw new ModException("game folder not selected", ModErrors.Unsupported),
+        "game" => _game ?? throw new ModException("game folder not selected", ModErrors.GameFolder),
         _ => throw new ModException("invalid root"),
     };
 

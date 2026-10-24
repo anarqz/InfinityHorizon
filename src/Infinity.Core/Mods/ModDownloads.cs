@@ -54,6 +54,8 @@ public static class ModErrors
     public const string RuntimeMissing = "runtime_missing";
     /// <summary>OD-117: the player's own files for a mod are missing, different, not checked yet, or the chosen source is unusable.</summary>
     public const string ExternalFiles = "external_files";
+    /// <summary>The mod writes game files (media overrides) and no game folder is chosen yet (Configure → Game folder).</summary>
+    public const string GameFolder = "game_folder";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");

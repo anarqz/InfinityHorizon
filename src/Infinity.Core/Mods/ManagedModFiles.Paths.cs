@@ -18,7 +18,7 @@ public sealed partial class ManagedModFiles
         if (relative.EndsWith(".slt", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".db", StringComparison.OrdinalIgnoreCase)
             || relative.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".sqlite3", StringComparison.OrdinalIgnoreCase))
             throw new ModException("databases require session coordination", ModErrors.Unsupported);
-        var target = Safe(root switch { "azimuth" => _azimuth, "game" => _game ?? throw new ModException("game folder not selected", ModErrors.Unsupported), _ => throw new ModException("invalid root") }, relative);
+        var target = Safe(root switch { "azimuth" => _azimuth, "game" => _game ?? throw new ModException("game folder not selected", ModErrors.GameFolder), _ => throw new ModException("invalid root") }, relative);
         RejectProtected(target);
         return target;
     }
