@@ -1418,6 +1418,7 @@ static wchar_t launch_overlay_path[PATH_CAPACITY];
 static unsigned char launch_overlay_sha[32];
 static wchar_t launch_ui_pipe[72];
 static volatile LONG launch_overlay_started;
+static unsigned launch_overlay_flags; /* FI_OVERLAY_OFFLINE (0x2) on the launcher's Play offline */
 
 static void launch_overlay_log(const char *line) {
     char text[512];
@@ -1484,7 +1485,7 @@ static DWORD WINAPI launch_overlay_thread(void *unused) {
                 launch_log("overlay: the DLL has no fi_overlay_start.", 0, 0, "");
             } else {
                 LaunchOverlayHost host = {1u, (unsigned)sizeof(LaunchOverlayHost), launch_ui_pipe, 0,
-                                          launch_overlay_log, 0, fi_livery_sync};
+                                          launch_overlay_log, launch_overlay_flags, fi_livery_sync};
                 int result = start(&host);
                 ok = result == 0;
                 if (ok) InterlockedExchangePointer((void *volatile *)&launch_overlay_module, dll);
@@ -1556,6 +1557,65 @@ static int launch_overlay_frame(LaunchReader *r) {
     }
     CloseHandle(thread);
     launch_log("the launcher offers the overlay: loading it.", 0, 0, "");
+    return 1;
+}
+
+/* OD-118: the launcher's Play offline (FI_LAUNCH=v1;offline) has no session pipe and no Overlay
+   frame, so the launcher names the overlay in the environment instead: FI_OFFLINE_OVERLAY (its full
+   path), FI_OFFLINE_OVERLAY_SHA256 (64 hex) and FI_OFFLINE_UI (the 32-hex nonce of its -ui pipe,
+   served by the launcher for this process). The same SHA-256 check and loader as the Overlay frame;
+   the overlay is told it is an offline session (FI_OVERLAY_OFFLINE). Absent: no overlay, as before. */
+int fi_launch_offline_overlay(void) {
+    wchar_t sha[72], nonce[40];
+    DWORD np = GetEnvironmentVariableW(L"FI_OFFLINE_OVERLAY", launch_overlay_path, PATH_CAPACITY);
+    DWORD ns = GetEnvironmentVariableW(L"FI_OFFLINE_OVERLAY_SHA256", sha, ARRAY_COUNT(sha));
+    DWORD nn = GetEnvironmentVariableW(L"FI_OFFLINE_UI", nonce, ARRAY_COUNT(nonce));
+    if (!np && !ns && !nn) {
+        return 0;
+    }
+    int ok = np && np < PATH_CAPACITY && ns == 64 && nn == 32;
+    for (int i = 0; ok && i < 64; ++i) {
+        wchar_t c = sha[i];
+        int v = c >= L'0' && c <= L'9' ? c - L'0' : c >= L'a' && c <= L'f' ? c - L'a' + 10 : -1;
+        if (v < 0) {
+            ok = 0;
+        } else if (i % 2 == 0) {
+            launch_overlay_sha[i / 2] = (unsigned char)(v << 4);
+        } else {
+            launch_overlay_sha[i / 2] |= (unsigned char)v;
+        }
+    }
+    for (int i = 0; ok && i < 32; ++i) {
+        wchar_t c = nonce[i];
+        ok = (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f');
+    }
+    if (!ok) {
+        launch_log("REFUSED: the launcher's offline overlay is not named correctly; no overlay.", 0, 0, "");
+        return 0;
+    }
+    if (InterlockedExchange(&launch_overlay_started, 1)) {
+        return 1;
+    }
+    static const wchar_t prefix[] = L"\\\\.\\pipe\\ForzaInfinity-";
+    size_t n = 0;
+    for (; prefix[n]; ++n) {
+        launch_ui_pipe[n] = prefix[n];
+    }
+    for (int i = 0; i < 32; ++i) {
+        launch_ui_pipe[n++] = nonce[i];
+    }
+    launch_ui_pipe[n++] = L'-';
+    launch_ui_pipe[n++] = L'u';
+    launch_ui_pipe[n++] = L'i';
+    launch_ui_pipe[n] = 0;
+    launch_overlay_flags = 0x2u;
+    HANDLE thread = CreateThread(0, 0, launch_overlay_thread, 0, 0, 0);
+    if (!thread) {
+        launch_log("overlay: the loader thread could not start.", 0, 0, "");
+        return 0;
+    }
+    CloseHandle(thread);
+    launch_log("the launcher offers the overlay for its Play offline: loading it.", 0, 0, "");
     return 1;
 }
 
