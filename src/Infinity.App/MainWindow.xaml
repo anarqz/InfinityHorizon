@@ -969,6 +969,15 @@
         </Grid>
       </DockPanel>
     </Grid>
+    <!-- OD-118 (T1b): offline, a newer launcher on GitHub (checked from this PC to GitHub only): advice, never a block. -->
+    <Border x:Name="GitHubAdvisory" Grid.Row="0" Grid.ColumnSpan="2" Panel.ZIndex="31" Background="{StaticResource InfinitySurfaceHigh}" Padding="22,10"
+            Visibility="{Binding ShowGitHubAdvisory, Converter={StaticResource Visible}}">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="{Binding S[updater.github_dismiss]}" Click="OnDismissGitHubAdvisory" Margin="10,0,0,0" />
+        <Button DockPanel.Dock="Right" Content="{Binding S[updater.github_open]}" Click="OnOfficialReleases" Style="{StaticResource AccentButtonStyle}" Margin="16,0,0,0" />
+        <TextBlock Text="{Binding GitHubAdvisoryText}" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+      </DockPanel>
+    </Border>
     <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{StaticResource InfinityWarnSurface}" Padding="22,10"
             Visibility="{Binding ShowLauncherUpdateBanner, Converter={StaticResource Visible}}">
       <DockPanel>

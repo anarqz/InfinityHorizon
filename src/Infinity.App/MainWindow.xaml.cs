@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesAsync();
     private async void OnCheckOnlineStatus(object sender, RoutedEventArgs e) => await _vm.CheckOnlineStatusAsync();
     private void OnOnlineSupport(object sender, RoutedEventArgs e) => _vm.OpenOnlineSupport();
+    private void OnDismissGitHubAdvisory(object sender, RoutedEventArgs e) => _vm.DismissGitHubAdvisory();
     private void OnPlayOfflineFromStatus(object sender, RoutedEventArgs e) => _vm.PlayOfflineFromStatus();
     private void OnOpenOnlineStatus(object sender, RoutedEventArgs e) => _vm.OpenOnlineStatus();
     private void OnCloseOnlineStatus(object sender, RoutedEventArgs e) => _vm.CloseOnlineStatus();

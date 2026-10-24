@@ -49,6 +49,27 @@ public sealed partial class ShellViewModel
     public void CancelLauncherUpdate() { if (CanCancelLauncherUpdate) _updateDownload?.Cancel(); }
     public void OpenUpdateSupport() { if (_launcherUpdatePhase == UpdatePhase.Applying) return; _updateSupport = true; Changed(string.Empty); }
 
+    private string? _githubNewer;
+    private bool _githubAdvisoryDismissed;
+
+    /// <summary>
+    /// OD-118 (T1b): offline (before Sign in), a newer signed release on GitHub is shown as advice with a link to the official release
+    /// page. It comes from the GitHub discovery alone (the player's PC to GitHub), never blocks Play and sets no floor.
+    /// </summary>
+    public bool ShowGitHubAdvisory => !_onlineEngaged && _githubNewer is not null && !_githubAdvisoryDismissed && !Playing;
+
+    public string GitHubAdvisoryText => _githubNewer is { } version ? S.Format("updater.github_newer", ("version", version)) : "";
+
+    /// <summary>The GitHub discovery's result (its verified version, or null when none): the advice shows when it is newer.</summary>
+    internal void ObserveDiscoveredRelease(string? discovered)
+    {
+        _githubNewer = LauncherAdvisory.NewerOnGitHub(Version, discovered);
+        if (_githubNewer is not null) Log("update: a newer launcher is on GitHub (" + _githubNewer + "); advisory while offline");
+        Changed(string.Empty);
+    }
+
+    public void DismissGitHubAdvisory() { _githubAdvisoryDismissed = true; Changed(string.Empty); }
+
     public async Task CheckLauncherUpdatesAsync()
     {
         if (Playing) return;
@@ -68,6 +89,7 @@ public sealed partial class ShellViewModel
                 await DiscoverLauncherReleaseAsync(bound.Token);
                 if (_updateRecoveryBlocked) return;
                 _launcherUpdatePhase = UpdatePhase.Current; _updateTarget = null;
+                ObserveDiscoveredRelease(_updater.DiscoveredVersion);
                 Log("update: release floor deferred to Sign in (offline)");
                 return;
             }
