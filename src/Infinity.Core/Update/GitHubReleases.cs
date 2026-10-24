@@ -59,7 +59,7 @@ public sealed class GitHubReleases : IDisposable
         {
             var refused = Failure(response);
             try { return await GetLatestFromWebAsync(bound.Token).ConfigureAwait(false); }
-            catch (Exception fallback) when (fallback is HttpRequestException or InvalidDataException)
+            catch (Exception fallback) when (fallback is HttpRequestException or InvalidDataException || fallback is OperationCanceledException && !cancellation.IsCancellationRequested)
             { throw new HttpRequestException(refused.Message + "; web fallback: " + fallback.Message, fallback, refused.StatusCode); }
         }
         Status(response);

@@ -107,6 +107,14 @@ public sealed partial class ShellViewModel
     private bool DataModSqlReady => _nativeRuntime is not null && _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild;
 
     /// <summary>
+    /// A data mod (SQL or database base) may be installed: the runtime is installed, or (OD-116) the catalog lists the one its install
+    /// brings, and the hook applies it. Before 1.0.11 the runtime came with the launcher; now a fresh install has none until a mod
+    /// that needs it installs it, as native mods already do (review, T2 M7).
+    /// </summary>
+    private bool DataModSqlInstallable => (_nativeRuntime is not null || _catalog?.Runtime is not null)
+        && _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild;
+
+    /// <summary>
     /// OD-113: why a launch with enabled native mods (online, or Play offline since OD-118) cannot start (en/pt-BR), or null with the
     /// verified runtime package.
     /// Checked off the UI thread right before the launch, so a package changed since the Mods page looked is seen.

@@ -243,7 +243,7 @@ public sealed partial class ShellViewModel
 
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
-    // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it decides which mods every Play needs).
+    // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it carries the runtime native and data mods need; it never blocks Play).
     public string? ModPlayNotice => _install is null ? null : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
         : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
         : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
@@ -511,7 +511,7 @@ public sealed partial class ShellViewModel
             { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
             if ((!mod.SupportedForInstall || mod.CustomBlocked) && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
             // FIMOD004: a data mod's SQL needs the runtime and hook that apply it; until then listed, never installed or enabled.
-            if (((fact.Next ?? mod).HasDatabaseSql || (fact.Next ?? mod).DatabaseBase is not null) && !DataModSqlReady && !(installed is { Enabled: true } && fact.Next is null))
+            if (((fact.Next ?? mod).HasDatabaseSql || (fact.Next ?? mod).DatabaseBase is not null) && !DataModSqlInstallable && !(installed is { Enabled: true } && fact.Next is null))
             { status = S["mods.data_sql_runtime"]; badge = S["mods.badge_review"]; canAct = false; }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
