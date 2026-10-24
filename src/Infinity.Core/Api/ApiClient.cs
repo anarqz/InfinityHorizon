@@ -40,6 +40,8 @@ public static class ErrorCodes
     public const string AccountsNameUnavailable = "ACCOUNTS.NAME_UNAVAILABLE";
     public const string AccountsProfileLimit = "ACCOUNTS.PROFILE_LIMIT";
     public const string AccountsInvalidName = "ACCOUNTS.INVALID_NAME";
+    /// <summary>The same <c>Idempotency-Key</c> with another body (CORE_API; services/api launcher/accounts.rs).</summary>
+    public const string RequestIdempotencyKeyReused = "REQUEST.IDEMPOTENCY_KEY_REUSED";
     public const string GameUpdateRequired = "GAME.UPDATE_REQUIRED";
     public const string SessionsInUseElsewhere = "SESSIONS.IN_USE_ELSEWHERE";
     public const string SessionsProfileInUse = "SESSIONS.PROFILE_IN_USE";
@@ -281,6 +283,17 @@ public sealed partial class ApiClient
 
     public Task<Profile> CreateProfileAsync(string access, NewProfile profile, CancellationToken cancellation = default) =>
         SendAsync<Profile>(HttpMethod.Post, Core, "/launcher/v1/profiles", profile, access, idempotent: true, cancellation);
+
+    /// <summary>
+    /// OD-118 upload of a local profile: the profile's own stable key, so a retry replays the first outcome instead of creating a
+    /// second profile (a changed body under the same key is <c>REQUEST.IDEMPOTENCY_KEY_REUSED</c>).
+    /// </summary>
+    public Task<Profile> CreateProfileAsync(string access, NewProfile profile, string idempotencyKey, CancellationToken cancellation = default) =>
+        SendAsync<Profile>(HttpMethod.Post, Core, "/launcher/v1/profiles", profile, access, idempotencyKey, cancellation);
+
+    /// <summary><c>POST /launcher/v1/accounts</c> with the first local profile's stable key (OD-118).</summary>
+    public Task<LauncherAccountCreated> CreateAccountAsync(LauncherAccountCreate create, string idempotencyKey, CancellationToken cancellation = default) =>
+        SendAsync<LauncherAccountCreated>(HttpMethod.Post, Core, "/launcher/v1/accounts", create, access: null, idempotencyKey, cancellation);
 
     /// <summary><c>POST /gate/v1/sessions</c>: <c>Idempotency-Key</c> is the session id, so a retry is the same admission.</summary>
     public Task<GateSession> CreateSessionAsync(string access, PlaySessionCreate create, CancellationToken cancellation = default)
