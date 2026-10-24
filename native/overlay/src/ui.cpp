@@ -104,6 +104,28 @@ void TextAt(ImDrawList *dl, ImFont *font, ImVec2 pos, ImU32 color, const char *t
 }
 
 ImVec2 Measure(ImFont *font, const char *text) { return font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, text); }
+// OD-118: an online-only tab during the launcher's Play offline: a disconnected plug drawn with lines
+// (the launcher's OfflineIcon geometry on its 24-unit grid, never an icon font) and "Offline mode".
+void DrawOfflineMode(ImDrawList *dl, float center_x, float center_y, float scale) {
+    const float u = 3.5f * scale; // one grid unit
+    const ImVec2 o(center_x - 12 * u, center_y - 70 * scale);
+    const ImU32 c = Rgba(255, 255, 255, 0.30f);
+    const float w = 1.6f * u;
+    auto at = [&](float x, float y) { return ImVec2(o.x + x * u, o.y + y * u); };
+    dl->AddRect(at(2, 9), at(8, 15), c, 0, 0, w);
+    dl->AddLine(at(8, 10.5f), at(11, 10.5f), c, w);
+    dl->AddLine(at(8, 13.5f), at(11, 13.5f), c, w);
+    dl->AddRect(at(16, 9), at(22, 15), c, 0, 0, w);
+    dl->AddLine(at(13, 10.5f), at(16, 10.5f), c, w);
+    dl->AddLine(at(13, 13.5f), at(16, 13.5f), c, w);
+    dl->AddLine(at(4, 20), at(20, 4), c, w);
+    const char *title = T("Offline mode", "Modo offline");
+    const ImVec2 size = Measure(f.title, title);
+    TextAt(dl, f.title, ImVec2(center_x - size.x / 2, center_y + 34 * scale), kTextDim, title);
+    const char *hint = T("Sign in to the Infinity Launcher to play online.", "Entre no Infinity Launcher para jogar online.");
+    const ImVec2 hint_size = Measure(f.body, hint);
+    TextAt(dl, f.body, ImVec2(center_x - hint_size.x / 2, center_y + 34 * scale + size.y + 8 * scale), kTextDim, hint, 0.8f);
+}
 
 // Xbox controller face button: a coloured disc with its letter.
 void FaceButton(ImDrawList *dl, ImVec2 centre, float radius, ImU32 color, const char *letter) {
@@ -345,7 +367,10 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     y += 38 * s;
 
     SetHoverPane(nullptr); // the worlds tab sets it again for its focused row
-    if (g_tab == kTabWorlds) {
+    if (OfflineSession() && (g_tab == kTabWorlds || g_tab == kTabFriends)) {
+        g_pending.action = -1; // OD-118: lobbies and friends need the online session
+        DrawOfflineMode(dl, x0 + pw / 2, (y + height - 80 * s) / 2, s);
+    } else if (g_tab == kTabWorlds) {
         DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, height - 80 * s, supporter, dt);
     } else if (g_tab == kTabFriends) {
         g_pending.action = -1;

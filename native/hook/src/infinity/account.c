@@ -860,8 +860,11 @@ static int account_apply_offline(void) {
 }
 
 static void account_apply(const wchar_t *directory) {
-    if (fi_cfg()->launch == FI_LAUNCH_OFFLINE && account_apply_offline()) {
-        return;
+    if (fi_cfg()->launch == FI_LAUNCH_OFFLINE) {
+        fi_launch_offline_overlay(); /* OD-118: the overlay of the launcher's Play offline, if it named one */
+        if (account_apply_offline()) {
+            return;
+        }
     }
     if (fi_launch_protocol()) {
         account_apply_launch(directory);

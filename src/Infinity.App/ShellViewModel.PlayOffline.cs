@@ -1,10 +1,13 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
+using System.IO;
 using Infinity.Core.Mods;
+using Infinity.Core.Overlay;
 using Infinity.Core.Process;
 using Infinity.Core.Saves;
 using Infinity.Core.Session;
 using Infinity.Core.Shell;
+using Infinity.Core.Supervisor;
 using Infinity.Core.Windows;
 
 namespace Infinity.App;
@@ -34,6 +37,30 @@ public sealed partial class ShellViewModel
     private LocalProfile? OfflinePlayProfile => _chosenLocal ?? LocalProfiles.Read().FirstOrDefault(p => p.Game == _gate.Game && p.DisplayName == _gate.ProfileTag);
 
     public bool CanPlayAny => PlaysOnline ? CanPlay : CanPlayOffline;
+
+    /// <summary>
+    /// The signed overlay for an offline Play (OD-118): its path and SHA-256 and a fresh -ui pipe nonce go into the game's environment
+    /// (FI_OFFLINE_OVERLAY, FI_OFFLINE_OVERLAY_SHA256, FI_OFFLINE_UI; the hook checks the hash like the Overlay frame), and the pipe is
+    /// created before the game starts. Null, and nothing added, when there is no signed overlay or the pipe cannot be made.
+    /// </summary>
+    private WindowsPipe? OfflineOverlay(List<(string Name, string Value)> environment)
+    {
+        if (LoadOverlayPackage() is not { } package) return null;
+        try
+        {
+            var link = new Handoff(HandoffChannel.Pipe, System.Security.Cryptography.RandomNumberGenerator.GetBytes(Launch.NonceLength));
+            var pipe = new WindowsPipe(PipeServer.Create(link.UiPipeName));
+            environment.Add(("FI_OFFLINE_OVERLAY", package.Path));
+            environment.Add(("FI_OFFLINE_OVERLAY_SHA256", Convert.ToHexStringLower(package.Sha256)));
+            environment.Add(("FI_OFFLINE_UI", link.NonceHex));
+            return pipe;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            Log("overlay: offline UI pipe unavailable (" + error.GetType().Name + "); playing without the overlay");
+            return null;
+        }
+    }
 
     public async Task PlayOfflineAsync()
     {
@@ -74,8 +101,18 @@ public sealed partial class ShellViewModel
                 if (inherited is not null) environment.Add(("WINEDLLOVERRIDES", inherited));
             }
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
+            // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
+            using var uiPipe = OfflineOverlay(environment);
             Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
             using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, []));
+            using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
+                new UiFrame.Status(profile.Name, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
+            if (overlay is not null)
+            {
+                // The first notice the overlay shows (queued until its hello): Playing offline.
+                await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"]), CancellationToken.None);
+                _ = overlay.RunAsync(child.Pid, child.Exited, TimeSpan.FromMinutes(5), _play.Token);
+            }
             _modOperation = false; Busy = false; SetStatus(S["offline.playing_offline_status"]);
             var wait = child.WaitForExitAsync(); _playTask = wait;
             var code = await wait;

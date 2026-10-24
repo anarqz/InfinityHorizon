@@ -17,6 +17,7 @@ extern "C" {
 
 #define FI_OVERLAY_ABI 1u
 #define FI_OVERLAY_DEV 0x1u /* flags bit 0: development host (the D3D12 test app) */
+#define FI_OVERLAY_OFFLINE 0x2u /* flags bit 1 (OD-118): the launcher's Play offline; online-only tabs say "Offline mode" */
 
 /* livery_sync results (OD-65 amendment: the current car's paint goes to the server before a world). */
 #define FI_LIVERY_SYNCED 0          /* uploaded: world mates fetch it by its id */
