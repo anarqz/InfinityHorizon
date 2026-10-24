@@ -27,6 +27,8 @@ public partial class MainWindow : Window
         var config = ServerConfig.From(arguments, Environment.GetEnvironmentVariable);
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
         var vm = new ShellViewModel(strings, config, state);
+        // OD-119: the news column sits beside PLAY only when the window is wide enough to keep PLAY's width (not at 1280x800).
+        SizeChanged += (_, _) => vm.SetWideLayout(ActualWidth >= WideLayoutWidth);
         DataContext = vm;
         _gamepad = new GamepadNavigator(this, () => vm.Playing);
         // OD-117: the set-up pane and its browser take the focus when they open, so the controller's D-pad and B act there.
@@ -218,6 +220,12 @@ public partial class MainWindow : Window
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
 
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
+
+    /// <summary>OD-119: below this window width the news column moves under PLAY.</summary>
+    internal const double WideLayoutWidth = 1400;
+    private void OnNavNews(object sender, RoutedEventArgs e) => _vm.OpenNews();
+    private async void OnNewsCard(object sender, RoutedEventArgs e) => await _vm.OpenNewsItemAsync((NewsCard)((FrameworkElement)sender).DataContext, fromHome: _vm.ShowHome);
+    private void OnNewsBack(object sender, RoutedEventArgs e) => _vm.NewsBack();
 
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
     private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);

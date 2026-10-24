@@ -16,15 +16,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Infinity.Core\Infinity.Core.csproj" />
+    <PackageReference Include="Markdig" /><!-- OD-119 news markdown; BSD-2-Clause, see NOTICE -->
   </ItemGroup>
 
   <!-- The Infinity Horizon brand (owner's files, 2026-10-19): art, the icon and the Selawik font (OFL)
        are resources inside infinity.exe, so nothing goes missing on Windows or under Wine/Proton; a
        256 px icon is also copied next to it for Linux shortcuts (.desktop, Steam). -->
   <ItemGroup>
-    <Resource Include="Assets\*.png;Assets\*.jpg;Assets\*.ico;Assets\Fonts\*.ttf" />
+    <Resource Include="Assets\*.png;Assets\*.jpg;Assets\*.ico;Assets\Fonts\*.ttf;Assets\Fonts\*.CompositeFont" />
     <Content Include="Assets\infinity-256.png" Link="infinity.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Fonts\Selawik-LICENSE.txt" Link="licenses\Selawik-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Fonts\NotoEmoji-LICENSE.txt" Link="licenses\NotoEmoji-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Local English and Brazilian Portuguese catalogs. -->
