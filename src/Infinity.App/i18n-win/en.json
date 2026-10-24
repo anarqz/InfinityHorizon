@@ -1,4 +1,6 @@
 {
+  "play.catalog_loading": "Loading the mod catalog…",
+  "play.catalog_failed": "The mod catalog couldn't be loaded. Check your connection, then try again.",
   "updater.github_newer": "A newer Infinity launcher ({version}) is available on GitHub. Your launcher keeps working; get the new one from the official release page.",
   "updater.github_open": "Official release page",
   "updater.github_dismiss": "Not now",

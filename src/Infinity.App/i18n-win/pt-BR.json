@@ -1,4 +1,6 @@
 {
+  "play.catalog_loading": "Carregando o catálogo de mods…",
+  "play.catalog_failed": "Não foi possível carregar o catálogo de mods. Verifique sua conexão e tente de novo.",
   "updater.github_newer": "Uma versão mais nova do launcher Infinity ({version}) está disponível no GitHub. Seu launcher continua funcionando; baixe a nova na página oficial de releases.",
   "updater.github_open": "Página oficial de releases",
   "updater.github_dismiss": "Agora não",

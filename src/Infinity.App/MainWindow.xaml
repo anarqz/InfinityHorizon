@@ -548,6 +548,9 @@
                   <WrapPanel Margin="0,8,0,0">
                     <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="0,0,8,6" />
                     <!-- OD-115: the required mod's own action (install from the signed catalog, adopt, enable, or retry the catalog). -->
+                    <!-- OD-118 T1f: the catalog failed: retry it here (GitHub, never Infinity). -->
+                    <Button Content="{Binding S[updater.retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,4" Margin="0,0,8,6"
+                            Visibility="{Binding ShowCatalogRetry, Converter={StaticResource Visible}}" />
                     <Button Content="{Binding RequiredModAction}" Click="OnRequiredMod" IsEnabled="{Binding CanActOnRequiredMod}" Padding="10,4" Margin="0,0,8,6"
                             Visibility="{Binding ShowRequiredModAction, Converter={StaticResource Visible}}" />
                   </WrapPanel>
