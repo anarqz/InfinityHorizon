@@ -800,7 +800,6 @@
                       <!-- Hidden (as on Configure) when there is no hook package to install: an empty label is no button. -->
                       <Button Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" AutomationProperties.Name="{Binding HookInstallLabel}"
                               Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}"><TextBlock Text="{Binding HookInstallLabel}" TextWrapping="Wrap" TextAlignment="Center" /></Button>
-                      <Button Content="{Binding S[mods.offline_play]}" Click="OnModdedOffline" IsEnabled="{Binding CanPlayModdedOffline}" Padding="10,6" Margin="0,0,8,8" />
                     </WrapPanel>
                     <Button Click="OnLoadModCatalog" Padding="10,8" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
                             ToolTip="{Binding S[mods.refresh_catalog]}" AutomationProperties.Name="{Binding S[mods.refresh_catalog]}">
@@ -1036,9 +1035,9 @@
                               <TextBlock Text="{Binding Label}" FontWeight="Bold" TextWrapping="Wrap" />
                               <TextBlock Text="{Binding Help}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,8" />
                               <DockPanel>
-                                <TextBlock DockPanel.Dock="Left" Text="✓" FontWeight="Bold" Margin="0,0,6,0" Foreground="{StaticResource InfinityGood}"
+                                <Path DockPanel.Dock="Left" Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="14" Height="14" StrokeThickness="2.4" Margin="0,0,8,0" Stroke="{StaticResource InfinityGood}"
                                            Visibility="{Binding Ok, Converter={StaticResource Visible}}" />
-                                <TextBlock DockPanel.Dock="Left" Text="⚠" FontWeight="Bold" Margin="0,0,6,0" Foreground="{StaticResource InfinityGold}"
+                                <Path DockPanel.Dock="Left" Data="{StaticResource IconWarning}" Style="{StaticResource InlineIcon}" Width="14" Height="14" StrokeThickness="2" Margin="0,0,8,0" Stroke="{StaticResource InfinityGold}"
                                            Visibility="{Binding Problems, Converter={StaticResource Visible}}" />
                                 <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                               </DockPanel>
@@ -1086,8 +1085,20 @@
                                  Visibility="{Binding BrowserEmpty, Converter={StaticResource Visible}}" />
                       <ItemsControl x:Name="BrowserList" ItemsSource="{Binding BrowserEntries}">
                         <ItemsControl.ItemTemplate><DataTemplate>
-                          <Button Content="{Binding Display}" Click="OnBrowserEntry" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                  Padding="10,6" Margin="0,0,0,4" />
+                          <Button Click="OnBrowserEntry" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,6" Margin="0,0,0,4" AutomationProperties.Name="{Binding Name}">
+                            <StackPanel Orientation="Horizontal">
+                              <!-- Bundled icons (Wine has no emoji font): a folder, or a ZIP or file to pick. -->
+                              <Path Width="16" Height="16" Margin="0,0,10,0">
+                                <Path.Style>
+                                  <Style TargetType="Path" BasedOn="{StaticResource InlineIcon}">
+                                    <Setter Property="Data" Value="{StaticResource IconArchive}" />
+                                    <Style.Triggers><DataTrigger Binding="{Binding Folder}" Value="True"><Setter Property="Data" Value="{StaticResource IconFolder}" /></DataTrigger></Style.Triggers>
+                                  </Style>
+                                </Path.Style>
+                              </Path>
+                              <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                            </StackPanel>
+                          </Button>
                         </DataTemplate></ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </StackPanel>

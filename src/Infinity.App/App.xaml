@@ -307,6 +307,9 @@
       <Geometry x:Key="IconRefresh">M 19,12 A 7,7 0 1 1 16.95,7.05 M 17.5,2.5 L 17.2,7.3 L 12.4,7</Geometry>
       <Geometry x:Key="IconExternal">M 7,17 L 17,7 M 9,7 L 17,7 L 17,15</Geometry>
       <Geometry x:Key="IconBack">M 19,12 L 5,12 M 11,6 L 5,12 L 11,18</Geometry>
+      <Geometry x:Key="IconWarning">M 12,3.5 L 21.5,20 L 2.5,20 Z M 12,9.5 L 12,14 M 12,17 L 12,17.2</Geometry>
+      <Geometry x:Key="IconFolder">M 3,6.5 L 3,18.5 L 21,18.5 L 21,8.5 L 11.5,8.5 L 9.5,6 L 3,6 Z</Geometry>
+      <Geometry x:Key="IconArchive">M 6,3 L 15,3 L 19,7 L 19,21 L 6,21 Z M 15,3 L 15,7 L 19,7 M 11,5 L 11,6.5 M 11,8 L 11,9.5 M 11,11 L 11,12.5 M 9.5,14 L 12.5,14 L 12.5,17 L 9.5,17 Z</Geometry>
       <Style x:Key="InlineIcon" TargetType="Path">
         <Setter Property="Width" Value="12" />
         <Setter Property="Height" Value="12" />
