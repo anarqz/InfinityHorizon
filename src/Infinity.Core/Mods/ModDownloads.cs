@@ -50,6 +50,8 @@ public static class ModErrors
     public const string ArchiveNoManifest = "archive_no_manifest";
     /// <summary>Add from URL: the custom folder already holds the most custom mods the launcher lists.</summary>
     public const string CustomFull = "custom_full";
+    /// <summary>OD-116: a native mod needs the Infinity mod runtime, and no verified one is installed or listed by the catalog.</summary>
+    public const string RuntimeMissing = "runtime_missing";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");

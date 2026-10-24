@@ -751,6 +751,24 @@
                 </StackPanel>
               </Border>
               </Grid>
+
+              <!-- OD-116: "Use a different catalog"; an unofficial catalog is always shown with its warning. -->
+              <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[catalog.title]}" FontWeight="Bold" FontSize="18" Margin="0,0,0,12" />
+                  <TextBlock Text="{Binding CatalogSourceText}" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding CustomCatalogWarning}" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding UsingCustomCatalog, Converter={StaticResource Visible}}" AutomationProperties.LiveSetting="Polite" />
+                  <TextBlock Text="{Binding S[catalog.hint]}" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,6" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBox Text="{Binding CatalogDraft, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" AutomationProperties.Name="{Binding S[catalog.title]}" />
+                  <TextBlock Text="{Binding S[catalog.invalid]}" FontSize="12" Margin="0,4,0,0" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding CatalogDraftInvalid, Converter={StaticResource Visible}}" />
+                  <WrapPanel Margin="0,10,0,0">
+                    <Button Content="{Binding S[catalog.use_custom]}" Click="OnUseCustomCatalog" IsEnabled="{Binding CanUseCustomCatalog}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[catalog.use_official]}" Click="OnUseOfficialCatalog" IsEnabled="{Binding CanUseOfficialCatalog}" Margin="0,0,8,8" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
             </StackPanel>
           </ScrollViewer>
 
@@ -793,6 +811,15 @@
                             ToolTip="{Binding S[mods.url_hint]}" />
                   </WrapPanel>
                   <TextBlock Text="{Binding ModCatalogSummary}" ToolTip="{Binding ModCatalogStatus}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                  <!-- OD-116: a player-chosen catalog is never shown without this warning. -->
+                  <Border Style="{StaticResource Card}" Padding="12,10" Margin="0,8,0,0" BorderBrush="{StaticResource InfinityGold}"
+                          Visibility="{Binding UsingCustomCatalog, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding CustomCatalogWarning}" TextWrapping="Wrap" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}" />
+                      <Button Content="{Binding S[catalog.use_official]}" Style="{StaticResource LinkButton}" Click="OnUseOfficialCatalog" HorizontalAlignment="Left"
+                              IsEnabled="{Binding CanUseOfficialCatalog}" Margin="-6,4,0,0" />
+                    </StackPanel>
+                  </Border>
                   <!-- OD-114: custom mods are read from this folder, one subfolder per mod. -->
                   <TextBox Text="{Binding CustomModsFolderText, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent" TextWrapping="Wrap"
                            FontSize="11" Foreground="{StaticResource InfinityMuted}" Padding="0" Margin="0,2,0,0" />
@@ -850,7 +877,7 @@
                               <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,24,0" ToolTip="{Binding Name}" />
                               <TextBlock Text="{Binding Manifest.Version, StringFormat=v{0}}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
                               <TextBlock Text="{Binding CustomBadge}" Foreground="{StaticResource InfinityPink}" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"
-                                         Visibility="{Binding Custom, Converter={StaticResource Visible}}" />
+                                         Visibility="{Binding ShowSourceBadge, Converter={StaticResource Visible}}" />
                               <TextBlock Text="{Binding Badge}" Foreground="{StaticResource InfinityGold}" FontSize="12" Margin="0,12,0,0"
                                          TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}" />
                             </StackPanel>
@@ -919,7 +946,7 @@
                     <TextBlock Text="{Binding SelectedMod.Name}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding SelectedMod.Credits}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,6,0,0" />
                     <TextBlock Text="{Binding SelectedMod.CustomBadge}" Foreground="{StaticResource InfinityPink}" FontSize="12" FontWeight="SemiBold" Margin="0,6,0,0"
-                               Visibility="{Binding SelectedMod.Custom, Converter={StaticResource Visible}}" />
+                               Visibility="{Binding SelectedMod.ShowSourceBadge, Converter={StaticResource Visible}}" />
                     <TextBlock Text="{Binding SelectedMod.Description}" TextWrapping="Wrap" Margin="0,18,0,0" />
                     <TextBlock Text="{Binding SelectedMod.Status}" TextWrapping="Wrap" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}" Margin="0,18,0,0" />
                     <TextBlock Text="{Binding SelectedMod.Requirements}" TextWrapping="Wrap" FontSize="12" Margin="0,10,0,0" />

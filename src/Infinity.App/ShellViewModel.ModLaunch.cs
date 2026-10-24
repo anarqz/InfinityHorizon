@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.IO;
+using System.Net.Http;
 using Infinity.Core.Mods;
 using Infinity.Core.Process;
 using Infinity.Core.Session;
@@ -16,6 +17,31 @@ public sealed partial class ShellViewModel
     private byte[] NativeModKey => DevHookKey ?? HookInstaller.ReleaseKey.ToArray();
 
     private static string LauncherDirectory => AppContext.BaseDirectory;
+
+    /// <summary>
+    /// OD-116: the runtime installed from the catalog's <c>infinity-mod-runtime</c> entry. The launcher no longer bundles one; only a
+    /// development build still falls back to its own <c>mod\</c> folder.
+    /// </summary>
+    private ModRuntimePackage? LocateRuntime(string home, byte[] key) =>
+        ModRuntimePackage.LocateInstalled(home, key) ?? (DevelopmentMods ? ModRuntimePackage.Locate(LauncherDirectory, key) : null);
+
+    /// <summary>
+    /// Installs (or updates to) the catalog's runtime when it differs from the installed one: before a native mod is installed,
+    /// enabled or updated, and before an online launch with native mods. With no catalog runtime the installed one is used; a
+    /// failed update keeps an earlier runtime that still verifies.
+    /// </summary>
+    private async Task<ModRuntimePackage?> EnsureRuntimeAsync(CancellationToken cancellation)
+    {
+        var key = NativeModKey; var home = ModHome; var entry = _catalog?.Runtime;
+        var installed = await Task.Run(() => LocateRuntime(home, key), cancellation);
+        if (!ModRuntimePackage.NeedsInstall(installed, entry)) { _nativeRuntime = installed; return installed; }
+        _modProgress = S["mods.progress.runtime"]; Changed(nameof(ModProgress));
+        try { installed = await ModRuntimePackage.InstallAsync(ModDownloads, home, entry!, key, cancellation); Log("mods: runtime " + entry!.Version + " installed"); }
+        catch (Exception error) when (installed is not null && (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException))
+        { Log("mods: runtime update failed, keeping " + installed.Version + ": " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "")); }
+        _nativeRuntime = installed;
+        return installed;
+    }
 
     /// <summary>Why the last launch could not prepare its mods (with the reason), shown on Play until the next attempt.</summary>
     private string? _modLaunchFailure;
@@ -83,9 +109,11 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<(ModRuntimePackage? Runtime, string? Refusal)> NativeModsForOnlineAsync(bool dataSql = false)
     {
-        var key = NativeModKey;
-        var runtime = await Task.Run(() => ModRuntimePackage.Locate(LauncherDirectory, key));
-        _nativeRuntime = runtime;
+        ModRuntimePackage? runtime;
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
+            try { runtime = await EnsureRuntimeAsync(timeout.Token); }
+            catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)
+            { Log("mods: runtime unavailable: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "")); runtime = null; }
         if (runtime is null) return (null, S["mods.native_unavailable_play"]);
         RefreshHook();
         if (dataSql && !DataModSqlReady) return (null, S["mods.data_sql_runtime"]);
@@ -147,7 +175,7 @@ public sealed partial class ShellViewModel
         _play = new CancellationTokenSource(); Changed(string.Empty);
         try
         {
-            var runtimeFolder = Path.Combine(AppContext.BaseDirectory, "mod");
+            var runtime = LocateRuntime(ModHome, key) ?? throw new ModException("no verified mod runtime", ModErrors.Unsupported);
             IReadOnlyList<string> overrides = [];
             session = await Task.Run(() =>
             {
@@ -155,7 +183,7 @@ public sealed partial class ShellViewModel
                 var prepared = manager.PrepareForLaunch(); // locks enforced, Wine overrides reconciled (paired with their removal)
                 if (!prepared.HasEnabledNative) throw new ModException("no native mods enabled", ModErrors.Unsupported);
                 overrides = prepared.DllOverrides;
-                return manager.PrepareNativeLaunch(Path.Combine(runtimeFolder, "infinity_mod.dll"), Path.Combine(runtimeFolder, "infinity-mod-prepare.exe"), key);
+                return manager.PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key);
             });
             var environment = session.Environment.ToList();
             environment.Add((Launch.EnvLaunch, Launch.EnvOffline));

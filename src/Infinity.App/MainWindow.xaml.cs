@@ -235,6 +235,8 @@ public partial class MainWindow : Window
     }
 
     private void OnOpenModSchemaPage(object sender, RoutedEventArgs e) => OpenCommunityLink(ShellViewModel.ModSchemaPage);
+    private async void OnUseCustomCatalog(object sender, RoutedEventArgs e) => await _vm.UseCustomCatalogAsync();
+    private async void OnUseOfficialCatalog(object sender, RoutedEventArgs e) => await _vm.UseOfficialCatalogAsync();
 
     // Enter adds, Escape (the controller's B) closes the address field.
     private async void OnModUrlKey(object sender, System.Windows.Input.KeyEventArgs e)
