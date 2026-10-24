@@ -54,7 +54,7 @@ public sealed partial class ShellViewModel
 
     // Pages and layout ------------------------------------------------------------------------------------------------
 
-    public bool ShowNews => _onNews && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport && !ShowPickSave;
+    public bool ShowNews => _onNews && InShell && !ShowWelcome && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport && !ShowPickSave;
     public bool ShowNewsList => ShowNews && _newsOpen is null;
     public bool ShowNewsDetail => ShowNews && _newsOpen is not null;
 
@@ -79,6 +79,7 @@ public sealed partial class ShellViewModel
         LeaveAccount(); _onMods = _onSetup = _onBugReport = false; _crashOpen = false;
         _onNews = true; _newsOpen = null; _newsDocument = null;
         Changed(string.Empty);
+        LoadCovers(NewsCards.Count);
         if (!_newsLoaded) _ = LoadNewsAsync();
     }
 
@@ -138,7 +139,7 @@ public sealed partial class ShellViewModel
     }
 
     private static bool NewsFailure(Exception error) => error is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException
-        or OperationCanceledException or JsonException or ArgumentException or NotSupportedException;
+        or OperationCanceledException or JsonException or ArgumentException or NotSupportedException or ObjectDisposedException;
 
     private void ShowFeed(NewsSnapshot snapshot)
     {
@@ -153,14 +154,20 @@ public sealed partial class ShellViewModel
             var card = known.TryGetValue(item.Id, out var old) && old.Item == item ? old
                 : new NewsCard(item, item.Title.For(S.Locale), item.Summary.For(S.Locale), item.Day?.ToString("d MMM yyyy", Culture) ?? item.Date, !NewsRead.IsRead(item.Id), S["news.pinned"]);
             NewsCards.Add(card);
-            if (card.Cover is null && item.Cover is { } cover) _ = LoadCoverAsync(card, cover);
         }
+        LoadCovers(_onNews ? NewsCards.Count : 4); // only the cards on screen (NEWS_FEED.md §4); the News page loads the rest
         NewsChanged();
+    }
+
+    private void LoadCovers(int count)
+    {
+        foreach (var card in NewsCards.Take(count))
+            if (!card.CoverRequested && card.Item.Cover is { } cover) { card.CoverRequested = true; _ = LoadCoverAsync(card, cover); }
     }
 
     private async Task LoadCoverAsync(NewsCard card, string path)
     {
-        if (await AssetAsync(card.Item, path) is { Length: > 0 } bytes && Bitmap(bytes) is { } image) card.Cover = image;
+        if (await AssetAsync(card.Item, path) is { Length: > 0 } bytes && await Task.Run(() => Bitmap(bytes)) is { } image) card.Cover = image; // decoded and frozen off the UI thread
     }
 
     private async Task<byte[]?> AssetAsync(NewsItem item, string path)
@@ -202,6 +209,7 @@ public sealed class NewsCard(NewsItem item, string title, string summary, string
     public ImageSource? Cover { get => _cover; set { _cover = value; Changed(); Changed(nameof(HasCover)); } }
     public bool HasCover => _cover is not null;
     public bool Unread { get => _unread; set { _unread = value; Changed(); } }
+    internal bool CoverRequested { get; set; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

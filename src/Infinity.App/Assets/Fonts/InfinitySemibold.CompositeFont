@@ -1,7 +1,7 @@
 <!-- OD-119: the launcher's font. Emoji code points draw with Noto Emoji (monochrome, OFL-1.1, bundled; WPF and Wine draw no color
      emoji fonts reliably), everything else with Selawik Semibold; a code point Selawik lacks falls back to Noto Emoji, never a system font.
      A composite font, because a plain family list leaves supplementary-plane emoji as boxes in WPF. -->
-<FontFamily xmlns="http://schemas.microsoft.com/winfx/2006/xaml/composite-font" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Baseline="0.9" LineSpacing="1.2">
+<FontFamily xmlns="http://schemas.microsoft.com/winfx/2006/xaml/composite-font" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Baseline="1.079" LineSpacing="1.33">
   <FontFamily.FamilyNames><x:String x:Key="en-US">Infinity Semibold</x:String></FontFamily.FamilyNames>
   <FontFamily.FamilyMaps>
     <FontFamilyMap Unicode="231A-231B,23E9-23F3,23F8-23FA,25FB-25FE,2600-27BF,2934-2935,2B05-2B07,2B1B-2B1C,2B50,2B55,3030,303D,3297,3299,1F000-1FAFF,FE0F,200D,20E3,E0020-E007F" Target="./#Noto Emoji" Scale="1.0" />
