@@ -25,9 +25,9 @@ public sealed partial class ShellViewModel
     public bool OnlineServicePaused => _onlinePause is not null;
     public bool CanCheckOnlineStatus => !_onlineChecking && OnlineRetryRemaining <= TimeSpan.Zero;
     // OD-118: before SIGN IN (and offline) the service status is never read, so it never covers the launcher.
-    public bool ShowOnlineStatusPage => _onlineEngaged && (!OnlineServiceAllowsPlay || _onlineViewing) && !Playing && !_onlineSupport && !(DevelopmentMods && ShowMods)
+    public bool ShowOnlineStatusPage => _onlineEngaged && _onlineAnswered && (!OnlineServiceAllowsPlay || _onlineViewing) && !Playing && !_onlineSupport && !(DevelopmentMods && ShowMods)
         && !_updateAwaitingCommit && _launcherUpdatePhase is not (UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying or UpdatePhase.RecoveryRequired);
-    public bool ShowOnlineStatusBanner => _onlineEngaged && !OnlineServiceAllowsPlay && !ShowOnlineStatusPage;
+    public bool ShowOnlineStatusBanner => _onlineEngaged && _onlineAnswered && !OnlineServiceAllowsPlay && !ShowOnlineStatusPage;
     public bool CanViewOnlineStatus => _onlineEngaged || OfflineMode;
     public string OnlineServiceTitle => S[_onlinePause?.Reason switch
     { "budget" => "online.budget_title", "operator" => "online.operator_title", _ => "online.title" }];
@@ -114,7 +114,7 @@ public sealed partial class ShellViewModel
             ExtendOnlineCooldown(TimeSpan.FromSeconds(_onlinePause is null ? 5 : 300));
             Log("online status: unavailable (" + error.GetType().Name + ")");
         }
-        finally { _onlineChecking = false; Changed(string.Empty); }
+        finally { _onlineChecking = false; _onlineAnswered = _onlineEngaged; Changed(string.Empty); }
     }
 
     partial void PrepareOnlineStatusRequest(ref Task<OnlineStatus>? request, CancellationToken cancellation);
@@ -131,6 +131,7 @@ public sealed partial class ShellViewModel
     /// <summary>A terminal decision for the current session; it never cancels or kills the game.</summary>
     public void ObserveOnlinePause(OnlinePause pause)
     {
+        _onlineAnswered = _onlineEngaged; // a pause is an answer from the service
         ArgumentNullException.ThrowIfNull(pause);
         _onlinePauseEpoch++;
         _onlinePause = pause;

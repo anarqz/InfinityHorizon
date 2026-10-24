@@ -38,6 +38,14 @@ public sealed partial class ShellViewModel
 
     public bool CanPlayAny => PlaysOnline ? CanPlay : CanPlayOffline;
 
+    private static readonly string[] OfflineOverlayNames = ["FI_OFFLINE_OVERLAY", "FI_OFFLINE_OVERLAY_SHA256", "FI_OFFLINE_UI"];
+
+    /// <summary>The chosen local profile as stored now (an upload or account refresh since it was chosen links it to the account).</summary>
+    private void RefreshChosenLocal()
+    {
+        if (_chosenLocal is { } chosen) _chosenLocal = LocalProfiles.Read().FirstOrDefault(p => p.Id == chosen.Id) ?? chosen;
+    }
+
     /// <summary>
     /// The signed overlay for an offline Play (OD-118): its path and SHA-256 and a fresh -ui pipe nonce go into the game's environment
     /// (FI_OFFLINE_OVERLAY, FI_OFFLINE_OVERLAY_SHA256, FI_OFFLINE_UI; the hook checks the hash like the Overlay frame), and the pipe is
@@ -116,7 +124,8 @@ public sealed partial class ShellViewModel
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
             using var uiPipe = OfflineOverlay(environment);
             Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
-            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, []));
+            // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
+            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, OfflineOverlayNames));
             using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
                 new UiFrame.Status(profile.Name, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
             if (overlay is not null)
