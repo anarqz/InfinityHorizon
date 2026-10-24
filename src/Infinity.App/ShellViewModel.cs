@@ -105,7 +105,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         // OD-118: from the offline path the sign-in screen replaces it; cancelling returns to the welcome screen (Play offline again).
         if (OfflineMode && !Playing && !_busy) { Gate = _gate.SignOut(); Profiles.Clear(); Games.Clear(); }
-        _loginOpen = true;
+        _loginOpen = true; _onNews = false;
         Message = null;
         Changed(string.Empty);
         // OD-118 (G1): the player's SIGN IN is the first moment Infinity is contacted: the service status, then the release floor.
@@ -333,7 +333,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         // A dedicated lobby is stopped first (its gate leave needs this session's tokens): CanChangeIdentity hides sign-out meanwhile.
         if (Playing || _busy || DedicatedActive) return;
         _nativeFlow.Clear();
-        LeaveAccount();
+        LeaveAccount(); _onNews = false;
         _onMods = _onSetup = _onBugReport = _loginOpen = false;
         _playStatus = null;
         _session?.Dispose();

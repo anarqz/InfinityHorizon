@@ -41,6 +41,7 @@ public sealed class NewsClient : IDisposable
 
     /// <summary>The why of the last failed fetch, for the log (a status or an exception type; never a body).</summary>
     public string? LastError { get; private set; }
+    private string? _error;
 
     private static bool Allowed(Uri url) => url.IsAbsoluteUri && url.Scheme == Uri.UriSchemeHttps && url.IsDefaultPort && url.UserInfo.Length == 0
         && url.Fragment.Length == 0 && url.Query.Length == 0 && string.Equals(url.IdnHost, RawHost, StringComparison.OrdinalIgnoreCase);
@@ -57,8 +58,10 @@ public sealed class NewsClient : IDisposable
     public async Task<NewsSnapshot?> RefreshAsync(CancellationToken cancellation)
     {
         var fetched = await FetchAsync("news.json", NewsFeed.MaxIndexBytes, bytes => Valid(() => NewsFeed.Parse(bytes)), cancellation).ConfigureAwait(false);
+        LastError = _error;
         if (fetched is not { Bytes: { } bytes }) return null;
-        return new(NewsFeed.Parse(bytes), fetched.AsOf, fetched.Stale);
+        try { return new(NewsFeed.Parse(bytes), fetched.AsOf, fetched.Stale); }
+        catch (InvalidDataException) { Forget("news.json"); LastError = "cached copy unreadable"; return null; } // its ETag goes too: the next fetch is a full one
     }
 
     /// <summary>The item's markdown: the player's language, else the other; null when neither can be read.</summary>
@@ -79,8 +82,8 @@ public sealed class NewsClient : IDisposable
     public async Task<byte[]?> AssetAsync(NewsItem item, string path, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(item);
-        if (!NewsFeed.IsId(item.Id) || !NewsFeed.IsItemPath(path)) return null;
-        var fetched = await FetchAsync($"news/{item.Id}/{path}", NewsFeed.MaxImageBytes, _ => true, cancellation).ConfigureAwait(false);
+        if (!NewsFeed.IsId(item.Id) || NewsFeed.ItemPath(path) is not { } inside) return null;
+        var fetched = await FetchAsync($"news/{item.Id}/{inside}", NewsFeed.MaxImageBytes, _ => true, cancellation).ConfigureAwait(false);
         return fetched?.Bytes;
     }
 
@@ -100,22 +103,22 @@ public sealed class NewsClient : IDisposable
     /// </summary>
     private async Task<Fetched?> FetchAsync(string relative, int limit, Func<byte[], bool> valid, CancellationToken cancellation)
     {
-        var cached = Read(relative);
+        var cached = await Task.Run(() => Read(relative), cancellation).ConfigureAwait(false); // a cached image can be megabytes: never on the UI thread
         try
         {
             var (status, bytes, etag) = await GetAsync(new Uri(_base, relative), cached?.ETag, limit, cancellation).ConfigureAwait(false);
-            if (status == HttpStatusCode.NotModified && cached is not null) { Write(relative, cached.Bytes, cached.ETag); return new(cached.Bytes, _now(), false); }
+            if (status == HttpStatusCode.NotModified && cached is not null) { Confirm(relative, cached.ETag); _error = null; return new(cached.Bytes, _now(), false); }
             if (status == HttpStatusCode.NotFound) { Forget(relative); return new(null, _now(), false); }
             if (status != HttpStatusCode.OK || bytes is null) throw new HttpRequestException("HTTP " + (int)status, null, status);
             if (!valid(bytes)) throw new InvalidDataException("invalid " + Path.GetExtension(relative) + " file");
             Write(relative, bytes, etag);
-            LastError = null;
+            _error = null;
             return new(bytes, _now(), false);
         }
         catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException
             || error is OperationCanceledException && !cancellation.IsCancellationRequested)
         {
-            LastError = error is HttpRequestException { StatusCode: { } code } ? "HTTP " + (int)code : error.GetType().Name;
+            _error = error is HttpRequestException { StatusCode: { } code } ? "HTTP " + (int)code : error.GetType().Name;
             return cached is null ? null : new(cached.Bytes, cached.AsOf, true);
         }
     }
@@ -187,6 +190,13 @@ public sealed class NewsClient : IDisposable
             Atomic(path + ".meta", JsonSerializer.SerializeToUtf8Bytes(new Meta(etag, _now())));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } // a cache that cannot be written only costs a refetch
+    }
+
+    /// <summary>A 304: only the date it was last confirmed changes (the cached bytes stay as they are).</summary>
+    private void Confirm(string relative, string? etag)
+    {
+        try { Atomic(CachePath(relative) + ".meta", JsonSerializer.SerializeToUtf8Bytes(new Meta(etag, _now()))); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 
     private void Forget(string relative)

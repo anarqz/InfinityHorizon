@@ -38,7 +38,16 @@ public sealed class NewsFeed
         && id.IndexOfAny(['/', '\\', ':', '?', '#']) < 0;
 
     /// <summary>A path relative to the item's folder that stays inside it (a cover or a markdown image).</summary>
-    public static bool IsItemPath(string? path) => !string.IsNullOrWhiteSpace(path) && !path.Contains('\\') && !path.Contains(':')
+    public static bool IsItemPath(string? path) => ItemPath(path) is not null;
+
+    /// <summary>The path relative to the item's folder (a leading <c>./</c> dropped), or null when it would leave the folder.</summary>
+    public static string? ItemPath(string? path)
+    {
+        if (path is not null && path.StartsWith("./", StringComparison.Ordinal)) path = path[2..];
+        return Inside(path) ? path : null;
+    }
+
+    private static bool Inside(string? path) => !string.IsNullOrWhiteSpace(path) && !path.Contains('\\') && !path.Contains(':')
         && !path.StartsWith('/') && path.Split('/').All(s => s.Length > 0 && s is not ("." or ".."));
 
     /// <summary>Reads <c>news.json</c>; throws only when it is not a JSON object with an <c>items</c> list at all.</summary>
@@ -68,9 +77,11 @@ public sealed class NewsFeed
         var id = String(item, "id");
         var title = Text(item, "title");
         if (!IsId(id) || title is null) return null;
-        var cover = String(item, "cover") is { } path && IsItemPath(path) ? path : null;
+        var cover = ItemPath(String(item, "cover"));
         var pinned = item.TryGetProperty("pinned", out var p) && p.ValueKind == JsonValueKind.True;
-        var minimum = LauncherVersion.TryParse(String(item, "minLauncher"), out var parsed) ? parsed : null;
+        LauncherVersion? minimum = null;
+        // A minLauncher that cannot be read hides the item (review): a typo must never show a gated item to older launchers.
+        if (item.TryGetProperty("minLauncher", out var m) && !(m.ValueKind == JsonValueKind.String && LauncherVersion.TryParse(m.GetString(), out minimum))) return null;
         return new(id!, String(item, "date") ?? "", title, Text(item, "summary") ?? new(null, null), cover, pinned, minimum);
     }
 
