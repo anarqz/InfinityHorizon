@@ -1,4 +1,6 @@
 {
+  "offline.create_profile": "Create profile",
+  "offline.create_noob": "Offline profiles are Noob. Hardcore profiles are created when you're signed in.",
   "upsert.title": "Update online profiles",
   "upsert.intro": "These profiles are on this PC only. Choose which to put on your account to play them online (room for {room} more).",
   "upsert.choose": "These profiles are on this PC only and not all of them fit: your account has room for {room} more. Choose which to put online; the others stay on this PC and keep playing offline.",

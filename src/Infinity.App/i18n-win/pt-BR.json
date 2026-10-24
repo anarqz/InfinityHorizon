@@ -1,4 +1,6 @@
 {
+  "offline.create_profile": "Criar perfil",
+  "offline.create_noob": "Perfis offline são Noob. Perfis Hardcore são criados com a sessão iniciada.",
   "upsert.title": "Atualizar perfis online",
   "upsert.intro": "Estes perfis estão só neste PC. Escolha quais colocar na sua conta para jogar online (cabem mais {room}).",
   "upsert.choose": "Estes perfis estão só neste PC e nem todos cabem: sua conta tem espaço para mais {room}. Escolha quais colocar online; os outros continuam neste PC e jogam offline.",

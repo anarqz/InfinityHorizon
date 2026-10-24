@@ -487,7 +487,7 @@
                 <StackPanel>
                   <TextBlock Text="{Binding S[profiles.new]}" Style="{StaticResource SectionTag}" FontSize="12" />
                   <DockPanel Margin="0,10,0,0">
-                    <Button DockPanel.Dock="Right" Content="{Binding S[profiles.add]}" Margin="10,0,0,0"
+                    <Button DockPanel.Dock="Right" Content="{Binding CreateProfileLabel}" Margin="10,0,0,0"
                             Click="OnCreateProfile" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}" />
                     <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" />
                   </DockPanel>
@@ -500,7 +500,10 @@
                     <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
                   <TextBlock Text="{Binding S[modes.free_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
-                             Visibility="{Binding CanChooseHardcore, Converter={StaticResource Hidden}}" />
+                             Visibility="{Binding ShowFreeNoobHint, Converter={StaticResource Visible}}" />
+                <!-- OD-118: offline creation is Noob; Hardcore is created signed in. -->
+                <TextBlock Text="{Binding S[offline.create_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
+                           Visibility="{Binding OfflineMode, Converter={StaticResource Visible}}" />
                 </StackPanel>
               </Border>
               <!-- OD-52: Hardcore → Noob, what is deleted for good, then the confirmation. -->
@@ -1016,6 +1019,9 @@
           <WrapPanel Margin="0,20,0,12">
             <Button Content="{Binding S[online.retry]}" Click="OnCheckOnlineStatus" IsEnabled="{Binding CanCheckOnlineStatus}" Margin="0,0,10,10" Style="{StaticResource AccentButtonStyle}" />
             <Button Content="{Binding S[online.continue]}" Click="OnCloseOnlineStatus" Visibility="{Binding OnlineServiceAllowsPlay, Converter={StaticResource Visible}}" Margin="0,0,10,10" />
+            <!-- OD-118: never stranded here: the launcher works offline. -->
+            <Button x:Name="StatusPlayOffline" Content="{Binding S[offline.play_offline_link]}" Click="OnPlayOfflineFromStatus" Margin="0,0,10,10"
+                    Visibility="{Binding CanPlayOfflineFromStatus, Converter={StaticResource Visible}}" />
             <Button Content="{Binding S[online.support]}" Click="OnOnlineSupport" Margin="0,0,10,10" />
             <Button Content="{Binding S[online.updates]}" Click="OnOpenLauncherUpdate" Margin="0,0,10,10" />
             <Button Content="{Binding S[updater.exit]}" Click="OnExitLauncherUpdate" Margin="0,0,10,10" />
@@ -1043,7 +1049,8 @@
             BorderThickness="0,1,0,0" Padding="24,12">
       <DockPanel>
         <Button DockPanel.Dock="Right" Content="{Binding S[legal.about]}" Click="OnAbout" Margin="16,0,0,0" Padding="10,4" />
-        <Button DockPanel.Dock="Right" Content="{Binding S[online.view]}" Click="OnOpenOnlineStatus" Margin="16,0,0,0" Padding="10,4" />
+        <Button DockPanel.Dock="Right" Content="{Binding S[online.view]}" Click="OnOpenOnlineStatus" Margin="16,0,0,0" Padding="10,4"
+                    Visibility="{Binding CanViewOnlineStatus, Converter={StaticResource Visible}}" />
         <Border DockPanel.Dock="Left" Padding="9,4" Margin="0,0,16,0" VerticalAlignment="Center" CornerRadius="4"
                 Background="{StaticResource InfinityWarnSurface}">
           <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />

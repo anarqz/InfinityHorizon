@@ -24,9 +24,11 @@ public sealed partial class ShellViewModel
     public bool CanStartOnlineAccount => OnlineServiceAllowsPlay && !Busy && !LauncherUpdateBusy;
     public bool OnlineServicePaused => _onlinePause is not null;
     public bool CanCheckOnlineStatus => !_onlineChecking && OnlineRetryRemaining <= TimeSpan.Zero;
-    public bool ShowOnlineStatusPage => (!OnlineServiceAllowsPlay || _onlineViewing) && !Playing && !_onlineSupport && !(DevelopmentMods && ShowMods)
+    // OD-118: before SIGN IN (and offline) the service status is never read, so it never covers the launcher.
+    public bool ShowOnlineStatusPage => _onlineEngaged && (!OnlineServiceAllowsPlay || _onlineViewing) && !Playing && !_onlineSupport && !(DevelopmentMods && ShowMods)
         && !_updateAwaitingCommit && _launcherUpdatePhase is not (UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying or UpdatePhase.RecoveryRequired);
-    public bool ShowOnlineStatusBanner => !OnlineServiceAllowsPlay && !ShowOnlineStatusPage;
+    public bool ShowOnlineStatusBanner => _onlineEngaged && !OnlineServiceAllowsPlay && !ShowOnlineStatusPage;
+    public bool CanViewOnlineStatus => _onlineEngaged || OfflineMode;
     public string OnlineServiceTitle => S[_onlinePause?.Reason switch
     { "budget" => "online.budget_title", "operator" => "online.operator_title", _ => "online.title" }];
     public string OnlineServiceMessage => S[_onlinePause?.Reason switch
@@ -42,13 +44,34 @@ public sealed partial class ShellViewModel
         : _onlineRetryDelay - _onlineClock.GetElapsedTime(_onlineRetryTimestamp);
 
     public void OpenOnlineSupport() { _onlineSupport = true; _onlineViewing = false; _updateSupport = true; Changed(string.Empty); }
-    public void OpenOnlineStatus() { _onlineSupport = false; _onlineViewing = true; Changed(string.Empty); }
+    public void OpenOnlineStatus()
+    {
+        // OD-118 (G3): offline, the service status is an online-only area: the Offline mode pane, and no request.
+        if (!_onlineEngaged)
+        {
+            if (!OfflineMode) return;
+            LeaveAccount(); _onMods = _onSetup = _onBugReport = false; _onOfflineStatus = true;
+            Changed(string.Empty);
+            return;
+        }
+        _onlineSupport = false; _onlineViewing = true; Changed(string.Empty);
+    }
+
+    /// <summary>OD-118: the way out of a paused, closed or unreachable service before the shell: the launcher offline.</summary>
+    public bool CanPlayOfflineFromStatus => !InShell && !Playing && !_busy;
+
+    public void PlayOfflineFromStatus()
+    {
+        if (!CanPlayOfflineFromStatus) return;
+        _onlineViewing = _onlineSupport = false;
+        PlayOffline();
+    }
     public void CloseOnlineStatus() { if (OnlineServiceAllowsPlay) { _onlineViewing = false; Changed(string.Empty); } }
 
     /// <summary>One startup request, then explicit user checks. The timer only refreshes the retry button.</summary>
     public async Task CheckOnlineStatusAsync(bool manual = true)
     {
-        if (_onlineChecking || !CanCheckOnlineStatus || !manual && _onlineStarted) { Changed(string.Empty); return; }
+        if (!_onlineEngaged || _onlineChecking || !CanCheckOnlineStatus || !manual && _onlineStarted) { Changed(string.Empty); return; }
         _onlineStarted = true;
         _onlineChecking = true;
         var epoch = _onlinePauseEpoch;

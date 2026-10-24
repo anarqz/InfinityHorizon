@@ -20,9 +20,6 @@ namespace Infinity.App;
 /// </summary>
 public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 {
-    private static readonly HttpClient Http = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
-    private static readonly Lazy<HttpClient> ProductionMatchmakingHttp=new(Infinity.Core.Matchmaking.MatchmakingTransport.Create);
-
     private readonly ServerConfig _config;
     private readonly string _stateDirectory;
     private readonly Infinity.Core.Diagnostics.BoundedRunLog _runLog;
@@ -42,8 +39,12 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _config = config;
         config.Validate();
         _stateDirectory = config.StateDirectory(stateDirectory);
-        _resuming = SessionStore.Exists(_stateDirectory);
         _runLog=new(_stateDirectory);
+        // OD-118: every Infinity client behind one gate; nothing is sent until the player clicks SIGN IN (or resumes an online run).
+        InfinityGate = CreateInfinityGate(new HttpClientHandler { AllowAutoRedirect = false });
+        Http = new(InfinityGate, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(30) };
+        ProductionMatchmakingHttp = new(() => Infinity.Core.Matchmaking.MatchmakingTransport.Create(transport => CreateMatchmakingGate(transport)));
+        _resuming = StartsOnline;
         Version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
         ServerLabel = S.Format("shell.live", ("server", config.Server.Authority));
@@ -74,7 +75,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public bool ShowBugReport => SignedIn && _onBugReport && !ShowPickSave;
 
     /// <summary>OD-118: an online-only area (the account page, bug reports) opened on the offline path says so, centered.</summary>
-    public bool ShowOfflinePane => OfflineMode && (_onAccount || _onBugReport) && !ShowPickSave;
+    public bool ShowOfflinePane => OfflineMode && (_onAccount || _onBugReport || _onOfflineStatus) && !ShowPickSave;
 
     /// <summary>
     /// OD-118 "Play offline": the launcher without an account. The one game this launcher serves is chosen for the player (no server
@@ -84,6 +85,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_busy || InShell) return;
         _loginOpen = false; _pending = null; Message = null;
+        DisengageOnline(); // OD-118: from here until SIGN IN, not a single request to Infinity
+        RememberLaunchMode(LaunchModeStore.Offline);
         Games.Clear();
         Games.Add(OfflineGame);
         Gate = _gate.PlayOffline().ChooseGame(OfflineGame.Id);
@@ -100,6 +103,18 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _loginOpen = true;
         Message = null;
         Changed(string.Empty);
+        // OD-118 (G1): the player's SIGN IN is the first moment Infinity is contacted: the service status, then the release floor.
+        if (!_onlineEngaged)
+        {
+            EngageOnline();
+            _ = EngagedChecksAsync();
+        }
+    }
+
+    private async Task EngagedChecksAsync()
+    {
+        await CheckOnlineStatusAsync(manual: false);
+        if (!_config.Production || OnlineServiceAllowsPlay) await CheckLauncherUpdatesAsync();
     }
 
     public void OpenWelcome()
@@ -315,6 +330,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _session?.Dispose();
         _session = null;
         SessionStore.Delete(_stateDirectory);
+        DisengageOnline(); // OD-118: signed out is offline again until the next SIGN IN
         ClearIntegrity();
         ClearCrashScreen();
         _pending = null;
@@ -335,6 +351,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         session.Tokens.Changed += refresh => KeepSession(session, refresh);
         var me = await session.RefreshMeAsync(cancellation);
         KeepSession(session, session.Tokens.RefreshToken);
+        RememberLaunchMode(LaunchModeStore.Online); // OD-118 (G2): the next start resumes this session
         cancellation.ThrowIfCancellationRequested();
         if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) throw new OperationCanceledException("Online services paused.", cancellation);
         _nativeFlow.Clear();

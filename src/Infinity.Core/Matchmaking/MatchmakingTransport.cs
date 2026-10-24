@@ -7,7 +7,10 @@ namespace Infinity.Core.Matchmaking;
 /// <summary>CR-S40: dedicated IPv4 observation for IPv4 STUN ports; original HTTPS authority/TLS.</summary>
 public static class MatchmakingTransport
 {
-    public static HttpClient Create()=>new(CreateHandler())
+    public static HttpClient Create()=>Create(handler=>handler);
+
+    /// <summary>OD-118: the same client with a handler in front of its transport (the launcher's InfinityRequestGate).</summary>
+    public static HttpClient Create(Func<HttpMessageHandler,HttpMessageHandler> wrap)=>new(wrap(CreateHandler()))
     {
         Timeout=TimeSpan.FromSeconds(30),DefaultRequestVersion=HttpVersion.Version11,
         DefaultVersionPolicy=HttpVersionPolicy.RequestVersionOrLower,
