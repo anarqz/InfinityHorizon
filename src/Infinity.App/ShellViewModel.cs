@@ -217,7 +217,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ? S["signin.needs_account"] + " " + S.Format("signin.form_email", ("email", email))
         : S["signin.needs_account"];
 
-    public string ProfilesText => Profiles.Count == 0 ? S["profiles.none_yet"] : S.Format("profiles.from_server", ("game", GameLabel));
+    public string ProfilesText => Profiles.Count == 0 ? S["profiles.none_yet"]
+        : S.Format(OfflineMode ? "offline.profiles_local" : "profiles.from_server", ("game", GameLabel));
 
     public void CancelSignIn()
     {
@@ -260,6 +261,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public void ChooseProfile(Profile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        _chosenLocal = _rowLocals.GetValueOrDefault(profile.ProfileId);
         Gate = _gate.ChooseProfile(profile.Gamertag);
         Message = null;
         _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a Supporter + Hardcore profile is checked in the background
@@ -291,24 +293,12 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public async Task CreateProfileAsync()
     {
-        if (_session is null || _gate.Game is not { } game || !CheckName())
+        // OD-118: created on this PC (no cloud call); signed in, uploaded at once by the idempotent upsert.
+        if (_gate.Game is not { } game || !CheckName())
         {
             return;
         }
-        await Run(async () =>
-        {
-            Message = S.Format("profiles.creating", ("name", NewName));
-            var hardcore = NewHardcore;
-            var profile = await _session.CreateProfileAsync(game, NewName, hardcore ? "hardcore" : "noob");
-            await _session.RefreshMeAsync();
-            FillProfiles();
-            Message = S.Format(hardcore ? "modes.created_hardcore" : "profiles.created", ("name", profile.Gamertag));
-            NewName = string.Empty;
-            if (!hardcore)
-            {
-                OfferSaves(profile); // a Hardcore career starts empty and the game seeds it (OD-60), never from a local save
-            }
-        });
+        await CreateLocalProfileAsync(game);
     }
 
     public void SignOut()
@@ -428,10 +418,17 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         Profiles.Clear();
         ProfileRows.Clear();
-        foreach (var profile in _session?.Me?.Profiles.Where(p => p.Game == _gate.Game) ?? [])
+        _rowLocals.Clear();
+        // OD-118: offline the local profiles; signed in the account's plus the local ones not on it (offline-only until uploaded).
+        var game = _gate.Game ?? "";
+        var rows = OfflineMode ? OfflineRows(game)
+            : (_session?.Me?.Profiles.Where(p => p.Game == game).Select(p => (Row: p, Local: (LocalProfile?)null)) ?? [])
+                .Concat(_session?.Me is { } me ? LocalOnlyRows(game, me.AccountId) : []);
+        foreach (var (profile, local) in rows)
         {
             Profiles.Add(profile);
-            ProfileRows.Add(new ProfileRow(profile, ModeLine(profile)));
+            ProfileRows.Add(new ProfileRow(profile, local is null ? ModeLine(profile) : ModeLine(profile) + " · " + LocalLine(local)));
+            if (local is not null) _rowLocals[profile.ProfileId] = local;
         }
         Changed(nameof(CanChooseHardcore));
         Changed(nameof(NewHardcore));
