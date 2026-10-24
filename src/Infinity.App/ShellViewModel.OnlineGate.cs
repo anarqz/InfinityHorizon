@@ -1,0 +1,95 @@
+// Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.IO;
+using System.Net.Http;
+using Infinity.Core.Api;
+using Infinity.Core.Auth;
+using Infinity.Core.Shell;
+
+namespace Infinity.App;
+
+/// <summary>
+/// OD-118, "not a single request to Infinity offline": the launcher is offline from its start until the player clicks SIGN IN, and
+/// again from Play offline on. Only then (or when the last run was online and kept a session, which resumes) is the service status
+/// read, the release floor fetched (/launcher/v1/info) and the IdP used. Every Infinity client goes through <see cref="InfinityGate"/>,
+/// which refuses anything sent while offline. The GitHub release discovery and the mod catalog and downloads are not Infinity hosts
+/// and stay available offline.
+/// </summary>
+public sealed partial class ShellViewModel
+{
+    private readonly HttpClient Http;
+    private readonly Lazy<HttpClient> ProductionMatchmakingHttp;
+    private bool _onlineEngaged, _onOfflineStatus;
+
+    /// <summary>The handler in front of every Infinity client (counts and refuses; tests stub it).</summary>
+    internal InfinityRequestGate InfinityGate { get; }
+
+    /// <summary>Infinity hosts may be contacted: the player clicked SIGN IN, or resumed a session chosen online.</summary>
+    public bool OnlineEngaged => _onlineEngaged;
+
+    /// <summary>The last run ended online with a session kept (G2): this start resumes it. Otherwise nothing is sent until SIGN IN.</summary>
+    public bool StartsOnline => LaunchModeStore.Read(_stateDirectory) == LaunchModeStore.Online && SessionStore.Exists(_stateDirectory);
+
+    /// <summary>The last run chose Play offline (G2): this start opens offline, with no request and no token refresh.</summary>
+    public bool StartsOffline => LaunchModeStore.Read(_stateDirectory) == LaunchModeStore.Offline;
+
+    private InfinityRequestGate CreateInfinityGate(HttpMessageHandler transport)
+    {
+        var gate = new InfinityRequestGate(() => _onlineEngaged, Log, DevServer, transport);
+        gate.Violation += what => Message = "DEV: offline mode refused " + what;
+        return gate;
+    }
+
+    /// <summary>The production matchmaking transport's own gate (same rule; a DelegatingHandler has one transport).</summary>
+    internal InfinityRequestGate? MatchmakingGate { get; private set; }
+
+    private InfinityRequestGate CreateMatchmakingGate(HttpMessageHandler transport) => MatchmakingGate = CreateInfinityGate(transport);
+
+    /// <summary>The player asked for the online side (SIGN IN, or a resumed online session): the first Infinity requests may follow.</summary>
+    private void EngageOnline()
+    {
+        if (_onlineEngaged) return;
+        _onlineEngaged = true;
+        Log("online: engaged (the player chose Sign in); service status and release floor are read now");
+        Changed(string.Empty);
+    }
+
+    /// <summary>A start that resumes the online run's kept session (G2): the player chose online last time.</summary>
+    public void ResumeOnline() => EngageOnline();
+
+    /// <summary>Back to offline (Play offline, sign-out): nothing more is sent until the next SIGN IN.</summary>
+    private void DisengageOnline()
+    {
+        _onlineEngaged = false;
+        _onlineStarted = false;
+        _onlineStatus = null;
+        Changed(string.Empty);
+    }
+
+    private void RememberLaunchMode(string mode)
+    {
+        try { LaunchModeStore.Write(_stateDirectory, mode); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("shell: launch mode not kept: " + e.GetType().Name); }
+    }
+
+    /// <summary>
+    /// The launcher's start after the window loads (OD-46 folder search; OD-118 G1/G2). No Infinity request unless the last run ended
+    /// online with a kept session: then the service status, the release floor and the resume, as before. A run that chose Play offline
+    /// opens offline again. GitHub's release list is read either way.
+    /// </summary>
+    public async Task StartupAsync(string? azimuth)
+    {
+        var online = StartsOnline;
+        if (online) ResumeOnline();
+        var onlineCheck = online ? CheckOnlineStatusAsync(manual: false) : Task.CompletedTask;
+        // Production bootstrap respects global closure before requesting discovery.
+        if (_config.Production) await onlineCheck;
+        var updateCheck = !online || !_config.Production || OnlineServiceAllowsPlay ? ProbeServerAsync() : Task.CompletedTask;
+        await VerifyBuildOriginAsync();
+        if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
+        else await FindAzimuthAsync(null, openSetupWhenNeeded: true);
+        await Task.WhenAll(updateCheck, onlineCheck);
+        if (online) await ResumeSessionAsync();
+        else if (StartsOffline) PlayOffline();
+        await RefreshIntegrityAutomaticallyAsync();
+    }
+}

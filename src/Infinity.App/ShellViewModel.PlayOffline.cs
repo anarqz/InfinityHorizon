@@ -62,6 +62,28 @@ public sealed partial class ShellViewModel
         }
     }
 
+    /// <summary>
+    /// The game's environment for an offline Play (OD-118): the native mods' plan, <c>FI_LAUNCH=v1;offline</c> (the hook then never
+    /// reaches a network), the launcher's path, the profile's offline identity and, under Wine, the mods' native DLL overrides. No
+    /// server, ticket or token is ever part of it.
+    /// </summary>
+    internal static List<(string Name, string Value)> OfflineLaunchEnvironment(LocalProfile profile, IEnumerable<(string Name, string Value)>? planEnvironment,
+        IReadOnlyList<string> overrides)
+    {
+        var environment = (planEnvironment ?? []).ToList();
+        environment.Add((Launch.EnvLaunch, Launch.EnvOffline));
+        environment.Add((Launch.EnvLauncherExe, Environment.ProcessPath ?? "infinity.exe"));
+        environment.Add((EnvOfflineXuid, profile.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture)));
+        environment.Add((EnvOfflineGamertag, profile.Name));
+        if (WineHost.Detected)
+        {
+            var inherited = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
+            foreach (var module in overrides) inherited = WineHost.WithNativeDll(inherited, module) ?? inherited;
+            if (inherited is not null) environment.Add(("WINEDLLOVERRIDES", inherited));
+        }
+        return environment;
+    }
+
     public async Task PlayOfflineAsync()
     {
         if (!CanPlayOffline || _install is not { } install || OfflinePlayProfile is not { } profile || ModManagerFactory() is not { } factory) return;
@@ -89,17 +111,7 @@ public sealed partial class ShellViewModel
                 if (runtime is null || !NativeModHookReady) throw new ModException("native mods need the verified runtime and hook", ModErrors.Unsupported);
                 plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
             }
-            var environment = (plan?.Environment ?? []).ToList();
-            environment.Add((Launch.EnvLaunch, Launch.EnvOffline));
-            environment.Add((Launch.EnvLauncherExe, Environment.ProcessPath ?? "infinity.exe"));
-            environment.Add((EnvOfflineXuid, profile.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture)));
-            environment.Add((EnvOfflineGamertag, profile.Name));
-            if (WineHost.Detected)
-            {
-                var inherited = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
-                foreach (var module in overrides) inherited = WineHost.WithNativeDll(inherited, module) ?? inherited;
-                if (inherited is not null) environment.Add(("WINEDLLOVERRIDES", inherited));
-            }
+            var environment = OfflineLaunchEnvironment(profile, plan?.Environment, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
             using var uiPipe = OfflineOverlay(environment);

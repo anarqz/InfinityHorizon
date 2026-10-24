@@ -62,6 +62,15 @@ public sealed partial class ShellViewModel
         {
             using var bound = CancellationTokenSource.CreateLinkedTokenSource(_updateStop.Token);
             bound.CancelAfter(TimeSpan.FromSeconds(25));
+            if (!_onlineEngaged)
+            {
+                // OD-118 (G1): before SIGN IN only GitHub's release list is read; the release floor (/launcher/v1/info) waits for Sign in.
+                await DiscoverLauncherReleaseAsync(bound.Token);
+                if (_updateRecoveryBlocked) return;
+                _launcherUpdatePhase = UpdatePhase.Current; _updateTarget = null;
+                Log("update: release floor deferred to Sign in (offline)");
+                return;
+            }
             var infoTask = UpdateServerInfoAsync(bound.Token);
             var releaseTask = DiscoverLauncherReleaseAsync(bound.Token);
             await Task.WhenAll(infoTask, releaseTask);

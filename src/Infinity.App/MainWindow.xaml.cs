@@ -48,16 +48,7 @@ public partial class MainWindow : Window
                 await vm.OpenDevelopmentModsAsync(azimuth);
                 return;
             }
-            var onlineCheck = vm.CheckOnlineStatusAsync(manual: false);
-            // Production bootstrap respects global closure before requesting discovery.
-            if (config.Production) await onlineCheck;
-            var updateCheck = !config.Production || vm.OnlineServiceAllowsPlay ? vm.ProbeServerAsync() : Task.CompletedTask;
-            await vm.VerifyBuildOriginAsync();
-            if (azimuth is not null) vm.Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
-            else await vm.FindAzimuthAsync(null, openSetupWhenNeeded: true);
-            await Task.WhenAll(updateCheck, onlineCheck);
-            await vm.ResumeSessionAsync();
-            await vm.RefreshIntegrityAutomaticallyAsync();
+            await vm.StartupAsync(azimuth);
         };
     }
 
@@ -66,6 +57,7 @@ public partial class MainWindow : Window
     private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesAsync();
     private async void OnCheckOnlineStatus(object sender, RoutedEventArgs e) => await _vm.CheckOnlineStatusAsync();
     private void OnOnlineSupport(object sender, RoutedEventArgs e) => _vm.OpenOnlineSupport();
+    private void OnPlayOfflineFromStatus(object sender, RoutedEventArgs e) => _vm.PlayOfflineFromStatus();
     private void OnOpenOnlineStatus(object sender, RoutedEventArgs e) => _vm.OpenOnlineStatus();
     private void OnCloseOnlineStatus(object sender, RoutedEventArgs e) => _vm.CloseOnlineStatus();
     private async void OnApplyLauncherUpdate(object sender, RoutedEventArgs e) => await _vm.ApplyLauncherUpdateAsync();
