@@ -20,6 +20,11 @@ public sealed record ExternalSourceCheck(string SourceId, string Picked, string?
     public int Different => Files.Count(f => f.State == ExternalFileState.Different);
     /// <summary>Files this pick itself provided (the rest, if Ok, are an earlier verified copy of an update's unchanged files).</summary>
     public int FromSource { get; init; }
+    /// <summary>
+    /// Files this pick holds at their place but with other bytes (another version), which the earlier stored copy covers: the install
+    /// uses the stored bytes, and the player is told (T2b; SAURON's Proton pass). Never silently ignored.
+    /// </summary>
+    public IReadOnlyList<ExternalFile> DifferentInPick { get; init; } = [];
     /// <summary>Every file verifies, and the pick provided at least one: a folder without any of the files is never "found".</summary>
     public bool Ok => Files.Count > 0 && Found == Files.Count && FromSource > 0;
 }
@@ -124,6 +129,7 @@ public sealed partial class ManagedModFiles
         var (prefix, matched) = Match(source.Entries, expected);
         var bySize = source.Entries.ToLookup(e => e.Bytes);
         var results = new List<ExternalFileCheck>(); long done = 0; var total = expected.Sum(f => f.Bytes); var fromSource = 0;
+        var differentInPick = new List<ExternalFile>();
         foreach (var file in expected)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -136,7 +142,11 @@ public sealed partial class ManagedModFiles
                     if (!ReferenceEquals(candidate, entry) && StoreIfMatches(candidate, file)) { state = ExternalFileState.Ok; break; }
             if (state == ExternalFileState.Ok) fromSource++;
             // An update's unchanged file may come from the earlier copy, only while its stored bytes still verify.
-            else if (ObjectVerified(file.Sha256, file.Bytes)) state = ExternalFileState.Ok;
+            else if (ObjectVerified(file.Sha256, file.Bytes))
+            {
+                if (state == ExternalFileState.Different) differentInPick.Add(file); // this pick's copy is another version: reported
+                state = ExternalFileState.Ok;
+            }
             results.Add(new(file, state));
             done += file.Bytes;
             progress?.Report(new(results.Count, expected.Length, done, total));
@@ -144,7 +154,7 @@ public sealed partial class ManagedModFiles
         RememberCheckedObjects(manifest);
         if (fromSource > 0) RememberExternalChoice(manifest.Id, sourceId, picked); // under the lock: two rows never lose each other's pick
         var root = prefix is null ? null : source.Describe(prefix);
-        return new(sourceId, picked, root, results.AsReadOnly()) { FromSource = fromSource };
+        return new(sourceId, picked, root, results.AsReadOnly()) { FromSource = fromSource, DifferentInPick = differentInPick.AsReadOnly() };
     }
 
     private bool StoreIfMatches(SourceEntry entry, ExternalFile file)

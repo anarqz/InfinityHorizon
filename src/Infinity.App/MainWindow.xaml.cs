@@ -365,6 +365,13 @@ public partial class MainWindow : Window
 
     private void OnNavSetup(object sender, RoutedEventArgs e) => _vm.OpenSetup();
 
+    /// <summary>Mods' "Use a different catalog…": Configure, scrolled to its catalog card.</summary>
+    private void OnOpenCatalogSetting(object sender, RoutedEventArgs e)
+    {
+        _vm.OpenSetup();
+        Dispatcher.InvokeAsync(() => { UpdateLayout(); CatalogCard.BringIntoView(); }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
     private void OnInstallHook(object sender, RoutedEventArgs e) => _vm.InstallHook();
 
     private async void OnRecheckAzimuth(object sender, RoutedEventArgs e) => await _vm.RecheckAzimuthAsync();

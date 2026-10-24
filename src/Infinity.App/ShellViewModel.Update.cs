@@ -23,13 +23,21 @@ public sealed partial class ShellViewModel
     private long _updateBytes, _updateTotal;
     public event Action? UpdateRestartRequested;
 
-    public bool LauncherUpdateAllowsPlay => !_updateAwaitingCommit && !_updateRecoveryBlocked && _launcherUpdatePhase is UpdatePhase.Current or UpdatePhase.ReleaseUnavailable;
+    public bool LauncherUpdateAllowsPlay => !_updateAwaitingCommit && !_updateRecoveryBlocked && (_launcherUpdatePhase is UpdatePhase.Current or UpdatePhase.ReleaseUnavailable || OfflineUpdateQuiet);
+
+    /// <summary>
+    /// OD-118 (T2b; SAURON saw it stick under --mods): offline, the server-side phases (checking, unavailable, required, release
+    /// unavailable) show nothing, so no "checking … online compatibility" text appears before SIGN IN or while the check runs, and
+    /// a check that never ran (the --mods route) never leaves it up. Local install states (download, apply, recovery) still show.
+    /// </summary>
+    private bool OfflineUpdateQuiet => !_onlineEngaged && !_updateAwaitingCommit && !_updateRecoveryBlocked
+        && _launcherUpdatePhase is UpdatePhase.Checking or UpdatePhase.Unavailable or UpdatePhase.Required or UpdatePhase.ReleaseUnavailable;
     public bool LauncherReleaseUnavailable => _launcherUpdatePhase == UpdatePhase.ReleaseUnavailable;
     public bool LauncherUpdateBusy => _updateAwaitingCommit || _updateChecking || _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying;
     public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport
         && !(DevelopmentMods && ShowMods && !_updateAwaitingCommit && !_updateRecoveryBlocked
             && _launcherUpdatePhase is not (UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying or UpdatePhase.RecoveryRequired));
-    public bool ShowLauncherUpdateBanner => !ShowOnlineStatusBanner && !ShowOnlineStatusPage && (LauncherReleaseUnavailable && LauncherUpdateAllowsPlay || !LauncherUpdateAllowsPlay && !ShowLauncherUpdate);
+    public bool ShowLauncherUpdateBanner => !OfflineUpdateQuiet && !ShowOnlineStatusBanner && !ShowOnlineStatusPage && (LauncherReleaseUnavailable && LauncherUpdateAllowsPlay || !LauncherUpdateAllowsPlay && !ShowLauncherUpdate);
     public string LauncherUpdateBannerAction => S[LauncherReleaseUnavailable ? "updater.retry" : "updater.open"];
     public bool CanRetryLauncherUpdate => !LauncherUpdateBusy && !Playing;
     public bool CanCancelLauncherUpdate => _updateDownload is not null && _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying;
