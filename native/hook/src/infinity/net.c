@@ -721,6 +721,9 @@ static int net_query_text(HINTERNET request, DWORD query, Buffer *out) {
 
 /* Forward to the test server as http://SERVER/<original host + path>. */
 static int net_forward(NetRequest *request, HRESULT *error) {
+    if (net_mode != NET_MODE_PROXY || fi_cfg()->launch == FI_LAUNCH_OFFLINE) {
+        return 0; /* OD-118: never on Play offline */
+    }
     HINTERNET session = 0, connection = 0, http = 0;
     Buffer path = {0}, headers = {0}, raw = {0};
     int answered = 0;
@@ -1036,6 +1039,12 @@ static DWORD net_request_at(const wchar_t *host, INTERNET_PORT port, int secure,
                             const wchar_t *path, const wchar_t *headers, const wchar_t *content_type,
                             const void *body, size_t body_size, void *out, size_t capacity, size_t *received,
                             int timeout_ms) {
+    if (fi_cfg()->launch == FI_LAUNCH_OFFLINE) { /* OD-118: no request of the hook's own leaves a Play offline */
+        static volatile LONG refused;
+        net_log_once(&refused, "NETWORK: Play offline: the hook's own request was not sent.\r\n");
+        if (received) *received = 0;
+        return 0;
+    }
     wchar_t type_header[96]; /* several threads call this at once */
     HINTERNET session = 0, connection = 0, http = 0;
     DWORD status = 0, status_size = sizeof(status), size = 0;
@@ -1594,7 +1603,12 @@ static void net_read_settings(const wchar_t *directory) {
     net_mode = config->net_mode == FI_NET_PROXY     ? NET_MODE_PROXY
                : config->net_mode == FI_NET_CAPTURE ? NET_MODE_CAPTURE
                                                     : NET_MODE_OFF;
-    net_auto_update = config->auto_update != 0;
+    /* OD-118: cfg_launch already turns the network off for Play offline, whatever [hook] NetMode says; kept here too,
+       so no later setting can turn it back on (the game's requests get Azimuth's own offline answer). */
+    if (config->launch == FI_LAUNCH_OFFLINE) {
+        net_mode = NET_MODE_OFF;
+    }
+    net_auto_update = config->auto_update != 0 && config->launch != FI_LAUNCH_OFFLINE;
     const wchar_t *server = config->server;
     net_server_secure = 0;
     if (wide_starts_ignore_case(server, wide_length(server), L"http://")) {

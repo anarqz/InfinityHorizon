@@ -1041,6 +1041,9 @@ int fi_launch_live(void) {
 }
 
 int fi_launch_network_allowed(void) {
+    if (fi_cfg()->launch == FI_LAUNCH_OFFLINE) {
+        return 0; /* OD-118: Play offline: no world, relay, STUN, livery or UDP proof */
+    }
     return !fi_launch_protocol() || (!fi_launch_suspended() && (launch_state != LAUNCH_ONLINE || fi_launch_live()));
 }
 
