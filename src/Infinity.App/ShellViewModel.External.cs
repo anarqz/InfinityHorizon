@@ -70,7 +70,32 @@ public sealed partial class ShellViewModel
     /// <summary>The mod writes game files and no game folder is chosen: the pane asks for it before Install (never a refusal after it).</summary>
     public bool ExternalNeedsGameFolder => _externalMod is { } mod && ContentLocation is null && mod.Files.Any(f => f.Root == "game");
     public bool ExternalInstalled => _externalMod is { } mod && _modHealth.Installed.Any(i => i.Id == mod.Id);
-    public string ExternalInstallLabel => S[ExternalInstalled ? "external.recheck_done" : "external.install"];
+    public string ExternalInstallLabel => ExternalInstalled && !ExternalUpdate ? S["external.recheck_done"]
+        : ExternalReplaced.Count > 0 ? S.Format("external.install_replacing", ("count", ExternalReplaced.Count.ToString(CultureInfo.CurrentCulture))) : S["external.install"];
+    private bool ExternalUpdate => _externalMod is { } mod && _modHealth.Installed.FirstOrDefault(i => i.Id == mod.Id)?.Manifest?.SameContent(mod) == false;
+
+    private (string Key, IReadOnlyList<string> Files)? _replaced;
+    /// <summary>
+    /// Before Install: the game folder the files go to and the existing files they replace (backed up, restored on disable or
+    /// uninstall). Shown so a wrong folder — a real game picked for a test pack — is visible before anything is written.
+    /// </summary>
+    private IReadOnlyList<string> ExternalReplaced
+    {
+        get
+        {
+            if (_externalMod is not { } mod || ContentLocation?.Mount is not { } mount || ModManagerFactory() is not { } factory) return [];
+            var key = mod.Digest + "|" + mount;
+            if (_replaced?.Key != key)
+                try { _replaced = (key, factory().ExistingFilesReplaced(mod)); }
+                catch (Exception error) when (ManagedModFiles.IsStateError(error)) { _replaced = (key, []); }
+            return _replaced.Value.Files;
+        }
+    }
+    public string ExternalTargetText => _externalMod is { } mod && mod.Files.Any(f => f.Root == "game") && ContentLocation?.Mount is { } mount
+        ? S.Format("external.target", ("path", mount)) : "";
+    public bool ExternalReplaces => ExternalAllOk && ExternalReplaced.Count > 0;
+    public string ExternalReplacesText => ExternalReplaced is { Count: > 0 } files
+        ? S.Format("external.replaces", ("count", files.Count.ToString(CultureInfo.CurrentCulture)), ("files", string.Join("\n", files.Take(8)) + (files.Count > 8 ? "\n…" : ""))) : "";
 
     public bool ShowBrowser => _browsing && ShowExternalSetup;
     public string BrowserPath => _browserPath;
@@ -118,7 +143,7 @@ public sealed partial class ShellViewModel
     public void CloseExternalSetup()
     {
         foreach (var check in _externalChecks.Values) check.Cancel();
-        _externalMod = null; _browsing = false; _browsingRow = null;
+        _externalMod = null; _browsing = false; _browsingRow = null; _replaced = null;
         ExternalRows.Clear(); BrowserEntries.Clear();
         Changed(string.Empty);
     }

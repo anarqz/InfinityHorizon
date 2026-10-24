@@ -188,6 +188,26 @@ public sealed partial class ManagedModFiles
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
 
     /// <summary>
+    /// What Install would replace: the mapped destinations that already hold a file the launcher does not own for this mod (another
+    /// mod's or the game's own), relative to their root, for the player to see before Install. Reads only.
+    /// </summary>
+    public IReadOnlyList<string> ExistingFilesReplaced(ModManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        var owned = ReadReceipt(manifest.Id)?.Files.Select(f => f.Root + "/" + f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+        var replaced = new List<string>();
+        foreach (var file in manifest.Files)
+        {
+            if (file.Root == "game" && _game is null || owned.Contains(file.Root + "/" + file.Destination)) continue;
+            if (File.Exists(Target(file.Root, file.Destination))) replaced.Add(file.Destination);
+        }
+        return replaced.AsReadOnly();
+    }
+
+    /// <summary>The selected game folder files are installed into (the game's Mount), or null.</summary>
+    public string? GameFolder => _game;
+
+    /// <summary>
     /// OD-117 install: every expected file must already be in the store (checked when copied, checked again when read). Same
     /// transaction as a package: backups of what it replaces, receipts, settings, one database base at a time (OD-114).
     /// </summary>
