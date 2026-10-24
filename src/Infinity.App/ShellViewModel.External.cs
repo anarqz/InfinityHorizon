@@ -186,8 +186,8 @@ public sealed partial class ShellViewModel
         }
         if (check.FromSource == 0) { row.Status = S["external.nothing_found"]; return; } // a pick without any of the files, whatever is stored
         var parts = new List<string>();
-        if (check.Missing > 0) parts.Add(S.Format("external.missing", ("count", N(check.Missing))));
-        if (check.Different > 0) parts.Add(S.Format("external.different", ("count", N(check.Different))));
+        if (check.Missing > 0) parts.Add(Counted("external.missing", check.Missing));
+        if (check.Different > 0) parts.Add(Counted("external.different", check.Different));
         row.Status = check.MatchedRoot is null && check.Found == 0 ? S["external.nothing_found"] : string.Join(" · ", parts)
             + (check.MatchedRoot is { } where ? "\n" + S.Format("external.looked_in", ("where", where)) : "");
         row.Details = string.Join("\n", check.Files.Where(f => f.State != ExternalFileState.Ok).Take(200).Select(f =>
