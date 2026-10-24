@@ -264,6 +264,7 @@ public static class DevelopmentModCatalog
     {
         ArgumentNullException.ThrowIfNull(url);
         var bytes = await ReadAsync(http, url, 256 * 1024, cancellation).ConfigureAwait(false);
+        if (OfficialModCatalog.IsSchema2(bytes)) return OfficialModCatalog.Development(bytes); // OD-116: v2 from a local file (development only)
         var parsed = ModCatalogTrust.Parse(bytes, signed: false);
         if (parsed.Entries.Count > 64) throw new ModException("catalog too large", ModErrors.Catalog);
         var mods = new List<ModManifest>();
