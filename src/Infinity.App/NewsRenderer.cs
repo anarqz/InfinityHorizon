@@ -27,8 +27,9 @@ public static class NewsRenderer
     {
         var document = new FlowDocument
         {
-            FontFamily = (FontFamily)resources["InfinityFont"], FontSize = 15, PagePadding = new Thickness(0), TextAlignment = TextAlignment.Left,
-            Foreground = (Brush)resources["InfinityText"], Background = Brushes.Transparent,
+            // T3b (Alex): reading on black: near-white body at a comfortable size and line height, white headings, quiet links.
+            FontFamily = (FontFamily)resources["InfinityFont"], FontSize = 17, LineHeight = 28, PagePadding = new Thickness(0), TextAlignment = TextAlignment.Left,
+            Foreground = (Brush)resources["NewsReadingText"], Background = Brushes.Transparent, MaxPageWidth = 760,
         };
         MarkdownDocument parsed;
         try { parsed = Markdown.Parse(markdown, Pipeline); }
@@ -44,8 +45,11 @@ public static class NewsRenderer
 
     private sealed record Context(Func<string, Task<byte[]?>> Image, Action<Uri> Open, ResourceDictionary Resources)
     {
-        public Brush Muted => (Brush)Resources["InfinityMuted"];
-        public Brush Accent => (Brush)Resources["InfinityAccent"];
+        public Brush Muted => (Brush)Resources["NewsReadingMuted"];
+        public Brush Heading => (Brush)Resources["NewsReadingHeading"];
+        public Brush LinkBrush => (Brush)Resources["NewsReadingLink"];
+        public Brush Rule => (Brush)Resources["NewsReadingRule"];
+        public Brush CodeSurface => (Brush)Resources["NewsReadingCode"];
     }
 
     private static FontFamily Mono => new("Consolas, Courier New");
@@ -55,12 +59,13 @@ public static class NewsRenderer
         switch (block)
         {
             case HeadingBlock heading:
-                var title = Inlines(new Paragraph { FontWeight = FontWeights.Bold, FontSize = heading.Level switch { 1 => 24, 2 => 20, 3 => 17, _ => 15 }, Margin = new Thickness(0, 14, 0, 6) }, heading.Inline, context);
+                var title = Inlines(new Paragraph { FontWeight = FontWeights.SemiBold, Foreground = context.Heading, FontSize = heading.Level switch { 1 => 28, 2 => 22, 3 => 19, _ => 17 },
+                    LineHeight = heading.Level switch { 1 => 36, 2 => 30, _ => 26 }, Margin = new Thickness(0, heading.Level == 1 ? 8 : 22, 0, 8) }, heading.Inline, context);
                 return title;
             case ParagraphBlock paragraph:
-                return Inlines(new Paragraph { Margin = new Thickness(0, 0, 0, 10) }, paragraph.Inline, context);
+                return Inlines(new Paragraph { Margin = new Thickness(0, 0, 0, 16) }, paragraph.Inline, context);
             case ListBlock list:
-                var result = new List { MarkerStyle = list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc, Margin = new Thickness(0, 0, 0, 10), Padding = new Thickness(22, 0, 0, 0) };
+                var result = new List { MarkerStyle = list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc, Margin = new Thickness(0, 0, 0, 16), Padding = new Thickness(34, 0, 0, 0), MarkerOffset = 10 };
                 if (list.IsOrdered && int.TryParse(list.OrderedStart, out var start) && start > 0) result.StartIndex = start;
                 foreach (var entry in list.OfType<ListItemBlock>())
                 {
@@ -70,14 +75,14 @@ public static class NewsRenderer
                 }
                 return result;
             case QuoteBlock quote:
-                var section = new Section { BorderBrush = context.Accent, BorderThickness = new Thickness(3, 0, 0, 0), Padding = new Thickness(12, 2, 0, 2), Margin = new Thickness(0, 0, 0, 10), Foreground = context.Muted };
+                var section = new Section { BorderBrush = context.Rule, BorderThickness = new Thickness(3, 0, 0, 0), Padding = new Thickness(16, 2, 0, 2), Margin = new Thickness(0, 0, 0, 16), Foreground = context.Muted };
                 foreach (var child in quote) if (Block(child, context) is { } converted) section.Blocks.Add(converted);
                 return section;
             case FencedCodeBlock or CodeBlock:
                 var code = (LeafBlock)block;
-                return new Paragraph(new Run(code.Lines.ToString())) { FontFamily = Mono, FontSize = 13, Background = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0)), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
+                return new Paragraph(new Run(code.Lines.ToString())) { FontFamily = Mono, FontSize = 14, LineHeight = 21, Background = context.CodeSurface, Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 0, 0, 16) };
             case ThematicBreakBlock:
-                return new BlockUIContainer(new Border { Height = 1, Background = context.Muted, Margin = new Thickness(0, 8, 0, 8), Opacity = 0.5 });
+                return new BlockUIContainer(new Border { Height = 1, Background = context.Rule, Margin = new Thickness(0, 12, 0, 12) });
             case HtmlBlock html:
                 return new Paragraph(new Run(html.Lines.ToString())) { Foreground = context.Muted, Margin = new Thickness(0, 0, 0, 10) }; // shown as text
             case LeafBlock leaf when leaf.Inline is not null:
@@ -113,7 +118,7 @@ public static class NewsRenderer
         {
             case LiteralInline literal: return new Run(literal.Content.ToString());
             case EmphasisInline emphasis: return Children(emphasis.DelimiterCount >= 2 ? new Bold() : new Italic(), emphasis, context);
-            case CodeInline code: return new Run(code.Content) { FontFamily = Mono, Background = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0)) };
+            case CodeInline code: return new Run(code.Content) { FontFamily = Mono, FontSize = 15, Background = context.CodeSurface };
             case LineBreakInline lineBreak: return lineBreak.IsHard ? new LineBreak() : new Run(" ");
             case HtmlEntityInline entity: return new Run(entity.Transcoded.ToString());
             case HtmlInline html: return new Run(html.Tag); // shown as text
@@ -128,7 +133,7 @@ public static class NewsRenderer
     private static System.Windows.Documents.Inline Link(string? url, Span content, Context context)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var target) || target.Scheme is not ("https" or "http")) return content; // text only
-        var link = new Hyperlink { Foreground = context.Accent, ToolTip = target.AbsoluteUri, NavigateUri = target };
+        var link = new Hyperlink { Foreground = context.LinkBrush, ToolTip = target.AbsoluteUri, NavigateUri = target };
         link.Inlines.Add(content);
         link.RequestNavigate += (_, e) => { context.Open(e.Uri); e.Handled = true; };
         return link;
