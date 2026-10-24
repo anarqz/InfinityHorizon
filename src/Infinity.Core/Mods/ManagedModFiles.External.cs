@@ -38,7 +38,7 @@ public sealed partial class ManagedModFiles
 {
     private const int MaxSourceEntries = 50_000;
     /// <summary>Stable reasons a chosen source cannot be used (the <see cref="ModException"/> message; the launcher shows external.reason.&lt;reason&gt;).</summary>
-    public const string SourceGone = "source_gone", SourceTooLarge = "source_too_large", SourceNotZip = "source_not_zip";
+    public const string SourceGone = "source_gone", SourceTooLarge = "source_too_large", SourceNotZip = "source_not_zip", SourceLinked = "source_linked";
     private const int MaxSourceDepth = 16;
 
     /// <summary>Every file an external mod reads from its sources: its mappings and its database base.</summary>
@@ -280,6 +280,10 @@ public sealed partial class ManagedModFiles
         public static SourceEntries Open(string picked)
         {
             var full = Path.GetFullPath(picked);
+            // The walk skips links inside the pick; the pick itself is not followed either (a symbolic link or junction: review, T2 M7).
+            // LinkTarget is null for cloud placeholders (OneDrive), which are the player's own files and stay allowed.
+            FileSystemInfo item = Directory.Exists(full) ? new DirectoryInfo(full) : new FileInfo(full);
+            if (item.Exists && item.LinkTarget is not null) throw new ModException(SourceLinked, ModErrors.ExternalFiles);
             if (Directory.Exists(full))
             {
                 var options = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = MaxSourceDepth, IgnoreInaccessible = true,

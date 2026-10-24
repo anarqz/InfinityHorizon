@@ -968,7 +968,10 @@
                     <!-- M5 reviewed update: the change first, then the confirmation. -->
                     <StackPanel Margin="0,14,0,0" Visibility="{Binding SelectedModUpdate, Converter={StaticResource Visible}}">
                       <TextBlock Text="{Binding SelectedMod.UpdateSummary}" TextWrapping="Wrap" FontSize="12" />
-                      <Button Content="{Binding S[mods.confirm_update]}" Click="OnConfirmModUpdate" IsEnabled="{Binding CanConfirmModUpdate}"
+                      <TextBlock Text="{Binding UpdatePreviewText}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                      <TextBlock Text="{Binding UpdatePreviewFiles}" TextWrapping="Wrap" FontSize="11" Margin="0,6,0,0" Foreground="{StaticResource InfinityMuted}"
+                                 Visibility="{Binding UpdatePreviewHasFiles, Converter={StaticResource Visible}}" />
+                      <Button x:Name="ConfirmUpdateButton" Content="{Binding ConfirmUpdateLabel}" Click="OnConfirmModUpdate" IsEnabled="{Binding CanConfirmModUpdate}"
                               Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,10,0,0" />
                     </StackPanel>
                     <!-- H3: changed files are a warning with two choices; M6: settings repair. -->

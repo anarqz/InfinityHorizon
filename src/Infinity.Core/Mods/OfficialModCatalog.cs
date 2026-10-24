@@ -52,6 +52,8 @@ public static class OfficialModCatalog
             var root = json.RootElement;
             ModManifest.RejectDuplicates(root);
             if (root.GetProperty("schemaVersion").GetInt32() != SchemaVersion) throw new ModException("unsupported catalog schema", ModErrors.Catalog);
+            // OD-116: the root carries only these (a root-level required or availability, or anything else, is refused, never ignored).
+            if (root.EnumerateObject().Any(p => p.Name is not ("schemaVersion" or "mods"))) throw new ModException("unknown catalog field", ModErrors.Catalog);
             var list = root.GetProperty("mods");
             if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 512) throw new ModException("invalid catalog mods", ModErrors.Catalog);
             var mods = new List<ModManifest>(); ModRuntimeEntry? runtime = null; var requires = new List<string>();
@@ -60,6 +62,11 @@ public static class OfficialModCatalog
             {
                 var id = entry.GetProperty("id").GetString()!;
                 if (!ids.Add(id)) throw new ModException("duplicate catalog id", ModErrors.Catalog);
+                // OD-116 ("drop both"): no required mods and no availability, on any entry (the runtime's too) or inside its install;
+                // refused rather than silently ignored, so a catalog author never believes they take effect.
+                foreach (var dropped in DroppedFields)
+                    if (entry.TryGetProperty(dropped, out _) || entry.TryGetProperty("install", out var body) && body.ValueKind == JsonValueKind.Object && body.TryGetProperty(dropped, out _))
+                        throw new ModException("catalog v2 has no '" + dropped + "' (OD-116)", ModErrors.Catalog);
                 if (id == RuntimeId)
                 {
                     if (entry.TryGetProperty("install", out _)) throw new ModException("the runtime entry installs no files", ModErrors.Catalog);
@@ -68,10 +75,6 @@ public static class OfficialModCatalog
                     runtime = new(id, version, Download(entry.GetProperty("download")));
                     continue;
                 }
-                // OD-116 ("drop both"): a v2 entry has no required mods and no availability; refused rather than silently ignored,
-                // so a catalog author never believes they take effect.
-                foreach (var dropped in DroppedFields)
-                    if (entry.TryGetProperty(dropped, out _)) throw new ModException("catalog v2 has no '" + dropped + "' (OD-116)", ModErrors.Catalog);
                 var manifest = Manifest(entry);
                 if (entry.TryGetProperty("requires", out var required))
                     foreach (var name in required.EnumerateArray())
