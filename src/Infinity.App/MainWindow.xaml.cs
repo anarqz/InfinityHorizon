@@ -183,6 +183,15 @@ public partial class MainWindow : Window
     // OD-118: the welcome screen's Play offline link.
     private void OnPlayOfflineLink(object sender, RoutedEventArgs e) => _vm.PlayOffline();
 
+    // OD-118: the Update online profiles panel after sign-in.
+    private async void OnUploadProfiles(object sender, RoutedEventArgs e) => await _vm.UploadProfilesAsync();
+    private void OnCloseProfileUpsert(object sender, RoutedEventArgs e) => _vm.CloseProfileUpsert();
+    private void OnUpsertPanelKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true; _vm.CloseProfileUpsert();
+    }
+
     private void OnWelcome(object sender, RoutedEventArgs e)
     {
         PasswordBox.Clear();
