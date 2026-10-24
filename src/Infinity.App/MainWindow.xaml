@@ -788,11 +788,28 @@
                         </Button>
                     <Button Content="{Binding S[mods.folder_short]}" Click="OnChooseAzimuth" Padding="10,6" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
                             ToolTip="{Binding ModFolder}" AutomationProperties.Name="{Binding S[mods.choose_folder]}" />
+                    <!-- Add from URL: a ZIP with one custom mod, placed as mods/custom/<its custom. id>; confirmed on its card as usual. -->
+                    <Button Content="{Binding S[mods.url_add]}" Click="OnToggleModUrl" Padding="10,6" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
+                            ToolTip="{Binding S[mods.url_hint]}" />
                   </WrapPanel>
                   <TextBlock Text="{Binding ModCatalogSummary}" ToolTip="{Binding ModCatalogStatus}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                   <!-- OD-114: custom mods are read from this folder, one subfolder per mod. -->
                   <TextBox Text="{Binding CustomModsFolderText, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent" TextWrapping="Wrap"
                            FontSize="11" Foreground="{StaticResource InfinityMuted}" Padding="0" Margin="0,2,0,0" />
+                  <Button Content="{Binding S[mods.custom_open]}" Style="{StaticResource LinkButton}" Click="OnOpenCustomModsFolder" HorizontalAlignment="Left"
+                          FontSize="11" Margin="0,2,0,0" />
+                  <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,10,0,0" Visibility="{Binding ShowModUrl, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[mods.url_title]}" FontWeight="Bold" />
+                      <TextBlock Text="{Binding S[mods.url_hint]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,8" />
+                      <TextBox x:Name="ModUrlBox" Text="{Binding ModUrl, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" KeyDown="OnModUrlKey"
+                               AutomationProperties.Name="{Binding S[mods.url_title]}" />
+                      <WrapPanel Margin="0,8,0,0">
+                        <Button Content="{Binding S[mods.url_download]}" Click="OnAddModFromUrl" IsEnabled="{Binding CanAddModFromUrl}" Padding="10,6" Margin="0,0,8,0" />
+                        <Button Content="{Binding S[mods.url_cancel]}" Click="OnToggleModUrl" Padding="10,6" />
+                      </WrapPanel>
+                    </StackPanel>
+                  </Border>
                   <!-- H4/§1.4: production recovery, always with a resolution. -->
                   <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,10,0,0" Visibility="{Binding ShowModRecovery, Converter={StaticResource Visible}}">
                     <StackPanel>

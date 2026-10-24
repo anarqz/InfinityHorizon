@@ -141,7 +141,63 @@ public sealed partial class ShellViewModel
         ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
         + (_customProblems > 0 ? " · " + S.Format("mods.custom_problems", ("count", _customProblems.ToString(CultureInfo.CurrentCulture))) : "");
     /// <summary>OD-114: where the player puts custom mods, one folder per mod (shown on the Mods page).</summary>
-    public string CustomModsFolderText => S.Format("mods.custom_folder", ("path", ManagedModFiles.CustomModsFolder(ModHome)));
+    public string CustomModsFolderText => S.Format("mods.custom_folder", ("path", ManagedModFiles.CustomModsFolder(ModHome)))
+        + (Infinity.Core.Process.WineHost.Detected && Infinity.Core.Process.WineHost.UnixPath(ManagedModFiles.CustomModsFolder(ModHome)) is { } unix
+            ? "\n" + S.Format("mods.custom_folder_linux", ("path", unix)) : "");
+
+    /// <summary>Opens the custom mods folder (created if missing): Explorer on Windows, the prefix's explorer under Wine/Proton.</summary>
+    public void OpenCustomModsFolder()
+    {
+        try { Infinity.Core.Process.FolderOpener.Open(ManagedModFiles.CustomModsFolder(ModHome)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            Log("mods: custom folder could not be opened: " + error.GetType().Name);
+            Message = S["mods.custom_folder_failed"];
+        }
+    }
+
+    private bool _showModUrl;
+    private string _modUrl = "";
+    /// <summary>Add from URL: the address field, shown under the Mods toolbar.</summary>
+    public bool ShowModUrl => _showModUrl && ModsIdle;
+    public string ModUrl
+    {
+        get => _modUrl;
+        set { _modUrl = value ?? ""; Changed(); Changed(nameof(CanAddModFromUrl)); }
+    }
+    public bool CanAddModFromUrl => ModsIdle && CustomModUrl(_modUrl) is not null;
+    /// <summary>The downloader's own rules (ModDownloads): HTTPS on the default port, no credentials or fragment.</summary>
+    private static Uri? CustomModUrl(string text) => Uri.TryCreate(text.Trim(), UriKind.Absolute, out var url) && url.Scheme == Uri.UriSchemeHttps
+        && url.IsDefaultPort && url.UserInfo.Length == 0 && url.Fragment.Length == 0 ? url : null;
+
+    public void ToggleModUrl()
+    {
+        _showModUrl = !_showModUrl;
+        Changed(string.Empty);
+    }
+
+    /// <summary>
+    /// Add from URL: downloads a ZIP with one custom mod, places it as <c>mods/custom/&lt;its custom. id&gt;</c>, then shows its card so the
+    /// player can read and confirm it. Adding never confirms nor installs it.
+    /// </summary>
+    public async Task AddModFromUrlAsync()
+    {
+        if (!CanAddModFromUrl) return;
+        var url = CustomModUrl(_modUrl)!; var home = ModHome;
+        CustomModImport? added = null;
+        await RunModOperationAsync(async () =>
+        {
+            var progress = new Progress<string>(stage => { _modProgress = S[stage == "download" ? "mods.progress.url_download" : "mods.progress.url_verify"]; Changed(nameof(ModProgress)); });
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+            added = await ManagedModFiles.ImportCustomFromUrlAsync(ModDownloads, home, url, progress, timeout.Token);
+        }, S["mods.action_done"]);
+        if (added is null) return;
+        Log("mods: custom mod added from URL: " + added.Manifest.Id + (added.Replaced ? " (replaced)" : added.Unchanged ? " (unchanged)" : ""));
+        Message = S.Format(added.Unchanged ? "mods.url_unchanged" : added.Replaced ? "mods.url_replaced" : "mods.url_added", ("mod", added.Manifest.Text("name", S.Locale)));
+        _modUrl = ""; _showModUrl = false;
+        if (ModCards.FirstOrDefault(c => c.Manifest.Id == added.Manifest.Id) is { } card) ShowModInformation(card);
+        Changed(string.Empty);
+    }
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
 
     /// <summary>Any interrupted operation in the bucket: mod changes wait for it (Play only for this folder, <see cref="ModPlayBlocked"/>).</summary>
