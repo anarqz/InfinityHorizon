@@ -685,6 +685,8 @@
   "external.reason.other": "não foi possível lê-la.",
   "external.kept": "{count} arquivos sem mudança mantidos da sua cópia anterior.",
   "external.stored_damaged": "{count} arquivos copiados não conferem mais. Escolha de novo a sua cópia do pacote.",
+  "external.game_folder": "Este mod adiciona arquivos ao jogo. Escolha primeiro a pasta do jogo (a pasta com Mount dentro, ou a própria Mount).",
+  "mods.error.game_folder": "Este mod adiciona arquivos ao jogo e nenhuma pasta do jogo foi escolhida ainda. Escolha-a em Pasta do jogo (Configurar → Integridade do jogo) e tente de novo.",
   "catalog.title": "Catálogo de mods",
   "catalog.using_official": "Usando o catálogo oficial de mods do Infinity.",
   "catalog.using_custom": "Usando outro catálogo: {url}",

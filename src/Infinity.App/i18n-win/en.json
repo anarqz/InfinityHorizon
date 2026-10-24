@@ -685,6 +685,8 @@
   "external.reason.other": "it can't be read.",
   "external.kept": "{count} unchanged files kept from your earlier copy.",
   "external.stored_damaged": "{count} copied files no longer match. Choose your copy of the pack again.",
+  "external.game_folder": "This mod adds files to the game. Choose the game folder first (the folder with Mount inside, or Mount itself).",
+  "mods.error.game_folder": "This mod adds files to the game, and no game folder is chosen yet. Choose it with Game folder (Configure → Game integrity), then try again.",
   "catalog.title": "Mod catalog",
   "catalog.using_official": "Using Infinity's official mod catalog.",
   "catalog.using_custom": "Using a different catalog: {url}",
