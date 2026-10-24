@@ -804,6 +804,13 @@
                       <TextBlock Text="{Binding S[mods.url_hint]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,8" />
                       <TextBox x:Name="ModUrlBox" Text="{Binding ModUrl, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" KeyDown="OnModUrlKey"
                                AutomationProperties.Name="{Binding S[mods.url_title]}" />
+                      <!-- A ZIP without infinity-mod.json: incompatible until its modder adapts it to the schema. -->
+                      <StackPanel Margin="0,8,0,0" Visibility="{Binding ModUrlIncompatible, Converter={StaticResource Visible}}">
+                        <TextBlock Text="{Binding S[mods.url_incompatible_title]}" FontWeight="Bold" Foreground="{StaticResource InfinityGold}" />
+                        <TextBlock Text="{Binding ModUrlIncompatibleText}" TextWrapping="Wrap" Margin="0,4,0,2" />
+                        <Button Content="{x:Static local:ShellViewModel.ModSchemaPage}" Style="{StaticResource LinkButton}" Click="OnOpenModSchemaPage"
+                                HorizontalAlignment="Left" />
+                      </StackPanel>
                       <WrapPanel Margin="0,8,0,0">
                         <Button Content="{Binding S[mods.url_download]}" Click="OnAddModFromUrl" IsEnabled="{Binding CanAddModFromUrl}" Padding="10,6" Margin="0,0,8,0" />
                         <Button Content="{Binding S[mods.url_cancel]}" Click="OnToggleModUrl" Padding="10,6" />

@@ -98,7 +98,8 @@ public sealed partial class ManagedModFiles
             }
 
             var manifests = entries.Keys.Where(k => string.Equals(k.Split('/')[^1], CustomManifestName, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (manifests.Length != 1) throw new ModException(manifests.Length == 0 ? "no manifest in the archive" : "several manifests in the archive", ModErrors.ArchiveManifest);
+            if (manifests.Length == 0) throw new ModException("no manifest in the archive", ModErrors.ArchiveNoManifest);
+            if (manifests.Length > 1) throw new ModException("several manifests in the archive", ModErrors.ArchiveManifest);
             var prefix = manifests[0][..^CustomManifestName.Length];
             var manifestEntry = entries[manifests[0]];
             if (manifestEntry.Length > ModCatalogTrust.MaxManifestBytes) throw new ModException("custom mod manifest too large", ModErrors.ArchiveManifest);

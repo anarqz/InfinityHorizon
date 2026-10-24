@@ -44,8 +44,10 @@ public static class ModErrors
     public const string UrlDownload = "url_download";
     /// <summary>Add from URL: the download is not a readable ZIP, is too large, or lacks a file its manifest maps.</summary>
     public const string Archive = "archive";
-    /// <summary>Add from URL: the ZIP has no, several, or an invalid <c>infinity-mod.json</c>, or one that is not a custom mod.</summary>
+    /// <summary>Add from URL: the ZIP has several or an invalid <c>infinity-mod.json</c>, or one that is not a custom mod.</summary>
     public const string ArchiveManifest = "archive_manifest";
+    /// <summary>Add from URL: the ZIP has no <c>infinity-mod.json</c> at all; the mod was never adapted to Infinity's schema.</summary>
+    public const string ArchiveNoManifest = "archive_no_manifest";
     /// <summary>Add from URL: the custom folder already holds the most custom mods the launcher lists.</summary>
     public const string CustomFull = "custom_full";
 }

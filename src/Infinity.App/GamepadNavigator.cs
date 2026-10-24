@@ -260,9 +260,10 @@ internal sealed class GamepadNavigator
 
     /// <summary>
     /// Steam's on-screen keyboard: Proton hands steam:// links to the Steam client (checked on a Deck in
-    /// Game Mode). Typed text arrives as ordinary key presses in the focused field.
+    /// Game Mode). Typed text arrives as ordinary key presses in the focused field. Also called when a
+    /// field opens already focused (Add from URL), where no tap or A press would open it.
     /// </summary>
-    private void OpenSteamKeyboard()
+    internal void OpenSteamKeyboard()
     {
         if (!SteamGamepadUi || DateTime.UtcNow - _keyboardOpened < TimeSpan.FromSeconds(1)) return;
         _keyboardOpened = DateTime.UtcNow;
