@@ -31,16 +31,6 @@
   </Window.Resources>
   <Grid>
   <Grid x:Name="ShellContent" IsEnabled="{Binding ModContentEnabled}">
-    <Grid.Style>
-      <Style TargetType="Grid">
-        <Style.Triggers>
-          <DataTrigger Binding="{Binding ModOperationBusy}" Value="True">
-            <!-- T2b: a plain dim, not a BlurEffect (under Wine the blur drew text boxes as solid grey bars). -->
-            <Setter Property="Opacity" Value="0.45" />
-          </DataTrigger>
-        </Style.Triggers>
-      </Style>
-    </Grid.Style>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
@@ -1263,7 +1253,9 @@
       </DockPanel>
     </Border>
   </Grid>
-    <Border x:Name="ModProgressOverlay" Background="#B20E0B16" Panel.ZIndex="100"
+    <!-- T2b/T4b: an opaque backdrop, and no opacity or effect on the content under it: under Wine, any composited dim or blur
+         drew the text boxes behind it as solid grey bars. Nothing behind the dialog needs to show while a mod operation runs. -->
+    <Border x:Name="ModProgressOverlay" Background="#FF0E0B16" Panel.ZIndex="100"
             Visibility="{Binding ModOperationBusy, Converter={StaticResource Visible}}"
             Focusable="True" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle">
       <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"

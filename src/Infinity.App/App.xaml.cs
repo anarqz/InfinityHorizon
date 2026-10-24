@@ -28,7 +28,15 @@ public partial class App : Application
             Log("unobserved task: " + e.Exception);
             e.SetObserved();
         };
+        // T4b: why the launcher ended, so a log never just stops (a fatal fault, or which way it was closed). No personal data: the
+        // reason and the exit code only; a fault's exception as the other handlers log it.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Log("fatal: " + e.ExceptionObject + (e.IsTerminating ? " (terminating)" : ""));
+        Exit += (_, e) => Log("exit: " + ExitReason + ", code " + e.ApplicationExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SessionEnding += (_, e) => ExitReason = "Windows session ending (" + e.ReasonSessionEnding + ")";
     }
+
+    /// <summary>How the launcher is ending, for the exit line in launcher.log; the window close is the default.</summary>
+    internal static string ExitReason { get; set; } = "window closed";
 
     private static void OnDispatcherUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
