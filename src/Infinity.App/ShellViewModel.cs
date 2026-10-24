@@ -365,6 +365,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
         else Message = S["signin.done_toast"];
         await RefreshIntegrityAutomaticallyAsync();
+        await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
     }
 
     private void KeepSession(AccountSession session, Secret refresh)
