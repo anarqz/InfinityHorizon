@@ -59,7 +59,7 @@ public sealed partial class ShellViewModel
     private void StartMods()
     {
         _ = RefreshModsAsync();
-        if (_modsStarted) return;
+        if (_modsStarted) { EnsureModCatalog(); return; } // T1f: a game folder found or changed in the shell loads it too
         _modsStarted = true;
         _ = StartModsOnceAsync();
     }

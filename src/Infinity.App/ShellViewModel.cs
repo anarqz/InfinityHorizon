@@ -91,6 +91,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Games.Add(OfflineGame);
         Gate = _gate.PlayOffline().ChooseGame(OfflineGame.Id);
         FillProfiles();
+        EnsureModCatalog(); // T1f: offline, Play needs the (GitHub) catalog's requirements; never wait for Mods to be opened
         // OD-118 T1c: the profile last chosen offline is chosen again (top bar no longer says "no profile" after a restart).
         if (LaunchModeStore.ReadLastProfile(_stateDirectory) is { } last
             && Profiles.FirstOrDefault(p => _rowLocals.TryGetValue(p.ProfileId, out var local) && local.Id == last) is { } row)

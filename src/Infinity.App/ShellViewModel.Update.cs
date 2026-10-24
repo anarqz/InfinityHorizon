@@ -130,7 +130,7 @@ public sealed partial class ShellViewModel
             return true;
         }
         catch (Exception error) when (UpdateFailure(error))
-        { Log("update: release discovery unavailable (" + error.GetType().Name + ")"); return false; }
+        { Log("update: release discovery unavailable: " + ErrorChain(error)); return false; }
     }
 
     /// <summary>Tests only: replaces the GitHub discovery (returns the discovered version, or throws as a failed read).</summary>

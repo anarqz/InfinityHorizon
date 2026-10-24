@@ -232,11 +232,17 @@ public sealed partial class ShellViewModel
     private IReadOnlyList<ModRequirement>? RequiredCatalog => _catalog?.Required ?? (_config.Production ? null : []);
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
+    // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it decides which mods every Play needs).
     public string? ModPlayNotice => _install is null ? null : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
+        : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
+        : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
         : RequiredModNotice is { } required ? required
         : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
         : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
+
+    /// <summary>OD-118 T1f: the catalog failed and is not loading: PLAY offers a retry next to the reason.</summary>
+    public bool ShowCatalogRetry => _install is not null && !_catalogLoaded && !_catalogLoading && _catalogFailure is not null && !Playing && !ShowRequiredModAction;
 
     public string ModFolder => _install?.Root ?? S["setup.not_found"];
 
@@ -298,11 +304,48 @@ public sealed partial class ShellViewModel
         }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)
         {
-            Log("mods: catalog unavailable: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : ""));
+            Log("mods: catalog unavailable: " + ErrorChain(error) + (error is ModException mod ? " " + mod.Code : ""));
             _catalogFailure = S["mods.catalog_failed"];
+            if (!_catalogLoaded) _ = RetryCatalogOnceAsync(); // T1f: a first-start fetch failure (seen under Proton) gets one more try
         }
-        finally { _catalogLoading = false; }
+        finally { _catalogLoading = false; Changed(string.Empty); }
         await RefreshModsAsync();
+    }
+
+    private bool _catalogRetryScheduled;
+
+    /// <summary>OD-118 T1f: one delayed retry of the quiet catalog load after it failed (GitHub, never Infinity), once per run.</summary>
+    private async Task RetryCatalogOnceAsync()
+    {
+        if (_catalogRetryScheduled) return;
+        _catalogRetryScheduled = true;
+        try { await Task.Delay(GitHubRetryDelay, _updateStop.Token); }
+        catch (OperationCanceledException) { return; }
+        if (_catalogLoaded || Playing || !ModsIdle) return;
+        Log("mods: retrying the catalog once");
+        await LoadModCatalogQuietlyAsync();
+    }
+
+    /// <summary>OD-118 T1f: the quiet catalog load when the shell opens without one (Play offline, or the game folder found later).</summary>
+    private void EnsureModCatalog()
+    {
+        if (_install is not null && InShell && !_catalogLoaded && !_catalogLoading && !DevelopmentMods) _ = LoadModCatalogQuietlyAsync();
+    }
+
+    /// <summary>
+    /// A failure's cause for the log (T1f: why GitHub fails on a first start under Proton): each exception's type and message, inner
+    /// ones included. URL queries and IP addresses are removed (logs never carry them).
+    /// </summary>
+    internal static string ErrorChain(Exception error)
+    {
+        var parts = new List<string>();
+        for (var e = error; e is not null && parts.Count < 5; e = e.InnerException)
+        {
+            var message = System.Text.RegularExpressions.Regex.Replace(e.Message, @"(https?://[^\s?#]+)[?#]\S*", "…");
+            message = System.Text.RegularExpressions.Regex.Replace(message, @"\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b|\[[0-9A-Fa-f:]{3,}\](:\d+)?", "<ip>");
+            parts.Add(e.GetType().Name + ": " + (message.Length > 160 ? message[..160] + "…" : message));
+        }
+        return string.Join(" <- ", parts);
     }
 
     private ModCatalog? SignedCatalogCached()
@@ -311,11 +354,15 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return null; }
     }
 
+    /// <summary>Tests only: replaces the network catalog fetch (returns the catalog, or throws as a failed fetch).</summary>
+    internal Func<CancellationToken, Task<ModCatalog>>? CatalogFetchForTests { get; set; }
+
     private async Task FetchCatalogAsync()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         ModCatalog catalog;
-        if (DevelopmentMods)
+        if (CatalogFetchForTests is { } fake) catalog = await fake(timeout.Token);
+        else if (DevelopmentMods)
         {
             if (!Uri.TryCreate(Environment.GetEnvironmentVariable("FI_DEV_MOD_CATALOG_URL"), UriKind.Absolute, out var uri))
                 throw new ModException("invalid catalog URL", ModErrors.Catalog);
