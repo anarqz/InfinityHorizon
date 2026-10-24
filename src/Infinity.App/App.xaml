@@ -69,8 +69,9 @@
         <GradientStop Color="#00F01864" Offset="1" />
       </LinearGradientBrush>
 
-      <FontFamily x:Key="InfinityFont">pack://application:,,,/Assets/Fonts/#Selawik</FontFamily>
-      <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Selawik Semibold</FontFamily>
+      <!-- OD-119: composite fonts (Assets/Fonts/*.CompositeFont): Selawik for text, the bundled Noto Emoji for emoji. -->
+    <FontFamily x:Key="InfinityFont">pack://application:,,,/Assets/Fonts/#Infinity</FontFamily>
+      <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Infinity Semibold</FontFamily>
 
       <BitmapImage x:Key="BrandLogo" UriSource="pack://application:,,,/Assets/logo.png" />
       <!-- OD-118: the "Offline mode" icon, a disconnected plug drawn as our own vector (24x24 grid, stroked), never a system

@@ -136,7 +136,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         if (!InShell) return;
         LeaveAccount();
-        _onMods = _onSetup = false;
+        _onMods = _onSetup = _onNews = false;
         _onBugReport = true;
         Changed(string.Empty);
     }
@@ -208,11 +208,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowNeedsAccount => _pending is not null;
 
-    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
+    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
 
-    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
+    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
 
-    public bool ShowHome => Ready && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
+    public bool ShowHome => Ready && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
 
     public bool Idle => !_busy;
 
@@ -369,7 +369,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (_install is not null && !_catalogLoaded) _ = LoadModCatalogQuietlyAsync(); // OD-45: updates checked when the launcher opens
         _loginOpen = false;
         LeaveAccount();
-        _onMods = _onSetup = _onBugReport = false;
+        _onMods = _onSetup = _onBugReport = _onNews = false;
         Games.Clear();
         foreach (var game in session.Info.Games ?? [])
         {
@@ -385,7 +385,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         FillProfiles();
         if (session.Deletion is not null)
         {
-            _onAccount = true;
+            _onAccount = true; _onNews = false;
             DeletionEmail = session.Email ?? string.Empty;
             Message = DeletionPendingText;
         }
@@ -520,6 +520,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _newsClient?.Dispose();
         // OD-109: the dedicated lobby's DELETE and gate leave start first and run beside the play
         // session's own cleanup; both finish (bounded) before the session's token manager is disposed.
         var dedicated = _dedicated is { Active: true } host ? Task.Run(host.StopAsync) : Task.CompletedTask;

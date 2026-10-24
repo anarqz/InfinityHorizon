@@ -727,5 +727,13 @@
   "pane.role_in": "Jogando",
   "pane.role_reserved": "Entrando",
   "pane.add_friend": "Adicionar amigo",
-  "mods.update_replacing_one": "Substituir 1 arquivo e atualizar"
+  "mods.update_replacing_one": "Substituir 1 arquivo e atualizar",
+  "news.title": "Notícias",
+  "news.loading": "Carregando as notícias…",
+  "news.failed": "Não foi possível carregar as notícias. Confira sua conexão; elas carregam de novo na próxima vez.",
+  "news.stale": "Não foi possível atualizar as notícias. Mostrando a cópia de {date}.",
+  "news.empty": "Ainda não há notícias.",
+  "news.back": "Voltar",
+  "news.all": "Todas as notícias",
+  "news.pinned": "Fixada"
 }

@@ -50,7 +50,7 @@ public sealed partial class ShellViewModel
         if (!_onlineEngaged)
         {
             if (!OfflineMode) return;
-            LeaveAccount(); _onMods = _onSetup = _onBugReport = false; _onOfflineStatus = true;
+            LeaveAccount(); _onMods = _onSetup = _onBugReport = _onNews = false; _onOfflineStatus = true;
             Changed(string.Empty);
             return;
         }

@@ -150,7 +150,7 @@ public sealed partial class ShellViewModel
         LeaveAccount();
         _onSetup = true;
         _onMods = false;
-        _onBugReport = false;
+        _onBugReport = false; _onNews = false;
         RefreshHook();
         Changed(string.Empty);
     }

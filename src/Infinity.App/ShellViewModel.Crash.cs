@@ -49,7 +49,7 @@ public sealed partial class ShellViewModel
         if (_session?.Me?.AccountId != incident.OwnerAccountId) return;
         ClearCrashScreen();
         _crash = incident; _crashOpen = true; _crashConsent = _crashManualDumpConsent = _crashNewMetadataAction = _crashSent = false; _crashStatus = null;
-        _onMods = _onSetup = _onAccount = _onBugReport = false;
+        _onMods = _onSetup = _onAccount = _onBugReport = _onNews = false;
         try { _crashSubmission = CrashStore.Prepared(incident.Id); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { _crashSubmission = null; }
         if (_crashSubmission is not null && !_crashSubmission.IsCurrentMetadata)
@@ -89,7 +89,7 @@ public sealed partial class ShellViewModel
         _crashStatus = null;
     }
 
-    public void ReviewCrash() { if (HasCrashReport) { _onMods = _onSetup = _onAccount = _onBugReport = false; _crashOpen = true; Changed(string.Empty); } }
+    public void ReviewCrash() { if (HasCrashReport) { _onMods = _onSetup = _onAccount = _onBugReport = _onNews = false; _crashOpen = true; Changed(string.Empty); } }
     public void LaterCrash() { if (!CrashIdle) return; _crashOpen = _crashConsent = _crashManualDumpConsent = false; Changed(string.Empty); }
 
     public string? CopyableCrashReport() => CanExportCrash && _crash is { } incident

@@ -72,6 +72,7 @@ if (!$Production) {
 $licenses = @{
     'LICENSE' = 'LICENSE'; 'NOTICE' = 'NOTICE';
     'licenses/BouncyCastle-LICENSE.md' = 'licenses/BouncyCastle-LICENSE.md';
+    'licenses/Markdig-LICENSE.txt' = 'licenses/Markdig-LICENSE.txt';
     'licenses/fh2-mods-LICENSE.txt' = 'licenses/fh2-mods-LICENSE.txt';
     'native/hook/NOTICE.md' = 'licenses/Hook-NOTICE.md';
     'native/mod/third_party/sqlite/VERSION.txt' = 'licenses/SQLite-VERSION.txt';

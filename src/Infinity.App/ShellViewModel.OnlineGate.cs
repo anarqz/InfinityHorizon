@@ -105,6 +105,7 @@ public sealed partial class ShellViewModel
         if (online) await CheckOnlineStatusAsync(manual: false);
         var onlineCheck = Task.CompletedTask;
         var updateCheck = ProbeServerAsync();
+        _ = LoadNewsAsync(); // OD-119: GitHub only, signed out and offline too (the last good copy first)
         await VerifyBuildOriginAsync();
         if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
         else await FindAzimuthAsync(null, openSetupWhenNeeded: OpenSetupOnStart);

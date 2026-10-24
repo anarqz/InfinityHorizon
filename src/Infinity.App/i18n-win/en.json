@@ -727,5 +727,13 @@
   "pane.role_in": "Playing",
   "pane.role_reserved": "Joining",
   "pane.add_friend": "Add friend",
-  "mods.update_replacing_one": "Replace 1 file and update"
+  "mods.update_replacing_one": "Replace 1 file and update",
+  "news.title": "News",
+  "news.loading": "Loading the news…",
+  "news.failed": "The news couldn't be loaded. Check your connection; it loads again next time.",
+  "news.stale": "Couldn't refresh the news. Showing the copy from {date}.",
+  "news.empty": "No news yet.",
+  "news.back": "Back",
+  "news.all": "All news",
+  "news.pinned": "Pinned"
 }

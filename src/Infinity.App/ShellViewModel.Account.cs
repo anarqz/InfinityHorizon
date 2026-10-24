@@ -48,7 +48,7 @@ public sealed partial class ShellViewModel
     {
         if (!CanChangeIdentity) return;
         _onMods = _onSetup = _onBugReport = _onOfflineStatus = false;
-        _onAccount = true;
+        _onAccount = true; _onNews = false;
         DeletionEmail = _session?.Email ?? string.Empty;
         DeletionConfirmation = string.Empty;
         Message = null;

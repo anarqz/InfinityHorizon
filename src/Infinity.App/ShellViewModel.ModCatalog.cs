@@ -281,7 +281,7 @@ public sealed partial class ShellViewModel
         if (!DevelopmentMods || !ModsIdle) return;
         if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
         else await FindAzimuthAsync(null, openSetupWhenNeeded: false);
-        _onMods = true; _onSetup = false; _onBugReport = false;
+        _onMods = true; _onSetup = false; _onBugReport = false; _onNews = false;
         Changed(string.Empty);
         await LoadModCatalogAsync();
     }
