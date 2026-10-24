@@ -369,7 +369,8 @@ public sealed partial class ShellViewModel
         _catalogLoading = true;
         try
         {
-            if (!DevelopmentMods && !_catalogLoaded && await Task.Run(() => OfficialModCatalog.LoadCached(CatalogUri, CatalogCache)) is { } cached)
+            var address = CatalogUri;
+            if (!DevelopmentMods && !_catalogLoaded && await Task.Run(() => OfficialModCatalog.LoadCached(address, CatalogCache)) is { } cached && address == CatalogUri)
             {
                 ApplyCatalog(cached);
                 await RefreshModsAsync(); // OD-115: the cached catalog's requirements decide Play while the network fetch runs
@@ -441,7 +442,13 @@ public sealed partial class ShellViewModel
                 throw new ModException("invalid catalog URL", ModErrors.Catalog);
             catalog = await DevelopmentModCatalog.LoadAsync(ModDownloads, uri, timeout.Token);
         }
-        else catalog = await OfficialModCatalog.LoadAsync(ModDownloads, CatalogUri, CatalogCache, timeout.Token);
+        else
+        {
+            var address = CatalogUri;
+            catalog = await OfficialModCatalog.LoadAsync(ModDownloads, address, CatalogCache, timeout.Token);
+            // A fetch for an address the player switched away from meanwhile never replaces the chosen catalog (and its warnings).
+            if (address != CatalogUri) { Log("mods: dropped a catalog fetched for a previous address"); return; }
+        }
         ApplyCatalog(catalog);
     }
 
@@ -595,7 +602,8 @@ public sealed partial class ShellViewModel
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
                 UpdateAvailable = fact.Next is not null, Next = fact.Next, UpdateSummary = fact.Next is { } upcoming ? UpdateSummary(mod, upcoming) : "",
                 // OD-116: every mod of a player-chosen catalog says so, and a native one that it runs code with the game.
-                CustomBadge = custom ? S["mods.custom_badge"] : UsingCustomCatalog && _manifestCatalog.Any(m => m.Id == mod.Id)
+                CustomBadge = custom ? S["mods.custom_badge"]
+                    : UsingCustomCatalog && _manifestCatalog.Any(m => m.Id == mod.Id) || installed is not null && UnofficialSource(mod.Id) is not null
                     ? S[mod.IsNative ? "catalog.badge_native" : "catalog.badge"] : "",
                 // Disabling never needs it; installing, enabling and each update's new digest do.
                 NeedsConfirmation = custom && !fact.Confirmed && !(installed is { Enabled: true } && fact.Next is null),
@@ -658,6 +666,7 @@ public sealed partial class ShellViewModel
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
                 await manager.InstallAsync(ModDownloads, mod, hosts, timeout.Token, progress, hardcore: hardcore);
+                RecordModSource(mod.Id);
             }
             else await Task.Run(() => manager.SetEnabled(mod, !current.Enabled, progress, hardcore));
         }, S["mods.action_done"]);
@@ -685,7 +694,7 @@ public sealed partial class ShellViewModel
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             var manager = await Task.Run(ModManagerFactory() ?? factory); // after the runtime step: a data mod sees the runtime it installed
             if (next.IsCustom) await Task.Run(() => manager.InstallCustom(next, progress, update: true, hardcore: hardcore));
-            else await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
+            else { await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore); RecordModSource(next.Id); }
         }, S["mods.updated"]);
     }
 

@@ -632,6 +632,7 @@
   "mods.error.archive_no_manifest": "This ZIP has no infinity-mod.json, so Infinity can't install it. Ask the modder to adapt the mod to the Infinity mod schema: {url}",
   "mods.error.custom_full": "The custom mods folder already holds the most mods it can list. Remove one before adding another.",
   "mods.error.external_files": "Some of this mod's files from your own copy are missing or different, or haven't been checked yet. Open Set up on its card and choose your copy again.",
+  "mods.runtime_catalog_needed": "Native mods need the Infinity mod runtime, which comes from the mod catalog, and the catalog couldn't be reached. Check your connection and try again, or disable them on Mods to play online.",
   "mods.error.runtime_missing": "This mod needs the Infinity mod runtime, and none could be installed. Check your connection and the catalog, then try again.",
   "mods.runtime_with_mod": "Not installed · installs the Infinity mod runtime with it",
   "mods.progress.runtime": "Installing the Infinity mod runtime…",

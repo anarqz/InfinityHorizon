@@ -19,11 +19,12 @@ public sealed partial class ShellViewModel
     private static string LauncherDirectory => AppContext.BaseDirectory;
 
     /// <summary>
-    /// OD-116: the runtime installed from the catalog's <c>infinity-mod-runtime</c> entry. The launcher no longer bundles one; only a
-    /// development build still falls back to its own <c>mod\</c> folder.
+    /// OD-116: the runtime installed from the catalog's <c>infinity-mod-runtime</c> entry. The launcher no longer bundles one; a
+    /// development build still falls back to its own <c>mod\</c> folder, and production adopts once the signed one a 1.0.9 left there.
     /// </summary>
     private ModRuntimePackage? LocateRuntime(string home, byte[] key) =>
-        ModRuntimePackage.LocateInstalled(home, key) ?? (DevelopmentMods ? ModRuntimePackage.Locate(LauncherDirectory, key) : null);
+        ModRuntimePackage.LocateInstalled(home, key)
+        ?? (DevelopmentMods ? ModRuntimePackage.Locate(LauncherDirectory, key) : ModRuntimePackage.AdoptBundled(LauncherDirectory, home, key));
 
     /// <summary>
     /// Installs (or updates to) the catalog's runtime when it differs from the installed one: before a native mod is installed,
@@ -35,6 +36,8 @@ public sealed partial class ShellViewModel
         var key = NativeModKey; var home = ModHome; var entry = _catalog?.Runtime;
         var installed = await Task.Run(() => LocateRuntime(home, key), cancellation);
         if (!ModRuntimePackage.NeedsInstall(installed, entry)) { _nativeRuntime = installed; return installed; }
+        // The runtime is shared by every catalog: an unofficial one may provide it when none is installed, never replace (or roll back) one.
+        if (UsingCustomCatalog && installed is not null) { Log("mods: unofficial catalog's runtime not applied over the installed " + installed.Version); _nativeRuntime = installed; return installed; }
         _modProgress = S["mods.progress.runtime"]; Changed(nameof(ModProgress));
         try { installed = await ModRuntimePackage.InstallAsync(ModDownloads, home, entry!, key, cancellation); Log("mods: runtime " + entry!.Version + " installed"); }
         catch (Exception error) when (installed is not null && (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException))
@@ -110,6 +113,13 @@ public sealed partial class ShellViewModel
     private async Task<(ModRuntimePackage? Runtime, string? Refusal)> NativeModsForOnlineAsync(bool dataSql = false)
     {
         ModRuntimePackage? runtime;
+        // The update from 1.0.9 removes the bundled runtime: the catalog's comes first, so a Play right after startup waits for it.
+        if (_catalog is null && !DevelopmentMods && LocateRuntime(ModHome, NativeModKey) is null)
+        {
+            if (!_catalogLoading) await LoadModCatalogQuietlyAsync();
+            else for (var i = 0; i < 300 && _catalogLoading; i++) await Task.Delay(100);
+            if (_catalog?.Runtime is null) return (null, S["mods.runtime_catalog_needed"]);
+        }
         using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
             try { runtime = await EnsureRuntimeAsync(timeout.Token); }
             catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)

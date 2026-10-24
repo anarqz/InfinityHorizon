@@ -368,8 +368,15 @@ public sealed class ModManifest
     /// OD-116: the same manifest whatever its bytes (property order, spacing, escapes). A manifest rebuilt from a schema-2 catalog
     /// entry is not byte-identical to the one 1.0.9 installed from its separate file; the installed one is kept when they match.
     /// </summary>
-    public bool SameContent(ModManifest other) => ReferenceEquals(this, other) || other is not null && Digest == other.Digest
-        || other is not null && Canonical(Document).AsSpan().SequenceEqual(Canonical(other.Document));
+    public bool SameContent(ModManifest other)
+    {
+        if (ReferenceEquals(this, other) || other is not null && Digest == other.Digest) return true;
+        if (other is null) return false;
+        // A string a writer cannot re-encode (a lone surrogate escape) is never "the same": the bytes decide, conservatively.
+        try { return Canonical(Document).AsSpan().SequenceEqual(Canonical(other.Document)); }
+        catch (InvalidOperationException) { return false; }
+        catch (ArgumentException) { return false; }
+    }
 
     private static byte[] Canonical(JsonElement element)
     {
