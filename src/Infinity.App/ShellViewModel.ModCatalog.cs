@@ -44,9 +44,6 @@ public sealed partial class ShellViewModel
     private ModCard? _selectedMod;
     private bool _showModInfo;
     private ModHealth _modHealth = ModHealth.Empty;
-    // OD-116 supersedes OD-115's catalog-required rule: no catalog requires a mod, so nothing blocks Play from here (dependencies and
-    // the runtime still refuse a native mod that lacks them).
-    private ModRequirementStatus _modRequirement = ModRequirementStatus.Satisfied;
     private string? _modStateError;
     private IReadOnlyList<ModCardFacts> _modFacts = [];
     private int _customProblems;
@@ -113,6 +110,7 @@ public sealed partial class ShellViewModel
 
     public void CloseModPanel()
     {
+        _installPreviewDigest = null;
         _showModInfo = false; _showModOptions = false;
         Changed(string.Empty);
     }
@@ -243,65 +241,18 @@ public sealed partial class ShellViewModel
         .Where(i => i.Enabled && i.Manifest is { } m && ModMultiplayer.AffectsMultiplayer(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
     private string HardcoreRefusal(IEnumerable<string> names) => S.Format("mods.hardcore_refused", ("mods", string.Join(", ", names)));
 
-    /// <summary>
-    /// OD-115: what the signed catalog requires before every Play is missing, disabled or unknown. Production only for an unknown
-    /// catalog: a development launcher without one (a LAN stack) requires nothing it cannot read.
-    /// </summary>
-    public bool RequiredModBlocked => _install is not null && _modRequirement.Blocks;
-    private string RequiredModName => _modRequirement.Manifest?.Text("name", S.Locale) ?? _modRequirement.Id ?? "";
-    private string? RequiredModNotice => !RequiredModBlocked ? null : _modRequirement.State switch
-    {
-        ModRequirementState.CatalogUnavailable => S["mods.required_catalog"],
-        ModRequirementState.Install => S.Format("mods.required_missing", ("mod", RequiredModName)),
-        ModRequirementState.Adopt => S.Format("mods.required_adopt", ("mod", RequiredModName)),
-        ModRequirementState.Enable => S.Format("mods.required_disabled", ("mod", RequiredModName)),
-        ModRequirementState.Settings => S.Format("mods.required_settings", ("mod", RequiredModName)),
-        _ => S.Format("mods.required_unavailable", ("mod", RequiredModName)),
-    };
-    /// <summary>The prompt's one action: install, adopt or enable the required mod, retry the catalog, or open Mods.</summary>
-    public string RequiredModAction => _modRequirement.State switch
-    {
-        ModRequirementState.CatalogUnavailable => S["mods.required_retry"],
-        ModRequirementState.Install => S.Format("mods.required_install", ("mod", RequiredModName)),
-        ModRequirementState.Adopt => S["mods.adopt"],
-        ModRequirementState.Enable => S.Format("mods.required_enable", ("mod", RequiredModName)),
-        _ => S["mods.open"],
-    };
-    public bool ShowRequiredModAction => RequiredModBlocked && !Playing;
-    public bool CanActOnRequiredMod => ShowRequiredModAction && ModsIdle && !ModRecoveryRequired;
-
-    /// <summary>The Play prompt's action: the required mod's own card action (install from the signed catalog, adopt, enable).</summary>
-    public async Task ActOnRequiredModAsync()
-    {
-        if (!CanActOnRequiredMod) return;
-        switch (_modRequirement.State)
-        {
-            case ModRequirementState.CatalogUnavailable: await LoadModCatalogAsync(); return;
-            case ModRequirementState.Install or ModRequirementState.Adopt or ModRequirementState.Enable:
-                if (ModCards.FirstOrDefault(c => c.Manifest.Id == _modRequirement.Id) is { CanAct: true } card && !card.UpdateAvailable)
-                { await ActOnModAsync(card); return; }
-                break;
-        }
-        OpenMods();
-        if (ModCards.FirstOrDefault(c => c.Manifest.Id == _modRequirement.Id) is { } shown) ShowModInformation(shown);
-    }
-
-
-    /// <remarks>OD-116 dropped <c>required</c>: the catalog no longer makes a mod mandatory before Play (only a development catalog still can).</remarks>
-    private static IReadOnlyList<ModRequirement> RequiredCatalog => []; // OD-116: no catalog-required mods (development catalogs included)
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
     // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it decides which mods every Play needs).
     public string? ModPlayNotice => _install is null ? null : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
         : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
         : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
-        : RequiredModNotice is { } required ? required
         : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
         : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
 
     /// <summary>OD-118 T1f: the catalog failed and is not loading: PLAY offers a retry next to the reason.</summary>
-    public bool ShowCatalogRetry => _install is not null && !_catalogLoaded && !_catalogLoading && _catalogFailure is not null && !Playing && !ShowRequiredModAction;
+    public bool ShowCatalogRetry => _install is not null && !_catalogLoaded && !_catalogLoading && _catalogFailure is not null && !Playing;
 
     public string ModFolder => _install?.Root ?? S["setup.not_found"];
 
@@ -453,12 +404,11 @@ public sealed partial class ShellViewModel
         var catalog = _manifestCatalog;
         var key = NativeModKey;
         var home = ModHome;
-        var required = RequiredCatalog;
-        var (health, error, facts, problems, requirement) = await Task.Run(() => ReadModState(factory, catalog, home, required));
+        var (health, error, facts, problems) = await Task.Run(() => ReadModState(factory, catalog, home));
         _nativeRuntime = await Task.Run(() => LocateRuntime(home, key));
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
-        _modHealth = health; _modStateError = error; _modFacts = facts; _modRequirement = requirement;
+        _modHealth = health; _modStateError = error; _modFacts = facts;
         if (problems.Count > 0 && problems.Count != _customProblems)
             Log("mods: custom folders skipped: " + string.Join(", ", problems.Select(p => p.Folder + " " + p.Reason)));
         _customProblems = problems.Count;
@@ -467,20 +417,19 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
-    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts, IReadOnlyList<CustomModProblem> Problems, ModRequirementStatus Requirement) ReadModState(
-        Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official, string home, IReadOnlyList<ModRequirement>? required)
+    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts, IReadOnlyList<CustomModProblem> Problems) ReadModState(
+        Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official, string home)
     {
         // OD-114: custom mods are rescanned on every refresh and listed with the official catalog (their ids can never collide).
         CustomModScan custom;
         try { custom = ManagedModFiles.ScanCustomMods(home); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error)) { custom = new([], [new("", ManagedModFiles.Code(error))]); }
         var catalog = official.Concat(custom.Mods.Where(m => official.All(o => o.Id != m.Id))).ToArray();
-        if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray(), custom.Problems, ModRequirementStatus.Satisfied);
+        if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray(), custom.Problems);
         ManagedModFiles manager;
         try { manager = factory(); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
-        { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray(), custom.Problems,
-            new(required is null ? ModRequirementState.CatalogUnavailable : ModRequirementState.Unavailable, required is { Count: > 0 } list ? list[0].Id : null)); }
+        { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray(), custom.Problems); }
         bool Confirmed(ModManifest m) { try { return m.IsCustom && manager.CustomConfirmed(m); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return false; } }
         var health = manager.Inspect();
         var facts = new List<ModCardFacts>();
@@ -505,10 +454,7 @@ public sealed partial class ShellViewModel
         }
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
             facts.Add(new(installed.Manifest!, installed, false, Blocker(() => { if (installed.Enabled) manager.CheckDependents(installed.Id); else manager.CheckDependencies(installed.Manifest!); }), null, Confirmed(installed.Manifest!)));
-        // OD-115: the required mods (signed catalog) from the same snapshot; adoption as the cards decided it.
-        var requirement = ModRequirements.Evaluate(required, health.Installed, official,
-            m => facts.Any(f => f.Manifest.Digest == m.Digest && f.CanAdopt));
-        return (health, null, facts, custom.Problems, requirement);
+        return (health, null, facts, custom.Problems);
     }
 
     private static string? Blocker(Action check)
@@ -636,6 +582,7 @@ public sealed partial class ShellViewModel
         if (current is not { CanAct: true }) return;
         if (current.UpdateAvailable || current.NeedsConfirmation) { ShowModInformation(current); return; } // reviewed (and a custom mod confirmed) first, in the information pane
         if (!current.Installed && current.Manifest.IsExternal) { await OpenExternalSetupAsync(current); return; }
+        if (NeedsInstallPreview(current)) { ShowInstallPreview(current); return; } // Alex (1.0.11): where it goes and what it replaces, first
         var mod = current.Manifest;
         var factory = ModManagerFactory()!;
         var hosts = CatalogHosts;
