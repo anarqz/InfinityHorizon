@@ -408,6 +408,20 @@
             </ItemsControl>
           </StackPanel>
 
+          <!-- OD-118: an online-only area on the offline path: centered "Offline mode" with the disconnect icon, and Sign in. -->
+          <StackPanel x:Name="OfflinePane" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="460"
+                      Visibility="{Binding ShowOfflinePane, Converter={StaticResource Visible}}">
+            <Viewbox Width="72" Height="72" HorizontalAlignment="Center">
+              <Path Data="{StaticResource OfflineIcon}" Stroke="{StaticResource InfinityMuted}" StrokeThickness="1.5" StrokeLineJoin="Round"
+                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="24" Height="24" Stretch="None" />
+            </Viewbox>
+            <TextBlock Text="{Binding S[offline.mode]}" HorizontalAlignment="Center" FontSize="22" FontWeight="Bold" Margin="0,14,0,0" />
+            <TextBlock Text="{Binding S[offline.mode_hint]}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                       Margin="0,8,0,0" Foreground="{StaticResource InfinityMuted}" />
+            <Button Content="{Binding S[offline.sign_in]}" Click="OnOpenSignIn" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Center"
+                    Margin="0,16,0,0" Padding="18,8" IsEnabled="{Binding Idle}" />
+          </StackPanel>
+
           <!-- Choose a profile (from the server) or create one. -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowPickProfile, Converter={StaticResource Visible}}">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500" Margin="0,8">
