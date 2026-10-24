@@ -52,6 +52,7 @@ SOURCES = [
     "src/infinity/events.c",
     "src/infinity/progress.c",
     "src/infinity/account.c",
+    "src/infinity/offline_identity.c",
     "src/infinity/launch.c",
     "src/infinity/codec.c",
     "src/infinity/cloud.c",
