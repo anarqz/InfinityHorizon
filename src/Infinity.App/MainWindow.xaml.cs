@@ -219,7 +219,6 @@ public partial class MainWindow : Window
     private void OnNavMods(object sender, RoutedEventArgs e) => _vm.OpenMods();
     private async void OnRequiredMod(object sender, RoutedEventArgs e) => await _vm.ActOnRequiredModAsync();
 
-    private async void OnModdedOffline(object sender, RoutedEventArgs e) => await _vm.PlayModdedOfflineAsync();
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
     private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);
     private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);

@@ -34,10 +34,7 @@ public sealed class ExternalSourceRow(ExternalSource source, string label, strin
 }
 
 /// <summary>An entry of the in-launcher browser: a folder, or a file the source accepts (a ZIP, or any file for a file source).</summary>
-public sealed record BrowserEntry(string Name, string FullPath, bool Folder)
-{
-    public string Display => (Folder ? "📁  " : "🗜  ") + Name;
-}
+public sealed record BrowserEntry(string Name, string FullPath, bool Folder);
 
 /// <summary>A quick location of the browser (Home, Downloads, SD card, a drive…), shown only when it exists.</summary>
 public sealed record BrowserPlace(string Label, string Path);

@@ -31,7 +31,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>The offline Play's own requirements: no account, session or online service involved.</summary>
     public bool CanPlayOffline => Ready && !PlaysOnline && _install is not null && OfflinePlayProfile is not null && !Playing && !_busy && CrashIdle
-        && GameConfigurationReady && !ModPlayBlocked && OperatingSystem.IsWindows();
+        && GameConfigurationReady && !ModPlayBlocked && !RequiredModBlocked && OperatingSystem.IsWindows();
 
     /// <summary>The local profile an offline Play plays: the chosen local one, or the cached copy of the chosen account profile.</summary>
     private LocalProfile? OfflinePlayProfile => _chosenLocal ?? LocalProfiles.Read().FirstOrDefault(p => p.Game == _gate.Game && p.DisplayName == _gate.ProfileTag);
@@ -151,11 +151,21 @@ public sealed partial class ShellViewModel
                 var prepared = factory().PrepareForLaunch(); // locks enforced, Wine overrides reconciled (paired with their removal)
                 overrides = prepared.DllOverrides; hasNative = prepared.HasEnabledNative;
             });
+            // OD-115: every Play needs the catalog's required mods managed, enabled and with their required settings, offline too
+            // (the locks above wrote them); PLAY shows the requirement and its action instead.
+            if (await RequiredModsForLaunchAsync() is { Blocks: true } requirement)
+            {
+                _modRequirement = requirement; Message = ModPlayNotice; return;
+            }
             if (hasNative)
             {
-                runtime = await Task.Run(() => ModRuntimePackage.Locate(LauncherDirectory, key));
-                if (runtime is null || !NativeModHookReady) throw new ModException("native mods need the verified runtime and hook", ModErrors.Unsupported);
+                // OD-116: the runtime is the catalog's (installed under the mods home, from GitHub: allowed offline), found and checked
+                // exactly as for online Play, with the same reasons when it cannot be used.
+                var (found, refusal) = await NativeModsForOnlineAsync();
+                if (found is null) { _modLaunchFailure = refusal; Message = refusal; return; }
+                runtime = found;
                 plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
+                _nativePlanPath = plan.Environment.FirstOrDefault(v => v.Name == "FI_MOD_PLAN").Value;
             }
             var environment = OfflineLaunchEnvironment(profile, plan?.Environment, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
