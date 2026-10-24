@@ -44,7 +44,9 @@ public sealed partial class ShellViewModel
     private ModCard? _selectedMod;
     private bool _showModInfo;
     private ModHealth _modHealth = ModHealth.Empty;
-    private ModRequirementStatus _modRequirement = new(ModRequirementState.CatalogUnavailable);
+    // OD-116 supersedes OD-115's catalog-required rule: no catalog requires a mod, so nothing blocks Play from here (dependencies and
+    // the runtime still refuse a native mod that lacks them).
+    private ModRequirementStatus _modRequirement = ModRequirementStatus.Satisfied;
     private string? _modStateError;
     private IReadOnlyList<ModCardFacts> _modFacts = [];
     private int _customProblems;
@@ -284,26 +286,9 @@ public sealed partial class ShellViewModel
         if (ModCards.FirstOrDefault(c => c.Manifest.Id == _modRequirement.Id) is { } shown) ShowModInformation(shown);
     }
 
-    /// <summary>Play's own check after the launch preparation (locks written), with the required settings read from disk.</summary>
-    private async Task<ModRequirementStatus> RequiredModsForLaunchAsync()
-    {
-        if (ModManagerFactory() is not { } factory) return _modRequirement;
-        var required = RequiredCatalog; var catalog = _manifestCatalog;
-        try
-        {
-            return await Task.Run(() =>
-            {
-                var manager = factory();
-                return ModRequirements.Evaluate(required, manager.Inspect().Installed, catalog, manager.CanAdopt,
-                    settings: m => m.ConfigPath is null ? new Dictionary<string, System.Text.Json.JsonElement>() : manager.ReadSettings(m).Values);
-            });
-        }
-        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { Log("mods: required mods unreadable: " + ManagedModFiles.Code(error)); return new(ModRequirementState.Unavailable, _modRequirement.Id); }
-    }
 
-    /// <summary>The catalog's requirements; none known yet is "unknown" in production and "nothing" in development.</summary>
     /// <remarks>OD-116 dropped <c>required</c>: the catalog no longer makes a mod mandatory before Play (only a development catalog still can).</remarks>
-    private IReadOnlyList<ModRequirement>? RequiredCatalog => _catalog?.Required ?? [];
+    private static IReadOnlyList<ModRequirement> RequiredCatalog => []; // OD-116: no catalog-required mods (development catalogs included)
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
     // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it decides which mods every Play needs).

@@ -37,6 +37,7 @@ public static class OfficialModCatalog
     public static bool IsOfficial(Uri url) => Uri.Compare(url, OfficialUrl, UriComponents.AbsoluteUri, UriFormat.UriEscaped, StringComparison.Ordinal) == 0;
 
     private static readonly string[] EntryFields = ["id", "version", "name", "description", "author"];
+    private static readonly string[] DroppedFields = ["required", "availability"];
     /// <summary>Fields the entry carries, so an <c>install</c> object never repeats or overrides them.</summary>
     private static readonly string[] ReservedInstallFields = [.. EntryFields, "package", "additionalPackages", "payload", "externalSources"];
 
@@ -67,6 +68,10 @@ public static class OfficialModCatalog
                     runtime = new(id, version, Download(entry.GetProperty("download")));
                     continue;
                 }
+                // OD-116 ("drop both"): a v2 entry has no required mods and no availability; refused rather than silently ignored,
+                // so a catalog author never believes they take effect.
+                foreach (var dropped in DroppedFields)
+                    if (entry.TryGetProperty(dropped, out _)) throw new ModException("catalog v2 has no '" + dropped + "' (OD-116)", ModErrors.Catalog);
                 var manifest = Manifest(entry);
                 if (entry.TryGetProperty("requires", out var required))
                     foreach (var name in required.EnumerateArray())
