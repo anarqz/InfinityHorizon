@@ -299,6 +299,7 @@ public sealed partial class ShellViewModel
     /// <summary>The player confirmed "Close the game".</summary>
     public void QuitGame()
     {
+        if (_offlineChild is not null) { QuitOfflineGame(); return; } // OD-118: no supervisor offline
         if (_waitingForAdmission) return;
         if (_commands?.Writer.TryWrite(new SupervisorCommand.Quit()) == true)
         {

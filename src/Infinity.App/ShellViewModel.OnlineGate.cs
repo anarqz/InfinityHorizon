@@ -20,6 +20,9 @@ public sealed partial class ShellViewModel
     private readonly Lazy<HttpClient> ProductionMatchmakingHttp;
     private bool _onlineEngaged, _onlineAnswered, _onOfflineStatus;
 
+    /// <summary>OD-118: an offline game has exited and the launcher is finishing locally: no Infinity request, signed in or not.</summary>
+    private bool _offlineWrapUp;
+
     /// <summary>The handler in front of every Infinity client (counts and refuses; tests stub it).</summary>
     internal InfinityRequestGate InfinityGate { get; }
 
@@ -34,7 +37,7 @@ public sealed partial class ShellViewModel
 
     private InfinityRequestGate CreateInfinityGate(HttpMessageHandler transport)
     {
-        var gate = new InfinityRequestGate(() => _onlineEngaged, Log, DevServer, transport);
+        var gate = new InfinityRequestGate(() => _onlineEngaged && !_offlineWrapUp, Log, DevServer, transport);
         gate.Violation += what => Message = "DEV: offline mode refused " + what;
         return gate;
     }

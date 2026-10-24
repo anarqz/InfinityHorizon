@@ -38,6 +38,44 @@ public sealed partial class ShellViewModel
 
     public bool CanPlayAny => PlaysOnline ? CanPlay : CanPlayOffline;
 
+    private GameProcess? _offlineChild;
+
+    /// <summary>How long Quit waits for the game to close its windows before ending it (the supervisor's 20 s; tests shorten it).</summary>
+    internal TimeSpan OfflineQuitGrace { get; set; } = TimeSpan.FromSeconds(20);
+    private bool _offlineQuitting;
+
+    /// <summary>
+    /// OD-118: Quit game during an offline Play (the launcher's button or the overlay's confirmed Quit). There is no supervisor or
+    /// session pipe offline, so the launcher closes the game as the supervisor does: WM_CLOSE to its windows, then a forced end
+    /// after 20 s.
+    /// </summary>
+    private void QuitOfflineGame()
+    {
+        if (_offlineChild is not { } child || _offlineQuitting) return;
+        _offlineQuitting = true;
+        SetStatus(S["supervisor.quit_asked"]);
+        Log("play: offline quit asked");
+        _ = QuitOfflineChildAsync(child);
+    }
+
+    private async Task QuitOfflineChildAsync(GameProcess child)
+    {
+        try { if (await child.QuitAsync(OfflineQuitGrace)) Log("play: offline game did not close in time; ended"); }
+        catch (Exception error) when (error is ObjectDisposedException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        { Log("play: offline quit: " + error.GetType().Name); }
+    }
+
+    /// <summary>The overlay's events offline: its confirmed Quit ends the game; the rest has no online session to go to.</summary>
+    internal async Task ReadOfflineOverlayAsync(System.Threading.Channels.ChannelReader<UiIncoming> incoming, CancellationToken cancellation)
+    {
+        try
+        {
+            await foreach (var item in incoming.ReadAllAsync(cancellation))
+                if (item is UiIncoming.Event { Kind: UiEventKind.Quit }) QuitOfflineGame();
+        }
+        catch (OperationCanceledException) { }
+    }
+
     private static readonly string[] OfflineOverlayNames = ["FI_OFFLINE_OVERLAY", "FI_OFFLINE_OVERLAY_SHA256", "FI_OFFLINE_UI"];
 
     /// <summary>The chosen local profile as stored now (an upload or account refresh since it was chosen links it to the account).</summary>
@@ -133,11 +171,18 @@ public sealed partial class ShellViewModel
                 // The first notice the overlay shows (queued until its hello): Playing offline.
                 await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"]), CancellationToken.None);
                 _ = overlay.RunAsync(child.Pid, child.Exited, TimeSpan.FromMinutes(5), _play.Token);
+                _ = ReadOfflineOverlayAsync(overlay.Incoming, _play.Token);
             }
+            _offlineChild = child; _offlineQuitting = false;
             _modOperation = false; Busy = false; SetStatus(S["offline.playing_offline_status"]);
             var wait = child.WaitForExitAsync(); _playTask = wait;
             var code = await wait;
-            SetStatus(code == 0 ? S["status.ended"] : S["mods.runtime_failed"]);
+            _offlineChild = null;
+            // OD-118: an offline game ends here: no save sync, upload, integrity or session step follows, only local mod cleanup,
+            // and the Infinity gate refuses anything until the launcher is back (even for a signed-in player's local profile).
+            _offlineWrapUp = true;
+            Log("play: offline game ended (code " + code.ToString(CultureInfo.InvariantCulture) + "); back to the launcher, nothing synced");
+            SetStatus(code == 0 || code == ExitDisposition.QuitForcedExit ? S["status.ended"] : S["mods.runtime_failed"]);
         }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is System.ComponentModel.Win32Exception)
         { Message = ModLaunchFailed("offline session", error); }
@@ -146,8 +191,11 @@ public sealed partial class ShellViewModel
             _modOperation = true; Busy = true; _modProgress = S["mods.session_prepare"]; Changed(string.Empty);
             try { if (plan is not null) await Task.Run(plan.Dispose); }
             catch (Exception error) when (ManagedModFiles.IsStateError(error)) { Message = S["mods.recovery_needed"]; }
+            _offlineChild = null;
             _play?.Dispose(); _play = null; _playTask = null; _modOperation = false; Busy = false;
-            await RefreshModsAsync(); Changed(string.Empty);
+            try { await RefreshModsAsync(); } // local: the mods' state on disk
+            finally { _offlineWrapUp = false; }
+            Changed(string.Empty);
         }
     }
 }
