@@ -236,6 +236,57 @@ public partial class MainWindow : Window
 
     private void OnOpenModSchemaPage(object sender, RoutedEventArgs e) => OpenCommunityLink(ShellViewModel.ModSchemaPage);
     private async void OnUseCustomCatalog(object sender, RoutedEventArgs e) => await _vm.UseCustomCatalogAsync();
+
+    // OD-117: the set-up pane of a mod made of the player's own files, and its in-launcher browser.
+    private async void OnOpenExternalSetup(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) await _vm.OpenExternalSetupAsync(card); }
+    private void OnCloseExternalSetup(object sender, RoutedEventArgs e) => _vm.CloseExternalSetup();
+    private async void OnInstallExternal(object sender, RoutedEventArgs e) => await _vm.InstallExternalAsync();
+
+    private void OnBrowseExternal(object sender, RoutedEventArgs e)
+    {
+        _vm.StartBrowsing((ExternalSourceRow)((FrameworkElement)sender).DataContext);
+        // The first entry takes the focus for the controller; the path box opens the Steam keyboard when chosen.
+        _ = Dispatcher.InvokeAsync(() => BrowserPathBox.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)),
+            System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private async void OnSystemPickExternal(object sender, RoutedEventArgs e)
+    {
+        var row = (ExternalSourceRow)((FrameworkElement)sender).DataContext;
+        string? picked = null;
+        if (row.PicksFolder)
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = row.Label };
+            if (dialog.ShowDialog(this) == true) picked = dialog.FolderName;
+        }
+        else
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = row.Label, CheckFileExists = true };
+            if (dialog.ShowDialog(this) == true) picked = dialog.FileName;
+        }
+        if (picked is not null) await _vm.PickWithSystemDialogAsync(row, picked);
+    }
+
+    private void OnBrowsePlace(object sender, RoutedEventArgs e) => _vm.Browse(((BrowserPlace)((FrameworkElement)sender).DataContext).Path);
+    private void OnBrowseDraft(object sender, RoutedEventArgs e) => _vm.BrowseDraft();
+    private void OnBrowseUp(object sender, RoutedEventArgs e) => _vm.BrowseUp();
+    private void OnStopBrowsing(object sender, RoutedEventArgs e) => _vm.StopBrowsing();
+    private async void OnPickBrowserFolder(object sender, RoutedEventArgs e) => await _vm.PickBrowserFolderAsync();
+    private async void OnBrowserEntry(object sender, RoutedEventArgs e) => await _vm.OpenBrowserEntryAsync((BrowserEntry)((FrameworkElement)sender).DataContext);
+
+    private void OnBrowserPathKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+        e.Handled = true; _vm.BrowseDraft();
+    }
+
+    // Escape (the controller's B): back out of the browser first, then close the pane.
+    private void OnExternalPaneKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true;
+        if (_vm.ShowBrowser) _vm.StopBrowsing(); else _vm.CloseExternalSetup();
+    }
     private async void OnUseOfficialCatalog(object sender, RoutedEventArgs e) => await _vm.UseOfficialCatalogAsync();
 
     // Enter adds, Escape (the controller's B) closes the address field.

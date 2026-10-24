@@ -976,6 +976,10 @@
                       <Button Content="{Binding S[mods.uninstall]}" Click="OnUninstallMod" Padding="10,6" Margin="0,0,8,8"
                               Visibility="{Binding SelectedModCanUninstall, Converter={StaticResource Visible}}" />
                     </WrapPanel>
+                    <!-- OD-117: an installed mod of the player's own files: check its files again, or point at another copy. -->
+                    <WrapPanel Margin="0,8,0,0" Visibility="{Binding SelectedModExternal, Converter={StaticResource Visible}}">
+                      <Button Content="{Binding S[external.recheck]}" Click="OnOpenExternalSetup" Padding="10,6" Margin="0,0,8,8" />
+                    </WrapPanel>
                     <Button Content="{Binding S[mods.options]}" Click="OnSelectedModOptions" Margin="0,18,0,0"
                             Visibility="{Binding SelectedMod.HasOptions, Converter={StaticResource Visible}}" />
                     <TextBlock Text="{Binding SelectedModFiles}" TextWrapping="Wrap" FontSize="12" Margin="0,20,0,0" Foreground="{StaticResource InfinityMuted}" />
@@ -989,6 +993,91 @@
                         </DataTemplate></ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </Expander>
+                  </StackPanel>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
+            <!-- OD-117: set up a mod made of the player's own files; one row per source, then the notice and Install. -->
+            <Border Grid.Column="1" Width="400" Margin="0,-28,-40,-16" Padding="22,22,16,16" Background="{StaticResource InfinitySurface}"
+                    BorderBrush="#3365184D" BorderThickness="1,0,0,0" Visibility="{Binding ShowExternalSetup, Converter={StaticResource Visible}}"
+                    KeyDown="OnExternalPaneKey">
+              <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                  <Button DockPanel.Dock="Right" Content="{Binding S[mods.options_close]}" Style="{StaticResource LinkButton}" Click="OnCloseExternalSetup" />
+                  <TextBlock Text="{Binding ExternalSetupTitle}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" />
+                </DockPanel>
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,12,8,0" Visibility="{Binding ShowBrowser, Converter={StaticResource Hidden}}">
+                  <TextBlock Text="{Binding ExternalNotice}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,10" />
+                  <Button x:Name="ExternalInstallButton" Content="{Binding ExternalInstallLabel}" Click="OnInstallExternal" IsEnabled="{Binding CanInstallExternal}"
+                          Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" />
+                </StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <StackPanel Margin="0,0,8,0">
+                    <!-- The sources -->
+                    <StackPanel Visibility="{Binding ShowBrowser, Converter={StaticResource Hidden}}">
+                      <TextBlock Text="{Binding S[external.intro]}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                      <ItemsControl ItemsSource="{Binding ExternalRows}">
+                        <ItemsControl.ItemTemplate><DataTemplate>
+                          <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,0,0,10">
+                            <StackPanel>
+                              <TextBlock Text="{Binding Label}" FontWeight="Bold" TextWrapping="Wrap" />
+                              <TextBlock Text="{Binding Help}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,8" />
+                              <DockPanel>
+                                <TextBlock DockPanel.Dock="Left" Text="✓" FontWeight="Bold" Margin="0,0,6,0" Foreground="{StaticResource InfinityGood}"
+                                           Visibility="{Binding Ok, Converter={StaticResource Visible}}" />
+                                <TextBlock DockPanel.Dock="Left" Text="⚠" FontWeight="Bold" Margin="0,0,6,0" Foreground="{StaticResource InfinityGold}"
+                                           Visibility="{Binding Problems, Converter={StaticResource Visible}}" />
+                                <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                              </DockPanel>
+                              <ProgressBar Value="{Binding Progress, Mode=OneWay}" Maximum="1" Height="4" Margin="0,8,0,0"
+                                           Visibility="{Binding Checking, Converter={StaticResource Visible}}" />
+                              <Expander Header="{Binding DataContext.S[external.details], RelativeSource={RelativeSource AncestorType=ItemsControl}}" Margin="0,8,0,0"
+                                        Visibility="{Binding HasDetails, Converter={StaticResource Visible}}">
+                                <TextBox Text="{Binding Details, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" FontSize="11" BorderThickness="0" Background="Transparent" />
+                              </Expander>
+                              <WrapPanel Margin="0,10,0,0">
+                                <Button Content="{Binding DataContext.S[external.choose_folder], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                        Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFolder, Converter={StaticResource Visible}}" />
+                                <Button Content="{Binding DataContext.S[external.choose_file], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                        Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" Tag="file" />
+                                <Button Content="{Binding DataContext.S[external.system_dialog], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                        Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6"
+                                        Visibility="{Binding DataContext.CanUseSystemPicker, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource Visible}}" />
+                              </WrapPanel>
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate></ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                    <!-- The in-launcher browser: controller-friendly, quick locations, the path box opens the Steam keyboard. -->
+                    <StackPanel Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding S[external.browse_title]}" FontWeight="Bold" Margin="0,0,0,8" />
+                      <ItemsControl ItemsSource="{Binding BrowserPlaces}" Margin="0,0,0,8">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate><DataTemplate>
+                          <Button Content="{Binding Label}" Click="OnBrowsePlace" Padding="8,4" Margin="0,0,6,6" />
+                        </DataTemplate></ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <DockPanel Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right" Content="{Binding S[external.go]}" Click="OnBrowseDraft" Padding="10,6" Margin="6,0,0,0" />
+                        <TextBox x:Name="BrowserPathBox" Text="{Binding BrowserDraft, UpdateSourceTrigger=PropertyChanged}" Padding="8,6" KeyDown="OnBrowserPathKey"
+                                 AutomationProperties.Name="{Binding S[external.path]}" />
+                      </DockPanel>
+                      <WrapPanel Margin="0,0,0,8">
+                        <Button Content="{Binding S[external.up]}" Click="OnBrowseUp" Padding="10,6" Margin="0,0,8,6" />
+                        <Button Content="{Binding S[external.pick_this]}" Click="OnPickBrowserFolder" IsEnabled="{Binding BrowserCanPickFolder}"
+                                Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,6" />
+                        <Button Content="{Binding S[external.cancel]}" Click="OnStopBrowsing" Padding="10,6" Margin="0,0,8,6" />
+                      </WrapPanel>
+                      <TextBlock Text="{Binding S[external.empty_folder]}" Foreground="{StaticResource InfinityMuted}" FontSize="12"
+                                 Visibility="{Binding BrowserEmpty, Converter={StaticResource Visible}}" />
+                      <ItemsControl x:Name="BrowserList" ItemsSource="{Binding BrowserEntries}">
+                        <ItemsControl.ItemTemplate><DataTemplate>
+                          <Button Content="{Binding Display}" Click="OnBrowserEntry" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                  Padding="10,6" Margin="0,0,0,4" />
+                        </DataTemplate></ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
                   </StackPanel>
                 </ScrollViewer>
               </DockPanel>
