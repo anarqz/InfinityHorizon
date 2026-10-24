@@ -90,6 +90,8 @@ public sealed partial class ShellViewModel
 
     public async Task PlayAsync()
     {
+        // OD-118: without an account (or with a profile not on it) Play is the offline launch.
+        if (!PlaysOnline) { await PlayOfflineAsync(); return; }
         _modLaunchFailure = null;
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
