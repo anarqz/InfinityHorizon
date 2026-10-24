@@ -52,6 +52,8 @@ public static class ModErrors
     public const string CustomFull = "custom_full";
     /// <summary>OD-116: a native mod needs the Infinity mod runtime, and no verified one is installed or listed by the catalog.</summary>
     public const string RuntimeMissing = "runtime_missing";
+    /// <summary>OD-117: the player's own files for a mod are missing, different, not checked yet, or the chosen source is unusable.</summary>
+    public const string ExternalFiles = "external_files";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");

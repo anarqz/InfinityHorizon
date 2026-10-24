@@ -57,6 +57,7 @@ public sealed class ModManifest
         foreach (var field in new[] { "version", "author", "license" }) ValidateText(Document.GetProperty(field));
         foreach (var version in Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray()) ValidateText(version);
         _ = NeedsDatabaseCoordination;
+        ExternalSources = ExternalSourcesOf(Document);
         if (ConfigPath is { } configPath)
         {
             ValidatePath(configPath);
@@ -108,13 +109,15 @@ public sealed class ModManifest
         if (Document.TryGetProperty("databaseBase", out var baseDb))
         {
             // OD-114 follow-up: a car pack's whole database, used as shipped as the session database's base (never the stock file).
-            if (IsNative || !IsCustom || baseDb.ValueKind != JsonValueKind.Object || baseDb.EnumerateObject().Count() != 4
+            // OD-117: a catalog mod may carry one only from the player's own files (an external source), never from a download.
+            if (IsNative || !(IsCustom || IsExternal) || baseDb.ValueKind != JsonValueKind.Object || baseDb.EnumerateObject().Count() != 4
                 || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported database base", ModErrors.Unsupported);
             var path = baseDb.GetProperty("source").GetString()!; var hash = baseDb.GetProperty("sha256").GetString()!;
             var size = baseDb.GetProperty("bytes").GetInt64(); var violations = baseDb.GetProperty("foreignKeyViolations").GetInt64();
-            ValidatePath(path);
-            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || path.Count(c => c == '/') != 1
-                || !(path.EndsWith(".slt", StringComparison.Ordinal) || path.EndsWith(".db", StringComparison.Ordinal) || path.EndsWith(".sqlite", StringComparison.Ordinal))
+            var local = IsExternal ? ExternalPath(path) : path;
+            ValidatePath(local);
+            if (!IsExternal && (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || path.Count(c => c == '/') != 1)
+                || !(local.EndsWith(".slt", StringComparison.OrdinalIgnoreCase) || local.EndsWith(".db", StringComparison.OrdinalIgnoreCase) || local.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
                 || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c))
                 || size is < 100 or > MaxDatabaseBaseBytes || violations is < 0 or > int.MaxValue) throw new ModException("invalid database base", ModErrors.Unsupported);
             DatabaseBase = new(path, hash, size, (int)violations);
@@ -162,7 +165,10 @@ public sealed class ModManifest
                     {
                         JsonValueKind.True => true, JsonValueKind.False => false, _ => throw new ModException("invalid loader flag"),
                     } : false);
-                ValidatePath(item.Source); ValidatePath(item.Destination);
+                ValidatePath(IsExternal ? ExternalPath(item.Source) : item.Source); ValidatePath(item.Destination);
+                // OD-117: the player's own files are data only, never code the game or a loader would run.
+                if (IsExternal && (item.Role == "binary" || item.Loader || ExecutableExtension(item.Destination) || ExecutableExtension(item.Source)))
+                    throw new ModException("external files carry no executable code", ModErrors.Unsupported);
                 // OD-115/OD-111: a loader is a binary the game process loads by itself (a top-level proxy DLL of its root). Only a reviewed
                 // official manifest may declare one; it is the only mapping allowed in the game root outside the media overrides.
                 if (item.Loader && (IsCustom || !reviewed || item.Role != "binary" || item.Mode == "seed" || item.Destination.Contains('/')
@@ -204,6 +210,12 @@ public sealed class ModManifest
                 || payload.GetProperty("path").GetString() != CustomPayloadFolder) throw new ModException("invalid custom payload", ModErrors.Unsupported);
         }
         else if (Document.TryGetProperty("payload", out _)) throw new ModException("only custom mods use a local payload", ModErrors.Unsupported);
+        else if (IsExternal)
+        {
+            // OD-117: no download at all; every byte comes from the player's sources, checked against these pins.
+            if (Document.TryGetProperty("package", out _) || Document.TryGetProperty("additionalPackages", out _))
+                throw new ModException("a mod of external files has no download", ModErrors.Unsupported);
+        }
         else ValidatePackage(Document.GetProperty("package"));
         var packageNames = new HashSet<string>(StringComparer.Ordinal) { "primary" };
         if (Document.TryGetProperty("additionalPackages", out var additional))
@@ -245,6 +257,49 @@ public sealed class ModManifest
                 if (file.GetProperty("root").GetString() is not ("game" or "azimuth")) throw new ModException("invalid incompatible file root");
                 ValidatePath(file.GetProperty("path").GetString()!);
             }
+    }
+
+    /// <summary>
+    /// OD-117: a catalog mod made of the player's own files (a car pack they already have): <c>externalSources</c> instead of a
+    /// download; each mapping's <c>source</c> is <c>&lt;source id&gt;:&lt;path inside it&gt;</c>, pinned by SHA-256 and size.
+    /// </summary>
+    public bool IsExternal => Document.TryGetProperty("externalSources", out _);
+    public IReadOnlyList<ExternalSource> ExternalSources { get; }
+
+    /// <summary>The source id of an external mapping (<c>pack</c> of <c>pack:cars/x.zip</c>).</summary>
+    public static string ExternalSourceId(string source) => source.IndexOf(':', StringComparison.Ordinal) is var colon and > 0 ? source[..colon] : "";
+
+    /// <summary>The path inside the source, after a declared source id; anything else is refused.</summary>
+    private string ExternalPath(string source)
+    {
+        var id = ExternalSourceId(source);
+        if (id.Length == 0 || ExternalSources.All(s => s.Id != id)) throw new ModException("external mapping names an undeclared source", ModErrors.Unsupported);
+        return source[(id.Length + 1)..];
+    }
+
+    private static System.Collections.ObjectModel.ReadOnlyCollection<ExternalSource> ExternalSourcesOf(JsonElement document)
+    {
+        if (!document.TryGetProperty("externalSources", out var list)) return new([]);
+        if (IsCustomId(document.GetProperty("id").GetString()) || list.ValueKind != JsonValueKind.Array || list.GetArrayLength() is < 1 or > 8)
+            throw new ModException("invalid external sources", ModErrors.Unsupported);
+        var sources = new List<ExternalSource>();
+        foreach (var item in list.EnumerateArray())
+        {
+            var id = item.GetProperty("id").GetString()!; var kind = item.GetProperty("kind").GetString()!;
+            if (id.Length is < 1 or > 32 || id.Any(c => c is not (>= 'a' and <= 'z' or >= '0' and <= '9' or '-')) || sources.Any(s => s.Id == id)
+                || kind is not ("folder" or "file" or "either")) throw new ModException("invalid external source", ModErrors.Unsupported);
+            foreach (var field in new[] { "label", "help" })
+            {
+                var text = item.GetProperty(field);
+                if (text.ValueKind != JsonValueKind.Object) throw new ModException("invalid localized text");
+                foreach (var value in text.EnumerateObject()) ValidateText(value.Value);
+                ValidateText(text.GetProperty("en"));
+            }
+            string? hint = null;
+            if (item.TryGetProperty("hint", out var hintValue)) { ValidateText(hintValue); hint = hintValue.GetString(); }
+            sources.Add(new(id, kind, item.GetProperty("label").Clone(), item.GetProperty("help").Clone(), hint));
+        }
+        return sources.AsReadOnly();
     }
 
     private static void ValidatePackage(JsonElement package)
@@ -384,3 +439,10 @@ public sealed record DataModSqlFile(string Path, string Sha256, long Bytes);
 public sealed record DatabaseBaseFile(string Path, string Sha256, long Bytes, int ForeignKeyViolations);
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 public sealed record ModWineOverride(string Module, bool AppDefaults);
+/// <summary>OD-117: one of the player's own sources a mod reads (a folder, a file such as a ZIP, or either), with its texts.</summary>
+public sealed record ExternalSource(string Id, string Kind, JsonElement Label, JsonElement Help, string? Hint)
+{
+    public string LabelText(string locale) => Localized(Label, locale);
+    public string HelpText(string locale) => Localized(Help, locale);
+    private static string Localized(JsonElement text, string locale) => text.TryGetProperty(locale, out var value) ? value.GetString()! : text.GetProperty("en").GetString()!;
+}

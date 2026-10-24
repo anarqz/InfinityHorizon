@@ -38,7 +38,7 @@ public static class OfficialModCatalog
 
     private static readonly string[] EntryFields = ["id", "version", "name", "description", "author"];
     /// <summary>Fields the entry carries, so an <c>install</c> object never repeats or overrides them.</summary>
-    private static readonly string[] ReservedInstallFields = [.. EntryFields, "package", "additionalPackages", "payload"];
+    private static readonly string[] ReservedInstallFields = [.. EntryFields, "package", "additionalPackages", "payload", "externalSources"];
 
     /// <summary>Parses a schema-2 catalog into manifests (rebuilt from the entries) and its runtime entry.</summary>
     public static (IReadOnlyList<ModManifest> Mods, ModRuntimeEntry? Runtime) Parse(byte[] raw)
@@ -91,7 +91,14 @@ public static class OfficialModCatalog
             throw new ModException("install repeats a field of the entry", ModErrors.Catalog);
         var node = JsonNode.Parse(install.GetRawText())!.AsObject();
         foreach (var field in EntryFields) node[field] = JsonNode.Parse(entry.GetProperty(field).GetRawText());
-        node["package"] = Package(Download(entry.GetProperty("download")));
+        // OD-117: a mod of the player's own files lists its sources instead of any download (and never both).
+        if (entry.TryGetProperty("externalSources", out var sources))
+        {
+            if (entry.TryGetProperty("download", out _) || entry.TryGetProperty("additionalDownloads", out _))
+                throw new ModException("an entry has a download or external sources, not both", ModErrors.Catalog);
+            node["externalSources"] = JsonNode.Parse(sources.GetRawText());
+        }
+        else node["package"] = Package(Download(entry.GetProperty("download")));
         if (entry.TryGetProperty("additionalDownloads", out var additional))
         {
             if (additional.ValueKind != JsonValueKind.Object) throw new ModException("invalid additional downloads", ModErrors.Catalog);
@@ -117,7 +124,8 @@ public static class OfficialModCatalog
         var entry = new JsonObject();
         foreach (var field in EntryFields) { entry[field] = body[field]?.DeepClone(); body.Remove(field); }
         static JsonObject Download(JsonNode package) => new() { ["url"] = package["url"]!.DeepClone(), ["sha256"] = package["sha256"]!.DeepClone(), ["bytes"] = package["bytes"]!.DeepClone() };
-        if (body["package"] is { } package && package["format"]?.GetValue<string>() is null or "zip") { entry["download"] = Download(package); body.Remove("package"); }
+        if (manifest.IsExternal) { entry["externalSources"] = body["externalSources"]!.DeepClone(); body.Remove("externalSources"); }
+        else if (body["package"] is { } package && package["format"]?.GetValue<string>() is null or "zip") { entry["download"] = Download(package); body.Remove("package"); }
         else throw new ModException("a catalog download is a zip package", ModErrors.Catalog);
         if (body["additionalPackages"] is JsonObject additional)
         {
