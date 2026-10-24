@@ -628,6 +628,8 @@
   "mods.error.url_download": "The ZIP could not be downloaded. Check that the link is HTTPS and points straight at the file.",
   "mods.error.archive": "The download is not a usable mod ZIP: it is damaged, too large, or misses a file its manifest lists.",
   "mods.error.archive_manifest": "The ZIP needs exactly one valid custom mod infinity-mod.json (an id starting with custom.).",
+  "mods.url_incompatible_title": "This mod isn't compatible with Infinity",
+  "mods.error.archive_no_manifest": "This ZIP has no infinity-mod.json, so Infinity can't install it. Ask the modder to adapt the mod to the Infinity mod schema: {url}",
   "mods.error.custom_full": "The custom mods folder already holds the most mods it can list. Remove one before adding another.",
   "pane.profile": "Profile",
   "pane.player_subtitle": "Player details",

@@ -170,9 +170,16 @@ public sealed partial class ShellViewModel
     private static Uri? CustomModUrl(string text) => Uri.TryCreate(text.Trim(), UriKind.Absolute, out var url) && url.Scheme == Uri.UriSchemeHttps
         && url.IsDefaultPort && url.UserInfo.Length == 0 && url.Fragment.Length == 0 ? url : null;
 
+    /// <summary>Where modders learn to adapt a mod to Infinity's schema (shown when a ZIP has no infinity-mod.json).</summary>
+    public const string ModSchemaPage = "https://infinity-horizon.com/mods";
+    private bool _modUrlIncompatible;
+    /// <summary>The last ZIP had no infinity-mod.json: the field stays open with the warning and the schema page's link.</summary>
+    public bool ModUrlIncompatible => _modUrlIncompatible && ShowModUrl;
+    public string ModUrlIncompatibleText => S.Format("mods.error.archive_no_manifest", ("url", ModSchemaPage));
+
     public void ToggleModUrl()
     {
-        _showModUrl = !_showModUrl;
+        _showModUrl = !_showModUrl; _modUrlIncompatible = false;
         Changed(string.Empty);
     }
 
@@ -185,12 +192,15 @@ public sealed partial class ShellViewModel
         if (!CanAddModFromUrl) return;
         var url = CustomModUrl(_modUrl)!; var home = ModHome;
         CustomModImport? added = null;
+        _modUrlIncompatible = false;
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S[stage == "download" ? "mods.progress.url_download" : "mods.progress.url_verify"]; Changed(nameof(ModProgress)); });
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(15));
-            added = await ManagedModFiles.ImportCustomFromUrlAsync(ModDownloads, home, url, progress, timeout.Token);
+            try { added = await ManagedModFiles.ImportCustomFromUrlAsync(ModDownloads, home, url, progress, timeout.Token); }
+            catch (ModException error) when (error.Code == ModErrors.ArchiveNoManifest) { _modUrlIncompatible = true; throw; }
         }, S["mods.action_done"]);
+        if (_modUrlIncompatible) { Message = ModUrlIncompatibleText; Changed(string.Empty); return; }
         if (added is null) return;
         Log("mods: custom mod added from URL: " + added.Manifest.Id + (added.Replaced ? " (replaced)" : added.Unchanged ? " (unchanged)" : ""));
         Message = S.Format(added.Unchanged ? "mods.url_unchanged" : added.Replaced ? "mods.url_replaced" : "mods.url_added", ("mod", added.Manifest.Text("name", S.Locale)));

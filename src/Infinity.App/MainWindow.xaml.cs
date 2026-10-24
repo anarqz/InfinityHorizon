@@ -12,6 +12,8 @@ public partial class MainWindow : Window
 {
     private ShellViewModel _vm => (ShellViewModel)DataContext;
 
+    private readonly GamepadNavigator _gamepad;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -26,7 +28,7 @@ public partial class MainWindow : Window
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
         var vm = new ShellViewModel(strings, config, state);
         DataContext = vm;
-        _ = new GamepadNavigator(this, () => vm.Playing);
+        _gamepad = new GamepadNavigator(this, () => vm.Playing);
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
         vm.UpdateRestartRequested += () => Application.Current.Shutdown();
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
@@ -228,8 +230,11 @@ public partial class MainWindow : Window
     private void OnToggleModUrl(object sender, RoutedEventArgs e)
     {
         _vm.ToggleModUrl();
-        if (_vm.ShowModUrl) _ = Dispatcher.InvokeAsync(() => ModUrlBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        // The field opens focused, so the Steam keyboard (Game Mode / Big Picture only) opens with it.
+        if (_vm.ShowModUrl) _ = Dispatcher.InvokeAsync(() => { ModUrlBox.Focus(); _gamepad.OpenSteamKeyboard(); }, System.Windows.Threading.DispatcherPriority.Input);
     }
+
+    private void OnOpenModSchemaPage(object sender, RoutedEventArgs e) => OpenCommunityLink(ShellViewModel.ModSchemaPage);
 
     // Enter adds, Escape (the controller's B) closes the address field.
     private async void OnModUrlKey(object sender, System.Windows.Input.KeyEventArgs e)
