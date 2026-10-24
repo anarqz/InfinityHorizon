@@ -53,6 +53,13 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
+    /// <summary>
+    /// OD-118 T1h: the start's own folder search may open Configure when Azimuth is not ready, but not under a player who already
+    /// landed on PLAY offline (a remembered offline start): the page never switches by itself; PLAY shows the setup reason instead.
+    /// First runs and signed-in starts keep opening Configure.
+    /// </summary>
+    internal bool OpenSetupOnStart => !OfflineMode;
+
     /// <summary>A start that resumes the online run's kept session (G2): the player chose online last time.</summary>
     public void ResumeOnline() => EngageOnline();
 
@@ -97,7 +104,7 @@ public sealed partial class ShellViewModel
         var updateCheck = ProbeServerAsync();
         await VerifyBuildOriginAsync();
         if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
-        else await FindAzimuthAsync(null, openSetupWhenNeeded: true);
+        else await FindAzimuthAsync(null, openSetupWhenNeeded: OpenSetupOnStart);
         await Task.WhenAll(updateCheck, onlineCheck);
         if (online) await ResumeSessionAsync();
         await RefreshIntegrityAutomaticallyAsync();
