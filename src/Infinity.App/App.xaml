@@ -70,6 +70,29 @@
       </LinearGradientBrush>
 
       <!-- OD-119: composite fonts (Assets/Fonts/*.CompositeFont): Selawik for text, the bundled Noto Emoji for emoji. -->
+    <!-- T3b (Alex): the news reading surface: black, an almost invisible bundled vector pattern, white type. No bitmap, no system
+         resource, so it is the same under Proton. -->
+    <SolidColorBrush x:Key="NewsReadingBackground" Color="#000000" />
+    <SolidColorBrush x:Key="NewsReadingText" Color="#EDEDED" />
+    <SolidColorBrush x:Key="NewsReadingHeading" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="NewsReadingMuted" Color="#A3A3A3" />
+    <SolidColorBrush x:Key="NewsReadingLink" Color="#F2A7C3" />
+    <SolidColorBrush x:Key="NewsReadingRule" Color="#333333" />
+    <SolidColorBrush x:Key="NewsReadingCode" Color="#141414" />
+    <SolidColorBrush x:Key="NewsReadingCard" Color="#111111" />
+    <!-- A news card's surface: the launcher's own on PLAY; the reading surface overrides it on the News page. -->
+    <SolidColorBrush x:Key="NewsCardSurface" Color="#FF170B22" />
+    <DrawingBrush x:Key="NewsReadingPattern" TileMode="Tile" Viewport="0,0,28,28" ViewportUnits="Absolute" Viewbox="0,0,28,28" ViewboxUnits="Absolute" Opacity="0.05">
+      <DrawingBrush.Drawing>
+        <GeometryDrawing>
+          <GeometryDrawing.Pen><Pen Brush="#FFFFFF" Thickness="0.6" /></GeometryDrawing.Pen>
+          <GeometryDrawing.Geometry><GeometryGroup>
+            <LineGeometry StartPoint="0,28" EndPoint="28,0" />
+            <EllipseGeometry Center="14,14" RadiusX="0.8" RadiusY="0.8" />
+          </GeometryGroup></GeometryDrawing.Geometry>
+        </GeometryDrawing>
+      </DrawingBrush.Drawing>
+    </DrawingBrush>
     <FontFamily x:Key="InfinityFont">pack://application:,,,/Assets/Fonts/#Infinity</FontFamily>
       <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Infinity Semibold</FontFamily>
 

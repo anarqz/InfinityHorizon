@@ -30,7 +30,7 @@
     </Style>
     <!-- OD-119: a news card (cover, title, date, summary, pinned, unread) and the PLAY column of the newest few. -->
     <DataTemplate x:Key="NewsCardTemplate">
-      <Button Click="OnNewsCard" Margin="0,0,0,10" Background="{StaticResource InfinitySurface}" AutomationProperties.Name="{Binding Title}">
+      <Button Click="OnNewsCard" Margin="0,0,0,10" Background="{DynamicResource NewsCardSurface}" AutomationProperties.Name="{Binding Title}">
         <Button.Style><Style TargetType="Button" BasedOn="{StaticResource ModCardButton}" /></Button.Style>
         <StackPanel>
           <Border CornerRadius="6" ClipToBounds="True" Margin="0,0,0,10" MaxHeight="150" Visibility="{Binding HasCover, Converter={StaticResource Visible}}">
@@ -639,8 +639,15 @@
             </Grid>
           </ScrollViewer>
 
-          <!-- OD-119: News, the same feed (offline too); an item opens here with Back. -->
-          <Grid Visibility="{Binding ShowNews, Converter={StaticResource Visible}}">
+          <!-- OD-119: News, the same feed (offline too); an item opens here with Back. T3b (Alex): read on black, with an almost
+               invisible bundled pattern, full-bleed over the content area. -->
+          <Border Margin="-40,-28,-40,-16" Background="{StaticResource NewsReadingBackground}" Visibility="{Binding ShowNews, Converter={StaticResource Visible}}">
+          <Border.Resources>
+            <SolidColorBrush x:Key="NewsCardSurface" Color="#111111" />
+          </Border.Resources>
+          <Grid>
+          <Rectangle Fill="{StaticResource NewsReadingPattern}" IsHitTestVisible="False" />
+          <Grid Margin="40,28,40,16">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowNewsList, Converter={StaticResource Visible}}">
               <StackPanel MaxWidth="760" HorizontalAlignment="Left">
                 <TextBlock Text="{Binding S[news.title]}" Style="{StaticResource PageTitle}" />
@@ -656,12 +663,15 @@
                   <TextBlock Text="{Binding S[news.back]}" />
                 </StackPanel>
               </Button>
-              <TextBlock DockPanel.Dock="Top" Text="{Binding NewsOpen.Title}" Style="{StaticResource PageTitle}" TextWrapping="Wrap" />
-              <TextBlock DockPanel.Dock="Top" Text="{Binding NewsOpen.Date}" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,16" />
+              <TextBlock DockPanel.Dock="Top" Text="{Binding NewsOpen.Title}" Style="{StaticResource PageTitle}" TextWrapping="Wrap" MaxWidth="760"
+                         HorizontalAlignment="Left" Foreground="{StaticResource NewsReadingHeading}" />
+              <TextBlock DockPanel.Dock="Top" Text="{Binding NewsOpen.Date}" Foreground="{StaticResource NewsReadingMuted}" Margin="0,8,0,20" />
               <FlowDocumentScrollViewer x:Name="NewsDocumentViewer" Document="{Binding NewsDocument}" VerticalScrollBarVisibility="Auto"
                                         HorizontalScrollBarVisibility="Disabled" IsToolBarVisible="False" Focusable="True" />
             </DockPanel>
           </Grid>
+          </Grid>
+          </Border>
 
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowCrashReport, Converter={StaticResource Visible}}">
             <StackPanel MaxWidth="700" HorizontalAlignment="Left">

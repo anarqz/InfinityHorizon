@@ -12,7 +12,8 @@ public sealed record NewsLocalized(string? En, string? PtBr)
 }
 
 /// <summary>One entry of <c>news.json</c>. <see cref="Date"/> stays the published <c>YYYY-MM-DD</c> text (it sorts as written).</summary>
-public sealed record NewsItem(string Id, string Date, NewsLocalized Title, NewsLocalized Summary, string? Cover, bool Pinned, LauncherVersion? MinLauncher)
+/// <remarks><see cref="Highlight"/> (optional, at most one item; NEWS_FEED.md) is read but unused in 1.0.12: a later overlay shows it.</remarks>
+public sealed record NewsItem(string Id, string Date, NewsLocalized Title, NewsLocalized Summary, string? Cover, bool Pinned, LauncherVersion? MinLauncher, bool Highlight = false)
 {
     public DateOnly? Day => DateOnly.TryParseExact(Date, "yyyy-MM-dd", out var day) ? day : null;
 }
@@ -82,7 +83,8 @@ public sealed class NewsFeed
         LauncherVersion? minimum = null;
         // A minLauncher that cannot be read hides the item (review): a typo must never show a gated item to older launchers.
         if (item.TryGetProperty("minLauncher", out var m) && !(m.ValueKind == JsonValueKind.String && LauncherVersion.TryParse(m.GetString(), out minimum))) return null;
-        return new(id!, String(item, "date") ?? "", title, Text(item, "summary") ?? new(null, null), cover, pinned, minimum);
+        var highlight = item.TryGetProperty("highlight", out var h) && h.ValueKind == JsonValueKind.True;
+        return new(id!, String(item, "date") ?? "", title, Text(item, "summary") ?? new(null, null), cover, pinned, minimum, highlight);
     }
 
     private static NewsLocalized? Text(JsonElement item, string name)
