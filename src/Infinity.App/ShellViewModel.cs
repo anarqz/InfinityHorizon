@@ -71,7 +71,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowHero => ShowWelcome || ShowHome;
 
-    public bool ShowBugReport => InShell && _onBugReport && !ShowPickSave;
+    public bool ShowBugReport => SignedIn && _onBugReport && !ShowPickSave;
+
+    /// <summary>OD-118: an online-only area (the account page, bug reports) opened on the offline path says so, centered.</summary>
+    public bool ShowOfflinePane => OfflineMode && (_onAccount || _onBugReport) && !ShowPickSave;
 
     /// <summary>
     /// OD-118 "Play offline": the launcher without an account. The one game this launcher serves is chosen for the player (no server

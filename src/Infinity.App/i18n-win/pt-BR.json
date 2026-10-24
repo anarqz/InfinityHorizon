@@ -1,4 +1,6 @@
 {
+  "offline.mode": "Modo offline",
+  "offline.mode_hint": "Esta parte do Infinity funciona online. Entre para usá-la; todo o resto continua funcionando offline.",
   "offline.play_offline_button": "JOGAR OFFLINE",
   "offline.play_online_button": "JOGAR ONLINE",
   "offline.playing_offline_status": "Jogando offline",

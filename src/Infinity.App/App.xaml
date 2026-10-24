@@ -73,6 +73,9 @@
       <FontFamily x:Key="InfinityFontSemibold">pack://application:,,,/Assets/Fonts/#Selawik Semibold</FontFamily>
 
       <BitmapImage x:Key="BrandLogo" UriSource="pack://application:,,,/Assets/logo.png" />
+      <!-- OD-118: the "Offline mode" icon, a disconnected plug drawn as our own vector (24x24 grid, stroked), never a system
+           icon font, so Proton draws it the same. One resource: the overlay draws the same shape with ImGui lines. -->
+      <Geometry x:Key="OfflineIcon">M2,9 H8 V15 H2 Z M8,10.5 H11 M8,13.5 H11 M16,9 H22 V15 H16 Z M13,10.5 H16 M13,13.5 H16 M4,20 L20,4</Geometry>
       <BitmapImage x:Key="BrandMark" UriSource="pack://application:,,,/Assets/mark.png" />
       <BitmapImage x:Key="BrandHero" UriSource="pack://application:,,,/Assets/hero.jpg" />
       <BitmapImage x:Key="BrandStreaks" UriSource="pack://application:,,,/Assets/streaks.png" />
