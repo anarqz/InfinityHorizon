@@ -18,7 +18,7 @@ public sealed partial class ShellViewModel
 {
     private readonly HttpClient Http;
     private readonly Lazy<HttpClient> ProductionMatchmakingHttp;
-    private bool _onlineEngaged, _onOfflineStatus;
+    private bool _onlineEngaged, _onlineAnswered, _onOfflineStatus;
 
     /// <summary>The handler in front of every Infinity client (counts and refuses; tests stub it).</summary>
     internal InfinityRequestGate InfinityGate { get; }
@@ -60,6 +60,7 @@ public sealed partial class ShellViewModel
     private void DisengageOnline()
     {
         _onlineEngaged = false;
+        _onlineAnswered = false;
         _onlineStarted = false;
         _onlineStatus = null;
         Changed(string.Empty);
@@ -80,6 +81,8 @@ public sealed partial class ShellViewModel
     {
         var online = StartsOnline;
         if (online) ResumeOnline();
+        // A run that chose Play offline opens offline at once, before any check, so a SIGN IN click meanwhile is never undone.
+        else if (StartsOffline) PlayOffline();
         var onlineCheck = online ? CheckOnlineStatusAsync(manual: false) : Task.CompletedTask;
         // Production bootstrap respects global closure before requesting discovery.
         if (_config.Production) await onlineCheck;
@@ -89,7 +92,6 @@ public sealed partial class ShellViewModel
         else await FindAzimuthAsync(null, openSetupWhenNeeded: true);
         await Task.WhenAll(updateCheck, onlineCheck);
         if (online) await ResumeSessionAsync();
-        else if (StartsOffline) PlayOffline();
         await RefreshIntegrityAutomaticallyAsync();
     }
 }

@@ -55,13 +55,24 @@ public sealed class LocalProfileStore(string stateDirectory)
     /// <summary>The profiles, newest last; a missing or unreadable file is none (never a crash: it only lists profiles).</summary>
     public IReadOnlyList<LocalProfile> Read()
     {
+        try { return Load(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    /// <summary>
+    /// The profiles for a change: an unreadable or foreign file throws <see cref="IOException"/> instead of reading as empty, so a change
+    /// never overwrites profiles (and their offline XUIDs) it could not read.
+    /// </summary>
+    private List<LocalProfile> Load()
+    {
+        if (!File.Exists(Path_)) return [];
+        if (new FileInfo(Path_).Length > 256 * 1024) throw new IOException("local-profiles.json is too large");
         try
         {
-            if (!File.Exists(Path_) || new FileInfo(Path_).Length > 256 * 1024) return [];
             var document = JsonSerializer.Deserialize<Document>(File.ReadAllBytes(Path_), Json);
-            return document is { SchemaVersion: 1, Profiles: { } list } ? list.Where(Valid).ToArray() : [];
+            return document is { SchemaVersion: 1, Profiles: { } list } ? list.Where(Valid).ToList() : throw new IOException("local-profiles.json is not this launcher's");
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { return []; }
+        catch (JsonException error) { throw new IOException("local-profiles.json is damaged", error); }
     }
 
     private static bool Valid(LocalProfile? p) => p is { Id.Length: > 0, Game.Length: > 0, Name.Length: > 0, UploadKey.Length: > 0 }
@@ -85,7 +96,7 @@ public sealed class LocalProfileStore(string stateDirectory)
         ArgumentNullException.ThrowIfNull(saveFolderExists);
         if (!ProfileName.IsValid(name)) throw new LocalProfileException(ErrorCodes.AccountsInvalidName);
         if (mode is not ("hardcore" or "noob")) throw new ArgumentException("unknown mode", nameof(mode));
-        var all = Read().ToList();
+        var all = Load();
         if (all.Count(p => p.Game == game && p.LocalOnly) + all.Count(p => p.Game == game && !p.LocalOnly && !p.NotOnAccount) >= MaxProfiles)
             throw new LocalProfileException(ErrorCodes.AccountsProfileLimit);
         if (all.Any(p => p.Game == game && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)))
@@ -111,7 +122,7 @@ public sealed class LocalProfileStore(string stateDirectory)
     public LocalProfile Edit(string id, string name, string mode)
     {
         if (!ProfileName.IsValid(name)) throw new LocalProfileException(ErrorCodes.AccountsInvalidName);
-        var all = Read().ToList();
+        var all = Load();
         var index = all.FindIndex(p => p.Id == id);
         if (index < 0 || !all[index].LocalOnly) throw new InvalidOperationException("only a local profile that was never uploaded can be edited");
         if (all.Any(p => p.Id != id && p.Game == all[index].Game && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)))
@@ -128,7 +139,7 @@ public sealed class LocalProfileStore(string stateDirectory)
     /// <summary>Stores the server's answer for an uploaded profile at once (its key's replay record is not kept forever).</summary>
     public LocalProfile Link(string id, CloudLink cloud)
     {
-        var all = Read().ToList();
+        var all = Load();
         var index = all.FindIndex(p => p.Id == id);
         if (index < 0) throw new InvalidOperationException("unknown local profile");
         all[index] = all[index] with { Cloud = cloud, NotOnAccount = false };
@@ -144,21 +155,39 @@ public sealed class LocalProfileStore(string stateDirectory)
     public IReadOnlyList<LocalProfile> RefreshFromAccount(Me me, string game, Func<string, bool> saveFolderExists)
     {
         ArgumentNullException.ThrowIfNull(me);
-        var all = Read().ToList();
+        var all = Load();
         var listed = me.Profiles.Where(p => p.Game == game).ToList();
         for (var i = 0; i < all.Count; i++)
         {
-            if (all[i].Cloud is not { } cloud || cloud.AccountId != me.AccountId) continue;
+            // Only this game's profiles are compared with this game's list (another game's are not "not on this account").
+            if (all[i].Game != game || all[i].Cloud is not { } cloud || cloud.AccountId != me.AccountId) continue;
             all[i] = listed.FirstOrDefault(p => p.ProfileId == cloud.ProfileId) is { } current
                 ? all[i] with { Cloud = cloud with { Xuid = current.Xuid, Gamertag = current.Gamertag }, Mode = current.Mode, NotOnAccount = false }
                 : all[i] with { NotOnAccount = true };
         }
         foreach (var profile in listed.Where(p => all.All(l => l.Cloud?.ProfileId != p.ProfileId)))
-            all.Add(new LocalProfile(Guid.NewGuid().ToString(), game, profile.Handle.Length > 0 ? profile.Handle : profile.Gamertag.Split('#')[0], profile.Mode,
-                Guid.NewGuid().ToString(), profile.CreatedAt, FreeOfflineXuid(all, saveFolderExists),
-                new CloudLink(me.AccountId, profile.ProfileId, profile.Xuid, profile.Gamertag)));
+        {
+            var name = PlayName(profile);
+            var link = new CloudLink(me.AccountId, profile.ProfileId, profile.Xuid, profile.Gamertag);
+            // An upload whose answer was lost: the local profile it came from is linked, not shadowed by a second cached copy.
+            var origin = all.FindIndex(l => l.LocalOnly && l.Game == game && l.Mode == profile.Mode && string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (origin >= 0) { all[origin] = all[origin] with { Cloud = link, NotOnAccount = false }; continue; }
+            all.Add(new LocalProfile(Guid.NewGuid().ToString(), game, name, profile.Mode, Guid.NewGuid().ToString(), profile.CreatedAt,
+                FreeOfflineXuid(all, saveFolderExists), link));
+        }
         Write(all);
         return all;
+    }
+    /// <summary>
+    /// The name an account profile plays under offline (FI_OFFLINE_GAMERTAG): the gamertag before '#' (the handle "Name-12345" is not a
+    /// profile name), kept to the profile-name rule the hook checks (1-20 letters or digits, a letter first).
+    /// </summary>
+    internal static string PlayName(Profile profile)
+    {
+        var tag = profile.Gamertag.Split('#')[0];
+        var letters = new string(tag.Where(char.IsAsciiLetterOrDigit).Take(20).ToArray());
+        var name = letters.TrimStart("0123456789".ToCharArray());
+        return ProfileName.IsValid(name) ? name : "Player";
     }
 }
 

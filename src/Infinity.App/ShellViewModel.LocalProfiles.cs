@@ -23,7 +23,8 @@ public sealed partial class ShellViewModel
     internal LocalProfile? ChosenLocalProfile => _chosenLocal;
 
     /// <summary>A save folder exists already (CR-L36: an offline identity never reuses one).</summary>
-    private bool SaveFolderExists(string name) => _install is { } install && Directory.Exists(Path.Combine(AzimuthSaves.SavesRoot(install.Root), name));
+    /// <summary>Azimuth keeps every profile's save in <c>&lt;saves&gt;\player-1\User_&lt;hex&gt;</c> (AzimuthSaves.List).</summary>
+    private bool SaveFolderExists(string name) => _install is { } install && Directory.Exists(Path.Combine(AzimuthSaves.SavesRoot(install.Root), "player-1", name));
 
     /// <summary>The row of a local profile: the picker's <see cref="Profile"/> shape, never sent anywhere.</summary>
     /// <summary>OD-118: offline the create button makes a profile on this PC, not on an account.</summary>
@@ -48,6 +49,8 @@ public sealed partial class ShellViewModel
     /// <summary>Creates a profile on this PC; signed in, it is uploaded at once through the same idempotent upsert as the panel.</summary>
     private async Task CreateLocalProfileAsync(string game)
     {
+        // CR-L36: an offline identity never takes a save folder that exists, so the game's folder must be known before one is chosen.
+        if (_install is null) { Message = S["play.setup_needed"]; return; }
         var hardcore = NewHardcore;
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow); }

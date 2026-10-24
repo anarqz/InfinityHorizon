@@ -60,6 +60,7 @@ public sealed partial class ShellViewModel
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
             var plan = await ProfileUpsert.PlanAsync(new ApiProfileAccount(session.Api), access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
             FillProfiles();
+            RefreshChosenLocal();
             if (plan.Uploadable.Count == 0) return;
             ShowUpsert(plan);
         }
@@ -86,7 +87,8 @@ public sealed partial class ShellViewModel
     {
         if (_upsertBusy) return;
         _upsertPlan = null; UpsertRows.Clear(); UpsertAccountProfiles.Clear();
-        FillProfiles(); Changed(string.Empty);
+        FillProfiles();
+        RefreshChosenLocal(); Changed(string.Empty);
     }
 
     public async Task UploadProfilesAsync()
@@ -108,6 +110,7 @@ public sealed partial class ShellViewModel
             }
             await session.RefreshMeAsync();
             FillProfiles();
+            RefreshChosenLocal();
             Message = results.All(r => r.Uploaded) ? S["upsert.done"] : S["upsert.partly"];
         }
         catch (Exception error) when (error is ApiException or HttpRequestException or OperationCanceledException or LocalProfileException)
