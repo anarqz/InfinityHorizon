@@ -410,8 +410,15 @@
 
           <!-- OD-118: after sign-in, this PC's profiles that could go online (Update online profiles). Panel over the content. -->
           <Border x:Name="UpsertPanel" Panel.ZIndex="20" Style="{StaticResource Card}" Background="{StaticResource InfinitySurface}" MaxWidth="600"
-                  HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26,22" KeyDown="OnUpsertPanelKey"
+                  HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26,22" KeyDown="OnUpsertPanelKey" Margin="0,16"
                   Visibility="{Binding ShowProfileUpsert, Converter={StaticResource Visible}}">
+            <DockPanel>
+              <WrapPanel DockPanel.Dock="Bottom" Margin="0,16,0,0">
+                <Button x:Name="UpsertUploadButton" Content="{Binding S[upsert.upload]}" Click="OnUploadProfiles" IsEnabled="{Binding CanUpload}"
+                        Style="{StaticResource AccentButtonStyle}" Margin="0,0,10,0" />
+                <Button Content="{Binding S[upsert.not_now]}" Click="OnCloseProfileUpsert" Padding="12,6" />
+              </WrapPanel>
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
               <TextBlock Text="{Binding S[upsert.title]}" FontSize="22" FontWeight="Bold" />
               <TextBlock Text="{Binding UpsertIntro}" TextWrapping="Wrap" Margin="0,8,0,0" />
@@ -435,12 +442,9 @@
               </ItemsControl>
               <TextBlock Text="{Binding UpsertSelectionText}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,2,0,0" />
               <TextBlock Text="{Binding S[upsert.rules]}" TextWrapping="Wrap" FontSize="12" Margin="0,10,0,0" />
-              <WrapPanel Margin="0,16,0,0">
-                <Button x:Name="UpsertUploadButton" Content="{Binding S[upsert.upload]}" Click="OnUploadProfiles" IsEnabled="{Binding CanUpload}"
-                        Style="{StaticResource AccentButtonStyle}" Margin="0,0,10,0" />
-                <Button Content="{Binding S[upsert.not_now]}" Click="OnCloseProfileUpsert" Padding="12,6" />
-              </WrapPanel>
             </StackPanel>
+              </ScrollViewer>
+            </DockPanel>
           </Border>
 
           <!-- OD-118: an online-only area on the offline path: centered "Offline mode" with the disconnect icon, and Sign in. -->
