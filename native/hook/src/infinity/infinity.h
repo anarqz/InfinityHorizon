@@ -99,6 +99,8 @@ int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const
 int fi_launch_protocol(void);
 /* Starts the launch thread (account.c, instead of the Beta account thread): 1 when it runs. */
 int fi_launch_start(const wchar_t *bin);
+/* offline_identity.c (OD-118): the launcher's Play offline profile, FI_OFFLINE_XUID/FI_OFFLINE_GAMERTAG; 1 when valid. */
+int fi_offline_identity(const wchar_t *xuid, const wchar_t *gamertag, unsigned long long *value);
 /* The game asked who plays before the handshake ended: 1 when the session is now offline for
    good, 0 when it went online in that same moment. */
 int fi_launch_late(void);

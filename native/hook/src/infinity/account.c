@@ -818,7 +818,51 @@ static void account_apply_launch(const wchar_t *directory) {
     }
 }
 
+/* OD-118 (P1): the launcher's Play offline (FI_LAUNCH=v1;offline) names the chosen local profile
+   (offline_identity.c); the getters answer with it at once, so its save is its own User_<hex xuid>.
+   No account file, server, cloud or update thread. Absent or invalid: Azimuth's own offline profile. */
+static int account_apply_offline(void) {
+    wchar_t xuid[24], tag[24];
+    DWORD nx = GetEnvironmentVariableW(L"FI_OFFLINE_XUID", xuid, ARRAY_COUNT(xuid));
+    DWORD nt = GetEnvironmentVariableW(L"FI_OFFLINE_GAMERTAG", tag, ARRAY_COUNT(tag));
+    unsigned long long value = 0;
+    if (!nx && !nt) {
+        return 0;
+    }
+    if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value)) {
+        log_append("ACCOUNT: the launcher's offline profile is not valid; playing Azimuth's offline profile.\r\n");
+        return 0;
+    }
+    account_host = (unsigned char *)GetModuleHandleW(NULL);
+    account_offsets = azimuth_offsets(account_host);
+    if (!account_offsets) {
+        log_append("ACCOUNT: unsupported host; playing Azimuth's offline profile.\r\n");
+        return 0;
+    }
+    int patched = account_patch_slot(account_offsets->account_xuid_slot, account_offsets->account_xuid_target,
+                                     account_get_xuid, &account_xuid_original);
+    for (unsigned i = 0; i < 3; ++i) {
+        patched += account_patch_slot(account_offsets->account_info_slots[i], account_offsets->account_info_targets[i],
+                                      account_info_hooks[i], &account_info_original[i]);
+    }
+    if (patched != 4) {
+        log_append("ACCOUNT: LocalUser getters not where expected; playing Azimuth's offline profile.\r\n");
+        return 0;
+    }
+    memory_copy(account_xuid, xuid, (wide_len(xuid) + 1) * sizeof(wchar_t));
+    memory_copy(account_gamertag, tag, (wide_len(tag) + 1) * sizeof(wchar_t));
+    account_active = 1;
+    account_ready = 1; /* nothing to wait for: the identity is known before the game asks */
+    char ascii[32];
+    wide_to_ascii(account_gamertag, ascii, sizeof(ascii));
+    account_log("playing offline as ", ascii);
+    return 1;
+}
+
 static void account_apply(const wchar_t *directory) {
+    if (fi_cfg()->launch == FI_LAUNCH_OFFLINE && account_apply_offline()) {
+        return;
+    }
     if (fi_launch_protocol()) {
         account_apply_launch(directory);
         return;
