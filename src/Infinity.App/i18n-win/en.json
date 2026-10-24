@@ -1,4 +1,7 @@
 {
+  "offline.sign_in": "Sign in",
+  "offline.play_offline_link": "Play offline",
+  "offline.sign_in_needed": "Signing in is necessary for online play",
   "connection.direct_failed": "The direct connection could not be established. Try again or check Connection details.",
   "worlds.public_warning": "Public lobby\nBugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
   "worlds.player_left": "Player left the lobby\n{player} left your lobby.",

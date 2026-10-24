@@ -32,7 +32,7 @@ public sealed partial class ShellViewModel
 
     private bool DevServer => !_config.Production && Infinity.Core.DevNet.PlainHttpUrl(_config.Server.GetLeftPart(UriPartial.Authority));
 
-    public bool ShowSetup => SignedIn && _onSetup && !ShowPickSave;
+    public bool ShowSetup => InShell && _onSetup && !ShowPickSave;
 
     public AzimuthStatus SetupStatus => AzimuthSetup.StatusOf(_install, _hook);
 
@@ -110,7 +110,7 @@ public sealed partial class ShellViewModel
     };
 
     /// <summary>Install, update or replace with the signed package (Azimuth must be the compatible version).</summary>
-    public bool CanInstallHook => (SignedIn || DevelopmentMods) && AzimuthVersionOk && ModsIdle && _hook is not null && HookInstaller.CanInstallManually(_hook, _hookPackage);
+    public bool CanInstallHook => (InShell || DevelopmentMods) && AzimuthVersionOk && ModsIdle && _hook is not null && HookInstaller.CanInstallManually(_hook, _hookPackage);
 
     public string HookInstallLabel => _hookPackage is null ? string.Empty
         : S.Format(_hook?.Kind != HookKind.Ours ? "setup.hook_install"
@@ -146,7 +146,7 @@ public sealed partial class ShellViewModel
 
     public void OpenSetup()
     {
-        if (!SignedIn) return;
+        if (!InShell) return;
         LeaveAccount();
         _onSetup = true;
         _onMods = false;
@@ -180,7 +180,7 @@ public sealed partial class ShellViewModel
         }
         Install = found;
         Log(found is null ? "setup: no Azimuth found" : $"setup: Azimuth {found.Version ?? "?"} at {found.Root} ({SetupStatus})");
-        if (SignedIn && openSetupWhenNeeded && SetupStatus != AzimuthStatus.Ready)
+        if (InShell && openSetupWhenNeeded && SetupStatus != AzimuthStatus.Ready)
         {
             OpenSetup();
         }
@@ -190,7 +190,7 @@ public sealed partial class ShellViewModel
     /// <summary>The folder the player picked: kept only when it holds azimuth.exe.</summary>
     public void ChooseAzimuthFolder(string folder)
     {
-        if ((!SignedIn && !DevelopmentMods) || !ModsIdle) return;
+        if ((!InShell && !DevelopmentMods) || !ModsIdle) return;
         if (!AzimuthSetup.SaveChoice(_stateDirectory, folder))
         {
             _azimuthChoiceFailed = true;
@@ -203,7 +203,7 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
-    public Task RecheckAzimuthAsync() => SignedIn && ModsIdle
+    public Task RecheckAzimuthAsync() => InShell && ModsIdle
         ? FindAzimuthAsync(_install?.Root, openSetupWhenNeeded: false) : Task.CompletedTask;
 
     /// <summary>Installs the signed hook package into the player's Azimuth (the game closed).</summary>

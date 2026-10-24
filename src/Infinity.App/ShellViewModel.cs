@@ -59,11 +59,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public string VersionLabel => "v" + Version + " · BETA";
 
-    public int SidebarWidth => SignedIn ? 220 : 0;
+    public int SidebarWidth => InShell ? 220 : 0;
 
-    public bool CanChangeIdentity => SignedIn && !Playing && !_busy && !LauncherUpdateBusy && !DedicatedActive;
+    public bool CanChangeIdentity => InShell && !Playing && !_busy && !LauncherUpdateBusy && !DedicatedActive;
 
-    public bool ShowWelcome => !SignedIn && _pending is null && !_loginOpen && !_onMods;
+    public bool ShowWelcome => !InShell && _pending is null && !_loginOpen && !_onMods;
 
     /// <summary>The kept session is being checked: the welcome screen says so instead of offering sign-in.</summary>
     public bool Resuming => _resuming;
@@ -71,10 +71,29 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowHero => ShowWelcome || ShowHome;
 
-    public bool ShowBugReport => SignedIn && _onBugReport && !ShowPickSave;
+    public bool ShowBugReport => InShell && _onBugReport && !ShowPickSave;
+
+    /// <summary>
+    /// OD-118 "Play offline": the launcher without an account. The one game this launcher serves is chosen for the player (no server
+    /// list without an account), then the local profiles are offered; every area opens, online ones say they are offline.
+    /// </summary>
+    public void PlayOffline()
+    {
+        if (_busy || InShell) return;
+        _loginOpen = false; _pending = null; Message = null;
+        Games.Clear();
+        Games.Add(OfflineGame);
+        Gate = _gate.PlayOffline().ChooseGame(OfflineGame.Id);
+        FillProfiles();
+    }
+
+    /// <summary>The game an offline launcher plays (the server's list needs an account): Forza Horizon 2.</summary>
+    internal static GameInfo OfflineGame { get; } = new("fh2", "Forza Horizon 2", "", "", true, null);
 
     public void OpenSignIn()
     {
+        // OD-118: from the offline path the sign-in screen replaces it; cancelling returns to the welcome screen (Play offline again).
+        if (OfflineMode && !Playing && !_busy) { Gate = _gate.SignOut(); Profiles.Clear(); Games.Clear(); }
         _loginOpen = true;
         Message = null;
         Changed(string.Empty);
@@ -91,7 +110,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void OpenBugReport()
     {
-        if (!SignedIn) return;
+        if (!InShell) return;
         LeaveAccount();
         _onMods = _onSetup = false;
         _onBugReport = true;
@@ -150,7 +169,14 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>The profile picker's rows: the profile and what its mode means now (OD-52).</summary>
     public ObservableCollection<ProfileRow> ProfileRows { get; } = [];
 
-    public bool SignedIn => _gate.Step != ShellStep.SignIn;
+    /// <summary>An account is signed in: online features (sessions, integrity, lobbies, the account page).</summary>
+    public bool SignedIn => _gate.SignedIn;
+
+    /// <summary>OD-118: past the welcome screen, signed in or on the offline path: every launcher area opens.</summary>
+    public bool InShell => _gate.Step != ShellStep.SignIn;
+
+    /// <summary>OD-118: the launcher used without an account (the welcome screen's Play offline).</summary>
+    public bool OfflineMode => _gate.Offline;
 
     public bool Ready => _gate.Step == ShellStep.Ready;
 
