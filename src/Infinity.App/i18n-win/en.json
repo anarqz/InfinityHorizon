@@ -1,4 +1,7 @@
 {
+  "offline.play_offline_button": "PLAY OFFLINE",
+  "offline.play_online_button": "PLAY ONLINE",
+  "offline.playing_offline_status": "Playing offline",
   "offline.profiles_local": "Your {game} profiles on this PC. Sign in to put them on your account for online play.",
   "offline.profile_local": "On this PC only",
   "offline.profile_cached": "On your account",

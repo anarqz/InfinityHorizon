@@ -493,7 +493,7 @@
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <WrapPanel>
-                  <Button Content="{Binding S[profiles.play]}" HorizontalAlignment="Left" Click="OnPlay" IsEnabled="{Binding CanPlay}"
+                  <Button x:Name="PlayButton" Content="{Binding PlayButtonLabel}" HorizontalAlignment="Left" Click="OnPlay" IsEnabled="{Binding CanPlayAny}"
                           Style="{StaticResource PlayButton}" Margin="0,0,12,8" />
                 </WrapPanel>
                 <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" FontWeight="Bold"
