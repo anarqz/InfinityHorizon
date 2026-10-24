@@ -63,7 +63,9 @@ public sealed partial class ShellViewModel
     public bool HasModCards => ModCards.Count > 0;
     public bool NoMatchingMods => HasModCards && !FilteredModCards.Any();
     public ModCard? SelectedMod => _selectedMod;
-    public bool ShowModInfo => _showModInfo && ShowMods && _selectedMod is not null;
+    public bool ShowModInfo => _showModInfo && ShowMods && _selectedMod is not null && _externalMod is null;
+    /// <summary>OD-117: an installed mod of the player's own files can be re-checked or pointed at another copy.</summary>
+    public bool SelectedModExternal => ModsIdle && _selectedMod is { Installed: true } selected && selected.Manifest.IsExternal;
     public string SelectedModFiles => _selectedMod is not { } selected ? "" :
         S.Format("mods.file_summary", ("game", selected.Manifest.Files.Count(f => f.Root == "game").ToString(CultureInfo.CurrentCulture)),
             ("azimuth", selected.Manifest.Files.Count(f => f.Root == "azimuth").ToString(CultureInfo.CurrentCulture)))
@@ -560,8 +562,10 @@ public sealed partial class ShellViewModel
             else
             {
                 status = expired ? S["mods.catalog_expired"] : nativeBlocked ? S["mods.native_unavailable"]
+                    : mod.IsExternal ? S.Format("external.card_status", ("hint", mod.ExternalSources[0].Hint ?? mod.ExternalSources[0].LabelText(S.Locale)))
                     : mod.NeedsRuntime && !custom && RuntimeComesWithMod ? S["mods.runtime_with_mod"] : S["mods.not_installed"];
-                badge = S["mods.not_installed"]; action = S["mods.install"];
+                // OD-117: a mod of the player's own files opens its set-up pane instead of downloading anything.
+                badge = S[mod.IsExternal ? "external.badge" : "mods.not_installed"]; action = S[mod.IsExternal ? "external.setup" : "mods.install"];
                 // A custom mod needs no catalog (it has no download); an official one waits for a fresh catalog.
                 canAct = compatible && !nativeBlocked && fact.Blocker is null && (custom ? !mod.CustomBlocked : !expired && _catalog is not null);
             }
@@ -638,6 +642,7 @@ public sealed partial class ShellViewModel
         var current = ModCards.FirstOrDefault(c => c.Manifest.Digest == card.Manifest.Digest);
         if (current is not { CanAct: true }) return;
         if (current.UpdateAvailable || current.NeedsConfirmation) { ShowModInformation(current); return; } // reviewed (and a custom mod confirmed) first, in the information pane
+        if (!current.Installed && current.Manifest.IsExternal) { await OpenExternalSetupAsync(current); return; }
         var mod = current.Manifest;
         var factory = ModManagerFactory()!;
         var hosts = CatalogHosts;
@@ -670,7 +675,8 @@ public sealed partial class ShellViewModel
 
     public Task ConfirmModUpdateAsync()
     {
-        if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next }) return Task.CompletedTask;
+        if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next } card) return Task.CompletedTask;
+        if (next.IsExternal) return OpenExternalSetupAsync(card); // only the files whose pins changed are asked for again
         var factory = ModManagerFactory()!; var hosts = CatalogHosts; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
         {
