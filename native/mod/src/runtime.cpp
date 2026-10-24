@@ -1,11 +1,13 @@
 // Copyright (C) 2026 Alexandre Moraes. GPL-3.0-only; see repository LICENSE.
 #include "runtime_internal.hpp"
 #include <bcrypt.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 #include "../third_party/sqlite/sqlite3.h"
@@ -16,7 +18,10 @@ struct FileLock {
     std::vector<HANDLE> parents;
     ~FileLock() { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); for (auto h : parents) CloseHandle(h); }
 };
+
+bool none(const wchar_t* path) { return path && path[0] == L'-' && path[1] == 0; }
 struct Entry {
+    bool data = false;
     InfinityMod owner;
     InfinityModApiV1 api{};
     InfinityModReportV1 report{};
@@ -31,6 +36,9 @@ std::mutex state_mutex;
 std::atomic<bool> started{false};
 std::atomic<bool> hook_fault{false};
 bool failed = false, complete = false;
+
+uint32_t plan_version = 0;
+uint8_t plan_nonce[16]{}, plan_digest[32]{};
 std::vector<std::unique_ptr<Entry>> entries;
 void* game_image = nullptr;
 std::filesystem::path azimuth, mount;
@@ -70,10 +78,13 @@ bool valid_path(const wchar_t* value) {
 bool identity(const char* value, bool version) {
     auto n = strnlen_s(value, 65);
     if (!n || n > 64) return false;
+    if (!version && (!((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= '0' && value[0] <= '9')) || value[n - 1] == '.')) return false;
     for (size_t i = 0; i < n; ++i) {
         auto c = value[i];
         if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-'
+            && !(!version && (c == '.' || c == '_'))
             && !(version && (c == '.' || c == '+' || (c >= 'A' && c <= 'Z')))) return false;
+        if (!version && c == '.' && i + 1 < n && value[i + 1] == '.') return false;
     }
     return true;
 }
@@ -84,20 +95,39 @@ bool plain(HANDLE handle, bool directory) {
         && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
         && ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == directory;
 }
-std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32]) {
-    if (!valid_path(path.c_str())) return {};
+bool wine_host() {
+    static const bool wine = [] { auto ntdll = GetModuleHandleW(L"ntdll.dll"); return ntdll && GetProcAddress(ntdll, "wine_get_version"); }();
+    return wine;
+}
+bool wine_override = false;
+bool within(const std::wstring& root, const std::wstring& path) {
+    if (root.size() < 3 || path.size() < root.size() || _wcsnicmp(root.c_str(), path.c_str(), root.size())) return false;
+    return path.size() == root.size() || root.back() == L'\\' || path[root.size()] == L'\\';
+}
+std::unique_ptr<FileLock> verify_file(const std::wstring& path, const uint8_t expected[32], const std::wstring& boundary, bool linked_root, DWORD share = FILE_SHARE_READ) {
+    if (!valid_path(path.c_str()) || !valid_path(boundary.c_str())) return {};
+    std::wstring trimmed = boundary;
+    while (trimmed.size() > 3 && trimmed.back() == L'\\') trimmed.pop_back();
+    const std::filesystem::path root(trimmed);
+    if (!within(root.wstring(), path) || _wcsicmp(root.wstring().c_str(), path.c_str()) == 0) return {};
     auto lock = std::make_unique<FileLock>();
     auto parent = std::filesystem::path(path).parent_path();
     for (;;) {
+        const bool at_root = _wcsicmp(parent.wstring().c_str(), root.wstring().c_str()) == 0;
         auto h = CreateFileW(parent.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         if (h == INVALID_HANDLE_VALUE) return {};
         lock->parents.push_back(h);
-        if (!plain(h, true)) return {};
-        if (parent == parent.root_path()) break;
+        if (!plain(h, true)) {
+            BY_HANDLE_FILE_INFORMATION info{};
+            if (!(at_root && linked_root && (wine_host() || wine_override) && GetFileInformationByHandle(h, &info)
+                  && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))) return {};
+        }
+        if (at_root) break;
+        if (parent == parent.root_path()) return {};
         parent = parent.parent_path();
     }
-    lock->file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    lock->file = CreateFileW(path.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     LARGE_INTEGER length{};
     if (lock->file == INVALID_HANDLE_VALUE || !plain(lock->file, false) || !GetFileSizeEx(lock->file, &length)
@@ -139,7 +169,7 @@ void report(InfinityMod* mod, uint32_t state) {
     std::lock_guard lock(state_mutex);
     auto e = owned(mod);
     if (!e || failed) return;
-    if (state == INFINITY_MOD_FAILED) fail_locked();
+    if (state == INFINITY_MOD_FAILED) { infinity_mod::plog("failed: " + e->owner.name + " reported itself failed"); fail_locked(); }
     else if (state == INFINITY_MOD_READY && e->report.state == INFINITY_MOD_INITIALIZING)
     {
         if (GetTickCount64() >= e->deadline) fail_locked();
@@ -190,34 +220,36 @@ void load_selected(uint32_t timeout_ms = 65000) {
                 if (hook_fault && !failed) fail_locked();
                 if (failed) return;
                 for (size_t j = 0; j < i; ++j)
-                    if ((e.dependencies & (1u << j)) && entries[j]->report.state != INFINITY_MOD_READY) { fail_locked(); return; }
+                    if ((e.dependencies & (1u << j)) && entries[j]->report.state != INFINITY_MOD_READY) { infinity_mod::plog("failed: " + e.owner.name + " needs " + entries[j]->owner.name + ", which is not ready"); fail_locked(); return; }
+                if (e.data) { e.init_returned = true; e.report.state = INFINITY_MOD_READY; continue; }
                 fill_api(e);
                 e.deadline = GetTickCount64() + timeout_ms;
                 e.report.state = INFINITY_MOD_INITIALIZING;
             }
             if (GetModuleHandleW(e.binary.c_str()) || GetModuleHandleW(std::filesystem::path(e.binary).filename().c_str()))
-                throw std::runtime_error("preloaded mod");
+                throw std::runtime_error(e.owner.name + " was already loaded");
             e.library = LoadLibraryExW(e.binary.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-            if (!e.library) throw std::runtime_error("load failed");
+            if (!e.library) throw std::runtime_error("loading " + e.owner.name + " failed (error " + std::to_string(GetLastError()) + ")");
             {
                 std::lock_guard lock(state_mutex);
                 if (hook_fault && !failed) fail_locked();
                 if (failed) return;
             }
             auto init = reinterpret_cast<InfinityModInitializeV1Fn>(GetProcAddress(e.library, "InfinityModInitializeV1"));
-            if (!init || guarded_initialize(init, &e.api) != 0) throw std::runtime_error("initialization failed");
+            if (!init) throw std::runtime_error(e.owner.name + " has no InfinityModInitializeV1");
+            if (const int rc = guarded_initialize(init, &e.api); rc != 0) throw std::runtime_error(e.owner.name + "'s initializer returned " + std::to_string(rc));
             {
                 std::lock_guard lock(state_mutex);
                 e.init_returned = true;
-                if (GetTickCount64() >= e.deadline && !failed) fail_locked();
+                if (GetTickCount64() >= e.deadline && !failed) { infinity_mod::plog("failed: " + e.owner.name + " took longer than its deadline to initialize"); fail_locked(); }
             }
             for (;;) {
                 {
                     std::lock_guard lock(state_mutex);
                     if (failed) return;
-                    if (hook_fault) { fail_locked(); return; }
+                    if (hook_fault) { infinity_mod::plog("failed: a hook faulted while " + e.owner.name + " was starting"); fail_locked(); return; }
                     if (e.report.state == INFINITY_MOD_READY) break;
-                    if (GetTickCount64() >= e.deadline) { fail_locked(); return; }
+                    if (GetTickCount64() >= e.deadline) { infinity_mod::plog("failed: " + e.owner.name + " did not report ready in time"); fail_locked(); return; }
                 }
                 Sleep(20);
             }
@@ -225,24 +257,27 @@ void load_selected(uint32_t timeout_ms = 65000) {
         std::lock_guard lock(state_mutex);
         if (hook_fault && !failed) fail_locked();
         if (!failed) complete = true;
-    } catch (...) { std::lock_guard lock(state_mutex); fail_locked(); }
+    } catch (const std::exception& error) { infinity_mod::plog(std::string("failed: ") + error.what()); std::lock_guard lock(state_mutex); fail_locked(); }
+    catch (...) { infinity_mod::plog("failed: an unexpected error"); std::lock_guard lock(state_mutex); fail_locked(); }
 }
 bool prepare(const InfinityModsLaunchV1& launch) {
     std::vector<std::unique_ptr<Entry>> pending;
     for (uint32_t i=0;i<launch.count;++i) {
         const auto& item = launch.mods[i];
-        if (!identity(item.id, false) || !identity(item.version, true) || !valid_path(item.binary_path)
-            || !valid_path(item.settings_path) || !nonzero(item.binary_sha256) || !nonzero(item.settings_sha256)
+        const bool data = none(item.binary_path), no_settings = none(item.settings_path);
+        if (!identity(item.id, false) || !identity(item.version, true)
+            || (data ? nonzero(item.binary_sha256) : !valid_path(item.binary_path) || !nonzero(item.binary_sha256))
+            || (no_settings ? nonzero(item.settings_sha256) || !data : !valid_path(item.settings_path) || !nonzero(item.settings_sha256))
             || !nonzero(item.compatibility_sha256) || (item.dependency_mask & ~((1u << i) - 1))) return false;
         for (auto& previous : pending)
-            if (previous->owner.name == item.id || !_wcsicmp(previous->binary.c_str(), item.binary_path)
-                || !_wcsicmp(std::filesystem::path(previous->binary).filename().c_str(), std::filesystem::path(item.binary_path).filename().c_str())) return false;
+            if (previous->owner.name == item.id || (!data && !previous->data && (!_wcsicmp(previous->binary.c_str(), item.binary_path)
+                || !_wcsicmp(std::filesystem::path(previous->binary).filename().c_str(), std::filesystem::path(item.binary_path).filename().c_str())))) return false;
         auto e = std::make_unique<Entry>();
+        e->data = data;
         e->owner.name = item.id; e->binary = item.binary_path; e->settings = item.settings_path;
         e->dependencies = item.dependency_mask;
-        e->binary_lock = verify_file(e->binary, item.binary_sha256);
-        e->settings_lock = verify_file(e->settings, item.settings_sha256);
-        if (!e->binary_lock || !e->settings_lock) return false;
+        if (!data && !(e->binary_lock = verify_file(e->binary, item.binary_sha256, launch.azimuth_directory, true))) return false;
+        if (!no_settings && !(e->settings_lock = verify_file(e->settings, item.settings_sha256, launch.azimuth_directory, true))) return false;
         std::memcpy(e->report.id, item.id, sizeof item.id); std::memcpy(e->report.version, item.version, sizeof item.version);
         std::memcpy(e->report.binary_sha256, item.binary_sha256, 32);
         std::memcpy(e->report.settings_sha256, item.settings_sha256, 32);
@@ -269,9 +304,21 @@ std::string narrow(const std::wstring& value) {
     WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), out.data(), count, nullptr, nullptr);
     return out;
 }
+std::mutex log_mutex;
+std::wstring log_path;
+void log_to(const std::wstring& path) { std::lock_guard lock(log_mutex); log_path = path; }
 void log_line(const std::string& who, const std::string& text) {
-    auto line = "[infinity_mod:" + who.substr(0,64) + "] " + text.substr(0,1024) + "\n";
+    auto line = "[infinity_mod:" + who.substr(0,64) + "] " + text.substr(0,1024) + "\r\n";
     OutputDebugStringA(line.c_str());
+    std::lock_guard lock(log_mutex);
+    if (log_path.empty()) return;
+    HANDLE file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER size{}; DWORD wrote = 0;
+    if (plain(file, false) && GetFileSizeEx(file, &size) && size.QuadPart < 1024 * 1024)
+        WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &wrote, nullptr);
+    CloseHandle(file);
 }
 }
 
@@ -282,7 +329,7 @@ extern "C" __declspec(dllexport) int InfinityModsStartV1(const InfinityModsLaunc
     std::lock_guard lock(state_mutex);
     if (started.exchange(true)) return 2;
     try {
-        if (!prepare(*launch)) { failed = true; return 1; }
+        if (!prepare(*launch)) { infinity_mod::plog("refused: a selected mod's files do not match the plan"); failed = true; return 1; }
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(&InfinityModsStartV1), &pinned)) { failed = true; return 3; }
@@ -290,18 +337,33 @@ extern "C" __declspec(dllexport) int InfinityModsStartV1(const InfinityModsLaunc
         return 0;
     } catch (...) { failed = true; return 3; }
 }
-extern "C" __declspec(dllexport) int InfinityModsQueryV1(InfinityModsSnapshotV1* result) {
-    if (!result || result->size != sizeof *result || result->abi_version != 1) return 1;
-    std::lock_guard lock(state_mutex);
+namespace {
+template <typename Snapshot> void snapshot_locked(Snapshot& result) {
     if (hook_fault && !failed) fail_locked();
     if (!failed)
         for (const auto& e : entries)
             if ((e->report.state == INFINITY_MOD_INITIALIZING || (e->report.state == INFINITY_MOD_READY && !e->init_returned))
                 && GetTickCount64() >= e->deadline) { fail_locked(); break; }
+    result.count = static_cast<uint32_t>(entries.size()); result.failed = failed;
+    result.ready = started && complete && !failed;
+    for (size_t i=0;i<entries.size();++i) result.mods[i] = entries[i]->report;
+}
+}
+extern "C" __declspec(dllexport) int InfinityModsQueryV1(InfinityModsSnapshotV1* result) {
+    if (!result || result->size != sizeof *result || result->abi_version != 1) return 1;
+    std::lock_guard lock(state_mutex);
     *result = {}; result->size = sizeof *result; result->abi_version = 1;
-    result->count = static_cast<uint32_t>(entries.size()); result->failed = failed;
-    result->ready = started && complete && !failed;
-    for (size_t i=0;i<entries.size();++i) result->mods[i] = entries[i]->report;
+    snapshot_locked(*result);
+    return 0;
+}
+
+extern "C" __declspec(dllexport) int InfinityModsQueryV2(InfinityModsSnapshotV2* result) {
+    if (!result || result->size != sizeof *result || result->abi_version != 2) return 1;
+    std::lock_guard lock(state_mutex);
+    *result = {}; result->size = sizeof *result; result->abi_version = 2;
+    result->plan_version = plan_version;
+    std::memcpy(result->nonce, plan_nonce, sizeof plan_nonce); std::memcpy(result->plan_sha256, plan_digest, sizeof plan_digest);
+    snapshot_locked(*result);
     return 0;
 }
 
@@ -326,13 +388,24 @@ struct ParsedPlan {
     std::array<std::wstring, INFINITY_MOD_MAX_COUNT> binary, settings;
     std::array<InfinityModSelectionV1, INFINITY_MOD_MAX_COUNT> mods{};
     std::array<std::vector<std::string>, INFINITY_MOD_MAX_COUNT> tables;
+    std::array<std::array<uint8_t, 32>, INFINITY_MOD_MAX_COUNT> sql{};
     uint8_t baseline_hash[32]{}, prepared_hash[32]{}, sql_hash[32]{};
     std::vector<infinity_mod::Readiness> readiness;
     uint32_t count = 0;
+    uint32_t version = 0;
+    uint8_t nonce[16]{};
 };
 void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
     PlanReader reader{bytes}; char magic[8]; reader.read(magic, 8);
-    if (std::memcmp(magic, "FIMOD002", 8)) throw std::runtime_error("unknown plan format");
+    if (!std::memcmp(magic, "FIMOD003", 8) || !std::memcmp(magic, "FIMOD004", 8)) {
+        plan.version = magic[7] == '4' ? 4 : 3; reader.read(plan.nonce, 16);
+        uint8_t any = 0; for (auto b : plan.nonce) any |= b;
+        if (!any) throw std::runtime_error("missing launch nonce");
+    } else if (!std::memcmp(magic, "FIMOD002", 8)) {
+        plan.version = 2;
+    } else {
+        throw std::runtime_error("unknown plan format");
+    }
     plan.count = reader.number();
     if (!plan.count || plan.count > INFINITY_MOD_MAX_COUNT) throw std::runtime_error("invalid selection count");
     plan.azimuth = reader.text(); plan.game = reader.text();
@@ -356,12 +429,22 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
         plan.mods[i].binary_path = plan.binary[i].c_str(); plan.mods[i].settings_path = plan.settings[i].c_str();
         reader.read(plan.mods[i].binary_sha256, 32); reader.read(plan.mods[i].settings_sha256, 32);
         reader.read(plan.mods[i].compatibility_sha256, 32); plan.mods[i].dependency_mask = reader.number();
-        auto count = reader.number(); if (count > 32) throw std::runtime_error("too many tables");
+        auto count = reader.number(); if (count > (none(plan.binary[i].c_str()) ? 64u : 32u)) throw std::runtime_error("too many tables");
         for (uint32_t j = 0; j < count; ++j) {
             auto table = infinity_mod::narrow(reader.text());
             if (table.empty() || table.size() > 64 || table.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos
-                || table.starts_with("sqlite_") || table.starts_with("_infinity")) throw std::runtime_error("invalid table scope");
+                || !_strnicmp(table.c_str(), "sqlite_", 7) || !_strnicmp(table.c_str(), "_infinity", 9)) throw std::runtime_error("invalid table scope");
             plan.tables[i].push_back(table);
+        }
+        if (plan.version < 4) continue;
+        reader.read(plan.sql[i].data(), 32);
+        const bool data = none(plan.binary[i].c_str()), sql = nonzero(plan.sql[i].data());
+        if (sql && (!data || plan.tables[i].empty() || database_count != 1)) throw std::runtime_error("invalid data SQL");
+        if (data && !plan.tables[i].empty() && !sql) throw std::runtime_error("data tables without SQL");
+        for (uint32_t j = 0; j < i; ++j) {
+            if (plan.mods[i].dependency_mask & (1u << j)) continue;
+            for (auto& a : plan.tables[i]) for (auto& b : plan.tables[j])
+                if (!_stricmp(a.c_str(), b.c_str())) throw std::runtime_error("table overlap without dependency");
         }
     }
     if (reader.at != bytes.size()) throw std::runtime_error("trailing plan data");
@@ -372,24 +455,46 @@ void parse_plan(const std::vector<uint8_t>& bytes, ParsedPlan& plan) {
 extern "C" __declspec(dllexport) int InfinityModsStartPlanV1(void* image, const wchar_t* path, const uint8_t hash[32]) {
     try {
         if (!hash || !valid_path(path) || !valid_host() || !valid_image(image)) return 1;
-        wchar_t mode[32]{};
-        if (GetEnvironmentVariableW(L"FI_LAUNCH", mode, 32) != 10 || wcscmp(mode, L"v1;offline")) return 1;
-        auto locked = verify_file(path, hash); if (!locked) return 1;
+
+        wchar_t mode[48]{};
+        const DWORD mode_length = GetEnvironmentVariableW(L"FI_LAUNCH", mode, 48);
+        bool online = false;
+        if (mode_length == 10 && !wcscmp(mode, L"v1;offline")) {
+            online = false;
+        } else if (mode_length == 40 && !wcsncmp(mode, L"v1;pipe=", 8)
+            && std::all_of(mode + 8, mode + 40, [](wchar_t c) { return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'); })) {
+            online = true;
+        } else {
+            return 1;
+        }
+        infinity_mod::log_to((std::filesystem::path(path).parent_path() / L"runtime.log").wstring());
+        auto locked = verify_file(path, hash, std::filesystem::path(path).parent_path().wstring(), false);
+        if (!locked) { infinity_mod::plog("refused: the plan does not verify"); return 1; }
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(locked->file, &size) || size.QuadPart < 12 || size.QuadPart > 1024 * 1024) return 1;
         LARGE_INTEGER zero{}; if (!SetFilePointerEx(locked->file, zero, nullptr, FILE_BEGIN)) return 1;
         std::vector<uint8_t> bytes(size_t(size.QuadPart)); DWORD read = 0;
         if (!ReadFile(locked->file, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size()) return 1;
         ParsedPlan plan; parse_plan(bytes, plan);
+
+        if (online && plan.version < 3) return 1;
+        {
+            std::lock_guard lock(state_mutex);
+            if (started) return 2;
+            plan_version = plan.version;
+            std::memcpy(plan_nonce, plan.nonce, sizeof plan_nonce); std::memcpy(plan_digest, hash, sizeof plan_digest);
+        }
         wchar_t exe[32768]; auto length = GetModuleFileNameW(nullptr, exe, 32768);
         if (!length || length >= 32768 || _wcsicmp(std::filesystem::path(exe).parent_path().c_str(), plan.azimuth.c_str())) return 1;
         auto prefix = plan.azimuth + L"\\";
         for (uint32_t i = 0; i < plan.count; ++i)
-            if (_wcsnicmp(plan.binary[i].c_str(), prefix.c_str(), prefix.size()) || _wcsnicmp(plan.settings[i].c_str(), prefix.c_str(), prefix.size())) return 1;
+            if ((!none(plan.binary[i].c_str()) && _wcsnicmp(plan.binary[i].c_str(), prefix.c_str(), prefix.size()))
+                || (!none(plan.settings[i].c_str()) && _wcsnicmp(plan.settings[i].c_str(), prefix.c_str(), prefix.size()))) return 1;
         if (!plan.database.empty()) {
             if (!nonzero(plan.prepared_hash) || !nonzero(plan.sql_hash)) return 1;
             for (auto suffix : { L"-wal", L"-shm", L"-journal" }) if (std::filesystem::exists(plan.database + suffix)) return 1;
-            session_database_lock = verify_file(plan.database, plan.prepared_hash);
+
+            session_database_lock = verify_file(plan.database, plan.prepared_hash, plan.game, true, FILE_SHARE_READ | FILE_SHARE_WRITE);
             if (!session_database_lock) return 1;
         }
         infinity_mod::configure_readiness(std::move(plan.readiness));

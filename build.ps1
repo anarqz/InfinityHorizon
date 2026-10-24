@@ -42,11 +42,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Hook build failed' }
 & "$root/native/overlay/build.ps1" -Release
 Copy-Item -LiteralPath "$root/native/overlay/build/infinity-overlay.dll" -Destination "$out/overlay/infinity-overlay.dll" -Force
 
+# The native mod runtime and its helper ship in both profiles (OD-112); a production build leaves them
+# unsigned for the maintainer's release signature ("fi-mod-runtime-v1 " line), like the other binaries.
+& "$root/native/mod/build.ps1"
+if ($LASTEXITCODE -ne 0) { throw "Mod runtime build failed" }
+New-Item -ItemType Directory -Force "$out/mod" | Out-Null
+foreach ($name in @('infinity_mod.dll', 'infinity-mod-prepare.exe')) { Copy-Item -LiteralPath "$root/native/mod/build/$name" -Destination "$out/mod/$name" -Force }
+
 if (!$Production) {
-    & "$root/native/mod/build.ps1"
-    New-Item -ItemType Directory -Force "$out/mod" | Out-Null
-    foreach ($name in @('infinity_mod.dll', 'infinity-mod-prepare.exe')) { Copy-Item -LiteralPath "$root/native/mod/build/$name" -Destination "$out/mod/$name" -Force }
-    if ($LASTEXITCODE -ne 0) { throw "Mod runtime build failed" }
     & dotnet build "$root/tools/DevSign/DevSign.csproj" -c Release --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Development signer build failed' }
     $signer = "$root/tools/DevSign/bin/Release/net10.0/devsign.dll"
@@ -59,7 +62,7 @@ if (!$Production) {
     & dotnet $signer sign "$out/overlay/infinity-overlay.dll"
     if ($LASTEXITCODE -ne 0) { throw 'Overlay development signing failed' }
     foreach ($binary in @("$out/mod/infinity_mod.dll", "$out/mod/infinity-mod-prepare.exe")) {
-        & dotnet $signer sign $binary
+        & dotnet $signer sign-mod $binary
         if ($LASTEXITCODE -ne 0) { throw 'Mod host development signing failed' }
     }
     $key = (& dotnet $signer key).Trim()
@@ -72,6 +75,10 @@ $licenses = @{
     'licenses/fh2-mods-LICENSE.txt' = 'licenses/fh2-mods-LICENSE.txt';
     'native/hook/NOTICE.md' = 'licenses/Hook-NOTICE.md';
     'native/mod/third_party/sqlite/VERSION.txt' = 'licenses/SQLite-VERSION.txt';
+    'native/mod/NOTICE.md' = 'licenses/Mod-NOTICE.md';
+    'native/mod/LICENSE-SDK.txt' = 'licenses/Mod-SDK-LICENSE.txt';
+    'native/mod/licenses/FH2-hooks-MIT.txt' = 'licenses/FH2-hooks-MIT.txt';
+    'native/mod/third_party/minhook/LICENSE.txt' = 'licenses/Mod-MinHook-LICENSE.txt';
     'native/overlay/third_party/imgui/LICENSE.txt' = 'licenses/ImGui-LICENSE.txt';
     'native/overlay/third_party/minhook/LICENSE.txt' = 'licenses/MinHook-LICENSE.txt';
     'native/overlay/third_party/fonts/Selawik-LICENSE.txt' = 'licenses/Selawik-LICENSE.txt';

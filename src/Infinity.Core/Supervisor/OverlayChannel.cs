@@ -127,7 +127,31 @@ public sealed class OverlayChannel : IDisposable
         }
     }
 
-    /// <summary>Any launcher → overlay frame (the worlds' answers); dropped while the overlay is not there.</summary>
+    /// <summary>Whether the connected overlay understands <paramref name="frame"/> (protocol 2 frames only to a protocol 2 overlay).</summary>
+    public bool Accepts(UiFrame frame)
+    {
+        lock (_lock)
+        {
+            return !_closed && _session.Accepts(frame);
+        }
+    }
+
+    /// <summary>The connected overlay's UI protocol (0 before its hello).</summary>
+    public ushort Protocol
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _session.Protocol;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Any launcher → overlay frame (the worlds' answers); dropped while the overlay is not there, and
+    /// dropped when the overlay's protocol does not have it (a protocol 1 overlay never sees 0x14-0x18).
+    /// </summary>
     public Task SendFrameAsync(UiFrame frame, CancellationToken cancellation) =>
         Ready ? SendAsync(frame, cancellation) : Task.CompletedTask;
 
@@ -136,6 +160,14 @@ public sealed class OverlayChannel : IDisposable
 
     private async Task SendAsync(UiFrame frame, CancellationToken cancellation)
     {
+        // Every send path: a frame this overlay's protocol does not have is dropped (and noted), never written.
+        if (!Accepts(frame))
+        {
+            bool open;
+            lock (_lock) open = !_closed && _session.Ready;
+            if (open) _incoming.Writer.TryWrite(new UiIncoming.Event(UiEventKind.Passthrough, $"ui pipe: dropped type 0x{frame.Type:x2} for protocol {Protocol}"));
+            return;
+        }
         await _write.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {

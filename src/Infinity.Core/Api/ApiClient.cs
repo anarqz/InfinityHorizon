@@ -152,13 +152,25 @@ public sealed partial class ApiClient
         return clock.GetUtcNow() + ClockOffset;
     }
 
+    /// <summary>
+    /// A development build talking to a literal loopback or private-LAN plain-http stack: its Date is
+    /// the only server clock a LAN test has, so it is sampled too (the relay proof and network hints
+    /// compare grant expiries on it). A production build samples HTTPS origins only.
+    /// </summary>
+#if INFINITY_PRODUCTION_BUILD
+    private static bool DevelopmentStack => false;
+#else
+    private bool DevelopmentStack => Core.Scheme==Uri.UriSchemeHttp && Gate.Scheme==Uri.UriSchemeHttp
+        && DevNet.PlainHttpUrl(Core.GetLeftPart(UriPartial.Authority)) && DevNet.PlainHttpUrl(Gate.GetLeftPart(UriPartial.Authority));
+#endif
+
     /// <summary>Records the offset of one response's <c>Date</c> header against <paramref name="localNow"/>.</summary>
     public void ObserveDate(DateTimeOffset? serverDate, DateTimeOffset localNow)
     {
         if (serverDate is { } date)
         {
             ClockOffset = date - localNow;
-            if(Core.Scheme==Uri.UriSchemeHttps && Gate.Scheme==Uri.UriSchemeHttps)
+            if(Core.Scheme==Uri.UriSchemeHttps && Gate.Scheme==Uri.UriSchemeHttps || DevelopmentStack)
             {
                 lock(_serverTimeLock)
                 {

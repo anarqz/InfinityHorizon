@@ -46,6 +46,24 @@ public sealed record SupervisorConfig(
     /// <summary>The overlay's Worlds tab (OD-54): the bridge for a session, given its current game ticket; null: none.</summary>
     public Func<Func<string>, Matchmaking.WorldsBridge>? Worlds { get; init; }
 
+    /// <summary>
+    /// OD-112: the session's multiplayer mod set (the same instance the <see cref="Worlds"/> bridge uses).
+    /// A non-empty <see cref="Matchmaking.IModSetSource.Planned"/> admits the session as <c>modded</c> (GATE_API.md §2).
+    /// </summary>
+    public Matchmaking.IModSetSource? Mods { get; init; }
+
+    /// <summary>
+    /// OD-113: a native mod launch's plan handoff (<see cref="Infinity.Core.Mods.NativeModPlan.Environment"/>: FI_MOD_PLAN, FI_MOD_PLAN_HASH,
+    /// FI_MOD_RUNTIME, FI_MOD_RUNTIME_HASH), added to the game's environment next to FI_LAUNCH. Only those names; empty: no native mods.
+    /// </summary>
+    public IReadOnlyList<(string Name, string Value)> ModEnvironment { get; init; } = [];
+
+    /// <summary>
+    /// OD-113: how long after the hook's handshake a <see cref="Matchmaking.RuntimeModSetSource"/> may stay not ready. Past it the set
+    /// fails for this launch (no modded matchmaking): a hook without the mod host, or a runtime that never reports, is never waited on forever.
+    /// </summary>
+    public TimeSpan ModReportDeadline { get; init; } = TimeSpan.FromSeconds(90);
+
     /// <summary>The cloud save around the game (OD-52, OD-60); null: no cloud save step.</summary>
     public Saves.SessionSaves? Saves { get; init; }
 
@@ -118,6 +136,22 @@ public abstract record SupervisorEvent
     /// <summary>The overlay said hello on the UI pipe (its version).</summary>
     public sealed record OverlayConnected(string Version) : SupervisorEvent;
 
+    /// <summary>
+    /// N-H2 (OD-112): the hook forwarded the native mod runtime's report. Unverified here: check the nonce and
+    /// plan digest against this launch's plan and each mod's hashes against what was prepared before using it.
+    /// </summary>
+    public sealed record ModsReported(Session.Frame.ModsReport Report) : SupervisorEvent
+    {
+        /// <summary>
+        /// OD-113: what the session's mod set made of it (the supervisor routes it, <see cref="Matchmaking.ModSets.Report"/>): true accepted,
+        /// false another launch's nonce or plan (ignored), null no runtime source (no native plan).
+        /// </summary>
+        public bool? Accepted { get; init; }
+    }
+
+    /// <summary>OD-113: the session's runtime mod set failed (a failed report, or no ready report in time): no modded matchmaking for this launch.</summary>
+    public sealed record ModsFailed(string Reason) : SupervisorEvent;
+
     /// <summary>Something the overlay reported (Overlay.UiEventKind: first frame, passthrough, ...).</summary>
     public sealed record OverlayEvent(byte Kind, string Detail) : SupervisorEvent;
 }
@@ -186,6 +220,8 @@ public sealed class PlaySupervisor
     {
         _uiPipes = uiPipes;
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        if (config.ModEnvironment.Any(e => !Infinity.Core.Mods.NativeModPlan.EnvironmentNames.Contains(e.Name, StringComparer.Ordinal)))
+            throw new ArgumentException("only the native mod plan's variables", nameof(config));
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _spawner = spawner ?? throw new ArgumentNullException(nameof(spawner));
         _pipes = pipes ?? throw new ArgumentNullException(nameof(pipes));
@@ -261,7 +297,8 @@ public sealed class PlaySupervisor
         using var uiPipe = _config.Overlay is not null && _uiPipes is not null ? _uiPipes(handoff) : null;
         _admissionPending = true;
         var admission = await new GateAdmission(_gate, _emit, _clock).WaitAsync(
-            id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false),
+            id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false,
+                Modded: Matchmaking.ModSets.Modded(_config.Mods)),
             preparing.Token, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
         if (admission is null)
         {
@@ -317,13 +354,15 @@ public sealed class PlaySupervisor
         var token = new GameToken(new Secret(active.Ticket.Token), Unix(active.Ticket.ExpiresAt));
         var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild);
         List<(string, string)> env = [(Launch.EnvLaunch, handoff.EnvValue), (Launch.EnvLauncherExe, _config.LauncherExe)];
+        // OD-113: the native plan rides the online launch too; the hook accepts it there only as FIMOD003 (mod_host.c)
+        env.AddRange(_config.ModEnvironment);
         if (WineHost.Detected)
         {
             var overrides = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
             foreach (var module in _config.NativeDllOverrides)
             {
                 overrides = WineHost.WithNativeDll(overrides, module) ?? overrides;
-                _ = WineHost.EnsureNativeDllOverride(module, true);
+                // The AppDefaults registry entry is set and removed by ManagedModFiles.ReconcileWineOverrides (L12).
             }
             if (overrides is not null) env.Add(("WINEDLLOVERRIDES", overrides));
         }
@@ -562,6 +601,12 @@ public sealed class PlaySupervisor
                             await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
                         }
                         var frame = received.Frame;
+                        if (frame is Frame.ModsReport mods)
+                        {
+                            // N-H2/OD-113: the session's set verifies it (nonce, plan digest, hashes) and turns ready or failed
+                            if (endpoint.Greeted) RouteModsReport(mods);
+                            continue;
+                        }
                         if(frame is Frame.UdpDiagnostic diagnostic)
                         {
                             if(endpoint.Greeted && !suspended && tokensOpen)worlds?.RecordUdpDiagnostic(diagnostic);
@@ -748,6 +793,23 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Worlds w when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.ListAsync(w.Query, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
+                            case Overlay.UiIncoming.WorldsV2 w when worlds is not null && !suspended:
+                                // OD-112: the modded filter, each row's players and mods, and whether they match this session's set.
+                                _ = ReplyAsync(overlay, async () => await worlds.ListV2Async(w.Query, stop.Token).ConfigureAwait(false), stop.Token,
+                                    () => new Overlay.UiFrame.WorldsListV2(w.Query.Filter, w.Query.Modded, 2, _config.Text?["worlds.list_failed"] ?? "The lobby list is unavailable.", []));
+                                break;
+                            case Overlay.UiIncoming.PlayerDetails details when worlds is not null:
+                                // OD-112: the player card's pane, from what this launcher already holds (no request); a pane
+                                // that cannot be encoded closes instead of leaving the overlay waiting.
+                                _ = ReplyAsync(overlay, () => Task.FromResult<Overlay.UiFrame>(worlds.PlayerDetails(details.Request)), stop.Token,
+                                    () => new Overlay.UiFrame.DetailPane(string.Empty, string.Empty, string.Empty, string.Empty, [], []), always: true);
+                                break;
+                            case Overlay.UiIncoming.PaneClick click when worlds is not null:
+                                worlds.PaneClick(click.Request);
+                                break;
+                            case Overlay.UiIncoming.PaneClick click:
+                                _emit(new SupervisorEvent.Note($"overlay: pane action {click.Request.ActionId} ignored"));
+                                break;
                             case Overlay.UiIncoming.Join j when worlds is not null && !suspended:
                                 _ = ReplyAsync(overlay, async () => await worlds.JoinAsync(j.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
@@ -817,17 +879,35 @@ public sealed class PlaySupervisor
         catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException) { }
     }
 
-    private async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation)
+    /// <summary>
+    /// One answer to the overlay. A frame that cannot be encoded (<see cref="ProtocolException"/>: past a cap, a bad
+    /// pane) is logged and replaced by <paramref name="fallback"/> (a failed list, a closed pane) so the overlay never
+    /// waits forever. <paramref name="always"/>: answered while online is paused too (no network behind it).
+    /// </summary>
+    private async Task ReplyAsync(OverlayChannel overlay, Func<Task<Overlay.UiFrame>> work, CancellationToken cancellation,
+        Func<Overlay.UiFrame>? fallback = null, bool always = false)
     {
         try
         {
             var frame = await work().ConfigureAwait(false);
-            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
-            await overlay.SendFrameAsync(frame, cancellation).ConfigureAwait(false);
+            if ((_online.IsPaused && !always) || cancellation.IsCancellationRequested) return;
+            try
+            {
+                await overlay.SendFrameAsync(frame, cancellation).ConfigureAwait(false);
+            }
+            catch (ProtocolException error)
+            {
+                _emit(new SupervisorEvent.Note($"overlay: answer type 0x{frame.Type:x2} not sent: {error.Message}"));
+                if (fallback is not null) await overlay.SendFrameAsync(fallback(), cancellation).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
             // the session ended first
+        }
+        catch (ProtocolException error)
+        {
+            _emit(new SupervisorEvent.Note("overlay: answer not sent: " + error.Message));
         }
     }
 
@@ -859,6 +939,23 @@ public sealed class PlaySupervisor
         }
     }
 
+    private void RouteModsReport(Frame.ModsReport report)
+    {
+        var before = _config.Mods?.State.Phase;
+        var accepted = Matchmaking.ModSets.Report(_config.Mods, report);
+        _emit(new SupervisorEvent.ModsReported(report) { Accepted = accepted });
+        if (accepted == true && before != Matchmaking.ModSetPhase.Failed && _config.Mods!.State.Phase == Matchmaking.ModSetPhase.Failed)
+            _emit(new SupervisorEvent.ModsFailed(_config.Mods.State.Reason ?? "runtime"));
+    }
+
+    /// <summary>OD-113: a runtime set still not ready at the deadline fails for this launch (cancelled when this game process ends).</summary>
+    private async Task ExpireModsAsync(Matchmaking.RuntimeModSetSource mods, CancellationToken cancellation)
+    {
+        try { await Task.Delay(_config.ModReportDeadline, _clock, cancellation).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        if (mods.Expire("timeout")) _emit(new SupervisorEvent.ModsFailed("timeout"));
+    }
+
     private async Task<SessionRecord> OnFrame(Frame frame, LauncherEndpoint endpoint, IControlPipe pipe, GameToken token, SessionRecord state, CancellationToken cancellation)
     {
         var (replies, evt) = endpoint.Handle(frame, token);
@@ -879,6 +976,7 @@ public sealed class PlaySupervisor
                 else
                 {
                     _emit(new SupervisorEvent.Running());
+                    if (_config.Mods is Matchmaking.RuntimeModSetSource runtimeMods) _ = ExpireModsAsync(runtimeMods, cancellation);
                     if (_config.Overlay is { } package)
                     {
                         // right after the handshake: the hook checks the file against this hash and loads it

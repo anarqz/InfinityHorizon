@@ -11,11 +11,23 @@ public sealed class ModManifest
     public string Id => Document.GetProperty("id").GetString()!;
     public string Version => Document.GetProperty("version").GetString()!;
     public string Digest { get; }
+    /// <summary>The reserved prefix of custom (player-supplied, unreviewed) mod ids (OD-114); official ids never contain a dot.</summary>
+    public const string CustomPrefix = "custom.";
+    /// <summary>A custom mod (OD-114): loaded from the player's custom folder, never from a catalog; its payload is a local <c>files/</c> tree.</summary>
+    public bool IsCustom => IsCustomId(Id);
+    /// <summary>A custom mod that maps executable code (a native binary): only a development native runtime may load it.</summary>
+    public bool HasExecutableCode => Files.Any(f => f.Role == "binary" || ExecutableExtension(f.Destination));
+    /// <summary>A custom mod whose manifest still lists review blockers: listed, never installed or enabled.</summary>
+    public bool CustomBlocked => IsCustom && Document.GetProperty("review").GetProperty("blockers").GetArrayLength() > 0;
     public string PackageUrl => Document.GetProperty("package").GetProperty("url").GetString()!;
     public string PackageHash => Document.GetProperty("package").GetProperty("sha256").GetString()!;
     public long PackageBytes => Document.GetProperty("package").GetProperty("bytes").GetInt64();
     public IReadOnlyList<ManifestFile> Files { get; }
     public IReadOnlyList<ManifestDependency> Dependencies { get; }
+    /// <summary>Wine/Proton native-first overrides applied while the mod is enabled (launch.wineDllOverrides).</summary>
+    public IReadOnlyList<ModWineOverride> WineDllOverrides { get; }
+    /// <summary>Legacy parked copies (adoption.parkedFiles): mapped binary destination to its parked Azimuth-relative path.</summary>
+    public IReadOnlyDictionary<string, string> ParkedFiles { get; }
     public ModMultiplayer? Multiplayer { get; }
     public bool NeedsDatabaseCoordination => Document.GetProperty("databaseMigrations").GetArrayLength() > 0
         || Document.GetProperty("runtimeOutputs").GetArrayLength() > 0;
@@ -70,15 +82,51 @@ public sealed class ModManifest
                     }
                     ModMultiplayer.ValidateValue(option, option.GetProperty("default"));
                     if (option.TryGetProperty("lockedValue", out var locked)) ModMultiplayer.ValidateValue(option, locked);
+                    foreach (var field in new[] { "label", "description", "lockReason" })
+                        if (option.TryGetProperty(field, out var text))
+                        {
+                            if (text.ValueKind != JsonValueKind.Object) throw new ModException("invalid localized text");
+                            foreach (var value in text.EnumerateObject()) ValidateText(value.Value);
+                        }
+                    if (option.TryGetProperty("lockReason", out _) && !option.TryGetProperty("lockedValue", out _)) throw new ModException("lock reason without a locked value");
                 }
             }
         }
+        if (Document.TryGetProperty("databaseSql", out var sql))
+        {
+            // FIMOD004: a data mod's startup SQL, a file of its own folder pinned like any file. Custom data mods only for now;
+            // a native mod registers its SQL itself (InfinityModRegisterDatabaseV1), never both.
+            if (IsNative || !IsCustom || sql.ValueKind != JsonValueKind.Object || sql.EnumerateObject().Count() != 3
+                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported data mod SQL", ModErrors.Unsupported);
+            var path = sql.GetProperty("path").GetString()!; var hash = sql.GetProperty("sha256").GetString()!; var size = sql.GetProperty("bytes").GetInt64();
+            ValidatePath(path);
+            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || !path.EndsWith(".sql", StringComparison.Ordinal)
+                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c)) || size is < 1 or > DataModSql.MaxBytes)
+                throw new ModException("invalid data mod SQL", ModErrors.Unsupported);
+            DatabaseSql = new(path, hash, size);
+        }
+        if (Document.TryGetProperty("databaseBase", out var baseDb))
+        {
+            // OD-114 follow-up: a car pack's whole database, used as shipped as the session database's base (never the stock file).
+            if (IsNative || !IsCustom || baseDb.ValueKind != JsonValueKind.Object || baseDb.EnumerateObject().Count() != 4
+                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported database base", ModErrors.Unsupported);
+            var path = baseDb.GetProperty("source").GetString()!; var hash = baseDb.GetProperty("sha256").GetString()!;
+            var size = baseDb.GetProperty("bytes").GetInt64(); var violations = baseDb.GetProperty("foreignKeyViolations").GetInt64();
+            ValidatePath(path);
+            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || path.Count(c => c == '/') != 1
+                || !(path.EndsWith(".slt", StringComparison.Ordinal) || path.EndsWith(".db", StringComparison.Ordinal) || path.EndsWith(".sqlite", StringComparison.Ordinal))
+                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c))
+                || size is < 100 or > MaxDatabaseBaseBytes || violations is < 0 or > int.MaxValue) throw new ModException("invalid database base", ModErrors.Unsupported);
+            DatabaseBase = new(path, hash, size, (int)violations);
+        }
         if (Document.TryGetProperty("database", out var db))
         {
-            if (!IsNative || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
-                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is < 1 or > 32) throw new ModException("unsupported database capability");
+            if (!(IsNative || DatabaseSql is not null || DatabaseBase is not null) || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
+                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is var tableCount && (tableCount < (DatabaseBase is not null && DatabaseSql is null ? 0 : 1) || tableCount > (DatabaseSql is null ? DataModSql.MaxNativeTables : DataModSql.MaxTables))) throw new ModException("unsupported database capability");
             var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
             ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
+            // OD-115: the runtime's session copy is game data the runtime owns, so it too is an override; the baseline is only read.
+            if (!UnderMediaOverride(target)) throw new ModException("session database must be a media override", ModErrors.Unsupported);
             foreach (var table in db.GetProperty("tables").EnumerateArray())
             {
                 var name = table.GetString()!;
@@ -91,9 +139,17 @@ public sealed class ModManifest
             ValidatePath(readiness.GetProperty("module").GetString()!); ValidatePath(readiness.GetProperty("log").GetString()!);
             if (readiness.GetProperty("contains").GetString() is not { Length: > 0 and <= 512 }) throw new ModException("invalid readiness marker");
         }
-        if (Id.Length is < 1 or > 64 || Id.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')))
-            throw new ModException("invalid mod id");
+        if (!ValidId(Id)) throw new ModException("invalid mod id");
+        if (IsCustom && (!Document.TryGetProperty("review", out var review) || !review.TryGetProperty("blockers", out var blockers)
+            || blockers.ValueKind != JsonValueKind.Array || blockers.EnumerateArray().Any(b => b.ValueKind != JsonValueKind.String)))
+            throw new ModException("invalid custom review", ModErrors.Unsupported);
         Digest = Hash(_bytes);
+        foreach (var output in Document.GetProperty("runtimeOutputs").EnumerateArray())
+            if (output.ValueKind == JsonValueKind.Object && output.TryGetProperty("root", out var outputRoot) && outputRoot.GetString() == "game"
+                && (!output.TryGetProperty("path", out var outputPath) || outputPath.GetString() is not { } written || !UnderMediaOverride(written)))
+                throw new ModException("runtime game output must be a media override", ModErrors.Unsupported);
+        var reviewed = Document.TryGetProperty("review", out var reviewState) && reviewState.ValueKind == JsonValueKind.Object
+            && reviewState.TryGetProperty("status", out var status) && status.GetString() == "reviewed";
         var files = new List<ManifestFile>();
         foreach (var root in new[] { "game", "azimuth" })
             foreach (var file in Document.GetProperty("files").GetProperty(root).EnumerateArray())
@@ -101,8 +157,20 @@ public sealed class ModManifest
                 var item = new ManifestFile(root, file.GetProperty("source").GetString()!, file.GetProperty("destination").GetString()!,
                     file.GetProperty("sha256").GetString()!, file.GetProperty("bytes").GetInt64(),
                     file.GetProperty("role").GetString()!, file.GetProperty("mode").GetString()!,
-                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary");
+                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary",
+                    file.TryGetProperty("loader", out var loader) ? loader.ValueKind switch
+                    {
+                        JsonValueKind.True => true, JsonValueKind.False => false, _ => throw new ModException("invalid loader flag"),
+                    } : false);
                 ValidatePath(item.Source); ValidatePath(item.Destination);
+                // OD-115/OD-111: a loader is a binary the game process loads by itself (a top-level proxy DLL of its root). Only a reviewed
+                // official manifest may declare one; it is the only mapping allowed in the game root outside the media overrides.
+                if (item.Loader && (IsCustom || !reviewed || item.Role != "binary" || item.Mode == "seed" || item.Destination.Contains('/')
+                    || !item.Destination.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+                    throw new ModException("a loader is a top-level binary of a reviewed official manifest", ModErrors.Unsupported);
+                // OD-115: mods never write the game's own files; every game-root change is an override the game reads instead.
+                if (item.Root == "game" && !item.Loader && !UnderMediaOverride(item.Destination))
+                    throw new ModException("game files change only through media overrides", ModErrors.Unsupported);
                 if (item.Bytes is < 0 or > 64 * 1024 * 1024 || (item.Hash.Length != 64 || item.Hash.Any(c => !char.IsAsciiHexDigit(c)))
                     || item.Mode is not ("add" or "replace" or "add-or-replace" or "seed")) throw new ModException("invalid file mapping");
                 if (item.Role is not ("binary" or "config" or "asset" or "user-asset" or "license")
@@ -110,6 +178,9 @@ public sealed class ModManifest
                     || item.Role == "config" && (item.Root != "azimuth" || item.Mode != "seed" || item.Destination != ConfigPath)
                     || item.Root == "azimuth" && item.Destination.Equals(ConfigPath, StringComparison.OrdinalIgnoreCase) && item.Role != "config")
                     throw new ModException("invalid file role or settings mapping");
+                if (IsCustom && (item.Source != item.Root + "/" + item.Destination
+                    || (item.Role == "binary" || ExecutableExtension(item.Destination)) && !IsNative))
+                    throw new ModException("custom mods map their files tree and carry no executable code", ModErrors.Unsupported);
                 files.Add(item);
             }
         if (files.Count > 512 || files.Select(f => f.Root + "/" + f.Destination).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Count)
@@ -118,11 +189,22 @@ public sealed class ModManifest
         Dependencies = Document.GetProperty("dependencies").EnumerateArray().Select(d => new ManifestDependency(
             d.GetProperty("id").GetString()!, d.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray())).ToArray();
         if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
-            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || d.Id.Length is < 1 or > 64
-                || d.Id.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')) || d.Versions.Count == 0
+            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !ValidId(d.Id) || IsCustomId(d.Id) && !IsCustom || d.Versions.Count == 0
                 || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
         Multiplayer = ModMultiplayer.Parse(Document);
-        ValidatePackage(Document.GetProperty("package"));
+        if (DatabaseBase is not null && Multiplayer is not { EntersLobbySet: true }) throw new ModException("a database base affects multiplayer", ModErrors.Unsupported);
+        if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => c.GetString() is not { } other || !ValidId(other)))
+            throw new ModException("invalid conflicts");
+        if (IsCustom)
+        {
+            // A custom mod has no download: its payload is the player's own files tree next to its manifest.
+            if (Document.TryGetProperty("package", out _) || Document.TryGetProperty("additionalPackages", out _)
+                || !Document.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object
+                || payload.EnumerateObject().Count() != 2 || payload.GetProperty("format").GetString() != "folder"
+                || payload.GetProperty("path").GetString() != CustomPayloadFolder) throw new ModException("invalid custom payload", ModErrors.Unsupported);
+        }
+        else if (Document.TryGetProperty("payload", out _)) throw new ModException("only custom mods use a local payload", ModErrors.Unsupported);
+        else ValidatePackage(Document.GetProperty("package"));
         var packageNames = new HashSet<string>(StringComparer.Ordinal) { "primary" };
         if (Document.TryGetProperty("additionalPackages", out var additional))
             foreach (var p in additional.EnumerateObject())
@@ -131,14 +213,32 @@ public sealed class ModManifest
                 ValidatePackage(p.Value);
             }
         if (Files.Any(f => !packageNames.Contains(f.Package))) throw new ModException("unknown package mapping");
+        var wine = new List<ModWineOverride>();
         if (Document.TryGetProperty("launch", out var launch) && launch.TryGetProperty("wineDllOverrides", out var overrides))
             foreach (var item in overrides.EnumerateArray())
             {
-                var name = item.GetString()!;
+                // A bare module name is shorthand for { "module": name, "appDefaults": true }.
+                var name = item.ValueKind == JsonValueKind.String ? item.GetString()! : item.GetProperty("module").GetString()!;
+                var appDefaults = item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("appDefaults", out var flag) || flag.GetBoolean();
+                if (item.ValueKind == JsonValueKind.Object && item.EnumerateObject().Any(p => p.Name is not ("module" or "appDefaults")))
+                    throw new ModException("unsupported DLL override field");
                 if (name.Length is < 1 or > 64 || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
+                    || wine.Any(w => w.Module.Equals(name, StringComparison.OrdinalIgnoreCase))
                     || !Files.Any(f => f.Root == "azimuth" && f.Role == "binary" && f.Destination.Equals(name + ".dll", StringComparison.OrdinalIgnoreCase)))
                     throw new ModException("DLL override must name a mapped binary");
+                wine.Add(new(name, appDefaults));
             }
+        WineDllOverrides = wine.AsReadOnly();
+        var parked = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (Document.TryGetProperty("adoption", out var adoption) && adoption.TryGetProperty("parkedFiles", out var parkedFiles))
+            foreach (var item in parkedFiles.EnumerateArray())
+            {
+                var path = item.GetProperty("path").GetString()!; var destination = item.GetProperty("destination").GetString()!;
+                ValidatePath(path);
+                if (parked.Count >= 16 || !Files.Any(f => f.Root == "azimuth" && f.Role == "binary" && f.Destination == destination) || !parked.TryAdd(destination, path))
+                    throw new ModException("parked legacy files must name a mapped azimuth binary");
+            }
+        ParkedFiles = parked;
         if (Document.TryGetProperty("incompatibleFiles", out var incompatible))
             foreach (var file in incompatible.EnumerateArray())
             {
@@ -162,6 +262,51 @@ public sealed class ModManifest
             throw new ModException("invalid manifest text");
     }
 
+    /// <summary>
+    /// OD-115: the game-root folder whose files the game reads in place of its own media (<c>mediaoverride/X</c> over
+    /// <c>media/X</c>). Every game-root mapping, runtime output and session database lives below it, except a declared loader.
+    /// </summary>
+    public const string MediaOverrideFolder = "mediaoverride";
+
+    /// <summary>A game-root relative path strictly below <see cref="MediaOverrideFolder"/> (any letter case, as Windows resolves it).</summary>
+    public static bool UnderMediaOverride(string? path) => path is { Length: > 14 } && path.StartsWith(MediaOverrideFolder + "/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The payload folder of a custom mod, next to its manifest: <c>files/&lt;root&gt;/&lt;destination&gt;</c>.</summary>
+    public const string CustomPayloadFolder = "files";
+    /// <summary>The folder of a custom data mod's startup SQL, next to <see cref="CustomPayloadFolder"/> (never installed into the game).</summary>
+    public const string CustomSqlFolder = "database";
+
+    /// <summary>FIMOD004: the data mod's startup SQL (custom data mods), applied by the runtime to the session database; null when none.</summary>
+    public DataModSqlFile? DatabaseSql { get; }
+    public bool HasDatabaseSql => DatabaseSql is not null;
+    /// <summary>OD-114 follow-up: a car pack's whole replacement database, the session database's base; at most one enabled mod has one.</summary>
+    public DatabaseBaseFile? DatabaseBase { get; }
+    public const long MaxDatabaseBaseBytes = 64L * 1024 * 1024;
+    /// <summary>The session database's write permissions (<c>database.tables</c>), for native and SQL data mods alike.</summary>
+    public IReadOnlyList<string> DatabaseTables => Document.TryGetProperty("database", out var db)
+        ? db.GetProperty("tables").EnumerateArray().Select(t => t.GetString()!).ToArray() : [];
+    /// <summary>Needs the native runtime at launch: a native mod, or a data mod whose SQL the runtime applies.</summary>
+    public bool NeedsRuntime => IsNative || HasDatabaseSql || DatabaseBase is not null;
+
+    public static bool IsCustomId(string? id) => id is not null && id.StartsWith(CustomPrefix, StringComparison.Ordinal);
+
+    /// <summary>Official ids: <c>^[a-z][a-z0-9-]{0,63}$</c> (no dot). Custom ids: <c>custom.</c> + <c>[a-z0-9][a-z0-9-]{0,56}</c>. The two never collide.</summary>
+    public static bool ValidId(string? id)
+    {
+        if (id is null) return false;
+        if (IsCustomId(id))
+        {
+            var rest = id[CustomPrefix.Length..];
+            return rest.Length is >= 1 and <= 57 && (char.IsAsciiLetterLower(rest[0]) || char.IsAsciiDigit(rest[0]))
+                && rest.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+        }
+        return id.Length is >= 1 and <= 64 && char.IsAsciiLetterLower(id[0]) && id.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+    }
+
+    private static readonly string[] Executables = [".dll", ".exe", ".asi", ".sys", ".com", ".bat", ".cmd", ".ps1", ".scr", ".msi", ".cpl", ".ocx", ".drv", ".vbs"];
+    /// <summary>A file Windows or a loader would execute, by extension.</summary>
+    public static bool ExecutableExtension(string path) => Executables.Any(e => path.EndsWith(e, StringComparison.OrdinalIgnoreCase));
+
     public byte[] Snapshot() => (byte[])_bytes.Clone();
     public string Text(string field, string locale) => Document.GetProperty(field).TryGetProperty(locale, out var text)
         ? text.GetString()! : Document.GetProperty(field).GetProperty("en").GetString()!;
@@ -174,6 +319,9 @@ public sealed class ModManifest
         foreach (var part in path.Split('/'))
         {
             var stem = part.Split('.')[0];
+            var tilde = part.IndexOf('~', StringComparison.Ordinal);
+            // An 8.3 short-name alias (DATA~1, AZIMUT~1.EXE) could name a protected path under another spelling.
+            if (tilde >= 0 && tilde + 1 < part.Length && char.IsAsciiDigit(part[tilde + 1])) throw new ModException("invalid mod path");
             if (part is "" or "." or ".." || part.EndsWith('.') || part.EndsWith(' ')
                 || new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(stem, StringComparer.OrdinalIgnoreCase))
                 throw new ModException("invalid mod path");
@@ -196,60 +344,11 @@ public sealed class ModManifest
     }
 }
 
-public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
+/// <summary>One mapped file. <see cref="Loader"/>: a binary the game process loads by itself (OD-115 game-root exception, reviewed official manifests only).</summary>
+public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary", bool Loader = false);
+/// <summary>A data mod's startup SQL file: its path in the mod folder, SHA-256 and size.</summary>
+public sealed record DataModSqlFile(string Path, string Sha256, long Bytes);
+/// <summary>A car pack's whole database: its path in the mod folder, SHA-256, size and the foreign-key violations it ships with (recorded, not refused).</summary>
+public sealed record DatabaseBaseFile(string Path, string Sha256, long Bytes, int ForeignKeyViolations);
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
-
-public static class DevelopmentModCatalog
-{
-    public static async Task<IReadOnlyList<ModManifest>> LoadAsync(HttpClient http, Uri url, CancellationToken cancellation)
-    {
-        var bytes = await ReadAsync(http, url, 256 * 1024, cancellation).ConfigureAwait(false);
-        using var json = JsonDocument.Parse(bytes);
-        ModManifest.RejectDuplicates(json.RootElement);
-        if (json.RootElement.GetProperty("schemaVersion").GetInt32() != 1) throw new ModException("unsupported catalog");
-        var entries = json.RootElement.GetProperty("mods");
-        if (entries.GetArrayLength() > 64) throw new ModException("catalog too large");
-        var mods = new List<ModManifest>();
-        foreach (var entry in entries.EnumerateArray())
-        {
-            var address = new Uri(entry.GetProperty("manifestUrl").GetString()!, UriKind.Absolute);
-            if (address.IsFile && !url.IsFile) throw new ModException("remote catalog references a local file");
-            var raw = await ReadAsync(http, address, 256 * 1024, cancellation).ConfigureAwait(false);
-            if (ModManifest.Hash(raw) != entry.GetProperty("manifestSha256").GetString()) throw new ModException("manifest digest mismatch");
-            var mod = new ModManifest(raw);
-            if (mod.Id != entry.GetProperty("id").GetString() || mod.Version != entry.GetProperty("version").GetString()
-                || mods.Any(m => m.Id == mod.Id)) throw new ModException("catalog identity mismatch");
-            mods.Add(mod);
-        }
-        return mods.AsReadOnly();
-    }
-
-    private static async Task<byte[]> ReadAsync(HttpClient http, Uri url, int limit, CancellationToken cancellation)
-    {
-        if (url.IsFile)
-        {
-            if (url.IsUnc || new FileInfo(url.LocalPath).Length > limit) throw new ModException("invalid local catalog file");
-            return await File.ReadAllBytesAsync(url.LocalPath, cancellation).ConfigureAwait(false);
-        }
-        if (url.Scheme != "https" && !(url.Scheme == "http" && url.IsLoopback)
-            || url.UserInfo.Length > 0 || url.Fragment.Length > 0) throw new ModException("invalid catalog URL");
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        if (response.RequestMessage?.RequestUri != url) throw new ModException("catalog redirects are not supported");
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
-        return await ReadBoundedAsync(stream, limit, cancellation).ConfigureAwait(false);
-    }
-
-    internal static async Task<byte[]> ReadBoundedAsync(Stream stream, long limit, CancellationToken cancellation)
-    {
-        using var result = new MemoryStream();
-        var buffer = new byte[81920];
-        int count;
-        while ((count = await stream.ReadAsync(buffer, cancellation).ConfigureAwait(false)) > 0)
-        {
-            if (result.Length + count > limit) throw new ModException("download too large");
-            result.Write(buffer, 0, count);
-        }
-        return result.ToArray();
-    }
-}
+public sealed record ModWineOverride(string Module, bool AppDefaults);

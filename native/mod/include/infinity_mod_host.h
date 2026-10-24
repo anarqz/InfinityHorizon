@@ -28,8 +28,15 @@ typedef struct InfinityModsSnapshotV1 {
     uint32_t size, abi_version, count, ready, failed;
     InfinityModReportV1 mods[INFINITY_MOD_MAX_COUNT];
 } InfinityModsSnapshotV1;
+
+typedef struct InfinityModsSnapshotV2 {
+    uint32_t size, abi_version, plan_version, count, ready, failed;
+    uint8_t nonce[16], plan_sha256[32];
+    InfinityModReportV1 mods[INFINITY_MOD_MAX_COUNT];
+} InfinityModsSnapshotV2;
 typedef int (*InfinityModsStartV1Fn)(const InfinityModsLaunchV1*);
 typedef int (*InfinityModsQueryV1Fn)(InfinityModsSnapshotV1*);
+typedef int (*InfinityModsQueryV2Fn)(InfinityModsSnapshotV2*);
 typedef int (*InfinityModsStartPlanV1Fn)(void* game_image, const wchar_t* path, const uint8_t sha256[32]);
 #ifdef __cplusplus
 }

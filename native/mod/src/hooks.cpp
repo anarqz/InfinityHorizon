@@ -23,6 +23,47 @@
 struct InfinityHook;
 
 namespace infinity_mod {
+
+bool parse_relocations(const uint8_t* data, std::size_t size, uint32_t image_size, std::vector<Fixup>& out) {
+    out.clear();
+    if (!data || size > 16u * 1024 * 1024) return false;
+    for (std::size_t at = 0; at < size;) {
+        if (size - at < 8) return false;
+        uint32_t page = 0, block = 0;
+        std::memcpy(&page, data + at, 4); std::memcpy(&block, data + at + 4, 4);
+        if (block < 8 || block % 2 || block > size - at || page >= image_size || page % 0x1000) return false;
+        for (std::size_t e = at + 8; e + 2 <= at + block; e += 2) {
+            uint16_t entry = 0; std::memcpy(&entry, data + e, 2);
+            const unsigned type = entry >> 12, offset = entry & 0xFFF;
+            if (type == IMAGE_REL_BASED_ABSOLUTE) continue;
+            const uint8_t width = type == IMAGE_REL_BASED_DIR64 ? 8 : type == IMAGE_REL_BASED_HIGHLOW ? 4 : 0;
+            if (!width || page + offset + width > image_size) return false;
+            out.push_back({page + offset, width});
+        }
+        at += block;
+    }
+    std::sort(out.begin(), out.end(), [](const Fixup& a, const Fixup& b) { return a.rva < b.rva; });
+    for (std::size_t i = 1; i < out.size(); ++i) if (out[i].rva < out[i - 1].rva + out[i - 1].width) return false;
+    return true;
+}
+
+int compare_relocated(const uint8_t* disk, const uint8_t* live, std::size_t n, uint32_t rva, int64_t delta, const std::vector<Fixup>& fixups) {
+    if (!disk || !live || n > 32) return -1;
+    uint8_t copy[32];
+    std::memcpy(copy, disk, n);
+    const uint64_t begin = rva, end = uint64_t(rva) + n;
+    auto it = std::lower_bound(fixups.begin(), fixups.end(), rva > 8 ? rva - 8 : 0, [](const Fixup& f, uint32_t v) { return f.rva < v; });
+    for (; it != fixups.end() && it->rva < end; ++it) {
+        const uint64_t lo = it->rva, hi = lo + it->width;
+        if (hi <= begin) continue;
+        if (lo < begin || hi > end) return -1;
+        auto* slot = copy + (lo - begin);
+        if (it->width == 8) { uint64_t v; std::memcpy(&v, slot, 8); v += uint64_t(delta); std::memcpy(slot, &v, 8); }
+        else { uint32_t v; std::memcpy(&v, slot, 4); v += uint32_t(uint64_t(delta)); std::memcpy(slot, &v, 4); }
+    }
+    return std::memcmp(copy, live, n) == 0 ? 1 : 0;
+}
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -164,6 +205,9 @@ struct DiskImage {
     HANDLE file = INVALID_HANDLE_VALUE;
     uint64_t image_base = 0;
     std::vector<IMAGE_SECTION_HEADER> sections;
+    uint32_t reloc_rva = 0, reloc_size = 0;
+    bool relocs_tried = false, relocs_ok = false;
+    std::vector<Fixup> fixups;
 } g_disk;
 
 void open_disk_image() {
@@ -191,6 +235,10 @@ void open_disk_image() {
             if (ok) {
                 g_disk.sections.assign(sec, sec + n);
                 g_disk.image_base = nt->OptionalHeader.ImageBase;
+                if (nt->OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_BASERELOC) {
+                    g_disk.reloc_rva  = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+                    g_disk.reloc_size = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+                }
                 g_disk.file       = f;
                 plog("hooks: checking game code against " + narrow(c.wstring()));
                 return;
@@ -224,6 +272,28 @@ bool code_sections_executable(std::string* first_bad) {
     return true;
 }
 
+bool disk_relocations() {
+    if (g_disk.relocs_tried) return g_disk.relocs_ok;
+    g_disk.relocs_tried = true;
+    for (const auto& s : g_disk.sections) {
+        if (!g_disk.reloc_size || g_disk.reloc_rva < s.VirtualAddress || uint64_t(g_disk.reloc_rva) + g_disk.reloc_size > uint64_t(s.VirtualAddress) + s.SizeOfRawData)
+            continue;
+        std::vector<uint8_t> table(g_disk.reloc_size);
+        OVERLAPPED ov{};
+        const uint64_t off = s.PointerToRawData + (g_disk.reloc_rva - s.VirtualAddress);
+        ov.Offset = static_cast<DWORD>(off); ov.OffsetHigh = static_cast<DWORD>(off >> 32);
+        DWORD got = 0;
+        g_disk.relocs_ok = table.size() <= 16u * 1024 * 1024 && ReadFile(g_disk.file, table.data(), static_cast<DWORD>(table.size()), &got, &ov)
+            && got == table.size() && parse_relocations(table.data(), table.size(), kGameSizeOfImage, g_disk.fixups);
+        break;
+    }
+    if (!g_disk.relocs_ok)
+        plog("hooks: the game is loaded away from its preferred address and its exe's relocation table is missing or invalid, "
+             "so game bytes can't be verified against disk");
+    else plog("hooks: the game is loaded away from its preferred address; comparing against disk with " + std::to_string(g_disk.fixups.size()) + " relocations");
+    return g_disk.relocs_ok;
+}
+
 int matches_disk(const void* p, std::size_t n, bool pointer) {
     open_disk_image();
     if (g_disk.file == INVALID_HANDLE_VALUE) return -1;
@@ -248,7 +318,10 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
             if (want < g_disk.image_base || want >= g_disk.image_base + kGameSizeOfImage) return -1;
             return have == want + (reinterpret_cast<uint64_t>(base) - g_disk.image_base) ? 1 : 0;
         }
-        if (reinterpret_cast<uint64_t>(base) != g_disk.image_base) return -1;
+        if (reinterpret_cast<uint64_t>(base) != g_disk.image_base) {
+            if (!disk_relocations()) return -1;
+            return compare_relocated(disk, static_cast<const uint8_t*>(p), n, rva, static_cast<int64_t>(reinterpret_cast<uint64_t>(base) - g_disk.image_base), g_disk.fixups);
+        }
         return std::memcmp(disk, p, n) == 0 ? 1 : 0;
     }
     return -1;

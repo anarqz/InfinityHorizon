@@ -464,6 +464,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         {
             return new UiFrame.JoinResult(UiJoin.Code, _text("worlds.code_wrong"));
         }
+        // OD-112: the session's set goes with every join; planned mods not confirmed yet never join as vanilla.
+        var (mods, modsRefusal) = WireMods();
+        if (modsRefusal is not null) return new(UiJoin.NotAllowed, _text(modsRefusal));
         try
         {
             for (var attempt = 0; attempt < 2; ++attempt)
@@ -471,7 +474,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, token), cancellation,
+                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -510,7 +513,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         }
                         var proofInstalled=false;
                         try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation).ConfigureAwait(false);}
-                        catch(Exception error) when(HostFailure(error)) { }
+                        catch(Exception error) when(HostFailure(error)) { _log($"worlds: socket proof context failed: {error.GetType().Name}"); }
                         if(!proofInstalled || joinEpoch!=Volatile.Read(ref _mineEpoch))
                         {
                             await ReleaseGrantAsync(grant.Id,CancellationToken.None).ConfigureAwait(false);
@@ -557,6 +560,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.closed"));
                     case JoinStatuses.RateLimited:
                         return new UiFrame.JoinResult(UiJoin.SlowDown, _text("worlds.slow_down"));
+                    case JoinStatuses.NotAllowed when join.Reason == NotAllowedReasons.Mods:
+                        return new UiFrame.JoinResult(UiJoin.NotAllowed, ModsRefusal(join.Details));
                     case JoinStatuses.NotAllowed:
                         return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.not_allowed_" + (join.Reason ?? "host")));
                 }
@@ -930,6 +935,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             generation = current;
         }
         bool GameStillReady() => generation is not { } loaded || GameReadiness.Matches(loaded);
+        // OD-112: a world carries the session's set from its PUT on; planned mods not confirmed yet never open a vanilla world.
+        var (mods, modsRefusal) = WireMods();
+        if (modsRefusal is not null) return new(1, string.Empty, string.Empty, _text(modsRefusal));
         InvalidateMine(reset: true);
         var operation = QueueHostOperation(replace: true, create: true);
         await operation.Previous.ConfigureAwait(false);
@@ -959,6 +967,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 MaxRttMs = request.Latency switch { 1 => 150u, 2 => 100u, 3 => 60u, _ => null },
                 Races = true,
                 Endpoint = Announcement(relay),
+                Mods = mods,
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {
@@ -998,6 +1007,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         (_hostJoining, _hostAloneSince, _hostAloneWarned) = (true, _clock.GetTimestamp(), false);
                         _nextAdmissionsRefresh = Now + AdmissionsEvery;
                         Volatile.Write(ref _hostedCode, world.Code);
+                        Volatile.Write(ref _hostedMods, mods ?? []);
                         Volatile.Write(ref _hostedPlayers, world.Players);
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
@@ -1018,6 +1028,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 {
                     MmErrorKind.SupporterRequired => "worlds.host_supporters",
                     MmErrorKind.ModeMismatch => "worlds.host_mode",
+                    MmErrorKind.Conflict when opened?.Error?.Reason == ConflictReasons.Mods => "worlds.mods_changed",
+                    MmErrorKind.Invalid when opened?.Error?.Field == "mods" => "worlds.mods_failed",
                     MmErrorKind.RateLimited => "worlds.slow_down",
                     _ => "worlds.host_failed",
                 };
@@ -1073,6 +1085,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 return _text(beforeHost.MessageKey);
             }
             if (!IsCurrent(operation) || !_host.IsOpen || _host.WorldId is not { } id || _relay is not { } relay) return null;
+            if (!HostedModsCurrent())
+            {
+                // a world's set is fixed (§2.7): a session whose set changed closes it; the player opens a new one
+                _log("worlds: the session's mod set changed; closing the world");
+                await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
+                return _text("worlds.mods_changed");
+            }
             if (!relay.Running)
             {
                 _log("worlds: the relay ended on its own");

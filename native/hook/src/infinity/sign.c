@@ -523,3 +523,22 @@ int azimuth_sign_update_ok(const unsigned char signature[64], const unsigned cha
     }
     return azimuth_sign_verify(signature, line, sizeof(line), key);
 }
+
+/* The native mod runtime and its helper (OD-112): the same construction under its own domain,
+   "fi-mod-runtime-v1 " + SHA-256 lowercase hex (82 bytes), so a runtime signature is never a hook
+   update and the other way round. */
+int azimuth_sign_mod_runtime_ok(const unsigned char signature[64], const unsigned char digest[32],
+                                const unsigned char key[32]) {
+    static const char prefix[] = AZIMUTH_MOD_SIGN_PREFIX;
+    static const char hex[] = "0123456789abcdef";
+    unsigned char line[AZIMUTH_MOD_SIGN_LINE];
+    size_t n = sizeof(prefix) - 1;
+    for (size_t i = 0; i < n; ++i) {
+        line[i] = (unsigned char)prefix[i];
+    }
+    for (int i = 0; i < 32; ++i) {
+        line[n + 2 * i] = (unsigned char)hex[digest[i] >> 4];
+        line[n + 2 * i + 1] = (unsigned char)hex[digest[i] & 15];
+    }
+    return azimuth_sign_verify(signature, line, sizeof(line), key);
+}

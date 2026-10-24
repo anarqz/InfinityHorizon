@@ -58,6 +58,11 @@ typedef struct FiOverlayHost {
 /* Returns at once: 0 started (work continues on the overlay's own threads), <0 refused. */
 __declspec(dllexport) int32_t fi_overlay_start(const FiOverlayHost *host);
 
+/* Optional export (overlay 0.2.0, OD-112; resolve with GetProcAddress, absent before): the game's
+ * player card (PLAYER DETAILS) for a player. Any thread, returns at once; the guide opens on the
+ * player's pane. xuid: decimal digits; gamertag: UTF-8, may be NULL. Both NUL-terminated, copied. */
+__declspec(dllexport) void fi_overlay_player_card(const char *xuid, const char *gamertag);
+
 #ifdef __cplusplus
 }
 #endif

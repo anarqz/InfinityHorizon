@@ -472,6 +472,14 @@
                      Visibility="{Binding ShowPlayBrand, Converter={StaticResource Visible}}" />
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <!-- §1.1: mods never block Play silently; the reason and the way to Mods are shown here. -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="420" Foreground="{StaticResource InfinityGold}" VerticalAlignment="Center" />
+                  <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="12,0,0,0" VerticalAlignment="Center" />
+                  <!-- OD-115: the required mod's own action (install from the signed catalog, adopt, enable, or retry the catalog). -->
+                  <Button Content="{Binding RequiredModAction}" Click="OnRequiredMod" IsEnabled="{Binding CanActOnRequiredMod}" Padding="10,4" Margin="8,0,0,0" VerticalAlignment="Center"
+                          Visibility="{Binding ShowRequiredModAction, Converter={StaticResource Visible}}" />
+                </StackPanel>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <WrapPanel>
@@ -653,7 +661,8 @@
                   <TextBlock Text="{Binding IntegrityLocationLabel}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,8" Foreground="{StaticResource InfinityMuted}" />
                   <WrapPanel>
                     <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[setup.recheck]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8" />
+                    <Button Content="{Binding S[setup.recheck]}" Click="OnCheckIntegrity" IsEnabled="{Binding CanCheckIntegrity}" Margin="0,0,8,8"
+                            Visibility="{Binding ShowIntegrityCheck, Converter={StaticResource Visible}}" />
                     <Button Content="{Binding S[integrity.cancel]}" Click="OnCancelIntegrity" Visibility="{Binding IntegrityChecking, Converter={StaticResource Visible}}" Margin="0,0,8,8" />
                   </WrapPanel>
                   <StackPanel Visibility="{Binding ShowIntegritySupport, Converter={StaticResource Visible}}">
@@ -678,7 +687,7 @@
             <DockPanel Grid.Column="0" Margin="0,0,18,0">
               <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                 <TextBlock Text="{Binding S[mods.title]}" Style="{StaticResource PageTitle}" />
-                <Grid Margin="0,14,0,12" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Visible}}">
+                <Grid Margin="0,14,0,12" Visibility="{Binding HasModCards, Converter={StaticResource Visible}}">
                   <TextBox Text="{Binding ModSearch, UpdateSourceTrigger=PropertyChanged}" Padding="14,11,38,11"
                            AutomationProperties.Name="{Binding S[mods.search]}" />
                   <TextBlock Text="{Binding S[mods.search]}" Margin="15,0,38,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
@@ -688,27 +697,46 @@
                           Click="OnClearModSearch" ToolTip="{Binding S[mods.search_clear]}" AutomationProperties.Name="{Binding S[mods.search_clear]}"
                           Visibility="{Binding ModSearchEmpty, Converter={StaticResource Hidden}}" />
                 </Grid>
-                <StackPanel Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}">
+                <StackPanel>
                   <WrapPanel>
-                    <Button Content="{Binding S[welcome.back]}" Click="OnNavHome" Padding="10,6" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" ToolTip="{Binding IntegrityLocationLabel}" Padding="10,6" Margin="0,0,8,8" />
-                    <Button Content="{Binding HookInstallLabel}" Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[mods.offline_play]}" Click="OnModdedOffline" IsEnabled="{Binding CanPlayModdedOffline}" Padding="10,6" Margin="0,0,8,8" />
+                    <!-- Development tools only: the DEV catalog override and the native offline session. -->
+                    <WrapPanel Visibility="{Binding DevelopmentMods, Converter={StaticResource Visible}}">
+                      <Button Content="{Binding S[welcome.back]}" Click="OnNavHome" Padding="10,6" Margin="0,0,8,8" />
+                      <Button Content="{Binding S[integrity.choose]}" Click="OnChooseContent" IsEnabled="{Binding CanChooseContent}" ToolTip="{Binding IntegrityLocationLabel}" Padding="10,6" Margin="0,0,8,8" />
+                      <Button Content="{Binding HookInstallLabel}" Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,6" Margin="0,0,8,8" />
+                      <Button Content="{Binding S[mods.offline_play]}" Click="OnModdedOffline" IsEnabled="{Binding CanPlayModdedOffline}" Padding="10,6" Margin="0,0,8,8" />
+                    </WrapPanel>
                     <Button Content="↻" Click="OnLoadModCatalog" Padding="10,3" FontSize="20" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
                             ToolTip="{Binding S[mods.refresh_catalog]}" AutomationProperties.Name="{Binding S[mods.refresh_catalog]}" />
                     <Button Content="{Binding S[mods.folder_short]}" Click="OnChooseAzimuth" Padding="10,6" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8"
                             ToolTip="{Binding ModFolder}" AutomationProperties.Name="{Binding S[mods.choose_folder]}" />
                   </WrapPanel>
                   <TextBlock Text="{Binding ModCatalogSummary}" ToolTip="{Binding ModCatalogStatus}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
-                  <Button Content="{Binding S[mods.recover]}" Click="OnRecoverMods" Margin="0,8,0,0"
-                          Visibility="{Binding ShowModRecovery, Converter={StaticResource Visible}}" />
+                  <!-- OD-114: custom mods are read from this folder, one subfolder per mod. -->
+                  <TextBox Text="{Binding CustomModsFolderText, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent" TextWrapping="Wrap"
+                           FontSize="11" Foreground="{StaticResource InfinityMuted}" Padding="0" Margin="0,2,0,0" />
+                  <!-- H4/§1.4: production recovery, always with a resolution. -->
+                  <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,10,0,0" Visibility="{Binding ShowModRecovery, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[mods.recovery_title]}" FontWeight="Bold" />
+                      <TextBlock Text="{Binding ModRecoveryText}" TextWrapping="Wrap" Margin="0,6,0,8" />
+                      <WrapPanel>
+                        <Button Content="{Binding S[mods.recover]}" Click="OnRecoverMods" IsEnabled="{Binding CanRecoverMods}" Padding="10,6" Margin="0,0,8,6" />
+                        <Button Content="{Binding S[mods.resolve]}" Click="OnResolveMods" IsEnabled="{Binding CanResolveMods}" Padding="10,6" Margin="0,0,8,6"
+                                ToolTip="{Binding S[mods.resolve_hint]}" />
+                        <Button Content="{Binding S[mods.relink]}" Click="OnRelinkMods" IsEnabled="{Binding ModsIdle}" Padding="10,6" Margin="0,0,8,6"
+                                Visibility="{Binding HasModRelink, Converter={StaticResource Visible}}" />
+                      </WrapPanel>
+                      <TextBlock Text="{Binding S[mods.resolve_hint]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                    </StackPanel>
+                  </Border>
                 </StackPanel>
               </StackPanel>
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel>
                 <TextBlock Text="{Binding S[mods.search_none]}" TextWrapping="Wrap" Margin="0,18,0,0" Foreground="{StaticResource InfinityMuted}"
                            Visibility="{Binding NoMatchingMods, Converter={StaticResource Visible}}" />
-                <ItemsControl ItemsSource="{Binding FilteredModCards}" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Visible}}">
+                <ItemsControl ItemsSource="{Binding FilteredModCards}" Visibility="{Binding HasModCards, Converter={StaticResource Visible}}">
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -719,6 +747,8 @@
                             <StackPanel>
                               <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,24,0" ToolTip="{Binding Name}" />
                               <TextBlock Text="{Binding Manifest.Version, StringFormat=v{0}}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
+                              <TextBlock Text="{Binding CustomBadge}" Foreground="{StaticResource InfinityPink}" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"
+                                         Visibility="{Binding Custom, Converter={StaticResource Visible}}" />
                               <TextBlock Text="{Binding Badge}" Foreground="{StaticResource InfinityGold}" FontSize="12" Margin="0,12,0,0"
                                          TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}" />
                             </StackPanel>
@@ -734,7 +764,7 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBlock Text="{Binding ModCatalogStatus}" TextWrapping="Wrap" Visibility="{Binding HasManifestCatalog, Converter={StaticResource Hidden}}" />
+                <TextBlock Text="{Binding ModCatalogStatus}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource InfinityMuted}" />
               </StackPanel>
               </ScrollViewer>
             </DockPanel>
@@ -763,6 +793,8 @@
                         <StackPanel Margin="0,8,0,10" IsEnabled="{Binding Editable}">
                           <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
                           <TextBlock Text="{Binding Help}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="11" Margin="0,4,0,6" />
+                          <TextBlock Text="{Binding LockReason}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" FontSize="11" Margin="0,0,0,6"
+                                     Visibility="{Binding HasLockReason, Converter={StaticResource Visible}}" />
                           <CheckBox IsChecked="{Binding Checked}" Visibility="{Binding IsBoolean, Converter={StaticResource Visible}}" />
                           <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding IsNumber, Converter={StaticResource Visible}}" />
                           <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" Visibility="{Binding IsChoice, Converter={StaticResource Visible}}" />
@@ -784,9 +816,37 @@
                   <StackPanel Margin="0,0,8,0">
                     <TextBlock Text="{Binding SelectedMod.Name}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding SelectedMod.Credits}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <TextBlock Text="{Binding SelectedMod.CustomBadge}" Foreground="{StaticResource InfinityPink}" FontSize="12" FontWeight="SemiBold" Margin="0,6,0,0"
+                               Visibility="{Binding SelectedMod.Custom, Converter={StaticResource Visible}}" />
                     <TextBlock Text="{Binding SelectedMod.Description}" TextWrapping="Wrap" Margin="0,18,0,0" />
                     <TextBlock Text="{Binding SelectedMod.Status}" TextWrapping="Wrap" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}" Margin="0,18,0,0" />
                     <TextBlock Text="{Binding SelectedMod.Requirements}" TextWrapping="Wrap" FontSize="12" Margin="0,10,0,0" />
+                    <!-- OD-114: an unreviewed custom mod is confirmed for its exact digest before its first install or enable. -->
+                    <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,14,0,0" Visibility="{Binding SelectedModNeedsConfirmation, Converter={StaticResource Visible}}">
+                      <StackPanel>
+                        <TextBlock Text="{Binding S[mods.custom_confirm_title]}" FontWeight="Bold" Foreground="{StaticResource InfinityGold}" />
+                        <TextBlock Text="{Binding SelectedModConfirmation}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                        <Button Content="{Binding S[mods.custom_confirm]}" Click="OnConfirmCustomMod" IsEnabled="{Binding CanConfirmCustomMod}"
+                                Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,10,0,0" />
+                      </StackPanel>
+                    </Border>
+                    <!-- M5 reviewed update: the change first, then the confirmation. -->
+                    <StackPanel Margin="0,14,0,0" Visibility="{Binding SelectedModUpdate, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding SelectedMod.UpdateSummary}" TextWrapping="Wrap" FontSize="12" />
+                      <Button Content="{Binding S[mods.confirm_update]}" Click="OnConfirmModUpdate" IsEnabled="{Binding CanConfirmModUpdate}"
+                              Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,10,0,0" />
+                    </StackPanel>
+                    <!-- H3: changed files are a warning with two choices; M6: settings repair. -->
+                    <WrapPanel Margin="0,14,0,0">
+                      <Button Content="{Binding S[mods.accept_files]}" Click="OnAcceptModFiles" Padding="10,6" Margin="0,0,8,8"
+                              Visibility="{Binding SelectedModDrift, Converter={StaticResource Visible}}" />
+                      <Button Content="{Binding S[mods.disable_keep]}" Click="OnDisableModKeeping" Padding="10,6" Margin="0,0,8,8"
+                              Visibility="{Binding SelectedModCanDisableKeeping, Converter={StaticResource Visible}}" />
+                      <Button Content="{Binding S[mods.repair_settings]}" Click="OnRepairModSettings" Padding="10,6" Margin="0,0,8,8"
+                              Visibility="{Binding SelectedModSettingsIssues, Converter={StaticResource Visible}}" />
+                      <Button Content="{Binding S[mods.uninstall]}" Click="OnUninstallMod" Padding="10,6" Margin="0,0,8,8"
+                              Visibility="{Binding SelectedModCanUninstall, Converter={StaticResource Visible}}" />
+                    </WrapPanel>
                     <Button Content="{Binding S[mods.options]}" Click="OnSelectedModOptions" Margin="0,18,0,0"
                             Visibility="{Binding SelectedMod.HasOptions, Converter={StaticResource Visible}}" />
                     <TextBlock Text="{Binding SelectedModFiles}" TextWrapping="Wrap" FontSize="12" Margin="0,20,0,0" Foreground="{StaticResource InfinityMuted}" />

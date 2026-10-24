@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "ui_frames.h"
+
 struct ImDrawList;
 
 namespace fi {
@@ -76,20 +78,13 @@ void DrawCodeEntry(float width, float height, float dt);
 
 // --- worlds (worlds.cpp, OD-54/56/57/58): the guide's Worlds tab; the launcher answers through the pipe
 enum class WorldFilter : uint8_t { None, Friends, Near, Global };
-struct WorldRow {
-    std::string id, name, host;
-    uint8_t players = 0, max = 0;
-    uint8_t kind = 0;      // 0 everyone's, 1 Infinity Supporter
-    uint8_t audience = 0;  // 0 everyone, 1 supporters, 2 friends, 3 private
-    uint8_t lock = 0;      // 0 joinable, 1 tier, 2 friends, 3 code, 4 full, 5 latency
-    uint8_t ping = 0;      // 0 unknown, 1 good, 2 fair, 3 poor
-    bool friend_host = false;
-};
+// WorldRow is in ui_frames.h (protocol 2 adds modded, modsMatch, members and mods)
 struct HostedWorld {
     uint8_t status = 0; // 0 open, else refused
     std::string world, code, message;
 };
-void SetWorlds(WorldFilter filter, uint8_t status, const std::string &message, std::vector<WorldRow> rows); // status 0 ok, 1 loading, 2 error
+// status 0 ok, 1 loading, 2 error; `modded` echoes the query (protocol 1 answers are vanilla)
+void SetWorlds(WorldFilter filter, bool modded, uint8_t status, const std::string &message, std::vector<WorldRow> rows);
 void SetJoinResult(uint8_t status, const std::string &message); // 0 seat reserved, 3 wrong code, else refused
 void SetHosted(const HostedWorld &hosted);
 
@@ -115,6 +110,20 @@ bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool supporter, float dt);
 
+// --- the right pane (pane.cpp, OD-112): one component for every detail view, drawn beside the guide
+// The launcher's pane (DetailPane frame; any thread): a non-empty id opens it (and the guide), empty closes it.
+void SetDetailPane(DetailPane pane);
+// The game's player card (any thread): opens the guide on that player's pane at once (name, avatar
+// placeholder, a disabled "Add friend") and asks the launcher for the rest.
+void OpenPlayerCard(const std::string &xuid, const std::string &gamertag);
+// Render thread, every frame: what the focused or hovered lobby row shows (null: nothing).
+void SetHoverPane(const DetailPane *pane);
+void PaneTick(float dt);      // render thread, before the guide: applies what arrived (may open the guide)
+bool PaneModal();             // a launcher or player pane is open: it takes the controller
+bool PaneNavigate(Nav nav);   // true: the pane used it
+void ClosePane();
+void DrawPane(ImDrawList *dl, float x, float y, float w, float height, float alpha); // render thread
+
 // Development host only: a request the render thread runs at its next frame (1, 2 the keyboard; 3 the code).
 void DevRequest(int request);
 
@@ -130,7 +139,9 @@ bool InstallRenderHooks();
 void StartPipe(const wchar_t *name);
 void SendEvent(uint8_t kind, const std::string &detail); // UiEventKind: 1 first frame, 5 passthrough, 7 quit
 void SendPanel(bool open);
-void SendWorldsQuery(WorldFilter filter, bool not_full);
+void SendWorldsQuery(WorldFilter filter, bool not_full, bool modded); // 0x14 WorldsQueryV2
+void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag);
+void SendPaneAction(const std::string &pane, const std::string &action);
 void SendJoinWorld(const std::string &world, const std::string &code);
 void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency);
 void SendMyWorldQuery();
