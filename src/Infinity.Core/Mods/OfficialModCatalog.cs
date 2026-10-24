@@ -188,6 +188,24 @@ public static class OfficialModCatalog
         catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException) { return null; }
     }
 
+    /// <summary>
+    /// A schema-2 catalog read through the development route (<c>FI_DEV_MOD_CATALOG_URL</c>, development builds only): parsed by the same
+    /// rules, never official or trusted, so a tester can load v2 from a local file without an HTTPS host.
+    /// </summary>
+    public static ModCatalog Development(byte[] raw) => Build(new Uri("file:///development-catalog.json"), raw, cached: false);
+
+    /// <summary>The bytes declare <c>schemaVersion</c> 2 (the development route tells v2 from the older development format).</summary>
+    public static bool IsSchema2(byte[] raw)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(raw, new JsonDocumentOptions { MaxDepth = 40 });
+            return json.RootElement.ValueKind == JsonValueKind.Object && json.RootElement.TryGetProperty("schemaVersion", out var version)
+                && version.TryGetInt32(out var number) && number == SchemaVersion;
+        }
+        catch (JsonException) { return false; }
+    }
+
     private static ModCatalog Build(Uri url, byte[] raw, bool cached)
     {
         var (mods, runtime) = Parse(raw);
