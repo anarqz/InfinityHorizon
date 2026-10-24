@@ -53,6 +53,15 @@ public sealed class GitHubReleases : IDisposable
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, bound.Token).ConfigureAwait(false);
         CheckFinalUrl(response, LatestUrl);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        // T1i: the unauthenticated API allows 60 requests an hour per IP (shared behind a CGNAT, used up by tests): when it refuses
+        // or fails, the release is read from the web instead, which that limit does not count.
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+        {
+            var refused = Failure(response);
+            try { return await GetLatestFromWebAsync(bound.Token).ConfigureAwait(false); }
+            catch (Exception fallback) when (fallback is HttpRequestException or InvalidDataException)
+            { throw new HttpRequestException(refused.Message + "; web fallback: " + fallback.Message, fallback, refused.StatusCode); }
+        }
         Status(response);
         if (response.Content.Headers.ContentType?.MediaType is not ("application/json" or "application/vnd.github+json")) Invalid();
         var bytes = await ReadMetadataAsync(response.Content, bound.Token).ConfigureAwait(false);
@@ -66,7 +75,12 @@ public sealed class GitHubReleases : IDisposable
         return output.ToArray();
     }
 
-    public async Task DownloadAssetAsync(GitHubReleaseAsset asset, Stream destination, long maxBytes,
+    public Task DownloadAssetAsync(GitHubReleaseAsset asset, Stream destination, long maxBytes,
+        IProgress<long>? progress = null, CancellationToken cancellation = default) =>
+        DownloadAssetAsync(asset, destination, maxBytes, exactSize: true, progress, cancellation);
+
+    /// <summary><paramref name="exactSize"/> false (the web fallback's descriptor): <see cref="GitHubReleaseAsset.Size"/> is only the bound.</summary>
+    private async Task DownloadAssetAsync(GitHubReleaseAsset asset, Stream destination, long maxBytes, bool exactSize,
         IProgress<long>? progress = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(asset); ArgumentNullException.ThrowIfNull(destination);
@@ -96,10 +110,10 @@ public sealed class GitHubReleases : IDisposable
                 continue;
             }
             Status(response);
-            if (response.Content.Headers.ContentLength is { } length && length != asset.Size
+            if (response.Content.Headers.ContentLength is { } length && (exactSize ? length != asset.Size : length > asset.Size)
                 || response.Content.Headers.ContentEncoding.Count != 0
                 || response.Content.Headers.ContentType?.MediaType is "text/html" or "application/xhtml+xml") Invalid();
-            await CopyAsync(response.Content, destination, asset, progress, bound.Token).ConfigureAwait(false);
+            await CopyAsync(response.Content, destination, asset, exactSize, progress, bound.Token).ConfigureAwait(false);
             return;
         }
     }
@@ -116,7 +130,7 @@ public sealed class GitHubReleases : IDisposable
         return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, bound.Token).ConfigureAwait(false);
     }
 
-    private static async Task CopyAsync(HttpContent content, Stream destination, GitHubReleaseAsset asset, IProgress<long>? progress, CancellationToken cancellation)
+    private static async Task CopyAsync(HttpContent content, Stream destination, GitHubReleaseAsset asset, bool exactSize, IProgress<long>? progress, CancellationToken cancellation)
     {
         await using var input = await content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
         using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -134,7 +148,7 @@ public sealed class GitHubReleases : IDisposable
             await destination.WriteAsync(buffer.AsMemory(0, count), cancellation).ConfigureAwait(false);
             digest.AppendData(buffer, 0, count); total += count; progress?.Report(total);
         }
-        if (total != asset.Size || asset.Sha256 is { } expected && Convert.ToHexStringLower(digest.GetHashAndReset()) != expected) Invalid();
+        if (exactSize && total != asset.Size || asset.Sha256 is { } expected && Convert.ToHexStringLower(digest.GetHashAndReset()) != expected) Invalid();
         await destination.FlushAsync(cancellation).ConfigureAwait(false);
     }
 
@@ -154,8 +168,66 @@ public sealed class GitHubReleases : IDisposable
     }
     private static void Status(HttpResponseMessage response)
     {
-        if (response.StatusCode != HttpStatusCode.OK)
-            throw new HttpRequestException("GitHub release request failed", null, response.StatusCode);
+        if (response.StatusCode != HttpStatusCode.OK) throw Failure(response);
+    }
+
+    /// <summary>
+    /// T1i: a refusal that says why: the HTTP status and, when GitHub sends them, its rate-limit headers (remaining requests and the
+    /// reset time) and Retry-After. Never the response body or a URL with a query.
+    /// </summary>
+    private static HttpRequestException Failure(HttpResponseMessage response)
+    {
+        static string? Header(HttpResponseMessage r, string name) =>
+            r.Headers.TryGetValues(name, out var values) && values.FirstOrDefault() is { Length: > 0 and <= 32 } value && value.All(char.IsAsciiLetterOrDigit) ? value : null;
+        var text = "GitHub release request failed: HTTP " + ((int)response.StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (Header(response, "X-RateLimit-Remaining") is { } remaining) text += ", rate limit remaining " + remaining;
+        if (Header(response, "X-RateLimit-Reset") is { } reset && long.TryParse(reset, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+            text += ", resets " + DateTimeOffset.FromUnixTimeSeconds(seconds).ToString("u", System.Globalization.CultureInfo.InvariantCulture);
+        if (response.Headers.RetryAfter?.Delta is { } wait) text += ", retry after " + ((int)wait.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + " s";
+        return new HttpRequestException(text, null, response.StatusCode);
+    }
+
+    /// <summary>The web page's redirect for the latest release (not the API, so not its rate limit).</summary>
+    public static Uri WebLatestUrl { get; } = new($"https://github.com/{Repository}/releases/latest");
+
+    /// <summary>
+    /// T1i fallback: the latest release from the web, without the API. Its tag comes from the <c>releases/latest</c> redirect; the
+    /// signed update descriptor is read to learn its size and the package's name and size; the signature is 64 bytes. Nothing here is
+    /// trusted on its own: the coordinator verifies the descriptor's signature and pins the package to the descriptor's SHA-256.
+    /// </summary>
+    private async Task<GitHubRelease?> GetLatestFromWebAsync(CancellationToken cancellation)
+    {
+        DedicatedClient();
+        using var request = Request(WebLatestUrl, metadata: false);
+        using var response = await SendHeadersAsync(request, cancellation).ConfigureAwait(false);
+        CheckFinalUrl(response, WebLatestUrl);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        if (response.StatusCode is not (HttpStatusCode.Found or HttpStatusCode.MovedPermanently or HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect)
+            || response.Headers.Location is not { } next) throw Failure(response);
+        var page = next.IsAbsoluteUri ? next : new Uri(WebLatestUrl, next);
+        var segments = page.AbsolutePath.Split('/');
+        var tag = segments.Length == 6 ? Uri.UnescapeDataString(segments[5]) : "";
+        if (!TagVersion(tag, out var version) || !RepositoryUrl(page, "releases/tag", tag)) Invalid();
+        Uri Download(string name) => new($"https://github.com/{Repository}/releases/download/{Uri.EscapeDataString(tag)}/{name}");
+        var descriptorUrl = Download(UpdateCoordinator.DescriptorAssetName);
+        using var raw = new MemoryStream();
+        await DownloadAssetAsync(new(1, UpdateCoordinator.DescriptorAssetName, 65_536, descriptorUrl), raw, 65_536, exactSize: false, cancellation: cancellation).ConfigureAwait(false);
+        var descriptor = raw.ToArray();
+        string package; long packageBytes;
+        try
+        {
+            using var document = JsonDocument.Parse(descriptor, new JsonDocumentOptions { MaxDepth = 32 });
+            var item = document.RootElement.GetProperty("package");
+            package = item.GetProperty("name").GetString() ?? ""; packageBytes = item.GetProperty("byteLength").GetInt64();
+        }
+        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { throw new InvalidDataException("Invalid GitHub release metadata or download"); }
+        if (!AssetName(package) || packageBytes is < 1 or > MaxAssetBytes) Invalid();
+        return new(version, tag, page,
+        [
+            new(1, UpdateCoordinator.DescriptorAssetName, descriptor.Length, descriptorUrl, Convert.ToHexStringLower(SHA256.HashData(descriptor))),
+            new(2, UpdateCoordinator.SignatureAssetName, 64, Download(UpdateCoordinator.SignatureAssetName)),
+            new(3, package, packageBytes, Download(package)),
+        ]);
     }
 
     private static async Task<byte[]> ReadMetadataAsync(HttpContent content, CancellationToken cancellation)
