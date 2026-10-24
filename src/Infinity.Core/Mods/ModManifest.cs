@@ -308,6 +308,38 @@ public sealed class ModManifest
     public static bool ExecutableExtension(string path) => Executables.Any(e => path.EndsWith(e, StringComparison.OrdinalIgnoreCase));
 
     public byte[] Snapshot() => (byte[])_bytes.Clone();
+
+    /// <summary>
+    /// OD-116: the same manifest whatever its bytes (property order, spacing, escapes). A manifest rebuilt from a schema-2 catalog
+    /// entry is not byte-identical to the one 1.0.9 installed from its separate file; the installed one is kept when they match.
+    /// </summary>
+    public bool SameContent(ModManifest other) => ReferenceEquals(this, other) || other is not null && Digest == other.Digest
+        || other is not null && Canonical(Document).AsSpan().SequenceEqual(Canonical(other.Document));
+
+    private static byte[] Canonical(JsonElement element)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer)) Write(writer, element);
+        return buffer.ToArray();
+
+        static void Write(Utf8JsonWriter writer, JsonElement value)
+        {
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    writer.WriteStartObject();
+                    foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { writer.WritePropertyName(property.Name); Write(writer, property.Value); }
+                    writer.WriteEndObject(); break;
+                case JsonValueKind.Array:
+                    writer.WriteStartArray();
+                    foreach (var item in value.EnumerateArray()) Write(writer, item);
+                    writer.WriteEndArray(); break;
+                case JsonValueKind.String: writer.WriteStringValue(value.GetString()); break;
+                // Numbers keep their exact text (20.0 and 20 are different settings defaults to a reviewer).
+                default: value.WriteTo(writer); break;
+            }
+        }
+    }
     public string Text(string field, string locale) => Document.GetProperty(field).TryGetProperty(locale, out var text)
         ? text.GetString()! : Document.GetProperty(field).GetProperty("en").GetString()!;
     public static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));

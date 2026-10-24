@@ -22,6 +22,8 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     /// <summary>OD-114: a custom, unofficial mod from the player's custom folder (shown with its badge).</summary>
     public bool Custom => Manifest.IsCustom;
     public string CustomBadge { get; init; } = "";
+    /// <summary>The custom-mod or unofficial-catalog badge is shown.</summary>
+    public bool ShowSourceBadge => CustomBadge.Length > 0;
     /// <summary>The player still has to confirm this exact custom manifest (the update's, when one is pending) before acting.</summary>
     public bool NeedsConfirmation { get; init; }
 }
@@ -128,16 +130,19 @@ public sealed partial class ShellViewModel
     /// Native (infinity_mod.dll) mods need the signed runtime and helper next to the launcher (<see cref="ModRuntimePackage"/>): development
     /// packages carry them; a production package only once WINDOWS ships them with a hook that hosts mods (OD-113, MODS.md §6).
     /// </summary>
-    public bool NativeModsAvailable => DevelopmentMods || _nativeRuntime is not null;
+    /// <remarks>OD-116: or installable, the catalog listing <c>infinity-mod-runtime</c> (installing a native mod installs it first).</remarks>
+    public bool NativeModsAvailable => DevelopmentMods || _nativeRuntime is not null || _catalog?.Runtime is not null;
+    /// <summary>A native mod installs its runtime with it: none verified yet, but the catalog lists one.</summary>
+    private bool RuntimeComesWithMod => _nativeRuntime is null && _catalog?.Runtime is not null;
     public bool HasManifestCatalog => _catalogLoaded;
     public bool ModOperationBusy => _modOperation;
     public bool ModContentEnabled => !_modOperation;
     public string ModProgress => _modProgress;
     private bool CatalogExpired => _catalog?.Expired(DateTimeOffset.UtcNow) == true;
     public string ModCatalogStatus => _catalogFailure ?? (!_catalogLoaded ? S[_catalogLoading ? "mods.progress.catalog" : "mods.catalog_unloaded"]
-        : CatalogExpired ? S["mods.catalog_expired"] : _catalog is { Trusted: false } ? S["mods.catalog_dev"]
+        : CatalogExpired ? S["mods.catalog_expired"] : DevelopmentMods ? S["mods.catalog_dev"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"]
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
-    public string ModCatalogSummary => S.Format(_catalog is { Trusted: true } ? "mods.catalog_count_signed" : "mods.catalog_count",
+    public string ModCatalogSummary => S.Format(_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count",
         ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
         + (_customProblems > 0 ? " · " + S.Format("mods.custom_problems", ("count", _customProblems.ToString(CultureInfo.CurrentCulture))) : "");
     /// <summary>OD-114: where the player puts custom mods, one folder per mod (shown on the Mods page).</summary>
@@ -295,7 +300,8 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>The catalog's requirements; none known yet is "unknown" in production and "nothing" in development.</summary>
-    private IReadOnlyList<ModRequirement>? RequiredCatalog => _catalog?.Required ?? (_config.Production ? null : []);
+    /// <remarks>OD-116 dropped <c>required</c>: the catalog no longer makes a mod mandatory before Play (only a development catalog still can).</remarks>
+    private IReadOnlyList<ModRequirement>? RequiredCatalog => _catalog?.Required ?? [];
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
     // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it decides which mods every Play needs).
@@ -361,7 +367,7 @@ public sealed partial class ShellViewModel
         _catalogLoading = true;
         try
         {
-            if (!DevelopmentMods && !_catalogLoaded && await Task.Run(() => SignedCatalogCached()) is { } cached)
+            if (!DevelopmentMods && !_catalogLoaded && await Task.Run(() => OfficialModCatalog.LoadCached(CatalogUri, CatalogCache)) is { } cached)
             {
                 ApplyCatalog(cached);
                 await RefreshModsAsync(); // OD-115: the cached catalog's requirements decide Play while the network fetch runs
@@ -414,11 +420,10 @@ public sealed partial class ShellViewModel
         return string.Join(" <- ", parts);
     }
 
-    private ModCatalog? SignedCatalogCached()
-    {
-        try { return new SignedModCatalog(ModDownloads, Path.Combine(_stateDirectory, "mod-catalog")).LoadCached(); }
-        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return null; }
-    }
+
+    /// <summary>OD-116: the player's catalog ("Use a different catalog"), else the official file on the launcher repository's main.</summary>
+    private Uri CatalogUri => CustomCatalog ?? OfficialModCatalog.OfficialUrl;
+    private string CatalogCache => Path.Combine(_stateDirectory, "mod-catalog-v2");
 
     /// <summary>Tests only: replaces the network catalog fetch (returns the catalog, or throws as a failed fetch).</summary>
     internal Func<CancellationToken, Task<ModCatalog>>? CatalogFetchForTests { get; set; }
@@ -434,7 +439,7 @@ public sealed partial class ShellViewModel
                 throw new ModException("invalid catalog URL", ModErrors.Catalog);
             catalog = await DevelopmentModCatalog.LoadAsync(ModDownloads, uri, timeout.Token);
         }
-        else catalog = await new SignedModCatalog(ModDownloads, Path.Combine(_stateDirectory, "mod-catalog")).LoadAsync(ModCatalogTrust.ProductionUrl, timeout.Token);
+        else catalog = await OfficialModCatalog.LoadAsync(ModDownloads, CatalogUri, CatalogCache, timeout.Token);
         ApplyCatalog(catalog);
     }
 
@@ -456,7 +461,7 @@ public sealed partial class ShellViewModel
         var home = ModHome;
         var required = RequiredCatalog;
         var (health, error, facts, problems, requirement) = await Task.Run(() => ReadModState(factory, catalog, home, required));
-        _nativeRuntime = await Task.Run(() => ModRuntimePackage.Locate(LauncherDirectory, key));
+        _nativeRuntime = await Task.Run(() => LocateRuntime(home, key));
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts; _modRequirement = requirement;
@@ -485,9 +490,12 @@ public sealed partial class ShellViewModel
         bool Confirmed(ModManifest m) { try { return m.IsCustom && manager.CustomConfirmed(m); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return false; } }
         var health = manager.Inspect();
         var facts = new List<ModCardFacts>();
-        foreach (var manifest in catalog)
+        foreach (var listed in catalog)
         {
-            var installed = health.Installed.FirstOrDefault(i => i.Id == manifest.Id);
+            var installed = health.Installed.FirstOrDefault(i => i.Id == listed.Id);
+            // OD-116: a catalog entry rebuilds its manifest, so the reviewed manifest a 1.0.9 installed has other bytes for the same
+            // content; the installed one stands for it (no update to review, receipts and settings stay bound to it).
+            var manifest = installed?.Manifest is { } same && same.SameContent(listed) ? same : listed;
             if (installed?.Manifest is { } current && current.Digest != manifest.Digest)
             {
                 facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest, Confirmed(manifest)));
@@ -551,7 +559,8 @@ public sealed partial class ShellViewModel
             }
             else
             {
-                status = expired ? S["mods.catalog_expired"] : nativeBlocked ? S["mods.native_unavailable"] : S["mods.not_installed"];
+                status = expired ? S["mods.catalog_expired"] : nativeBlocked ? S["mods.native_unavailable"]
+                    : mod.NeedsRuntime && !custom && RuntimeComesWithMod ? S["mods.runtime_with_mod"] : S["mods.not_installed"];
                 badge = S["mods.not_installed"]; action = S["mods.install"];
                 // A custom mod needs no catalog (it has no download); an official one waits for a fresh catalog.
                 canAct = compatible && !nativeBlocked && fact.Blocker is null && (custom ? !mod.CustomBlocked : !expired && _catalog is not null);
@@ -581,7 +590,9 @@ public sealed partial class ShellViewModel
                 Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
                 UpdateAvailable = fact.Next is not null, Next = fact.Next, UpdateSummary = fact.Next is { } upcoming ? UpdateSummary(mod, upcoming) : "",
-                CustomBadge = custom ? S["mods.custom_badge"] : "",
+                // OD-116: every mod of a player-chosen catalog says so, and a native one that it runs code with the game.
+                CustomBadge = custom ? S["mods.custom_badge"] : UsingCustomCatalog && _manifestCatalog.Any(m => m.Id == mod.Id)
+                    ? S[mod.IsNative ? "catalog.badge_native" : "catalog.badge"] : "",
                 // Disabling never needs it; installing, enabling and each update's new digest do.
                 NeedsConfirmation = custom && !fact.Confirmed && !(installed is { Enabled: true } && fact.Next is null),
             });
@@ -629,12 +640,13 @@ public sealed partial class ShellViewModel
         if (current.UpdateAvailable || current.NeedsConfirmation) { ShowModInformation(current); return; } // reviewed (and a custom mod confirmed) first, in the information pane
         var mod = current.Manifest;
         var factory = ModManagerFactory()!;
-        var hosts = _catalog?.DownloadHosts ?? [];
+        var hosts = CatalogHosts;
         var hardcore = ProfileHardcore;
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
-            var manager = await Task.Run(factory);
+            if (mod.NeedsRuntime && !(current.Installed && current.Enabled)) await RequireRuntimeAsync(); // OD-116: installing a native mod installs its runtime
+            var manager = await Task.Run(ModManagerFactory() ?? factory); // after the runtime step: a data mod sees the runtime it installed
             if (!current.Installed && current.Action == S["mods.adopt"]) await Task.Run(() => manager.Adopt(mod, hardcore));
             else if (!current.Installed && mod.IsCustom) await Task.Run(() => manager.InstallCustom(mod, progress, hardcore: hardcore));
             else if (!current.Installed)
@@ -646,15 +658,26 @@ public sealed partial class ShellViewModel
         }, S["mods.action_done"]);
     }
 
+    /// <summary>This catalog's download host rule (OD-116: any HTTPS host, every download pinned); nothing without a catalog.</summary>
+    private Func<string, bool> CatalogHosts => _catalog?.AllowsHost ?? (_ => false);
+
+    /// <summary>A native or SQL data mod's runtime, installed from the catalog when missing or changed; refused when none verifies.</summary>
+    private async Task RequireRuntimeAsync()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        if (await EnsureRuntimeAsync(timeout.Token) is null) throw new ModException("no verified mod runtime", ModErrors.RuntimeMissing);
+    }
+
     public Task ConfirmModUpdateAsync()
     {
         if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next }) return Task.CompletedTask;
-        var factory = ModManagerFactory()!; var hosts = _catalog?.DownloadHosts ?? []; var hardcore = ProfileHardcore;
+        var factory = ModManagerFactory()!; var hosts = CatalogHosts; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
+            if (next.NeedsRuntime) await RequireRuntimeAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-            var manager = await Task.Run(factory);
+            var manager = await Task.Run(ModManagerFactory() ?? factory); // after the runtime step: a data mod sees the runtime it installed
             if (next.IsCustom) await Task.Run(() => manager.InstallCustom(next, progress, update: true, hardcore: hardcore));
             else await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
         }, S["mods.updated"]);

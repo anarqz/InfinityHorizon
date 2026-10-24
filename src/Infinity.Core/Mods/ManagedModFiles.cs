@@ -126,7 +126,15 @@ public sealed partial class ManagedModFiles
             throw new ModException("Hardcore profiles cannot enable mods that affect multiplayer", ModErrors.Hardcore);
     }
 
-    public async Task InstallAsync(HttpClient http, ModManifest manifest, IReadOnlyCollection<string> downloadHosts, CancellationToken cancellation,
+    public Task InstallAsync(HttpClient http, ModManifest manifest, IReadOnlyCollection<string> downloadHosts, CancellationToken cancellation,
+        IProgress<string>? progress = null, bool update = false, bool hardcore = false)
+    {
+        ArgumentNullException.ThrowIfNull(downloadHosts);
+        return InstallAsync(http, manifest, host => downloadHosts.Contains(host, StringComparer.OrdinalIgnoreCase), cancellation, progress, update, hardcore);
+    }
+
+    /// <summary>The same with a host rule: an OD-116 catalog allows any HTTPS host, every package pinned by its SHA-256 and size.</summary>
+    public async Task InstallAsync(HttpClient http, ModManifest manifest, Func<string, bool> downloadHosts, CancellationToken cancellation,
         IProgress<string>? progress = null, bool update = false, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(downloadHosts);

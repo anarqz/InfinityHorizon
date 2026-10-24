@@ -17,6 +17,15 @@ public sealed record ModCatalog(string CatalogId, long Sequence, DateTimeOffset?
     /// </summary>
     public IReadOnlyList<ModRequirement> Required { get; init; } = [];
 
+    /// <summary>OD-116: the catalog's runtime entry (the signed native mod runtime), or null.</summary>
+    public ModRuntimeEntry? Runtime { get; init; }
+
+    /// <summary>OD-116: downloads may come from any HTTPS host; each is pinned by its SHA-256 and size instead.</summary>
+    public bool AnyDownloadHost { get; init; }
+
+    /// <summary>The host rule for this catalog's downloads.</summary>
+    public Func<string, bool> AllowsHost => AnyDownloadHost ? _ => true : host => DownloadHosts.Contains(host, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>An expired catalog still lists and manages installed mods; it no longer installs or updates.</summary>
     public bool Expired(DateTimeOffset now) => ExpiresAt is { } expires && now >= expires;
 }
