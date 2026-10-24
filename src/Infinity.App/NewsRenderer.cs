@@ -66,6 +66,8 @@ public static class NewsRenderer
                 return title;
             case ParagraphBlock paragraph:
                 return Inlines(new Paragraph { Margin = new Thickness(0, 0, 0, 16) }, paragraph.Inline, context);
+            case ListBlock { IsOrdered: false } bullets:
+                return Bullets(bullets, context);
             case ListBlock list:
                 var result = new List { MarkerStyle = list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc, Margin = new Thickness(0, 0, 0, 16), Padding = new Thickness(34, 0, 0, 0), MarkerOffset = 10 };
                 if (list.IsOrdered && int.TryParse(list.OrderedStart, out var start) && start > 0) result.StartIndex = start;
@@ -109,6 +111,38 @@ public static class NewsRenderer
         span.Inlines.AddRange(parts);
         return span;
     }
+
+    /// <summary>
+    /// T3e: an unordered list with its own markers. Under Wine, FlowDocument draws no Disc marker (ordered numbers are fine), so each
+    /// item is a hanging-indent paragraph that starts with a fixed-width "•" in Selawik; wrapped lines align with the text.
+    /// </summary>
+    private static Section Bullets(ListBlock list, Context context)
+    {
+        const double indent = 34;
+        var section = new Section { Margin = new Thickness(0, 0, 0, 16) };
+        foreach (var entry in list.OfType<ListItemBlock>())
+        {
+            var first = true;
+            foreach (var child in entry)
+            {
+                if (Block(child, context) is not { } converted) continue;
+                converted = Tight(converted);
+                if (first && converted is Paragraph paragraph)
+                {
+                    paragraph.Margin = new Thickness(indent, 0, 0, 4); paragraph.TextIndent = -indent;
+                    if (paragraph.Inlines.FirstInline is { } start) paragraph.Inlines.InsertBefore(start, Marker(indent)); else paragraph.Inlines.Add(Marker(indent));
+                }
+                else converted.Margin = new Thickness(indent, converted.Margin.Top, 0, converted.Margin.Bottom);
+                section.Blocks.Add(converted);
+                first = false;
+            }
+        }
+        return section;
+    }
+
+    /// <summary>The bullet, a Selawik "•" in a box of the indent's width (so the text after it starts where wrapped lines do).</summary>
+    internal static InlineUIContainer Marker(double width) =>
+        new(new TextBlock { Text = "•", Width = width, Padding = new Thickness(12, 0, 0, 0) }) { BaselineAlignment = BaselineAlignment.Baseline };
 
     private static System.Windows.Documents.Block Tight(System.Windows.Documents.Block block) { if (block is Paragraph p) p.Margin = new Thickness(0, 0, 0, 4); return block; }
 
