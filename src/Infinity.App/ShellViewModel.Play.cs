@@ -82,7 +82,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModRecoveryRequired;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked && !RequiredModBlocked;
 
     public string? PlayStatus => _playStatus;
 
@@ -90,6 +90,7 @@ public sealed partial class ShellViewModel
 
     public async Task PlayAsync()
     {
+        _modLaunchFailure = null;
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         RefreshHook(); // the hook as it is now, not as it was when the screen last looked
@@ -104,13 +105,38 @@ public sealed partial class ShellViewModel
             return;
         }
         var startingSession = _session;
-        try
+        // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
+        // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
+        ModLaunchPreparation mods;
+        try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
+        catch (ModHardcoreException error)
         {
-            ValidateManagedMods();
-            if (ManagedMods().HasEnabledNativeMods) { Message = S["mods.offline_only"]; return; }
+            // OD-112 follow-up: refused before anything is written; the Mods page offers Disable.
+            Message = HardcoreRefusal(error.Mods.Select(m => m.Text("name", S.Locale)));
+            await RefreshModsAsync(); return;
         }
-        catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException)
-        { Message = S["mods.requirements_unmet"]; return; }
+        catch (ModException error) when (error.Code == ModErrors.Recovery)
+        { Message = S["mods.play_blocked"]; await RefreshModsAsync(); return; }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error))
+        {
+            if (_modHealth.AnyEnabled) { Message = ModLaunchFailed("launch preparation", error); await RefreshModsAsync(); return; }
+            Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : "") + ": " + error.Message);
+            mods = ModLaunchPreparation.None;
+        }
+        // OD-115: every Play needs the catalog's required mods managed, enabled and with their required settings (the locks above wrote them).
+        if (await RequiredModsForLaunchAsync() is { Blocks: true } requirement)
+        {
+            _modRequirement = requirement; Message = ModPlayNotice; await RefreshModsAsync(); return;
+        }
+        // OD-113: native mods play online (modded lobbies only) when the signed runtime and a hook that hosts it are present.
+        ModRuntimePackage? nativeRuntime = null;
+        if (mods.HasEnabledNative)
+        {
+            var (runtime, refusal) = await NativeModsForOnlineAsync(mods.HasEnabledDataSql);
+            if (refusal is not null) { Message = refusal; return; }
+            nativeRuntime = runtime;
+        }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var startingInstall = _install;
         var startingGame = _gate.Game;
         if (!await RefreshOnlineServiceForPlayAsync()) return;
@@ -118,28 +144,50 @@ public sealed partial class ShellViewModel
         if (!await RefreshLauncherPolicyAsync()) return;
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var futureSessionId = Guid.CreateVersion7().ToString();
-        await CheckIntegrityAsync(futureSessionId);
-        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
-            || !CanPlay || !IntegrityReady || _integrity is null)
-        { ConfigurationMessage(IntegrityStatus, error: true, integrity: true); return; }
+        // OD-113: only a Supporter + Hardcore profile is checked, silently; any other declares no car database.
+        var (integrityProceed, integrity) = await IntegrityForPlayAsync(futureSessionId);
+        if (!integrityProceed || !ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
+            || !CanPlay) return;
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
         if (profile is null)
         {
             return;
         }
-        var integrity = _integrity!;
-        if (integrity.CarDbSha256 is not { Length: 64 } carDb) { ConfigurationMessage(S["integrity.inconclusive"], error: true, integrity: true); return; }
+        var carDb = integrity?.CarDbSha256 ?? string.Empty;
         var development = DevServer;
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
+        // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods, each one's mapped files
+        // checked against its manifest (OD-113: data mods enter it from this verified plan); the gate's `modded` flag and the
+        // overlay's bridge share it.
+        var launchModSet = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
+        if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed)
+        {
+            Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")");
+            // never online as vanilla with multiplayer mods enabled: the session would be admitted unmodded
+            if (mods.MultiplayerMods.Count > 0) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
+        }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
+        // N-H2/OD-113: a launch with native mods carries a FIMOD003 plan (this launch's nonce) to the hook and uses the runtime
+        // source: ready only on a verified ModsReport for that nonce and digest; file mods in it are ready from the verified plan.
+        NativeModPlan? nativePlan = null;
+        if (nativeRuntime is not null)
+        {
+            nativePlan = await PrepareOnlineNativePlanAsync(nativeRuntime);
+            if (nativePlan is null) return;
+            if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
+        }
+        var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
         using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
-            NativeDllOverrides = ManagedMods().NativeDllOverrides(),
+            NativeDllOverrides = mods.DllOverrides,
+            ModEnvironment = nativePlan?.Environment ?? [],
             Saves = SessionSavesFor(profile),
-            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity),
+            Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, modSet),
+            Mods = modSet,
             OnlineActivity = onlineActivity,
             Text = S,
             CrashReports = new Infinity.Core.Diagnostics.CrashIncidentStore(_stateDirectory),
@@ -150,14 +198,16 @@ public sealed partial class ShellViewModel
                     ? matchmakingOrigin.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped) : S["connection.unavailable"]),
             CarDbSha256 = carDb,
             InitialSessionId = futureSessionId,
-            OnlineAccessLost = integrity.Revoke,
-            PrepareAdmission = async (id, ct) =>
+            OnlineAccessLost = integrity is null ? null : integrity.Revoke,
+            PrepareAdmission = integrity is null ? null : async (id, ct) =>
             {
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
                 await integrity.PrepareAdmissionAsync(id, ct).ConfigureAwait(false);
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
             },
         };
+        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild,
+            mods.HasEnabledDataSql ? DataModSqlHookBuild : NativeModOnlineHookBuild) };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
         _waitingForAdmission = true;
@@ -174,6 +224,7 @@ public sealed partial class ShellViewModel
         // BUG-0001: the online session's drivatar caches never reach offline play.
         var caches = SwitchCaches(_install.Root, online: true);
         _playOnlineActivity = onlineActivity;
+        _playModSet = modSet;
         try
         {
             _playTask = Task.Run(() => supervisor.RunAsync(_play.Token));
@@ -181,6 +232,8 @@ public sealed partial class ShellViewModel
         }
         finally
         {
+            // OD-113: the session database restore runs after the game exited, as offline, before Play can start again
+            if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan);
             if (caches)
             {
                 SwitchCaches(_install.Root, online: false);
@@ -193,6 +246,8 @@ public sealed partial class ShellViewModel
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
+            _playModSet = null;
+            RefreshMods();
             Changed(string.Empty);
             if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
                 await RefreshIntegrityAutomaticallyAsync();
@@ -284,6 +339,25 @@ public sealed partial class ShellViewModel
         OverlayOn(e);
         switch (e)
         {
+            case SupervisorEvent.ModsReported reported:
+                // N-H2: the supervisor fed the hook's ModsReport (0x1b) to this launch's runtime mod set; a report for another nonce or plan is ignored.
+                Log(reported.Accepted switch
+                {
+                    true => "mods: runtime report accepted (" + _playModSet?.State.Phase + ")",
+                    false => "mods: runtime report ignored (not this launch's plan)",
+                    null => "mods: runtime report ignored (no native plan)",
+                });
+                foreach (var entry in reported.Report.Mods)
+                    Log($"mods: report {entry.Id} {entry.Version} state={entry.State switch { 1 => "ready", 2 => "failed", _ => "starting" }} compat={Convert.ToHexStringLower(entry.CompatibilitySha256)[..16]}");
+                break;
+            case SupervisorEvent.ModsFailed failed:
+                // OD-113: no modded matchmaking for this launch; the game itself goes on (or the runtime already ended it)
+                Log("mods: runtime mod set failed (" + failed.Reason + ")");
+                var why = RuntimeReason();
+                Message = why is null ? S["mods.online_failed"] : S["mods.online_failed"] + " (" + why + ")";
+                _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
+                SetStatus(Message);
+                break;
             case SupervisorEvent.RequestingAdmission:
                 _waitingForAdmission = true;
                 _queued = false;
@@ -340,10 +414,19 @@ public sealed partial class ShellViewModel
                 Changed(nameof(HookLine));
                 Changed(string.Empty);
                 break;
+            case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed { Code: ModRuntimeExitCode } }:
+                // the hook ended the session on purpose: the selected mods failed after they began loading (N-M4), not a crash
+                _modRuntimeEnded = true;
+                var reason = RuntimeReason();
+                Message = reason is null ? S["mods.runtime_ended"] : S["mods.runtime_ended"] + " (" + reason + ")";
+                _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
+                SetStatus(Message);
+                break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
                 break;
             case SupervisorEvent.CrashCaptured captured:
+                if (_modRuntimeEnded) { _modRuntimeEnded = false; Log("crash: not presented (the mod runtime ended the session)"); break; }
                 PresentCrash(captured.Incident);
                 break;
             case SupervisorEvent.Exited:
@@ -354,7 +437,7 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Ended ended:
                 _waitingForAdmission = _queued = false;
-                if (ended.Reason is not "error") ClearRuntimeConfigurationIssue();
+                if (ended.Reason is not "error") { ClearRuntimeConfigurationIssue(); ClearHookOfflineNotice(); }
                 var text = ended.Reason switch
                 {
                     "queue_cancelled" => S[ended.Left ? "queue.left" : "queue.leave_pending"],
@@ -368,7 +451,10 @@ public sealed partial class ShellViewModel
                 SetStatus(ended.Left || ended.Reason is "queue_cancelled" or "error" ? text : text + " " + S["supervisor.leave_failed"]);
                 break;
             case SupervisorEvent.HookOffline:
+                // The hook closes its pipe whenever the game quits, a moment before the process exit: a real problem only
+                // while the game keeps running, so Ended takes the notice back instead of leaving Configure flagged.
                 ConfigurationMessage(S["supervisor.hook_offline"], error: true);
+                _hookOfflineNotice = true;
                 SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error err when err.Message.StartsWith("save: ", StringComparison.Ordinal):
@@ -394,12 +480,7 @@ public sealed partial class ShellViewModel
                 SetStatus(S["updater.session_required"]);
                 break;
             case SupervisorEvent.Error content when content.Message is ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged or ErrorCodes.ContentPolicyUnavailable:
-                _integrity?.Revoke();
-                VerificationCache.Invalidate();
-                _integrityFailed = true;
-                _integrityStatus = S[content.Message == ErrorCodes.ContentPolicyUnavailable ? "integrity.policy_unavailable"
-                    : content.Message == ErrorCodes.ContentIncompatible ? "integrity.incompatible" : "integrity.inconclusive"];
-                ConfigurationMessage(_integrityStatus, error: true, integrity: true);
+                IntegrityRefused(content.Message, content.DuringAdmission); // OD-113: a mismatch is shown; any other refusal is re-checked silently
                 SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Error { DuringAdmission: true }:

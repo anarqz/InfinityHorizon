@@ -14,6 +14,11 @@ public sealed partial class WorldsBridge
     public bool SocketProofRequired {get;init;}
     public Func<Frame.RelayContext,CancellationToken,Task>? SendRelayContext {get;set;}
     private bool NeedsProof=>BuildProfile.ProductionOnly || SocketProofRequired;
+    // A development guest takes the production path whenever its grant carries proof material it can
+    // verify and the hook pipe is there: context, network hint, punch, proof. requireSocketProof stays
+    // the host's policy; without proof material a development grant keeps working as before.
+    private bool ProofFor(RelayGrant? relay)=>NeedsProof || relay?.UdpProof is not null && SocketProofKeys is not null && SendRelayContext is not null;
+    private bool ProofInstalled=>Volatile.Read(ref _proofPayload) is not null;
     private readonly SemaphoreSlim _proofWrites=new(1,1);
     private byte[]? _proofPayload;
     // Seat-view refreshes are not credential changes. Guard network replies with this generation.
@@ -54,16 +59,28 @@ public sealed partial class WorldsBridge
     }
     private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation)
     {
-        if(!NeedsProof)return true;
+        if(!ProofFor(relay))return true;
         Frame.RelayContext frame;
         try { frame=ProofFrame(relay,world,grant); }
-        catch(InvalidDataException) { await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);return false; }
+        catch(InvalidDataException)
+        {
+            await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);
+            if(NeedsProof)return false;
+            _log("worlds: development grant proof unusable; joining without a socket proof");
+            return true; // development only: never worse than the old path
+        }
         var entered=false;
         try
         {
             await _proofWrites.WaitAsync(cancellation).ConfigureAwait(false);entered=true;
             if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch) || SendRelayContext is null)return false;
-            await SendRelayContext(frame,cancellation).ConfigureAwait(false);
+            try { await SendRelayContext(frame,cancellation).ConfigureAwait(false); }
+            catch(Exception error) when(!NeedsProof && error is not OperationCanceledException)
+            {
+                // development only: a context the hook cannot take (pipe not ready, no clock) never costs the seat
+                _log("worlds: development guest could not push the socket proof context; joining without a socket proof");
+                return true;
+            }
             if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch))
             {
                 await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);return false;
@@ -72,13 +89,15 @@ public sealed partial class WorldsBridge
                 || !CryptographicOperations.FixedTimeEquals(_proofPayload.AsSpan(57,32),frame.Payload.AsSpan(57,32)))
             { _networkRevision=0;_proofGeneration++; }
             if(_proofPayload is not null)CryptographicOperations.ZeroMemory(_proofPayload);
-            _proofPayload=frame.Payload.ToArray();return true;
+            _proofPayload=frame.Payload.ToArray();
+            if(!NeedsProof)_log("worlds: development guest installed the socket proof context");
+            return true;
         }
         finally {CryptographicOperations.ZeroMemory(frame.Payload);if(entered)_proofWrites.Release();}
     }
     private Task<bool> SendSeatProofAsync(Seat? seat,long epoch,CancellationToken cancellation)
     {
-        if(!NeedsProof)return Task.FromResult(true);
+        if(!NeedsProof && !ProofFor(seat?.Relay))return ProofInstalled ? ClearSeatProofAsync(epoch) : Task.FromResult(true);
         if(seat is null || seat.State==SeatStates.Hosting)return ClearSeatProofAsync(epoch);
         if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync(epoch,success:false);
         return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation);
@@ -86,7 +105,7 @@ public sealed partial class WorldsBridge
     private async Task<bool> ClearSeatProofAsync(long epoch,bool success=true) {await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);return success;}
     private async Task ClearProofAsync(CancellationToken cancellation,long? expectedEpoch=null)
     {
-        if(!NeedsProof)return;
+        if(!NeedsProof && !ProofInstalled)return; // a development context, once pushed, is cleared like a production one
         var epoch=expectedEpoch ?? Volatile.Read(ref _mineEpoch);
         using var bound=CancellationTokenSource.CreateLinkedTokenSource(cancellation);bound.CancelAfter(TimeSpan.FromSeconds(2));
         await _proofWrites.WaitAsync(bound.Token).ConfigureAwait(false);

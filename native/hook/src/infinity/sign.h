@@ -25,6 +25,12 @@ int azimuth_sign_verify(const unsigned char signature[64], const unsigned char *
 int azimuth_sign_update_ok(const unsigned char signature[64], const unsigned char digest[32],
                            const unsigned char key[32]);
 
+/* The native mod runtime and helper (OD-112): "fi-mod-runtime-v1 " + SHA-256 lowercase hex. */
+#define AZIMUTH_MOD_SIGN_PREFIX "fi-mod-runtime-v1 "
+#define AZIMUTH_MOD_SIGN_LINE 82
+int azimuth_sign_mod_runtime_ok(const unsigned char signature[64], const unsigned char digest[32],
+                                const unsigned char key[32]);
+
 /* Launch tickets (ONLINE_OFFLINE.md 3.2, fi_auth::ticket): Ed25519 by the server's
    launch-ticket key over "fi-launch-ticket-v1\n" || claims (the claims' raw bytes, no
    canonicalisation). The key is picked by the claims' kid; two overlap for 30 days (the current

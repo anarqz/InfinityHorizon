@@ -29,6 +29,10 @@ public sealed class OnlineContentSession : IDisposable
         : _permission?.State == "incompatible" ? InstallationState.Incompatible : InstallationState.Inconclusive;
     public string? CarDbSha256 => _snapshot?.Files.FirstOrDefault(file => file.FileId == "car_database")?.Sha256;
     public bool FilesCurrent => _snapshot?.IsCurrent() == true;
+    /// <summary>The digests this check observed, with their stamps (OD-113: remembered so an unchanged file is not rehashed).</summary>
+    public ImmutableArray<KnownDigest> Digests => _snapshot?.Digests ?? [];
+    /// <summary>How many listed files reused a remembered digest instead of being rehashed.</summary>
+    public int ReusedDigests => _snapshot?.ReusedDigests ?? 0;
     public ImmutableArray<InstallationFinding> Findings
     {
         get
@@ -54,15 +58,20 @@ public sealed class OnlineContentSession : IDisposable
         _serverAnchor = api.ServerNow(clock); _anchorStamp = clock.GetTimestamp();
     }
 
-    public static async Task<OnlineContentSession> CheckAsync(ApiClient api, Func<CancellationToken, Task<string>> access,
+    public static Task<OnlineContentSession> CheckAsync(ApiClient api, Func<CancellationToken, Task<string>> access,
         string mount, string? sessionId = null, TimeProvider? clock = null, CancellationToken cancellation = default)
+        => CheckAsync(api, access, mount, known: null, sessionId, clock, cancellation);
+
+    /// <summary>As the other overload; a listed file unchanged since a <paramref name="known"/> digest is not rehashed (OD-113).</summary>
+    public static async Task<OnlineContentSession> CheckAsync(ApiClient api, Func<CancellationToken, Task<string>> access,
+        string mount, IReadOnlyCollection<KnownDigest>? known, string? sessionId = null, TimeProvider? clock = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(api); ArgumentNullException.ThrowIfNull(access);
         clock ??= TimeProvider.System;
         var capabilities = await api.ContentCapabilitiesAsync(await access(cancellation).ConfigureAwait(false), "fh2", cancellation).ConfigureAwait(false);
         Validate(capabilities);
         var snapshot = capabilities.Manifest is { } manifest
-            ? await CriticalFileReader.ReadAsync(mount, manifest.Files.Select(file => new CriticalFile(file.FileId, file.Path, (long)file.ByteLength)).ToArray(), cancellation).ConfigureAwait(false) : null;
+            ? await CriticalFileReader.ReadAsync(mount, manifest.Files.Select(file => new CriticalFile(file.FileId, file.Path, (long)file.ByteLength)).ToArray(), known, cancellation).ConfigureAwait(false) : null;
         var result = new OnlineContentSession(api, access, capabilities, snapshot, clock);
         try
         {
