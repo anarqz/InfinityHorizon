@@ -87,10 +87,11 @@ public sealed partial class ShellViewModel
             {
                 // OD-118 (G1, T1c): before SIGN IN, or while the service is not open, only GitHub's release list is read; the release
                 // floor (/launcher/v1/info) waits for Sign in and an open service.
-                await DiscoverLauncherReleaseAsync(bound.Token);
+                var read = await DiscoverLauncherReleaseAsync(bound.Token);
                 if (_updateRecoveryBlocked) return;
                 _launcherUpdatePhase = UpdatePhase.Current; _updateTarget = null;
-                ObserveDiscoveredRelease(_updater.DiscoveredVersion);
+                ObserveDiscoveredRelease(DiscoveredVersion);
+                if (!read && !_onlineEngaged) _ = RetryGitHubDiscoveryAsync(); // T1e
                 Log("update: release floor deferred (" + (_onlineEngaged ? "service not open" : "offline") + ")");
                 return;
             }
@@ -119,11 +120,44 @@ public sealed partial class ShellViewModel
         }
     }
 
-    private async Task DiscoverLauncherReleaseAsync(CancellationToken cancellation)
+    /// <summary>GitHub's signed release list (never an Infinity host): true when it was read.</summary>
+    private async Task<bool> DiscoverLauncherReleaseAsync(CancellationToken cancellation)
     {
-        try { await _updater!.DiscoverAsync(cancellation); }
+        try
+        {
+            if (DiscoveryForTests is { } fake) _discoveredForTests = await fake(cancellation);
+            else await _updater!.DiscoverAsync(cancellation);
+            return true;
+        }
         catch (Exception error) when (UpdateFailure(error))
-        { Log("update: release discovery unavailable (" + error.GetType().Name + ")"); }
+        { Log("update: release discovery unavailable (" + error.GetType().Name + ")"); return false; }
+    }
+
+    /// <summary>Tests only: replaces the GitHub discovery (returns the discovered version, or throws as a failed read).</summary>
+    internal Func<CancellationToken, Task<string?>>? DiscoveryForTests { get; set; }
+    private string? _discoveredForTests;
+    private string? DiscoveredVersion => DiscoveryForTests is not null ? _discoveredForTests : _updater?.DiscoveredVersion;
+
+    /// <summary>OD-118 T1e: how long after a failed offline GitHub read the one retry waits (a first-run Wine TLS hiccup).</summary>
+    internal TimeSpan GitHubRetryDelay { get; set; } = TimeSpan.FromSeconds(30);
+    private bool _githubRetryScheduled;
+
+    /// <summary>
+    /// OD-118 T1e: one delayed retry of GitHub's release list after an offline read failed, so a transient failure does not hide the
+    /// advice for the whole run. GitHub only (no Infinity request); skipped once the player chose SIGN IN (the online flow owns the
+    /// release check then), while a game runs, or when the launcher closes.
+    /// </summary>
+    private async Task RetryGitHubDiscoveryAsync()
+    {
+        if (_githubRetryScheduled) return;
+        _githubRetryScheduled = true;
+        try { await Task.Delay(GitHubRetryDelay, _updateStop.Token); }
+        catch (OperationCanceledException) { return; }
+        if (_onlineEngaged || Playing || _updateChecking || _updater is null && DiscoveryForTests is null) { Log("update: GitHub retry skipped"); return; }
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(_updateStop.Token);
+        bound.CancelAfter(TimeSpan.FromSeconds(25));
+        Log("update: retrying GitHub's release list once");
+        if (await DiscoverLauncherReleaseAsync(bound.Token) && !_onlineEngaged) ObserveDiscoveredRelease(DiscoveredVersion);
     }
 
     private async Task<ServerInfo> UpdateServerInfoAsync(CancellationToken cancellation)
