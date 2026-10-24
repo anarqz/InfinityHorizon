@@ -636,6 +636,8 @@
   "mods.error.runtime_missing": "Este mod precisa do runtime de mods do Infinity, e não foi possível instalá-lo. Confira sua conexão e o catálogo e tente de novo.",
   "mods.runtime_with_mod": "Não instalado · instala junto o runtime de mods do Infinity",
   "mods.progress.runtime": "Instalando o runtime de mods do Infinity…",
+  "mods.catalog_count_one": "{count} mod",
+  "mods.catalog_count_official_one": "{count} mod · catálogo oficial",
   "mods.catalog_count_official": "{count} mods · catálogo oficial",
   "external.badge": "Requer seus arquivos",
   "external.setup": "Configurar…",

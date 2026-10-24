@@ -144,7 +144,7 @@ public sealed partial class ShellViewModel
     public string ModCatalogStatus => _catalogFailure ?? (!_catalogLoaded ? S[_catalogLoading ? "mods.progress.catalog" : "mods.catalog_unloaded"]
         : CatalogExpired ? S["mods.catalog_expired"] : DevelopmentMods ? S["mods.catalog_dev"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"]
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
-    public string ModCatalogSummary => S.Format(_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count",
+    public string ModCatalogSummary => S.Format((_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count") + (ModCards.Count == 1 ? "_one" : ""),
         ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
         + (_customProblems > 0 ? " · " + S.Format("mods.custom_problems", ("count", _customProblems.ToString(CultureInfo.CurrentCulture))) : "");
     /// <summary>OD-114: where the player puts custom mods, one folder per mod (shown on the Mods page).</summary>
