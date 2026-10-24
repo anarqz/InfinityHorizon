@@ -1,4 +1,7 @@
 {
+  "updater.github_newer": "Uma versão mais nova do launcher Infinity ({version}) está disponível no GitHub. Seu launcher continua funcionando; baixe a nova na página oficial de releases.",
+  "updater.github_open": "Página oficial de releases",
+  "updater.github_dismiss": "Agora não",
   "offline.create_profile": "Criar perfil",
   "offline.create_noob": "Perfis offline são Noob. Perfis Hardcore são criados com a sessão iniciada.",
   "upsert.title": "Atualizar perfis online",
