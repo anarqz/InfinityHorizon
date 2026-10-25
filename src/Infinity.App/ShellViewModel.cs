@@ -119,15 +119,42 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     private async Task EngagedChecksAsync()
     {
         // A SIGN IN after sign-out or Play offline may fall inside the previous answer's retry-after (or a read still in
-        // flight): the first read waits for it instead of being dropped, so the status and the floor are always read.
+        // flight): the first read waits for it instead of being dropped, so the status and the floor are always read. A
+        // later sign-out or SIGN IN starts a new engagement; this one's waiter then stops without sending anything.
+        var engagement = _onlineEngagement;
+        bool Current() => _onlineEngaged && engagement == _onlineEngagement;
         try
         {
-            while (_onlineEngaged && (_onlineChecking || OnlineRetryRemaining > TimeSpan.Zero))
-                await Task.Delay(_onlineChecking ? TimeSpan.FromMilliseconds(100) : OnlineRetryRemaining, _onlineClock, _onlineStop.Token);
+            for (var waited = false; Current();)
+            {
+                var wait = _onlineChecking ? TimeSpan.FromMilliseconds(100) : OnlineRetryRemaining;
+                if (wait <= TimeSpan.Zero) break;
+                if (!waited) { waited = true; _onlineWaiting = true; Message = S["online.checking"]; Changed(string.Empty); } // the form says why it waits
+                // Task.Delay takes 1 ms to 1 day: a negative remainder means "now", a longer server cooldown is re-checked
+                await Task.Delay(wait < TimeSpan.FromMilliseconds(1) ? TimeSpan.FromMilliseconds(1) : wait > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : wait,
+                    _onlineClock, _onlineStop.Token);
+            }
         }
         catch (OperationCanceledException) { return; }
-        if (!_onlineEngaged) return;
+        finally
+        {
+            if (engagement == _onlineEngagement && _onlineWaiting)
+            {
+                _onlineWaiting = false;
+                if (Message == S["online.checking"]) Message = null;
+                Changed(string.Empty);
+            }
+        }
+        if (!Current()) return;
         await CheckOnlineStatusAsync(manual: false);
+        // the startup GitHub-only update probe may still be running: the floor read waits for it instead of being skipped
+        try
+        {
+            while (Current() && OnlineServiceAllowsPlay && _updateChecking)
+                await Task.Delay(TimeSpan.FromMilliseconds(100), _onlineClock, _onlineStop.Token);
+        }
+        catch (OperationCanceledException) { return; }
+        if (!Current()) return;
         // OD-118 T1c: strictly in order; the release floor (/launcher/v1/info) only once the service answered open.
         if (_onlineEngaged && OnlineServiceAllowsPlay) await CheckLauncherUpdatesAsync();
     }
