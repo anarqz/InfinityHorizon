@@ -146,7 +146,7 @@ public sealed partial class ShellViewModel
         var (integrityProceed, integrity) = await IntegrityForPlayAsync(futureSessionId);
         if (!integrityProceed || !ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
             || !CanPlay) return;
-        var profile = _session.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
+        var profile = _session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game);
         if (profile is null)
         {
             return;

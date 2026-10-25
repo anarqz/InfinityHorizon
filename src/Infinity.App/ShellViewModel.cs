@@ -263,6 +263,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             return;
         }
+        if (_firstLocal is not null)
+        {
+            await CreateAccountFromLocalAsync(_pending, _firstLocal);
+            return;
+        }
         await Run(async () =>
         {
             var session = await _pending.CreateAccountAsync("fh2", NewName);
@@ -277,6 +282,36 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         });
     }
 
+    /// <summary>The local profile a new account starts with (OD-120: POST /accounts registers it), null when none is on this PC.</summary>
+    private LocalProfile? _firstLocal;
+
+    /// <summary>
+    /// OD-120: a new account whose first profile is this PC's own (made signed out): POST /accounts with its name under its upload
+    /// key, then linked like any registration, and its offline save continues online (P1b). A name taken meanwhile renames the local
+    /// profile first (the player typed another name), so the profile and its save are never left behind.
+    /// </summary>
+    private Task CreateAccountFromLocalAsync(PendingAccount pending, LocalProfile first) => Run(async () =>
+    {
+        // The stored copy decides: another window may have changed or removed it since the screen opened.
+        if (LocalProfiles.Read().FirstOrDefault(p => p.Id == first.Id && p.LocalOnly) is not { } local) { _firstLocal = null; Message = S["offline.error.other"]; return; }
+        if (!string.Equals(NewName.Trim(), local.Name, StringComparison.Ordinal))
+        {
+            try { local = _firstLocal = LocalProfiles.Edit(local.Id, NewName.Trim(), local.Mode); }
+            catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
+        }
+        AccountSession session; Profile profile;
+        try { (session, profile) = await pending.CreateAccountAsync(new NewProfile(local.Game, local.Name, local.Mode), local.UploadKey); }
+        catch (ApiException refused) when (refused.Code == ErrorCodes.AccountsNameUnavailable) { Message = S["offline.error.name_unavailable"]; return; }
+        var linked = LocalProfiles.Link(local.Id, new CloudLink(session.Tokens.AccountId, profile.ProfileId, profile.Xuid, profile.Gamertag, profile.RenameNotice));
+        _pending = null; _firstLocal = null;
+        NewName = string.Empty;
+        var firstLine = S.Format("upsert.registered", ("names", linked.DisplayName)) + SaveNote(linked);
+        try { await EnterAsync(session); }
+        catch { session.Dispose(); throw; }
+        // The sign-in's own registrations (the other local profiles) follow this one's line.
+        Message = Message is { } after && after != S["signin.done_toast"] ? firstLine + " " + after : firstLine;
+    });
+
     public void ChooseGame(GameInfo game)
     {
         ArgumentNullException.ThrowIfNull(game);
@@ -289,7 +324,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ArgumentNullException.ThrowIfNull(profile);
         _chosenLocal = _rowLocals.GetValueOrDefault(profile.ProfileId);
         if (OfflineMode && _chosenLocal is { } chosen) RememberLastLocalProfile(chosen.Id);
-        Gate = _gate.ChooseProfile(profile.Gamertag);
+        Gate = _gate.ChooseProfile(ProfileName.Plain(profile.Gamertag), profile.ProfileId);
         Message = null;
         _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a Supporter + Hardcore profile is checked in the background
     }
@@ -301,7 +336,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         OpenHome();
         if (_session is not null)
         {
-            Gate = _gate with { Game = null, ProfileTag = null };
+            Gate = _gate with { Game = null, ProfileTag = null, ProfileKey = null };
         }
     }
 
@@ -312,7 +347,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         OpenHome();
         if (_gate.Game is not null)
         {
-            Gate = _gate with { ProfileTag = null };
+            Gate = _gate with { ProfileTag = null, ProfileKey = null };
             FillProfiles();
             _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: clears a previous profile's integrity result
         }
@@ -375,7 +410,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             Games.Add(game);
         }
-        var gate = _gate.SignIn(session.Email ?? (me.Profiles.Count > 0 ? me.Profiles[0].Gamertag : me.AccountId[..8]));
+        var gate = _gate.SignIn(session.Email ?? (me.Profiles.Count > 0 ? ProfileName.Plain(me.Profiles[0].Gamertag) : me.AccountId[..8]));
         // One game served: choose it for the player, as the owner's flow only asks when there is a choice.
         if (Games.Count == 1)
         {

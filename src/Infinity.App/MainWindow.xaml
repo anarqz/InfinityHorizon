@@ -471,6 +471,11 @@
                       <CheckBox IsChecked="{Binding Selected}" IsEnabled="{Binding CanChange}" Content="{Binding Name}" FontWeight="Bold" />
                       <TextBlock Text="{Binding Line}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="24,4,0,0" />
                       <TextBlock Text="{Binding Result}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}" Margin="24,4,0,0" />
+                      <!-- OD-120: the name was taken meanwhile: a new one, then Put them online again. -->
+                      <StackPanel Margin="24,6,0,0" Visibility="{Binding AsksName, Converter={StaticResource Visible}}">
+                        <TextBlock Text="{Binding DataContext.S[upsert.new_name], RelativeSource={RelativeSource AncestorType=Window}}" FontSize="12" />
+                        <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" Margin="0,4,0,0" />
+                      </StackPanel>
                     </StackPanel>
                   </Border>
                 </DataTemplate></ItemsControl.ItemTemplate>
@@ -480,6 +485,25 @@
             </StackPanel>
               </ScrollViewer>
             </DockPanel>
+          </Border>
+
+          <!-- OD-120: an account profile renamed by the plain-name backfill: one-time notice with the free rename. -->
+          <Border x:Name="RenamePanel" Panel.ZIndex="20" Style="{StaticResource Card}" Background="{StaticResource InfinitySurface}" MaxWidth="560"
+                  HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26,22" KeyDown="OnRenamePanelKey" Margin="0,16"
+                  Visibility="{Binding ShowRenameNotice, Converter={StaticResource Visible}}">
+            <StackPanel>
+              <TextBlock Text="{Binding S[rename.title]}" FontSize="22" FontWeight="Bold" />
+              <TextBlock Text="{Binding RenameNoticeText}" TextWrapping="Wrap" Margin="0,8,0,0" />
+              <Button x:Name="RenameKeepButton" Content="{Binding RenameKeepLabel}" Click="OnKeepRenamedName" IsEnabled="{Binding CanKeepName}"
+                      Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,16,0,0" />
+              <TextBlock Text="{Binding S[rename.new_name]}" FontSize="12" Margin="0,16,0,0" />
+              <DockPanel Margin="0,4,0,0">
+                <Button Content="{Binding S[rename.choose]}" Click="OnRenameProfile" IsEnabled="{Binding CanRename}" DockPanel.Dock="Right"
+                        Padding="12,6" Margin="10,0,0,0" />
+                <TextBox Text="{Binding RenameName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" />
+              </DockPanel>
+              <Button Content="{Binding S[rename.later]}" Click="OnRenameLater" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="0,14,0,0" />
+            </StackPanel>
           </Border>
 
           <!-- OD-118: an online-only area on the offline path: centered "Offline mode" with the disconnect icon, and Sign in. -->

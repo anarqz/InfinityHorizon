@@ -139,7 +139,7 @@ public sealed partial class ShellViewModel
     {
         get
         {
-            var profile = _session?.Me?.Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag && p.Game == _gate.Game);
+            var profile = _session?.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game);
             InspectLobbyProfile(ref profile);
             return profile;
         }

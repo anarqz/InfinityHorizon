@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using Infinity.Core.Api;
+using Infinity.Core.Shell;
 
 namespace Infinity.App;
 
@@ -18,9 +19,15 @@ public sealed partial class ShellViewModel
     public bool HasDeletionPending => AccountDeletion is not null;
     public bool CanRequestDeletion => CanChangeIdentity && !HasDeletionPending &&
         !string.IsNullOrWhiteSpace(DeletionEmail) &&
-        _session?.Me?.Profiles.Any(p => p.Gamertag == DeletionConfirmation.Trim()) == true;
+        _session?.Me?.Profiles.Any(p => DeletionConfirms(p, DeletionConfirmation)) == true;
     public string DeletionHint => S.Format("account.delete_hint", ("tag", _gate.ProfileTag ??
-        (_session?.Me?.Profiles is { Count: > 0 } profiles ? profiles[0].Gamertag : "Name#12345")));
+        (_session?.Me?.Profiles is { Count: > 0 } profiles ? ProfileName.Plain(profiles[0].Gamertag) : "Name")));
+
+    /// <summary>The typed confirmation names this profile: its plain name or the server's gamertag, case-insensitively (OD-120).</summary>
+    private static bool DeletionConfirms(Profile profile, string typed) =>
+        typed.Trim() is { Length: > 0 } text && (string.Equals(text, profile.Gamertag, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, ProfileName.Plain(profile.Gamertag), StringComparison.OrdinalIgnoreCase));
+
     public string DeletionPendingText
     {
         get
@@ -67,7 +74,9 @@ public sealed partial class ShellViewModel
     {
         if (!CanRequestDeletion || string.IsNullOrEmpty(password) || _session is not { } session) return Task.CompletedTask;
         var email = DeletionEmail.Trim();
-        var confirmation = DeletionConfirmation.Trim();
+        // OD-120: the player types the plain name; the server is sent its own gamertag for that profile (plain, or a legacy one).
+        if (session.Me?.Profiles.FirstOrDefault(p => DeletionConfirms(p, DeletionConfirmation)) is not { } confirmed) return Task.CompletedTask;
+        var confirmation = confirmed.Gamertag;
         return Native(async (idp, _, _, cancellation) =>
         {
             try

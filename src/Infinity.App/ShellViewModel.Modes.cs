@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
 using Infinity.Core.Api;
+using Infinity.Core.Shell;
 using Infinity.Core.Saves;
 
 namespace Infinity.App;
@@ -43,7 +44,7 @@ public sealed partial class ShellViewModel
     /// <summary>The Hardcore → Noob warning is open (step 1 answered).</summary>
     public bool ShowConvert => _converting is not null && _convertDetails is not null;
 
-    public string ConvertTitle => _converting is null ? string.Empty : S.Format("modes.convert_title", ("name", _converting.Gamertag));
+    public string ConvertTitle => _converting is null ? string.Empty : S.Format("modes.convert_title", ("name", ProfileName.Plain(_converting.Gamertag)));
 
     /// <summary>What the change deletes for good, one line per kind the server counted.</summary>
     public string ConvertDeletes
@@ -116,7 +117,7 @@ public sealed partial class ShellViewModel
             CancelConvert();
             await _session.RefreshMeAsync();
             FillProfiles();
-            Message = S.Format("modes.converted", ("name", profile.Gamertag));
+            Message = S.Format("modes.converted", ("name", ProfileName.Plain(profile.Gamertag)));
         });
     }
 
@@ -223,7 +224,7 @@ public sealed partial class ShellViewModel
 /// <summary>One row of the profile picker.</summary>
 public sealed record ProfileRow(Profile Profile, string Line)
 {
-    public string Gamertag => Profile.Gamertag;
+    public string Gamertag => ProfileName.Plain(Profile.Gamertag);
 
     public bool Hardcore => Profile.Mode == "hardcore";
 }

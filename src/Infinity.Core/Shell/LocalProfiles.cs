@@ -7,8 +7,11 @@ using Infinity.Core.Saves;
 
 namespace Infinity.Core.Shell;
 
-/// <summary>The account profile a local profile became (or a cached account profile): stored as soon as the server answers.</summary>
-public sealed record CloudLink(string AccountId, string ProfileId, string Xuid, string Gamertag);
+/// <summary>
+/// The account profile a local profile became (or a cached account profile): stored as soon as the server answers.
+/// <see cref="RenameNotice"/>: the server's OD-120 clash-rename notice, while its free rename is unused.
+/// </summary>
+public sealed record CloudLink(string AccountId, string ProfileId, string Xuid, string Gamertag, RenameNotice? RenameNotice = null);
 
 /// <summary>
 /// OD-118: a profile kept on this PC. Created without an account (the same screen as before, no cloud call); uploaded to the
@@ -34,7 +37,8 @@ public sealed record LocalProfile(string Id, string Game, string Name, string Mo
     public ulong OfflinePlayXuid => !Hardcore && Cloud is { } cloud && !NotOnAccount
         && ulong.TryParse(cloud.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) ? xuid : OfflineXuid;
 
-    public string DisplayName => Cloud?.Gamertag ?? Name;
+    /// <summary>The name shown (OD-120: plain, never a cached legacy <c>#NNNNN</c>).</summary>
+    public string DisplayName => Cloud is { } cloud ? ProfileName.Plain(cloud.Gamertag) : Name;
 }
 
 /// <summary>
@@ -148,9 +152,10 @@ public sealed class LocalProfileStore(string stateDirectory)
     }
 
     /// <summary>
-    /// On every sign-in (P3): the account's profiles from GET /me. Cached ones it still lists are refreshed; ones it no longer
-    /// lists (deleted) are marked not on this account, never removed with their save; account profiles made on another PC are
-    /// added as cached entries with their own offline XUID. Profiles of another account stay as they are, never this account's.
+    /// On every sign-in (P3): the account's profiles from GET /me. Cached ones it still lists are refreshed, their name included
+    /// (OD-120: the server's plain name, also the name they play offline); ones it no longer lists (deleted) are marked not on this
+    /// account, never removed with their save; account profiles made on another PC are added as cached entries with their own
+    /// offline XUID. Profiles of another account stay as they are, never this account's.
     /// </summary>
     public IReadOnlyList<LocalProfile> RefreshFromAccount(Me me, string game, Func<string, bool> saveFolderExists)
     {
@@ -161,14 +166,12 @@ public sealed class LocalProfileStore(string stateDirectory)
         {
             // Only this game's profiles are compared with this game's list (another game's are not "not on this account").
             if (all[i].Game != game || all[i].Cloud is not { } cloud || cloud.AccountId != me.AccountId) continue;
-            all[i] = listed.FirstOrDefault(p => p.ProfileId == cloud.ProfileId) is { } current
-                ? all[i] with { Cloud = cloud with { Xuid = current.Xuid, Gamertag = current.Gamertag }, Mode = current.Mode, NotOnAccount = false }
-                : all[i] with { NotOnAccount = true };
+            all[i] = listed.FirstOrDefault(p => p.ProfileId == cloud.ProfileId) is { } current ? Refreshed(all[i], cloud, current) : all[i] with { NotOnAccount = true };
         }
         foreach (var profile in listed.Where(p => all.All(l => l.Cloud?.ProfileId != p.ProfileId)))
         {
             var name = PlayName(profile);
-            var link = new CloudLink(me.AccountId, profile.ProfileId, profile.Xuid, profile.Gamertag);
+            var link = new CloudLink(me.AccountId, profile.ProfileId, profile.Xuid, profile.Gamertag, profile.RenameNotice);
             // An upload whose answer was lost: the local profile it came from is linked, not shadowed by a second cached copy.
             var origin = all.FindIndex(l => l.LocalOnly && l.Game == game && l.Mode == profile.Mode && string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase));
             if (origin >= 0) { all[origin] = all[origin] with { Cloud = link, NotOnAccount = false }; continue; }
@@ -178,17 +181,33 @@ public sealed class LocalProfileStore(string stateDirectory)
         Write(all);
         return all;
     }
+
     /// <summary>
-    /// The name an account profile plays under offline (FI_OFFLINE_GAMERTAG): the gamertag before '#' (the handle "Name-12345" is not a
-    /// profile name), kept to the profile-name rule the hook checks (1-20 letters or digits, a letter first).
+    /// One account profile as the server answered it now (a free rename's 200 <c>Profile</c>): its cached copy takes the new name and
+    /// notice at once, without waiting for the next GET /me. Nothing happens when this launcher holds no copy of it.
     /// </summary>
-    internal static string PlayName(Profile profile)
+    public LocalProfile? ApplyAccountProfile(string accountId, Profile current)
     {
-        var tag = profile.Gamertag.Split('#')[0];
-        var letters = new string(tag.Where(char.IsAsciiLetterOrDigit).Take(20).ToArray());
-        var name = letters.TrimStart("0123456789".ToCharArray());
-        return ProfileName.IsValid(name) ? name : "Player";
+        ArgumentNullException.ThrowIfNull(current);
+        var all = Load();
+        var index = all.FindIndex(p => p.Cloud is { } cloud && cloud.AccountId == accountId && cloud.ProfileId == current.ProfileId);
+        if (index < 0) return null;
+        all[index] = Refreshed(all[index], all[index].Cloud!, current);
+        Write(all);
+        return all[index];
     }
+
+    private static LocalProfile Refreshed(LocalProfile local, CloudLink cloud, Profile current) => local with
+    {
+        Cloud = cloud with { Xuid = current.Xuid, Gamertag = current.Gamertag, RenameNotice = current.RenameNotice },
+        Name = PlayName(current), Mode = current.Mode, NotOnAccount = false,
+    };
+
+    /// <summary>
+    /// The name an account profile plays under offline (FI_OFFLINE_GAMERTAG): its plain name (a legacy <c>Name#12345</c> without the
+    /// number; the handle is never a profile name), kept to the profile-name rule the hook checks (1-20 letters or digits, a letter first).
+    /// </summary>
+    internal static string PlayName(Profile profile) => ProfileName.Playable(profile.Gamertag);
 }
 
 /// <summary>A local refusal with the account plane's own code, so the launcher shows the same text as for the server's.</summary>
