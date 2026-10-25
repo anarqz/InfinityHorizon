@@ -118,6 +118,15 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task EngagedChecksAsync()
     {
+        // A SIGN IN after sign-out or Play offline may fall inside the previous answer's retry-after (or a read still in
+        // flight): the first read waits for it instead of being dropped, so the status and the floor are always read.
+        try
+        {
+            while (_onlineEngaged && (_onlineChecking || OnlineRetryRemaining > TimeSpan.Zero))
+                await Task.Delay(_onlineChecking ? TimeSpan.FromMilliseconds(100) : OnlineRetryRemaining, _onlineClock, _onlineStop.Token);
+        }
+        catch (OperationCanceledException) { return; }
+        if (!_onlineEngaged) return;
         await CheckOnlineStatusAsync(manual: false);
         // OD-118 T1c: strictly in order; the release floor (/launcher/v1/info) only once the service answered open.
         if (_onlineEngaged && OnlineServiceAllowsPlay) await CheckLauncherUpdatesAsync();
