@@ -533,6 +533,8 @@
   "mods.badge_review": "Revisão necessária",
   "mods.badge_attention": "Requer atenção",
   "mods.badge_needs": "Precisa de {mod} antes",
+  "mods.install_dependency": "Instalar {mod}",
+  "mods.enable_dependency": "Ativar {mod}",
   "mods.needs_dependency": "Instale e ative {mods} antes; depois este mod pode ser instalado.",
   "mods.depended_on_by": "Ativado · {mods} depende dele, então ele continua ativado enquanto esse mod estiver ativado.",
   "mods.badge_hook": "Atualize o hook do Infinity antes",

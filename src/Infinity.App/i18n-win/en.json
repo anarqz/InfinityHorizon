@@ -533,6 +533,8 @@
   "mods.badge_review": "Review required",
   "mods.badge_attention": "Needs attention",
   "mods.badge_needs": "Needs {mod} first",
+  "mods.install_dependency": "Install {mod}",
+  "mods.enable_dependency": "Enable {mod}",
   "mods.needs_dependency": "Install and enable {mods} first; then this mod can be installed.",
   "mods.depended_on_by": "Enabled · {mods} depends on it, so it stays on while that mod is enabled.",
   "mods.badge_hook": "Update the Infinity hook first",
