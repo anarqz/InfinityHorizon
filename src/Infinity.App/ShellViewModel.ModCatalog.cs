@@ -533,7 +533,7 @@ public sealed partial class ShellViewModel
                 // it keeps its badge, and only its Disable waits.
                 var dependents = fact.Blocker == ModErrors.Dependency && installed is { Enabled: true } ? DependentNames(mod.Id) : [];
                 var missing = fact.Blocker == ModErrors.Dependency && installed is not { Enabled: true } ? MissingDependencyNames(mod) : [];
-                if (dependents.Count > 0) status = S.Format("mods.required_by", ("mods", string.Join(", ", dependents)));
+                if (dependents.Count > 0) status = S.Format("mods.depended_on_by", ("mods", string.Join(", ", dependents)));
                 else if (missing.Count > 0)
                 {
                     var names = string.Join(", ", missing);
