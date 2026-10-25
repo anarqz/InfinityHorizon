@@ -306,6 +306,8 @@
   "overlay.notice_warning": "Atenção",
   "overlay.notice_error": "Ação necessária",
   "overlay.session_ended_body": "A sessão online terminou. O progresso continua sendo salvo neste PC.",
+  "overlay.session_ended_idle": "Você ficou ausente enquanto havia jogadores esperando, então sua vaga foi para o próximo da fila. O progresso continua sendo salvo neste PC. Feche o jogo e clique em Jogar para entrar na fila de novo.",
+  "overlay.idle_warning": "Parece que você está ausente e há jogadores esperando. Dirija ou aperte qualquer botão em até {seconds} s para manter sua vaga.",
   "overlay.save_stopped": "Sincronização na nuvem interrompida",
   "native.check_title": "Confira seu e-mail",
   "native.check_email": "Abra o link de verificação enviado para {email} e continue aqui. Você pode abrir o link em qualquer dispositivo.",

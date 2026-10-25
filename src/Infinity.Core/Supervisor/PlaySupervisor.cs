@@ -632,6 +632,12 @@ public sealed class PlaySupervisor
                         {
                             await overlay.ToastAsync(noticeToast, stop.Token).ConfigureAwait(false);
                         }
+                        // OD-121: the server's idle countdown (Event 7 with evict_in) warns in the overlay
+                        if (frame is Frame.Event { Kind: HookEvents.Activity } activity && overlay is not null && !suspended
+                            && HookEvents.IdleWarning(activity.Detail, _config.Text) is { } idleToast)
+                        {
+                            await overlay.ToastAsync(idleToast, stop.Token).ConfigureAwait(false);
+                        }
                         // OD-57: the world closes when its host leaves free roam (the hook''s Event 4)
                         if (frame is Frame.Event { Kind: HookEvents.FreeRoamLeft } && worlds is not null)
                         {
@@ -718,7 +724,7 @@ public sealed class PlaySupervisor
                             ? _config.Text?["crash.frozen"] ?? "Online access is temporarily frozen for security review. Sign-in and support remain available."
                             : e.Code == ErrorCodes.GameUpdateRequired
                                 ? _config.Text?["updater.session_required"] ?? "Update Infinity Launcher after this game session to return online. Your progress keeps saving."
-                                : SessionEndedText()).ConfigureAwait(false);
+                                : e.Code == ErrorCodes.SessionsEnded && SessionEndedReason(e) == "idle" ? IdleEndedText() : SessionEndedText()).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (suspended || _online.IsPaused) { }
                     catch (Exception e) when (OperationBackoff.Transient(e) && !stop.IsCancellationRequested)
@@ -996,6 +1002,23 @@ public sealed class PlaySupervisor
 
     private string SessionEndedText() => _config.Text?["overlay.session_ended_body"]
         ?? "The online session ended. Progress keeps saving on this PC.";
+
+    /// <summary>OD-121 (GATE_API.md §4a): the seat went to a waiting player; the next Play joins at the end of the queue.</summary>
+    private string IdleEndedText() => _config.Text?["overlay.session_ended_idle"]
+        ?? "You were away while players waited, so your seat went to the next in line. Progress keeps saving on this PC. Close the game and press Play to queue again.";
+
+    private static string? SessionEndedReason(ApiException error)
+    {
+        try
+        {
+            return error.Details is { ValueKind: System.Text.Json.JsonValueKind.Object } details && details.TryGetProperty("reason", out var value)
+                && value.ValueKind == System.Text.Json.JsonValueKind.String ? value.GetString() : null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     internal async Task Notice(IControlPipe pipe, LauncherEndpoint endpoint, OverlayChannel? overlay, byte level, string text, CancellationToken cancellation)
     {

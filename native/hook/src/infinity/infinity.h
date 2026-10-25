@@ -132,6 +132,9 @@ void fi_launch_event(unsigned kind, const char *detail);
 #define FI_EVENT_FREE_ROAM_ENTERED 3u
 #define FI_EVENT_FREE_ROAM_LEFT 4u
 #define FI_EVENT_NOTICE 6u
+/* 7 (OD-121): the server's X-Fi-Activity-State for this session (detail "active|menu|idle|no_signal"
+   with ";evict_in=N" while eviction is enforced): the launcher warns through the overlay. */
+#define FI_EVENT_ACTIVITY 7u
 #define FI_NOTICE_INFO 0u
 #define FI_NOTICE_WARNING 1u
 #define FI_NOTICE_ERROR 2u
@@ -181,6 +184,13 @@ void *fi_launch_overlay_export(const char *name);
 /* OD-112: the game's PLAYER DETAILS opens the overlay's player pane instead of the system
    profile card (gamer_card.c; one vtable slot, guarded by the game build and its bytes). */
 void fi_gamer_card_apply(unsigned char *game_image);
+/* activity.c (OD-121): the odometer, input idle and screen wrappers (launcher sessions only). */
+void fi_activity_apply(unsigned char *game_image);
+/* "X-Fi-Activity: v1.<seq>.<odo_m>.<idle_s>.<rp>" for a RetrieveForUser request (no CRLF): its
+   length, 0 when nothing is sent. */
+size_t fi_activity_header(const wchar_t *request_headers, wchar_t *out, size_t cap);
+/* The response's X-Fi-Activity-State, if any: a new state goes to the launcher (Event 7). */
+void fi_activity_answer(const wchar_t *response_headers);
 /* RelaunchRequest{reason}, then ExitProcess(0x46490001): the launcher starts the game again
    (never returns). */
 void fi_launch_relaunch(unsigned reason);

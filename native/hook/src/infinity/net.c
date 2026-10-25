@@ -790,6 +790,13 @@ static int net_forward(NetRequest *request, HRESULT *error) {
     if (car_db && (!buffer_append_wide(&headers, car_db) || !buffer_append_wide(&headers, L"\r\n"))) {
         goto done;
     }
+    /* OD-121: what the player is doing, on the game's 30 s RetrieveForUser (activity.c) */
+    wchar_t activity[96];
+    if (fi_launch_protocol() &&
+        fi_activity_header(buffer_wide(&request->request_headers), activity, ARRAY_COUNT(activity)) &&
+        (!buffer_append_wide(&headers, activity) || !buffer_append_wide(&headers, L"\r\n"))) {
+        goto done;
+    }
     session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
@@ -855,6 +862,9 @@ static int net_forward(NetRequest *request, HRESULT *error) {
             length -= 2; /* drop the blank line that ends the header block */
         }
         buffer_append(&request->response_headers, fields, length * sizeof(wchar_t));
+        if (fi_launch_protocol()) {
+            fi_activity_answer(buffer_wide(&request->response_headers));
+        }
     }
     for (;;) {
         if (fi_launch_protocol() && !fi_launch_live()) goto done;
