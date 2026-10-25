@@ -11,11 +11,12 @@ public sealed record NewsLocalized(string? En, string? PtBr)
     public string For(string locale) => (locale.StartsWith("pt", StringComparison.OrdinalIgnoreCase) ? PtBr ?? En : En ?? PtBr) ?? "";
 }
 
-/// <summary>One entry of <c>news.json</c>. <see cref="Date"/> stays the published <c>YYYY-MM-DD</c> text (it sorts as written).</summary>
+/// <summary>One entry of <c>news.json</c>. <see cref="Date"/> stays the published <c>YYYY-MM-DD</c> or <c>YYYY-MM-DDTHH:MM</c> text
+/// (it sorts as written, so a time orders items of the same day).</summary>
 /// <remarks><see cref="Highlight"/> (optional, at most one item; NEWS_FEED.md) is read but unused in 1.0.12: a later overlay shows it.</remarks>
 public sealed record NewsItem(string Id, string Date, NewsLocalized Title, NewsLocalized Summary, string? Cover, bool Pinned, LauncherVersion? MinLauncher, bool Highlight = false)
 {
-    public DateOnly? Day => DateOnly.TryParseExact(Date, "yyyy-MM-dd", out var day) ? day : null;
+    public DateOnly? Day => (Date.Length == 10 || Date.Length > 10 && Date[10] == 'T') && DateOnly.TryParseExact(Date[..10], "yyyy-MM-dd", out var day) ? day : null;
 }
 
 /// <summary>
