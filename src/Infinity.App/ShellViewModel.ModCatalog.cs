@@ -12,6 +12,8 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     string Action, bool CanAct, bool HasOptions, string Credits, string Badge)
 {
     public bool Installed { get; init; }
+    /// <summary>T5d: the dependency this card waits for; its action installs (or enables) that mod first.</summary>
+    public ModManifest? Dependency { get; init; }
     public bool Enabled { get; init; }
     public bool Drift { get; init; }
     public bool SettingsIssues { get; init; }
@@ -473,6 +475,10 @@ public sealed partial class ShellViewModel
         .Select(i => i.Manifest!.Text("name", S.Locale)).ToList();
 
     /// <summary>Names of <paramref name="mod"/>'s dependencies that are not installed and enabled (T5d).</summary>
+    private ModManifest? MissingDependency(ModManifest mod) => mod.Dependencies
+        .Where(d => !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
+        .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id && d.Versions.Contains(m.Version))).FirstOrDefault(m => m is not null);
+
     private List<string> MissingDependencyNames(ModManifest mod) => mod.Dependencies
         .Where(d => !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
         .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id).ToList();
@@ -494,7 +500,7 @@ public sealed partial class ShellViewModel
             // Custom executable code runs only through the development runtime until custom signing is designed (OD-114).
             var nativeBlocked = mod.IsNative && !(mod.IsCustom ? DevelopmentMods : NativeModsAvailable);
             var custom = mod.IsCustom;
-            string status, badge, action; bool canAct;
+            string status, badge, action; bool canAct; ModManifest? dependency = null;
             if (_modHealth.RecoveryHere) { status = S["mods.recovery_needed"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
             else if (installed?.Problem is not null) { status = S["mods.recovery_problems"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
             else if (fact.Next is { } next)
@@ -533,6 +539,14 @@ public sealed partial class ShellViewModel
                 // it keeps its badge, and only its Disable waits.
                 var dependents = fact.Blocker == ModErrors.Dependency && installed is { Enabled: true } ? DependentNames(mod.Id) : [];
                 var missing = fact.Blocker == ModErrors.Dependency && installed is not { Enabled: true } ? MissingDependencyNames(mod) : [];
+                // The first missing dependency the catalog offers: the card's action installs (or enables) it, with its own preview.
+                dependency = installed is null && missing.Count > 0 ? MissingDependency(mod) : null;
+                if (dependency is not null)
+                {
+                    var off = _modHealth.Installed.Any(i => i.Id == dependency.Id && !i.Enabled);
+                    action = S.Format(off ? "mods.enable_dependency" : "mods.install_dependency", ("mod", dependency.Text("name", S.Locale)));
+                    canAct = true;
+                }
                 if (dependents.Count > 0) status = S.Format("mods.depended_on_by", ("mods", string.Join(", ", dependents)));
                 else if (missing.Count > 0)
                 {
@@ -548,6 +562,7 @@ public sealed partial class ShellViewModel
                 // T5d: name what is missing. A reviewed data mod waits for a verified hook (build 85+), or for the catalog's runtime.
                 var hookMissing = !(_hook is { Verified: true } && Infinity.Core.Process.HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild);
                 status = S[hookMissing ? "mods.needs_hook" : "mods.data_sql_runtime"]; badge = S[hookMissing ? "mods.badge_hook" : "mods.badge_attention"]; canAct = false;
+                if (dependency is not null) { dependency = null; action = S[mod.IsExternal ? "external.setup" : "mods.install"]; } // the hook comes first
             }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
@@ -565,7 +580,7 @@ public sealed partial class ShellViewModel
                 action, canAct, mod.ConfigPath is not null && installed is not null && installed.Problem is null,
                 mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version, badge)
             {
-                Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true,
+                Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true, Dependency = dependency,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
                 UpdateAvailable = fact.Next is not null, Next = fact.Next, UpdateSummary = fact.Next is { } upcoming ? UpdateSummary(mod, upcoming) : "",
                 // OD-116: every mod of a player-chosen catalog says so, and a native one that it runs code with the game.
@@ -616,6 +631,8 @@ public sealed partial class ShellViewModel
         await RefreshModsAsync();
         var current = ModCards.FirstOrDefault(c => c.Manifest.Digest == card.Manifest.Digest);
         if (current is not { CanAct: true }) return;
+        // T5d: a card waiting for a dependency installs (or enables) that dependency, through its own preview.
+        if (current.Dependency is { } needed && ModCards.FirstOrDefault(c => c.Manifest.Id == needed.Id) is { } first) { await ActOnModAsync(first); return; }
         if (current.UpdateAvailable || current.NeedsConfirmation) { ShowModInformation(current); return; } // reviewed (and a custom mod confirmed) first, in the information pane
         if (!current.Installed && current.Manifest.IsExternal) { await OpenExternalSetupAsync(current); return; }
         if (NeedsInstallPreview(current)) { ShowInstallPreview(current); return; } // Alex (1.0.11): where it goes and what it replaces, first
