@@ -25,6 +25,9 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
         "mod/infinity_mod.dll", "mod/infinity_mod.dll.sig", "mod/infinity-mod-prepare.exe", "mod/infinity-mod-prepare.exe.sig",
         "licenses/SQLite-VERSION.txt", "licenses/Mod-NOTICE.md", "licenses/Mod-SDK-LICENSE.txt", "licenses/FH2-hooks-MIT.txt",
         "licenses/Mod-MinHook-LICENSE.txt",
+        // Accepted from 1.0.12 so a later release may ship them; until 1.0.12 is the floor their texts live in NOTICE,
+        // because 1.0.10/1.0.11 updaters refuse any path outside their own list.
+        "licenses/Markdig-LICENSE.txt", "licenses/NotoEmoji-LICENSE.txt",
     };
     public const int MaxFiles = 128;
     public const long MaxPackageBytes = 1024L * 1024 * 1024;
