@@ -467,6 +467,16 @@ public sealed partial class ShellViewModel
         return (health, null, facts, custom.Problems);
     }
 
+    /// <summary>Names of the enabled mods that depend on <paramref name="id"/> (T5d).</summary>
+    private List<string> DependentNames(string id) => _modHealth.Installed
+        .Where(i => i.Enabled && i.Manifest is { } m && m.Id != id && m.Dependencies.Any(d => d.Id == id))
+        .Select(i => i.Manifest!.Text("name", S.Locale)).ToList();
+
+    /// <summary>Names of <paramref name="mod"/>'s dependencies that are not installed and enabled (T5d).</summary>
+    private List<string> MissingDependencyNames(ModManifest mod) => mod.Dependencies
+        .Where(d => !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
+        .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id).ToList();
+
     private static string? Blocker(Action check)
     {
         try { check(); return null; }
@@ -518,11 +528,27 @@ public sealed partial class ShellViewModel
                 canAct = compatible && !nativeBlocked && fact.Blocker is null && (custom ? !mod.CustomBlocked : !expired && _catalog is not null);
             }
             if (fact.Blocker is not null && installed?.Problem is null && fact.Next is null && !(installed is { Enabled: true } && installed.Drift.Count > 0))
-            { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
+            {
+                // T5d: a dependency state says which mod, never a generic "Needs attention". An enabled mod others depend on is fine:
+                // it keeps its badge, and only its Disable waits.
+                var dependents = fact.Blocker == ModErrors.Dependency && installed is { Enabled: true } ? DependentNames(mod.Id) : [];
+                var missing = fact.Blocker == ModErrors.Dependency && installed is not { Enabled: true } ? MissingDependencyNames(mod) : [];
+                if (dependents.Count > 0) status = S.Format("mods.required_by", ("mods", string.Join(", ", dependents)));
+                else if (missing.Count > 0)
+                {
+                    var names = string.Join(", ", missing);
+                    badge = S.Format("mods.badge_needs", ("mod", names)); status = S.Format("mods.needs_dependency", ("mods", names));
+                }
+                else { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
+            }
             if ((!mod.SupportedForInstall || mod.CustomBlocked) && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
             // FIMOD004: a data mod's SQL needs the runtime and hook that apply it; until then listed, never installed or enabled.
             if (((fact.Next ?? mod).HasDatabaseSql || (fact.Next ?? mod).DatabaseBase is not null) && !DataModSqlInstallable && !(installed is { Enabled: true } && fact.Next is null))
-            { status = S["mods.data_sql_runtime"]; badge = S["mods.badge_review"]; canAct = false; }
+            {
+                // T5d: name what is missing. A reviewed data mod waits for a verified hook (build 85+), or for the catalog's runtime.
+                var hookMissing = !(_hook is { Verified: true } && Infinity.Core.Process.HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild);
+                status = S[hookMissing ? "mods.needs_hook" : "mods.data_sql_runtime"]; badge = S[hookMissing ? "mods.badge_hook" : "mods.badge_attention"]; canAct = false;
+            }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
                 // Hardcore: unavailable on this profile; an enabled one keeps its Disable action and its files.
