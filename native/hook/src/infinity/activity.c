@@ -118,8 +118,8 @@ static volatile LONG64 act_odometer_m;
 static volatile LONG64 act_idle_ms, act_idle_at, act_input_at, act_presence_at, act_started_at;
 static volatile LONG act_screen;
 static volatile LONG64 act_seq;
-static char act_last_state[48];
-static unsigned act_reports;
+static char act_last_state[48]; /* under act_lock */
+static volatile LONG act_reports;
 
 /* ------------------------------------------------------------------ the wrappers */
 
@@ -136,12 +136,10 @@ uint64_t fi_activity_stats_before(void *self) {
     return bits;
 }
 
-/* One tick's growth of a stats component's distance: counted when it is the local car's. */
+/* One tick of a stats component: the counted instance is the first one ticking, and keeps that
+   role while it ticks at all (parked included); another instance takes over only once it has not
+   ticked for ACT_SWITCH_MS (a car swap). Only the counted instance's growth goes in. */
 void fi_activity_add_distance(void *self, float before, float after, unsigned long long now) {
-    if (!float_is_finite(before) || !float_is_finite(after) || after <= before) {
-        return; /* still, or a bank zeroed it inside this call */
-    }
-    double step = (double)after - (double)before;
     AcquireSRWLockExclusive(&act_lock);
     unsigned known = 0;
     for (unsigned i = 0; i < act_seen_count; ++i) known |= act_seen[i] == self;
@@ -149,17 +147,23 @@ void fi_activity_add_distance(void *self, float before, float after, unsigned lo
         if (act_seen_count < ACT_INSTANCES) act_seen[act_seen_count++] = self;
         else ++act_seen_overflow;
     }
-    if (step > ACT_MAX_STEP_M) {
-        ++act_rejected_ticks;
-    } else if (act_car != self && act_car && now - act_car_at < ACT_SWITCH_MS) {
-        ++act_skipped_ticks; /* another car's component while the counted one ticks */
-        act_skipped_m += step;
+    int moved = float_is_finite(before) && float_is_finite(after) && after > before; /* else still, or banked */
+    double step = moved ? (double)after - (double)before : 0.0;
+    if (act_car != self && act_car && now - act_car_at < ACT_SWITCH_MS) {
+        if (moved) {
+            ++act_skipped_ticks; /* another component while the counted one ticks */
+            act_skipped_m += step;
+        }
     } else {
         act_car = self;
         act_car_at = now;
-        act_odometer += step;
-        double whole = act_odometer < (double)ACT_MAX_ODO ? act_odometer : (double)ACT_MAX_ODO;
-        InterlockedExchange64(&act_odometer_m, (LONG64)whole);
+        if (step > ACT_MAX_STEP_M) {
+            ++act_rejected_ticks;
+        } else if (moved) {
+            act_odometer += step;
+            double whole = act_odometer < (double)ACT_MAX_ODO ? act_odometer : (double)ACT_MAX_ODO;
+            InterlockedExchange64(&act_odometer_m, (LONG64)whole);
+        }
     }
     ReleaseSRWLockExclusive(&act_lock);
 }
@@ -321,22 +325,32 @@ static int act_is(const wchar_t *text, size_t length, const char *expected) {
 }
 
 /* The report line for a request with these headers ("X-Fi-Activity: v1...", no CRLF): its
-   length, 0 when nothing is sent (not RetrieveForUser, or not installed). */
+   length, 0 when nothing is sent (not Xls.WebServices.Notifications.RetrieveForUser, not
+   installed, or no idle source ticking now: a ping without a fresh one would claim idleness). */
 size_t fi_activity_header(const wchar_t *request_headers, wchar_t *out, size_t cap) {
     static const char name[] = "X-Fi-Activity: ";
-    size_t method_length = 0;
+    size_t method_length = 0, class_length = 0;
     const wchar_t *method = act_header(request_headers, L"X-Method", &method_length);
-    if (!act_ready || !method || !act_is(method, method_length, "RetrieveForUser")) return 0;
+    const wchar_t *class_name = act_header(request_headers, L"X-ClassName", &class_length);
+    size_t comma = 0;
+    while (class_name && comma < class_length && class_name[comma] != L',') ++comma;
+    while (comma && class_name[comma - 1] == L' ') --comma;
+    if (!act_ready || !method || !act_is(method, method_length, "RetrieveForUser") || !class_name ||
+        !act_is(class_name, comma, "Xls.WebServices.Notifications")) {
+        return 0;
+    }
     unsigned long long now = act_now(), idle_ms;
+    int presence_fresh = act_has_presence && act_presence_at && now - (unsigned long long)act_presence_at <= ACT_FRESH_MS;
     if (act_has_inactivity && act_idle_at && now - (unsigned long long)act_idle_at <= ACT_FRESH_MS) {
         idle_ms = (unsigned long long)act_idle_ms + (now - (unsigned long long)act_idle_at);
-    } else {
+    } else if (presence_fresh) {
+        /* the game's timer does not tick (gated): seconds since the input byte was last seen */
         unsigned long long since = (unsigned long long)(act_input_at > act_started_at ? act_input_at : act_started_at);
         idle_ms = now > since ? now - since : 0;
+    } else {
+        return 0;
     }
-    unsigned screen = act_has_presence && act_presence_at && now - (unsigned long long)act_presence_at <= ACT_FRESH_MS
-                          ? (unsigned)act_screen
-                          : 0;
+    unsigned screen = presence_fresh ? (unsigned)act_screen : 0;
     char value[96];
     size_t length = fi_activity_format((unsigned long long)InterlockedIncrement64(&act_seq),
                                        (unsigned long long)act_odometer_m, idle_ms / 1000, screen, value, sizeof(value));
@@ -345,7 +359,8 @@ size_t fi_activity_header(const wchar_t *request_headers, wchar_t *out, size_t c
     for (size_t i = 0; i < sizeof(name) - 1; ++i) out[at++] = (wchar_t)name[i];
     for (size_t i = 0; i < length; ++i) out[at++] = (wchar_t)value[i];
     out[at] = 0;
-    if (++act_reports % 10 == 1) {
+    LONG reports = InterlockedIncrement(&act_reports);
+    if (reports % 10 == 1) {
         /* evidence for the live check (T-AFK4): how many stats instances ticked, and what was skipped */
         unsigned long long skipped, rejected, skipped_m, seen;
         AcquireSRWLockShared(&act_lock);
@@ -359,7 +374,7 @@ size_t fi_activity_header(const wchar_t *request_headers, wchar_t *out, size_t c
         static const char a[] = "ACTIVITY: report ", b[] = "; stats instances ", c[] = ", skipped ticks ",
                           d[] = " (", e[] = " m), rejected ", f[] = "; idle from ";
         const char *parts[] = {a, b, c, d, e, f};
-        unsigned long long numbers[] = {act_reports, seen, skipped, skipped_m, rejected};
+        unsigned long long numbers[] = {(unsigned long long)reports, seen, skipped, skipped_m, rejected};
         for (unsigned i = 0; i < 6; ++i) {
             for (const char *p = parts[i]; *p && n + 1 < sizeof(line); ++p) line[n++] = *p;
             if (i < 5 && !(n = act_put_number(line, n, sizeof(line), numbers[i]))) return at;
@@ -417,9 +432,12 @@ void fi_activity_answer(const wchar_t *response_headers) {
         return;
     }
     size_t same = 0;
+    AcquireSRWLockExclusive(&act_lock);
     while (state[same] && state[same] == act_last_state[same]) ++same;
-    if (!evict_in && !state[same] && !act_last_state[same]) return;
-    memory_copy(act_last_state, state, length + 1);
+    int unchanged = !state[same] && !act_last_state[same];
+    if (!unchanged) memory_copy(act_last_state, state, length + 1);
+    ReleaseSRWLockExclusive(&act_lock);
+    if (!evict_in && unchanged) return;
     if (!evict_in) {
         log_append("ACTIVITY: the server now sees this session as ");
         log_append(state);

@@ -465,6 +465,12 @@ int fi_tier_free_route(const wchar_t *method, const wchar_t *url, const wchar_t 
             tier_equal(call, method_length, L"GetUserData")) {
             return FI_ROUTE_PASS;
         }
+        /* OD-121: the 30 s inbox poll carries the activity report (activity.c); the free game plane
+           answers it with the empty inbox */
+        if (platform && class_name && call && tier_equal(class_name, comma, L"Xls.WebServices.Notifications") &&
+            tier_equal(call, method_length, L"RetrieveForUser")) {
+            return FI_ROUTE_PASS;
+        }
         /* OD-65: the player's own paint reaches world mates on every tier (temporary on a free or
            noob ticket, kept for the session and served only to world mates by the server) */
         if (platform && class_name && call &&
