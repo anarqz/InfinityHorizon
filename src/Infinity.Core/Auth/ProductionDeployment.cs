@@ -32,7 +32,8 @@ public static class ProductionDeployment
     public static void ValidateInfo(ServerInfo info)
     {
         if (info.ApiVersion != 1 || info.Realm != "forzainfinity" || info.Idp is not { ProjectId: "forza-infinity-online" } idp ||
-            string.IsNullOrWhiteSpace(idp.ApiKey) || idp.EmulatorUrl is not null || info.Services is not { } services)
+            string.IsNullOrWhiteSpace(idp.ApiKey) || idp.EmulatorUrl is not null || idp.Kind is not (null or IdpKinds.Firebase) ||
+            info.Services is not { } services)
             throw new InvalidDataException("Production discovery is invalid");
         void Check(string value, Uri expected)
         {
