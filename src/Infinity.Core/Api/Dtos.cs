@@ -36,11 +36,20 @@ public sealed record GameInfo(string Id, string Title, string MinHook, string Mi
 public sealed record CheckpointPolicy(bool Enabled, uint MinIntervalSecs, uint MaxCommitsPerHour);
 
 /// <summary>
-/// A launcher install as it introduces itself (<c>platform</c>: windows, proton, linux; ACCOUNTS.md §2). <see cref="Fingerprint"/> is OD-120's write-only same-device value: its derivation is open
-/// (OPEN_QUESTIONS OD120-Q1), so the launcher never sets it and it is left out of the body (servers before OD-120 refuse it).
+/// A launcher install as it introduces itself (<c>platform</c>: windows, proton, linux; ACCOUNTS.md §2). <see cref="Fingerprint"/> is
+/// OD-120's write-only same-device value (<see cref="Infinity.Core.Auth.DeviceFingerprint"/>); when it cannot be computed it is left
+/// out of the body, never sent empty. Servers before the OD-120 deploy refuse it, so no launcher that sends it ships before then.
 /// </summary>
 public sealed record Device(string DeviceId, string Label, string Platform,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Fingerprint = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Fingerprint = null)
+{
+    /// <summary>A logged or interpolated <see cref="Device"/> never carries the fingerprint.</summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("DeviceId = ").Append(DeviceId).Append(", Label = ").Append(Label).Append(", Platform = ").Append(Platform);
+        return true;
+    }
+}
 
 public sealed record BoundDevice(string DeviceId, string Label, string Platform, string BoundAt, string LastSeenAt);
 

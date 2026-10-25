@@ -15,8 +15,12 @@ public static class DeviceIdentity
 
     private sealed record Stored(string DeviceId);
 
-    /// <summary>The device of this install: its stored id (minted once), the PC name and the platform.</summary>
-    public static Device Load(string stateDirectory, string platform)
+    /// <summary>
+    /// The device of this install: its stored id (minted once), the PC name, the platform and, OD-120, this PC's anonymous
+    /// fingerprint (<see cref="DeviceFingerprint"/>, computed now and never stored). <paramref name="fingerprint"/> replaces the
+    /// registry read (tests).
+    /// </summary>
+    public static Device Load(string stateDirectory, string platform, Func<string?>? fingerprint = null)
     {
         Directory.CreateDirectory(stateDirectory);
         var path = Path.Combine(stateDirectory, FileName);
@@ -36,6 +40,6 @@ public static class DeviceIdentity
             File.WriteAllText(temp, JsonSerializer.Serialize(new Stored(id), ApiClient.Json));
             File.Move(temp, path, overwrite: true);
         }
-        return new Device(id!, Environment.MachineName, platform);
+        return new Device(id!, Environment.MachineName, platform, (fingerprint ?? DeviceFingerprint.Read)());
     }
 }
