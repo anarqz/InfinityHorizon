@@ -62,8 +62,12 @@ writes them:
 ```
 
 - **Profiles.** Each Infinity profile has its own XUID, so its own `User_<hex>` folder; several
-  profiles sit side by side in `player-1`. Azimuth's offline career is `User_9000000000000`;
-  "Play offline" always uses it, never an online profile's folder.
+  profiles sit side by side in `player-1`. Each profile kept on this PC also gets its own local
+  offline XUID (`User_9000000000001` to `User_90000000000FF`, never issued by the server).
+  "Play offline" plays that folder. The exception is a Noob profile uploaded to your account: it
+  plays offline on its account XUID's folder, so its offline and online progress are one career.
+  Azimuth's own offline career, `User_9000000000000`, is untouched; a new profile can start
+  from it.
 - **Revisions.** The `commit` file lists every data file with its SHA-256 and size. A revision
   counts only when it is sealed (every file matches its line). Azimuth loads the highest folder
   and keeps the two newest.
