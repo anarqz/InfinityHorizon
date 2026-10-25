@@ -35,6 +35,7 @@ SOURCES = [
     "src/infinity/runtime.c",
     "src/infinity/mod_host.c",
     "src/infinity/gamer_card.c",
+    "src/infinity/activity.c",
     "src/infinity/cfg.c",
     "src/infinity/eo_detect.c",
     "src/infinity/tier.c",

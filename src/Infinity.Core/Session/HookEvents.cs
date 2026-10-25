@@ -29,6 +29,29 @@ public static class HookEvents
     /// </summary>
     public const byte Notice = 6;
 
+    /// <summary>
+    /// The server's <c>X-Fi-Activity-State</c> for this session (hook activity.c, OD-121, GATE_API.md §4a): detail
+    /// <c>active|menu|idle|no_signal</c>, with <c>;evict_in=N</c> only while eviction is enforced.
+    /// </summary>
+    public const byte Activity = 7;
+
+    /// <summary>
+    /// An <see cref="Activity"/> detail as the overlay's idle warning: only when it carries <c>evict_in</c> (the seat
+    /// goes to a waiting player in N seconds); null otherwise, or when the detail is malformed.
+    /// </summary>
+    public static Overlay.UiFrame.Toast? IdleWarning(string detail, Strings? strings = null)
+    {
+        var parts = detail.Split(';');
+        if (parts.Length != 2 || parts[0] is not ("active" or "menu" or "idle" or "no_signal") || !parts[1].StartsWith("evict_in=", StringComparison.Ordinal))
+            return null;
+        var digits = parts[1]["evict_in=".Length..];
+        if (digits.Length is 0 or > 6 || !digits.All(char.IsAsciiDigit)) return null;
+        var seconds = int.Parse(digits, System.Globalization.CultureInfo.InvariantCulture);
+        var text = (strings?["overlay.idle_warning"] ?? "You seem to be away and players are waiting. Drive or press any button within {seconds} s to keep your seat.")
+            .Replace("{seconds}", seconds.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        return Overlay.OverlayNotices.Create(Overlay.UiLevel.Warn, text, strings);
+    }
+
     /// <summary>A <see cref="Notice"/> detail as an overlay toast; null when it is not one.</summary>
     public static Overlay.UiFrame.Toast? NoticeToast(string detail, Strings? strings = null)
     {

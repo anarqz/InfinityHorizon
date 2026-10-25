@@ -306,6 +306,8 @@
   "overlay.notice_warning": "Attention",
   "overlay.notice_error": "Action needed",
   "overlay.session_ended_body": "The online session ended. Progress keeps saving on this PC.",
+  "overlay.session_ended_idle": "You were away while players waited, so your seat went to the next in line. Progress keeps saving on this PC. Close the game and press Play to queue again.",
+  "overlay.idle_warning": "You seem to be away and players are waiting. Drive or press any button within {seconds} s to keep your seat.",
   "overlay.save_stopped": "Cloud sync stopped",
   "native.check_title": "Check your e-mail",
   "native.check_email": "Open the verification link sent to {email}, then continue here. You can open the link on any device.",
