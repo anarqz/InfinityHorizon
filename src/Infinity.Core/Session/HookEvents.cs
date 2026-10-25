@@ -47,7 +47,7 @@ public static class HookEvents
         var digits = parts[1]["evict_in=".Length..];
         if (digits.Length is 0 or > 6 || !digits.All(char.IsAsciiDigit)) return null;
         var seconds = int.Parse(digits, System.Globalization.CultureInfo.InvariantCulture);
-        var text = (strings?["overlay.idle_warning"] ?? "You seem to be away and players are waiting. Drive or press any button within {seconds} s to keep your seat.")
+        var text = (strings?["overlay.idle_warning"] ?? "You seem to be away and players are waiting. Drive within {seconds} s to keep your seat.")
             .Replace("{seconds}", seconds.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
         return Overlay.OverlayNotices.Create(Overlay.UiLevel.Warn, text, strings);
     }
