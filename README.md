@@ -61,11 +61,17 @@ writes them:
 <Azimuth>\data\titles\1A96545B\saves\player-1\User_<XUID upper hex>\revisions\<16 lowercase hex>\{commit, data\*}
 ```
 
-- **Profiles.** Each Infinity profile has its own XUID, so its own `User_<hex>` folder; several
-  profiles sit side by side in `player-1`. Each profile kept on this PC also gets its own local
-  offline XUID (`User_9000000000001` to `User_90000000000FF`, never issued by the server).
-  "Play offline" plays that folder. The exception is a Noob profile uploaded to your account: it
-  plays offline on its account XUID's folder, so its offline and online progress are one career.
+- **Profiles.** One list of at most 3 profiles, the same signed in or not. Names are plain
+  (letters and digits, no `#NNNNN`). A profile made while signed out (Noob only) plays a local
+  folder until the next sign-in, which registers its name and copies its newest sealed revision
+  to its account XUID's folder; a taken name asks for a new one, and the profile and its save stay
+  as they are. Each profile has its own XUID, so its own `User_<hex>` folder in `player-1`;
+  profiles never share a save:
+  - **Noob:** one folder, the account XUID's, offline and online: one career.
+  - **Hardcore:** played offline, its own local folder (`User_9000000000001` to
+    `User_90000000000FF`, never issued by the server), never uploaded; online always continues
+    from the cloud save.
+
   Azimuth's own offline career, `User_9000000000000`, is untouched; a new profile can start
   from it.
 - **Revisions.** The `commit` file lists every data file with its SHA-256 and size. A revision
