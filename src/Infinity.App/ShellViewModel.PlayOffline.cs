@@ -34,7 +34,7 @@ public sealed partial class ShellViewModel
         && GameConfigurationReady && !ModPlayBlocked && OperatingSystem.IsWindows();
 
     /// <summary>The local profile an offline Play plays: the chosen local one, or the cached copy of the chosen account profile.</summary>
-    private LocalProfile? OfflinePlayProfile => _chosenLocal ?? LocalProfiles.Read().FirstOrDefault(p => p.Game == _gate.Game && p.DisplayName == _gate.ProfileTag);
+    private LocalProfile? OfflinePlayProfile => _chosenLocal ?? LocalProfiles.Read().FirstOrDefault(p => p.Game == _gate.Game && p.Cloud?.ProfileId == _gate.ProfileKey);
 
     public bool CanPlayAny => PlaysOnline ? CanPlay : CanPlayOffline;
 
@@ -169,16 +169,19 @@ public sealed partial class ShellViewModel
             // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
             using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, OfflineOverlayNames));
             using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
-                new UiFrame.Status(profile.Name, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
+                new UiFrame.Status(profile.DisplayName, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
             if (overlay is not null)
             {
                 // The first notice the overlay shows (queued until its hello): Playing offline.
                 await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"]), CancellationToken.None);
+                // OD-120: a Hardcore profile offline plays Noob-like on its own local folder; the player is told so in the game too.
+                if (profile.Hardcore) await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 160, S["offline.hardcore_offline"]), CancellationToken.None);
                 _ = overlay.RunAsync(child.Pid, child.Exited, TimeSpan.FromMinutes(5), _play.Token);
                 _ = ReadOfflineOverlayAsync(overlay.Incoming, _play.Token);
             }
             _offlineChild = child; _offlineQuitting = false;
             _modOperation = false; Busy = false; SetStatus(S["offline.playing_offline_status"]);
+            if (profile.Hardcore) Message = S["offline.hardcore_offline"]; // OD-120: offline progress stays here, online continues from the cloud
             var wait = child.WaitForExitAsync(); _playTask = wait;
             var code = await wait;
             _offlineChild = null;

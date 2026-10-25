@@ -83,6 +83,11 @@ public sealed partial class ShellViewModel
         {
             _pending = pending;
             Message = null;
+            // OD-120: a new account's first profile is this PC's oldest local profile, whatever its mode (a Hardcore one left by 1.0.12
+            // registers its name only), so the account never starts with one more profile than this PC has.
+            _firstLocal = LocalProfiles.Read().Where(p => p.Game == OfflineGame.Id && p.LocalOnly)
+                .OrderBy(p => p.CreatedAt, StringComparer.Ordinal).FirstOrDefault();
+            if (_firstLocal is not null) NewName = _firstLocal.Name;
         }
         else Message = S["native.unverified"];
     }

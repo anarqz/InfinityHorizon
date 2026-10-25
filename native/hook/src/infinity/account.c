@@ -456,19 +456,20 @@ static int account_adopt(void) {
 
 /* Rewrites Azimuth's player-name std::wstring (ptr/inline buffer, size +0x10, capacity
    +0x18) in place; the gamertag fits whenever "Player 1"-style names already did. */
-/* The name the game shows: its gamertag fields hold 15 characters, so a longer Name#12345 is
-   the name alone (cut at 15), as the server sends it (Store::game_tag). */
-static void account_game_tag(wchar_t out[16]) {
-    size_t n = wide_len(account_gamertag), k = 0;
-    if (n <= 15) {
-        memory_copy(out, account_gamertag, (n + 1) * sizeof(wchar_t));
-        return;
-    }
-    while (k < 15 && account_gamertag[k] && account_gamertag[k] != L'#') {
+/* The name the game shows: its gamertag fields hold 15 characters, so the name is cut at 15
+   (Store::game_tag). OD-120: names are plain; a legacy Name#12345 (a ticket from a server before
+   OD-120) shows as the name alone, never its number. */
+static void account_plain_tag(wchar_t *out, size_t cap) {
+    size_t k = 0;
+    while (k + 1 < cap && account_gamertag[k] && account_gamertag[k] != L'#') {
         out[k] = account_gamertag[k];
         ++k;
     }
     out[k] = 0;
+}
+
+static void account_game_tag(wchar_t out[16]) {
+    account_plain_tag(out, 16);
 }
 
 static int account_set_player_name(void) {
@@ -550,7 +551,9 @@ static HRESULT account_get_name(int slot, void *self, void **out) {
         return account_info_original[slot](self, out);
     }
     AccountHstringCreateFn create = (AccountHstringCreateFn)(uintptr_t)(account_host + account_offsets->hstring_create);
-    return create(account_gamertag, (unsigned)wide_len(account_gamertag), out);
+    wchar_t name[ARRAY_COUNT(account_gamertag)];
+    account_plain_tag(name, ARRAY_COUNT(name));
+    return create(name, (unsigned)wide_len(name), out);
 }
 static HRESULT account_get_info_0(void *self, void **out) {
     return account_get_name(0, self, out);

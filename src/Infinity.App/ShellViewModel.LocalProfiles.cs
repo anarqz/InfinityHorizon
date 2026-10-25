@@ -69,6 +69,8 @@ public sealed partial class ShellViewModel
                 await session.RefreshMeAsync();
                 Message = result is { Uploaded: false, ErrorCode: { } code } ? ProfileErrorText(code)
                     : S.Format(hardcore ? "modes.created_hardcore" : "profiles.created", ("name", result?.Profile.DisplayName ?? created.Name));
+                // OD-120: a name taken meanwhile (or no room) opens the panel, which asks for a new name or keeps it on this PC.
+                if (result is { Uploaded: false }) await OfferProfileUpsertAsync();
             });
         }
         FillProfiles();

@@ -31,9 +31,11 @@ public enum ShellPage
 /// <summary>
 /// Nothing opens before sign-in (or, OD-118, the welcome screen's Play offline) → game → profile; a sign-out or a game change
 /// re-locks what depends on it. <see cref="Offline"/>: the player chose to use the launcher without an account; every area opens,
-/// online ones say they are offline, and profiles are the local ones.
+/// online ones say they are offline, and profiles are the local ones. <see cref="ProfileTag"/> is the chosen profile's shown name;
+/// <see cref="ProfileKey"/> is what finds it again (its row id: the account's profileId, or the local profile's id), never the name,
+/// which a server rename changes (OD-120).
 /// </summary>
-public sealed record ShellGate(string? AccountEmail, string? Game, string? ProfileTag, bool Offline = false)
+public sealed record ShellGate(string? AccountEmail, string? Game, string? ProfileTag, bool Offline = false, string? ProfileKey = null)
 {
     public static ShellGate SignedOut { get; } = new(null, null, null);
 
@@ -49,15 +51,15 @@ public sealed record ShellGate(string? AccountEmail, string? Game, string? Profi
     public bool CanOpen(ShellPage page) => Enum.IsDefined(page) && Step == ShellStep.Ready;
 
     /// <summary>Signing in replaces the offline path; the local profile chosen offline is chosen again from the account's list.</summary>
-    public ShellGate SignIn(string email) => this with { AccountEmail = email, Game = null, ProfileTag = null, Offline = false };
+    public ShellGate SignIn(string email) => this with { AccountEmail = email, Game = null, ProfileTag = null, ProfileKey = null, Offline = false };
 
-    public ShellGate SignOut() => this with { AccountEmail = null, Game = null, ProfileTag = null, Offline = false };
+    public ShellGate SignOut() => this with { AccountEmail = null, Game = null, ProfileTag = null, ProfileKey = null, Offline = false };
 
     /// <summary>OD-118 "Play offline" on the welcome screen: the launcher without an account.</summary>
-    public ShellGate PlayOffline() => this with { AccountEmail = null, Game = null, ProfileTag = null, Offline = true };
+    public ShellGate PlayOffline() => this with { AccountEmail = null, Game = null, ProfileTag = null, ProfileKey = null, Offline = true };
 
     /// <summary>A different game drops the profile, which belongs to the game.</summary>
-    public ShellGate ChooseGame(string game) => AccountEmail is null && !Offline ? this : this with { Game = game, ProfileTag = game == Game ? ProfileTag : null };
+    public ShellGate ChooseGame(string game) => AccountEmail is null && !Offline ? this : this with { Game = game, ProfileTag = game == Game ? ProfileTag : null, ProfileKey = game == Game ? ProfileKey : null };
 
-    public ShellGate ChooseProfile(string tag) => Game is null ? this : this with { ProfileTag = tag };
+    public ShellGate ChooseProfile(string tag, string? key = null) => Game is null ? this : this with { ProfileTag = tag, ProfileKey = key };
 }

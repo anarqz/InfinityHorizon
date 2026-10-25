@@ -195,6 +195,15 @@ public partial class MainWindow : Window
     // OD-118: the Update online profiles panel after sign-in.
     private async void OnUploadProfiles(object sender, RoutedEventArgs e) => await _vm.UploadProfilesAsync();
     private void OnCloseProfileUpsert(object sender, RoutedEventArgs e) => _vm.CloseProfileUpsert();
+    // OD-120: the one-time rename notice.
+    private async void OnKeepRenamedName(object sender, RoutedEventArgs e) => await _vm.KeepRenamedNameAsync();
+    private async void OnRenameProfile(object sender, RoutedEventArgs e) => await _vm.RenameProfileAsync();
+    private void OnRenameLater(object sender, RoutedEventArgs e) => _vm.RenameLater();
+    private void OnRenamePanelKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true; _vm.RenameLater();
+    }
     private void OnUpsertPanelKey(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Escape) return;

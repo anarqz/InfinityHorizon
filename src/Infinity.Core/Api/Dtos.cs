@@ -35,12 +35,20 @@ public sealed record GameInfo(string Id, string Title, string MinHook, string Mi
 
 public sealed record CheckpointPolicy(bool Enabled, uint MinIntervalSecs, uint MaxCommitsPerHour);
 
-/// <summary>A launcher install as it introduces itself (<c>platform</c>: windows, proton, linux).</summary>
-public sealed record Device(string DeviceId, string Label, string Platform);
+/// <summary>
+/// A launcher install as it introduces itself (<c>platform</c>: windows, proton, linux; ACCOUNTS.md §2). <see cref="Fingerprint"/> is OD-120's write-only same-device value: its derivation is open
+/// (OPEN_QUESTIONS OD120-Q1), so the launcher never sets it and it is left out of the body (servers before OD-120 refuse it).
+/// </summary>
+public sealed record Device(string DeviceId, string Label, string Platform,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Fingerprint = null);
 
 public sealed record BoundDevice(string DeviceId, string Label, string Platform, string BoundAt, string LastSeenAt);
 
-/// <summary>A game profile (<c>xuid</c> decimal, <c>gamertag</c> <c>Name#12345</c>, <c>mode</c> hardcore or noob).</summary>
+/// <summary>
+/// A game profile (<c>xuid</c> decimal, <c>gamertag</c> the plain <c>Name</c> since OD-120, <c>Name#12345</c> from older servers,
+/// <c>mode</c> hardcore or noob). <see cref="RenameNotice"/> is set while an OD-120 clash rename's free rename is unused (absent
+/// from servers before OD-120).
+/// </summary>
 public sealed record Profile(
     string ProfileId,
     string Game,
@@ -50,7 +58,14 @@ public sealed record Profile(
     string Mode,
     string Status,
     string CreatedAt,
-    string? LastPlayedAt);
+    string? LastPlayedAt,
+    RenameNotice? RenameNotice = null);
+
+/// <summary>Why a profile carries another name than the one its player chose (OD-120 backfill, ACCOUNTS.md §5).</summary>
+public sealed record RenameNotice(string PreviousName, string RenamedAt);
+
+/// <summary><c>POST /launcher/v1/profiles/{xuid}/name</c> (OD-120, CR-S44): the free rename after a clash rename.</summary>
+public sealed record NameChange(string Name);
 
 /// <summary>Access as the account plane reads it (internal tier id <c>vip</c>; shown as "Infinity Supporter").</summary>
 public sealed record Access(string Tier, string Status, string? AccessUntil, string? Plan, string? Provider, bool AutoRenew, bool PastDue);

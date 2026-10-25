@@ -223,4 +223,15 @@ public sealed class PendingAccount(ApiClient api, Device device, ServerInfo info
         var created = await api.CreateAccountAsync(new LauncherAccountCreate(needs.IdentityTicket, device, new NewProfile(game, name, "noob")), cancellation).ConfigureAwait(false);
         return AccountSession.Created(api, device, info, created, needs.Email);
     }
+
+    /// <summary>
+    /// OD-120: the first profile of the account is a profile already on this PC (created signed out): <c>POST /launcher/v1/accounts</c>
+    /// with its name and mode under its own upload key, so a retry replays instead of creating a second account. The caller links the
+    /// local profile to the answer's <see cref="LauncherAccountCreated.Profile"/>.
+    /// </summary>
+    public async Task<(AccountSession Session, Profile Profile)> CreateAccountAsync(NewProfile first, string uploadKey, CancellationToken cancellation = default)
+    {
+        var created = await api.CreateAccountAsync(new LauncherAccountCreate(needs.IdentityTicket, device, first), uploadKey, cancellation).ConfigureAwait(false);
+        return (AccountSession.Created(api, device, info, created, needs.Email), created.Profile);
+    }
 }

@@ -51,4 +51,11 @@ public sealed partial class ApiClient
     /// </summary>
     public Task<Profile> ChangeModeAsync(string access, string xuid, ModeChange change, string idempotencyKey, CancellationToken cancellation = default) =>
         SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/mode", change, access, idempotencyKey, cancellation);
+
+    /// <summary>
+    /// <c>POST /launcher/v1/profiles/{xuid}/name</c> (OD-120, ACCOUNTS.md §5 "Plain names and renames"): only while the profile has a
+    /// <c>renameNotice</c>; the current name keeps it, another free name takes it, and either clears the notice.
+    /// </summary>
+    public Task<Profile> RenameProfileAsync(string access, string xuid, NameChange change, string idempotencyKey, CancellationToken cancellation = default) =>
+        SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/name", change, access, idempotencyKey, cancellation);
 }

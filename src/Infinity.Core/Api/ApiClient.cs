@@ -40,6 +40,8 @@ public static class ErrorCodes
     public const string AccountsNameUnavailable = "ACCOUNTS.NAME_UNAVAILABLE";
     public const string AccountsProfileLimit = "ACCOUNTS.PROFILE_LIMIT";
     public const string AccountsInvalidName = "ACCOUNTS.INVALID_NAME";
+    /// <summary>The profile has no free rename (<c>renameNotice</c> absent, OD-120).</summary>
+    public const string AccountsRenameNotAllowed = "ACCOUNTS.RENAME_NOT_ALLOWED";
     /// <summary>The same <c>Idempotency-Key</c> with another body (CORE_API; services/api launcher/accounts.rs).</summary>
     public const string RequestIdempotencyKeyReused = "REQUEST.IDEMPOTENCY_KEY_REUSED";
     public const string GameUpdateRequired = "GAME.UPDATE_REQUIRED";

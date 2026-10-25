@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using Infinity.Core.Api;
+using Infinity.Core.Shell;
 using Infinity.Core.Saves;
 
 namespace Infinity.App;
@@ -24,14 +25,14 @@ public sealed partial class ShellViewModel
     /// <summary>The save picker is open (it covers the profile and home panels).</summary>
     public bool ShowPickSave => _saveTarget is not null;
 
-    public string PickSaveText => _saveTarget is null ? string.Empty : S.Format("saves.pick_text", ("name", _saveTarget.Gamertag));
+    public string PickSaveText => _saveTarget is null ? string.Empty : S.Format("saves.pick_text", ("name", ProfileName.Plain(_saveTarget.Gamertag)));
 
     public bool CanPickSave => Ready && _install is not null && !Playing && !Busy;
 
     /// <summary>Home's "use a save from this PC": the picker for the chosen profile.</summary>
     public void OpenSavePicker()
     {
-        if (CanPickSave && Profiles.FirstOrDefault(p => p.Gamertag == _gate.ProfileTag) is { } profile)
+        if (CanPickSave && Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey) is { } profile)
         {
             OfferSaves(profile, always: true);
         }
@@ -134,7 +135,7 @@ public sealed partial class ShellViewModel
             }
             Log($"save clone {choice.Save.Folder}/{choice.Save.Revision.Number:x16} -> {result.Target}/{result.Number:x16}, {result.Backups.Count} backups in {AzimuthSaves.ArchiveDir}");
             CloseSavePicker();
-            Message = S.Format("saves.cloned", ("title", choice.Title), ("name", target.Gamertag));
+            Message = S.Format("saves.cloned", ("title", choice.Title), ("name", ProfileName.Plain(target.Gamertag)));
             try
             {
                 new SaveLinks(_stateDirectory).Set(target.Xuid, new SaveLink(choice.Save.Folder, choice.Save.Revision.Number, result.Number, DateTime.UtcNow));
@@ -152,7 +153,7 @@ public sealed partial class ShellViewModel
     /// <summary>"Start a new career": nothing is copied, the game creates the save.</summary>
     public void SkipSave()
     {
-        var name = _saveTarget?.Gamertag ?? string.Empty;
+        var name = ProfileName.Plain(_saveTarget?.Gamertag);
         CloseSavePicker();
         Message = S.Format("saves.skipped", ("name", name));
     }
