@@ -15,7 +15,8 @@ public sealed partial class ShellViewModel
     private OnlineStatus? _onlineStatus;
     private OnlinePause? _onlinePause;
     private OnlineActivity? _playOnlineActivity;
-    private bool _onlineChecking, _onlineStarted, _onlineSupport, _onlineViewing;
+    private bool _onlineChecking, _onlineStarted, _onlineSupport, _onlineViewing, _onlineWaiting;
+    private long _onlineEngagement; // a new one at every SIGN IN and every sign-out or Play offline
     private long _onlinePauseEpoch, _onlineRetryTimestamp;
     private long? _onlineConfirmedTimestamp;
     private TimeSpan _onlineRetryDelay;
@@ -34,7 +35,7 @@ public sealed partial class ShellViewModel
     public string OnlineServiceMessage => S[_onlinePause?.Reason switch
     {
         "budget" => "online.budget", "operator" => "online.operator",
-        _ => _onlineChecking ? "online.checking" : OnlineServiceAllowsPlay ? "online.open" : "online.unknown",
+        _ => _onlineChecking || _onlineWaiting ? "online.checking" : OnlineServiceAllowsPlay ? "online.open" : "online.unknown",
     }];
     public string OnlineRetryHint => OnlineRetryRemaining is { } remaining && remaining > TimeSpan.Zero
         ? S.Format("online.retry_wait", ("minutes", Math.Ceiling(remaining.TotalMinutes).ToString(CultureInfo.CurrentCulture))) : "";
@@ -86,6 +87,8 @@ public sealed partial class ShellViewModel
             OnlineStatusRules.Validate(status);
             // A closure observed after this read began wins over an in-flight cached open reply.
             if (epoch != _onlinePauseEpoch) return;
+            // an answer that arrives after the player went offline is not the next engagement's answer
+            if (!_onlineEngaged) return;
             // Revisions diagnose the responding controller; edge and platform are not one ordered authority.
             if (status.State == "closed")
             {

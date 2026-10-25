@@ -52,6 +52,7 @@ public sealed partial class ShellViewModel
     {
         if (_onlineEngaged) return;
         _onlineEngaged = true;
+        _onlineEngagement++;
         Log("online: engaged (the player chose Sign in); service status and release floor are read now");
         Changed(string.Empty);
     }
@@ -70,6 +71,8 @@ public sealed partial class ShellViewModel
     private void DisengageOnline()
     {
         _onlineEngaged = false;
+        _onlineEngagement++;
+        _onlineWaiting = false;
         _onlineAnswered = false;
         _onlineStarted = false;
         _onlineStatus = null;
