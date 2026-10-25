@@ -90,7 +90,7 @@ public partial class MainWindow : Window
     private void OnOfficialReleases(object sender, RoutedEventArgs e) => OpenCommunityLink("https://github.com/anarqz/InfinityHorizon/releases");
 
     private void OnAbout(object sender, RoutedEventArgs e) => MessageBox.Show(this,
-        $"Infinity Launcher {_vm.Version}\n\nBased on Infinity Launcher - https://github.com/anarqz/InfinityHorizon\n\n{_vm.S["legal.license"]}\n\n{_vm.S["legal.third_party"]}",
+        $"Infinity Launcher {_vm.Version}\n\nBased on Infinity Launcher - https://github.com/anarqz/InfinityHorizon\n\n{_vm.S["legal.license"]}\n\n{_vm.S["legal.third_party"]}\n\n{_vm.S["legal.privacy"]}",
         _vm.S["legal.about"], MessageBoxButton.OK, MessageBoxImage.Information);
 
     private void OnCancelSignIn(object sender, RoutedEventArgs e)
