@@ -26,7 +26,6 @@
     <Resource Include="Assets\*.png;Assets\*.jpg;Assets\*.ico;Assets\Fonts\*.ttf;Assets\Emoji\*.gz" />
     <Content Include="Assets\infinity-256.png" Link="infinity.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Fonts\Selawik-LICENSE.txt" Link="licenses\Selawik-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Assets\Fonts\NotoEmoji-LICENSE.txt" Link="licenses\NotoEmoji-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Local English and Brazilian Portuguese catalogs. -->
