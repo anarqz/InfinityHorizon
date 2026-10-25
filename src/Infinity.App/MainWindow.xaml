@@ -566,7 +566,7 @@
                T3d (Alex): beside PLAY the news scrolls on its own and PLAY stays put; stacked, the page scrolls as one. -->
           <Grid x:Name="HomeArea" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}" SizeChanged="OnHomeSized">
           <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-          <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto">
+          <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
             <Grid>
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <StackPanel MaxWidth="600" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,8,0,8">
@@ -637,7 +637,7 @@
                             Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" Visibility="{Binding NewsBelow, Converter={StaticResource Visible}}" />
             </Grid>
           </ScrollViewer>
-          <ScrollViewer x:Name="NewsScroll" Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="32,0,0,0"
+          <ScrollViewer x:Name="NewsScroll" Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="32,0,0,0" FocusVisualStyle="{x:Null}"
                         Visibility="{Binding NewsBeside, Converter={StaticResource Visible}}">
             <ContentControl x:Name="NewsColumnBeside" Width="340" Margin="0,8,8,8" VerticalAlignment="Top" Focusable="False"
                             Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" />
