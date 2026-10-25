@@ -1,0 +1,1877 @@
+{
+  "schemaVersion": 2,
+  "mods": [
+    {
+      "id": "infinity-mod-runtime",
+      "version": "1.0.0",
+      "name": {
+        "en": "Infinity mod runtime",
+        "pt-BR": "Runtime de mods do Infinity"
+      },
+      "description": {
+        "en": "Loads native mods inside the game. Installed automatically with the first mod that needs it.",
+        "pt-BR": "Carrega mods nativos dentro do jogo. Instalado automaticamente com o primeiro mod que precisar dele."
+      },
+      "author": "Infinity",
+      "download": {
+        "url": "https://github.com/anarqz/InfinityHorizon/releases/download/mod-runtime-1.0.0/infinity-mod-runtime-1.0.0.zip",
+        "sha256": "516d1d8b1496117b3438f9d66352b16a932a4ea3cbfd377bf2128703902efa6f",
+        "bytes": 839894
+      }
+    },
+    {
+      "id": "extraoptions",
+      "version": "0.2.98",
+      "name": {
+        "en": "Extra Options",
+        "pt-BR": "Extra Options"
+      },
+      "description": {
+        "en": "Gameplay and configuration options.",
+        "pt-BR": "Opções de jogabilidade e configuração."
+      },
+      "author": "Arthur (RokkuDayo)",
+      "download": {
+        "url": "https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions/releases/download/Azimuth_v0.9.10/FH2_Extra_Options_0.2.98-release.zip",
+        "sha256": "d3b9db715416abd8efef4048445a9edbe22d333ba0267fb48fb255dfab000c38",
+        "bytes": 731258
+      },
+      "install": {
+        "schemaVersion": 1,
+        "kind": "mod",
+        "license": "GPL-3.0",
+        "homepage": "https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions",
+        "runtime": "standalone",
+        "review": {
+          "status": "reviewed",
+          "blockers": []
+        },
+        "compatibility": {
+          "azimuthVersions": [
+            "0.9.10"
+          ],
+          "gameBuilds": [],
+          "verification": "catalog-baseline"
+        },
+        "dependencies": [],
+        "conflicts": [],
+        "files": {
+          "game": [],
+          "azimuth": [
+            {
+              "source": "Azimuth/winmm.dll",
+              "destination": "winmm.dll",
+              "sha256": "d372b3a331c93cbbbf984d9a3b5df63836fdfb2aee26a10660c838c4806ff3d5",
+              "bytes": 256000,
+              "role": "binary",
+              "mode": "add-or-replace",
+              "loader": true
+            },
+            {
+              "source": "Azimuth/FH2_ExtraOptions.ini",
+              "destination": "FH2_ExtraOptions.ini",
+              "sha256": "2f5eaa1df9754fa7e0d8c4a5e1d878c474e0917c1127e9603b8c3acb4d04ac8d",
+              "bytes": 3050,
+              "role": "config",
+              "mode": "seed"
+            },
+            {
+              "source": "Azimuth/Gamerpic.png",
+              "destination": "Gamerpic.png",
+              "sha256": "5554f8799c89cba41165db096b24d14f7741e3e28d21cbd69cda2ff8ac7a6763",
+              "bytes": 269296,
+              "role": "user-asset",
+              "mode": "seed"
+            }
+          ]
+        },
+        "config": {
+          "root": "azimuth",
+          "path": "FH2_ExtraOptions.ini",
+          "format": "ini",
+          "create": "package-seed",
+          "preserveOnDisable": true,
+          "options": [
+            {
+              "id": "global-enabled",
+              "section": "Global",
+              "key": "Enabled",
+              "label": {
+                "en": "Extra Options on",
+                "pt-BR": "Extra Options ativado"
+              },
+              "description": {
+                "en": "Turns every feature of the mod on or off.",
+                "pt-BR": "Liga ou desliga todas as funções do mod."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": true,
+              "lockReason": {
+                "en": "Kept on by Infinity: every player needs Extra Options to play, and mods are loaded through it.",
+                "pt-BR": "Mantido ligado pelo Infinity: todo jogador precisa do Extra Options para jogar, e os mods são carregados por ele."
+              }
+            },
+            {
+              "id": "content-unlockdlc",
+              "section": "Content",
+              "key": "UnlockDLC",
+              "label": {
+                "en": "Unlock all DLC",
+                "pt-BR": "Desbloquear todas as DLCs"
+              },
+              "description": {
+                "en": "Grants every DLC pack. Treasure Map and VIP have their own switches. Storm Island's map needs its package installed; its cars are available anyway.",
+                "pt-BR": "Libera todos os pacotes de DLC. Mapa do Tesouro e VIP têm opções próprias. O mapa da Storm Island precisa do pacote instalado; os carros dela ficam disponíveis de qualquer forma."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "content-offlinevip",
+              "section": "Content",
+              "key": "OfflineVIP",
+              "label": {
+                "en": "VIP status",
+                "pt-BR": "Status VIP"
+              },
+              "description": {
+                "en": "VIP perks: double credits and XP, and double wheelspin bonus.",
+                "pt-BR": "Vantagens VIP: créditos e XP em dobro e bônus dobrado nas roletas."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": false,
+              "lockReason": {
+                "en": "Kept off by Infinity: online perks come from Infinity Supporter and the server's economy.",
+                "pt-BR": "Mantido desligado pelo Infinity: as vantagens online vêm do Infinity Supporter e da economia do servidor."
+              }
+            },
+            {
+              "id": "content-unlocktreasuremap",
+              "section": "Content",
+              "key": "UnlockTreasureMap",
+              "label": {
+                "en": "Treasure Map",
+                "pt-BR": "Mapa do Tesouro"
+              },
+              "description": {
+                "en": "Reveals every bonus board and barn find, on the mainland and Storm Island. Turning it on, saving in game and turning it off keeps them found.",
+                "pt-BR": "Revela todas as placas de bônus e carros de celeiro, no continente e na Storm Island. Ligar, salvar no jogo e desligar mantém tudo descoberto."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": false,
+              "encoding": "0/1"
+            },
+            {
+              "id": "content-unlockstormislandcars",
+              "section": "Content",
+              "key": "UnlockStormIslandCars",
+              "label": {
+                "en": "Storm Island cars",
+                "pt-BR": "Carros da Storm Island"
+              },
+              "description": {
+                "en": "Lets you buy the Ranger T6 and #7 SST without the Storm Island events.",
+                "pt-BR": "Permite comprar o Ranger T6 e o #7 SST sem os eventos da Storm Island."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "frontend-skipintro",
+              "section": "Frontend",
+              "key": "SkipIntro",
+              "label": {
+                "en": "Skip the intro",
+                "pt-BR": "Pular a introdução"
+              },
+              "description": {
+                "en": "Starts straight at \"Press Start\".",
+                "pt-BR": "Abre direto no \"Press Start\"."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "frontend-getincarfrompausemenu",
+              "section": "Frontend",
+              "key": "GetInCarFromPauseMenu",
+              "label": {
+                "en": "Get in any car from the pause menu",
+                "pt-BR": "Trocar de carro pelo menu de pausa"
+              },
+              "description": {
+                "en": "Change cars anywhere in free roam: pick a car in My Cars in the pause menu.",
+                "pt-BR": "Troque de carro em qualquer lugar do free roam: escolha um carro em Meus Carros no menu de pausa."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "frontend-allrimscategory",
+              "section": "Frontend",
+              "key": "AllRimsCategory",
+              "label": {
+                "en": "All rims category",
+                "pt-BR": "Categoria com todas as rodas"
+              },
+              "description": {
+                "en": "Adds a category with every aftermarket and stock rim.",
+                "pt-BR": "Adiciona uma categoria com todas as rodas originais e de fábrica."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "frontend-enablemarketplace",
+              "section": "Frontend",
+              "key": "EnableMarketplace",
+              "label": {
+                "en": "Marketplace tab",
+                "pt-BR": "Aba Marketplace"
+              },
+              "description": {
+                "en": "Shows the pause menu's Marketplace tab.",
+                "pt-BR": "Mostra a aba Marketplace do menu de pausa."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": false,
+              "lockReason": {
+                "en": "Kept off by Infinity: Infinity serves this online tab itself.",
+                "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
+              }
+            },
+            {
+              "id": "frontend-enablesocial",
+              "section": "Frontend",
+              "key": "EnableSocial",
+              "label": {
+                "en": "Social tab",
+                "pt-BR": "Aba Social"
+              },
+              "description": {
+                "en": "Shows the pause menu's Social tab.",
+                "pt-BR": "Mostra a aba Social do menu de pausa."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": false,
+              "lockReason": {
+                "en": "Kept off by Infinity: Infinity serves this online tab itself.",
+                "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
+              }
+            },
+            {
+              "id": "frontend-enableclubs",
+              "section": "Frontend",
+              "key": "EnableClubs",
+              "label": {
+                "en": "Clubs tab",
+                "pt-BR": "Aba Clubes"
+              },
+              "description": {
+                "en": "Shows the pause menu's Clubs tab.",
+                "pt-BR": "Mostra a aba Clubes do menu de pausa."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": false,
+              "lockReason": {
+                "en": "Kept off by Infinity: Infinity serves this online tab itself.",
+                "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
+              }
+            },
+            {
+              "id": "frontend-enablerivals",
+              "section": "Frontend",
+              "key": "EnableRivals",
+              "label": {
+                "en": "Rivals tab",
+                "pt-BR": "Aba Rivais"
+              },
+              "description": {
+                "en": "Shows the pause menu's Rivals tab.",
+                "pt-BR": "Mostra a aba Rivais do menu de pausa."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": false,
+              "lockReason": {
+                "en": "Kept off by Infinity: Infinity serves this online tab itself.",
+                "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
+              }
+            },
+            {
+              "id": "photomode-freecamera",
+              "section": "PhotoMode",
+              "key": "FreeCamera",
+              "label": {
+                "en": "Free camera",
+                "pt-BR": "Câmera livre"
+              },
+              "description": {
+                "en": "Removes the photo mode camera's collisions and limits.",
+                "pt-BR": "Tira as colisões e os limites da câmera do modo foto."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "autodrive-enabled",
+              "section": "Autodrive",
+              "key": "Enabled",
+              "label": {
+                "en": "Autodrive",
+                "pt-BR": "Piloto automático"
+              },
+              "description": {
+                "en": "Set a GPS route in free roam, then press D-pad Down (or F2) and the car drives there. Steering, braking or pressing again gives control back.",
+                "pt-BR": "Marque uma rota no GPS no free roam e aperte o direcional para baixo (ou F2): o carro dirige até lá. Esterçar, frear ou apertar de novo devolve o controle."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "profile-customgamerpic",
+              "section": "Profile",
+              "key": "CustomGamerpic",
+              "label": {
+                "en": "Custom gamerpic",
+                "pt-BR": "Foto de perfil personalizada"
+              },
+              "description": {
+                "en": "Uses Gamerpic.png from the game folder as your picture (up to 2048x2048, 16 MB; square PNG recommended).",
+                "pt-BR": "Usa o Gamerpic.png da pasta do jogo como sua foto (até 2048x2048 e 16 MB; PNG quadrado recomendado)."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "compatibility-disableparentallocks",
+              "section": "Compatibility",
+              "key": "DisableParentalLocks",
+              "label": {
+                "en": "Allow user-created content",
+                "pt-BR": "Permitir conteúdo criado por usuários"
+              },
+              "description": {
+                "en": "Passes the game's local privilege checks for user-created content.",
+                "pt-BR": "Libera as verificações locais de privilégio para conteúdo criado por usuários."
+              },
+              "advanced": true,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "compatibility-disableazimuthsavechecksums",
+              "section": "Compatibility",
+              "key": "DisableAzimuthSaveChecksums",
+              "label": {
+                "en": "Skip Azimuth's save checks",
+                "pt-BR": "Pular as verificações de save do Azimuth"
+              },
+              "description": {
+                "en": "Skips Azimuth's save hash and size checks and rebuilds missing save markers at startup. Makes adding liveries to a save easier.",
+                "pt-BR": "Pula as checagens de hash e tamanho do save do Azimuth e recria marcadores de save que faltam ao abrir. Facilita adicionar pinturas ao save."
+              },
+              "advanced": true,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": false,
+              "lockReason": {
+                "en": "Kept off by Infinity: rebuilding save commit markers conflicts with sealed cloud-save revisions.",
+                "pt-BR": "Mantido desligado pelo Infinity: reconstruir os marcadores de commit do save conflita com as revisões seladas do save na nuvem."
+              }
+            },
+            {
+              "id": "files-enablemediaoverrides",
+              "section": "Files",
+              "key": "EnableMediaOverrides",
+              "label": {
+                "en": "Loose files (mediaoverride)",
+                "pt-BR": "Arquivos soltos (mediaoverride)"
+              },
+              "description": {
+                "en": "Loads loose files next to the game (mediaoverride, then mediapc, then the original media). Restart the game after changing files.",
+                "pt-BR": "Carrega arquivos soltos ao lado do jogo (mediaoverride, depois mediapc, depois a mídia original). Reinicie o jogo depois de mudar arquivos."
+              },
+              "advanced": true,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1",
+              "lockedValue": true,
+              "lockReason": {
+                "en": "Kept on by Infinity: mods change game files only through media overrides.",
+                "pt-BR": "Mantido ligado pelo Infinity: os mods só mudam arquivos do jogo pelas substituições de mídia."
+              }
+            }
+          ]
+        },
+        "runtimeOutputs": [],
+        "excludedArchiveEntries": [
+          "Azimuth/data/bin/azimuth-tls.dll"
+        ],
+        "databaseMigrations": [],
+        "launch": {
+          "wineDllOverrides": [
+            {
+              "module": "winmm",
+              "appDefaults": true
+            }
+          ]
+        },
+        "readiness": {
+          "module": "winmm.dll",
+          "log": "FH2_ExtraOptions.log",
+          "contains": "AZIMUTH: winmm proxy initialized"
+        },
+        "adoption": {
+          "parkedFiles": [
+            {
+              "path": "data/fi-launcher/mods/extraoptions/disabled/winmm.dll",
+              "destination": "winmm.dll"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "nitrosystem",
+      "version": "1.1.0-infinity.1",
+      "name": {
+        "en": "Nitro System · Infinity",
+        "pt-BR": "Sistema de Nitro · Infinity"
+      },
+      "description": {
+        "en": "NitroSystem adapted to the Infinity native mod API, with manifest-driven files/settings and startup SQL registered by the mod.",
+        "pt-BR": "NitroSystem adaptado à API nativa de mods Infinity, com arquivos e opções definidos pelo manifesto e SQL de inicialização registrado pelo mod."
+      },
+      "author": "qiangqiang101; Infinity edition by anarqz",
+      "download": {
+        "url": "https://github.com/anarqz/NitroSystem/releases/download/v1.1.0-infinity.1/NitroSystem-Infinity-1.1.0-infinity.1.zip",
+        "sha256": "232b4636007bb69887dc454830f009bb98548a056050b1884e0d70c56815dd46",
+        "bytes": 107951
+      },
+      "additionalDownloads": {
+        "upstream-assets": {
+          "url": "https://github.com/qiangqiang101/NitroSystem/releases/download/1.1.0/FnFNitro-1.1.0.zip",
+          "sha256": "a94848ecef2e68405c7d4aabaa82c733b8f76692ca45389bcdfede536f0cf94f",
+          "bytes": 2339419
+        }
+      },
+      "requires": [
+        "infinity-mod-runtime"
+      ],
+      "install": {
+        "schemaVersion": 1,
+        "kind": "mod",
+        "license": "MIT",
+        "homepage": "https://github.com/anarqz/NitroSystem",
+        "runtime": "infinity-native",
+        "review": {
+          "status": "reviewed",
+          "blockers": []
+        },
+        "compatibility": {
+          "azimuthVersions": [
+            "0.9.10"
+          ],
+          "gameBuilds": [],
+          "verification": "unverified"
+        },
+        "dependencies": [
+          {
+            "id": "extraoptions",
+            "versions": [
+              "0.2.98"
+            ],
+            "enabled": true,
+            "settings": [
+              {
+                "optionId": "global-enabled",
+                "value": true
+              },
+              {
+                "optionId": "files-enablemediaoverrides",
+                "value": true
+              }
+            ]
+          }
+        ],
+        "conflicts": [],
+        "files": {
+          "game": [
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/backfire.materialbin",
+              "destination": "mediaoverride/Particles/Materials/backfire.materialbin",
+              "sha256": "217cbed2e44ec2797dd4e454c18383f6a4b090424cd4b0d20c33a675b76c72cb",
+              "bytes": 352,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/backfire_blue.materialbin",
+              "destination": "mediaoverride/Particles/Materials/backfire_blue.materialbin",
+              "sha256": "c9c6309ec1a07a0da4f7ddb6a0c62619a87152a214b28eb7e37b8846e5aac22a",
+              "bytes": 352,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/backfire_purple.materialbin",
+              "destination": "mediaoverride/Particles/Materials/backfire_purple.materialbin",
+              "sha256": "e79795726feea5367bba5bd8b5581803780a2fbc89aeab64b402a1467c60efb1",
+              "bytes": 352,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Systems/Backfire.xml",
+              "destination": "mediaoverride/Particles/Systems/Backfire.xml",
+              "sha256": "2ac70254d35dbac5509fe793b3c236c013924a74c39f581ae6bc240ec2088f4a",
+              "bytes": 1705,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/Controls/HUDSpeedometerControl.xaml",
+              "destination": "mediaoverride/ui/Controls/HUDSpeedometerControl.xaml",
+              "sha256": "e53ad86d730591727c355ee0b380ddce4d0fc9f5a17df88c99c9e9972776a40d",
+              "bytes": 75116,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/Fire/backfire_blue.materialbin",
+              "destination": "mediaoverride/Particles/Materials/Fire/backfire_blue.materialbin",
+              "sha256": "c9c6309ec1a07a0da4f7ddb6a0c62619a87152a214b28eb7e37b8846e5aac22a",
+              "bytes": 352,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/Fire/carBackfire.materialbin",
+              "destination": "mediaoverride/Particles/Materials/Fire/carBackfire.materialbin",
+              "sha256": "c9c6309ec1a07a0da4f7ddb6a0c62619a87152a214b28eb7e37b8846e5aac22a",
+              "bytes": 352,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/Backfire.shaderbin",
+              "destination": "mediaoverride/Particles/Shaders/backfire/Backfire.shaderbin",
+              "sha256": "be571492903df723f38ca05f8a8f9bf4bfc489d22e16f56b57c2b422a06ec341",
+              "bytes": 788,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.pso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.pso",
+              "sha256": "f35e386274aef1247c2c42d02aa135bfac6b765b3e948e68a1065e7543cf800f",
+              "bytes": 10548,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.vso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.vso",
+              "sha256": "fd8ec27ba38ac727ccdaf186314963125ea9f719f21312f078411db2506f95cb",
+              "bytes": 28452,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.pso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.pso",
+              "sha256": "96ffcc3eb70cd6772f5535e78c9991df7efc5d3ef6d05296c16f61d1e00ad277",
+              "bytes": 11020,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.vso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.vso",
+              "sha256": "b79f5e7e01f114e69eb7a656d5ac6222c8c799a1be91f66a3311035ef8af0fe6",
+              "bytes": 31580,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.pso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.pso",
+              "sha256": "229bb0dc5b3cd40992f47c3d7b56dddfb4f886f74549dab48a6c8c184ccf22a8",
+              "bytes": 11316,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.vso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.vso",
+              "sha256": "567cc06f8a5bbfee521380d60e99403864048f06a1515ede1b5572b974d7fc00",
+              "bytes": 28460,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.pso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.pso",
+              "sha256": "f9ed0f4cf7010c15a609a47f4492d8ab6996755e8de4601ccabcc0725467ff03",
+              "bytes": 11692,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.vso",
+              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.vso",
+              "sha256": "b79f5e7e01f114e69eb7a656d5ac6222c8c799a1be91f66a3311035ef8af0fe6",
+              "bytes": 31580,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/HUD_XPBar_TipGlow.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/HUD_XPBar_TipGlow.swatchbin",
+              "sha256": "e74b50445a7e51bc516444f8032c26edfddbf4dece1a2b4bf076e18e7472cc5a",
+              "bytes": 1107,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/SkillBarTipGlow.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/SkillBarTipGlow.swatchbin",
+              "sha256": "cdf53b7a951f8b5d7b79948d246b141238bd2e4a195004926a9bafab74398e98",
+              "bytes": 4179,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/SkillsLargeGlow.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/SkillsLargeGlow.swatchbin",
+              "sha256": "c90784e0646e563cdf9e25f173586d59b55adb925da1a99b08bedeb00edcd8a1",
+              "bytes": 65619,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_Off.swatchbin",
+              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_Off.swatchbin",
+              "sha256": "be681511ebe073868b95c40449d4249a48adc5369f6b1396d86d2d15a9ad5b62",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_On.swatchbin",
+              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_On.swatchbin",
+              "sha256": "5697ca24c536055c650cd9267c009858f399877969d530db99cc7724f1c20b75",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_Off.swatchbin",
+              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_Off.swatchbin",
+              "sha256": "14506b5176dfdb7e6965a979ecdae7a81c7e2546b2e7df0a4c35ccb8b145ff19",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_On.swatchbin",
+              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_On.swatchbin",
+              "sha256": "24769047b89d0bc5981d54663c8889176c49ecd27d500d018ffdba502dd4b860",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Digital_Bar.swatchbin",
+              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Digital_Bar.swatchbin",
+              "sha256": "86d4111220ffa5158a535e3e6cff6a43ce3ca629378b497f9aa3ddae2eff7e82",
+              "bytes": 9299,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Radial_Bar.swatchbin",
+              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Radial_Bar.swatchbin",
+              "sha256": "c8002c716093e5d7863cec786ebc7ff929933bb997eb72d7e9389aa85035b4bd",
+              "bytes": 65619,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_1.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_1.swatchbin",
+              "sha256": "883bbee3c0c58af6659abb136205d37ecb983a359b85a6086c37bc64a5bebfe9",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_2.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_2.swatchbin",
+              "sha256": "e478ef350020246a14c2942a933089513739b50b74c5586580cf309f11c21b34",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_3.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_3.swatchbin",
+              "sha256": "225ef688a3e856edc811836b601a6a4e0873d13c407f16d0f61ada239fb4f62f",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_4.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_4.swatchbin",
+              "sha256": "1653b7d09123c956d91fd8f7fb011f0f8efa286145ef2d403c57a12a665d70b3",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_5.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_5.swatchbin",
+              "sha256": "02020c4e460aefd1ffe2d48249796c0321ae600b122009112f89daf9b1de44c9",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_6.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_6.swatchbin",
+              "sha256": "cda525a446b5c23e45e9c113a9d93c2fd0368089e5fa4b5400e633b0afda70a7",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_7.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_7.swatchbin",
+              "sha256": "033c5d18bc03fe18df1d640de27bdcd2b9fd0bc9c4ec83167045b6001d6469ce",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_8.swatchbin",
+              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_8.swatchbin",
+              "sha256": "a6d4bc22f9817a5c6e30a5435bf896659b576b30ce929b267743ecc0258198a2",
+              "bytes": 32851,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            }
+          ],
+          "azimuth": [
+            {
+              "source": "FnFNitro-1.1.0/azimuth-windows/FnFNitro/nos_boost.wav",
+              "destination": "FnFNitro/nos_boost.wav",
+              "sha256": "8eaf24cc2714bda855a2f8596b6a69a88cd10b5318276075ff7a65c61d0cb3df",
+              "bytes": 1440102,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro-1.1.0/azimuth-windows/FnFNitro/nos_stop.wav",
+              "destination": "FnFNitro/nos_stop.wav",
+              "sha256": "332f3b7ff32be6d5b8ff34cc9b6848be42c38977f81ea7e0eaf3b6d172169df0",
+              "bytes": 264270,
+              "role": "asset",
+              "mode": "add-or-replace",
+              "package": "upstream-assets"
+            },
+            {
+              "source": "FnFNitro.dll",
+              "destination": "infinity-mods/NitroSystem/FnFNitro.dll",
+              "sha256": "3c0fb2a20ecc31c1b8da743413b1feeba446fe31a0fcb21c2f768d81ef286d74",
+              "bytes": 199680,
+              "role": "binary",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "LICENSE.txt",
+              "destination": "infinity-mods/NitroSystem/LICENSE.txt",
+              "sha256": "742109f80236c34e340712843a408c0f9fadf78339a833ce2de2742b9e221080",
+              "bytes": 1071,
+              "role": "license",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "LICENSE-Infinity-SDK.txt",
+              "destination": "infinity-mods/NitroSystem/LICENSE-Infinity-SDK.txt",
+              "sha256": "319eeb899417ea76cb7dbc1bd6b95461dbb02f678ab4930bb182e9fff566df16",
+              "bytes": 1090,
+              "role": "license",
+              "mode": "add-or-replace"
+            }
+          ]
+        },
+        "config": {
+          "root": "azimuth",
+          "path": "infinity-mods/NitroSystem/FnFNitro.ini",
+          "format": "ini",
+          "create": "defaults",
+          "preserveOnDisable": true,
+          "options": [
+            {
+              "id": "nitroenabled",
+              "section": "Settings",
+              "key": "NitroEnabled",
+              "label": {
+                "en": "Nitro enabled",
+                "pt-BR": "Nitro ativado"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            },
+            {
+              "id": "nitrobutton",
+              "section": "Settings",
+              "key": "NitroButton",
+              "label": {
+                "en": "Nitro button",
+                "pt-BR": "Botão do nitro"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "enum",
+              "default": "LB",
+              "choices": [
+                {
+                  "value": "LB",
+                  "label": {
+                    "en": "LB",
+                    "pt-BR": "LB"
+                  }
+                },
+                {
+                  "value": "RB",
+                  "label": {
+                    "en": "RB",
+                    "pt-BR": "RB"
+                  }
+                },
+                {
+                  "value": "A",
+                  "label": {
+                    "en": "A",
+                    "pt-BR": "A"
+                  }
+                },
+                {
+                  "value": "B",
+                  "label": {
+                    "en": "B",
+                    "pt-BR": "B"
+                  }
+                },
+                {
+                  "value": "X",
+                  "label": {
+                    "en": "X",
+                    "pt-BR": "X"
+                  }
+                },
+                {
+                  "value": "Y",
+                  "label": {
+                    "en": "Y",
+                    "pt-BR": "Y"
+                  }
+                },
+                {
+                  "value": "LS",
+                  "label": {
+                    "en": "LS",
+                    "pt-BR": "LS"
+                  }
+                },
+                {
+                  "value": "RS",
+                  "label": {
+                    "en": "RS",
+                    "pt-BR": "RS"
+                  }
+                },
+                {
+                  "value": "DPadUp",
+                  "label": {
+                    "en": "DPadUp",
+                    "pt-BR": "DPadUp"
+                  }
+                },
+                {
+                  "value": "DPadDown",
+                  "label": {
+                    "en": "DPadDown",
+                    "pt-BR": "DPadDown"
+                  }
+                },
+                {
+                  "value": "DPadLeft",
+                  "label": {
+                    "en": "DPadLeft",
+                    "pt-BR": "DPadLeft"
+                  }
+                },
+                {
+                  "value": "DPadRight",
+                  "label": {
+                    "en": "DPadRight",
+                    "pt-BR": "DPadRight"
+                  }
+                },
+                {
+                  "value": "Back",
+                  "label": {
+                    "en": "Back",
+                    "pt-BR": "Back"
+                  }
+                },
+                {
+                  "value": "Start",
+                  "label": {
+                    "en": "Start",
+                    "pt-BR": "Start"
+                  }
+                },
+                {
+                  "value": "LT",
+                  "label": {
+                    "en": "LT",
+                    "pt-BR": "LT"
+                  }
+                },
+                {
+                  "value": "RT",
+                  "label": {
+                    "en": "RT",
+                    "pt-BR": "RT"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "torquescale",
+              "section": "Settings",
+              "key": "TorqueScale",
+              "label": {
+                "en": "Boost multiplier",
+                "pt-BR": "Multiplicador de potência"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "number",
+              "default": 1.6,
+              "minimum": 1.0,
+              "maximum": 2.0,
+              "step": 0.1,
+              "decimals": 2,
+              "unit": "multiplier"
+            },
+            {
+              "id": "duration",
+              "section": "Settings",
+              "key": "Duration",
+              "label": {
+                "en": "Tank capacity",
+                "pt-BR": "Capacidade do tanque"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "number",
+              "default": 20.0,
+              "minimum": 5,
+              "maximum": 60,
+              "step": 1,
+              "decimals": 1,
+              "unit": "seconds"
+            },
+            {
+              "id": "builduptime",
+              "section": "Settings",
+              "key": "BuildupTime",
+              "label": {
+                "en": "Buildup time",
+                "pt-BR": "Tempo para potência máxima"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "number",
+              "default": 0.5,
+              "minimum": 0.1,
+              "maximum": 2.0,
+              "step": 0.1,
+              "decimals": 2,
+              "unit": "seconds"
+            },
+            {
+              "id": "rechargerate",
+              "section": "Settings",
+              "key": "RechargeRate",
+              "label": {
+                "en": "Recharge rate",
+                "pt-BR": "Taxa de recarga"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "number",
+              "default": 1.0,
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "step": 0.1,
+              "decimals": 2,
+              "unit": "ratio"
+            },
+            {
+              "id": "debugoverlay",
+              "section": "Settings",
+              "key": "DebugOverlay",
+              "label": {
+                "en": "Debug overlay",
+                "pt-BR": "Informações de depuração"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": true,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": false,
+              "encoding": "0/1"
+            },
+            {
+              "id": "backfireonallcars",
+              "section": "Settings",
+              "key": "BackfireOnAllCars",
+              "label": {
+                "en": "Backfire on all cars",
+                "pt-BR": "Chamas em todos os carros"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": true,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            }
+          ]
+        },
+        "runtimeOutputs": [],
+        "excludedArchiveEntries": [
+          "FnFNitro-1.1.0/INSTALL.txt",
+          "FnFNitro-1.1.0/README.md",
+          "FnFNitro-1.1.0/azimuth-windows/d3dcompiler_47.dll",
+          "FnFNitro-1.1.0/licenses/LICENSE-FH2-Mod-Platform.txt",
+          "FnFNitro-1.1.0/licenses/LICENSE-MinHook.txt",
+          "FnFNitro-1.1.0/azimuth-windows/fh2-mods/FnFNitro.dll"
+        ],
+        "databaseMigrations": [],
+        "nativeHost": {
+          "abi": 1,
+          "runtime": "infinity_mod.dll",
+          "entryPoint": "InfinityModInitializeV1",
+          "binary": "infinity-mods/NitroSystem/FnFNitro.dll"
+        },
+        "source": {
+          "repository": "https://github.com/anarqz/NitroSystem",
+          "commit": "5ada9e841bebeca5d408a42cad062afde7d2128f"
+        },
+        "multiplayer": {
+          "schemaVersion": 1,
+          "impact": "gameplay",
+          "compatibilityId": "infinity-nitrosystem",
+          "revision": 1,
+          "match": "exact",
+          "settings": [
+            "nitroenabled",
+            "torquescale",
+            "duration",
+            "builduptime",
+            "rechargerate",
+            "backfireonallcars"
+          ]
+        },
+        "database": {
+          "root": "game",
+          "path": "mediaoverride/stripped/gamedbRC.slt",
+          "seedFrom": "media/stripped/gamedbRC.slt",
+          "access": "startup",
+          "revision": 1,
+          "tables": [
+            "BackfireLevels"
+          ]
+        },
+        "incompatibleFiles": [
+          {
+            "root": "azimuth",
+            "path": "d3dcompiler_47.dll"
+          }
+        ]
+      }
+    },
+    {
+      "id": "remix-car-pack",
+      "version": "1.0.0",
+      "name": {
+        "en": "Remix Car Pack — Experimental Vol.1",
+        "pt-BR": "Remix Car Pack — Experimental Vol.1"
+      },
+      "description": {
+        "en": "25 cars imported from Forza Motorsport 5, with their wheels, names in every language, thumbnails and manufacturer logos, loaded through Extra Options' media overrides. The pack's whole game database replaces the stock one for the session (the Infinity mod runtime builds a session copy and restores it after play) and applies as its author made it: \"cars only\" is not enforced, so its other changes (for example one stock car's parts and wheel names) come with it. Left out: the pack's new Nice Masséna Autoshow, its garage music, the SPGarage plugin and the FH2Patch requirement. Only one database-replacing car pack can be on at a time. Known issues: collision boxes don't suit FH2 well (avoid off-roading); dirt mapping and lights can be buggy; engine sounds are not exactly right.",
+        "pt-BR": "25 carros importados do Forza Motorsport 5, com rodas, nomes em todos os idiomas, miniaturas e logotipos das marcas, carregados pelas substituições de mídia do Extra Options. O banco de dados inteiro do pacote substitui o original durante a sessão (o runtime de mods do Infinity cria uma cópia da sessão e restaura depois) e vale como o autor fez: \"só os carros\" não é garantido, então as outras mudanças dele (por exemplo peças de um carro original e nomes de rodas) vêm junto. Ficam de fora: o novo Autoshow de Nice Masséna, a música da garagem, o plugin SPGarage e a exigência do FH2Patch. Só um pacote de carros que substitui o banco de dados pode ficar ativado por vez. Problemas conhecidos: as caixas de colisão não combinam bem com o FH2 (evite sair da estrada); o mapeamento de sujeira e as luzes podem falhar; os sons de motor não são exatos."
+      },
+      "author": "Remix Car Pack author (cars converted with Con's FM5 car importer)",
+      "externalSources": [
+        {
+          "id": "pack",
+          "kind": "either",
+          "label": {
+            "en": "Remix Car Pack — Experimental Vol.1",
+            "pt-BR": "Remix Car Pack — Experimental Vol.1"
+          },
+          "help": {
+            "en": "Choose your copy of the pack: its folder (the one with Mount and azimuth-windows inside), any folder above it, or the pack's ZIP. Infinity checks every file and copies what it needs; you can move or delete the pack afterwards.",
+            "pt-BR": "Escolha a sua cópia do pacote: a pasta dele (a que tem Mount e azimuth-windows dentro), qualquer pasta acima dela ou o ZIP do pacote. O Infinity confere cada arquivo e copia o que precisa; depois você pode mover ou apagar o pacote."
+          },
+          "hint": "Remix Car Pack"
+        }
+      ],
+      "requires": [
+        "infinity-mod-runtime"
+      ],
+      "install": {
+        "schemaVersion": 1,
+        "kind": "mod",
+        "license": "Unknown. Player-supplied files; Infinity never distributes them.",
+        "runtime": "standalone",
+        "review": {
+          "status": "reviewed",
+          "blockers": []
+        },
+        "compatibility": {
+          "azimuthVersions": [
+            "0.9.10"
+          ],
+          "gameBuilds": [],
+          "verification": "unverified"
+        },
+        "dependencies": [
+          {
+            "id": "extraoptions",
+            "versions": [
+              "0.2.98"
+            ],
+            "enabled": true,
+            "settings": [
+              {
+                "optionId": "global-enabled",
+                "value": true
+              },
+              {
+                "optionId": "files-enablemediaoverrides",
+                "value": true
+              }
+            ]
+          }
+        ],
+        "conflicts": [],
+        "files": {
+          "game": [
+            {
+              "source": "pack:Mount/mediaoverride/cars/AST_007_DBR9_06.zip",
+              "destination": "mediaoverride/cars/AST_007_DBR9_06.zip",
+              "sha256": "222fc84bbd94e1bd50ce12c82a812af1ac016afe5839aebf53c32c6b0aac170e",
+              "bytes": 13580646,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/AST_DBS_09.zip",
+              "destination": "mediaoverride/cars/AST_DBS_09.zip",
+              "sha256": "8995b1c6b08e6e8b3286d997317986031de876a1733ca566895e2aca00399894",
+              "bytes": 10147809,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/AUD_RS7_13.zip",
+              "destination": "mediaoverride/cars/AUD_RS7_13.zip",
+              "sha256": "870f3a389a0198151a30b6bd79f97e8425c146f37545c51866026a5cb3202c03",
+              "bytes": 16828137,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/BMW_92_M3GTR_09.zip",
+              "destination": "mediaoverride/cars/BMW_92_M3GTR_09.zip",
+              "sha256": "0b453a45507981e49cf826b99219f2a6261504bacabb9349c3694c7a86774ddb",
+              "bytes": 12304531,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/BMW_E46M3_05.zip",
+              "destination": "mediaoverride/cars/BMW_E46M3_05.zip",
+              "sha256": "efc2883f8c50597b81ab004af5ea9a29f30f66447db9588ba40d1e3761f5b024",
+              "bytes": 12965206,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/BMW_M3Touring_12.zip",
+              "destination": "mediaoverride/cars/BMW_M3Touring_12.zip",
+              "sha256": "897322d8c8645dc035f27da330f7c4c3d7f74db60f3011a81edf7daa71890d12",
+              "bytes": 18322848,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/BUG_VeyronFast7_12.zip",
+              "destination": "mediaoverride/cars/BUG_VeyronFast7_12.zip",
+              "sha256": "43f55e1f255bfb991adc4d871cd03042750bb2e330caa31cf9a979b3f977b818",
+              "bytes": 17057534,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/CHE_4_CorvetteZR1_11.zip",
+              "destination": "mediaoverride/cars/CHE_4_CorvetteZR1_11.zip",
+              "sha256": "250ecc8b243f2954383d5051c314ea31e5af0050bb11688e26497261db6bb821",
+              "bytes": 12677388,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/DOD_ViperSRT10ACR_08.zip",
+              "destination": "mediaoverride/cars/DOD_ViperSRT10ACR_08.zip",
+              "sha256": "17fd62db4d57b780c7077e99f96f918be9f29d36f298a9a6b21f193727c68678",
+              "bytes": 11992406,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/FER_62_F458_11.zip",
+              "destination": "mediaoverride/cars/FER_62_F458_11.zip",
+              "sha256": "bb9fac48f1609e878ac29259bdd1256a7b30801379650713ffb70289f41a52b2",
+              "bytes": 11797987,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/GMC_Vandura_83.zip",
+              "destination": "mediaoverride/cars/GMC_Vandura_83.zip",
+              "sha256": "96c9101b7b440f78ea940f17bbbe1f4dc676c9a011b4928f9e8c5bddba10c48e",
+              "bytes": 16433077,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/HOL_10_CommodoreVF_13.zip",
+              "destination": "mediaoverride/cars/HOL_10_CommodoreVF_13.zip",
+              "sha256": "1da0726ccf62cf2c61720838a25f137c26f347bf6726c9149c24f5ac33d82595",
+              "bytes": 18096197,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/HON_NSXR_05.zip",
+              "destination": "mediaoverride/cars/HON_NSXR_05.zip",
+              "sha256": "3f58447b00f6d8f0d1f1556c7c7c66c9f7c1d9f212bd1e20fb521aff461d62a8",
+              "bytes": 13714369,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/LAM_Reventon_08.zip",
+              "destination": "mediaoverride/cars/LAM_Reventon_08.zip",
+              "sha256": "5f1791ff495c2f3e0f4ad59338467575dc7b497420592b155e633ae9da271119",
+              "bytes": 23247312,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/LEX_ISF_09.zip",
+              "destination": "mediaoverride/cars/LEX_ISF_09.zip",
+              "sha256": "4c807ac56d56eef828b73371095ff1edfbcc5f609822d09f2209a9e3d5dc5c3c",
+              "bytes": 13075349,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/LOT_E21_13.zip",
+              "destination": "mediaoverride/cars/LOT_E21_13.zip",
+              "sha256": "07d279c8ee1a847f2c4573d4bab3f1b9c090083cc879ce129a1edb243bffed46",
+              "bytes": 17441174,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/MAZ_MX5Cup_13.zip",
+              "destination": "mediaoverride/cars/MAZ_MX5Cup_13.zip",
+              "sha256": "c4b741a3cdb1becab5bea401c196ee1ed1b932a560aa7ae4d8598360cffc5446",
+              "bytes": 17207077,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/MER_CLKGTR_98.zip",
+              "destination": "mediaoverride/cars/MER_CLKGTR_98.zip",
+              "sha256": "466fe88a8efefec33f3e20b85cad44ad1b7f6d54a71c67f3118adb91a121622d",
+              "bytes": 17658821,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/NIS_FairladyZ_03.zip",
+              "destination": "mediaoverride/cars/NIS_FairladyZ_03.zip",
+              "sha256": "791ce14c65f3d7afdfbb6561e92527a5fa103cf611fe75f1c934de4c4ccfb098",
+              "bytes": 14647135,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/NIS_GTRFast7_12.zip",
+              "destination": "mediaoverride/cars/NIS_GTRFast7_12.zip",
+              "sha256": "dcfd8b996e75ae2731dab95bc6c127cc0b4ef5ba3592a771dfe5c94998b9e193",
+              "bytes": 16858962,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/NIS_SkylineGTRVSpec_95.zip",
+              "destination": "mediaoverride/cars/NIS_SkylineGTRVSpec_95.zip",
+              "sha256": "ca5cb7d9252d6f892009ac96e7866d0b842b466f8adc5c4131a7c97818827ff8",
+              "bytes": 17666048,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/REN_FormulaE_14.zip",
+              "destination": "mediaoverride/cars/REN_FormulaE_14.zip",
+              "sha256": "a7396efc1f5a7ce2b79a4f5cc57120ce8b17527182aacd7f8499885593dfad20",
+              "bytes": 17114314,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/ROL_Wraith_14.zip",
+              "destination": "mediaoverride/cars/ROL_Wraith_14.zip",
+              "sha256": "05fad53549c6a798b7f5209e3c353de2b18bf2bd799a7b49aefabf63659c07e4",
+              "bytes": 20710567,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/VAU_Astra16_13.zip",
+              "destination": "mediaoverride/cars/VAU_Astra16_13.zip",
+              "sha256": "d2fb0ed5741b552ecefeefececb47bfb09cf3a1d726c1f6c85559b79574a9113",
+              "bytes": 19517402,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/VIP_91_Viper_13.zip",
+              "destination": "mediaoverride/cars/VIP_91_Viper_13.zip",
+              "sha256": "b53b6399a7c34a6f858d9932ead98bccbef4db638d0544a054fcf4c07f1e0d59",
+              "bytes": 14802965,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/AST_DBS_09.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/AST_DBS_09.zip",
+              "sha256": "610080147c4a4b366786da45e0c7d7556b755577c9a133dcc2401e22826b0c44",
+              "bytes": 571806,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/AUD_RS7_13.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/AUD_RS7_13.zip",
+              "sha256": "365bf5763337aefa6cf697568e587b9a2413ae5cfe30ee35135e0af765e3c9b5",
+              "bytes": 603583,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/BMW_92_M3GTR_09.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/BMW_92_M3GTR_09.zip",
+              "sha256": "8975b9b9cf9427ca8c82bf356afb81223aa762c4ebe696e4e12a8bf67a1434d9",
+              "bytes": 580695,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/BMW_E46M3_05.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/BMW_E46M3_05.zip",
+              "sha256": "2719723adc0a01b177207f44e1b51bbec54bf752e0a29fe10f1da1c77d8ef0eb",
+              "bytes": 645246,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/BMW_M3Touring_12.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/BMW_M3Touring_12.zip",
+              "sha256": "74879961f6d5b2f029822e736ddb8e332b065fd65c7870b49e5c2e79223d40c4",
+              "bytes": 754948,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/CHE_4_CorvetteZR1_11.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/CHE_4_CorvetteZR1_11.zip",
+              "sha256": "2784ddb5da889018bb47149a3327300d107d51f80a46c5f123bddbdd96e63b75",
+              "bytes": 653631,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/DOD_ViperSRT10ACR_08.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/DOD_ViperSRT10ACR_08.zip",
+              "sha256": "623a5919fa41e0ec7400ecc3a1ddb1703841d3fda558f4b68a8613d3ae956fae",
+              "bytes": 610856,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/FER_62_F458_11.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/FER_62_F458_11.zip",
+              "sha256": "2e70e71eeeb2502d746c48de0e91ce53a09b3f07d19eb6839eb6f6fdb0c9ef40",
+              "bytes": 491625,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/GMC_Vandura_83.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/GMC_Vandura_83.zip",
+              "sha256": "e7a4416f3a698b20304ca96c4530274765051f974d48bd7cd883c6a6803166fc",
+              "bytes": 554858,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/HOL_10_CommodoreVF_13.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/HOL_10_CommodoreVF_13.zip",
+              "sha256": "446741013e438c0a4a80102f355fc8d654604c6f76d8fe32860a7b90340ae993",
+              "bytes": 533172,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/HON_NSXR_05.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/HON_NSXR_05.zip",
+              "sha256": "2f8b45644357b90784c42dfc278296bd4d12b0222a6c6d310fb2e99f7a0074da",
+              "bytes": 585013,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/LAM_Reventon_08.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/LAM_Reventon_08.zip",
+              "sha256": "c9af8f870f8a478e80b1e2291907f6adc48090f788a5c66a22795c9ecc5d0dcd",
+              "bytes": 664014,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/LEX_ISF_09.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/LEX_ISF_09.zip",
+              "sha256": "b2f827c91512a340cceab255cb36a5c164a69d0ea10fd806fa5efc56d3204568",
+              "bytes": 594181,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/LOT_E21_13.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/LOT_E21_13.zip",
+              "sha256": "74dc2f7eb7a7e6fe54692f9a1ce4361d3f8c66ebdf47b187f6df75f3d23552d7",
+              "bytes": 620130,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/MAZ_MX5Cup_13.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/MAZ_MX5Cup_13.zip",
+              "sha256": "32289cd75a0d75319bac3ead9a6d813e911b0d0dbc3c0c05b13940e79215e5bd",
+              "bytes": 549838,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/MER_CLKGTR_98.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/MER_CLKGTR_98.zip",
+              "sha256": "2702a7ade276b510f77adb8f7c6836dac4b836a1a45113f18ce2ba8e5019b78d",
+              "bytes": 727985,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/NIS_FairladyZ_03.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/NIS_FairladyZ_03.zip",
+              "sha256": "6f53d294b3732a795eb15c9c35ec4b0b7f4dc51d1dd1607164cd262960dca97d",
+              "bytes": 441579,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/NIS_SkylineGTRVSpec_95.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/NIS_SkylineGTRVSpec_95.zip",
+              "sha256": "4b4cf4302fcabb660001f3a350b2ee0996a3e9714d88cb5ea093c31e9e86bc15",
+              "bytes": 534104,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/REN_FormulaE_14.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/REN_FormulaE_14.zip",
+              "sha256": "cfdedb9d5b44de33f5b42274e6e7531805af20c2d2dd0b3484fe1a6db47e0c0d",
+              "bytes": 688974,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/ROL_Wraith_14.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/ROL_Wraith_14.zip",
+              "sha256": "04981fe887e4f462764e59661d6e7933d9a6257a55cc2cfc3ff3f3ac3adbb550",
+              "bytes": 497355,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/VAU_Astra16_13.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/VAU_Astra16_13.zip",
+              "sha256": "9241d0a12fcd1381db31f95437824cd00701c8bf520b760b137a58f03ecf363e",
+              "bytes": 572258,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/VIP_91_Viper_13.zip",
+              "destination": "mediaoverride/cars/_library/scene/wheels/VIP_91_Viper_13.zip",
+              "sha256": "52f3a04605af6c7f9c5718d623953873e7b19ba24b7e7c9ab232ea195081b414",
+              "bytes": 633634,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/RC23.zip",
+              "destination": "mediaoverride/stripped/RC23.zip",
+              "sha256": "4ecde0942d3e9f25d7c1f5d46cc6091a4d9e9e4d2c11ef278c2fbde7d7b719fb",
+              "bytes": 185453,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/RC4.zip",
+              "destination": "mediaoverride/stripped/RC4.zip",
+              "sha256": "e9ee65cdb82f9e60251731ad4dde4ab8ad9aecfc043e3bd7a232e5490bfff8fd",
+              "bytes": 6113205,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/CHT.zip",
+              "destination": "mediaoverride/stripped/stringtables/CHT.zip",
+              "sha256": "fc09e26b5fafc4d7a143ad0107531db853387e729bc90d8bb2d3c5e9b12f20f6",
+              "bytes": 399598,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/DE.zip",
+              "destination": "mediaoverride/stripped/stringtables/DE.zip",
+              "sha256": "5ab2a7bb52a6e40a36ec3ebb496e0561b2b7c1dd416e0587bd6187838811fe81",
+              "bytes": 454641,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/DEV.zip",
+              "destination": "mediaoverride/stripped/stringtables/DEV.zip",
+              "sha256": "738c32574046b8e23d73b69a27c8bb75f2fdc6316b1b858183259a8c88d47560",
+              "bytes": 431032,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/EN.zip",
+              "destination": "mediaoverride/stripped/stringtables/EN.zip",
+              "sha256": "8d845fcd7a8ce3f4b72bf6b704c4a8a0fe89f0e879f9ef16187c3becd856a3c5",
+              "bytes": 432118,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/ES.zip",
+              "destination": "mediaoverride/stripped/stringtables/ES.zip",
+              "sha256": "ac847e76aaebf02222f72459fac93dc3fa43ff65261dbbce735db6b99cbf0fb2",
+              "bytes": 448039,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/FR.zip",
+              "destination": "mediaoverride/stripped/stringtables/FR.zip",
+              "sha256": "92e88de034456f65242e2af0087b470ea675f1f02a34b6cece249c5cf26d0bca",
+              "bytes": 450161,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/GB.zip",
+              "destination": "mediaoverride/stripped/stringtables/GB.zip",
+              "sha256": "85ed83f4d893bda46b5156360754b6cb58629a6b9665daef62d6d2ff95e53f40",
+              "bytes": 432163,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/HU.zip",
+              "destination": "mediaoverride/stripped/stringtables/HU.zip",
+              "sha256": "065f36b3375fb0aa948f6ecc6634a9da3da52e82c6bca7754cf74eb2aa35455f",
+              "bytes": 314890,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/IT.zip",
+              "destination": "mediaoverride/stripped/stringtables/IT.zip",
+              "sha256": "cf9267302ff80866f00029aa588ec5ef9c3198515031986ef68718226fb5931a",
+              "bytes": 444666,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/JP.zip",
+              "destination": "mediaoverride/stripped/stringtables/JP.zip",
+              "sha256": "6d6f1b34d369c569304b104b0f7b59324c8e6c3ed34420c9af16fec204e53e41",
+              "bytes": 406683,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/KO.zip",
+              "destination": "mediaoverride/stripped/stringtables/KO.zip",
+              "sha256": "fdc0440d416f940ee4a16138de2fa7cbeeb0a839368b0420f73b8eb65a223cd8",
+              "bytes": 389914,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/LOC.zip",
+              "destination": "mediaoverride/stripped/stringtables/LOC.zip",
+              "sha256": "9fe7055d3e99e2aef300ccefe175a87d7640e88c560563b41ae677af187021da",
+              "bytes": 234351,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/MX.zip",
+              "destination": "mediaoverride/stripped/stringtables/MX.zip",
+              "sha256": "ee9e37e0d67aaf444602dd1e6925d58f4de105c43a9b1a38bc15ecb41b1a5f9b",
+              "bytes": 446791,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/PL.zip",
+              "destination": "mediaoverride/stripped/stringtables/PL.zip",
+              "sha256": "2a63bf105e8ee26138e7f70a385857362487c49ee4561a8c7146e6d578cad006",
+              "bytes": 458768,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/RU.zip",
+              "destination": "mediaoverride/stripped/stringtables/RU.zip",
+              "sha256": "e00e61ebb3f1c627210319a6c44a8921dcb81c8b670285c9ec7a8dc528548428",
+              "bytes": 461701,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/br.zip",
+              "destination": "mediaoverride/stripped/stringtables/br.zip",
+              "sha256": "c5127d56b48bcca05a889a17881a52bbcbd8a20de83835f263fdafa82859efcd",
+              "bytes": 444342,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/cz.zip",
+              "destination": "mediaoverride/stripped/stringtables/cz.zip",
+              "sha256": "065f36b3375fb0aa948f6ecc6634a9da3da52e82c6bca7754cf74eb2aa35455f",
+              "bytes": 314890,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/stripped/stringtables/nl.zip",
+              "destination": "mediaoverride/stripped/stringtables/nl.zip",
+              "sha256": "971354764a83deb0e8927385fbd021163945be25232cfbd1831cd48dd79b0736",
+              "bytes": 413737,
+              "role": "asset",
+              "mode": "add-or-replace"
+            },
+            {
+              "source": "pack:Mount/mediaoverride/zipmanifest.xml",
+              "destination": "mediaoverride/zipmanifest.xml",
+              "sha256": "89ccf60862cb362d5ebf9d24947f4b31d7d165b43989200765dc67f9aa72934c",
+              "bytes": 86506,
+              "role": "asset",
+              "mode": "add-or-replace"
+            }
+          ],
+          "azimuth": []
+        },
+        "config": null,
+        "runtimeOutputs": [],
+        "excludedArchiveEntries": [],
+        "databaseMigrations": [],
+        "database": {
+          "root": "game",
+          "path": "mediaoverride/stripped/gamedbRC.slt",
+          "seedFrom": "media/stripped/gamedbRC.slt",
+          "access": "startup",
+          "revision": 1,
+          "tables": []
+        },
+        "databaseBase": {
+          "source": "pack:Mount/mediaoverride/stripped/gamedbRC.slt",
+          "sha256": "26de1d5e867da82d76a5845d0820694a9fd271320935bfe4c7fd9a1346f0394a",
+          "bytes": 6282240,
+          "foreignKeyViolations": 42
+        },
+        "multiplayer": {
+          "schemaVersion": 1,
+          "impact": "gameplay",
+          "compatibilityId": "remix-car-pack",
+          "revision": 1,
+          "match": "exact",
+          "settings": []
+        }
+      }
+    }
+  ]
+}
