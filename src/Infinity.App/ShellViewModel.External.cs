@@ -130,7 +130,7 @@ public sealed partial class ShellViewModel
             if (missing.All(f => f.SourceId != row.Source.Id))
             {
                 var count = ManagedModFiles.ExternalFiles(mod).Count(f => f.SourceId == row.Source.Id);
-                row.Ok = true; row.Status = S.Format("external.already", ("count", count.ToString(CultureInfo.CurrentCulture)));
+                row.Ok = true; row.Status = Counted("external.already", count);
             }
             else if (remembered.TryGetValue(row.Source.Id, out var path) && (Directory.Exists(path) || File.Exists(path))) await CheckExternalAsync(row, path);
         }
@@ -181,23 +181,22 @@ public sealed partial class ShellViewModel
 
     private void ShowCheck(ExternalSourceRow row, ExternalSourceCheck check)
     {
-        string N(int n) => n.ToString(CultureInfo.CurrentCulture);
         row.Ok = check.Ok; row.Problems = !check.Ok; row.Progress = 1; row.Notice = false; row.Details = "";
         if (check.Ok && check.DifferentInPick is { Count: > 0 } other)
         {
             // T2b: the install uses the stored, verified bytes; the pick's other version is named, never a plain check mark.
             row.Notice = true;
             row.Status = Counted("external.different_kept", other.Count)
-                + "\n" + S.Format("external.found", ("count", N(check.FromSource)), ("where", check.MatchedRoot ?? check.Picked))
-                + (check.Found - check.FromSource - other.Count is var kept and > 0 ? "\n" + S.Format("external.kept", ("count", N(kept))) : "");
+                + "\n" + Counted("external.found", check.FromSource, ("where", check.MatchedRoot ?? check.Picked))
+                + (check.Found - check.FromSource - other.Count is var kept and > 0 ? "\n" + Counted("external.kept", kept) : "");
             row.Details = string.Join("\n", other.Take(200).Select(f => S["external.file_different"] + "  " + f.Path
                 + "\n    " + S.Format("external.file_expected", ("bytes", f.Bytes.ToString("N0", CultureInfo.CurrentCulture)), ("sha", f.Sha256))));
             return;
         }
         if (check.Ok)
         {
-            row.Status = S.Format("external.found", ("count", N(check.FromSource)), ("where", check.MatchedRoot ?? check.Picked))
-                + (check.FromSource < check.Found ? "\n" + S.Format("external.kept", ("count", N(check.Found - check.FromSource))) : "");
+            row.Status = Counted("external.found", check.FromSource, ("where", check.MatchedRoot ?? check.Picked))
+                + (check.FromSource < check.Found ? "\n" + Counted("external.kept", check.Found - check.FromSource) : "");
             return;
         }
         if (check.FromSource == 0) { row.Status = S["external.nothing_found"]; return; } // a pick without any of the files, whatever is stored
@@ -229,7 +228,7 @@ public sealed partial class ShellViewModel
             {
                 var lost = failed.Where(f => f.SourceId == row.Source.Id).ToArray();
                 row.Ok = false; row.Problems = true;
-                row.Status = S.Format("external.stored_damaged", ("count", lost.Length.ToString(CultureInfo.CurrentCulture)));
+                row.Status = Counted("external.stored_damaged", lost.Length);
                 row.Details = string.Join("\n", lost.Take(200).Select(f => S["external.file_missing"] + "  " + f.Path));
             }
             Message = S["mods.error.external_files"]; Changed(string.Empty);
