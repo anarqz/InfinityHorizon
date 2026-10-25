@@ -534,7 +534,7 @@
   "mods.badge_attention": "Requer atenção",
   "mods.badge_needs": "Precisa de {mod} antes",
   "mods.needs_dependency": "Instale e ative {mods} antes; depois este mod pode ser instalado.",
-  "mods.required_by": "Ativado · {mods} depende dele, então ele continua ativado enquanto esse mod estiver ativado.",
+  "mods.depended_on_by": "Ativado · {mods} depende dele, então ele continua ativado enquanto esse mod estiver ativado.",
   "mods.badge_hook": "Atualize o hook do Infinity antes",
   "mods.needs_hook": "Este mod altera o banco de dados do jogo, o que precisa do hook do Infinity 0.3.0+fh2online.85 ou mais novo. Instale ou atualize o hook em Configurar antes.",
   "mods.folder_short": "Pasta…",
