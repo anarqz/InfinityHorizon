@@ -39,6 +39,19 @@ public sealed class NativeSignInFlow : IDisposable
         Remember(generation, email, password, cancellation);
     }
 
+    /// <summary>CR-L37: a <c>local</c> instance has no e-mail to confirm, so the sign-up's own ID token goes straight to the exchange.</summary>
+    public async Task<(AccountSession? Session, PendingAccount? Pending)> SignUpLocalAsync(
+        IdentityPlatform idp, ApiClient api, ServerInfo info, Device device, string email, string password, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(idp);
+        if (!idp.IsLocal) throw new InvalidOperationException("Identity Platform sign-up confirms the e-mail first");
+        var generation = Reset();
+        var idToken = await idp.SignUpAsync(email, password, cancellation).ConfigureAwait(false)
+            ?? throw new IdentityPlatformException(IdpProblem.Other, "NO_ID_TOKEN");
+        Check(generation, cancellation);
+        return await ExchangeTokenAsync(idp, api, info, device, idToken, email, password, generation, cancellation).ConfigureAwait(false);
+    }
+
     public Task<(AccountSession? Session, PendingAccount? Pending)> SignInAsync(
         IdentityPlatform idp, ApiClient api, ServerInfo info, Device device, string email, string password, CancellationToken cancellation = default)
     {
@@ -68,6 +81,12 @@ public sealed class NativeSignInFlow : IDisposable
         ArgumentNullException.ThrowIfNull(idp);
         var idToken = await idp.SignInAsync(email, password, cancellation).ConfigureAwait(false);
         Check(generation, cancellation);
+        return await ExchangeTokenAsync(idp, api, info, device, idToken, email, password, generation, cancellation).ConfigureAwait(false);
+    }
+
+    private async Task<(AccountSession? Session, PendingAccount? Pending)> ExchangeTokenAsync(
+        IdentityPlatform idp, ApiClient api, ServerInfo info, Device device, string idToken, string email, string password, long generation, CancellationToken cancellation)
+    {
         try
         {
             var result = await AccountSession.SignInWithIdTokenAsync(api, info, device, idToken, cancellation, email).ConfigureAwait(false);
@@ -86,7 +105,8 @@ public sealed class NativeSignInFlow : IDisposable
             }
             return result;
         }
-        catch (ApiException e) when (e.Code == ErrorCodes.AuthEmailUnverified)
+        // A local instance sends no confirmation mail: there is no screen to wait on.
+        catch (ApiException e) when (e.Code == ErrorCodes.AuthEmailUnverified && !idp.IsLocal)
         {
             Remember(generation, email, password, cancellation);
             return (null, null);

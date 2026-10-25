@@ -15,10 +15,15 @@ public sealed partial class ShellViewModel
     private bool _registrationEnabled = true;
     public bool CanCreateOnlineAccount => CanStartOnlineAccount && _registrationEnabled;
     public bool ShowRegistrationDisabled => !_registrationEnabled;
+    private bool _localIdentity;
+    /// <summary>CR-L37: a <c>local</c> instance sends no reset mail; its operator resets a forgotten password.</summary>
+    public bool ShowForgotPassword => !_localIdentity;
+    public bool ShowOperatorReset => _localIdentity;
 
     private void ObserveRegistration(ServerInfo info)
     {
         _registrationEnabled = info.RegistrationEnabled;
+        _localIdentity = info.Idp?.IsLocal == true;
         Changed(string.Empty);
     }
 
@@ -56,10 +61,17 @@ public sealed partial class ShellViewModel
         await CompleteNativeAsync(await _nativeFlow.SignInAsync(idp, api, info, device, LoginEmail.Trim(), password, cancellation), cancellation);
     });
 
-    public Task NativeSignUpAsync(string password) => Native(async (idp, info, _, cancellation) =>
+    public Task NativeSignUpAsync(string password) => Native(async (idp, info, api, cancellation) =>
     {
         if (!info.RegistrationEnabled) { RegistrationDisabled(); return; }
         Message = S["native.creating"];
+        if (idp.IsLocal)
+        {
+            // CR-L37: no e-mail to confirm; the new credential signs in right away.
+            var device = DeviceIdentity.Load(_stateDirectory, "windows");
+            await CompleteNativeAsync(await _nativeFlow.SignUpLocalAsync(idp, api, info, device, LoginEmail.Trim(), password, cancellation), cancellation);
+            return;
+        }
         await _nativeFlow.SignUpAsync(idp, LoginEmail.Trim(), password, cancellation);
         Message = S["native.verification_ready"];
     });
@@ -97,6 +109,7 @@ public sealed partial class ShellViewModel
         _nativeFlow.Clear();
         return Native(async (idp, _, _, cancellation) =>
         {
+            if (idp.IsLocal) { Message = S["native.local_reset"]; return; }
             if (string.IsNullOrWhiteSpace(LoginEmail)) { Message = S["native.need_email"]; return; }
             await idp.SendPasswordResetAsync(LoginEmail.Trim(), cancellation);
             Message = S.Format("native.reset_sent", ("email", LoginEmail.Trim()));
@@ -136,7 +149,7 @@ public sealed partial class ShellViewModel
             ObserveRegistration(info);
             IdentityPlatform? identity = null;
             PrepareNativeIdentity(ref identity);
-            await work(identity ?? new IdentityPlatform(Http, info.Idp.ApiKey, info.Idp.EmulatorUrl, S.Locale), info, api, cancellation.Token);
+            await work(identity ?? IdentityPlatform.For(Http, info, api, S.Locale), info, api, cancellation.Token);
             if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) Message = OnlineServiceMessage;
         }
         catch (OperationCanceledException)
@@ -192,8 +205,8 @@ public sealed partial class ShellViewModel
         IdpProblem.Credentials => S["native.bad_credentials"],
         IdpProblem.TooManyAttempts => S["native.too_many"],
         IdpProblem.Disabled => S["native.disabled"],
-        IdpProblem.EmailExists => S["native.email_exists"],
-        IdpProblem.WeakPassword => S["native.weak_password"],
+        IdpProblem.EmailExists => S[_localIdentity ? "native.local_email_exists" : "native.email_exists"],
+        IdpProblem.WeakPassword => S[_localIdentity ? "native.local_weak_password" : "native.weak_password"],
         IdpProblem.InvalidEmail => S["native.invalid_email"],
         _ => S["native.failed"],
     };

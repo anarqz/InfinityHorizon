@@ -36,6 +36,10 @@ public static class ErrorCodes
     public const string AuthProviderNotAllowed = "AUTH.PROVIDER_NOT_ALLOWED";
     public const string AccountsBanned = "ACCOUNTS.BANNED";
     public const string AccountsRegistrationDisabled = "ACCOUNTS.REGISTRATION_DISABLED";
+    /// <summary><c>local</c> sign-in: unknown e-mail and wrong password alike (CR-L37).</summary>
+    public const string AuthInvalidCredentials = "AUTH.INVALID_CREDENTIALS";
+    /// <summary><c>local</c> sign-up: the address already has a credential on this instance (CR-L37).</summary>
+    public const string AccountsEmailTaken = "ACCOUNTS.EMAIL_TAKEN";
     public const string SharingTooManyDevices = "SHARING.TOO_MANY_DEVICES";
     public const string AccountsNameUnavailable = "ACCOUNTS.NAME_UNAVAILABLE";
     public const string AccountsProfileLimit = "ACCOUNTS.PROFILE_LIMIT";
@@ -226,6 +230,19 @@ public sealed partial class ApiClient
     /// </summary>
     public Task<SignInResult> ExchangeIdTokenAsync(IdTokenGrant grant, string idempotencyKey, CancellationToken cancellation = default) =>
         SendAsync<SignInResult>(HttpMethod.Post, Core, "/launcher/v1/auth/token", grant, access: null, idempotencyKey, cancellation);
+
+    /// <summary><c>POST /auth/sign-up</c> on a <c>local</c> instance (CR-L37). The caller mints the key; the launcher mints one per press of Create, so a second press
+    /// after a lost answer reads <c>ACCOUNTS.EMAIL_TAKEN</c> ("sign in instead").</summary>
+    public Task<LocalIdToken> LocalSignUpAsync(LocalCredentials credentials, string idempotencyKey, CancellationToken cancellation = default) =>
+        SendAsync<LocalIdToken>(HttpMethod.Post, Core, "/launcher/v1/auth/sign-up", credentials, access: null, idempotencyKey, cancellation);
+
+    /// <summary><c>POST /auth/sign-in</c> on a <c>local</c> instance: the ID token for <see cref="ExchangeIdTokenAsync"/>.</summary>
+    public Task<LocalIdToken> LocalSignInAsync(LocalCredentials credentials, CancellationToken cancellation = default) =>
+        SendAsync<LocalIdToken>(HttpMethod.Post, Core, "/launcher/v1/auth/sign-in", credentials, access: null, idempotencyKey: null, cancellation);
+
+    /// <summary><c>POST /auth/password</c> on a <c>local</c> instance → 204; the server revokes every refresh family of the account.</summary>
+    public async Task LocalChangePasswordAsync(LocalPasswordChange change, CancellationToken cancellation = default) =>
+        await SendAsync<JsonElement?>(HttpMethod.Post, Core, "/launcher/v1/auth/password", change, access: null, idempotencyKey: null, cancellation).ConfigureAwait(false);
 
     /// <summary>A public on-demand check; never schedules background polling or sends a bearer token.</summary>
     public static async Task<OnlineStatus> OnlineStatusAsync(HttpClient http, Uri server, string clientHeader, CancellationToken cancellation = default)

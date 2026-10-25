@@ -25,8 +25,51 @@ public sealed record ServerInfo(
     IdpConfig Idp,
     bool RegistrationEnabled = true);
 
-/// <summary>Identity Platform for the native sign-in (OD-43): <c>emulatorUrl</c> only on local stacks.</summary>
-public sealed record IdpConfig(string ApiKey, string ProjectId, string? EmulatorUrl);
+/// <summary>
+/// The native sign-in's identity backend (OD-43, CR-L37): <c>kind</c> <c>firebase</c> (absent from servers before CR-S48) carries
+/// Identity Platform's <c>apiKey</c>/<c>projectId</c> and, on local stacks only, <c>emulatorUrl</c>; <c>local</c> carries none of
+/// them and the instance's own <c>/launcher/v1/auth/sign-up</c> and <c>/auth/sign-in</c> mint the ID token.
+/// </summary>
+public sealed record IdpConfig(string? ApiKey, string? ProjectId, string? EmulatorUrl, string? Kind = null)
+{
+    /// <summary>A <c>local</c> instance (ACCOUNTS.md §4.1 "Two identity backends"); anything else, absent included, is <c>firebase</c>.</summary>
+    [JsonIgnore]
+    public bool IsLocal => Kind == IdpKinds.Local;
+}
+
+/// <summary><c>IdpConfig.kind</c>'s wire values.</summary>
+public static class IdpKinds
+{
+    public const string Firebase = "firebase";
+    public const string Local = "local";
+}
+
+/// <summary><c>POST /launcher/v1/auth/sign-up</c> and <c>/auth/sign-in</c> on a <c>local</c> instance; never printed with its password.</summary>
+public sealed record LocalCredentials(string Email, string Password)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Email = ").Append(Email);
+        return true;
+    }
+}
+
+/// <summary>Their answer: an ID token, opaque to the launcher, for <c>POST /launcher/v1/auth/token</c>; <c>expiresIn</c> in seconds.</summary>
+public sealed record LocalIdToken(string IdToken, long ExpiresIn)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("ExpiresIn = ").Append(ExpiresIn);
+        return true;
+    }
+}
+
+/// <summary><c>POST /launcher/v1/auth/password</c> on a <c>local</c> instance: a fresh ID token from <c>/auth/sign-in</c> and the new password.</summary>
+public sealed record LocalPasswordChange(string IdToken, string NewPassword)
+{
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "A record's PrintMembers cannot be static.")]
+    private bool PrintMembers(System.Text.StringBuilder builder) => false;
+}
 
 /// <summary>The origin of each platform v1 surface (CORE_API.md §2.1): no client hard-codes one.</summary>
 public sealed record ServiceMap(string Core, string Gate, string Saves, string Matchmaking);
