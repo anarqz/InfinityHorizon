@@ -982,9 +982,13 @@
                               Visibility="{Binding SelectedModCanUninstall, Converter={StaticResource Visible}}" />
                     </WrapPanel>
                     <!-- OD-117: an installed mod of the player's own files: check its files again, or point at another copy. -->
-                    <WrapPanel Margin="0,8,0,0" Visibility="{Binding SelectedModExternal, Converter={StaticResource Visible}}">
-                      <Button Content="{Binding S[external.recheck]}" Click="OnOpenExternalSetup" Padding="10,6" Margin="0,0,8,8" />
-                    </WrapPanel>
+                    <!-- T2c: the label wraps inside the pane (pt-BR was clipped mid-word). -->
+                    <StackPanel Margin="0,8,0,0" Visibility="{Binding SelectedModExternal, Converter={StaticResource Visible}}">
+                      <Button Click="OnOpenExternalSetup" Padding="10,6" Margin="0,0,8,8" HorizontalAlignment="Left" HorizontalContentAlignment="Left"
+                              AutomationProperties.Name="{Binding S[external.recheck]}">
+                        <TextBlock Text="{Binding S[external.recheck]}" TextWrapping="Wrap" />
+                      </Button>
+                    </StackPanel>
                     <Button Content="{Binding S[mods.options]}" Click="OnSelectedModOptions" Margin="0,18,0,0"
                             Visibility="{Binding SelectedMod.HasOptions, Converter={StaticResource Visible}}" />
                     <TextBlock Text="{Binding SelectedModFiles}" TextWrapping="Wrap" FontSize="12" Margin="0,20,0,0" Foreground="{StaticResource InfinityMuted}" />

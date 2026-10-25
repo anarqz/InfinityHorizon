@@ -146,7 +146,7 @@ public sealed partial class ShellViewModel
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
     public string ModCatalogSummary => S.Format((_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count") + (ModCards.Count == 1 ? "_one" : ""),
         ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
-        + (_customProblems > 0 ? " · " + S.Format("mods.custom_problems", ("count", _customProblems.ToString(CultureInfo.CurrentCulture))) : "");
+        + (_customProblems > 0 ? " · " + Counted("mods.custom_problems", _customProblems) : "");
     /// <summary>OD-114: where the player puts custom mods, one folder per mod (shown on the Mods page).</summary>
     public string CustomModsFolderText => S.Format("mods.custom_folder", ("path", ManagedModFiles.CustomModsFolder(ModHome)))
         + (Infinity.Core.Process.WineHost.Detected && Infinity.Core.Process.WineHost.UnixPath(ManagedModFiles.CustomModsFolder(ModHome)) is { } unix
