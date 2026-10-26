@@ -24,8 +24,10 @@ public partial class MainWindow : Window
         var strings = Strings.Load(Path.Combine(AppContext.BaseDirectory, "i18n"), locale)
             .With(Path.Combine(AppContext.BaseDirectory, "i18n-win"));
         var arguments = cli.Skip(1).ToList();
-        var config = ServerConfig.From(arguments, Environment.GetEnvironmentVariable);
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
+        // CR-L39: the server the player chose on the screen, else the command line's (official in a release build).
+        var config = ServerChoice.Apply(ServerConfig.From(arguments, Environment.GetEnvironmentVariable), state,
+            explicitServer: arguments.Contains("--server") || Environment.GetEnvironmentVariable("FI_SERVER") is { Length: > 0 });
         var vm = new ShellViewModel(strings, config, state);
 
         DataContext = vm;
@@ -49,6 +51,7 @@ public partial class MainWindow : Window
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
+        vm.ServerChangeRestartRequested += () => Dispatcher.BeginInvoke(RestartOnServerChoice);
         // One launcher per state folder (launcher.lock): a second one cannot host a dedicated lobby (OD-109).
         _ = vm.AcquireInstanceLockAsync();
         ContentRendered += async (_, _) => await vm.ConfirmUpdatedStartupAsync(cli);
@@ -188,6 +191,41 @@ public partial class MainWindow : Window
     private void OnNavHome(object sender, RoutedEventArgs e) => _vm.OpenHome();
 
     private void OnOpenSignIn(object sender, RoutedEventArgs e) => _vm.OpenSignIn();
+
+    // CR-L39: the server choice on the welcome screen and a custom server's changed keys.
+    private void OnServerChange(object sender, RoutedEventArgs e)
+    {
+        _vm.OpenServerChoice();
+        _ = Dispatcher.InvokeAsync(() => ServerAddressBox.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnServerSave(object sender, RoutedEventArgs e) => _vm.SaveServerChoice();
+
+    private void OnServerCancel(object sender, RoutedEventArgs e) => _vm.CancelServerChoice();
+
+    private void OnTrustAccept(object sender, RoutedEventArgs e) => _vm.AcceptTrustChange();
+
+    private void OnTrustReject(object sender, RoutedEventArgs e) => _vm.RejectTrustChange();
+
+    /// <summary>The launcher starts again on the saved server: a new process, then this one exits (its state folder is another).</summary>
+    private static void RestartOnServerChoice()
+    {
+        try
+        {
+            // only the locale carries over: the server comes from the saved choice
+            var arguments = Environment.GetCommandLineArgs().Skip(1).ToList();
+            var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath ?? "infinity.exe") { UseShellExecute = false };
+            var localeAt = arguments.IndexOf("--locale");
+            if (localeAt >= 0 && localeAt + 1 < arguments.Count) { start.ArgumentList.Add("--locale"); start.ArgumentList.Add(arguments[localeAt + 1]); }
+            System.Diagnostics.Process.Start(start)?.Dispose();
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            // the choice is saved; the next start uses it
+        }
+        App.ExitReason = "server change";
+        Application.Current.Shutdown();
+    }
 
     // OD-118: the welcome screen's Play offline link.
     private void OnPlayOfflineLink(object sender, RoutedEventArgs e) => _vm.PlayOffline();

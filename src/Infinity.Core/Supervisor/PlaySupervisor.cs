@@ -352,7 +352,9 @@ public sealed class PlaySupervisor
         }
 
         var token = new GameToken(new Secret(active.Ticket.Token), Unix(active.Ticket.ExpiresAt));
-        var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild);
+        // CR-L39: a custom server's ticket reaches the hook with the keys it verified against (CustomTrust, hook build 89+).
+        var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild,
+            _config.Policy.Custom ? new Frame.CustomTrust(_config.Keys.All) : null);
         List<(string, string)> env = [(Launch.EnvLaunch, handoff.EnvValue), (Launch.EnvLauncherExe, _config.LauncherExe)];
         // OD-113: the native plan rides the online launch too; the hook accepts it there only as FIMOD003 (mod_host.c)
         env.AddRange(_config.ModEnvironment);

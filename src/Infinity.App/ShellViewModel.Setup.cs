@@ -30,7 +30,8 @@ public sealed partial class ShellViewModel
     /// </summary>
     private byte[]? DevHookKey => DevServer ? HookInstaller.DevKey(Environment.GetEnvironmentVariable(HookInstaller.DevKeyEnv)) : null;
 
-    private bool DevServer => !_config.Production && Infinity.Core.DevNet.PlainHttpUrl(_config.Server.GetLeftPart(UriPartial.Authority));
+    // A custom server (CR-L39) is never a development server: its own pinned keys, the release hook rules.
+    private bool DevServer => !_config.Production && !_config.Custom && Infinity.Core.DevNet.PlainHttpUrl(_config.Server.GetLeftPart(UriPartial.Authority));
 
     public bool ShowSetup => InShell && _onSetup && !ShowPickSave;
 

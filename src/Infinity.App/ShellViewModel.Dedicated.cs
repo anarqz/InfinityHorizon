@@ -295,7 +295,7 @@ public sealed partial class ShellViewModel
         if (_session is not { } session || LobbyMatchmaking is not { } mm) return null;
         var relayKeys = IntegratedRelayKeys(mm);
         var devLan = DevLanAdmission(mm);
-        TimeProvider? trusted = _config.Production ? session.Api.TrustedTimeProvider() : null;
+        TimeProvider? trusted = ProofClock(session);
         return CreateDedicatedHost(new GateClient(session.Api, session.Tokens), (ticket, activity) =>
         {
             var portInUse = false;
@@ -311,7 +311,7 @@ public sealed partial class ShellViewModel
                 checkWorldAccess: DedicatedWorldAccessAsync,
                 onlineActivity: activity, idleWhenNoWorld: false, requireGameReadiness: false, closeWhenAlone: false)
             {
-                SocketProofRequired = _config.Production, SocketProofKeys = relayKeys,
+                SocketProofRequired = SocketProofRequired, SocketProofKeys = relayKeys,
                 TrustedServerNow = session.Api.TrustedServerNow,
                 RelayFailureKey = () => portInUse ? "lobby.port_in_use" : null,
                 ModSet = mods,

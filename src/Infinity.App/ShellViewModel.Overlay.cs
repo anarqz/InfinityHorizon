@@ -79,8 +79,8 @@ public sealed partial class ShellViewModel
                 _config.Production?ProductionMatchmakingHttp.Value:Http, mm, ClientHeader, ticket);
             // OD-109: kept so the dedicated lobby is not created while this session hosts a world.
             return _playWorlds = new Infinity.Core.Matchmaking.WorldsBridge(
-                matchmaking, key => S[key], _config.Production?session.Api.TrustedTimeProvider():null, mode,
-                players => StartRelay(players, xuid, relayKeys, devLan, _config.Production?session.Api.TrustedTimeProvider():null), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
+                matchmaking, key => S[key], ProofClock(session), mode,
+                players => StartRelay(players, xuid, relayKeys, devLan, ProofClock(session)), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
                 updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
                     ? integrated.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
                 refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
@@ -91,11 +91,16 @@ public sealed partial class ShellViewModel
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 ModSet = mods,
-                SocketProofRequired=_config.Production,SocketProofKeys=relayKeys,
+                SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
             };
         };
     }
+
+    /// <summary>The official server and a custom one (CR-L39) prove the relay socket against the server's clock and relay keys.</summary>
+    private bool SocketProofRequired => _config.Production || _config.Custom;
+
+    private TimeProvider? ProofClock(Infinity.Core.Auth.AccountSession session) => SocketProofRequired ? session.Api.TrustedTimeProvider() : null;
 
     private Infinity.Core.Matchmaking.RelayGrantVerifyKeys IntegratedRelayKeys(Uri matchmaking)
     {
@@ -104,6 +109,9 @@ public sealed partial class ShellViewModel
             Infinity.Core.Auth.ProductionDeployment.RequireOrigin(matchmaking, Infinity.Core.Auth.ProductionDeployment.Matchmaking);
             return Infinity.Core.Auth.ProductionDeployment.RelayKeys();
         }
+        // CR-L39: the relay keys the custom server published and its realm's pin matched (none: worlds stay unavailable).
+        if (_config.Custom)
+            return _session?.Info.Trust is { } trust ? new([.. Infinity.Core.Auth.CustomServer.Keys(trust.RelayGrant ?? [])]) : new();
 #if INFINITY_PRODUCTION_BUILD
         return new();
 #else
@@ -130,7 +138,7 @@ public sealed partial class ShellViewModel
         try
         {
             var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys, devLanPeers: devLan,
-                contentPolicy: Infinity.Core.WorldServer.RelayContentPolicy.StockOnly,requireSocketProof:_config.Production,clock:clock);
+                contentPolicy: Infinity.Core.WorldServer.RelayContentPolicy.StockOnly,requireSocketProof:SocketProofRequired,clock:clock);
             Log($"worlds: relay bound on UDP {relay.Port}; awaiting world admission"
                 + (devLan ? " (development LAN admission: granted peers from private addresses, endpoint not verified)" : ""));
             return relay;

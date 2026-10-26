@@ -155,6 +155,8 @@ public sealed partial class ShellViewModel
         var development = DevServer;
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
+            // CR-L39: the keys this session's validated /info published and the realm's pin matched.
+            : _config.Custom ? (TicketKeys.FromTrust(_session.Info.Trust!), TicketPolicy.ForCustom)
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods, each one's mapped files
         // checked against its manifest (OD-113: data mods enter it from this verified plan); the gate's `modded` flag and the

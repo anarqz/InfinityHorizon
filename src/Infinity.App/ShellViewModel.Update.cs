@@ -179,6 +179,7 @@ public sealed partial class ShellViewModel
         }
         catch (ApiException error) when (Infinity.Core.Online.OnlinePause.From(error) is { } pause)
         { ObserveOnlinePause(pause); ExtendOnlineCooldown(error.RetryAfter); _serverReachable = true; throw; }
+        catch (TrustChangedException change) { ObserveTrustChange(change); _serverReachable = true; throw; }
         catch { _serverReachable = false; throw; }
     }
 
@@ -212,7 +213,9 @@ public sealed partial class ShellViewModel
         {
             if (UpdateInstaller.IsGameDirectory(AppContext.BaseDirectory))
             { _updateFailureKey = "updater.location"; _launcherUpdatePhase = UpdatePhase.Failed; Changed(string.Empty); return; }
-            var arguments = new[] { "--environment", _config.Production ? "production" : "development", "--server", _config.Server.ToString(), "--portal", _config.Portal.ToString(), "--locale", S.Locale };
+            // CR-L39: a custom server is the saved choice (ServerChoice), which the restarted launcher reads again.
+            var arguments = _config.Custom ? new[] { "--locale", S.Locale }
+                : new[] { "--environment", _config.Production ? "production" : "development", "--server", _config.Server.ToString(), "--portal", _config.Portal.ToString(), "--locale", S.Locale };
             var progress = new Progress<UpdateProgress>(value =>
             { if (!acceptingProgress) return; (_launcherUpdatePhase, _updateBytes, _updateTotal) = (value.Phase, value.ReceivedBytes, value.TotalBytes); Changed(string.Empty); });
             var plan = await Task.Run(() => _updater.StageAsync(AppContext.BaseDirectory, arguments, progress, download.Token), download.Token);
@@ -323,6 +326,7 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
-    private static bool UpdateFailure(Exception error) => error is ApiException or HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException
+    // TrustChangedException (CR-L39): the changed-keys question is already up; the update read simply did not happen
+    private static bool UpdateFailure(Exception error) => error is ApiException or TrustChangedException or HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException
         or JsonException or InvalidOperationException or ArgumentException or OperationCanceledException or TimeoutException or System.ComponentModel.Win32Exception;
 }

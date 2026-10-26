@@ -178,7 +178,9 @@ public sealed partial class ApiClient
         if (serverDate is { } date)
         {
             ClockOffset = date - localNow;
-            if(Core.Scheme==Uri.UriSchemeHttps && Gate.Scheme==Uri.UriSchemeHttps || DevelopmentStack)
+            // A custom server the player chose (CR-L39) is the only clock its relay proof can use, http or not.
+            if(Core.Scheme==Uri.UriSchemeHttps && Gate.Scheme==Uri.UriSchemeHttps || DevelopmentStack
+                || Auth.CustomOrigins.IsAllowed(Core) && Auth.CustomOrigins.IsAllowed(Gate))
             {
                 lock(_serverTimeLock)
                 {
@@ -190,7 +192,10 @@ public sealed partial class ApiClient
         }
     }
 
-    /// <summary>https anywhere; plain http only on loopback or a private LAN address with a port.</summary>
+    /// <summary>
+    /// https anywhere; plain http only on loopback or a private LAN address with a port, or on an origin a custom server the
+    /// player chose made acceptable (<see cref="Auth.CustomOrigins"/>, CR-L39).
+    /// </summary>
     public static Uri CheckOrigin(Uri origin)
     {
         ArgumentNullException.ThrowIfNull(origin);
@@ -199,7 +204,7 @@ public sealed partial class ApiClient
             return origin;
         }
         var text = origin.GetLeftPart(UriPartial.Authority);
-        if (origin.Scheme == Uri.UriSchemeHttp && DevNet.PlainHttpUrl(text))
+        if (origin.Scheme == Uri.UriSchemeHttp && (DevNet.PlainHttpUrl(text) || Auth.CustomOrigins.IsAllowed(origin)))
         {
             return origin;
         }

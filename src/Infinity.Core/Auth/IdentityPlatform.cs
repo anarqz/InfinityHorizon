@@ -54,18 +54,25 @@ public sealed class IdentityPlatform
     }
 
     /// <summary>A <c>local</c> instance's built-in provider, on the core origin of <paramref name="api"/>.</summary>
-    public static IdentityPlatform Local(ApiClient api) =>
-        BuildProfile.ProductionOnly
-            ? throw new InvalidOperationException("This build signs in with Identity Platform only")
-            : new(api ?? throw new ArgumentNullException(nameof(api)));
+    /// <remarks>The official server is never <c>local</c>: production discovery refuses that kind (ProductionDeployment.ValidateInfo).</remarks>
+    public static IdentityPlatform Local(ApiClient api) => new(api ?? throw new ArgumentNullException(nameof(api)));
 
-    /// <summary>The provider <paramref name="info"/>'s <c>idp</c> names: <c>local</c>, or Identity Platform (<c>kind</c> absent or <c>firebase</c>).</summary>
-    public static IdentityPlatform For(HttpClient http, ServerInfo info, ApiClient api, string locale)
+    /// <summary>
+    /// The provider <paramref name="info"/>'s <c>idp</c> names: <c>local</c>, or Identity Platform (<c>kind</c> absent or <c>firebase</c>).
+    /// <paramref name="customServer"/> (CR-L39): the custom server its ID tokens go to, which receives one of the official project only
+    /// when the build allows it (<see cref="CustomServer.RequireTokenFor"/>).
+    /// </summary>
+    public static IdentityPlatform For(HttpClient http, ServerInfo info, ApiClient api, string locale, Uri? customServer = null)
     {
         ArgumentNullException.ThrowIfNull(info);
         if (info.Idp.IsLocal) return Local(api);
-        return new(http, info.Idp.ApiKey ?? throw new InvalidDataException("idp.apiKey is missing"), info.Idp.EmulatorUrl, locale);
+        return new(http, info.Idp.ApiKey ?? throw new InvalidDataException("idp.apiKey is missing"), info.Idp.EmulatorUrl, locale)
+        {
+            _tokenRecipient = customServer,
+        };
     }
+
+    private Uri? _tokenRecipient;
 
     /// <summary>A <c>local</c> instance: no verification or reset mail, and the password can be changed in the launcher.</summary>
     public bool IsLocal => _local is not null;
@@ -100,7 +107,11 @@ public sealed class IdentityPlatform
     {
         if (_local is { } local)
             return Opaque(await Local(() => local.LocalSignInAsync(new LocalCredentials(email, password), cancellation)).ConfigureAwait(false));
-        return IdToken(await PostAsync("accounts:signInWithPassword", new { email, password, returnSecureToken = true }, cancellation).ConfigureAwait(false));
+        var idToken = IdToken(await PostAsync("accounts:signInWithPassword", new { email, password, returnSecureToken = true }, cancellation).ConfigureAwait(false));
+        // every exchange and re-authentication takes its token from here: an official-account token never reaches a custom server
+        // the build does not allow (OD-122 follow-up), whatever projectId the server advertised
+        if (_tokenRecipient is { } recipient) CustomServer.RequireTokenFor(recipient, idToken);
+        return idToken;
     }
 
     /// <summary>

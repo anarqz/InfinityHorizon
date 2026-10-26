@@ -69,6 +69,16 @@ public sealed class TicketKeys
 
     public byte[]? Get(string kid) => _keys.FirstOrDefault(k => k.Kid == kid).Key;
 
+    /// <summary>The keys in this ring, current first (the custom-server pipe frame hands them to the hook, CR-L39).</summary>
+    public IReadOnlyList<(string Kid, byte[] Key)> All => [.. _keys.Select(k => (k.Kid, k.Key.ToArray()))];
+
+    /// <summary>A custom server's pinned <c>trust.launchTicket</c> (CR-S49 <c>kid:hex</c>).</summary>
+    public static TicketKeys FromTrust(Api.TrustKeys trust)
+    {
+        ArgumentNullException.ThrowIfNull(trust);
+        return new([.. Auth.CustomServer.Keys(trust.LaunchTicket)]);
+    }
+
     /// <summary>The local stack's key id (compose <c>FI_LAUNCH_TICKET_SIGNING_KEYS</c>, <c>.env.example</c>).</summary>
 #if !INFINITY_PRODUCTION_BUILD
     public const string LocalStackKid = "lt-local-1";
@@ -142,6 +152,15 @@ public sealed record TicketPolicy
     public bool Production { get; init; }
     public bool Development { get; init; }
 
+    /// <summary>
+    /// A custom server the player chose (CR-L39): its game server may be plain http on any host (owner: "Plain http anywhere"),
+    /// never an official host. Keys come from its pinned <c>/info</c> <c>trust</c>.
+    /// </summary>
+    public bool Custom { get; init; }
+
+    /// <summary>The policy for a custom server's tickets.</summary>
+    public static TicketPolicy ForCustom { get; } = new() { Custom = true };
+
     public static TicketPolicy Default { get; } = new();
 }
 
@@ -206,9 +225,15 @@ public static class TicketVerifier
         }
         var secure = parsed.Server.StartsWith("https://", StringComparison.Ordinal);
         var localHttp = policy.AllowHttp && DevNet.PlainHttpUrl(parsed.Server);
-        if (!(secure || localHttp))
+        var customHttp = policy.Custom && parsed.Server.StartsWith("http://", StringComparison.Ordinal);
+        if (!(secure || localHttp || customHttp))
         {
             throw new TicketException("game server is not https");
+        }
+        if (policy.Custom)
+        {
+            try { Auth.CustomServer.ParseOrigin(parsed.Server); }
+            catch (ArgumentException) { throw new TicketException("a custom server's ticket names an invalid or official game server"); }
         }
         if (policy.Development && Uri.TryCreate(parsed.Server, UriKind.Absolute, out var destination) && Auth.ProductionDeployment.IsOfficial(destination))
             throw new TicketException("development ticket cannot select a production game server");

@@ -23,7 +23,14 @@ public sealed record ServerInfo(
     ServiceMap? Services,
     IReadOnlyList<GameInfo>? Games,
     IdpConfig Idp,
-    bool RegistrationEnabled = true);
+    bool RegistrationEnabled = true,
+    TrustKeys? Trust = null);
+
+/// <summary>
+/// <c>GET /info</c> <c>trust</c> (CR-S49): a custom server's Ed25519 public keys as <c>kid:hex</c> (64 lowercase hex), current
+/// first. Absent from the official server, whose keys are compiled in.
+/// </summary>
+public sealed record TrustKeys(IReadOnlyList<string> LaunchTicket, IReadOnlyList<string> RelayGrant);
 
 /// <summary>
 /// The native sign-in's identity backend (OD-43, CR-L37): <c>kind</c> <c>firebase</c> (absent from servers before CR-S48) carries

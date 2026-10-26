@@ -262,7 +262,9 @@ public sealed partial class ShellViewModel
     public string ModFolder => _install?.Root ?? S["setup.not_found"];
 
     /// <summary>The stable launcher data home: the bucket (game_backup) and the custom mods folder live here, shared by every profile.</summary>
-    private string ModHome => _config.Production ? Directory.GetParent(_stateDirectory)!.FullName : _stateDirectory;
+    // The game's mods are shared by every server's state: production and custom (CR-L39) state folders sit under the root.
+    private string ModHome => _config.Production ? Directory.GetParent(_stateDirectory)!.FullName
+        : _config.Custom ? Directory.GetParent(Directory.GetParent(_stateDirectory)!.FullName)!.FullName : _stateDirectory;
 
     /// <summary>The bucket lives in the stable launcher data home (shared by development and production profiles).</summary>
     private Func<ManagedModFiles>? ModManagerFactory()
