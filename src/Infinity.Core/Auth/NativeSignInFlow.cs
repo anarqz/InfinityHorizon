@@ -39,7 +39,8 @@ public sealed class NativeSignInFlow : IDisposable
         Remember(generation, email, password, cancellation);
     }
 
-    /// <summary>CR-L38: a <c>local</c> instance has no e-mail to confirm, so the sign-up's own ID token goes straight to the exchange.</summary>
+    /// <summary>CR-L38: the sign-up's own ID token goes straight to the exchange; an address the instance still has to confirm (CR-S53)
+    /// answers <c>AUTH.EMAIL_UNVERIFIED</c> there, and the confirmation screen opens as for Identity Platform.</summary>
     public async Task<(AccountSession? Session, PendingAccount? Pending)> SignUpLocalAsync(
         IdentityPlatform idp, ApiClient api, ServerInfo info, Device device, string email, string password, CancellationToken cancellation = default)
     {
@@ -105,8 +106,8 @@ public sealed class NativeSignInFlow : IDisposable
             }
             return result;
         }
-        // A local instance sends no confirmation mail: there is no screen to wait on.
-        catch (ApiException e) when (e.Code == ErrorCodes.AuthEmailUnverified && !idp.IsLocal)
+        // the confirmation screen: Identity Platform's mail, or a local instance's (CR-S53; with no mail its tokens say confirmed)
+        catch (ApiException e) when (e.Code == ErrorCodes.AuthEmailUnverified)
         {
             Remember(generation, email, password, cancellation);
             return (null, null);

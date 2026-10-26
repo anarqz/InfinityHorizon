@@ -85,6 +85,16 @@ public sealed record LocalPasswordChange(string IdToken, string NewPassword)
     private bool PrintMembers(System.Text.StringBuilder builder) => false;
 }
 
+/// <summary><c>POST /launcher/v1/auth/confirmation</c> on a <c>local</c> instance (CR-S53): the ID token just minted by sign-up or sign-in.</summary>
+public sealed record LocalConfirmationRequest(string IdToken)
+{
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "A record's PrintMembers cannot be static.")]
+    private bool PrintMembers(System.Text.StringBuilder builder) => false;
+}
+
+/// <summary><c>POST /launcher/v1/auth/password-reset</c> on a <c>local</c> instance (CR-S53): → 202 whatever the address.</summary>
+public sealed record LocalPasswordResetRequest(string Email);
+
 /// <summary>The origin of each platform v1 surface (CORE_API.md §2.1): no client hard-codes one.</summary>
 public sealed record ServiceMap(string Core, string Gate, string Saves, string Matchmaking);
 

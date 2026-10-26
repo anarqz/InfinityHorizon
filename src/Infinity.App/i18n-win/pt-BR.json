@@ -154,7 +154,7 @@
   "server.keys_reject": "Manter as chaves antigas",
   "server.keys_accepted": "Novas chaves aceitas. Entre de novo.",
   "server.keys_rejected": "As novas chaves não foram aceitas. O Infinity não se conecta a este servidor até que elas coincidam.",
-  "native.local_reset":"Esqueceu a senha? Peça ao operador do servidor para redefini-la.",
+  "native.local_bad_credentials":"E-mail ou senha incorretos. Se sua conta veio para cá sem senha (antes você entrava com o Google), use “Esqueceu a senha?” para definir uma.",
   "native.local_email_exists": "Este e-mail já tem um login neste servidor. Entre com ele.",
   "native.local_weak_password": "Escolha uma senha de 8 a 128 caracteres.",
   "native.failed": "Não foi possível entrar.",

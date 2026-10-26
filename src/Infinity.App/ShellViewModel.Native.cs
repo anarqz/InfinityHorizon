@@ -16,9 +16,6 @@ public sealed partial class ShellViewModel
     public bool CanCreateOnlineAccount => CanStartOnlineAccount && _registrationEnabled;
     public bool ShowRegistrationDisabled => !_registrationEnabled;
     private bool _localIdentity;
-    /// <summary>CR-L38: a <c>local</c> instance sends no reset mail; its operator resets a forgotten password.</summary>
-    public bool ShowForgotPassword => !_localIdentity;
-    public bool ShowOperatorReset => _localIdentity;
 
     private void ObserveRegistration(ServerInfo info)
     {
@@ -67,9 +64,11 @@ public sealed partial class ShellViewModel
         Message = S["native.creating"];
         if (idp.IsLocal)
         {
-            // CR-L38: no e-mail to confirm; the new credential signs in right away.
+            // CR-L38: the new credential signs in right away; an address the instance mails a confirmation to (CR-S53) waits on the
+            // confirmation screen, with the password kept in memory only while it is open
             var device = DeviceIdentity.Load(_stateDirectory, "windows");
             await CompleteNativeAsync(await _nativeFlow.SignUpLocalAsync(idp, api, info, device, LoginEmail.Trim(), password, cancellation), cancellation);
+            if (AwaitingVerification) Message = S["native.verification_ready"];
             return;
         }
         await _nativeFlow.SignUpAsync(idp, LoginEmail.Trim(), password, cancellation);
@@ -109,7 +108,7 @@ public sealed partial class ShellViewModel
         _nativeFlow.Clear();
         return Native(async (idp, _, _, cancellation) =>
         {
-            if (idp.IsLocal) { Message = S["native.local_reset"]; return; }
+            // CR-S53: a local instance answers 202 whatever the address, like Identity Platform: the same message either way
             if (string.IsNullOrWhiteSpace(LoginEmail)) { Message = S["native.need_email"]; return; }
             await idp.SendPasswordResetAsync(LoginEmail.Trim(), cancellation);
             Message = S.Format("native.reset_sent", ("email", LoginEmail.Trim()));
@@ -220,7 +219,8 @@ public sealed partial class ShellViewModel
 
     private string IdentityProblem(IdentityPlatformException e) => e.Problem switch
     {
-        IdpProblem.Credentials => S["native.bad_credentials"],
+        // CR-S53: an account moved without a password (Google-only) sets one through "Forgot password?"
+        IdpProblem.Credentials => S[_localIdentity ? "native.local_bad_credentials" : "native.bad_credentials"],
         IdpProblem.TooManyAttempts => S["native.too_many"],
         IdpProblem.Disabled => S["native.disabled"],
         IdpProblem.EmailExists => S[_localIdentity ? "native.local_email_exists" : "native.email_exists"],
