@@ -566,7 +566,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
         catch (ApiException e) when (e.Code is ErrorCodes.AccountsNameUnavailable or ErrorCodes.AccountsInvalidName)
         {
-            Message = S["profiles.name_rule"] + " (" + e.Code + ")";
+            Message = ErrorText(e.Code); // OD122-L7: "already in use" or the name rule, never the raw code
         }
         catch (ApiException e) when (Infinity.Core.Online.OnlinePause.From(e) is { } pause)
         {
@@ -592,7 +592,21 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private static string Describe(Exception e) => e is ApiException api ? api.Code : e.Message;
+    private string Describe(Exception e) => e switch
+    {
+        ApiException api => ErrorText(api.Code),
+        HttpRequestException => S["native.unreachable"],
+        _ => S["native.failed"],
+    };
+
+    /// <summary>
+    /// OD122-L7: a server error code in the player's language (<c>error.&lt;CODE&gt;</c>, every code of fi-protocol's catalog); a code this
+    /// build does not know reads "Unexpected error (CODE)".
+    /// </summary>
+    internal string ErrorText(string code) => KnownErrorText(code) ?? S.Format("error.unexpected", ("code", code));
+
+    /// <summary>The translated text of a server error code, or null for a code this build has no text for.</summary>
+    internal string? KnownErrorText(string code) => S["error." + code] is var text && text != "error." + code ? text : null;
 
     private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 

@@ -135,6 +135,6 @@ public sealed partial class ShellViewModel
         ErrorCodes.AccountsRegistrationDisabled => S["offline.error.registration_disabled"],
         ErrorCodes.RequestIdempotencyKeyReused => S["offline.error.key_reused"],
         ErrorCodes.AccountsFrozen => S["offline.error.frozen"],
-        _ => S["offline.error.other"],
+        _ => KnownErrorText(code) ?? S["offline.error.other"], // OD122-L7: any server code in the player's language
     };
 }

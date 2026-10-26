@@ -167,7 +167,12 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (error is ApiException or HttpRequestException or OperationCanceledException or LocalProfileException or IOException)
         {
             Log("profiles: upload failed: " + error.GetType().Name + (error is ApiException api ? " " + api.Code : ""));
-            Message = error is LocalProfileException local ? ProfileErrorText(local.Code) : S["upsert.retry"]; // the stored keys make the retry safe
+            Message = error switch // the stored keys make the retry safe
+            {
+                LocalProfileException local => ProfileErrorText(local.Code),
+                ApiException refused when KnownErrorText(refused.Code) is { } known => known + " " + S["upsert.retry"],
+                _ => S["upsert.retry"],
+            };
         }
         finally { _upsertBusy = false; Changed(string.Empty); }
     }
@@ -267,7 +272,7 @@ public sealed partial class ShellViewModel
                     ErrorCodes.AccountsInvalidName => S["profiles.name_rule"],
                     ErrorCodes.AccountsRenameNotAllowed => S["rename.not_allowed"],
                     ErrorCodes.SessionsProfileInUse => S["rename.in_use"],
-                    _ => S["rename.retry"],
+                    _ => KnownErrorText(code) ?? S["rename.retry"],
                 };
                 if (code == ErrorCodes.AccountsRenameNotAllowed) { await session.RefreshMeAsync(); FillProfiles(); NextRenameNotice(); }
                 return;
