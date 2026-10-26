@@ -69,6 +69,8 @@
   "offline.play_offline_link": "Jogar offline",
   "offline.sign_in_needed": "É necessário entrar para jogar online",
   "connection.direct_failed": "Não foi possível estabelecer a conexão direta. Tente novamente ou consulte os detalhes da conexão.",
+  "launch.ticket_refused": "O online está desligado nesta sessão: o jogo não aceitou o ticket de sessão do launcher. Você joga offline no save deste perfil; o save do próprio Azimuth não é tocado.",
+  "launch.late": "O online está desligado nesta sessão: o jogo iniciou antes de a sessão do launcher chegar até ele. Você joga offline no save deste perfil; o save do próprio Azimuth não é tocado.",
   "worlds.public_warning": "Lobby público\nBugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.",
   "worlds.player_left": "Jogador saiu do lobby\n{player} saiu do seu lobby.",
   "worlds.player_joined": "Jogador entrou no lobby\n{player} entrou no seu lobby.",

@@ -32,8 +32,8 @@ public sealed record SupervisorConfig(
     /// on Azimuth's own <c>User_9000000000000</c>. Null: the hook ends the game before it reads a save instead.
     /// </summary>
     public (string Xuid, string Gamertag)? FallbackIdentity { get; init; }
-    /// <summary>CR-S51: how often the profile's folder is read for a fresh-start career's first sealed revision while the game runs.</summary>
-    public TimeSpan FreshStartPoll { get; init; } = TimeSpan.FromSeconds(3);
+    /// <summary>How often the profile's folder is read while the game runs: a fresh start's first save (CR-S51), checkpoints (OD122-L3).</summary>
+    public TimeSpan SavesPoll { get; init; } = TimeSpan.FromSeconds(3);
     /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
     public uint MinimumOnlineHookBuild { get; init; } = BuildProfile.ProductionOnly ? 79u : 76u;
     /// <summary>One bounded accept (ORCHESTRATOR §1.4: called again for the child's whole life).</summary>
@@ -419,10 +419,10 @@ public sealed class PlaySupervisor
             state = state with { Phase = "spawned", ChildPid = child.Pid, ChildStarted = child.Started, SpawnedUnix = (ulong)_clock.GetUtcNow().ToUnixTimeSeconds() };
             Write(state);
             _emit(new SupervisorEvent.Spawned(child.Pid));
-            // CR-S51: a fresh-start Hardcore career's first save goes up while the game runs (before the intro race's rewards)
-            using var freshStop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            var freshWatch = _config.Saves is { AwaitsFreshStart: true } fresh
-                ? fresh.WatchFreshStartAsync(_config.FreshStartPoll, freshStop.Token) : Task.CompletedTask;
+            // while the game runs: a fresh-start career's first save (CR-S51) and checkpoints at the server's cadence (OD122-L3)
+            using var watchStop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+            var savesWatch = _config.Saves is { Watches: true } watched
+                ? watched.WatchAsync(_config.SavesPoll, watchStop.Token) : Task.CompletedTask;
             uint code;
             try
             {
@@ -439,11 +439,11 @@ public sealed class PlaySupervisor
             finally
             {
                 // the watcher ends before the exit commit, which then sends the first career if the watcher did not
-                await freshStop.CancelAsync().ConfigureAwait(false);
+                await watchStop.CancelAsync().ConfigureAwait(false);
                 // nothing the watcher throws may skip the drain, the exit commit and the gate's leave that follow
 #pragma warning disable CA1031
-                try { await freshWatch.ConfigureAwait(false); }
-                catch (Exception e) { _emit(new SupervisorEvent.Note("save: fresh-start watch ended (" + e.GetType().Name + ")")); }
+                try { await savesWatch.ConfigureAwait(false); }
+                catch (Exception e) { _emit(new SupervisorEvent.Note("save: watch ended (" + e.GetType().Name + ")")); }
 #pragma warning restore CA1031
             }
             await DrainJob(child).ConfigureAwait(false);

@@ -163,6 +163,7 @@ public sealed partial class ShellViewModel
             (step, detail) => _ui.Post(_ => RenderSave(step, detail), null))
         {
             ResolveConflict = AskSaveConflictAsync,
+            Checkpoints = session.Info.Checkpoints, // OD122-L3: the server's cadence while the game runs
         };
     }
 

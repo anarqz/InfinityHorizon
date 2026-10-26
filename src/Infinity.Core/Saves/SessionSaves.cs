@@ -99,6 +99,20 @@ public sealed class SessionSaves
     /// <summary>The session holds the profile's line (a lease and a head).</summary>
     public bool HasLine => _line is not null;
 
+    /// <summary>OD122-L3: the server's checkpoint cadence (<c>GET /info</c> <c>checkpoints</c>); null or disabled keeps the exit commit only.</summary>
+    public CheckpointPolicy? Checkpoints { get; init; }
+
+    /// <summary>The clock checkpoints are scheduled on (tests move it).</summary>
+    public Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
+
+    private CheckpointScheduler? _scheduler;
+    private DateTimeOffset _sessionStart;
+    private bool _checkpointing;
+    private (ulong Number, string Content)? _seen;
+
+    /// <summary>Something runs while the game does: a fresh start's first save, or checkpoints (SAVES_API §4.4).</summary>
+    public bool Watches => _line is not null && (AwaitsFreshStart || _checkpointing);
+
     /// <summary>The line's fence now (heartbeats may have moved it); null without a line.</summary>
     public ulong? FenceToken => _line?.Lease.FenceToken;
 
@@ -114,6 +128,13 @@ public sealed class SessionSaves
         {
             return; // free, Noob, or a lapsed Hardcore: no cloud line (OD-52)
         }
+        // the pre-launch sync counts as the previous commit (SAVES_API §4.4); a relaunch under a new lease starts the schedule over
+        _sessionStart = Clock();
+        _checkpointing = Checkpoints is { Enabled: true };
+        _scheduler = null;
+        _seen = null;
+        _freshStart = false;
+        _freshSettled = false;
         var access = await _access(cancellation).ConfigureAwait(false);
         var xuid = _xuid.ToString(CultureInfo.InvariantCulture);
         var prepared = CloudSaves.PrepareFolders(_savesRoot, _xuid);
@@ -297,16 +318,21 @@ public sealed class SessionSaves
     /// ceilings are those of a new career, before the intro race's rewards, and Azimuth keeps only its two newest revisions). Ends when
     /// it is committed or refused, or with <paramref name="cancellation"/>.
     /// </summary>
-    public async Task WatchFreshStartAsync(TimeSpan every, CancellationToken cancellation)
+    public async Task WatchAsync(TimeSpan every, CancellationToken cancellation)
     {
         var wait = every;
-        while (AwaitsFreshStart && !cancellation.IsCancellationRequested)
+        while (Watches && !cancellation.IsCancellationRequested)
         {
             try { await Task.Delay(wait, cancellation).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             wait = every;
             try
             {
+                if (!AwaitsFreshStart)
+                {
+                    await CheckpointAsync(cancellation).ConfigureAwait(false);
+                    continue;
+                }
                 // the bytes are recorded the moment the first save is seen (before any token or request), so a later failure keeps them
                 if (!CaptureFirstSave()) continue;
                 var retry = await SendFirstSaveAsync(cancellation).ConfigureAwait(false);
@@ -320,6 +346,75 @@ public sealed class SessionSaves
                 _report(SaveStep.Kept, e.GetType().Name);
                 wait = TimeSpan.FromSeconds(Math.Max(every.TotalSeconds, 15));
             }
+        }
+    }
+
+    /// <summary>
+    /// OD122-L3, SAVES_API §4.4 "During play": the newest sealed revision, only when its content changed and has settled, at the
+    /// server's cadence (by default at least 300 s apart, at most 30 per session hour, two kept for the exit), as <c>upload</c> on top
+    /// of the mark. A recorded upload that could not go yet goes first. A crash then loses at most one interval in the cloud.
+    /// </summary>
+    internal async Task CheckpointAsync(CancellationToken cancellation)
+    {
+        if (!_checkpointing || Checkpoints is not { } policy) return;
+        var mark = _saves.State(_xuid)?.Mark;
+        if (mark is null && _freshStart) { _checkpointing = false; return; } // a refused first career sends nothing more
+        _scheduler ??= new CheckpointScheduler(policy, _sessionStart, mark?.Content);
+        if (_scheduler.StoppedBecause is not null) { _checkpointing = false; return; }
+        if (AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, _xuid)) is not { } newest) return;
+        // a revision's folder never changes once sealed: its digest is read once
+        if (_seen?.Number != newest.Number) _seen = (newest.Number, Fh2Bundle.ContentDigest(CloudSaveFiles.ReadFiles(newest)));
+        var content = _seen.Value.Content;
+        var now = Clock();
+        if (!_scheduler.ShouldCommit(now, content)) return;
+        if (Interlocked.CompareExchange(ref _committing, 1, 0) != 0) return;
+        try
+        {
+            var access = await _access(cancellation).ConfigureAwait(false);
+            _scheduler.Sent(now);
+            var sent = _saves.State(_xuid)?.PendingUpload is not null
+                ? await _saves.SendPendingAsync(access, _xuid, _line!.Lease, cancellation).ConfigureAwait(false)
+                : await _saves.UploadAsync(access, _xuid, _line!.Lease, newest, mark?.Revision ?? 0, CommitKinds.Upload, cancellation).ConfigureAwait(false);
+            switch (sent)
+            {
+                case { Committed: { } committed }:
+                    _scheduler.Committed(Clock(), _saves.State(_xuid)?.Mark?.Content ?? content);
+                    _report(SaveStep.Uploaded, committed.Revision.ToString(CultureInfo.InvariantCulture));
+                    break;
+                case { Unchanged: true }:
+                    _scheduler.Committed(Clock(), content);
+                    break;
+                case { Failure: { Kind: SaveFailureKind.GateRefused } refused }:
+                    _scheduler.Refused(content); // parked by the server; a later revision is tried
+                    _report(SaveStep.Refused, refused.Reason);
+                    break;
+                case { Failure: { Kind: SaveFailureKind.SummaryUnreadable or SaveFailureKind.BundleInvalid } unreadable }:
+                    _scheduler.Refused(content);
+                    _report(SaveStep.Kept, unreadable.Code);
+                    break;
+                case { Failure: { Kind: SaveFailureKind.Integrity or SaveFailureKind.DigestMismatch or SaveFailureKind.UploadPending } local }:
+                    _report(SaveStep.Kept, local.Code); // a file read while it changed, or a check to redo: the next tick tries again
+                    break;
+                case { Failure: { Kind: SaveFailureKind.OnlineClosed or SaveFailureKind.SessionEnded } closed }:
+                    // kept for the next launch, never retried automatically: no more checkpoints this session
+                    _scheduler.Stop(closed.Code);
+                    _checkpointing = false;
+                    _report(SaveStep.Kept, closed.Code);
+                    break;
+                case { Failure: { KeepsPending: true } waiting }:
+                    _report(SaveStep.Kept, waiting.Code); // recorded; sent again at the next checkpoint or at the exit
+                    break;
+                case { Failure: { } stop }:
+                    // REVISION_CONFLICT, LEASE_LOST, NOT_ELIGIBLE…: no more checkpoints; the exit and the next launch decide on a fresh head
+                    _scheduler.Stop(stop.Code);
+                    _checkpointing = false;
+                    _report(SaveStep.Kept, stop.Code);
+                    break;
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _committing, 0);
         }
     }
 
@@ -349,6 +444,7 @@ public sealed class SessionSaves
             {
                 case { Committed: { } committed }:
                     _freshSettled = true;
+                    _sessionStart = Clock(); // the first save is the previous commit of the checkpoints that follow (§4.4)
                     _report(SaveStep.Uploaded, committed.Revision.ToString(CultureInfo.InvariantCulture));
                     return null;
                 case { Failure: { Kind: SaveFailureKind.GateRefused } refused }:
@@ -407,9 +503,17 @@ public sealed class SessionSaves
         CommitOutcome sent = new(null, false, false, null, null);
         for (var attempt = 0; attempt < 4; ++attempt)
         {
-            sent = _saves.State(_xuid)?.PendingUpload is not null
+            var pending = _saves.State(_xuid)?.PendingUpload is not null;
+            sent = pending
                 ? await _saves.SendPendingAsync(access, _xuid, _line.Lease, cancellation).ConfigureAwait(false)
                 : await _saves.UploadAsync(access, _xuid, _line.Lease, newest, mark?.Revision ?? 0, CommitKinds.Upload, cancellation).ConfigureAwait(false);
+            if (pending && sent.Committed is not null)
+            {
+                // an earlier upload (a checkpoint cut off or kept) went first: the session's newest save goes on top of it now
+                mark = _saves.State(_xuid)?.Mark;
+                --attempt;
+                continue;
+            }
             if (sent.Failure is not { KeepsPending: true } f || f.Kind is SaveFailureKind.SessionEnded or SaveFailureKind.OnlineClosed)
             {
                 break;

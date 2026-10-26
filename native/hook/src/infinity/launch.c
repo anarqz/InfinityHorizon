@@ -1238,6 +1238,31 @@ static int launch_go_online(const LaunchTicket *t) {
 
 /* --------------------------------------------------------------- thread */
 
+/* OD122-L4 (owner, "Bloquear online e avisar"): a refused start closes the pipe, so its reason goes
+   first, written at once as a Notice event (Event 6, "1|<key>"). The launcher shows the key's text in
+   the player's language as an overlay toast; the game plays offline on the profile's own save
+   (account.c, B1), never Azimuth's own. */
+static void launch_tell_offline(const char *key) {
+    unsigned char payload[64], frame[80];
+    size_t n = text_length(key);
+    if (n + 5 > sizeof(payload)) {
+        return;
+    }
+    payload[0] = (unsigned char)FI_EVENT_NOTICE;
+    payload[1] = (unsigned char)(n + 2);
+    payload[2] = 0;
+    payload[3] = '1';
+    payload[4] = '|';
+    memory_copy(payload + 5, key, n);
+    LaunchWriter w;
+    launch_frame_begin(&w, frame, sizeof(frame), FRAME_EVENT);
+    launch_put(&w, payload, n + 5);
+    size_t size = launch_frame_end(&w);
+    if (size) {
+        (void)launch_write(frame, size);
+    }
+}
+
 static void launch_close(void) {
     launch_frame_clear();
     if (launch_pipe != INVALID_HANDLE_VALUE) {
@@ -1349,11 +1374,13 @@ static int launch_handshake(void) {
         if (ticket.claims_size > LAUNCH_MAX_CLAIMS || ticket.token_size > LAUNCH_MAX_TOKEN) {
             launch_log("REFUSED: the ticket's claims or token are longer than this hook takes: offline.", 0, 0, "");
         }
+        launch_tell_offline("launch.ticket_refused");
         launch_close();
         launch_fail(LAUNCH_WHY_TICKET);
         return 0;
     }
     if (!launch_go_online(&ticket)) {
+        launch_tell_offline(launch_state == LAUNCH_LATE ? "launch.late" : "launch.ticket_refused");
         launch_close();
         launch_fail(launch_state == LAUNCH_LATE ? LAUNCH_WHY_LATE : LAUNCH_WHY_TICKET);
         return 0;
