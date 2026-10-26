@@ -27,11 +27,20 @@ public sealed partial class ShellViewModel
 
     public string PickSaveText => _saveTarget is null ? string.Empty : S.Format("saves.pick_text", ("name", ProfileName.Plain(_saveTarget.Gamertag)));
 
-    public bool CanPickSave => Ready && _install is not null && !Playing && !Busy;
+    public bool CanPickSave => Ready && _install is not null && !Playing && !Busy && !ChosenProfileHardcore;
+
+    /// <summary>
+    /// B2: a Hardcore career always starts fresh (OD-60; the server refuses anything else with SAVES.HARDCORE_NEEDS_FRESH_CAREER), so
+    /// no save from this PC is ever offered to it: the picker would only lead to a blocked launch.
+    /// </summary>
+    private bool ChosenProfileHardcore => Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey) is { Mode: "hardcore" };
+
+    public bool ShowHardcoreSaveNote => Ready && ChosenProfileHardcore;
 
     /// <summary>Home's "use a save from this PC": the picker for the chosen profile.</summary>
     public void OpenSavePicker()
     {
+        if (ChosenProfileHardcore) { Message = S["saves.hardcore_fresh"]; return; }
         if (CanPickSave && Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey) is { } profile)
         {
             OfferSaves(profile, always: true);
@@ -100,6 +109,7 @@ public sealed partial class ShellViewModel
         {
             return;
         }
+        if (target.Mode == "hardcore") { CloseSavePicker(); Message = S["saves.hardcore_fresh"]; return; } // B2
         var handled = false;
         PreviewSavePick(choice, ref handled);
         if (handled) return;

@@ -179,6 +179,15 @@ public sealed partial class ShellViewModel
             if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
         }
         var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
+        // A Supporter's Hardcore line lives in the cloud (OD-52/OD-60): without the server's saves service there is no seed, no lease
+        // and no upload, so it never plays (the vip pool always publishes saves; a missing one is a configuration error).
+        if (profile.Mode == "hardcore" && _session.Me?.Access.Tier == "vip" && SessionSavesFor(profile) is null)
+        {
+            Log("play: Hardcore refused, the server named no saves service");
+            Message = S["saves.hardcore_needs_saves"];
+            if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan);
+            return;
+        }
         using var onlineActivity = new OnlineActivity();
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
