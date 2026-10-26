@@ -391,7 +391,8 @@
               <TextBlock Text="{Binding S[saves.conflict_local]}" FontWeight="SemiBold" />
               <TextBlock Text="{Binding SaveConflictLocalText}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,2,0,16" />
               <WrapPanel>
-                <Button Content="{Binding S[saves.conflict_keep_cloud]}" Click="OnConflictKeepCloud" Style="{StaticResource AccentButtonStyle}" Padding="16,6" Margin="0,0,10,8" />
+                <Button Content="{Binding S[saves.conflict_keep_cloud]}" Click="OnConflictKeepCloud" Style="{StaticResource AccentButtonStyle}" Padding="16,6" Margin="0,0,10,8"
+                        Visibility="{Binding CanKeepCloudSave, Converter={StaticResource Visible}}" />
                 <Button Content="{Binding S[saves.conflict_keep_local]}" Click="OnConflictKeepLocal" Padding="16,6" Margin="0,0,10,8" />
                 <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnConflictNotNow" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
               </WrapPanel>

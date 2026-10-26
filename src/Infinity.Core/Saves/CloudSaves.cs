@@ -14,7 +14,10 @@ public static class CommitKinds
     public const string ResolveKeepLocal = "resolve_keep_local";
     public const string ImportOffline = "import_offline";
 
-    public static bool IsPlayerKind(string kind) => kind is Upload or ResolveKeepLocal or ImportOffline;
+    /// <summary>CR-S51: a Hardcore line's revision 1 from Azimuth's own first save (<c>If-Match: "0"</c>, line <c>start: fresh_start</c>).</summary>
+    public const string FreshStart = "fresh_start";
+
+    public static bool IsPlayerKind(string kind) => kind is Upload or ResolveKeepLocal or ImportOffline or FreshStart;
 }
 
 /// <summary>
@@ -495,7 +498,7 @@ public sealed class CloudSaves
         ArgumentNullException.ThrowIfNull(revision);
         if (!CommitKinds.IsPlayerKind(kind))
         {
-            throw new ArgumentException("upload, resolve_keep_local or import_offline", nameof(kind));
+            throw new ArgumentException("upload, resolve_keep_local, import_offline or fresh_start", nameof(kind));
         }
         if (lease.Lost)
         {
@@ -529,6 +532,25 @@ public sealed class CloudSaves
             return new CommitOutcome(null, false, false, PendingFirst(raced), raced);
         }
         return await SendPendingAsync(access, xuid, lease, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Records <paramref name="revision"/> as the profile's pending upload without sending it (no token needed): its bytes are kept
+    /// whatever happens next and <see cref="SendPendingAsync"/> sends exactly them. CR-S51: a new career's first save is captured the
+    /// moment it is seen. Null when recorded; a failure when the revision is no longer sealed or another upload is pending.
+    /// </summary>
+    public SaveFailure? RecordUpload(ulong xuid, LocalRevision revision, ulong expected, string kind)
+    {
+        ArgumentNullException.ThrowIfNull(revision);
+        if (!CommitKinds.IsPlayerKind(kind)) throw new ArgumentException("a player commit kind", nameof(kind));
+        if (State(xuid)?.PendingUpload is { } waiting) return PendingFirst(waiting);
+        PackedRevision packed;
+        try { packed = CloudSaveFiles.Pack(revision); }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
+        { return SaveFailure.Integrity(e.Message); }
+        try { _store.BeginUpload(_realm, xuid, Guid.CreateVersion7().ToString(), expected, kind, packed.Number, packed.ContentSha256, packed.Bundle); }
+        catch (InvalidOperationException) when (State(xuid)?.PendingUpload is { } raced) { return PendingFirst(raced); }
+        return null;
     }
 
     private static SaveFailure PendingFirst(PendingUpload waiting) => SaveFailure.Local(SaveFailureKind.UploadPending,

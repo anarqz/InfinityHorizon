@@ -24,7 +24,14 @@ public sealed record ServerInfo(
     IReadOnlyList<GameInfo>? Games,
     IdpConfig Idp,
     bool RegistrationEnabled = true,
-    TrustKeys? Trust = null);
+    TrustKeys? Trust = null,
+    SavesPolicy? Saves = null);
+
+/// <summary><c>GET /info</c> <c>saves</c> (CR-S51): which profiles keep a cloud line on this server; absent = OD-52. Explanatory only.</summary>
+public sealed record SavesPolicy(CloudLines Cloud);
+
+/// <summary>The server's <c>FI_CLOUD_SAVES</c> over Noob/Hardcore × free/Supporter.</summary>
+public sealed record CloudLines(bool NoobFree, bool HardcoreFree, bool NoobVip, bool HardcoreVip);
 
 /// <summary>
 /// <c>GET /info</c> <c>trust</c> (CR-S49): a custom server's Ed25519 public keys as <c>kid:hex</c> (64 lowercase hex), current
@@ -118,7 +125,11 @@ public sealed record Profile(
     string Status,
     string CreatedAt,
     string? LastPlayedAt,
-    RenameNotice? RenameNotice = null);
+    RenameNotice? RenameNotice = null,
+    // CR-S51: this server keeps the profile in the cloud / needs the OD-113 scan before admission; absent = OD-52 (a Supporter's
+    // Hardcore). Explanatory: the admission decides.
+    bool? CloudLine = null,
+    bool? ContentRequired = null);
 
 /// <summary>Why a profile carries another name than the one its player chose (OD-120 backfill, ACCOUNTS.md §5).</summary>
 public sealed record RenameNotice(string PreviousName, string RenamedAt);
@@ -274,7 +285,16 @@ public sealed record SaveHead(
     SaveSummary? Summary,
     LeaseView? Lease,
     // OD-52 renewal (SAVES_API.md §4.7): while the line is lapsed, the instant its coverage ended; null otherwise
-    string? LapsedSince = null);
+    string? LapsedSince = null,
+    // CR-S51 (SAVES_API.md §4.8): where a Hardcore line at revision 0 starts, "seed" or "fresh_start"; absent = seed
+    string? Start = null);
+
+/// <summary><c>SaveHead.start</c>'s values (CR-S51).</summary>
+public static class SaveStarts
+{
+    public const string Seed = "seed";
+    public const string FreshStart = "fresh_start";
+}
 
 /// <summary>One revision of the history (TypeScript <c>Revision</c>).</summary>
 public sealed record SaveRevision(

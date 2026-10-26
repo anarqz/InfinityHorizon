@@ -31,7 +31,8 @@ public sealed partial class ShellViewModel
     /// <summary>OD-113: only a Supporter + Hardcore profile runs the integrity check; every other profile plays without it.</summary>
     public bool IntegrityApplies
     {
-        get { var applies = IntegrityPolicy.Applies(_session?.Me?.Access.Tier, LobbyProfile?.Mode); InspectIntegrityApplies(ref applies); return applies; }
+        // CR-S51: the server says per profile (contentRequired); a server before CR-S51 leaves it out, which means OD-52's rule
+        get { var applies = LobbyProfile?.ContentRequired ?? IntegrityPolicy.Applies(_session?.Me?.Access.Tier, LobbyProfile?.Mode); InspectIntegrityApplies(ref applies); return applies; }
     }
     partial void InspectIntegrityApplies(ref bool applies);
 

@@ -239,6 +239,19 @@ public static class AzimuthSaves
         return null;
     }
 
+    /// <summary>The oldest sealed revision (CR-S51: a new career's first save, while Azimuth has not pruned it yet).</summary>
+    public static LocalRevision? OldestSealed(string profileDir)
+    {
+        foreach (var (number, path) in RevisionFolders(profileDir))
+        {
+            if (ReadRevision(number, path) is { } revision && Verify(revision).Count == 0)
+            {
+                return revision;
+            }
+        }
+        return null;
+    }
+
     /// <summary>
     /// Every <c>User_*</c> folder of <c>player-1</c> with a sealed revision, most recently played
     /// first. <paramref name="exclude"/> leaves out one folder (the profile's own container).
