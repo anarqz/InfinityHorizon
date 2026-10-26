@@ -110,6 +110,22 @@ public sealed partial class ShellViewModel
         return true;
     }
 
+    /// <summary>
+    /// B1: the save an online start of <paramref name="profile"/> falls back to when the hook cannot set the online identity: the
+    /// profile's own offline identity (OD-120: a Noob account profile plays its account folder, a Hardcore one its local folder), never
+    /// Azimuth's. Null for a Hardcore profile this PC has no local entry for: the hook then ends the game before it reads a save.
+    /// </summary>
+    internal (string Xuid, string Gamertag)? FallbackIdentityFor(Profile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        LocalProfile? local = null;
+        try { local = LocalProfiles.Read().FirstOrDefault(p => p.Cloud?.ProfileId == profile.ProfileId && p.Game == profile.Game); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("play: local profiles not read for the fallback identity: " + e.GetType().Name); }
+        if (local is not null) return (local.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture), local.Name);
+        var name = ProfileName.Playable(profile.Gamertag);
+        return profile.Mode == "hardcore" || !ProfileName.IsValid(name) ? null : (profile.Xuid, name);
+    }
+
     /// <summary>The account plane's profile refusals (and the local store's, which use the same codes), in the player's words.</summary>
     internal string ProfileErrorText(string code) => code switch
     {

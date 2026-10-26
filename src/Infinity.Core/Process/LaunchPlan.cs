@@ -16,9 +16,17 @@ public abstract record ExitDisposition
     /// <summary>The exit code of a game the overlay's Quit had to end with <c>TerminateProcess</c>.</summary>
     public const uint QuitForcedExit = 0x4649_0003;
 
+    /// <summary>
+    /// B1: the hook ended the game before it read a save, because no profile identity could be set (account.c account_refuse): never
+    /// Azimuth's own <c>User_9000000000000</c> in a launcher session. Not a crash.
+    /// </summary>
+    public const uint IdentityRefusedExit = 0x4649_0005;
+
     public sealed record Normal : ExitDisposition;
 
     public sealed record Relaunch : ExitDisposition;
+
+    public sealed record IdentityRefused : ExitDisposition;
 
     /// <summary>NTSTATUS-style failure (0xC0000005 …) or any other non-zero code.</summary>
     public sealed record Crashed(uint Code) : ExitDisposition;
@@ -27,6 +35,7 @@ public abstract record ExitDisposition
     {
         0 or QuitForcedExit => new Normal(),
         ExitRelaunch => new Relaunch(),
+        IdentityRefusedExit => new IdentityRefused(),
         _ => new Crashed(code),
     };
 }

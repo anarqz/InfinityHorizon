@@ -189,7 +189,9 @@ public sealed partial class ShellViewModel
             // and the Infinity gate refuses anything until the launcher is back (even for a signed-in player's local profile).
             _offlineWrapUp = true;
             Log("play: offline game ended (code " + code.ToString(CultureInfo.InvariantCulture) + "); back to the launcher, nothing synced");
-            SetStatus(code == 0 || code == ExitDisposition.QuitForcedExit ? S["status.ended"] : S["mods.runtime_failed"]);
+            // B1: the hook refuses to play a launcher profile on Azimuth's own save; any other code is the mod runtime's
+            SetStatus(code == 0 || code == ExitDisposition.QuitForcedExit ? S["status.ended"]
+                : code == ExitDisposition.IdentityRefusedExit ? S["supervisor.identity_refused"] : S["mods.runtime_failed"]);
         }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is System.ComponentModel.Win32Exception)
         { Message = ModLaunchFailed("offline session", error); }

@@ -185,6 +185,7 @@ public sealed partial class ShellViewModel
             Overlay = LoadOverlayPackage(),
             NativeDllOverrides = mods.DllOverrides,
             ModEnvironment = nativePlan?.Environment ?? [],
+            FallbackIdentity = FallbackIdentityFor(profile),
             Saves = SessionSavesFor(profile),
             Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, modSet),
             Mods = modSet,
@@ -423,6 +424,12 @@ public sealed partial class ShellViewModel
                 _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
                 SetStatus(Message);
                 break;
+            case SupervisorEvent.Exited { Disposition: ExitDisposition.IdentityRefused }:
+                // B1: the hook closed the game before it read a save: no profile identity could be set (never Azimuth's own career)
+                Message = S["supervisor.identity_refused"];
+                SetStatus(Message);
+                _identityRefused = true;
+                break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
                 break;
@@ -447,8 +454,11 @@ public sealed partial class ShellViewModel
                     "relaunch_loop" => S["supervisor.relaunch_loop"],
                     "error" => _playStatus ?? S["supervisor.launch_refused"],
                     _ when ended.Reason.StartsWith("crashed", StringComparison.Ordinal) => _playStatus ?? S["status.ended"],
+                    // B1: the game ended because no profile identity could be set: that reason stays on the status line
+                    _ when _identityRefused => S["supervisor.identity_refused"],
                     _ => S["status.ended"],
                 };
+                _identityRefused = false;
                 SetStatus(ended.Left || ended.Reason is "queue_cancelled" or "error" ? text : text + " " + S["supervisor.leave_failed"]);
                 break;
             case SupervisorEvent.HookOffline:
