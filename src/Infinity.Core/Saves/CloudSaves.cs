@@ -393,6 +393,8 @@ public sealed class CloudSaves
         ArgumentNullException.ThrowIfNull(head);
         return head.Revision == 0
             ? Task.FromResult(new DownloadOutcome(null, null, SaveFailure.Integrity("the line is empty: nothing to install")))
+            : head.IsCloudExpired() // retention (SAVES_API §4.1): never requested, the local save stays
+            ? Task.FromResult(new DownloadOutcome(null, null, SaveFailure.Integrity("the cloud copy expired: nothing to install")))
             : DownloadAsync(access, savesRoot, xuid, head.Revision, head.ContentSha256 ?? string.Empty, expectedLocal, label, cancellation);
     }
 

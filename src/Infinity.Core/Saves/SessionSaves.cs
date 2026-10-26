@@ -36,6 +36,9 @@ public enum SaveStep
 
     /// <summary>CR-S51: a new Hardcore career starts in the game; its first save goes to the cloud as soon as Azimuth writes it.</summary>
     FreshStart,
+
+    /// <summary>Retention: the cloud copy of this profile's save expired; this PC's save is kept and nothing came down.</summary>
+    CloudExpired,
 }
 
 /// <summary>The player's answer to a save conflict (owner 2026-10-26, "Cloud or PC, per the contract"; SAVES_API.md §4.4/§5).</summary>
@@ -203,6 +206,13 @@ public sealed class SessionSaves
         if (decision.Failure is { } failure)
         {
             throw new SaveBlockedException(failure.Code, failure.Message);
+        }
+        // retention (SAVES_API.md §4.1, §5): the head's file is gone; nothing comes down (no download, fast-forward, keep-cloud or
+        // lapsed install): the game plays on this PC's save and the player is told the cloud copy expired
+        if (head.IsCloudExpired() && decision.Decision is not (SyncDecision.InSync or SyncDecision.Empty))
+        {
+            _report(SaveStep.CloudExpired, null);
+            return;
         }
         // SAVES_API.md §5: a renewed line (save.lapsedSince) takes the cloud's head whatever the decision; this PC's save stays only
         // as a backup (archived by the install), never uploaded or kept
