@@ -219,7 +219,7 @@ public sealed partial class ShellViewModel
                 ErrorCodes.AuthRateLimited or ErrorCodes.RequestRateLimited => S["native.too_many"],
                 ErrorCodes.AccountsBanned => S["native.banned"],
                 ErrorCodes.SharingTooManyDevices or ErrorCodes.SharingTooManyRecentDevices => S["native.too_many_devices"],
-                _ => S["native.failed"] + " (" + e.Code + ")",
+                _ => ErrorText(e.Code),
             };
         }
         catch (TrustChangedException e)

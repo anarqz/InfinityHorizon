@@ -163,7 +163,7 @@ public sealed partial class ShellViewModel
             _crashSent = true; _crashConsent = false; _crashStatus = Message = S["crash.sent"];
         }
         catch (ApiException e)
-        { if (ReferenceEquals(_session, session) && _crash?.Id == incident.Id) _crashStatus = S[e.Code == ErrorCodes.AccountsFrozen ? "crash.frozen" : e.Code == ErrorCodes.CrashDumpsDisabled ? "crash.dumps_disabled" : "crash.send_failed"] + " (" + e.Code + ")"; }
+        { if (ReferenceEquals(_session, session) && _crash?.Id == incident.Id) _crashStatus = e.Code is ErrorCodes.AccountsFrozen or ErrorCodes.CrashDumpsDisabled ? S[e.Code == ErrorCodes.AccountsFrozen ? "crash.frozen" : "crash.dumps_disabled"] : S["crash.send_failed"] + " " + ErrorText(e.Code); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException)
         { if (ReferenceEquals(_session, session) && _crash?.Id == incident.Id) _crashStatus = S["crash.send_failed"]; }
         finally { if (ReferenceEquals(_crashSendStop, bound)) _crashSendStop = null; _crashSending = false; Changed(string.Empty); }
