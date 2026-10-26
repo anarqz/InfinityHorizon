@@ -287,7 +287,13 @@ public sealed record SaveHead(
     // OD-52 renewal (SAVES_API.md §4.7): while the line is lapsed, the instant its coverage ended; null otherwise
     string? LapsedSince = null,
     // CR-S51 (SAVES_API.md §4.8): where a Hardcore line at revision 0 starts, "seed" or "fresh_start"; absent = seed
-    string? Start = null);
+    string? Start = null,
+    // retention (SAVES_API.md §4.1, §8): false when the head's save file is no longer kept; absent = the file exists
+    bool? Bundle = null)
+{
+    /// <summary>The cloud copy of the head expired (retention): nothing is downloaded or installed; the local save stays.</summary>
+    public bool IsCloudExpired() => Bundle == false && Revision > 0;
+}
 
 /// <summary><c>SaveHead.start</c>'s values (CR-S51).</summary>
 public static class SaveStarts

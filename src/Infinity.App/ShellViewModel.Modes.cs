@@ -239,6 +239,7 @@ public sealed partial class ShellViewModel
         {
             SaveStep.Seeding => S["saves.seeding"],
             SaveStep.FreshStart => S["saves.fresh_start"],
+            SaveStep.CloudExpired => S["saves.cloud_expired"],
             SaveStep.Downloading => S["saves.downloading"],
             SaveStep.Installed => S.Format("saves.installed", ("rev", detail ?? "?")),
             SaveStep.Uploading => S["saves.uploading"],
@@ -267,6 +268,11 @@ public sealed partial class ShellViewModel
             return false;
         }
         var root = AzimuthSaves.SavesRoot(_install.Root);
+        if (head.IsCloudExpired())
+        {
+            RenderSave(SaveStep.CloudExpired, null); // retention: nothing to bring down; this PC's save is the one kept
+            return true;
+        }
         var decision = client.Saves.Decide(root, xuid, head);
         switch (decision.Decision)
         {
