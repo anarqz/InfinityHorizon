@@ -149,7 +149,7 @@ public sealed partial class ShellViewModel
             ObserveRegistration(info);
             IdentityPlatform? identity = null;
             PrepareNativeIdentity(ref identity);
-            await work(identity ?? IdentityPlatform.For(Http, info, api, S.Locale), info, api, cancellation.Token);
+            await work(identity ?? IdentityPlatform.For(Http, info, api, S.Locale, _config.Custom ? _config.Server : null), info, api, cancellation.Token);
             if (!OnlineServiceAllowsPlay || epoch != _onlinePauseEpoch) Message = OnlineServiceMessage;
         }
         catch (OperationCanceledException)
@@ -181,6 +181,24 @@ public sealed partial class ShellViewModel
                 ErrorCodes.SharingTooManyDevices or ErrorCodes.SharingTooManyRecentDevices => S["native.too_many_devices"],
                 _ => S["native.failed"] + " (" + e.Code + ")",
             };
+        }
+        catch (TrustChangedException e)
+        {
+            _nativeFlow.Clear();
+            ObserveTrustChange(e);
+        }
+        catch (OfficialIdentityRefusedException)
+        {
+            // OD-122 follow-up: an official-account sign-in would hand this server that account
+            _nativeFlow.Clear();
+            Log("auth: official-account sign-in refused for this custom server");
+            Message = S["server.official_identity_refused"];
+        }
+        catch (InvalidDataException e) when (_config.Custom)
+        {
+            // CR-L39: a custom server's discovery the launcher does not accept (official origins, its realm, no keys)
+            Log($"auth: custom server discovery refused: {e.GetType().Name}");
+            Message = S["server.invalid_discovery"];
         }
         catch (Exception e) when (e is HttpRequestException or IOException or JsonException)
         {

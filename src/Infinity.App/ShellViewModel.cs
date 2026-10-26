@@ -502,7 +502,12 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             Log($"auth: saved session refused: {e.Code}");
             if (e.Code is ErrorCodes.AuthRefreshInvalid or ErrorCodes.AuthRefreshReused or ErrorCodes.AccountsBanned) SessionStore.Delete(_stateDirectory);
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or JsonException or OperationCanceledException or InvalidOperationException)
+        catch (TrustChangedException change)
+        {
+            ObserveTrustChange(change);
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or JsonException or OperationCanceledException or InvalidOperationException
+            or InvalidDataException)
         {
             Log($"auth: saved session not resumed: {e.GetType().Name}");
         }

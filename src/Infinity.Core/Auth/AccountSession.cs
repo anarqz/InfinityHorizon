@@ -3,9 +3,23 @@ using Infinity.Core.Api;
 
 namespace Infinity.Core.Auth;
 
-/// <summary>Where the launcher talks to: the server (core and gate origins come from its <c>/info</c>) and the website used for account self-service.</summary>
-public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = false)
+/// <summary>
+/// Where the launcher talks to: the server (core and gate origins come from its <c>/info</c>) and the website used for account
+/// self-service. <see cref="Custom"/> (CR-L39) is a server the player chose besides the official one, in every build.
+/// </summary>
+public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = false, bool Custom = false)
 {
+    /// <summary>A player-chosen server (CR-L39): its own origin as server and portal; validated by <see cref="CustomServer"/>.</summary>
+    public static ServerConfig ForCustom(Uri origin)
+    {
+        var server = CustomServer.ParseOrigin(origin?.ToString() ?? throw new ArgumentNullException(nameof(origin)));
+        CustomOrigins.Allow(server);
+        return new ServerConfig(server, server, Production: false, Custom: true);
+    }
+
+    /// <summary>A custom server's key pins (<c>custom-trust.json</c> in its own state folder); required for <see cref="Custom"/>.</summary>
+    public TrustPins? Pins { get; init; }
+
     /// <summary>Official builds use production only; development builds keep their explicit local selection.</summary>
 #if INFINITY_PRODUCTION_BUILD
     public static ServerConfig Default { get; } = new(ProductionDeployment.Core, ProductionDeployment.Core, true);
@@ -50,7 +64,14 @@ public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = fals
 
     public void Validate()
     {
-        if (BuildProfile.ProductionOnly && !Production) throw new ArgumentException("This build uses production only");
+        if (Custom)
+        {
+            if (Production || !Server.Equals(CustomServer.ParseOrigin(Server.ToString())) || Portal != Server)
+                throw new ArgumentException("A custom server is its own origin");
+            CustomOrigins.Allow(Server);
+            return;
+        }
+        if (BuildProfile.ProductionOnly && !Production) throw new ArgumentException("This build uses production or a custom server only");
         if (Production)
         {
             ProductionDeployment.RequireOrigin(Server, ProductionDeployment.Core);
@@ -61,7 +82,11 @@ public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = fals
             throw new ArgumentException("Official endpoints require explicit production selection");
     }
 
-    public string StateDirectory(string root) => Production ? Path.Combine(root, "production") : root;
+    /// <summary>The official server in <c>production</c>, a custom one in <c>custom\&lt;scheme&gt;-&lt;host&gt;-&lt;port&gt;</c>, development in the root.</summary>
+    public string StateDirectory(string root) =>
+        Production ? Path.Combine(root, "production")
+        : Custom ? Path.Combine(root, "custom", $"{Server.Scheme}-{Server.IdnHost.ToLowerInvariant()}-{Server.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
+        : root;
 }
 
 /// <summary>
@@ -104,6 +129,17 @@ public sealed class AccountSession : IDisposable
         config.Validate();
         var info = await ApiClient.InfoAsync(http, config.Server, clientHeader, cancellation).ConfigureAwait(false);
         if (config.Production) ProductionDeployment.ValidateInfo(info);
+        else if (config.Custom)
+        {
+            CustomServer.ValidateInfo(info, config.Server);
+            var pins = config.Pins ?? throw new InvalidOperationException("A custom server needs its key pins");
+            switch (pins.Check(config.Server, info.Realm, info.Trust!))
+            {
+                case TrustPin.FirstUse: pins.Pin(config.Server, info.Realm, info.Trust!); break;
+                case TrustPin.Changed: throw new TrustChangedException(config.Server, info.Realm, info.Trust!);
+            }
+            foreach (var origin in CustomServer.Origins(info, config.Server)) CustomOrigins.Allow(origin);
+        }
         else ProductionDeployment.ValidateDevelopmentInfo(info);
         var (core, gate) = ApiClient.Origins(info, config.Server);
         return (info, new ApiClient(http, core, gate, clientHeader));

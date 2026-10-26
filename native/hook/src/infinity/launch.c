@@ -55,7 +55,21 @@ enum {
     FRAME_ONLINE_SUSPEND = 0x15,
     FRAME_RELAY_CONTEXT = 0x16,
     FRAME_MODS_REPORT = 0x1b,
+    FRAME_CUSTOM_TRUST = 0x1c,
 };
+
+/* CustomTrust (0x1c, CR-L39): a custom server the player chose publishes its own launch-ticket keys
+   (/launcher/v1/info trust, pinned by the launcher per realm). The launcher sends them right before
+   the Ticket, over this already authenticated pipe; with them the ticket verifies only against these
+   keys and may name a plain http game server on any host, never an official one. Without the frame
+   nothing changes: the compiled keys and the exact official servers. */
+#define LAUNCH_CUSTOM_KEYS 8u
+static struct {
+    char kid[33];
+    size_t kid_size;
+    unsigned char key[32];
+} launch_custom_keys[LAUNCH_CUSTOM_KEYS];
+static unsigned launch_custom_count;
 
 /* Where the session stands (launch_state). */
 enum { LAUNCH_IDLE, LAUNCH_WAITING, LAUNCH_ONLINE, LAUNCH_OFFLINE, LAUNCH_LATE };
@@ -660,6 +674,42 @@ static int launch_parse_ticket(LaunchTicket *t) {
     return !r.bad && !r.left;
 }
 
+/* CustomTrust's payload: {u8 version 1, u8 count 1..8, count x {str kid (1..32 of [a-z0-9-]), [32] key}}.
+   1 and the keys kept, or 0 when it does not parse. */
+static int launch_parse_custom_trust(void) {
+    LaunchReader r = {launch_frame + 5, launch_frame_size - 1, 0};
+    unsigned version = (unsigned)launch_le(&r, 1), count = (unsigned)launch_le(&r, 1);
+    if (r.bad || version != 1u || !count || count > LAUNCH_CUSTOM_KEYS) {
+        return 0;
+    }
+    for (unsigned i = 0; i < count; ++i) {
+        size_t size;
+        const unsigned char *kid = launch_blob(&r, &size);
+        if (r.bad || !size || size > 32 || r.left < 32) {
+            return 0;
+        }
+        for (size_t k = 0; k < size; ++k) {
+            unsigned char c = kid[k];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) {
+                return 0;
+            }
+            launch_custom_keys[i].kid[k] = (char)c;
+        }
+        launch_custom_keys[i].kid[size] = 0;
+        launch_custom_keys[i].kid_size = size;
+        for (unsigned b = 0; b < 32; ++b) {
+            launch_custom_keys[i].key[b] = r.at[b];
+        }
+        r.at += 32;
+        r.left -= 32;
+    }
+    if (r.left) {
+        return 0;
+    }
+    launch_custom_count = count;
+    return 1;
+}
+
 /* ----------------------------------------------------------------- claims */
 /* The claims are one flat JSON object (fi_auth::ticket::TicketClaims: strings and integers;
    fields this hook does not know are skipped, whatever they hold). This reader walks the object
@@ -837,7 +887,6 @@ static int launch_copy(char *out, size_t cap, const char *text, size_t size) {
     return 1;
 }
 
-#ifdef FI_DEV
 static int launch_mentions_production(const char *text, size_t size) {
     static const char suffix[] = ".infinity-horizon.com";
     for (size_t i = 0; i + sizeof(suffix) - 1 <= size; ++i) {
@@ -852,6 +901,37 @@ static int launch_mentions_production(const char *text, size_t size) {
     return 0;
 }
 
+/* A custom server's game server (CR-L39, owner: "Plain http anywhere"): http:// or https://, a host of
+   [A-Za-z0-9.-], an optional :port (1-65535), an optional trailing '/', nothing else; the shape
+   azimuth_net_set_launch_server parses. */
+static int launch_custom_server_ok(const char *text, size_t length) {
+    size_t i = launch_starts(text, length, "https://") ? 8 : launch_starts(text, length, "http://") ? 7 : 0;
+    if (!i) {
+        return 0;
+    }
+    size_t host = i;
+    while (i < length && ((text[i] >= 'a' && text[i] <= 'z') || (text[i] >= 'A' && text[i] <= 'Z') ||
+                          (text[i] >= '0' && text[i] <= '9') || text[i] == '.' || text[i] == '-')) {
+        ++i;
+    }
+    if (i == host) {
+        return 0;
+    }
+    if (i < length && text[i] == ':') {
+        size_t port_start = ++i;
+        unsigned port = 0;
+        while (i < length && text[i] >= '0' && text[i] <= '9' && i - port_start < 5) {
+            port = port * 10u + (unsigned)(text[i] - '0');
+            ++i;
+        }
+        if (i == port_start || !port || port > 65535u) {
+            return 0;
+        }
+    }
+    return i == length || (i + 1 == length && text[i] == '/');
+}
+
+#ifdef FI_DEV
 /* The --dev build also takes http://<127.0.0.1 or a private LAN IPv4>:<port> (OD-34 LAN tests;
    fi_launcher_core::devnet::plain_http_url). */
 static int launch_plain_http_ok(const char *text, size_t length) {
@@ -907,14 +987,29 @@ static int launch_ticket_ok(const LaunchTicket *t) {
         launch_log("REFUSED: the ticket's claims have no kid: offline.", 0, 0, "");
         return 0;
     }
-    const AzimuthLaunchKey *key = azimuth_sign_launch_key(text, length);
-    if (!key || !key->present) {
-        launch_log(key ? "REFUSED: this build has no public key yet for the ticket's kid: offline."
-                       : "REFUSED: the ticket is signed with a key this build does not know: offline.",
-                   0, 0, "");
-        return 0;
+    const unsigned char *verify_key = 0;
+    if (launch_custom_count) {
+        /* CR-L39: only the keys the custom server published, never the compiled ones */
+        for (unsigned i = 0; i < launch_custom_count && !verify_key; ++i) {
+            size_t k = 0;
+            while (k < length && k < launch_custom_keys[i].kid_size && text[k] == launch_custom_keys[i].kid[k]) ++k;
+            if (k == length && k == launch_custom_keys[i].kid_size) verify_key = launch_custom_keys[i].key;
+        }
+        if (!verify_key) {
+            launch_log("REFUSED: the ticket is signed with a key the custom server did not publish: offline.", 0, 0, "");
+            return 0;
+        }
+    } else {
+        const AzimuthLaunchKey *key = azimuth_sign_launch_key(text, length);
+        if (!key || !key->present) {
+            launch_log(key ? "REFUSED: this build has no public key yet for the ticket's kid: offline."
+                           : "REFUSED: the ticket is signed with a key this build does not know: offline.",
+                       0, 0, "");
+            return 0;
+        }
+        verify_key = key->key;
     }
-    if (!azimuth_sign_launch_ok(t->signature, t->claims, size, key->key)) {
+    if (!azimuth_sign_launch_ok(t->signature, t->claims, size, verify_key)) {
         launch_log("REFUSED: the ticket's signature does not verify: offline.", 0, 0, "");
         return 0;
     }
@@ -943,7 +1038,16 @@ static int launch_ticket_ok(const LaunchTicket *t) {
         launch_log("REFUSED: the ticket expired (or this PC's clock is more than a day off): offline.", 0, 0, "");
         return 0;
     }
-    if (!json_text(claims, size, "server", &text, &length) ||
+    if (!json_text(claims, size, "server", &text, &length)) {
+        launch_log("REFUSED: the ticket names no game server: offline.", 0, 0, "");
+        return 0;
+    }
+    if (launch_custom_count) {
+        if (launch_mentions_production(text, length) || !launch_custom_server_ok(text, length)) {
+            launch_log("REFUSED: the custom server's ticket names an official or malformed game server: offline.", 0, 0, "");
+            return 0;
+        }
+    } else if (
 #ifdef FI_DEV
         (launch_mentions_production(text, length) || !(launch_starts(text, length, "https://") || launch_plain_http_ok(text, length)))
 #else
@@ -1201,6 +1305,23 @@ static int launch_handshake(void) {
         return 0;
     }
     unsigned type = launch_frame[4];
+    if (type == FRAME_CUSTOM_TRUST) {
+        if (!launch_parse_custom_trust()) {
+            launch_log("REFUSED: a CustomTrust frame that does not parse: offline.", 0, 0, "");
+            launch_close();
+            launch_fail(LAUNCH_WHY_PROTOCOL);
+            return 0;
+        }
+        launch_log("custom server: the ticket verifies with the server's own published keys (", 1, launch_custom_count, ").");
+        got = launch_read_frame(LAUNCH_FRAME_WAIT_MS, &error);
+        if (got <= 0) {
+            launch_log("no ticket after the custom server's keys (error ", 1, error, "): offline.");
+            launch_fail(got == -2 ? LAUNCH_WHY_PROTOCOL : LAUNCH_WHY_NO_PIPE);
+            launch_close();
+            return 0;
+        }
+        type = launch_frame[4];
+    }
     if (type == FRAME_REFUSED) {
         LaunchReader r = {launch_frame + 5, launch_frame_size - 1, 0};
         size_t length;

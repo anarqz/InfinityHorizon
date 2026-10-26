@@ -98,6 +98,32 @@ public abstract record Frame
         }
     }
 
+    /// <summary>
+    /// launcher → hook (0x1c, CR-L39), right before <see cref="Ticket"/> and only for a custom server: the launch-ticket keys its
+    /// <c>/info</c> published and the realm's pin matched. With it the hook verifies the ticket only against these keys and takes
+    /// a game server on any host (plain http too), never an official one. <c>{u8 1, u8 count 1-8, count x {str kid, [32] key}}</c>.
+    /// </summary>
+    public sealed record CustomTrust(IReadOnlyList<(string Kid, byte[] Key)> Keys) : Frame
+    {
+        public const byte Version = 1;
+        public const int MaxKeys = 8;
+
+        public override byte Type => 0x1c;
+
+        public bool Equals(CustomTrust? other) => other is not null && Keys.Count == other.Keys.Count
+            && Keys.Zip(other.Keys).All(pair => pair.First.Kid == pair.Second.Kid && pair.First.Key.AsSpan().SequenceEqual(pair.Second.Key));
+
+        public override int GetHashCode() => Keys.Count;
+
+        internal void Validate()
+        {
+            if (Keys.Count is 0 or > MaxKeys) throw new ProtocolException("Invalid custom trust");
+            foreach (var (kid, key) in Keys)
+                if (kid is not { Length: >= 1 and <= 32 } || !kid.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-') || key is not { Length: 32 })
+                    throw new ProtocolException("Invalid custom trust key");
+        }
+    }
+
     public sealed record UdpDiagnostic(byte[] Payload):Frame
     {
         public override byte Type=>0x1a;
@@ -256,6 +282,16 @@ public abstract record Frame
                     w.U8(mod.State);
                 }
                 break;
+            case CustomTrust trust:
+                trust.Validate();
+                w.U8(CustomTrust.Version);
+                w.U8((byte)trust.Keys.Count);
+                foreach (var (kid, key) in trust.Keys)
+                {
+                    w.Str(kid);
+                    w.Fixed(key, 32, "custom trust key");
+                }
+                break;
             case UdpDiagnostic diagnostic:
                 if(!UdpDiagnostic.Valid(diagnostic.Payload))throw new ProtocolException("Invalid UDP diagnostic");
                 w.Fixed(diagnostic.Payload,32,"UDP diagnostic");break;
@@ -359,10 +395,12 @@ public abstract record Frame
             0x19 => new RelayClock(BinaryPrimitives.ReadUInt64BigEndian(r.Take(8))),
             0x1a => new UdpDiagnostic(r.Take(length.Value-1).ToArray()),
             0x1b => DecodeModsReport(ref r),
+            0x1c => DecodeCustomTrust(ref r),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
         if (frame is ModsReport mods) mods.Validate();
+        if (frame is CustomTrust trust) trust.Validate();
         if(frame is RelayContext context)RelayContext.Validate(context.Payload);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
         if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
@@ -371,6 +409,16 @@ public abstract record Frame
             throw new ProtocolException("unknown online suspension reason");
         used = 4 + length.Value;
         return frame;
+    }
+
+    private static CustomTrust DecodeCustomTrust(ref WireReader r)
+    {
+        if (r.U8() != CustomTrust.Version) throw new ProtocolException("Unknown custom trust version");
+        var count = r.U8();
+        if (count is 0 or > CustomTrust.MaxKeys) throw new ProtocolException("Invalid custom trust");
+        var keys = new List<(string Kid, byte[] Key)>(count);
+        for (var i = 0; i < count; i++) keys.Add((r.Str(), r.Take(32).ToArray()));
+        return new CustomTrust(keys);
     }
 
     private static ModsReport DecodeModsReport(ref WireReader r)

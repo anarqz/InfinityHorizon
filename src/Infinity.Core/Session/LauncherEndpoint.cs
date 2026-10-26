@@ -64,6 +64,18 @@ public sealed class LauncherEndpoint
     /// build, is answered with <c>Refused</c> (ORCHESTRATOR §2.1). 0 disables the check; the
     /// supervisor passes <see cref="Launch.FirstProtocolBuild"/>.
     /// </summary>
+    /// <summary>The first hook build that takes <see cref="Frame.CustomTrust"/> (CR-L39): an older one would refuse a custom server's ticket.</summary>
+    public const uint CustomTrustHookBuild = 89;
+
+    private readonly Frame.CustomTrust? _customTrust;
+
+    /// <param name="customTrust">A custom server's pinned launch-ticket keys (CR-L39), sent right before the Ticket; null for the official server.</param>
+    public LauncherEndpoint(Admission admission, uint minBuild, Frame.CustomTrust? customTrust)
+        : this(admission, customTrust is null ? minBuild : Math.Max(minBuild, CustomTrustHookBuild))
+    {
+        _customTrust = customTrust;
+    }
+
     public LauncherEndpoint(Admission admission, uint minBuild = 0)
     {
         _admission = admission ?? throw new ArgumentNullException(nameof(admission));
@@ -129,7 +141,7 @@ public sealed class LauncherEndpoint
                 Admission.Refused r => new Frame.Refused(r.Reason),
                 _ => throw new InvalidOperationException(),
             };
-            return ([reply], connected);
+            return (reply is Frame.Ticket && _customTrust is { } trust ? [trust, reply] : [reply], connected);
         }
         if (!Greeted)
         {
