@@ -36,9 +36,9 @@ public static class ErrorCodes
     public const string AuthProviderNotAllowed = "AUTH.PROVIDER_NOT_ALLOWED";
     public const string AccountsBanned = "ACCOUNTS.BANNED";
     public const string AccountsRegistrationDisabled = "ACCOUNTS.REGISTRATION_DISABLED";
-    /// <summary><c>local</c> sign-in: unknown e-mail and wrong password alike (CR-L37).</summary>
+    /// <summary><c>local</c> sign-in: unknown e-mail and wrong password alike (CR-L38).</summary>
     public const string AuthInvalidCredentials = "AUTH.INVALID_CREDENTIALS";
-    /// <summary><c>local</c> sign-up: the address already has a credential on this instance (CR-L37).</summary>
+    /// <summary><c>local</c> sign-up: the address already has a credential on this instance (CR-L38).</summary>
     public const string AccountsEmailTaken = "ACCOUNTS.EMAIL_TAKEN";
     public const string SharingTooManyDevices = "SHARING.TOO_MANY_DEVICES";
     public const string AccountsNameUnavailable = "ACCOUNTS.NAME_UNAVAILABLE";
@@ -236,7 +236,7 @@ public sealed partial class ApiClient
     public Task<SignInResult> ExchangeIdTokenAsync(IdTokenGrant grant, string idempotencyKey, CancellationToken cancellation = default) =>
         SendAsync<SignInResult>(HttpMethod.Post, Core, "/launcher/v1/auth/token", grant, access: null, idempotencyKey, cancellation);
 
-    /// <summary><c>POST /auth/sign-up</c> on a <c>local</c> instance (CR-L37). The caller mints the key; the launcher mints one per press of Create, so a second press
+    /// <summary><c>POST /auth/sign-up</c> on a <c>local</c> instance (CR-L38). The caller mints the key; the launcher mints one per press of Create, so a second press
     /// after a lost answer reads <c>ACCOUNTS.EMAIL_TAKEN</c> ("sign in instead").</summary>
     public Task<LocalIdToken> LocalSignUpAsync(LocalCredentials credentials, string idempotencyKey, CancellationToken cancellation = default) =>
         SendAsync<LocalIdToken>(HttpMethod.Post, Core, "/launcher/v1/auth/sign-up", credentials, access: null, idempotencyKey, cancellation);

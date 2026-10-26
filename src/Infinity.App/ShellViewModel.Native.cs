@@ -16,7 +16,7 @@ public sealed partial class ShellViewModel
     public bool CanCreateOnlineAccount => CanStartOnlineAccount && _registrationEnabled;
     public bool ShowRegistrationDisabled => !_registrationEnabled;
     private bool _localIdentity;
-    /// <summary>CR-L37: a <c>local</c> instance sends no reset mail; its operator resets a forgotten password.</summary>
+    /// <summary>CR-L38: a <c>local</c> instance sends no reset mail; its operator resets a forgotten password.</summary>
     public bool ShowForgotPassword => !_localIdentity;
     public bool ShowOperatorReset => _localIdentity;
 
@@ -67,7 +67,7 @@ public sealed partial class ShellViewModel
         Message = S["native.creating"];
         if (idp.IsLocal)
         {
-            // CR-L37: no e-mail to confirm; the new credential signs in right away.
+            // CR-L38: no e-mail to confirm; the new credential signs in right away.
             var device = DeviceIdentity.Load(_stateDirectory, "windows");
             await CompleteNativeAsync(await _nativeFlow.SignUpLocalAsync(idp, api, info, device, LoginEmail.Trim(), password, cancellation), cancellation);
             return;

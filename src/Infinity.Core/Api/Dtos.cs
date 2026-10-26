@@ -33,7 +33,7 @@ public sealed record ServerInfo(
 public sealed record TrustKeys(IReadOnlyList<string> LaunchTicket, IReadOnlyList<string> RelayGrant);
 
 /// <summary>
-/// The native sign-in's identity backend (OD-43, CR-L37): <c>kind</c> <c>firebase</c> (absent from servers before CR-S48) carries
+/// The native sign-in's identity backend (OD-43, CR-L38): <c>kind</c> <c>firebase</c> (absent from servers before CR-S48) carries
 /// Identity Platform's <c>apiKey</c>/<c>projectId</c> and, on local stacks only, <c>emulatorUrl</c>; <c>local</c> carries none of
 /// them and the instance's own <c>/launcher/v1/auth/sign-up</c> and <c>/auth/sign-in</c> mint the ID token.
 /// </summary>

@@ -39,7 +39,7 @@ public sealed class NativeSignInFlow : IDisposable
         Remember(generation, email, password, cancellation);
     }
 
-    /// <summary>CR-L37: a <c>local</c> instance has no e-mail to confirm, so the sign-up's own ID token goes straight to the exchange.</summary>
+    /// <summary>CR-L38: a <c>local</c> instance has no e-mail to confirm, so the sign-up's own ID token goes straight to the exchange.</summary>
     public async Task<(AccountSession? Session, PendingAccount? Pending)> SignUpLocalAsync(
         IdentityPlatform idp, ApiClient api, ServerInfo info, Device device, string email, string password, CancellationToken cancellation = default)
     {
