@@ -154,7 +154,7 @@
   "server.keys_reject": "Manter as chaves antigas",
   "server.keys_accepted": "Novas chaves aceitas. Entre de novo.",
   "server.keys_rejected": "As novas chaves não foram aceitas. O Infinity não se conecta a este servidor até que elas coincidam.",
-  "native.local_bad_credentials":"E-mail ou senha incorretos. Se sua conta veio para cá sem senha (antes você entrava com o Google), use “Esqueceu a senha?” para definir uma.",
+  "native.check_code":"Enviamos um código de 6 dígitos para {email}. Digite-o abaixo para confirmar o endereço (o link do mesmo e-mail também funciona).","native.code_label":"Código do e-mail (6 dígitos)","native.code_submit":"Confirmar","native.code_invalid":"Esse código não está certo, ou foi substituído por um e-mail mais novo. Digite o código do e-mail mais recente ou peça um novo.","native.code_limited":"Muitas tentativas com códigos. Use o link do e-mail ou redefina a senha em “Esqueceu a senha?”.","native.local_bad_credentials":"E-mail ou senha incorretos. Se sua conta veio para cá sem senha (antes você entrava com o Google), use “Esqueceu a senha?” para definir uma.",
   "native.local_email_exists": "Este e-mail já tem um login neste servidor. Entre com ele.",
   "native.local_weak_password": "Escolha uma senha de 8 a 128 caracteres.",
   "native.failed": "Não foi possível entrar.",

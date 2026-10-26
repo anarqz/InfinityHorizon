@@ -66,6 +66,22 @@ public sealed class NativeSignInFlow : IDisposable
         return ExchangeAsync(idp, api, info, device, email, password, generation, cancellation);
     }
 
+    /// <summary>
+    /// CR-S53 follow-up (owner: "a 6-digit code in the launcher"): a fresh sign-in with the password kept for this screen, the mail's
+    /// code, then the exchange with the confirmed token it returns: no page and no "I've confirmed".
+    /// </summary>
+    public async Task<(AccountSession? Session, PendingAccount? Pending)> ConfirmCodeAsync(
+        IdentityPlatform idp, ApiClient api, ServerInfo info, Device device, string code, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(idp);
+        var (email, password, generation) = Credentials();
+        var idToken = await idp.SignInAsync(email, password, cancellation).ConfigureAwait(false);
+        Check(generation, cancellation);
+        var confirmed = await idp.ConfirmCodeAsync(idToken, code, cancellation).ConfigureAwait(false);
+        Check(generation, cancellation);
+        return await ExchangeTokenAsync(idp, api, info, device, confirmed, email, password, generation, cancellation).ConfigureAwait(false);
+    }
+
     public async Task ResendAsync(IdentityPlatform idp, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(idp);

@@ -33,6 +33,7 @@ public static class ErrorCodes
     public const string AuthRateLimited = "AUTH.RATE_LIMITED";
     public const string AuthIdTokenInvalid = "AUTH.ID_TOKEN_INVALID";
     public const string AuthEmailUnverified = "AUTH.EMAIL_UNVERIFIED";
+    public const string AuthConfirmationCodeInvalid = "AUTH.CONFIRMATION_CODE_INVALID";
     public const string AuthProviderNotAllowed = "AUTH.PROVIDER_NOT_ALLOWED";
     public const string AccountsBanned = "ACCOUNTS.BANNED";
     public const string AccountsRegistrationDisabled = "ACCOUNTS.REGISTRATION_DISABLED";
@@ -249,6 +250,10 @@ public sealed partial class ApiClient
     /// <summary>CR-S53 <c>POST /launcher/v1/auth/confirmation</c>: the confirmation link mailed again (202; <c>AUTH.RATE_LIMITED</c>).</summary>
     public async Task LocalConfirmationAsync(LocalConfirmationRequest request, string language, CancellationToken cancellation = default) =>
         await SendAsync<JsonElement?>(HttpMethod.Post, Core, "/launcher/v1/auth/confirmation", request, access: null, idempotencyKey: null, cancellation, language).ConfigureAwait(false);
+
+    /// <summary>CR-S53 <c>POST /launcher/v1/auth/confirmation/code</c>: the mail's code confirms the address; a confirmed ID token back.</summary>
+    public Task<LocalIdToken> LocalConfirmationCodeAsync(LocalConfirmationCode request, CancellationToken cancellation = default) =>
+        SendAsync<LocalIdToken>(HttpMethod.Post, Core, "/launcher/v1/auth/confirmation/code", request, access: null, idempotencyKey: null, cancellation);
 
     /// <summary>CR-S53 <c>POST /launcher/v1/auth/password-reset</c>: 202 whatever the address (a known one gets a password link).</summary>
     public async Task LocalPasswordResetAsync(LocalPasswordResetRequest request, string language, CancellationToken cancellation = default) =>

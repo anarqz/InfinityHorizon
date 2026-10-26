@@ -147,6 +147,20 @@ public sealed class IdentityPlatform
             ? local.LocalConfirmationAsync(new LocalConfirmationRequest(idToken), _locale, cancellation)
             : PostAsync("accounts:sendOobCode", new { requestType = "VERIFY_EMAIL", idToken }, cancellation);
 
+    /// <summary><c>local</c> only (CR-S53): the mail's 6-digit code with a current sign-in token → a confirmed ID token for the exchange.</summary>
+    public async Task<string> ConfirmCodeAsync(string idToken, string code, CancellationToken cancellation = default)
+    {
+        var local = _local ?? throw new InvalidOperationException("Identity Platform confirms an address by its own link");
+        return Opaque(await local.LocalConfirmationCodeAsync(new LocalConfirmationCode(idToken, code), cancellation).ConfigureAwait(false));
+    }
+
+    /// <summary>The code as typed, spaces and dashes dropped: six ASCII digits, or null.</summary>
+    public static string? NormalizeCode(string? typed)
+    {
+        var digits = new string((typed ?? string.Empty).Where(c => c is not (' ' or '-')).ToArray());
+        return digits.Length == 6 && digits.All(char.IsAsciiDigit) ? digits : null;
+    }
+
     /// <summary>
     /// <c>accounts:sendOobCode</c> PASSWORD_RESET. Every Identity Platform answer, EMAIL_NOT_FOUND
     /// included, reads as sent (the screen never tells whether an e-mail has an account); only a
