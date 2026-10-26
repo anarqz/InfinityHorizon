@@ -35,6 +35,22 @@ public enum SaveStep
     Refused,
 }
 
+/// <summary>The player's answer to a save conflict (owner 2026-10-26, "Cloud or PC, per the contract"; SAVES_API.md §4.4/§5).</summary>
+public enum ConflictChoice
+{
+    /// <summary>Nothing changes: the launch stops, as before.</summary>
+    NotNow,
+
+    /// <summary>The cloud's revision is installed; this PC's revisions are archived first.</summary>
+    KeepCloud,
+
+    /// <summary>This PC's newest sealed revision is committed on top of the cloud's (<c>resolve_keep_local</c>); the cloud keeps its history.</summary>
+    KeepThisPc,
+}
+
+/// <summary>What the player sees of a conflict: the cloud's head and this PC's newest sealed revision (each number null when unknown).</summary>
+public sealed record SaveConflict(SaveHead Cloud, int? LocalLevel, int? LocalCredits, DateTime? LocalSavedUtc);
+
 /// <summary>A save step that stops the launch: the game is not started over an unknown state.</summary>
 public sealed class SaveBlockedException(string code, string message) : Exception(message)
 {
@@ -69,6 +85,9 @@ public sealed class SessionSaves
         _xuid = xuid;
         _report = report ?? throw new ArgumentNullException(nameof(report));
     }
+
+    /// <summary>Asks the player how to settle a conflict; null keeps the old rule (the launch stops).</summary>
+    public Func<SaveConflict, CancellationToken, Task<ConflictChoice>>? ResolveConflict { get; init; }
 
     /// <summary>The session holds the profile's line (a lease and a head).</summary>
     public bool HasLine => _line is not null;
@@ -131,6 +150,25 @@ public sealed class SessionSaves
         {
             throw new SaveBlockedException(failure.Code, failure.Message);
         }
+        // SAVES_API.md §5: a renewed line (save.lapsedSince) takes the cloud's head whatever the decision; this PC's save stays only
+        // as a backup (archived by the install), never uploaded or kept
+        if (head.LapsedSince is not null && decision.Decision is SyncDecision.Upload or SyncDecision.FirstUpload or SyncDecision.Conflict)
+        {
+            await InstallCloudAsync(access, head, decision.LocalContent, "lapsed", cancellation).ConfigureAwait(false);
+            return;
+        }
+        if (decision.Decision is SyncDecision.Conflict && ResolveConflict is { } ask)
+        {
+            switch (await ask(LocalConflict(head), cancellation).ConfigureAwait(false))
+            {
+                case ConflictChoice.KeepCloud:
+                    await InstallCloudAsync(access, head, decision.LocalContent, "conflict", cancellation).ConfigureAwait(false);
+                    return;
+                case ConflictChoice.KeepThisPc:
+                    await KeepThisPcAsync(access, head, cancellation).ConfigureAwait(false);
+                    return;
+            }
+        }
         switch (decision.Decision)
         {
             case SyncDecision.Download or SyncDecision.FastForward:
@@ -152,6 +190,42 @@ public sealed class SessionSaves
                 // Upload / FirstUpload: this PC is ahead; the game plays on it and the exit sends it.
                 break;
         }
+    }
+
+    /// <summary>The cloud's head installed as the newest local revision; every revision it shadows is archived under <paramref name="label"/>.</summary>
+    private async Task InstallCloudAsync(string access, SaveHead head, string? localContent, string label, CancellationToken cancellation)
+    {
+        _report(SaveStep.Downloading, null);
+        var outcome = await _saves.InstallHeadAsync(access, _savesRoot, _xuid, head, localContent, label, cancellation).ConfigureAwait(false);
+        if (outcome.Failure is { } installFailure)
+        {
+            throw new SaveBlockedException(installFailure.Code, installFailure.Message);
+        }
+        _report(SaveStep.Installed, head.Revision.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>The player kept this PC's save: its newest sealed revision goes on top of the cloud's head (<c>resolve_keep_local</c>, CAS on it).</summary>
+    private async Task KeepThisPcAsync(string access, SaveHead head, CancellationToken cancellation)
+    {
+        var newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, _xuid))
+            ?? throw new SaveBlockedException("SAVES.LOCAL_UNREADABLE", "this PC has no complete save to keep");
+        _report(SaveStep.Uploading, null);
+        var outcome = await _saves.UploadAsync(access, _xuid, _line!.Lease, newest, head.Revision, CommitKinds.ResolveKeepLocal, cancellation).ConfigureAwait(false);
+        if (outcome.Failure is { } commitFailure)
+        {
+            throw new SaveBlockedException(commitFailure.Code, commitFailure.Message);
+        }
+        _report(SaveStep.Uploaded, outcome.Committed?.Revision.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>The conflict as the player sees it: the cloud's head and this PC's newest sealed revision (level, credits, when).</summary>
+    private SaveConflict LocalConflict(SaveHead head)
+    {
+        var folder = AzimuthSaves.FolderFor(_xuid);
+        SaveProfile? local = null;
+        try { local = AzimuthSaves.List(_savesRoot).FirstOrDefault(s => string.Equals(s.Folder, folder, StringComparison.OrdinalIgnoreCase)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        return new SaveConflict(head, local?.Level, local?.Credits, local?.LastPlayedUtc);
     }
 
     /// <summary>After the game exited: the newest sealed revision, sent. The revision the cloud now has, or null.</summary>

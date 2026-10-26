@@ -380,6 +380,25 @@
                   </StackPanel>
                 </StackPanel>
           </Border>
+          <!-- Owner 2026-10-26: this PC and the cloud both moved on; the player picks (SAVES_API §4.4/§5). -->
+          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSaveConflict, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <TextBlock Text="{Binding S[saves.conflict_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
+              <TextBlock Text="{Binding S[saves.conflict_body]}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
+              <TextBlock Text="{Binding S[saves.conflict_cloud]}" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding SaveConflictCloudText}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,2,0,10" />
+              <TextBlock Text="{Binding S[saves.conflict_local]}" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding SaveConflictLocalText}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,2,0,16" />
+              <WrapPanel>
+                <Button Content="{Binding S[saves.conflict_keep_cloud]}" Click="OnConflictKeepCloud" Style="{StaticResource AccentButtonStyle}" Padding="16,6" Margin="0,0,10,8" />
+                <Button Content="{Binding S[saves.conflict_keep_local]}" Click="OnConflictKeepLocal" Padding="16,6" Margin="0,0,10,8" />
+                <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnConflictNotNow" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+              </WrapPanel>
+              <TextBlock Text="{Binding S[saves.conflict_backup]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityFaint}" />
+            </StackPanel>
+          </Border>
+          </Grid>
           <!-- CR-L39: a custom server's pinned keys changed; this covers every screen until the player answers. -->
           <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowTrustChange, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="480" VerticalAlignment="Center" HorizontalAlignment="Center">

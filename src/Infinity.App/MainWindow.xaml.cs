@@ -205,6 +205,13 @@ public partial class MainWindow : Window
 
     private void OnTrustAccept(object sender, RoutedEventArgs e) => _vm.AcceptTrustChange();
 
+    // Owner 2026-10-26: the save conflict's three answers.
+    private void OnConflictKeepCloud(object sender, RoutedEventArgs e) => _vm.AnswerSaveConflict(Infinity.Core.Saves.ConflictChoice.KeepCloud);
+
+    private void OnConflictKeepLocal(object sender, RoutedEventArgs e) => _vm.AnswerSaveConflict(Infinity.Core.Saves.ConflictChoice.KeepThisPc);
+
+    private void OnConflictNotNow(object sender, RoutedEventArgs e) => _vm.AnswerSaveConflict(Infinity.Core.Saves.ConflictChoice.NotNow);
+
     private void OnTrustReject(object sender, RoutedEventArgs e) => _vm.RejectTrustChange();
 
     /// <summary>The launcher starts again on the saved server: a new process, then this one exits (its state folder is another).</summary>

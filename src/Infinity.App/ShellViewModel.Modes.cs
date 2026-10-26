@@ -160,7 +160,67 @@ public sealed partial class ShellViewModel
             return null;
         }
         return new SessionSaves(client.Saves, client.Api, ct => session.Tokens.AccessAsync(ct), AzimuthSaves.SavesRoot(_install.Root), xuid,
-            (step, detail) => _ui.Post(_ => RenderSave(step, detail), null));
+            (step, detail) => _ui.Post(_ => RenderSave(step, detail), null))
+        {
+            ResolveConflict = AskSaveConflictAsync,
+        };
+    }
+
+    private SaveConflict? _saveConflict;
+    private TaskCompletionSource<ConflictChoice>? _saveConflictAnswer;
+
+    /// <summary>
+    /// Owner 2026-10-26 ("Cloud or PC, per the contract"): this PC and the cloud both moved on; the player picks. Nothing heartbeats
+    /// the lease before the game starts, so the question lasts <see cref="SaveConflictWait"/> (well inside the lease); after it, closing
+    /// it or cancelling the Play, the answer is "not now".
+    /// </summary>
+    private static readonly TimeSpan SaveConflictWait = TimeSpan.FromMinutes(3);
+
+    private Task<ConflictChoice> AskSaveConflictAsync(SaveConflict conflict, CancellationToken cancellation)
+    {
+        var answer = new TaskCompletionSource<ConflictChoice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        cancellation.Register(() => answer.TrySetResult(ConflictChoice.NotNow));
+        _ = Task.Delay(SaveConflictWait, cancellation).ContinueWith(_ =>
+        {
+            if (answer.TrySetResult(ConflictChoice.NotNow))
+                _ui.Post(__ => { if (ReferenceEquals(_saveConflictAnswer, answer)) { _saveConflict = null; _saveConflictAnswer = null; Message = S["saves.conflict_timeout"]; Changed(string.Empty); } }, null);
+        }, TaskScheduler.Default);
+        _ui.Post(_ =>
+        {
+            _saveConflictAnswer?.TrySetResult(ConflictChoice.NotNow);
+            _saveConflict = conflict;
+            _saveConflictAnswer = answer;
+            Log($"save: conflict on revision {conflict.Cloud.Revision}; asking the player");
+            Changed(string.Empty);
+        }, null);
+        return answer.Task;
+    }
+
+    public bool ShowSaveConflict => _saveConflict is not null;
+
+    public string SaveConflictCloudText => _saveConflict is not { } c ? string.Empty : SaveSideText(
+        c.Cloud.Summary?.Level is { } level ? (int?)level : null, c.Cloud.Summary?.Credits is { } credits ? (int?)credits : null,
+        DateTime.TryParse(c.Cloud.CommittedAt, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var when) ? when : null);
+
+    public string SaveConflictLocalText => _saveConflict is not { } c ? string.Empty : SaveSideText(c.LocalLevel, c.LocalCredits, c.LocalSavedUtc);
+
+    private string SaveSideText(int? level, int? credits, DateTime? when)
+    {
+        var parts = new List<string>();
+        if (level is { } l) parts.Add(S.Format("saves.level", ("level", l.ToString(CultureInfo.CurrentCulture))));
+        if (credits is { } cr) parts.Add(S.Format("saves.credits", ("credits", cr.ToString("N0", CultureInfo.CurrentCulture))));
+        if (when is { } w) parts.Add(S.Format("saves.last_played", ("when", w.ToLocalTime().ToString("g", CultureInfo.CurrentCulture))));
+        return parts.Count == 0 ? S["saves.conflict_unknown"] : string.Join(" · ", parts);
+    }
+
+    public void AnswerSaveConflict(ConflictChoice choice)
+    {
+        if (_saveConflictAnswer is not { } answer) return;
+        Log("save: conflict answered " + choice);
+        _saveConflict = null;
+        _saveConflictAnswer = null;
+        answer.TrySetResult(choice);
+        Changed(string.Empty);
     }
 
     private void RenderSave(SaveStep step, string? detail)
