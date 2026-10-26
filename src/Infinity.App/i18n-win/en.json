@@ -154,7 +154,7 @@
   "server.keys_reject": "Keep the old keys",
   "server.keys_accepted": "New keys accepted. Sign in again.",
   "server.keys_rejected": "The new keys were not accepted. Infinity will not connect to this server until they match.",
-  "native.local_reset":"Forgot your password? Ask the server operator to reset it.",
+  "native.local_bad_credentials":"E-mail or password is incorrect. If your account moved here without a password (you signed in with Google before), use “Forgot password?” to set one.",
   "native.local_email_exists": "This e-mail already has a login on this server. Sign in instead.",
   "native.local_weak_password": "Choose a password of 8 to 128 characters.",
   "native.failed": "Sign-in failed.",

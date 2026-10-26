@@ -246,6 +246,14 @@ public sealed partial class ApiClient
         SendAsync<LocalIdToken>(HttpMethod.Post, Core, "/launcher/v1/auth/sign-in", credentials, access: null, idempotencyKey: null, cancellation);
 
     /// <summary><c>POST /auth/password</c> on a <c>local</c> instance → 204; the server revokes every refresh family of the account.</summary>
+    /// <summary>CR-S53 <c>POST /launcher/v1/auth/confirmation</c>: the confirmation link mailed again (202; <c>AUTH.RATE_LIMITED</c>).</summary>
+    public async Task LocalConfirmationAsync(LocalConfirmationRequest request, string language, CancellationToken cancellation = default) =>
+        await SendAsync<JsonElement?>(HttpMethod.Post, Core, "/launcher/v1/auth/confirmation", request, access: null, idempotencyKey: null, cancellation, language).ConfigureAwait(false);
+
+    /// <summary>CR-S53 <c>POST /launcher/v1/auth/password-reset</c>: 202 whatever the address (a known one gets a password link).</summary>
+    public async Task LocalPasswordResetAsync(LocalPasswordResetRequest request, string language, CancellationToken cancellation = default) =>
+        await SendAsync<JsonElement?>(HttpMethod.Post, Core, "/launcher/v1/auth/password-reset", request, access: null, idempotencyKey: null, cancellation, language).ConfigureAwait(false);
+
     public async Task LocalChangePasswordAsync(LocalPasswordChange change, CancellationToken cancellation = default) =>
         await SendAsync<JsonElement?>(HttpMethod.Post, Core, "/launcher/v1/auth/password", change, access: null, idempotencyKey: null, cancellation).ConfigureAwait(false);
 
@@ -341,10 +349,12 @@ public sealed partial class ApiClient
     private Task<T> SendAsync<T>(HttpMethod method, Uri origin, string path, object? body, string? access, bool idempotent, CancellationToken cancellation) =>
         SendAsync<T>(method, origin, path, body, access, idempotent ? Guid.CreateVersion7().ToString() : null, cancellation);
 
-    private async Task<T> SendAsync<T>(HttpMethod method, Uri origin, string path, object? body, string? access, string? idempotencyKey, CancellationToken cancellation)
+    private async Task<T> SendAsync<T>(HttpMethod method, Uri origin, string path, object? body, string? access, string? idempotencyKey, CancellationToken cancellation,
+        string? language = null)
     {
         using var request = new HttpRequestMessage(method, new Uri(origin, path));
         request.Headers.TryAddWithoutValidation("X-Fi-Client", _client);
+        if (language is not null) request.Headers.TryAddWithoutValidation("Accept-Language", language); // the mail's language (CR-S53)
         if (idempotencyKey is not null)
         {
             request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);

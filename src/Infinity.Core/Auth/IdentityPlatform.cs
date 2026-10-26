@@ -74,7 +74,7 @@ public sealed class IdentityPlatform
 
     private Uri? _tokenRecipient;
 
-    /// <summary>A <c>local</c> instance: no verification or reset mail, and the password can be changed in the launcher.</summary>
+    /// <summary>A <c>local</c> instance: its own confirmation and reset mail (CR-S53), and the password can be changed in the launcher.</summary>
     public bool IsLocal => _local is not null;
 
     /// <param name="emulatorUrl"><c>idp.emulatorUrl</c> from <c>/launcher/v1/info</c> (local stacks only): plain http only on loopback or a private LAN address.</param>
@@ -116,7 +116,7 @@ public sealed class IdentityPlatform
 
     /// <summary>
     /// <c>accounts:signUp</c>, then the verification e-mail; NativeSignInFlow continues after confirmation without retyping (OD-74),
-    /// so the answer is null. <c>local</c>: <c>/auth/sign-up</c>, whose ID token is the answer (no e-mail to confirm).
+    /// so the answer is null. <c>local</c>: <c>/auth/sign-up</c>, whose ID token is the answer (the exchange tells whether its address still needs confirming, CR-S53).
     /// </summary>
     public async Task<string?> SignUpAsync(string email, string password, CancellationToken cancellation = default)
     {
@@ -138,20 +138,29 @@ public sealed class IdentityPlatform
         await Local(async () => { await local.LocalChangePasswordAsync(new LocalPasswordChange(idToken, newPassword), cancellation).ConfigureAwait(false); return true; }).ConfigureAwait(false);
     }
 
-    /// <summary><c>accounts:sendOobCode</c> VERIFY_EMAIL ("send the confirmation e-mail again", <c>AUTH.EMAIL_UNVERIFIED</c>).</summary>
+    /// <summary>
+    /// <c>accounts:sendOobCode</c> VERIFY_EMAIL ("send the confirmation e-mail again", <c>AUTH.EMAIL_UNVERIFIED</c>); <c>local</c>
+    /// (CR-S53): <c>/auth/confirmation</c> with the same fresh ID token (<c>AUTH.RATE_LIMITED</c> stays an <see cref="ApiException"/>).
+    /// </summary>
     public Task SendVerificationAsync(string idToken, CancellationToken cancellation = default) =>
-        _local is not null
-            ? throw new InvalidOperationException("A local instance sends no e-mail")
+        _local is { } local
+            ? local.LocalConfirmationAsync(new LocalConfirmationRequest(idToken), _locale, cancellation)
             : PostAsync("accounts:sendOobCode", new { requestType = "VERIFY_EMAIL", idToken }, cancellation);
 
     /// <summary>
     /// <c>accounts:sendOobCode</c> PASSWORD_RESET. Every Identity Platform answer, EMAIL_NOT_FOUND
     /// included, reads as sent (the screen never tells whether an e-mail has an account); only a
-    /// network failure throws.
+    /// network failure throws. <c>local</c> (CR-S53): <c>/auth/password-reset</c>, 202 whatever the address; a malformed
+    /// address and <c>AUTH.RATE_LIMITED</c> stay errors. The link opens the server's own page, never the launcher.
     /// </summary>
     public async Task SendPasswordResetAsync(string email, CancellationToken cancellation = default)
     {
-        if (_local is not null) throw new InvalidOperationException("A local instance sends no e-mail");
+        if (_local is { } local)
+        {
+            await Local(async () => { await local.LocalPasswordResetAsync(new LocalPasswordResetRequest(email), _locale, cancellation).ConfigureAwait(false); return true; })
+                .ConfigureAwait(false);
+            return;
+        }
         try
         {
             await PostAsync("accounts:sendOobCode", new { requestType = "PASSWORD_RESET", email }, cancellation).ConfigureAwait(false);

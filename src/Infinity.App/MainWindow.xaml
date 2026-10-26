@@ -432,11 +432,8 @@
                   <TextBox x:Name="EmailBox" Text="{Binding LoginEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" IsEnabled="{Binding CanStartOnlineAccount}" />
                   <TextBlock Text="{Binding S[native.password]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
                   <PasswordBox x:Name="PasswordBox" Margin="0,6,0,4" IsEnabled="{Binding CanStartOnlineAccount}" KeyDown="OnPasswordKey" IsVisibleChanged="OnPasswordVisibility" />
-                  <Button Content="{Binding S[native.forgot]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,0,0,16" Click="OnForgot" IsEnabled="{Binding CanStartOnlineAccount}"
-                          Visibility="{Binding ShowForgotPassword, Converter={StaticResource Visible}}" />
-                  <!-- CR-L38: a local instance sends no reset mail. -->
-                  <TextBlock Text="{Binding S[native.local_reset]}" Margin="0,4,0,16" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}"
-                             Visibility="{Binding ShowOperatorReset, Converter={StaticResource Visible}}" />
+                  <!-- CR-S53: a local instance mails the password link too (it opens the server's own page). -->
+                  <Button Content="{Binding S[native.forgot]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,0,0,16" Click="OnForgot" IsEnabled="{Binding CanStartOnlineAccount}" />
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <Button Content="{Binding S[native.sign_in]}" Click="OnNativeSignIn" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
