@@ -707,7 +707,11 @@
                 <Button Content="{Binding S[supervisor.quit_button]}" Margin="0,0,14,0" Click="OnQuitGame"
                         Visibility="{Binding GameStarted, Converter={StaticResource Visible}}" />
                 <Button Content="{Binding S[saves.use_pc_save]}" Style="{StaticResource LinkButton}" Margin="0"
-                        Click="OnOpenSavePicker" IsEnabled="{Binding CanPickSave}" />
+                        Click="OnOpenSavePicker" IsEnabled="{Binding CanPickSave}"
+                        Visibility="{Binding ShowHardcoreSaveNote, Converter={StaticResource Hidden}}" />
+                <!-- B2: a Hardcore career always starts fresh; no save from this PC is offered to it. -->
+                <TextBlock Text="{Binding S[saves.hardcore_fresh]}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
+                           VerticalAlignment="Center" Visibility="{Binding ShowHardcoreSaveNote, Converter={StaticResource Visible}}" />
               </WrapPanel>
             </StackPanel>
             <ContentControl x:Name="NewsColumnBelow" Grid.Row="1" MaxWidth="600" HorizontalAlignment="Left" Margin="0,24,0,8" Focusable="False"
