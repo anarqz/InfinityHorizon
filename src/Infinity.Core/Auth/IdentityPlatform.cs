@@ -33,7 +33,7 @@ public sealed class IdentityPlatformException(IdpProblem problem, string code) :
 /// or a file. No Identity Platform refresh token is kept: the ID token is exchanged right away
 /// (<c>grantType: id_token</c>) and dropped.
 /// <para>
-/// A <c>local</c> instance (CR-L37, development builds only until M5) is its own identity provider: the password goes to its
+/// A <c>local</c> instance (CR-L38; release builds too since CR-L39) is its own identity provider: the password goes to its
 /// <c>/launcher/v1/auth/sign-up</c> and <c>/auth/sign-in</c> instead, the opaque ID token they answer is exchanged the same way,
 /// and it sends no mail (no verification, no reset: the server's operator resets a password).
 /// </para>

@@ -414,7 +414,7 @@
                   <PasswordBox x:Name="PasswordBox" Margin="0,6,0,4" IsEnabled="{Binding CanStartOnlineAccount}" KeyDown="OnPasswordKey" IsVisibleChanged="OnPasswordVisibility" />
                   <Button Content="{Binding S[native.forgot]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,0,0,16" Click="OnForgot" IsEnabled="{Binding CanStartOnlineAccount}"
                           Visibility="{Binding ShowForgotPassword, Converter={StaticResource Visible}}" />
-                  <!-- CR-L37: a local instance sends no reset mail. -->
+                  <!-- CR-L38: a local instance sends no reset mail. -->
                   <TextBlock Text="{Binding S[native.local_reset]}" Margin="0,4,0,16" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}"
                              Visibility="{Binding ShowOperatorReset, Converter={StaticResource Visible}}" />
                   <Grid>
