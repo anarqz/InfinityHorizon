@@ -69,6 +69,8 @@
   "offline.play_offline_link": "Play offline",
   "offline.sign_in_needed": "Signing in is necessary for online play",
   "connection.direct_failed": "The direct connection could not be established. Try again or check Connection details.",
+  "launch.ticket_refused": "Online is off for this session: the game did not accept the launcher's session ticket. You play offline on this profile's own save; Azimuth's own save is untouched.",
+  "launch.late": "Online is off for this session: the game started before the launcher's session reached it. You play offline on this profile's own save; Azimuth's own save is untouched.",
   "worlds.public_warning": "Public lobby\nBugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
   "worlds.player_left": "Player left the lobby\n{player} left your lobby.",
   "worlds.player_joined": "Player joined the lobby\n{player} joined your lobby.",

@@ -59,6 +59,9 @@ public static class HookEvents
         var level = (byte)(detail[0] - '0');
         var text = detail[2..].Trim();
         if(text=="connection.direct_failed")text=strings?[text] ?? "The direct connection could not be established. Try again or check Connection details.";
+        // OD122-L4: the hook refused the start (it plays offline on the profile's own save, never Azimuth's)
+        if (text == "launch.ticket_refused") text = strings?[text] ?? "Online is off for this session: the game did not accept the launcher's session ticket. You play offline on this profile's own save; Azimuth's own save is untouched.";
+        if (text == "launch.late") text = strings?[text] ?? "Online is off for this session: the game started before the launcher's session reached it. You play offline on this profile's own save; Azimuth's own save is untouched.";
         if (text.Length == 0) return null;
         return Overlay.OverlayNotices.Create(level, text, strings);
     }
