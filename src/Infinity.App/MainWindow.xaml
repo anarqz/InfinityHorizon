@@ -601,6 +601,9 @@
                     <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" />
                   </DockPanel>
                   <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="11" Margin="0,6,0,0" Foreground="{StaticResource InfinityFaint}" />
+                  <!-- Owner 2026-10-26: the name is Azimuth's own player; a Noob profile adopts that career, a Hardcore one needs another name. -->
+                  <TextBlock Text="{Binding AzimuthNameWarning}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding ShowAzimuthNameWarning, Converter={StaticResource Visible}}" />
                   <!-- OD-52, OD-60: Hardcore (an Infinity Supporter's, a new career the game seeds) or Noob (the offline save). -->
                   <StackPanel Margin="0,14,0,0" Visibility="{Binding CanChooseHardcore, Converter={StaticResource Visible}}">
                     <RadioButton Content="{Binding S[signin.form_hardcore]}" IsChecked="{Binding NewHardcore}" GroupName="NewMode" FontWeight="Bold" />

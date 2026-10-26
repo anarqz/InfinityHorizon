@@ -28,6 +28,7 @@ public sealed partial class ShellViewModel
             _newHardcore = value;
             Changed(nameof(NewHardcore));
             Changed(nameof(NewNoob));
+            Changed(nameof(AzimuthNameWarning));
         }
     }
 

@@ -219,6 +219,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             _newName = value;
             Changed();
+            Changed(nameof(ShowAzimuthNameWarning));
+            Changed(nameof(AzimuthNameWarning));
         }
     }
 

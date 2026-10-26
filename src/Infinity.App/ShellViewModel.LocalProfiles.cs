@@ -46,12 +46,23 @@ public sealed partial class ShellViewModel
 
     private string LocalLine(LocalProfile local) => S[local.LocalOnly ? "offline.profile_local" : local.NotOnAccount ? "offline.profile_not_on_account" : "offline.profile_cached"];
 
+    /// <summary>
+    /// The new profile's name is Azimuth's own player (<see cref="AzimuthProfile"/>, owner 2026-10-26 "Adopt the Azimuth career"): a Noob
+    /// profile then starts from that career (a copy; the original stays), and a Hardcore one, which starts fresh, needs another name.
+    /// </summary>
+    public bool ShowAzimuthNameWarning => _install is { } install && ProfileName.IsValid(NewName.Trim())
+        && AzimuthProfile.SameName(AzimuthProfile.PlayerName(install.Root), NewName);
+
+    public string AzimuthNameWarning => S[NewHardcore ? "profiles.azimuth_name_hardcore" : "profiles.azimuth_name_noob"];
+
     /// <summary>Creates a profile on this PC; signed in, it is uploaded at once through the same idempotent upsert as the panel.</summary>
     private async Task CreateLocalProfileAsync(string game)
     {
         // CR-L36: an offline identity never takes a save folder that exists, so the game's folder must be known before one is chosen.
         if (_install is null) { Message = S["play.setup_needed"]; return; }
         var hardcore = NewHardcore;
+        var adoptsAzimuth = ShowAzimuthNameWarning;
+        if (hardcore && adoptsAzimuth) { Message = S["profiles.azimuth_name_hardcore"]; return; }
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
@@ -75,7 +86,28 @@ public sealed partial class ShellViewModel
         }
         FillProfiles();
         if (!hardcore && LocalProfiles.Read().FirstOrDefault(p => p.Id == created.Id) is { } stored)
+        {
+            // the name says it: this is the Azimuth career, copied into the new profile's folder without asking again
+            if (adoptsAzimuth && await AdoptAzimuthCareerAsync(AsRow(stored))) return;
             OfferSaves(AsRow(stored)); // a Hardcore career starts empty (OD-60), never from a local save
+        }
+    }
+
+    /// <summary>
+    /// Copies Azimuth's own career (<c>User_9000000000000</c>, newest sealed revision) into <paramref name="target"/>'s folder through
+    /// <see cref="AzimuthSaves.Clone"/>: the original is never written and every revision it shadows is archived first. False when
+    /// there is no such career to adopt (the picker then opens as usual).
+    /// </summary>
+    private async Task<bool> AdoptAzimuthCareerAsync(Profile target)
+    {
+        if (_install is null || ParseXuid(target) is not { } xuid) return false;
+        SaveProfile? azimuth;
+        try { azimuth = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root), AzimuthSaves.FolderFor(xuid)).FirstOrDefault(s => s.IsOffline); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Azimuth career not read: " + e.Message); return false; }
+        if (azimuth is null) { Log("saves: no Azimuth career to adopt"); return false; }
+        _saveTarget = target;
+        await PickSaveAsync(Describe(azimuth));
+        return true;
     }
 
     /// <summary>The account plane's profile refusals (and the local store's, which use the same codes), in the player's words.</summary>
