@@ -179,7 +179,13 @@ public sealed partial class ShellViewModel
     private Task<ConflictChoice> AskSaveConflictAsync(SaveConflict conflict, CancellationToken cancellation)
     {
         var answer = new TaskCompletionSource<ConflictChoice>(TaskCreationOptions.RunContinuationsAsynchronously);
-        cancellation.Register(() => answer.TrySetResult(ConflictChoice.NotNow));
+        // a cancelled Play is "not now", and the question leaves the screen with it
+        var registration = cancellation.Register(() =>
+        {
+            if (answer.TrySetResult(ConflictChoice.NotNow))
+                _ui.Post(_ => { if (ReferenceEquals(_saveConflictAnswer, answer)) { _saveConflict = null; _saveConflictAnswer = null; Changed(string.Empty); } }, null);
+        });
+        _ = answer.Task.ContinueWith(_ => registration.Dispose(), TaskScheduler.Default);
         _ = Task.Delay(SaveConflictWait, cancellation).ContinueWith(_ =>
         {
             if (answer.TrySetResult(ConflictChoice.NotNow))
@@ -197,6 +203,8 @@ public sealed partial class ShellViewModel
     }
 
     public bool ShowSaveConflict => _saveConflict is not null;
+
+    public bool CanKeepCloudSave => _saveConflict?.CanKeepCloud == true;
 
     public string SaveConflictCloudText => _saveConflict is not { } c ? string.Empty : SaveSideText(
         c.Cloud.Summary?.Level is { } level ? (int?)level : null, c.Cloud.Summary?.Credits is { } credits ? (int?)credits : null,
@@ -229,6 +237,7 @@ public sealed partial class ShellViewModel
         var text = step switch
         {
             SaveStep.Seeding => S["saves.seeding"],
+            SaveStep.FreshStart => S["saves.fresh_start"],
             SaveStep.Downloading => S["saves.downloading"],
             SaveStep.Installed => S.Format("saves.installed", ("rev", detail ?? "?")),
             SaveStep.Uploading => S["saves.uploading"],
