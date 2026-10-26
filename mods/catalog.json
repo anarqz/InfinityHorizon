@@ -488,20 +488,20 @@
     },
     {
       "id": "nitrosystem",
-      "version": "1.1.0-infinity.1",
+      "version": "1.1.0-infinity.2",
       "name": {
         "en": "Nitro System · Infinity",
         "pt-BR": "Sistema de Nitro · Infinity"
       },
       "description": {
-        "en": "NitroSystem adapted to the Infinity native mod API, with manifest-driven files/settings and startup SQL registered by the mod.",
-        "pt-BR": "NitroSystem adaptado à API nativa de mods Infinity, com arquivos e opções definidos pelo manifesto e SQL de inicialização registrado pelo mod."
+        "en": "qiangqiang101's NitroSystem, built unchanged and started by the Infinity mod runtime through an FH2 Mod Platform adapter. Its game files come from the original release.",
+        "pt-BR": "O NitroSystem de qiangqiang101, compilado sem alterações e iniciado pelo runtime de mods do Infinity por um adaptador da FH2 Mod Platform. Os arquivos do jogo vêm da release original."
       },
       "author": "qiangqiang101; Infinity edition by anarqz",
       "download": {
-        "url": "https://github.com/anarqz/NitroSystem/releases/download/v1.1.0-infinity.1/NitroSystem-Infinity-1.1.0-infinity.1.zip",
-        "sha256": "232b4636007bb69887dc454830f009bb98548a056050b1884e0d70c56815dd46",
-        "bytes": 107951
+        "url": "https://github.com/anarqz/InfinityMods/releases/download/v2026.10.25/nitrosystem-1.1.0-infinity.2.zip",
+        "sha256": "29cb725b615979d2ad6135b9ec128d0962c7e64d7c423f2aba9cedad89bdf540",
+        "bytes": 113092
       },
       "additionalDownloads": {
         "upstream-assets": {
@@ -517,7 +517,7 @@
         "schemaVersion": 1,
         "kind": "mod",
         "license": "MIT",
-        "homepage": "https://github.com/anarqz/NitroSystem",
+        "homepage": "https://github.com/anarqz/InfinityMods",
         "runtime": "infinity-native",
         "review": {
           "status": "reviewed",
@@ -853,7 +853,7 @@
           "azimuth": [
             {
               "source": "FnFNitro-1.1.0/azimuth-windows/FnFNitro/nos_boost.wav",
-              "destination": "FnFNitro/nos_boost.wav",
+              "destination": "infinity-mods/NitroSystem/FnFNitro/nos_boost.wav",
               "sha256": "8eaf24cc2714bda855a2f8596b6a69a88cd10b5318276075ff7a65c61d0cb3df",
               "bytes": 1440102,
               "role": "asset",
@@ -862,7 +862,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/azimuth-windows/FnFNitro/nos_stop.wav",
-              "destination": "FnFNitro/nos_stop.wav",
+              "destination": "infinity-mods/NitroSystem/FnFNitro/nos_stop.wav",
               "sha256": "332f3b7ff32be6d5b8ff34cc9b6848be42c38977f81ea7e0eaf3b6d172169df0",
               "bytes": 264270,
               "role": "asset",
@@ -872,32 +872,48 @@
             {
               "source": "FnFNitro.dll",
               "destination": "infinity-mods/NitroSystem/FnFNitro.dll",
-              "sha256": "3c0fb2a20ecc31c1b8da743413b1feeba446fe31a0fcb21c2f768d81ef286d74",
-              "bytes": 199680,
               "role": "binary",
-              "mode": "add-or-replace"
+              "mode": "add-or-replace",
+              "sha256": "847ce88fc0f6608c838aa1302e994fac0b61af60a334d4d5cd0d49f14cb930a4",
+              "bytes": 217600
             },
             {
               "source": "LICENSE.txt",
               "destination": "infinity-mods/NitroSystem/LICENSE.txt",
-              "sha256": "742109f80236c34e340712843a408c0f9fadf78339a833ce2de2742b9e221080",
-              "bytes": 1071,
               "role": "license",
-              "mode": "add-or-replace"
+              "mode": "add-or-replace",
+              "sha256": "742109f80236c34e340712843a408c0f9fadf78339a833ce2de2742b9e221080",
+              "bytes": 1071
             },
             {
-              "source": "LICENSE-Infinity-SDK.txt",
-              "destination": "infinity-mods/NitroSystem/LICENSE-Infinity-SDK.txt",
-              "sha256": "319eeb899417ea76cb7dbc1bd6b95461dbb02f678ab4930bb182e9fff566df16",
-              "bytes": 1090,
+              "source": "LICENSE-FH2-Mod-Platform.txt",
+              "destination": "infinity-mods/NitroSystem/LICENSE-FH2-Mod-Platform.txt",
               "role": "license",
-              "mode": "add-or-replace"
+              "mode": "add-or-replace",
+              "sha256": "592160090948f630b488f0766d5dda6c0345396dfb2f98cceeed54bea448dcf9",
+              "bytes": 1067
+            },
+            {
+              "source": "LICENSE-Infinity.txt",
+              "destination": "infinity-mods/NitroSystem/LICENSE-Infinity.txt",
+              "role": "license",
+              "mode": "add-or-replace",
+              "sha256": "e94defea699019542970e4b668288b7bc2152293a3c7bf51064ed3a3b51db1b3",
+              "bytes": 1170
+            },
+            {
+              "source": "NOTICE.md",
+              "destination": "infinity-mods/NitroSystem/NOTICE.md",
+              "role": "license",
+              "mode": "add-or-replace",
+              "sha256": "02fc3dbbd3b83ee6298085697da4451b6ff2e302415596e1ca37176162dda1d4",
+              "bytes": 953
             }
           ]
         },
         "config": {
           "root": "azimuth",
-          "path": "infinity-mods/NitroSystem/FnFNitro.ini",
+          "path": "infinity-mods/NitroSystem/fh2-mods/FnFNitro.ini",
           "format": "ini",
           "create": "defaults",
           "preserveOnDisable": true,
@@ -1194,8 +1210,8 @@
           "binary": "infinity-mods/NitroSystem/FnFNitro.dll"
         },
         "source": {
-          "repository": "https://github.com/anarqz/NitroSystem",
-          "commit": "5ada9e841bebeca5d408a42cad062afde7d2128f"
+          "repository": "https://github.com/anarqz/InfinityMods",
+          "commit": "96cbe639789821425f8a6abf5b71f31e95c13c8f"
         },
         "multiplayer": {
           "schemaVersion": 1,
@@ -1226,6 +1242,10 @@
           {
             "root": "azimuth",
             "path": "d3dcompiler_47.dll"
+          },
+          {
+            "root": "azimuth",
+            "path": "fh2-mods/FnFNitro.dll"
           }
         ]
       }
@@ -1871,6 +1891,152 @@
           "match": "exact",
           "settings": []
         }
+      }
+    },
+    {
+      "id": "discord-rpc",
+      "version": "1.1.0-infinity.1",
+      "name": {
+        "en": "Discord RPC · Infinity",
+        "pt-BR": "Discord RPC · Infinity"
+      },
+      "description": {
+        "en": "Shows \"Playing Forza Horizon 2\" and the play time on your Discord profile. Talks only to the Discord app on your PC.",
+        "pt-BR": "Mostra \"Jogando Forza Horizon 2\" e o tempo de jogo no seu perfil do Discord. Conversa só com o app do Discord no seu PC."
+      },
+      "author": "Bullet4fun; Infinity edition by anarqz",
+      "download": {
+        "url": "https://github.com/anarqz/InfinityMods/releases/download/v2026.10.25/discord-rpc-1.1.0-infinity.1.zip",
+        "sha256": "58875adc85ea34a41ea3023f4e34d4824a91b7f8185a0d621f2f14e328e780ab",
+        "bytes": 21153
+      },
+      "requires": [
+        "infinity-mod-runtime"
+      ],
+      "install": {
+        "schemaVersion": 1,
+        "kind": "mod",
+        "license": "GPL-3.0-or-later",
+        "homepage": "https://github.com/anarqz/InfinityMods",
+        "runtime": "infinity-native",
+        "review": {
+          "status": "reviewed",
+          "blockers": []
+        },
+        "compatibility": {
+          "azimuthVersions": [
+            "0.9.10"
+          ],
+          "gameBuilds": [],
+          "verification": "unverified"
+        },
+        "dependencies": [
+          {
+            "id": "extraoptions",
+            "versions": [
+              "0.2.98"
+            ],
+            "enabled": true,
+            "settings": [
+              {
+                "optionId": "global-enabled",
+                "value": true
+              }
+            ]
+          }
+        ],
+        "conflicts": [],
+        "files": {
+          "game": [],
+          "azimuth": [
+            {
+              "source": "FH2_DiscordRPC.dll",
+              "destination": "infinity-mods/DiscordRPC/FH2_DiscordRPC.dll",
+              "role": "binary",
+              "mode": "add-or-replace",
+              "sha256": "6d938213de5c36bbc765ad2934aa276ca51f7d9c208fd0616ba923eb364bf155",
+              "bytes": 16384
+            },
+            {
+              "source": "LICENSE.txt",
+              "destination": "infinity-mods/DiscordRPC/LICENSE.txt",
+              "role": "license",
+              "mode": "add-or-replace",
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+              "bytes": 35149
+            },
+            {
+              "source": "LICENSE-Infinity.txt",
+              "destination": "infinity-mods/DiscordRPC/LICENSE-Infinity.txt",
+              "role": "license",
+              "mode": "add-or-replace",
+              "sha256": "a75d09dd91bb571c9adf31afe3792ec33ad0f8f4af4d27328fe85314270addc5",
+              "bytes": 1167
+            },
+            {
+              "source": "NOTICE.md",
+              "destination": "infinity-mods/DiscordRPC/NOTICE.md",
+              "role": "license",
+              "mode": "add-or-replace",
+              "sha256": "5e56e3e6d2e411819d87f6c1af2b829aa7f97eab4190cb83c37535d99b40ecd9",
+              "bytes": 795
+            }
+          ]
+        },
+        "config": {
+          "root": "azimuth",
+          "path": "infinity-mods/DiscordRPC/FH2_DiscordRPC.ini",
+          "format": "ini",
+          "create": "defaults",
+          "preserveOnDisable": true,
+          "options": [
+            {
+              "id": "enabled",
+              "section": "Infinity",
+              "key": "Enabled",
+              "label": {
+                "en": "Show on Discord",
+                "pt-BR": "Mostrar no Discord"
+              },
+              "description": {
+                "en": "Applied on the next game launch.",
+                "pt-BR": "Aplicado na próxima inicialização do jogo."
+              },
+              "advanced": false,
+              "apply": "next-launch",
+              "type": "boolean",
+              "default": true,
+              "encoding": "0/1"
+            }
+          ]
+        },
+        "runtimeOutputs": [],
+        "excludedArchiveEntries": [],
+        "databaseMigrations": [],
+        "nativeHost": {
+          "abi": 1,
+          "runtime": "infinity_mod.dll",
+          "entryPoint": "InfinityModInitializeV1",
+          "binary": "infinity-mods/DiscordRPC/FH2_DiscordRPC.dll"
+        },
+        "source": {
+          "repository": "https://github.com/anarqz/InfinityMods",
+          "commit": "96cbe639789821425f8a6abf5b71f31e95c13c8f"
+        },
+        "multiplayer": {
+          "schemaVersion": 1,
+          "impact": "cosmetic",
+          "compatibilityId": "infinity-discord-rpc",
+          "revision": 1,
+          "match": "exact",
+          "settings": []
+        },
+        "incompatibleFiles": [
+          {
+            "root": "azimuth",
+            "path": "data/bin/mods/FH2_DiscordRPC.dll"
+          }
+        ]
       }
     }
   ]
