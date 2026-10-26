@@ -21,6 +21,8 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     public string UpdateSummary { get; init; } = "";
     public ModManifest? Next { get; init; }
     public bool CanUninstall => Installed && !Drift;
+    /// <summary>Not installed, its files kept on this PC by the uninstall (installing again needs no download); Purge deletes them.</summary>
+    public bool Held { get; init; }
     /// <summary>OD-114: a custom, unofficial mod from the player's custom folder (shown with its badge).</summary>
     public bool Custom => Manifest.IsCustom;
     public string CustomBadge { get; init; } = "";
@@ -31,7 +33,11 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
 }
 
 /// <summary>What the background refresh learned about one manifest (M10: no disk access while building cards).</summary>
-internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Installed, bool CanAdopt, string? Blocker, ModManifest? Next, bool Confirmed = false);
+internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Installed, bool CanAdopt, string? Blocker, ModManifest? Next, bool Confirmed = false)
+{
+    /// <summary>Not installed, with its files kept on this PC by its uninstall.</summary>
+    public bool Held { get; init; }
+}
 
 public sealed partial class ShellViewModel
 {
@@ -75,6 +81,7 @@ public sealed partial class ShellViewModel
     public bool SelectedModCanDisableKeeping => ModsIdle && _selectedMod is { Drift: true, Enabled: true };
     public bool SelectedModSettingsIssues => ModsIdle && _selectedMod is { SettingsIssues: true };
     public bool SelectedModCanUninstall => ModsIdle && _selectedMod is { CanUninstall: true } && !ModRecoveryRequired;
+    public bool SelectedModCanPurge => ModsIdle && _selectedMod is { Held: true, Installed: false } && !ModRecoveryRequired;
     public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true, NeedsConfirmation: false };
     /// <summary>OD-114: the confirmation an unreviewed custom mod needs before its first install or enable (and each new digest).</summary>
     public bool SelectedModNeedsConfirmation => _selectedMod is { Custom: true, NeedsConfirmation: true };
@@ -458,13 +465,13 @@ public sealed partial class ShellViewModel
                 facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest, Confirmed(manifest)));
                 continue;
             }
-            var adopt = false;
-            if (installed is null) try { adopt = manager.CanAdopt(manifest); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
+            var adopt = false; var held = false;
+            if (installed is null) try { adopt = manager.CanAdopt(manifest); held = manager.Held(manifest.Id) is not null; } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
             facts.Add(new(manifest, installed, adopt, installed?.Problem ?? Blocker(() =>
             {
                 if (installed is { Enabled: true }) manager.CheckDependents(manifest.Id);
                 else if (installed is null || installed.Drift.Count == 0) { manager.CheckDependencies(manifest); manager.CheckDatabaseBase(manifest); }
-            }), null, Confirmed(manifest)));
+            }), null, Confirmed(manifest)) { Held = held });
         }
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
             facts.Add(new(installed.Manifest!, installed, false, Blocker(() => { if (installed.Enabled) manager.CheckDependents(installed.Id); else manager.CheckDependencies(installed.Manifest!); }), null, Confirmed(installed.Manifest!)));
@@ -583,6 +590,7 @@ public sealed partial class ShellViewModel
                 mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version, badge)
             {
                 Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true, Dependency = dependency,
+                Held = installed is null && fact.Held,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
                 UpdateAvailable = fact.Next is not null, Next = fact.Next, UpdateSummary = fact.Next is { } upcoming ? UpdateSummary(mod, upcoming) : "",
                 // OD-116: every mod of a player-chosen catalog says so, and a native one that it runs code with the game.
@@ -710,6 +718,7 @@ public sealed partial class ShellViewModel
     public Task DisableModKeepingFilesAsync() => SelectedModOperation((m, mod) => m.DisableKeepingCurrentFiles(mod), S["mods.disabled_kept"]);
     public Task RepairModSettingsAsync() => SelectedModOperation((m, mod) => m.RepairSettings(mod), S["mods.repaired"]);
     public Task UninstallModAsync() => SelectedModOperation((m, mod) => m.Uninstall(mod.Id), S["mods.uninstalled"]);
+    public Task PurgeModAsync() => SelectedModOperation((m, mod) => m.Purge(mod.Id), S["mods.purged"]);
 
     private Task ManagerOperation(Action<ManagedModFiles> operation, string done) =>
         ModManagerFactory() is { } factory ? RunModOperationAsync(() => Task.Run(() => operation(factory())), done) : Task.CompletedTask;

@@ -77,8 +77,32 @@ public sealed partial class ManagedModFiles
         if (receipt.Id != id || receipt.Files is null || receipt.ManifestHash is null) throw new ModException("invalid receipt", ModErrors.Recovery);
         ValidateGameRoot(receipt);
         foreach (var file in receipt.Files) _ = Target(file.Root, file.Path);
-        return receipt;
+        // An enabled mod's file recorded as already there with the mod's own bytes (an earlier install the launcher lost track of,
+        // such as a moved game folder) is the mod's: disabling and uninstalling remove it (its bytes stay in the backup).
+        if (!receipt.Enabled || !receipt.Files.Any(f => !f.Preserve && f.Before is not null && f.Before == f.After)) return receipt;
+        ModManifest manifest;
+        try { manifest = SnapshotFor(receipt); }
+        catch (ModException) { return receipt; } // without the exact manifest nothing is taken as the mod's
+        return receipt.Files.Any(f => OwnCopy(f, manifest))
+            ? receipt with { Files = receipt.Files.Select(f => OwnCopy(f, manifest) ? f with { Before = null } : f).ToList() } : receipt;
     }
+
+    /// <summary>
+    /// A receipt entry whose original is exactly the bytes the manifest declares for that path: the mod's own copy, not the player's
+    /// (an original accepted back to the player's own bytes differs from the manifest's and stays the player's).
+    /// </summary>
+    private static bool OwnCopy(ManagedModFile file, ModManifest manifest) =>
+        !file.Preserve && file.Before is not null && file.Before == file.After
+        && manifest.Files.FirstOrDefault(m => m.Root == file.Root && string.Equals(m.Destination, file.Path, StringComparison.OrdinalIgnoreCase)) is { } mapped
+        && Original(mapped, file.Before) is null;
+
+    /// <summary>
+    /// What a mapped file's original is recorded as: a file already holding exactly the manifest's bytes is the mod's own copy left by
+    /// an install the launcher lost track of (owner, 2026-10-26), so it has no original and leaves with the mod. Settings, seeded files
+    /// and binaries (adopted explicitly, never inferred) keep what was there.
+    /// </summary>
+    private static string? Original(ManifestFile file, string? current) =>
+        current is not null && current == file.Hash && file.Role is not ("config" or "binary") && file.Mode != "seed" ? null : current;
 
     /// <summary>The receipt of exactly this manifest; another installed version is an update to review.</summary>
     public ManagedModReceipt? Receipt(ModManifest manifest)
@@ -141,6 +165,14 @@ public sealed partial class ManagedModFiles
         if (!update) CheckProfile(manifest, hardcore);
         if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported);
         if (manifest.IsCustom) throw new ModException("custom mods install from their local folder", ModErrors.Unsupported);
+        if (!update && Held(manifest.Id) is { } held && held.ManifestHash == manifest.Digest)
+        {
+            // the files kept on this PC by its uninstall: nothing is downloaded (every object is checked against its digest as it is read)
+            progress?.Report("verify");
+            await Task.Run(() => InstallFrom(manifest, () => FromHeld(manifest) ?? throw new ModException("held files missing", ModErrors.Digest), progress, update, hardcore),
+                cancellation).ConfigureAwait(false);
+            return;
+        }
         var packages = new Dictionary<string, byte[]>();
         foreach (var (name, spec) in PackageSpecs(manifest))
         {
@@ -237,11 +269,12 @@ public sealed partial class ManagedModFiles
         {
             var target = Target(file.Root, file.Destination);
             var before = Current(target);
-            if (file.Mode == "seed" && before is not null && file.Role != "config") continue;
+            if (file.Mode == "seed" && before is not null && file.Role != "config") { Store(source()); continue; } // held for a later install
             if (file.Mode == "add" && before is not null || file.Mode == "replace" && before is null) throw new ModException("file precondition failed", ModErrors.Conflict);
             if (before == file.Hash && file.Role == "binary") throw new ModException("existing installation needs explicit adoption", ModErrors.Conflict);
             if (before is not null) Store(File.ReadAllBytes(target));
             var bytes = source();
+            Store(bytes); // the mod's own bytes, kept for a later install after an uninstall (held)
             var afterBytes = bytes;
             if (file.Role == "config" && manifest.ConfigPath == file.Destination)
             {
@@ -250,7 +283,7 @@ public sealed partial class ManagedModFiles
             }
             var after = Store(afterBytes);
             var preserve = file.Role == "config" || file.Mode == "seed"; // seeded player files are the player's once written
-            owned.Add(new(file.Root, file.Destination, before, after, preserve));
+            owned.Add(new(file.Root, file.Destination, Original(file, before), after, preserve));
             changes.Add(new(file.Root, file.Destination, before, after));
         }
         AddConfig(manifest, owned, changes);
@@ -258,6 +291,7 @@ public sealed partial class ManagedModFiles
         SaveSnapshot(manifest);
         Execute(new(manifest.Id + ".receipt.json", new(manifest.Id, manifest.Digest, true, owned,
             owned.Any(f => f.Root == "game") ? _game : null, _azimuth, null, CreatedDirectories(owned)), changes), progress);
+        if (File.Exists(HeldPath(manifest.Id))) RemoveFile(HeldPath(manifest.Id)); // installed again: the receipt names its files now
         ReconcileWineOverrides();
     }
 
@@ -292,6 +326,7 @@ public sealed partial class ManagedModFiles
             var current = Current(target);
             if (old.Remove(key, out var previous) && (previous.Preserve || file.Mode == "seed"))
             {
+                Store(source()); // held for a later install, like every mapped file
                 owned.Add(previous with { Preserve = true }); // settings and seeded player files stay as they are
                 continue;
             }
@@ -305,7 +340,8 @@ public sealed partial class ManagedModFiles
             if (file.Mode == "seed" && current is not null && file.Role != "config") continue;
             if (file.Mode == "add" && current is not null && installed.Enabled || file.Mode == "replace" && current is null) throw new ModException("file precondition failed", ModErrors.Conflict);
             if (current is not null) Store(File.ReadAllBytes(target));
-            owned.Add(new(file.Root, file.Destination, current, after, file.Role == "config" || file.Mode == "seed"));
+            // a disabled mod writes nothing now: what is there stays its original until it is enabled (then a copy of its own bytes is its own)
+            owned.Add(new(file.Root, file.Destination, installed.Enabled ? Original(file, current) : current, after, file.Role == "config" || file.Mode == "seed"));
             if (installed.Enabled && current != after) changes.Add(new(file.Root, file.Destination, current, after));
         }
         foreach (var removed in old.Values)
@@ -408,7 +444,8 @@ public sealed partial class ManagedModFiles
 
     /// <summary>
     /// Disables (when enabled) and forgets the installation: the receipt is archived, created empty
-    /// folders are removed, the settings file and backups stay (pruned later). Refuses drift.
+    /// folders are removed, the settings file and backups stay (pruned later), and the mod's own files stay on this PC (held) for a
+    /// later install until <see cref="Purge"/>. Refuses drift.
     /// </summary>
     public void Uninstall(string id, IProgress<string>? progress = null)
     {
@@ -421,10 +458,28 @@ public sealed partial class ManagedModFiles
             var changes = receipt.Files.Where(f => !f.Preserve && f.Before != f.After).Select(f => new ModFileChange(f.Root, f.Path, f.After, f.Before)).ToList();
             Execute(new(id + ".receipt.json", receipt with { Enabled = false }, changes), progress);
         }
+        else if (OwnCopiesInPlace(receipt) is { Count: > 0 } copies)
+        {
+            // a disabled mod whose own copies stayed in place (recorded as already there): they leave with it
+            Execute(new(id + ".receipt.json", receipt with { Files = receipt.Files.Select(f => copies.Contains(f) ? f with { Before = null } : f).ToList() },
+                copies.Select(f => new ModFileChange(f.Root, f.Path, f.After, null)).ToList()), progress);
+        }
+        // the game no longer has the mod's files; this PC keeps them for a later install until the player purges them
+        try { Hold(SnapshotFor(receipt)); }
+        catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException) { } // nothing to reuse; the uninstall still completes
         var archive = Safe(BackupRoot, "uninstalled-" + id + "-" + Guid.NewGuid().ToString("N") + ".json");
         File.Move(ReceiptPath(id), archive);
         RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
         ReconcileWineOverrides();
+    }
+
+    /// <summary>A disabled receipt's own copies (by its manifest) still in the game with the mod's bytes.</summary>
+    private List<ManagedModFile> OwnCopiesInPlace(ManagedModReceipt receipt)
+    {
+        ModManifest manifest;
+        try { manifest = SnapshotFor(receipt); }
+        catch (ModException) { return []; }
+        return receipt.Files.Where(f => OwnCopy(f, manifest) && Current(Target(f.Root, f.Path)) == f.After).ToList();
     }
 
     private ManagedModReceipt Rebased(ManagedModReceipt receipt, IReadOnlyList<ModDrift> drift)
