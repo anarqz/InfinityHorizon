@@ -20,6 +20,9 @@ public static class Launch
     /// <summary>The launcher's own exe, reserved for the hook-side respawn (ORCHESTRATOR §1.6, CR-L19).</summary>
     public const string EnvLauncherExe = "FI_LAUNCHER_EXE";
 
+    /// <summary>The profile's own offline identity (OD-118 Play offline; B1: also an online start's fallback): XUID in decimal, play name.</summary>
+    public const string EnvOfflineXuid = "FI_OFFLINE_XUID", EnvOfflineGamertag = "FI_OFFLINE_GAMERTAG";
+
     public const ushort ProtocolVersion = 1;
 
     public const string PipePrefix = @"\\.\pipe\ForzaInfinity-";

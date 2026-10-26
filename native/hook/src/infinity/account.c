@@ -493,6 +493,59 @@ static int account_set_player_name(void) {
     return 1;
 }
 
+/* B1: a launcher session never lets the game run as Azimuth's own player (User_9000000000000): that
+   folder is another career, and a profile's progress written there is lost to the profile. When no
+   profile identity can be set, the game is ended before it reads a save, with this exit code, which
+   the launcher explains (LaunchPlan.cs ExitDisposition.IdentityRefused). */
+#define ACCOUNT_EXIT_IDENTITY 0x46490005u
+
+static void account_refuse(const char *why) {
+    log_append("ACCOUNT: REFUSED: ");
+    log_append(why);
+    log_append("; the game is closed before it reads a save (never Azimuth's own profile in a launcher session).\r\n");
+    TerminateProcess(GetCurrentProcess(), ACCOUNT_EXIT_IDENTITY);
+    ExitProcess(ACCOUNT_EXIT_IDENTITY);
+}
+
+/* B1: the profile's own offline identity (FI_OFFLINE_XUID / FI_OFFLINE_GAMERTAG, offline_identity.c),
+   which the launcher also names on an online start: when the online identity was not set (ticket
+   refused, handshake late or lost), the game plays offline on the profile's own save. 1 when set. */
+static int account_fallback_identity(void) {
+    wchar_t xuid[24], tag[24];
+    DWORD nx = GetEnvironmentVariableW(L"FI_OFFLINE_XUID", xuid, ARRAY_COUNT(xuid));
+    DWORD nt = GetEnvironmentVariableW(L"FI_OFFLINE_GAMERTAG", tag, ARRAY_COUNT(tag));
+    unsigned long long value = 0;
+    if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value)) {
+        return 0;
+    }
+    memory_copy(account_xuid, xuid, (wide_len(xuid) + 1) * sizeof(wchar_t));
+    memory_copy(account_gamertag, tag, (wide_len(tag) + 1) * sizeof(wchar_t));
+    account_active = 1;
+    char ascii[32];
+    wide_to_ascii(account_gamertag, ascii, sizeof(ascii));
+    account_log("the online identity was not set: playing offline on the profile's own save as ", ascii);
+    return 1;
+}
+
+/* Once per process, from the first identity request of a launcher session that has none: the
+   profile's offline identity, or the game ends. Other callers wait for the first to decide. */
+static volatile LONG account_fallback_state; /* 0 not tried, 1 deciding, 2 decided */
+static void account_require_identity(void) {
+    if (account_active || !fi_launch_protocol()) {
+        return;
+    }
+    if (InterlockedCompareExchange(&account_fallback_state, 1, 0) == 0) {
+        if (!account_fallback_identity()) {
+            account_refuse("the launcher's session set no identity and named no profile to fall back to");
+        }
+        InterlockedExchange(&account_fallback_state, 2);
+        return;
+    }
+    while (account_fallback_state != 2) {
+        Sleep(5);
+    }
+}
+
 static void account_wait(void) {
     /* a launcher start waits for the pipe handshake only (launch.c, at most 5 s): then the session
        is offline for good (an identity read now cannot change later), unless it went online in
@@ -534,6 +587,7 @@ void azimuth_account_launch_identity(const char *xuid, const char *gamertag, int
 static HRESULT account_get_xuid(void *self, void **out) {
     fi_game_callback_from("the game's first identity request");
     account_wait();
+    account_require_identity();
     if (!account_active || !out) {
         return account_xuid_original(self, out);
     }
@@ -547,6 +601,7 @@ static HRESULT account_get_xuid(void *self, void **out) {
 static HRESULT account_get_name(int slot, void *self, void **out) {
     fi_game_callback_from("the game's first identity request");
     account_wait();
+    account_require_identity();
     if (!account_active || !out) {
         return account_info_original[slot](self, out);
     }
@@ -800,9 +855,10 @@ static void account_apply_launch(const wchar_t *directory) {
     account_sleep = kernel ? (SleepFn)(uintptr_t)GetProcAddress(kernel, "Sleep") : 0;
     account_offsets = azimuth_offsets(account_host);
     if (!account_sleep || !account_offsets) {
-        log_append("ACCOUNT: unsupported host; the launcher's session cannot set the identity: offline.\r\n");
-        return;
+        account_refuse("unsupported host: the launcher's session cannot set the profile's identity");
     }
+    /* B1: wait for the handshake from the very first getter call, so none can see "no identity" early */
+    account_ready = 0;
     int patched = account_patch_slot(account_offsets->account_xuid_slot, account_offsets->account_xuid_target,
                                      account_get_xuid, &account_xuid_original);
     for (unsigned i = 0; i < 3; ++i) {
@@ -810,9 +866,7 @@ static void account_apply_launch(const wchar_t *directory) {
                                       account_info_hooks[i], &account_info_original[i]);
     }
     if (patched != 4) {
-        log_append("ACCOUNT: LocalUser getters not where expected; the launcher's session cannot set the identity: "
-                   "offline.\r\n");
-        return;
+        account_refuse("LocalUser getters not where expected: the launcher's session cannot set the profile's identity");
     }
 
     account_ready = 0;
@@ -823,7 +877,8 @@ static void account_apply_launch(const wchar_t *directory) {
 
 /* OD-118 (P1): the launcher's Play offline (FI_LAUNCH=v1;offline) names the chosen local profile
    (offline_identity.c); the getters answer with it at once, so its save is its own User_<hex xuid>.
-   No account file, server, cloud or update thread. Absent or invalid: Azimuth's own offline profile. */
+   No account file, server, cloud or update thread. Absent (a manual start, not this launcher's):
+   Azimuth's own offline profile; invalid or not applicable: the game ends (B1, account_refuse). */
 static int account_apply_offline(void) {
     wchar_t xuid[24], tag[24];
     DWORD nx = GetEnvironmentVariableW(L"FI_OFFLINE_XUID", xuid, ARRAY_COUNT(xuid));
@@ -832,15 +887,14 @@ static int account_apply_offline(void) {
     if (!nx && !nt) {
         return 0;
     }
+    /* B1: the launcher named a profile; its save is never swapped for Azimuth's own */
     if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value)) {
-        log_append("ACCOUNT: the launcher's offline profile is not valid; playing Azimuth's offline profile.\r\n");
-        return 0;
+        account_refuse("the launcher's offline profile is not valid");
     }
     account_host = (unsigned char *)GetModuleHandleW(NULL);
     account_offsets = azimuth_offsets(account_host);
     if (!account_offsets) {
-        log_append("ACCOUNT: unsupported host; playing Azimuth's offline profile.\r\n");
-        return 0;
+        account_refuse("unsupported host: the launcher's offline profile cannot be set");
     }
     int patched = account_patch_slot(account_offsets->account_xuid_slot, account_offsets->account_xuid_target,
                                      account_get_xuid, &account_xuid_original);
@@ -849,8 +903,7 @@ static int account_apply_offline(void) {
                                       account_info_hooks[i], &account_info_original[i]);
     }
     if (patched != 4) {
-        log_append("ACCOUNT: LocalUser getters not where expected; playing Azimuth's offline profile.\r\n");
-        return 0;
+        account_refuse("LocalUser getters not where expected: the launcher's offline profile cannot be set");
     }
     memory_copy(account_xuid, xuid, (wide_len(xuid) + 1) * sizeof(wchar_t));
     memory_copy(account_gamertag, tag, (wide_len(tag) + 1) * sizeof(wchar_t));

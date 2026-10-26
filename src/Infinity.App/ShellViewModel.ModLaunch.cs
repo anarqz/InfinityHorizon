@@ -54,6 +54,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>The current session ended through <see cref="ModRuntimeExitCode"/>; its crash capture is not presented.</summary>
     private bool _modRuntimeEnded;
+    private bool _identityRefused; // B1: the hook ended the game before it read a save (exit 0x46490005)
 
     /// <summary>This launch's plan file (FI_MOD_PLAN); the runtime writes runtime.log beside it.</summary>
     private string? _nativePlanPath;

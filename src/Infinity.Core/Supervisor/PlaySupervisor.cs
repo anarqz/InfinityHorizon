@@ -26,6 +26,12 @@ public sealed record SupervisorConfig(
 {
     public IReadOnlyList<string> NativeDllOverrides { get; init; } = [];
     public OnlineActivity? OnlineActivity { get; init; }
+    /// <summary>
+    /// B1: the profile's own offline identity (its XUID in decimal and the name it plays under), named to the hook on an online start
+    /// too: when the online identity cannot be set (ticket refused, handshake late or lost) the game plays offline on that save, never
+    /// on Azimuth's own <c>User_9000000000000</c>. Null: the hook ends the game before it reads a save instead.
+    /// </summary>
+    public (string Xuid, string Gamertag)? FallbackIdentity { get; init; }
     /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
     public uint MinimumOnlineHookBuild { get; init; } = BuildProfile.ProductionOnly ? 79u : 76u;
     /// <summary>One bounded accept (ORCHESTRATOR §1.4: called again for the child's whole life).</summary>
@@ -356,6 +362,12 @@ public sealed class PlaySupervisor
         var endpoint = new LauncherEndpoint(new Admission.Ticket(claims, signature), _config.MinimumOnlineHookBuild,
             _config.Policy.Custom ? new Frame.CustomTrust(_config.Keys.All) : null);
         List<(string, string)> env = [(Launch.EnvLaunch, handoff.EnvValue), (Launch.EnvLauncherExe, _config.LauncherExe)];
+        // B1: the profile's own save if the online identity cannot be set (account.c account_fallback_identity)
+        if (_config.FallbackIdentity is { } fallback)
+        {
+            env.Add((Launch.EnvOfflineXuid, fallback.Xuid));
+            env.Add((Launch.EnvOfflineGamertag, fallback.Gamertag));
+        }
         // OD-113: the native plan rides the online launch too; the hook accepts it there only as FIMOD003 (mod_host.c)
         env.AddRange(_config.ModEnvironment);
         if (WineHost.Detected)
@@ -368,7 +380,8 @@ public sealed class PlaySupervisor
             }
             if (overrides is not null) env.Add(("WINEDLLOVERRIDES", overrides));
         }
-        var plan = new LaunchPlan(_config.Install.HostExe, [], _config.Install.Root, env, []);
+        // B1: an inherited FI_OFFLINE_* (Steam launch options, a shell) never names the identity: only FallbackIdentity does
+        var plan = new LaunchPlan(_config.Install.HostExe, [], _config.Install.Root, env, [Launch.EnvOfflineXuid, Launch.EnvOfflineGamertag]);
         var crashContext = new CrashContext(_clock);
         var startedUtc = _clock.GetUtcNow();
         CrashDumpSnapshot? dumpSnapshot = null;
