@@ -154,7 +154,7 @@
   "server.keys_reject": "Keep the old keys",
   "server.keys_accepted": "New keys accepted. Sign in again.",
   "server.keys_rejected": "The new keys were not accepted. Infinity will not connect to this server until they match.",
-  "native.local_bad_credentials":"E-mail or password is incorrect. If your account moved here without a password (you signed in with Google before), use “Forgot password?” to set one.",
+  "native.check_code":"We sent a 6-digit code to {email}. Type it below to confirm the address (the link in the same e-mail works too).","native.code_label":"Code from the e-mail (6 digits)","native.code_submit":"Confirm","native.code_invalid":"That code is not right, or it was replaced by a newer e-mail. Type the code from the newest e-mail, or send a new one.","native.code_limited":"Too many tries with codes. Use the link in the e-mail, or reset your password with “Forgot password?”.","native.local_bad_credentials":"E-mail or password is incorrect. If your account moved here without a password (you signed in with Google before), use “Forgot password?” to set one.",
   "native.local_email_exists": "This e-mail already has a login on this server. Sign in instead.",
   "native.local_weak_password": "Choose a password of 8 to 128 characters.",
   "native.failed": "Sign-in failed.",

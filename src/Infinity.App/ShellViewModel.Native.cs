@@ -49,7 +49,7 @@ public sealed partial class ShellViewModel
         get { var pending = _nativeFlow.VerificationEmail is not null; InspectVerification(ref pending); return pending; }
     }
     partial void InspectVerification(ref bool pending);
-    public string VerificationText => S.Format("native.check_email", ("email", _nativeFlow.VerificationEmail ?? LoginEmail));
+    public string VerificationText => S.Format(_localIdentity ? "native.check_code" : "native.check_email", ("email", _nativeFlow.VerificationEmail ?? LoginEmail));
 
     public Task NativeSignInAsync(string password) => Native(async (idp, info, api, cancellation) =>
     {
@@ -75,7 +75,48 @@ public sealed partial class ShellViewModel
         Message = S["native.verification_ready"];
     });
 
-    public Task ConfirmVerificationAsync() => !AwaitingVerification ? Task.CompletedTask : Native(async (idp, info, api, cancellation) =>
+    /// <summary>CR-S53 follow-up: a local instance's mail carries a 6-digit code typed here (the link stays the alternative).</summary>
+    public bool ShowConfirmationCode => _localIdentity;
+    public bool ShowConfirmedButton => !_localIdentity;
+    private string _confirmationCode = string.Empty;
+    public string ConfirmationCode
+    {
+        get => _confirmationCode;
+        set { if (_confirmationCode == value) return; _confirmationCode = value; Changed(nameof(CanSubmitConfirmationCode)); }
+    }
+    public bool CanSubmitConfirmationCode => CanStartOnlineAccount && IdentityPlatform.NormalizeCode(_confirmationCode) is not null;
+
+    public Task SubmitConfirmationCodeAsync() => !AwaitingVerification || IdentityPlatform.NormalizeCode(ConfirmationCode) is not { } code
+        ? Task.CompletedTask : Native(async (idp, info, api, cancellation) =>
+        {
+            Message = S["native.signing_in"];
+            var device = DeviceIdentity.Load(_stateDirectory, "windows");
+            try
+            {
+                await CompleteNativeAsync(await _nativeFlow.ConfirmCodeAsync(idp, api, info, device, code, cancellation), cancellation);
+                ConfirmationCode = string.Empty;
+            }
+            catch (ApiException e) when (e.Code == ErrorCodes.AuthConfirmationCodeInvalid)
+            {
+                Message = S["native.code_invalid"]; // wrong, used, expired or replaced: retype from the newest mail, or send a new one
+            }
+            catch (ApiException e) when (e.Code == ErrorCodes.RequestInvalid)
+            {
+                // the address is already confirmed (the link, or another device): a plain sign-in and the exchange
+                await CompleteNativeAsync(await _nativeFlow.ConfirmAsync(idp, api, info, device, cancellation), cancellation);
+            }
+            catch (ApiException e) when (e.Code is ErrorCodes.AuthRateLimited or ErrorCodes.RequestRateLimited)
+            {
+                Message = S["native.code_limited"];
+            }
+            catch (ApiException e) when (e.Code == ErrorCodes.AuthIdTokenInvalid)
+            {
+                _nativeFlow.Clear(); // the password changed meanwhile: sign in again
+                Message = S["native.bad_credentials"];
+            }
+        });
+
+    public Task ConfirmVerificationAsync() =>!AwaitingVerification ? Task.CompletedTask : Native(async (idp, info, api, cancellation) =>
     {
         Message = S["native.signing_in"];
         var device = DeviceIdentity.Load(_stateDirectory, "windows");

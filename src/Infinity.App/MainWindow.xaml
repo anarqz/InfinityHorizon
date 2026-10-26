@@ -445,7 +445,16 @@
                 <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding S[native.check_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
                   <TextBlock Text="{Binding VerificationText}" Style="{StaticResource PageSubtitle}" Margin="0,0,0,18" />
-                  <Button Content="{Binding S[native.confirmed]}" Click="OnConfirmed" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}" />
+                  <!-- CR-S53 follow-up: a local instance's mail carries a 6-digit code; the link in it stays the alternative. -->
+                  <StackPanel Visibility="{Binding ShowConfirmationCode, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding S[native.code_label]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                    <TextBox x:Name="ConfirmationCodeBox" Text="{Binding ConfirmationCode, UpdateSourceTrigger=PropertyChanged}" MaxLength="11" Width="160"
+                             HorizontalAlignment="Left" FontSize="18" Margin="0,6,0,10" IsEnabled="{Binding CanStartOnlineAccount}" KeyDown="OnConfirmationCodeKey"
+                             AutomationProperties.Name="{Binding S[native.code_label]}" />
+                    <Button Content="{Binding S[native.code_submit]}" Click="OnSubmitConfirmationCode" IsEnabled="{Binding CanSubmitConfirmationCode}" Style="{StaticResource AccentButtonStyle}" />
+                  </StackPanel>
+                  <Button Content="{Binding S[native.confirmed]}" Click="OnConfirmed" IsEnabled="{Binding CanStartOnlineAccount}" Style="{StaticResource AccentButtonStyle}"
+                          Visibility="{Binding ShowConfirmedButton, Converter={StaticResource Visible}}" />
                   <Button Content="{Binding S[native.resend]}" Margin="0,12,0,0" Click="OnResend" IsEnabled="{Binding CanStartOnlineAccount}" />
                   <Button Content="{Binding S[native.change_login]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,12,0,0" Click="OnCancelVerification" IsEnabled="{Binding Idle}" />
                 </StackPanel>

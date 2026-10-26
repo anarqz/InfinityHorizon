@@ -157,6 +157,11 @@ public partial class MainWindow : Window
     }
 
     private async void OnResend(object sender, RoutedEventArgs e) => await _vm.ResendVerificationAsync();
+    private async void OnSubmitConfirmationCode(object sender, RoutedEventArgs e) => await _vm.SubmitConfirmationCodeAsync();
+    private async void OnConfirmationCodeKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter && _vm.CanSubmitConfirmationCode) await _vm.SubmitConfirmationCodeAsync();
+    }
 
     private async void OnCreateAccount(object sender, RoutedEventArgs e) => await _vm.CreateAccountAsync();
 

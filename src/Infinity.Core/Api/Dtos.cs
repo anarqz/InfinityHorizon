@@ -92,6 +92,16 @@ public sealed record LocalConfirmationRequest(string IdToken)
     private bool PrintMembers(System.Text.StringBuilder builder) => false;
 }
 
+/// <summary>
+/// <c>POST /launcher/v1/auth/confirmation/code</c> on a <c>local</c> instance (CR-S53 follow-up): a current <c>/auth/sign-in</c> token and the
+/// mail's 6-digit code → a confirmed <see cref="LocalIdToken"/> for <c>/auth/token</c>.
+/// </summary>
+public sealed record LocalConfirmationCode(string IdToken, string Code)
+{
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "A record's PrintMembers cannot be static.")]
+    private bool PrintMembers(System.Text.StringBuilder builder) => false;
+}
+
 /// <summary><c>POST /launcher/v1/auth/password-reset</c> on a <c>local</c> instance (CR-S53): → 202 whatever the address.</summary>
 public sealed record LocalPasswordResetRequest(string Email);
 
