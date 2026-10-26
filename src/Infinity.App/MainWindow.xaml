@@ -1171,6 +1171,8 @@
                               Visibility="{Binding SelectedModSettingsIssues, Converter={StaticResource Visible}}" />
                       <Button Content="{Binding S[mods.uninstall]}" Click="OnUninstallMod" Padding="10,6" Margin="0,0,8,8"
                               Visibility="{Binding SelectedModCanUninstall, Converter={StaticResource Visible}}" />
+                      <Button Content="{Binding S[mods.purge]}" Click="OnPurgeMod" Padding="10,6" Margin="0,0,8,8"
+                              ToolTip="{Binding S[mods.purge_hint]}" Visibility="{Binding SelectedModCanPurge, Converter={StaticResource Visible}}" />
                     </WrapPanel>
                     <!-- OD-117: an installed mod of the player's own files: check its files again, or point at another copy. -->
                     <!-- T2c: the label wraps inside the pane (pt-BR was clipped mid-word). -->

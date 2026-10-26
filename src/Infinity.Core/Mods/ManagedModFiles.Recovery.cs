@@ -307,17 +307,7 @@ public sealed partial class ManagedModFiles
         var receiptIds = Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Select(p => Path.GetFileName(p)[..^".receipt.json".Length]).ToHashSet(StringComparer.Ordinal);
         foreach (var legacy in Directory.EnumerateFiles(BackupRoot, "*.manifest.json"))
             if (!receiptIds.Contains(Path.GetFileName(legacy)[..^".manifest.json".Length])) RemoveFile(legacy);
-        var referenced = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var record in Directory.EnumerateFiles(BackupRoot, "*.json"))
-            foreach (Match match in Digests().Matches(File.ReadAllText(record))) referenced.Add(match.Value);
-        foreach (var store in new[] { "objects", "manifests" })
-        {
-            var directory = Path.Combine(BackupRoot, store);
-            if (!Directory.Exists(directory)) continue;
-            RejectLinks(directory);
-            foreach (var path in Directory.EnumerateFiles(directory).ToArray())
-                if (!referenced.Contains(Path.GetFileNameWithoutExtension(path))) RemoveFile(path);
-        }
+        RemoveUnreferenced();
         var sessions = Path.Combine(BackupRoot, "sessions");
         if (!Directory.Exists(sessions)) return;
         RejectLinks(sessions);
@@ -331,6 +321,22 @@ public sealed partial class ManagedModFiles
                 Directory.Delete(session, recursive: false);
             }
             catch (IOException) { } // a session still in use keeps its files
+        }
+    }
+
+    /// <summary>Backup objects and manifest snapshots no remaining record (receipts, archives, held mods) names go.</summary>
+    private void RemoveUnreferenced()
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var record in Directory.EnumerateFiles(BackupRoot, "*.json"))
+            foreach (Match match in Digests().Matches(File.ReadAllText(record))) referenced.Add(match.Value);
+        foreach (var store in new[] { "objects", "manifests" })
+        {
+            var directory = Path.Combine(BackupRoot, store);
+            if (!Directory.Exists(directory)) continue;
+            RejectLinks(directory);
+            foreach (var path in Directory.EnumerateFiles(directory).ToArray())
+                if (!referenced.Contains(Path.GetFileNameWithoutExtension(path))) RemoveFile(path);
         }
     }
 

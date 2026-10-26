@@ -310,6 +310,7 @@ public partial class MainWindow : Window
     private async void OnDisableModKeeping(object sender, RoutedEventArgs e) => await _vm.DisableModKeepingFilesAsync();
     private async void OnRepairModSettings(object sender, RoutedEventArgs e) => await _vm.RepairModSettingsAsync();
     private async void OnUninstallMod(object sender, RoutedEventArgs e) => await _vm.UninstallModAsync();
+    private async void OnPurgeMod(object sender, RoutedEventArgs e) => await _vm.PurgeModAsync();
     private void OnOpenCustomModsFolder(object sender, RoutedEventArgs e) => _vm.OpenCustomModsFolder();
     private async void OnAddModFromUrl(object sender, RoutedEventArgs e) => await _vm.AddModFromUrlAsync();
 
