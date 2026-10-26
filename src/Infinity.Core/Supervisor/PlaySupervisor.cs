@@ -333,6 +333,15 @@ public sealed class PlaySupervisor
         _admissionPending = false;
         Write(state);
 
+        // The server decides which profiles keep a cloud line (per server: any of Noob/Hardcore × free/Supporter): its admission
+        // carries one (lease and save). A line the launcher cannot serve (no saves service named) never plays unsynced.
+        if (_config.Saves is null && Saves.CloudSaveLine.FromGate(active) is not null)
+        {
+            var leftUnserved = await LeaveQuietly(sessionId, "player", fence).ConfigureAwait(false);
+            _emit(new SupervisorEvent.Error("save: SAVES.SERVICE_MISSING"));
+            _emit(new SupervisorEvent.Ended("save_blocked", leftUnserved));
+            return null;
+        }
         // OD-52 / OD-60: the cloud save before the game (seed, download, install); never over an unknown state.
         if (_config.Saves is { } saves)
         {

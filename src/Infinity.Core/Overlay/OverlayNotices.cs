@@ -27,6 +27,7 @@ public static class OverlayNotices
             "SERVICE.UNAVAILABLE" => "saves.seed_unavailable",
             "SAVES.REVISION_CONFLICT" => "saves.conflict",
             "SAVES.LOCAL_BUSY" => "saves.busy",
+            "SAVES.SERVICE_MISSING" => "saves.service_missing",
             _ => "saves.blocked",
         };
         return new UiFrame.Toast(UiLevel.Error, 3, 150,
