@@ -358,6 +358,8 @@
   "modes.kind_inbox": "messages and gifts",
   "modes.kind_save_revisions": "cloud save revisions",
   "modes.hardcore_wait": "Hardcore careers are played once the launcher syncs them with the cloud: coming in the next update. Your profile is ready.",
+  "modes.hardcore_hint_local": "A brand-new career: the game starts it on your first launch, with the opening race and the starter car picked in the game. This server does not keep your Hardcore progress in the cloud: it stays on this PC.",
+  "modes.hardcore_local": "saved on this PC; this server does not keep it in the cloud",
   "modes.hardcore_hint": "A brand-new career: the game starts it on your first launch, with the opening race and the starter car picked in the game. Your progress is saved in the cloud, with the online universe: boards, ghosts, drivatars and friends' worlds. That is the price of Hardcore.",
   "modes.noob_hint": "Starts from your offline save and stays on this PC. Cloud save and the social universe are Hardcore only. HARDCORE to NOOB is one-way.",
   "modes.free_noob": "New profiles are Noob: they start from your offline save and stay on this PC. Infinity Supporters can also create Hardcore profiles, saved in the cloud.",

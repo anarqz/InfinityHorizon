@@ -358,6 +358,8 @@
   "modes.kind_inbox": "mensagens e presentes",
   "modes.kind_save_revisions": "revisões de save na nuvem",
   "modes.hardcore_wait": "Carreiras Hardcore são jogadas quando o launcher sincroniza com a nuvem: chega na próxima atualização. Seu perfil já está pronto.",
+  "modes.hardcore_hint_local": "Uma carreira nova em folha: o jogo começa ela no seu primeiro lançamento, com a corrida inicial e o carro inicial escolhido no jogo. Este servidor não guarda o seu progresso Hardcore na nuvem: ele fica neste PC.",
+  "modes.hardcore_local": "salvo neste PC; este servidor não o guarda na nuvem",
   "modes.hardcore_hint": "Uma carreira nova em folha: o jogo começa ela no seu primeiro lançamento, com a corrida inicial e o carro inicial escolhido no jogo. Seu progresso fica salvo na nuvem, com o universo online: placares, ghosts, drivatars e mundos de amigos. É o preço do Hardcore.",
   "modes.noob_hint": "Começa do seu save offline e fica neste PC. Save na nuvem e o universo social são só do Hardcore. HARDCORE para NOOB não tem volta.",
   "modes.free_noob": "Perfis novos são Noob: começam do seu save offline e ficam neste PC. Infinity Supporters também podem criar perfis Hardcore, salvos na nuvem.",
