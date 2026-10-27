@@ -22,9 +22,16 @@ public static class CustomServer
     /// <summary>
     /// The owner's custom servers, the only ones that may receive an ID token of <see cref="OfficialIdentityProject"/> (OD-122
     /// follow-up "official accounts only on the owner's custom servers"): any other custom server could present it to the official
-    /// server and enter that player's official account. Add the tunnel's https origin here when it exists.
+    /// server and enter that player's official account. OD122-L8: the live server moved off SAURON to the SteamOS notebook on the LAN
+    /// and its Cloudflare tunnel.
     /// </summary>
-    public static IReadOnlyList<Uri> OfficialIdentityServers { get; } = [new("http://192.168.68.40:8080/")];
+    public static IReadOnlyList<Uri> OfficialIdentityServers { get; } = [new("http://192.168.68.57:8080/"), new(OwnerPublicOrigin)];
+
+    /// <summary>
+    /// OD122-L8: the owner's own server behind its Cloudflare tunnel, the one host under <c>infinity-horizon.com</c> that is a custom
+    /// server (exactly this origin; the official service hosts never are). The hook allows the same origin in a custom ticket.
+    /// </summary>
+    public const string OwnerPublicOrigin = "https://play.infinity-horizon.com/";
 
     public static bool MayUseOfficialIdentity(Uri server) => OfficialIdentityServers.Contains(new Uri(server.GetLeftPart(UriPartial.Authority)));
 
@@ -44,8 +51,9 @@ public static class CustomServer
         if (uri.HostNameType is not (UriHostNameType.Dns or UriHostNameType.IPv4) || host.Length == 0
             || !host.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '-') || uri.Port is <= 0 or > 65535)
             throw new ArgumentException("A custom server's host is an ASCII name or an IPv4 address with a port from 1 to 65535");
-        if (ProductionDeployment.IsOfficial(uri) || host.Equals("infinity-horizon.com", StringComparison.OrdinalIgnoreCase)
-            || host.EndsWith(".infinity-horizon.com", StringComparison.OrdinalIgnoreCase))
+        var owners = uri.Scheme == "https" && uri.IsDefaultPort && host.Equals(new Uri(OwnerPublicOrigin).Host, StringComparison.OrdinalIgnoreCase);
+        if (ProductionDeployment.IsOfficial(uri) || !owners && (host.Equals("infinity-horizon.com", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".infinity-horizon.com", StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("The official server is not a custom server");
         return new Uri(uri.GetLeftPart(UriPartial.Authority));
     }
