@@ -201,8 +201,25 @@ public partial class MainWindow : Window
     private void OnServerChange(object sender, RoutedEventArgs e)
     {
         _vm.OpenServerChoice();
-        _ = Dispatcher.InvokeAsync(() => ServerAddressBox.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+        // OD122-L9: focus lands on the chosen row (the D-pad moves through the list; the typed-address field, and with it the Steam
+        // keyboard, opens only when the player goes to it)
+        _ = Dispatcher.InvokeAsync(FocusServerPick, System.Windows.Threading.DispatcherPriority.Loaded);
     }
+
+    /// <summary>The sign-in screen's "Change": back to the welcome screen with the picker open.</summary>
+    private void OnSignInServerChange(object sender, RoutedEventArgs e)
+    {
+        OnWelcome(sender, e);
+        OnServerChange(sender, e);
+    }
+
+    private void FocusServerPick()
+    {
+        if (ServerList.ItemContainerGenerator.ContainerFromItem(ServerList.SelectedItem) is System.Windows.Controls.ListBoxItem row) row.Focus();
+        else ServerList.Focus();
+    }
+
+    private async void OnPickerRefresh(object sender, RoutedEventArgs e) => await _vm.RefreshPickersAsync();
 
     private void OnServerSave(object sender, RoutedEventArgs e) => _vm.SaveServerChoice();
 

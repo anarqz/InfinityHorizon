@@ -364,22 +364,68 @@
             </StackPanel>
           </StackPanel>
           <!-- CR-L39: the server editor takes the welcome screen's place while it is open. -->
-          <Border Style="{StaticResource Card}" Padding="24,20" Width="460" VerticalAlignment="Center" HorizontalAlignment="Center"
-                  Visibility="{Binding ShowServerEditor, Converter={StaticResource Visible}}">
+          <!-- OD122-L9: the beholder's servers and relays, the official server and a typed address; controller-first (D-pad, A, B). -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowServerEditor, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="560" Margin="0,20" VerticalAlignment="Center" HorizontalAlignment="Center">
                 <StackPanel>
-                  <TextBlock Text="{Binding S[server.title]}" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10" />
-                  <RadioButton GroupName="ServerChoice" Content="{Binding S[server.official]}" IsChecked="{Binding ServerOfficialSelected}" Margin="0,0,0,6" />
-                  <RadioButton GroupName="ServerChoice" Content="{Binding S[server.custom]}" IsChecked="{Binding ServerCustomSelected}" />
-                  <TextBox x:Name="ServerAddressBox" Text="{Binding ServerAddress, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,4"
-                           IsEnabled="{Binding ServerCustomSelected}" AutomationProperties.Name="{Binding S[server.custom]}" />
-                  <TextBlock Text="{Binding S[server.address_hint]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" />
+                  <DockPanel Margin="0,0,0,6">
+                    <Button DockPanel.Dock="Right" Content="{Binding S[picker.refresh]}" Click="OnPickerRefresh" Padding="12,4" IsEnabled="{Binding Idle}"
+                            AutomationProperties.Name="{Binding S[picker.refresh]}" />
+                    <TextBlock Text="{Binding S[server.title]}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding BeholderStatusText}" FontSize="11" Foreground="{StaticResource InfinityFaint}" Margin="0,0,0,6" />
+                  <ListBox x:Name="ServerList" ItemsSource="{Binding ServerItems}" SelectedItem="{Binding ServerPick}" MaxHeight="300"
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[server.title]}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate>
+                        <StackPanel Margin="4,6">
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="380" />
+                            <Border Margin="8,0,0,0" Padding="6,1" CornerRadius="3" BorderThickness="1" BorderBrush="{StaticResource InfinityFaint}" VerticalAlignment="Center"
+                                    Visibility="{Binding HasBadge, Converter={StaticResource Visible}}">
+                              <TextBlock Text="{Binding Badge}" FontSize="10" Foreground="{StaticResource InfinityMuted}" />
+                            </Border>
+                          </StackPanel>
+                          <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <TextBlock Text="{Binding S[picker.no_servers]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" Margin="0,4,0,0"
+                             Visibility="{Binding NoListedServers, Converter={StaticResource Visible}}" />
+                  <StackPanel Visibility="{Binding ShowServerAddressField, Converter={StaticResource Visible}}">
+                    <TextBox x:Name="ServerAddressBox" Text="{Binding ServerAddress, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,4"
+                             AutomationProperties.Name="{Binding S[server.custom]}" />
+                    <TextBlock Text="{Binding S[server.address_hint]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" />
+                  </StackPanel>
                   <TextBlock Text="{Binding ServerEditText}" FontSize="12" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                  <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                  <TextBlock Text="{Binding S[picker.relay_title]}" FontSize="16" FontWeight="SemiBold" Margin="0,18,0,6" />
+                  <ListBox x:Name="RelayList" ItemsSource="{Binding RelayItems}" SelectedItem="{Binding RelayPick}" MaxHeight="220"
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[picker.relay_title]}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate>
+                        <StackPanel Margin="4,6">
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="380" />
+                            <Border Margin="8,0,0,0" Padding="6,1" CornerRadius="3" BorderThickness="1" BorderBrush="{StaticResource InfinityFaint}" VerticalAlignment="Center"
+                                    Visibility="{Binding HasBadge, Converter={StaticResource Visible}}">
+                              <TextBlock Text="{Binding Badge}" FontSize="10" Foreground="{StaticResource InfinityMuted}" />
+                            </Border>
+                          </StackPanel>
+                          <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <CheckBox Content="{Binding S[picker.official_only]}" IsChecked="{Binding RelayOfficialOnly}" Margin="0,8,0,0" />
+                  <TextBlock Text="{Binding S[picker.relay_note]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                  <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                     <Button Content="{Binding S[server.save]}" Click="OnServerSave" Style="{StaticResource AccentButtonStyle}" Padding="18,6" />
                     <Button Content="{Binding S[server.cancel]}" Click="OnServerCancel" Margin="10,0,0,0" Padding="18,6" />
                   </StackPanel>
                 </StackPanel>
           </Border>
+          </ScrollViewer>
           <!-- Owner 2026-10-26: this PC and the cloud both moved on; the player picks (SAVES_API §4.4/§5). -->
           <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSaveConflict, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -423,10 +469,13 @@
                 <TextBlock Text="{Binding S[signin.title]}" Style="{StaticResource PageTitle}" FontSize="24" />
                 <TextBlock Text="{Binding S[native.subtitle]}" Margin="0,6,0,20" Style="{StaticResource PageSubtitle}" />
                 <!-- CR-L39: on a custom server the player sees where the sign-in goes and whether it is encrypted. -->
-                <TextBlock Margin="0,-12,0,16" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
+                <TextBlock Margin="0,-12,0,4" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
                            Visibility="{Binding ShowServerSecurity, Converter={StaticResource Visible}}">
                   <Run Text="{Binding ServerChoiceText, Mode=OneWay}" /><Run Text=" " /><Run Text="{Binding ServerSecurityText, Mode=OneWay}" />
                 </TextBlock>
+                <!-- OD122-L9: the server and relay pickers are one step away from sign-in too. -->
+                <Button Content="{Binding S[picker.change_server]}" Click="OnSignInServerChange" Style="{StaticResource LinkButton}" HorizontalAlignment="Left"
+                        Margin="-6,0,0,12" IsEnabled="{Binding CanChangeServer}" AutomationProperties.Name="{Binding S[picker.change_server]}" />
                 <StackPanel Visibility="{Binding AwaitingVerification, Converter={StaticResource Hidden}}">
                   <TextBlock Text="{Binding S[native.email]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
                   <TextBox x:Name="EmailBox" Text="{Binding LoginEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,14" IsEnabled="{Binding CanStartOnlineAccount}" />

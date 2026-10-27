@@ -613,6 +613,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _newsClient?.Dispose();
+        if (_pickerHttp.IsValueCreated) _pickerHttp.Value.Dispose();
         // OD-109: the dedicated lobby's DELETE and gate leave start first and run beside the play
         // session's own cleanup; both finish (bounded) before the session's token manager is disposed.
         var dedicated = _dedicated is { Active: true } host ? Task.Run(host.StopAsync) : Task.CompletedTask;
