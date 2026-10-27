@@ -19,10 +19,9 @@
 //   world instead of the list (updated by the launcher): the host closes it or kicks players,
 //   a player leaves it; anyone adds a player as a friend or reports them with a reason. Player
 //   names only, never their XUIDs (OD-61).
-// - Syncing cars (OD-65 amendment): once a world is created or a seat reserved, the hook uploads
-//   the current car's paint so world mates fetch it, behind a "Syncing cars" screen that takes no
-//   input (the game already sees an idle pad while the guide is open), for at most 5 s; a timeout
-//   or a failure is a warning, never a block. Then the prompt to go to Free Roam Online.
+// - Once a world is created the Hosted screen follows; once a seat is reserved, the prompt to go
+//   to Free Roam Online. (The OD-65 "Syncing cars" hold is retired: the server keeps the liveries
+//   and world mates' games fetch them by the game's own calls, CR-S59.)
 // - Modded lobbies (OD-112): the "Modded" chip shows modded worlds only, off shows vanilla only. A
 //   world whose mods differ from the player's carries a warning icon and is never joined from
 //   here: the player is told which mods it uses. The focused or hovered world fills the right pane
@@ -86,7 +85,7 @@ const char *AccessMessage(const Shared &sh) {
 }
 
 // ---------------------------------------------------------------- render-thread state
-enum class Screen { List, Warning, Busy, Create, Hosted, Supporter, Member, Report, Confirm, Sync };
+enum class Screen { List, Warning, Busy, Create, Hosted, Supporter, Member, Report, Confirm };
 Screen g_screen = Screen::List;
 WorldFilter g_filter = WorldFilter::Near; // the default filter (Alex, 2026-10-19)
 bool g_queried = false;                    // the list was asked since the guide opened
@@ -114,35 +113,9 @@ int g_buttons = 0;          // how many buttons the current card has
 uint64_t g_seen_mine = 0, g_seen_action = 0;
 int g_dev_mine = 0;         // the dev host's own world: 0 none, 1 hosting, 3 seated
 
-// syncing cars (OD-65 amendment)
-constexpr uint32_t kSyncTimeoutMs = 5000;
-constexpr float kSyncCap = 5.5f;       // the screen's own cap, should the hook not return
-constexpr float kSyncMinShown = 0.8f;  // long enough to read, never a flash
-float g_sync_time = 0;
-bool g_sync_hosted = false;            // what follows: the Hosted screen, or the seat's prompt
-std::atomic<int> g_sync_result{1000};  // 1000: still running
-std::atomic<uint64_t> g_sync_serial{0};
-
-void StartSync(bool hosted) {
-    g_screen = Screen::Sync;
-    g_sync_time = 0;
-    g_sync_hosted = hosted;
-    g_sync_result = 1000;
-    const uint64_t serial = ++g_sync_serial;
-    Log("livery: syncing the current car before the lobby");
-    std::thread([serial] {
-        const int result = LiverySync(kSyncTimeoutMs);
-        if (g_sync_serial == serial) g_sync_result = result;
-    }).detach();
-}
-
-void FinishSync(int result) {
-    Log("livery: sync %s (%d)", result == FI_LIVERY_SYNCED ? "done" : result == FI_LIVERY_STOCK ? "not needed" : "not done", result);
-    if (result != FI_LIVERY_SYNCED && result != FI_LIVERY_STOCK) {
-        PushToast(ToastKind::Warning, T("Car paint not synced", "Pintura do carro não sincronizada"),
-                  T("Other players may see your car in its standard colours.", "Outros jogadores podem ver seu carro nas cores de fábrica."));
-    }
-    if (g_sync_hosted) {
+// a world created (the Hosted screen) or a seat reserved (the prompt to go to Free Roam Online)
+void Admitted(bool hosted) {
+    if (hosted) {
         g_screen = Screen::Hosted;
     } else {
         g_screen = Screen::List;
@@ -717,21 +690,6 @@ void DrawWarning(ImDrawList *dl, float x, float y, float w) {
     if (Clicked(a2, b2)) { g_button = 1; g_accept = true; }
 }
 
-void DrawSync(ImDrawList *dl, float x, float y, float w) {
-    y += 70 * s;
-    const char *title = T("Syncing cars...", "Sincronizando carros...");
-    const ImVec2 ts = Measure(f.title, title);
-    TextAt(dl, f.title, ImVec2(x + (w - ts.x) / 2, y), kText, title);
-    y += 64 * s;
-    const float t = static_cast<float>(ImGui::GetTime());
-    const ImVec2 c(x + w / 2, y + 28 * s);
-    dl->PathArcTo(c, 26 * s, t * 5.0f, t * 5.0f + 4.2f, 32);
-    dl->PathStroke(kPinkU, 0, 4 * s);
-    y += 80 * s;
-    const char *hint = T("Sending your car's paint so the other players see it.", "Enviando a pintura do seu carro para os outros jogadores verem.");
-    Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, hint);
-}
-
 void DrawBusy(ImDrawList *dl, float x, float y, float w) {
     y += 60 * s;
     const float t = static_cast<float>(ImGui::GetTime());
@@ -1076,7 +1034,6 @@ bool WorldsNavigate(Nav nav) {
         default: return true;
         }
     case Screen::Busy: return nav != Nav::Back || true; // waits for the launcher
-    case Screen::Sync: return true;                     // no input until the car is synced
     case Screen::Create:
         switch (nav) {
         case Nav::Up: if (g_create.field > 0) --g_create.field; return true;
@@ -1120,17 +1077,11 @@ bool WorldsNavigate(Nav nav) {
 }
 
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool supporter, float dt) {
-    const char *reminder = T(
-        "Remember: Livery sync between players only works if you have an active car on you right now, make sure to be in-game",
-        "Lembrete: a sincronização de pinturas entre jogadores só funciona com um carro ativo no momento. Certifique-se de estar dentro da partida.");
-    const float reminder_height = f.small->CalcTextSizeA(f.small->FontSize, FLT_MAX, w, reminder).y;
-    const float reminder_y = bottom - reminder_height;
-    Wrapped(dl, f.small, ImVec2(x, reminder_y), w, kTextDim, reminder);
     const char *warning = T(
         "Public lobbies: bugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
         "Lobbies públicos: bugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.");
     const float warning_height = WrappedHeight(f.small, w, warning);
-    const float warning_y = reminder_y - 12 * s - warning_height;
+    const float warning_y = bottom - warning_height;
     Wrapped(dl, f.small, ImVec2(x, warning_y), w, kAmber, warning);
     bottom = warning_y - 16 * s;
     dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, bottom), true);
@@ -1141,10 +1092,9 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     }
     const bool world_access = DevHost() || sh.access.Allowed(GetTickCount64());
     if (!world_access && (g_screen == Screen::Warning || g_screen == Screen::Create || g_screen == Screen::Hosted
-        || g_screen == Screen::Supporter || g_screen == Screen::Sync || (g_screen == Screen::Busy && !g_world_action_busy))) {
+        || g_screen == Screen::Supporter || (g_screen == Screen::Busy && !g_world_action_busy))) {
         g_screen = Screen::List;
         g_after_warning = nullptr;
-        ++g_sync_serial;
         g_accept = false;
     }
     if (g_dev_wait >= 0) {
@@ -1156,7 +1106,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         g_seen_join = sh.join_serial;
         if (g_screen == Screen::Busy) {
             if (sh.join_status == 0 && world_access) {
-                StartSync(false); // the seat's prompt comes after the car's paint
+                Admitted(false); // the seat's prompt
             } else if (sh.join_status == 3) {
                 // a wrong code: back on the code screen, with the reason
                 g_screen = Screen::List;
@@ -1177,7 +1127,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         g_seen_hosted = sh.hosted_serial;
         if (g_screen == Screen::Busy) {
             if (sh.hosted.status == 0 && world_access) {
-                StartSync(true); // then the Hosted screen
+                Admitted(true); // the Hosted screen
             } else {
                 g_screen = Screen::Create;
                 PushToast(ToastKind::Warning, T("Could not create the lobby", "Não foi possível criar o lobby"), sh.hosted.message);
@@ -1306,18 +1256,6 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         }
         break;
     case Screen::Busy: DrawBusy(dl, x, y, w); break;
-    case Screen::Sync: {
-        DrawSync(dl, x, y, w);
-        g_sync_time += dt;
-        const int result = g_sync_result.load();
-        if (g_sync_time >= kSyncMinShown && result != 1000) {
-            FinishSync(result);
-        } else if (g_sync_time >= kSyncCap) {
-            ++g_sync_serial; // a late answer is ignored
-            FinishSync(FI_LIVERY_TIMEOUT);
-        }
-        break;
-    }
     case Screen::Create:
         DrawCreate(dl, x, y, w, supporter);
         if (!supporter && (g_create.audience == 1 || g_create.audience == 2)) {

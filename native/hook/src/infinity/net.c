@@ -1305,27 +1305,14 @@ static int net_answer_foreign(NetRequest *request) {
     return ok;
 }
 
-/* World mates' paints in a launcher session (livery_world.c, OD-66): the game's own
-   content-versioning calls for them are answered here from the world's relay. */
+/* The game's livery calls in a launcher session (livery_world.c, CR-S59): logged, never answered
+   here; they go on to the server, which keeps every ticket's liveries. */
 static int net_answer_livery(NetRequest *request) {
-    if (!fi_launch_protocol()) {
-        return 0;
+    if (fi_launch_protocol()) {
+        fi_livery_route(buffer_wide(&request->request_headers), request->request_body.data,
+                        request->request_body.size);
     }
-    unsigned char *reply = 0;
-    size_t size = 0;
-    if (!fi_livery_route(buffer_wide(&request->request_headers), request->request_body.data,
-                         request->request_body.size, &reply, &size)) {
-        return 0;
-    }
-    request->status = 200;
-    buffer_free(&request->status_text);
-    buffer_free(&request->response_headers);
-    buffer_free(&request->response_body);
-    int ok = buffer_append_wide(&request->status_text, L"OK") &&
-             buffer_append_wide(&request->response_headers, L"Content-Type: bin/xtsw\r\n") &&
-             buffer_append(&request->response_body, reply, size);
-    fi_livery_free(reply);
-    return ok;
+    return 0;
 }
 
 /* A profile sync beyond what play earns (azimuth_progress.c): not sent, and answered as the

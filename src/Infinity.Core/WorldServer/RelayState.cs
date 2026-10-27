@@ -144,7 +144,6 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal CarState? CarState { get; set; }
     internal System.Numerics.Vector3? CarPosition { get; set; }
     internal IPEndPoint? CarHook { get; set; }
-    internal IPEndPoint? LiveryHook { get; set; }
     internal long? CarStateAt { get; set; }
     internal int HistoryBits => Objects.Values.Sum(p => p.HistoryBits) + Orphans.Sum(p => p.Payload.Length);
 

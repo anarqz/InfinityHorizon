@@ -19,7 +19,9 @@ extern "C" {
 #define FI_OVERLAY_DEV 0x1u /* flags bit 0: development host (the D3D12 test app) */
 #define FI_OVERLAY_OFFLINE 0x2u /* flags bit 1 (OD-118): the launcher's Play offline; online-only tabs say "Offline mode" */
 
-/* livery_sync results (OD-65 amendment: the current car's paint goes to the server before a world). */
+/* livery_sync results (OD-65 amendment: the current car's paint before a world). Retired by CR-S59
+   (the server keeps the liveries from the game's own calls): this overlay never calls it, and a hook
+   with CR-S59 answers FI_LIVERY_UNAVAILABLE at once. The slot stays for the ABI. */
 #define FI_LIVERY_SYNCED 0          /* uploaded: world mates fetch it by its id */
 #define FI_LIVERY_STOCK 1           /* the current car has no design: nothing to upload */
 #define FI_LIVERY_TIMEOUT (-1)      /* not done within timeout_ms (the upload may still finish) */
@@ -41,8 +43,8 @@ typedef struct FiOverlayHost {
     void (*log)(const char *line);   /* hook's log_append (UTF-8, no newline), or NULL: then
                                         data\bin\infinity-overlay.log next to the DLL */
     uint32_t flags;                  /* FI_OVERLAY_DEV */
-    /* size >= 48 (hook 0.3.0+fh2online.65 and later): uploads the current car's paint and returns
-       a FI_LIVERY_* code within timeout_ms; called on an overlay thread, never the game's. */
+    /* size >= 48 (hook 0.3.0+fh2online.65 and later): retired (CR-S59), never called by this
+       overlay; it returned a FI_LIVERY_* code within timeout_ms, on an overlay thread. */
     int32_t (*livery_sync)(uint32_t timeout_ms);
 } FiOverlayHost;
 

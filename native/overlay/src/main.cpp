@@ -20,7 +20,6 @@ std::atomic<bool> g_started{false};
 std::atomic<bool> g_passthrough{false};
 std::mutex g_log_lock;
 void (*g_host_log)(const char *) = nullptr;
-int32_t (*g_livery_sync)(uint32_t) = nullptr; // the hook's, when it offers one (host size 48)
 wchar_t g_log_path[MAX_PATH] = L"";
 bool g_dev = false;
 bool g_offline = false; // OD-118: the launcher's Play offline (FI_OVERLAY_OFFLINE)
@@ -90,8 +89,6 @@ std::atomic<uint64_t> g_ready_until{0};
 void SetGameReadiness(bool ready) { g_ready_until = ready ? GetTickCount64() + 1500 : 0; }
 bool GameReady() { return DevHost() || GetTickCount64() < g_ready_until.load(); }
 
-int LiverySync(uint32_t timeout_ms) { return g_livery_sync ? g_livery_sync(timeout_ms) : FI_LIVERY_UNAVAILABLE; }
-
 } // namespace fi
 
 extern "C" __declspec(dllexport) int32_t fi_overlay_start(const FiOverlayHost *host) {
@@ -116,7 +113,6 @@ extern "C" __declspec(dllexport) int32_t fi_overlay_start(const FiOverlayHost *h
                        reinterpret_cast<LPCWSTR>(&fi_overlay_start), &self);
     fi::g_self = self;
     fi::g_host_log = host->log;
-    fi::g_livery_sync = host->size >= sizeof(FiOverlayHost) ? host->livery_sync : nullptr;
     fi::g_dev = (host->flags & FI_OVERLAY_DEV) != 0;
     fi::g_offline = (host->flags & FI_OVERLAY_OFFLINE) != 0;
     wcsncpy_s(fi::g_ui_pipe, host->ui_pipe, _TRUNCATE); // the hook's string is not ours to keep

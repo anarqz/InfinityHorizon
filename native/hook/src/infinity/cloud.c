@@ -886,6 +886,11 @@ static int creation_name_ok(const char *name) {
     if (n > 16 && memory_equal(name, "GarageThumbnail_", 16)) {
         return 0;
     }
+    /* CR-S59: another player's livery the game cached ("MultiplayerLivery_<id>") is theirs, never this
+       profile's creation */
+    if (n > 18 && memory_equal(name, "MultiplayerLivery_", 18)) {
+        return 0;
+    }
     while (kind < n && ((name[kind] | 32) >= 'a' && (name[kind] | 32) <= 'z')) {
         ++kind;
     }
