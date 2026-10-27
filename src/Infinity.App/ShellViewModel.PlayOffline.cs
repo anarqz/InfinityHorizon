@@ -176,7 +176,7 @@ public sealed partial class ShellViewModel
             if (overlay is not null)
             {
                 // The first notice the overlay shows (queued until its hello): Playing offline.
-                await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"]), CancellationToken.None);
+                await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"] + "\n" + S["overlay.open_hint"]), CancellationToken.None);
                 // OD-120: a Hardcore profile offline plays Noob-like on its own local folder; the player is told so in the game too.
                 if (profile.Hardcore) await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 160, S["offline.hardcore_offline"]), CancellationToken.None);
                 _ = overlay.RunAsync(child.Pid, child.Exited, TimeSpan.FromMinutes(5), _play.Token);

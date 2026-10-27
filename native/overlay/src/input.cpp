@@ -7,12 +7,11 @@
 // - Controller: Azimuth reads pads through Windows.Gaming.Input; IGamepad::GetCurrentReading is
 //   hooked once a pad exists, and the overlay sees the same reading the game does (whatever Steam
 //   Input or another remapper made of the pad).
-//   - View held for 1 s toggles the sidebar (OD-50, 2026-10-19: Steam and the Xbox Game Bar take
-//     the Xbox button, and Steam's desktop layout takes View + Menu, before any game sees them).
-//     The gate owns the trigger: View reaches the game only when it is released before 1 s, as a
-//     short press given back then; a hold that opens or closes the guide never reaches it.
-//   - LB + RB held together for 1 s also toggle it. Both are driving buttons, so the game keeps
-//     seeing them: only the chord held that long toggles, once per hold.
+//   - LB + RB held together for 1 s toggle the sidebar (OD-125 follow-up, 2026-10-27: Azimuth 1.0
+//     opens its own menu with View held about 3 s, so View is the game's and Azimuth's again; OD-50
+//     had View held 1 s). Both are driving buttons, so the game keeps seeing them: only the chord
+//     held that long toggles, once per hold. Steam and the Xbox Game Bar take the Xbox button, and
+//     Steam's desktop layout takes View + Menu, before any game sees them.
 //   - While the sidebar is open the game reads an idle pad ("connected, neutral", never
 //     "disconnected"); after it closes, until every button is up, so the B that closed it never
 //     reaches the game. The D-pad / left stick / A / B of that reading navigate, with repeat.
@@ -118,8 +117,7 @@ std::atomic<bool> g_open_seen{false}; // the render thread's SidebarOpen(), for 
 
 // GamepadButtons
 constexpr UINT32 kWMenu = 0x1, kWView = 0x2, kWA = 0x4, kWB = 0x8, kWX = 0x10, kWY = 0x20, kWLB = 0x400, kWRB = 0x800, kWUp = 0x40, kWDown = 0x80, kWLeft = 0x100, kWRight = 0x200;
-constexpr auto kTriggerHold = std::chrono::milliseconds(1000); // View held this long toggles the guide
-constexpr auto kReplay = std::chrono::milliseconds(60);        // a shorter View press, given back to the game
+constexpr auto kTriggerHold = std::chrono::milliseconds(1000); // LB + RB held this long toggles the guide
 
 // Each pad's latest raw reading, for the render thread's navigation: merged, since an idle second
 // pad (a virtual one, a wheel) is read too and must not hide the one in the player's hands.
@@ -141,13 +139,9 @@ struct Chord {
 };
 Chord g_xinput_shoulders; // the render thread's, from XInput, until the WGI hook is in
 
-// View long-press state, on the game's input thread only. Several pads share one vtable slot: one state per pad.
+// The LB + RB chord's state, on the game's input thread only. Several pads share one vtable slot: one state per pad.
 struct Trigger {
     void *pad = nullptr;
-    bool held = false; // View is down and held back from the game
-    bool fired = false;
-    std::chrono::steady_clock::time_point since{};
-    std::chrono::steady_clock::time_point replay_until{};
     Chord shoulders{};
 };
 Trigger g_triggers[4];
@@ -162,28 +156,6 @@ Trigger &TriggerOf(void *pad) {
     return g_triggers[0];
 }
 
-// Whether the game may see View now.
-bool GateView(Trigger &t, bool down, std::chrono::steady_clock::time_point now) {
-    if (down) {
-        if (!t.held) {
-            t.held = true;
-            t.fired = false;
-            t.since = now;
-        } else if (!t.fired && now - t.since >= kTriggerHold) {
-            t.fired = true;
-            g_trigger_toggle = true;
-        }
-        return false;
-    }
-    if (t.held) {
-        t.held = false;
-        if (!t.fired) { // a normal press: the game gets it, late
-            t.replay_until = now + kReplay;
-        }
-    }
-    return now < t.replay_until;
-}
-
 HRESULT STDMETHODCALLTYPE HookReading(void *self, GamepadReading *value) {
     const HRESULT hr = g_reading(self, value);
     if (FAILED(hr) || !value || InPassthrough()) {
@@ -196,7 +168,6 @@ HRESULT STDMETHODCALLTYPE HookReading(void *self, GamepadReading *value) {
     g_w_lx[slot] = static_cast<int>(value->LeftThumbstickX * 32767);
     g_w_ly[slot] = static_cast<int>(value->LeftThumbstickY * 32767);
     const auto now = std::chrono::steady_clock::now();
-    const bool view = GateView(trigger, (raw & kWView) != 0, now);
     if (trigger.shoulders.Update((raw & (kWLB | kWRB)) == (kWLB | kWRB), now)) g_trigger_toggle = true;
     if (g_open_seen.load() || g_hold_until_release.load()) {
         const UINT64 stamp = value->Timestamp;
@@ -204,7 +175,7 @@ HRESULT STDMETHODCALLTYPE HookReading(void *self, GamepadReading *value) {
         value->Timestamp = stamp;
         return hr;
     }
-    value->Buttons = static_cast<ABI::Windows::Gaming::Input::GamepadButtons>((raw & ~kWView) | (view ? kWView : 0));
+    // View is never held back: Azimuth 1.0's own menu opens with View held (OD-125 follow-up)
     return hr;
 }
 
