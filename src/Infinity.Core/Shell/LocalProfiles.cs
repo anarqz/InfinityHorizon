@@ -94,14 +94,17 @@ public sealed class LocalProfileStore(string stateDirectory)
     /// <summary>
     /// A new local profile (OD-118: no cloud call). Its offline XUID is the lowest one in the CR-L36 range that no profile uses and
     /// whose save folder does not exist (<paramref name="saveFolderExists"/>, never reusing a folder another identity left behind).
+    /// Signed in (<paramref name="accountId"/>), the cap counts this PC's local-only profiles and that account's own: another account's
+    /// profiles cached on this PC are not shown and do not take its room (the server keeps each account's own cap).
     /// </summary>
-    public LocalProfile Create(string game, string name, string mode, Func<string, bool> saveFolderExists, DateTimeOffset now)
+    public LocalProfile Create(string game, string name, string mode, Func<string, bool> saveFolderExists, DateTimeOffset now, string? accountId = null)
     {
         ArgumentNullException.ThrowIfNull(saveFolderExists);
         if (!ProfileName.IsValid(name)) throw new LocalProfileException(ErrorCodes.AccountsInvalidName);
         if (mode is not ("hardcore" or "noob")) throw new ArgumentException("unknown mode", nameof(mode));
         var all = Load();
-        if (all.Count(p => p.Game == game && p.LocalOnly) + all.Count(p => p.Game == game && !p.LocalOnly && !p.NotOnAccount) >= MaxProfiles)
+        var counted = accountId is null ? all.Count(p => p.Game == game && !p.LocalOnly && !p.NotOnAccount) : all.Count(p => p.Game == game && p.OnAccount(accountId));
+        if (all.Count(p => p.Game == game && p.LocalOnly) + counted >= MaxProfiles)
             throw new LocalProfileException(ErrorCodes.AccountsProfileLimit);
         if (all.Any(p => p.Game == game && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)))
             throw new LocalProfileException(ErrorCodes.AccountsNameUnavailable);
