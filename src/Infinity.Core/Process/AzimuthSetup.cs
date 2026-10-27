@@ -27,9 +27,15 @@ public enum AzimuthStatus
 public static class AzimuthSetup
 {
     /// <summary>The Azimuth version Infinity and the hook support.</summary>
-    public const string CompatibleVersion = "0.9.10";
+    public const string CompatibleVersion = "1.0.2";
 
-    /// <summary>The Forza Horizon 2 (Xbox One) build Azimuth 0.9.10 runs.</summary>
+    /// <summary>Azimuth 1.0's flag that starts the added game directly instead of Azimuth's own launcher.</summary>
+    public const string SkipLauncher = "--skip-launcher";
+
+    /// <summary>OD-125: the exact <c>azimuth.exe</c> of <see cref="CompatibleVersion"/> (SHA-256); any other build is refused.</summary>
+    public const string CompatibleHostSha256 = "42527964f48c90a537f2414200b8598ab9a6f92919bfbe046dbecccb36e7c597";
+
+    /// <summary>The Forza Horizon 2 (Xbox One) build Azimuth runs (unchanged from 0.9.10 to 1.0.2).</summary>
     public const string GameVersion = "1.0.0.64";
 
     /// <summary>Azimuth's official page (Almost There Games): the only place to get it.</summary>
@@ -47,6 +53,7 @@ public static class AzimuthSetup
     {
         null => AzimuthStatus.Missing,
         { Version: not CompatibleVersion } => AzimuthStatus.WrongVersion,
+        { HostSha256: not CompatibleHostSha256 } => AzimuthStatus.WrongVersion,
         _ when (hook is not null ? !hook.Verified : install.HookVersion is null) => AzimuthStatus.NoHook,
         _ => AzimuthStatus.Ready,
     };
@@ -78,7 +85,8 @@ public static class AzimuthSetup
                 }
             }
         }
-        return found.FirstOrDefault(i => i.Version == CompatibleVersion) ?? found.FirstOrDefault();
+        return found.FirstOrDefault(i => i.Version == CompatibleVersion && i.HostSha256 == CompatibleHostSha256)
+            ?? found.FirstOrDefault(i => i.Version == CompatibleVersion) ?? found.FirstOrDefault();
     }
 
     /// <summary>The usual places a player extracts a download to.</summary>

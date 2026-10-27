@@ -124,6 +124,8 @@ public sealed partial class ShellViewModel
         if (WineHost.Detected)
         {
             var inherited = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
+            // OD-125: the hook (ExtraOptions.Infinity's winmm.dll) loads native-first; the AppDefaults entry is set in PlayOfflineAsync
+            inherited = WineHost.WithNativeDll(inherited, WineHost.HookModule) ?? inherited;
             foreach (var module in overrides) inherited = WineHost.WithNativeDll(inherited, module) ?? inherited;
             if (inherited is not null) environment.Add(("WINEDLLOVERRIDES", inherited));
         }
@@ -167,7 +169,8 @@ public sealed partial class ShellViewModel
             using var uiPipe = OfflineOverlay(environment);
             Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
             // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
-            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, OfflineOverlayNames));
+            if (WineHost.Detected) Log("play: wine " + WineHost.HookModule + " " + WineHost.EnsureNativeDllOverride(WineHost.HookModule, true));
+            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [AzimuthSetup.SkipLauncher], install.Root, environment, OfflineOverlayNames));
             using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
                 new UiFrame.Status(profile.DisplayName, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
             if (overlay is not null)
