@@ -166,9 +166,12 @@ public sealed partial class ShellViewModel
         _searching = true;
         Changed(string.Empty);
         AzimuthInstall? found;
+        var notes = new List<string>();
         try
         {
-            found = await Task.Run(() => AzimuthSetup.Find(explicitFolder, _stateDirectory, AppContext.BaseDirectory));
+            // owner 2026-10-27: the location is the PC's (the launcher root), found in any server's folder
+            var root = StateRoot;
+            found = await Task.Run(() => AzimuthSetup.Find(explicitFolder, _stateDirectory, AppContext.BaseDirectory, AzimuthSearchRoots, root, notes.Add));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -179,6 +182,7 @@ public sealed partial class ShellViewModel
         {
             _searching = false;
         }
+        foreach (var note in notes) Log(note);
         Install = found;
         Log(found is null ? "setup: no Azimuth found" : $"setup: Azimuth {found.Version ?? "?"} at {found.Root} ({SetupStatus})");
         if (InShell && openSetupWhenNeeded && SetupStatus != AzimuthStatus.Ready)
@@ -192,7 +196,7 @@ public sealed partial class ShellViewModel
     public void ChooseAzimuthFolder(string folder)
     {
         if ((!InShell && !DevelopmentMods) || !ModsIdle) return;
-        if (!AzimuthSetup.SaveChoice(_stateDirectory, folder))
+        if (!AzimuthSetup.SaveChoice(_stateDirectory, folder, StateRoot))
         {
             _azimuthChoiceFailed = true;
             ConfigurationMessage(S["setup.not_azimuth_folder"], error: true);

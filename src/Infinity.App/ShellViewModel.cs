@@ -306,6 +306,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             await CreateAccountFromLocalAsync(_pending, _firstLocal);
             return;
         }
+        // Owner 2026-10-27: the new account's first profile starts from the Azimuth career too, as a Noob profile made on the
+        // profile screen: named as Azimuth's player it adopts that career, otherwise the picker offers this PC's Azimuth saves.
+        var adoptsAzimuth = ShowAzimuthNameWarning;
+        Profile? created = null;
         await Run(async () =>
         {
             var session = await _pending.CreateAccountAsync("fh2", NewName);
@@ -313,11 +317,13 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             NewName = string.Empty;
             try { await EnterAsync(session); }
             catch { session.Dispose(); throw; }
-            if (session.Me?.Profiles.FirstOrDefault(p => p.Game == "fh2") is { } first)
-            {
-                OfferSaves(first);
-            }
+            created = session.Me?.Profiles.FirstOrDefault(p => p.Game == "fh2");
         });
+        if (created is { Mode: not "hardcore" } first) // B2: a Hardcore career starts empty
+        {
+            if (adoptsAzimuth && await AdoptAzimuthCareerAsync(first)) return;
+            OfferSaves(first);
+        }
     }
 
     /// <summary>The local profile a new account starts with (OD-120: POST /accounts registers it), null when none is on this PC.</summary>

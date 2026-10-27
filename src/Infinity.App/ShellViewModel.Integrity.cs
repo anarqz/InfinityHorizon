@@ -47,7 +47,7 @@ public sealed partial class ShellViewModel
     {
         get
         {
-            if (!_contentLocationLoaded) { _contentLocation = GameContentLocation.Load(_stateDirectory); _contentLocationLoaded = true; }
+            if (!_contentLocationLoaded) { _contentLocation = GameContentLocation.Load(_stateDirectory, StateRoot); _contentLocationLoaded = true; }
             return _contentLocation;
         }
     }
@@ -81,7 +81,7 @@ public sealed partial class ShellViewModel
         if (location is null) { _configurationHasError = true; _integrityFailed = true; _integrityStatus = S["integrity.invalid_content"]; Message = _integrityStatus; Changed(string.Empty); return; }
         try
         {
-            location.Save(_stateDirectory);
+            location.Save(_stateDirectory, StateRoot);
             ClearIntegrity(); _contentLocation = location; _contentLocationLoaded = true;
             _integrityStatus = S["integrity.not_checked"];
         }

@@ -201,8 +201,16 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>The first Play's "Check this career": the dry run for the existing Hardcore profile.</summary>
-    public Task CheckSeedChoiceAsync() => _seedChoice is { } target && SeedChoiceSource is { } source
-        ? Run(() => CheckSeedAsync(target, source.Profile, fromPlay: true)) : Task.CompletedTask;
+    public Task CheckSeedChoiceAsync()
+    {
+        if (_seedChoice is not { } target || SeedChoiceSource is not { } source)
+        {
+            Log($"seed: check clicked without a choice (target={_seedChoice is not null}, source={SeedChoiceSource is not null})");
+            return Task.CompletedTask;
+        }
+        if (_busy) Log("seed: check clicked while the launcher is busy");
+        return Run(() => CheckSeedAsync(target, source.Profile, fromPlay: true));
+    }
 
     // ------------------------------------------------------------------ the dry run's answer, shown before the player confirms
 
@@ -276,9 +284,12 @@ public sealed partial class ShellViewModel
         if (_install is null || _session is not { } session || CloudSaveClient() is not { } client
             || ParseXuid(target) is null || ParseXuid(source) is not { } sourceXuid)
         {
+            Log($"seed: check not started (install={_install is not null}, session={_session is not null}, saves={CloudSaveClient() is not null})");
             Message = S["seed.failed"];
             return;
         }
+        Log("seed: reading the source's newest sealed revision on this PC");
+        Message = S["seed.checking"];
         var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
         PackedRevision? packed;
         try { packed = await Task.Run(() => ProfileSeed.ReadSource(savesRoot, sourceXuid)); }
@@ -289,6 +300,7 @@ public sealed partial class ShellViewModel
         }
         if (packed is null)
         {
+            Log("seed: the source has no sealed revision on this PC");
             Message = S.Format("seed.no_source_save", ("source", sourceName));
             return;
         }
@@ -296,12 +308,18 @@ public sealed partial class ShellViewModel
         try
         {
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
-            Message = S["seed.checking"];
+            Log($"seed: sending the check ({packed.Bundle.Length} bytes)");
             var answer = await client.Api.CheckSeedAsync(access, target.Xuid, source.Xuid, packed.Bundle);
             _seedChecks.Add(DateTimeOffset.UtcNow); // the server counts every check it answers, accepted or refused (§4.10)
             if (answer.Status == System.Net.HttpStatusCode.TooManyRequests)
                 while (SeedChecksToday < ProfileSeed.DailyChecks) _seedChecks.Add(DateTimeOffset.UtcNow); // the day's are used up
             result = ProfileSeed.Interpret(answer);
+        }
+        catch (ApiException e)
+        {
+            Log($"seed: check answered {(int)e.Status} {e.Code}");
+            Message = ErrorText(e.Code) + " " + S["seed.failed"];
+            return;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {

@@ -363,6 +363,30 @@
                          Visibility="{Binding ShowServerSecurity, Converter={StaticResource Visible}}" />
             </StackPanel>
           </StackPanel>
+          <!-- Owner 2026-10-27: Azimuth is found before sign-in. None found, its setup comes first (local only, OD-118). -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowAzimuthFirst, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="28,24" Width="560" Margin="0,20" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <TextBlock Text="{Binding S[setup.first_title]}" Style="{StaticResource PageTitle}" FontSize="24" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding S[setup.first_body]}" Margin="0,8,0,16" Style="{StaticResource PageSubtitle}" TextWrapping="Wrap" />
+              <DockPanel Margin="0,0,0,12">
+                <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}" />
+                <TextBlock Text="{Binding SetupFoundLine}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+              </DockPanel>
+              <TextBlock Text="{Binding SetupStep1}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,4" />
+              <TextBlock Text="{Binding S[setup.step2]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,4" />
+              <WrapPanel Margin="0,14,0,0">
+                <Button x:Name="AzimuthFirstChoose" Content="{Binding S[setup.choose]}" Click="OnChooseAzimuthFirst" Style="{StaticResource AccentButtonStyle}"
+                        Padding="16,6" Margin="0,0,10,8" IsEnabled="{Binding Idle}" AutomationProperties.Name="{Binding S[setup.choose]}" />
+                <Button Content="{Binding S[setup.recheck]}" Click="OnRecheckAzimuthFirst" Padding="16,6" Margin="0,0,10,8" IsEnabled="{Binding Idle}" />
+                <Button Content="{Binding S[setup.first_later]}" Click="OnAzimuthLater" Style="{StaticResource LinkButton}" Margin="0,0,0,8" VerticalAlignment="Center"
+                        AutomationProperties.Name="{Binding S[setup.first_later]}" />
+              </WrapPanel>
+              <Button Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,4,0,0" Click="OnOpenAzimuthPage" AutomationProperties.Name="{Binding S[setup.grab]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[setup.grab]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
+              <TextBlock Text="{Binding S[setup.first_note]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityFaint}" Margin="0,14,0,0" />
+            </StackPanel>
+          </Border>
+          </ScrollViewer>
           <!-- CR-L39: the server editor takes the welcome screen's place while it is open. -->
           <!-- OD122-L9: the beholder's servers and relays, the official server and a typed address; controller-first (D-pad, A, B). -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowServerEditor, Converter={StaticResource Visible}}">
@@ -464,6 +488,8 @@
                 <ComboBox Margin="0,6,0,0" ItemsSource="{Binding SeedChoiceSources}" SelectedItem="{Binding SeedChoiceSource}" DisplayMemberPath="Name"
                           AutomationProperties.Name="{Binding S[seed.source_label]}" />
                 <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                <!-- the panel covers the status line: progress and early failures are shown here too -->
+                <TextBlock Text="{Binding Message}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                 <WrapPanel Margin="0,14,0,0">
                   <Button Content="{Binding S[seed.check]}" Click="OnSeedCheckChoice" IsEnabled="{Binding CanCheckSeedChoice}" Style="{StaticResource AccentButtonStyle}"
                           Padding="16,6" Margin="0,0,10,8" />

@@ -27,7 +27,7 @@ public sealed record GameContentLocation(string PackageRoot, string Mount)
     {
         try
         {
-            var path = Path.Combine(stateDirectory, "game-content-location.txt");
+            var path = Path.Combine(stateDirectory, FileName);
             if (!CriticalFileReader.SafeAncestors(path) || !File.Exists(path)) return null;
             using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096);
             if (input.Length > 32768) return null;
@@ -46,8 +46,32 @@ public sealed record GameContentLocation(string PackageRoot, string Mount)
     public void Save(string stateDirectory)
     {
         Directory.CreateDirectory(stateDirectory);
-        var path = Path.Combine(stateDirectory, "game-content-location.txt");
+        var path = Path.Combine(stateDirectory, FileName);
         if (!CriticalFileReader.SafeAncestors(path)) throw new IOException("Unsafe local settings location");
         File.WriteAllText(path, PackageRoot, new UTF8Encoding(false));
+    }
+
+    public const string FileName = "game-content-location.txt";
+
+    /// <summary>Owner 2026-10-27: the game folder is the PC's. Saved in the server's folder and once in the launcher root.</summary>
+    public void Save(string stateDirectory, string launcherRoot)
+    {
+        Save(stateDirectory);
+        if (!Infinity.Core.Process.PcLocation.Same(launcherRoot, stateDirectory)) Save(launcherRoot);
+    }
+
+    /// <summary>
+    /// The PC's remembered game folder: the launcher root's, else this server's folder's, else the newest other server folder's that
+    /// still resolves (<see cref="Infinity.Core.Process.PcLocation"/>). One found elsewhere is copied into the root and this folder (best effort).
+    /// </summary>
+    public static GameContentLocation? Load(string stateDirectory, string launcherRoot)
+    {
+        if (Infinity.Core.Process.PcLocation.Resolve(launcherRoot, stateDirectory, FileName, Load) is not { } found) return null;
+        foreach (var dir in new[] { launcherRoot, stateDirectory })
+        {
+            try { if (Load(dir) != found.Value) found.Value.Save(dir); }
+            catch (Exception error) when (CriticalFileReader.FileError(error)) { /* the location stands; the copy is retried next time */ }
+        }
+        return found.Value;
     }
 }
