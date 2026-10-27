@@ -193,7 +193,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             ? _text("connection.yes") : unknown;
         var text = endpoints + "\n\n" + _text("connection.matchmaking") + ": " + result + "\n" + _text("connection.response") + ": " + started.ElapsedMilliseconds + " ms"
             + "\n\n" + _text("connection.public_address") + ": " + publicAddress + "\nIPv6: " + ipv6 + "\nNAT: " + nat
-            + "\nUPnP: " + (network is null ? unknown : _text("connection.upnp." + network.Upnp.ToString().ToLowerInvariant())) + "\n\n" + _text("connection.snapshot");
+            + "\nUPnP: " + (network is null ? unknown : _text("connection.upnp." + network.Upnp.ToString().ToLowerInvariant()))
+            + (TransportText() is { } transport ? "\n" + _text("connection.transport") + ": " + transport : "") + "\n\n" + _text("connection.snapshot");
         return new(state, text);
     }
 
@@ -467,6 +468,14 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         // OD-112: the session's set goes with every join; planned mods not confirmed yet never join as vanilla.
         var (mods, modsRefusal) = WireMods();
         if (modsRefusal is not null) return new(UiJoin.NotAllowed, _text(modsRefusal));
+        // CR-S57: only a hook that reported the relay capability gets nat and relays (also {}); without it both stay out (direct only).
+        string? nat = null;
+        IReadOnlyDictionary<string, int>? relays = null;
+        if (RelayJoinerCapable)
+        {
+            var report = await RelayReportAsync(cancellation).ConfigureAwait(false);
+            (nat, relays) = (report?.Nat, report?.Relays ?? new Dictionary<string, int>());
+        }
         try
         {
             for (var attempt = 0; attempt < 2; ++attempt)
@@ -474,7 +483,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, token), cancellation,
+                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -496,6 +505,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 if (answer.Value is not { } join)
                 {
+                    if (ConflictReasons.RelayKey(answer.Error) is { } relayKey)
+                    {
+                        _log($"worlds: join refused: {answer.Error?.Reason}");
+                        return new UiFrame.JoinResult(UiJoin.NotAllowed, _text(relayKey));
+                    }
                     return new UiFrame.JoinResult(UiJoin.Closed, _text(answer.Error?.Kind == MmErrorKind.WorldNotFound ? "worlds.closed" : "worlds.join_failed"));
                 }
                 switch (join.Status)
@@ -512,7 +526,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             return new(UiJoin.NotAllowed, _text("worlds.load_game"));
                         }
                         var proofInstalled=false;
-                        try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation).ConfigureAwait(false);}
+                        try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation,grant.Transport).ConfigureAwait(false);}
                         catch(Exception error) when(HostFailure(error)) { _log($"worlds: socket proof context failed: {error.GetType().Name}"); }
                         if(!proofInstalled || joinEpoch!=Volatile.Read(ref _mineEpoch))
                         {
@@ -621,7 +635,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (!renewed.Ok || renewed.Value is not { } seat)
                 {
                     _seat.RenewFailed(Now, renewed.RetryAfter);
-                    return null;
+                    // CR-S57: a relay refusal is shown (the seat itself stays until it lapses)
+                    return ConflictReasons.RelayKey(renewed.Error) is { } relayKey ? _text(relayKey) : null;
                 }
                 if (seat.Seat?.GrantId is { } returned && returned != grantId) { RequestReconcile(); return null; }
                 var seatAt = DateTimeOffset.TryParse(seat.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
@@ -958,6 +973,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(RelayFailureKey?.Invoke() ?? relayUnavailableKey));
             if (_relay is IntegratedWorldRelay integrated) {integrated.CrashContext = CrashContext;integrated.DiagnosticLog=_log;}
             var relay = _relay;
+            // CR-S57: the host's NAT test and relay round trips, read when the world opens (the host's relay legs already exist)
+            var relayReport = await RelayReportAsync(stop.Token).ConfigureAwait(false);
             var settings = new WorldSettings
             {
                 Name = string.IsNullOrWhiteSpace(request.Name) ? "Infinity" : request.Name.Trim()[..Math.Min(48, request.Name.Trim().Length)],
@@ -968,6 +985,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Races = true,
                 Endpoint = Announcement(relay),
                 Mods = mods,
+                Nat = relayReport?.Nat,
+                Relays = relayReport?.Relays,
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {
@@ -1009,6 +1028,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         Volatile.Write(ref _hostedCode, world.Code);
                         Volatile.Write(ref _hostedMods, mods ?? []);
                         Volatile.Write(ref _hostedPlayers, world.Players);
+                        Volatile.Write(ref _hostedTransport, world.Transport);
+                        Volatile.Write(ref _hostedRelayName, world.Relay?.Name);
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
@@ -1029,6 +1050,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     MmErrorKind.SupporterRequired => "worlds.host_supporters",
                     MmErrorKind.ModeMismatch => "worlds.host_mode",
                     MmErrorKind.Conflict when opened?.Error?.Reason == ConflictReasons.Mods => "worlds.mods_changed",
+                    MmErrorKind.Conflict when ConflictReasons.RelayKey(opened?.Error) is { } relayKey => relayKey,
                     MmErrorKind.Invalid when opened?.Error?.Field == "mods" => "worlds.mods_failed",
                     MmErrorKind.RateLimited => "worlds.slow_down",
                     _ => "worlds.host_failed",

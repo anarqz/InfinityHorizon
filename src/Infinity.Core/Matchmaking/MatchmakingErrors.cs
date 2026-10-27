@@ -42,7 +42,26 @@ public static class ConflictReasons
     /// <summary>OD-112: another mod set on an open world, or a request to join with another set.</summary>
     public const string Mods = "mods";
 
-    public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods];
+    /// <summary>CR-S57 §5b: a symmetric host with no trusted relay in its map, or a fallback renew of a grant without one.</summary>
+    public const string NoRelay = "no_relay";
+
+    /// <summary>CR-S57 §5b: a join without <c>relays</c> to a world born on a relay.</summary>
+    public const string LauncherUpdateRequired = "launcher_update_required";
+
+    /// <summary>CR-S57 §5b: past a relay cap (seats per world, the account's hourly bucket, one relay-born world).</summary>
+    public const string RelayBusy = "relay_busy";
+
+    public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
+        NoRelay, LauncherUpdateRequired, RelayBusy];
+
+    /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
+    public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch
+    {
+        NoRelay => "worlds.no_relay",
+        RelayBusy => "worlds.relay_busy",
+        LauncherUpdateRequired => "worlds.launcher_update_required",
+        _ => null,
+    } : null;
 }
 
 /// <summary><c>PORTAL.VIP_REQUIRED {capability}</c> values of §8.</summary>

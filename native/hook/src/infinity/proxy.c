@@ -165,6 +165,75 @@ int azimuth_proxy_relay_candidates(const unsigned char *p,size_t n) {
     ReleaseSRWLockExclusive(&px_hint_lock);return 1;
 }
 
+/* ------------------------------------------------------- relay fallback (CR-S57)
+
+   MATCHMAKING_API.md 5 and 5b, the FIR1 wire of fi_relay::wire (RelayLegs.cs is the host's side).
+   The launcher's RelayLeg (pipe frame 0x1d) names the grant's relay and the grant's exact signed
+   claims: {u8 1, grant[16], u8 transport (0 direct, 1 relay), relay IPv4[4], u16 BE rendezvous
+   port, u16 BE claims length (1-2048), claims, signature[64]}; {0} or {1, 16 zero bytes} clears
+   it. A direct world's joiner whose game is not proved within 3 s of the first applied
+   RelayCandidates says hello (role joiner) to that relay from the proxy's own socket, and once
+   the relay says `relay ok` every datagram for the world travels as FIR1 `data` (the FIUP proof
+   runs again, unchanged, over the relay); a relay-born world (transport 1) goes there at once.
+   RelayFallback (0x1e) tells the launcher: 1 direct failed (renew the seat with transport
+   "relay"), 2 relay ok, 3 relay unavailable for good, 4 direct ok. */
+#define PX_LEG_CLAIMS 2048u
+#define PX_RELAY_PAYLOAD 1200
+#define PX_DIRECT_FALLBACK_MS 3000u
+#define PX_RELAY_HELLO_MS 15000u
+#define PX_RELAY_RETRY_MS 1000u
+#define PX_RELAY_GIVE_UP_MS 10000u
+#define PX_RELAY_PROOF_MS 15000u
+static SRWLOCK px_leg_lock=SRWLOCK_INIT;
+static struct {
+    unsigned char grant[16],relay[4],claims[PX_LEG_CLAIMS],signature[64];
+    size_t claims_size;unsigned short port;unsigned transport;int present;
+} px_leg;
+static volatile LONG px_leg_revision;
+/* The proxy thread's leg (px_relay_phase is read by azimuth_proxy_send_world's callers too). */
+enum {PXR_IDLE,PXR_TRYING,PXR_OK,PXR_GAVE_UP,PXR_DIRECT};
+static struct {
+    unsigned char grant[16],claims[PX_LEG_CLAIMS],signature[64],cookie[16];
+    size_t claims_size;PxAddr relay;LONG revision;
+    int have_leg,skip_direct,have_cookie,answered,want_relay,direct_told,unavailable;
+    unsigned long long deadline,last_hello,last_relay,ok_at;
+} px_relay={.revision=-1};
+static volatile LONG px_relay_phase,px_relay_dropped;
+static unsigned long long px_direct_clock; /* the first applied RelayCandidates; 0: none yet */
+static void px_relay_reset(void);
+
+static int px_leg_grant_current(const unsigned char *grant) {
+    unsigned char context[89];unsigned long serial;
+    int ready=fi_udp_context_get(context,&serial);
+    int same=!ready || memory_equal(context+1,grant,16);fi_udp_zero(context,89);return same;
+}
+void azimuth_proxy_relay_leg_clear(void) {
+    AcquireSRWLockExclusive(&px_leg_lock);
+    fi_udp_zero(&px_leg,sizeof(px_leg));InterlockedIncrement(&px_leg_revision);
+    ReleaseSRWLockExclusive(&px_leg_lock);
+}
+/* RelayLeg (0x1d): 1 stored or cleared, 0 refused (logged; the session goes on). */
+int azimuth_proxy_relay_leg(const unsigned char *p,size_t n) {
+    static const unsigned char zero[16]={0};
+    if((n==1 && p[0]==0) || (n==17 && p[0]==1 && memory_equal(p+1,zero,16))) {
+        azimuth_proxy_relay_leg_clear();log_append("RELAY: leg cleared.\r\n");return 1;
+    }
+    size_t claims=n>=26 ? ((size_t)p[24]<<8)|p[25] : 0;
+    if(n<26 || p[0]!=1 || memory_equal(p+1,zero,16) || p[17]>1 || !p[18] || p[18]>=224 || !(p[22]|p[23])
+        || !claims || claims>PX_LEG_CLAIMS || n!=26+claims+64) {
+        log_append("RELAY: a RelayLeg frame that does not parse; ignored.\r\n");return 0;
+    }
+    /* Without a context yet it is kept; the proxy uses it only once the context names its grant. */
+    if(!px_leg_grant_current(p+1)) {log_append("RELAY: a RelayLeg for another grant; ignored.\r\n");return 0;}
+    AcquireSRWLockExclusive(&px_leg_lock);
+    memory_copy(px_leg.grant,p+1,16);px_leg.transport=p[17];memory_copy(px_leg.relay,p+18,4);
+    px_leg.port=(unsigned short)((p[22]<<8)|p[23]);px_leg.claims_size=claims;memory_copy(px_leg.claims,p+26,claims);
+    memory_copy(px_leg.signature,p+26+claims,64);px_leg.present=1;InterlockedIncrement(&px_leg_revision);
+    ReleaseSRWLockExclusive(&px_leg_lock);
+    log_append(p[17] ? "RELAY: leg stored (relay-born world).\r\n" : "RELAY: leg stored (direct first, relay fallback).\r\n");
+    return 1;
+}
+
 /* ------------------------------------------------------------------ helpers */
 
 typedef struct {
@@ -319,9 +388,40 @@ static void px_new_txid(unsigned char *t) {
     }
 }
 
+/* FIR1 ‖ kind ‖ grant ‖ payload (relay 0x03: no payload; data 0x05). Its size. */
+static size_t px_fir1_frame(unsigned char *out,unsigned kind,const unsigned char *grant,const void *payload,size_t size) {
+    memory_copy(out,"FIR1",4);out[4]=(unsigned char)kind;memory_copy(out+5,grant,16);
+    if(size)memory_copy(out+21,payload,size);
+    return 21+size;
+}
+/* FIR1 hello: role, u16 BE claims length, claims, signature[64], then the last challenge's cookie. */
+static size_t px_fir1_hello(unsigned char *out,unsigned role,const unsigned char *claims,size_t claims_size,
+                            const unsigned char *signature,const unsigned char *cookie) {
+    memory_copy(out,"FIR1",4);out[4]=1;out[5]=(unsigned char)role;
+    out[6]=(unsigned char)(claims_size>>8);out[7]=(unsigned char)claims_size;
+    memory_copy(out+8,claims,claims_size);memory_copy(out+8+claims_size,signature,64);
+    if(cookie)memory_copy(out+72+claims_size,cookie,16);
+    return 72+claims_size+(cookie ? 16 : 0);
+}
+/* Every datagram for the world: in relay mode the world is the relay, and what goes there is
+   FIR1 data for our grant (larger payloads are counted and dropped). */
+static int px_send_on(UINT_PTR s,const void *data,int size,const PxAddr *to) {
+    if(!fi_launch_network_allowed())return 0;
+    if(px_relay_phase==PXR_OK && px_same(to,&px_relay.relay)) {
+        if(size<=0 || size>PX_RELAY_PAYLOAD) {InterlockedIncrement(&px_relay_dropped);return 0;}
+        unsigned char frame[21+PX_RELAY_PAYLOAD];
+        int n=(int)px_fir1_frame(frame,5,px_relay.grant,data,(size_t)size);
+        return px.sendto(s,(const char *)frame,n,0,to,(int)sizeof(*to))==n;
+    }
+    return px.sendto(s,(const char *)data,size,0,to,(int)sizeof(*to))==size;
+}
 static void px_send(const void *data, int size, const PxAddr *to) {
-    if (!fi_launch_network_allowed()) return;
-    px.sendto(px_socket, (const char *)data, size, 0, to, (int)sizeof(*to));
+    px_send_on(px_socket,data,size,to);
+}
+/* FIR1 control to the relay itself, never wrapped. */
+static void px_send_raw(const void *data,int size,const PxAddr *to) {
+    if(!fi_launch_network_allowed())return;
+    px.sendto(px_socket,(const char *)data,size,0,to,(int)sizeof(*to));
 }
 
 static void px_binding_request(const unsigned char *txid, const PxAddr *to) {
@@ -541,6 +641,7 @@ static void px_stun_tick(unsigned long long now) {
 static int px_proof_context(unsigned char *context) {
     unsigned long serial=0;if(!fi_udp_context_get(context,&serial))return 0;
     if(serial!=px_proof_serial) {
+        px_relay_reset();px_direct_clock=0;
         px_proof_reset();px_have_world=0;px_proof_serial=serial;
         px_candidate_count=0;px_add_candidate(&px_initial);
         AcquireSRWLockExclusive(&px_hint_lock);px_hint_sent=px_hint_deadline=0;px_hint_size=0;
@@ -586,6 +687,8 @@ static void px_network_tick(const unsigned char *context,int publish) {
     if(expired)px_hint_deadline=0;
     ReleaseSRWLockExclusive(&px_hint_lock);
     if(!size && !expired)return;
+    if(size && !px_direct_clock)px_direct_clock=now?now:1; /* CR-S57: the direct path's 3 s start here */
+    if(px_relay_phase==PXR_OK)return; /* relay mode: the relay is the only candidate */
     px_diag(size?13:14,2,0);
     PxAddr old[PX_CANDIDATES];static PxProof proofs[2][PX_CANDIDATES];LONG old_count=px_candidate_count;
     memory_copy(old,px_candidates,sizeof(old));memory_copy(proofs,px_proofs,sizeof(proofs));
@@ -652,6 +755,161 @@ static int px_proof_received(const unsigned char *packet,int n,const PxAddr *fro
     } else if(px_have_world && px_same(from,&px_world)) { px_hook_at=now;InterlockedExchange(&px_hook_proved,1); }return 1;
 }
 
+/* ------------------------------------------------- relay leg (proxy thread only) */
+
+static void px_relay_log(const char *text,const char *tail) {
+    char at[72];px_format(&px_relay.relay,at,sizeof(at));
+    PxLine l;l.size=0;l.text[0]=0;px_text(&l,text);px_text(&l,at);px_text(&l,tail);log_append(l.text);
+}
+/* Back to the direct path's state; a relay mode's world and proofs were the relay's. */
+static void px_relay_reset(void) {
+    LONG phase=InterlockedExchange(&px_relay_phase,PXR_IDLE);
+    LONG dropped=InterlockedExchange(&px_relay_dropped,0);
+    if(dropped) {
+        PxLine l;l.size=0;l.text[0]=0;px_text(&l,"RELAY: ");px_number(&l,(unsigned long long)dropped);
+        px_text(&l," datagram(s) over 1200 bytes were not relayed.\r\n");log_append(l.text);
+    }
+    fi_udp_zero(&px_relay,sizeof(px_relay));px_relay.revision=-1;
+    if(phase==PXR_OK) {
+        px_proof_reset();InterlockedExchange(&px_have_world,0);
+        px_candidate_count=0;px_add_candidate(&px_initial);
+    }
+}
+static void px_relay_hello(unsigned long long now) {
+    static unsigned char m[72+PX_LEG_CLAIMS+16];
+    size_t n=px_fir1_hello(m,1,px_relay.claims,px_relay.claims_size,px_relay.signature,px_relay.have_cookie ? px_relay.cookie : 0);
+    px_send_raw(m,(int)n,&px_relay.relay);px_relay.last_hello=now;
+}
+static void px_relay_send_relay(unsigned long long now) {
+    unsigned char m[21];px_fir1_frame(m,3,px_relay.grant,0,0);
+    px_send_raw(m,21,&px_relay.relay);px_relay.last_relay=now;
+}
+/* The launcher's leg for the context's grant, when it changed (a re-signed copy for the same
+   grant and relay keeps the leg's progress, like RelayLegs.Update). */
+static void px_relay_sync(const unsigned char *context) {
+    LONG revision=px_leg_revision;
+    if(revision==px_relay.revision)return;
+    AcquireSRWLockShared(&px_leg_lock);
+    int usable=px_leg.present && memory_equal(px_leg.grant,context+1,16);
+    PxAddr relay={0};relay.family=PX_AF_INET6;relay.address[10]=relay.address[11]=0xff;
+    memory_copy(relay.address+12,px_leg.relay,4);relay.port=(unsigned short)((px_leg.port>>8)|((px_leg.port&255)<<8));
+    int same=usable && px_relay.have_leg && memory_equal(px_relay.grant,px_leg.grant,16) && px_same(&relay,&px_relay.relay)
+        && px_relay.skip_direct==(px_leg.transport==1);
+    if(!same) {
+        ReleaseSRWLockShared(&px_leg_lock);
+        if(px_relay.have_leg)log_append("RELAY: leg changed or cleared; the relay leg stops.\r\n");
+        px_relay_reset();
+        AcquireSRWLockShared(&px_leg_lock);
+        usable=px_leg.present && memory_equal(px_leg.grant,context+1,16);
+        if(usable) {
+            memory_copy(px_relay.grant,px_leg.grant,16);px_relay.relay=relay;
+            px_relay.skip_direct=px_leg.transport==1;px_relay.have_leg=1;
+        }
+    }
+    if(usable) {
+        memory_copy(px_relay.claims,px_leg.claims,px_leg.claims_size);px_relay.claims_size=px_leg.claims_size;
+        memory_copy(px_relay.signature,px_leg.signature,64);
+    }
+    px_relay.revision=revision;
+    ReleaseSRWLockShared(&px_leg_lock);
+}
+static void px_relay_start(unsigned long long now) {
+    px_relay.deadline=now+PX_RELAY_GIVE_UP_MS;px_relay.answered=px_relay.want_relay=px_relay.unavailable=0;
+    InterlockedExchange(&px_relay_phase,PXR_TRYING);
+    px_relay_hello(now);
+}
+static void px_relay_give_up(const char *line) {
+    log_append(line);
+    fi_launch_relay_fallback(px_relay.grant,3);
+    unsigned char grant[16];memory_copy(grant,px_relay.grant,16);
+    LONG revision=px_relay.revision;PxAddr relay=px_relay.relay;int skip=px_relay.skip_direct;
+    px_relay_reset();
+    /* the leg stays known (no second try for this grant) */
+    memory_copy(px_relay.grant,grant,16);px_relay.relay=relay;px_relay.skip_direct=skip;px_relay.have_leg=1;
+    px_relay.revision=revision;px_relay.direct_told=1;
+    InterlockedExchange(&px_relay_phase,PXR_GAVE_UP);
+}
+/* 0x04 relay ok: the relay becomes the world's only candidate and the FIUP proof runs over it. */
+static void px_relay_ok(unsigned long long now) {
+    px_proof_reset();InterlockedExchange(&px_have_world,0);
+    AcquireSRWLockExclusive(&px_lock);px_candidates[0]=px_relay.relay;px_candidate_count=1;ReleaseSRWLockExclusive(&px_lock);
+    px_relay.ok_at=now;
+    InterlockedExchange(&px_relay_phase,PXR_OK);
+    fi_launch_relay_fallback(px_relay.grant,2);
+    log_append("RELAY: relay ok; the world's datagrams go through the relay.\r\n");
+}
+/* Once per loop with the current context and the time (the tests drive `now`). */
+static void px_relay_tick(const unsigned char *context,unsigned long long now) {
+    px_relay_sync(context);
+    if(!px_relay.have_leg)return;
+    LONG phase=px_relay_phase;
+    if(px_game_proved && phase!=PXR_OK) {
+        if(!px_relay.direct_told) {
+            px_relay.direct_told=1;fi_launch_relay_fallback(px_relay.grant,4);
+            if(phase==PXR_TRYING) {
+                log_append("RELAY: the direct path answered first; the relay leg stops.\r\n");
+                InterlockedExchange(&px_relay_phase,PXR_DIRECT);
+            }
+        }
+        return;
+    }
+    if(phase==PXR_IDLE) {
+        if(px_relay.skip_direct) px_relay_log("RELAY: relay-born world; trying ",".\r\n");
+        else if(px_direct_clock && now-px_direct_clock>=PX_DIRECT_FALLBACK_MS && !px_have_world) {
+            fi_launch_relay_fallback(px_relay.grant,1);
+            px_relay_log("RELAY: direct failed after 3 s; trying ",".\r\n");
+        } else return;
+        px_relay_start(now);return;
+    }
+    if(phase==PXR_TRYING) {
+        if(now>=px_relay.deadline) {px_relay_give_up("RELAY: relay unavailable, giving up.\r\n");return;}
+        if(now-px_relay.last_hello>=(px_relay.answered ? PX_RELAY_HELLO_MS : PX_RELAY_RETRY_MS))px_relay_hello(now);
+        if(px_relay.want_relay && now-px_relay.last_relay>=PX_RELAY_RETRY_MS)px_relay_send_relay(now);
+    } else if(phase==PXR_OK) {
+        if(now-px_relay.last_hello>=PX_RELAY_HELLO_MS)px_relay_hello(now);
+        if(!px_have_world && now-px_relay.ok_at>=PX_RELAY_PROOF_MS)
+            px_relay_give_up("RELAY: the world did not answer through the relay; giving up.\r\n");
+    }
+}
+enum {PXR_RX_NOT_OURS,PXR_RX_HANDLED,PXR_RX_DATA};
+/* A datagram from the relay: FIR1 control is handled here, our grant's data is unwrapped in place
+   (*n becomes the payload's size) and then read exactly as one from the world. Anything else
+   from the relay's address is dropped; other senders are not ours. */
+static int px_relay_received(unsigned char *packet,int *n,const PxAddr *from,unsigned long long now) {
+    LONG phase=px_relay_phase;
+    if((phase!=PXR_TRYING && phase!=PXR_OK) || !px_same(from,&px_relay.relay))return PXR_RX_NOT_OURS;
+    int size=*n;
+    if(size<21 || !memory_equal(packet,"FIR1",4) || !memory_equal(packet+5,px_relay.grant,16))return PXR_RX_HANDLED;
+    switch(packet[4]) {
+    case 0x07: /* challenge: hello again with its cookie */
+        if(size!=37)break;
+        memory_copy(px_relay.cookie,packet+21,16);px_relay.have_cookie=1;px_relay.answered=1;px_relay_hello(now);break;
+    case 0x02: /* peer: both sides registered; ask to forward */
+        if(size!=29 && size!=41)break;
+        px_relay.answered=1;
+        if(phase==PXR_TRYING && !px_relay.want_relay) {px_relay.want_relay=1;px_relay_send_relay(now);}
+        break;
+    case 0x04:
+        if(size==21 && phase==PXR_TRYING)px_relay_ok(now);
+        break;
+    case 0x06: /* the host's leg may not be up yet: retried until the deadline */
+        if(size!=21 || phase!=PXR_TRYING)break;
+        px_relay.answered=px_relay.want_relay=1;
+        if(!px_relay.unavailable) {
+            px_relay.unavailable=1;
+            if(px_relay.deadline<now+PX_RELAY_GIVE_UP_MS)px_relay.deadline=now+PX_RELAY_GIVE_UP_MS;
+            log_append("RELAY: relay unavailable for now; retrying every second.\r\n");
+        }
+        break;
+    case 0x05:
+        if(phase!=PXR_OK || size<=21 || size-21>PX_RELAY_PAYLOAD)break;
+        for(int i=21;i<size;++i)packet[i-21]=packet[i];
+        *n=size-21;return PXR_RX_DATA;
+    default:break;
+    }
+    return PXR_RX_HANDLED;
+}
+
 static DWORD WINAPI px_thread(void *argument) {
     LONG generation = (LONG)(intptr_t)argument;
     /* this thread's own socket: a restart (azimuth_proxy_stop, then a new one) may set
@@ -669,10 +927,13 @@ static DWORD WINAPI px_thread(void *argument) {
     px_diag(5,2,0);px_diag(fi_launch_server_unix()?3:4,2,0);
     px_stun_round=0;
     px_new_txid(px_txid[PX_STUN_SERVERS]);
+    px_relay_reset();px_direct_clock=0;
     while (px_generation == generation && fi_launch_network_allowed()) {
         DWORD now = (DWORD)GetTickCount64();
         px_diag_tick(0);px_stun_tick(GetTickCount64());
-        if(px_proof_required() && !px_have_world && now-started>=30000) {
+        LONG relay_phase=px_relay_phase;
+        /* a leg that is still trying, or relaying, ends by its own deadlines */
+        if(px_proof_required() && !px_have_world && now-started>=30000 && relay_phase!=PXR_TRYING && relay_phase!=PXR_OK) {
             log_append("PROXY: direct connection could not be established within 30 seconds.\r\n");
             fi_launch_event(6,"2|connection.direct_failed");break;
         }
@@ -681,8 +942,12 @@ static DWORD WINAPI px_thread(void *argument) {
             if(!px_proof_context(proof_context)) {px_diag(2,2,0);fi_udp_zero(proof_context,89);px_proof_reset();break;}
             px_diag(1,2,0);
             px_network_tick(proof_context,signalled);
-            px_proof_tick(proof_context);
+            px_relay_tick(proof_context,GetTickCount64());
+            relay_phase=px_relay_phase;
+            /* a relay-born world never tries the direct path */
+            if(!px_relay.skip_direct || relay_phase==PXR_OK)px_proof_tick(proof_context);
         }
+        int direct_probes=relay_phase!=PXR_OK && !px_relay.skip_direct;
         /* the punch exchange once STUN answered (or gave up waiting) */
         if (!signalled) {
             unsigned answered = 0;
@@ -695,7 +960,7 @@ static DWORD WINAPI px_thread(void *argument) {
                 if (t) CloseHandle(t);
             }
         }
-        if (!px_have_world && now - last_probe >= PX_PROBE_MS && now - started < PX_SPRAY_MS) {
+        if (direct_probes && !px_have_world && now - last_probe >= PX_PROBE_MS && now - started < PX_SPRAY_MS) {
             last_probe = now;
             for (LONG i = 0; i < px_candidate_count && i < PX_CANDIDATES; ++i) {
                 px_binding_request(px_txid[PX_STUN_SERVERS], &px_candidates[i]);
@@ -706,7 +971,7 @@ static DWORD WINAPI px_thread(void *argument) {
                            "(INFINITY > TEST CONNECTION). Still trying.\r\n");
             }
         }
-        if (px_have_world && now - last_keepalive >= PX_KEEPALIVE_MS) {
+        if (direct_probes && px_have_world && now - last_keepalive >= PX_KEEPALIVE_MS) {
             last_keepalive = now;
             px_binding_request(px_txid[PX_STUN_SERVERS], &px_world);
         }
@@ -720,6 +985,10 @@ static DWORD WINAPI px_thread(void *argument) {
         }
         px_from(from_raw, &from);
         if(px_diag_rx!=0xffffffffUL)px_diag_rx++;
+        /* the relay: its control here, its data on as the world's own datagram */
+        if(px_proof_required() && px_relay_received(packet,&n,&from,GetTickCount64())==PXR_RX_HANDLED) {
+            fi_udp_zero(proof_context,89);continue;
+        }
         if(px_proof_required() && px_proof_received(packet,n,&from,proof_context,started)) {fi_udp_zero(proof_context,89);continue;}
         fi_udp_zero(proof_context,89);
         unsigned kind = 0;
@@ -791,6 +1060,7 @@ static DWORD WINAPI px_thread(void *argument) {
         px_text(&summary," tx=");px_number(&summary,px_diag_tx);px_text(&summary," rx=");px_number(&summary,px_diag_rx);
         px_text(&summary," dropped=");px_number(&summary,px_diag_dropped);px_text(&summary,"\r\n");log_append(summary.text);
     }
+    px_relay_reset();px_direct_clock=0;
     px_proof_reset();
     InterlockedCompareExchangePointer((void *volatile *)&px_socket, (void *)PX_INVALID, (void *)own);
     px.closesocket(own);
@@ -809,7 +1079,7 @@ int azimuth_proxy_send_world(const void *data, int size) {
         return 0;
     }
     PxAddr world = px_world;
-    return px.sendto(s, (const char *)data, size, 0, &world, (int)sizeof(world)) == size;
+    return px_send_on(s, data, size, &world); /* FIR1 data in relay mode */
 }
 int azimuth_proxy_proof_mode(void) {return px_proof_required() && px_socket!=PX_INVALID;}
 

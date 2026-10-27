@@ -73,6 +73,7 @@ public sealed partial class ShellViewModel
         var integrity = integrityApplies ? _integrity : null;
         var relayKeys = IntegratedRelayKeys(mm);
         var devLan = DevLanAdmission(mm);
+        var relayReports = RelayReports;
         return ticket =>
         {
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
@@ -93,6 +94,7 @@ public sealed partial class ShellViewModel
                 ModSet = mods,
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
+                RelayReports=relayReports.ReportAsync,
             };
         };
     }

@@ -18,6 +18,25 @@ public static class CaptureWhat
 
     /// <summary>The overlay DLL load the <c>Overlay</c> frame asked for (ok = <c>fi_overlay_start</c> returned 0).</summary>
     public const byte OverlayLoad = 4;
+
+    /// <summary>
+    /// CR-S57: the hook can fall back to a grant's relay (it takes <see cref="Frame.RelayLeg"/> and sends
+    /// <see cref="Frame.RelayFallback"/>). Only when ok in this session does a join send <c>nat</c> and <c>relays</c>.
+    /// </summary>
+    public const byte RelayJoiner = 7;
+}
+
+/// <summary><see cref="Frame.RelayFallback"/> states (hook → launcher, CR-S57).</summary>
+public static class RelayFallbackState
+{
+    /// <summary>The direct punch failed: renew the seat with <c>transport: "relay"</c> now and push the leg with transport relay.</summary>
+    public const byte DirectFailed = 1;
+    /// <summary>The pair's datagrams flow through the grant's relay.</summary>
+    public const byte RelayOk = 2;
+    /// <summary>The relay stayed unavailable (10 s of retries): the host could not be reached.</summary>
+    public const byte RelayUnavailable = 3;
+    /// <summary>The pair is direct.</summary>
+    public const byte DirectOk = 4;
 }
 
 /// <summary><c>ModsReport.phase</c>.</summary>
@@ -163,6 +182,67 @@ public abstract record Frame
         }
     }
 
+    /// <summary>
+    /// launcher → hook (0x1d, CR-S57): the relay a verified grant names, for the joiner's fallback.
+    /// <c>{u8 1, grant[16], u8 transport (0 direct, 1 relay), relayIPv4[4], u16 BE rendezvous port, u16 BE claimsLen,
+    /// claims[1-2048], sig[64]}</c>; clear = <c>{u8 1, grant[16] zero}</c>. The claims and signature are the grant's raw
+    /// signed bytes (the hook presents them to the relay). Never display the payload.
+    /// </summary>
+    public sealed record RelayLeg(byte[] Payload) : Frame
+    {
+        public const byte Version = 1;
+        public const int MaxClaims = 2048;
+        public const int ClearLength = 17;
+
+        public override byte Type => 0x1d;
+        public override string ToString() => "RelayLeg { redacted }";
+        public bool Equals(RelayLeg? other) => other is not null && Payload.AsSpan().SequenceEqual(other.Payload);
+        public override int GetHashCode() => Payload.Length;
+
+        public static RelayLeg Clear() => new([Version, .. new byte[16]]);
+
+        /// <summary>The leg of <paramref name="grant"/> at <paramref name="relay"/> (an IPv4 address) and its rendezvous port.</summary>
+        public static RelayLeg Build(Guid grant, bool viaRelay, System.Net.IPAddress relay, ushort port, ReadOnlySpan<byte> claims, ReadOnlySpan<byte> signature)
+        {
+            ArgumentNullException.ThrowIfNull(relay);
+            if (relay.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || claims.Length is 0 or > MaxClaims || signature.Length != 64)
+                throw new ProtocolException("Invalid relay leg");
+            var payload = new byte[90 + claims.Length];
+            payload[0] = Version;
+            grant.TryWriteBytes(payload.AsSpan(1, 16), bigEndian: true, out _);
+            payload[17] = viaRelay ? (byte)1 : (byte)0;
+            relay.TryWriteBytes(payload.AsSpan(18, 4), out _);
+            BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(22), port);
+            BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(24), (ushort)claims.Length);
+            claims.CopyTo(payload.AsSpan(26));
+            signature.CopyTo(payload.AsSpan(26 + claims.Length));
+            Validate(payload);
+            return new(payload);
+        }
+
+        internal static void Validate(ReadOnlySpan<byte> payload)
+        {
+            if (payload.Length == ClearLength && payload[0] == Version && !payload[1..].ContainsAnyExcept((byte)0)) return;
+            // the hook refuses an IPv4 whose first byte is 0 or 224+ (this network, multicast, reserved)
+            if (payload.Length < 91 || payload[0] != Version || !payload.Slice(1, 16).ContainsAnyExcept((byte)0) || payload[17] > 1
+                || payload[18] is 0 or >= 224 || BinaryPrimitives.ReadUInt16BigEndian(payload[22..]) == 0
+                || BinaryPrimitives.ReadUInt16BigEndian(payload[24..]) is var claims && (claims is 0 or > MaxClaims || payload.Length != 90 + claims))
+                throw new ProtocolException("Invalid relay leg");
+        }
+    }
+
+    /// <summary>hook → launcher (0x1e, CR-S57): <c>{grant[16], u8 state}</c>, one of <see cref="RelayFallbackState"/>.</summary>
+    public sealed record RelayFallback(Guid Grant, byte State) : Frame
+    {
+        public override byte Type => 0x1e;
+
+        internal static void Validate(Guid grant, byte state)
+        {
+            if (grant == Guid.Empty || state is < RelayFallbackState.DirectFailed or > RelayFallbackState.DirectOk)
+                throw new ProtocolException("Invalid relay fallback");
+        }
+    }
+
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
     {
@@ -304,6 +384,12 @@ public abstract record Frame
                 Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);w.Fixed(candidates.Payload,candidates.Payload.Length,"relay candidates");break;
             case RelayContext context:
                 RelayContext.Validate(context.Payload); w.Fixed(context.Payload,context.Payload.Length,"relay context");break;
+            case RelayLeg leg:
+                RelayLeg.Validate(leg.Payload); w.Fixed(leg.Payload, leg.Payload.Length, "relay leg"); break;
+            case RelayFallback fallback:
+                RelayFallback.Validate(fallback.Grant, fallback.State);
+                var grant = new byte[16]; fallback.Grant.TryWriteBytes(grant, bigEndian: true, out _);
+                w.Fixed(grant, 16, "relay fallback grant"); w.U8(fallback.State); break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -396,12 +482,16 @@ public abstract record Frame
             0x1a => new UdpDiagnostic(r.Take(length.Value-1).ToArray()),
             0x1b => DecodeModsReport(ref r),
             0x1c => DecodeCustomTrust(ref r),
+            0x1d => new RelayLeg(r.Take(length.Value - 1).ToArray()),
+            0x1e => new RelayFallback(new Guid(r.Take(16), bigEndian: true), r.U8()),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
         if (frame is ModsReport mods) mods.Validate();
         if (frame is CustomTrust trust) trust.Validate();
         if(frame is RelayContext context)RelayContext.Validate(context.Payload);
+        if (frame is RelayLeg leg) RelayLeg.Validate(leg.Payload);
+        if (frame is RelayFallback fallback) RelayFallback.Validate(fallback.Grant, fallback.State);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
         if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
         if(frame is RelayCandidates candidates)Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);
