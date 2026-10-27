@@ -26,6 +26,25 @@ public sealed partial class WorldsBridge
 
     public static readonly TimeSpan RelayReportBound = TimeSpan.FromSeconds(8);
 
+    /// <summary>
+    /// <see cref="RelayForce"/> (<c>FI_RELAY_FORCE=1</c>, a test switch): a joined grant that names a relay goes there at once, its
+    /// leg relay-born and its seat renewed with <c>transport: "relay"</c> (the path of the hook's direct failure). Hosting is unchanged.
+    /// </summary>
+    public bool ForceRelay { get; init; }
+
+    /// <summary>After a granted join under <see cref="ForceRelay"/>: the immediate relay renew, or a log line and direct play.</summary>
+    private async Task ForceRelayAsync(string grantId, CancellationToken cancellation)
+    {
+        if (!ForceRelay || !RelayJoinerCapable) return;
+        if (_legGrant != Guid.Parse(grantId))
+        {
+            _log("relay: FI_RELAY_FORCE set, but the grant names no usable relay; playing direct");
+            return;
+        }
+        _log("relay: FI_RELAY_FORCE: the seat goes straight to its relay");
+        await RelayFallbackAsync(new Frame.RelayFallback(Guid.Parse(grantId), RelayFallbackState.DirectFailed), cancellation).ConfigureAwait(false);
+    }
+
     private readonly WorldOperationRetry _fallbackRetry = new(TimeProvider.System);
     private readonly ConcurrentDictionary<string, string> _relayNames = new(StringComparer.Ordinal);
     private int _fallbackRunning;
@@ -73,9 +92,10 @@ public sealed partial class WorldsBridge
             await ClearLegAsync(cancellation).ConfigureAwait(false);
             return;
         }
-        // the hook's own report wins: once it plays direct, a seat that still reads "relay" never sends it back to the relay
-        var viaRelay = Volatile.Read(ref _directGrant) != verified.Grant
-            && (transport == Transports.Relay || Volatile.Read(ref _fallbackGrant) == verified.Grant);
+        // the hook's own report wins: once it plays direct, a seat that still reads "relay" never sends it back to the relay;
+        // FI_RELAY_FORCE (a test switch) sends every leg as relay-born, so the hook never tries the direct path
+        var viaRelay = ForceRelay || (Volatile.Read(ref _directGrant) != verified.Grant
+            && (transport == Transports.Relay || Volatile.Read(ref _fallbackGrant) == verified.Grant));
         byte[]? claims = null, signature = null;
         Frame.RelayLeg? leg = null;
         try

@@ -13,17 +13,22 @@ internal sealed record RelayLegSpec(Guid Grant, byte[] Claims, byte[] Signature,
 
 /// <summary>
 /// The host's relay legs, the FIR1 rendezvous protocol of <c>fi_relay::wire</c> spoken from the world's own socket: a
-/// <c>hello</c> (role host) as soon as a grant names a relay, again with the cookie of its <c>challenge</c> and every 15 s, and
-/// <c>relay</c> (every second until <c>relay ok</c>) while the pair is relayed. Each relayed joiner is one virtual endpoint the
-/// world engine sees as a peer: <c>data</c> from the relay arrives from it, and what the engine sends to it leaves as <c>data</c>.
-/// Only the relay a verified grant names is ever contacted, and only its own datagrams are read. Single-threaded (the relay actor).
+/// <c>hello</c> (role host) as soon as a grant names a relay, every second until the relay first answers, again with the cookie
+/// of its <c>challenge</c> and then every 15 s, and <c>relay</c> (every second until <c>relay ok</c>) while the pair is relayed.
+/// A leg the relay has not answered for <see cref="SilentAfterMs"/> goes quiet (a dead relay, or a grant it no longer accepts, is
+/// never hammered); the relay's next datagram for it, or the punch turning to relay, wakes it. Each relayed joiner is one virtual
+/// endpoint the world engine sees as a peer: <c>data</c> from the relay arrives from it, and what the engine sends to it leaves as
+/// <c>data</c>. Only the relay a verified grant names is ever contacted, and only its own datagrams are read. Single-threaded (the
+/// relay actor).
 /// </summary>
 internal sealed class RelayLegs(Action<RelayDatagram> send)
 {
     internal static ReadOnlySpan<byte> Magic => "FIR1"u8;
     internal const int MaxPayload = 1200;
     internal const long HelloEveryMs = 15000;
+    internal const long HelloRetryMs = 1000;
     internal const long RelayEveryMs = 1000;
+    internal const long SilentAfterMs = 60000;
     internal const int MaxLegs = 64;
 
     /// <summary>A virtual peer's address: unique local IPv6 <c>fd46:4952::/32</c> ("FIR"), never routable, never sent to.</summary>
@@ -31,7 +36,7 @@ internal sealed class RelayLegs(Action<RelayDatagram> send)
 
     internal enum Received { NotOurs, Handled, Data }
 
-    private sealed class Leg(RelayLegSpec spec)
+    private sealed class Leg(RelayLegSpec spec, long now)
     {
         public RelayLegSpec Spec { get; set; } = spec;
         public byte[] Id { get; } = spec.Grant.ToByteArray(bigEndian: true);
@@ -39,6 +44,9 @@ internal sealed class RelayLegs(Action<RelayDatagram> send)
         public byte[]? Cookie { get; set; }
         public long LastHello { get; set; } = long.MinValue;
         public long LastRelay { get; set; } = long.MinValue;
+        /// <summary>The relay's last datagram for this leg (the leg's start until one arrives).</summary>
+        public long LastHeard { get; set; } = now;
+        public bool Answered { get; set; }
         public bool Ok { get; set; }
         public bool Unavailable { get; set; }
     }
@@ -46,6 +54,11 @@ internal sealed class RelayLegs(Action<RelayDatagram> send)
     private readonly Dictionary<Guid, Leg> _legs = [];
 
     internal int Count => _legs.Count;
+
+    /// <summary>Whether the leg of <paramref name="grant"/> went quiet: no answer from its relay for <see cref="SilentAfterMs"/>.</summary>
+    internal bool Silent(Guid grant, long now) => _legs.TryGetValue(grant, out var leg) && Quiet(leg, now);
+
+    private static bool Quiet(Leg leg, long now) => now - leg.LastHeard >= SilentAfterMs;
 
     internal static IPEndPoint VirtualFor(Guid grant)
     {
@@ -71,10 +84,15 @@ internal sealed class RelayLegs(Action<RelayDatagram> send)
         {
             if (_legs.TryGetValue(grant, out var leg) && leg.Spec.Relay.Equals(spec.Relay))
             {
+                // the joiner moved to the relay since: a quiet leg tries again at once (its own 60 s from now)
+                if (spec.Forward && !leg.Spec.Forward)
+                {
+                    leg.LastHeard = now; leg.LastHello = leg.LastRelay = long.MinValue; leg.Unavailable = false;
+                }
                 leg.Spec = spec; // re-signed copies keep the same grant and relay (the cookie stays valid for this address)
                 continue;
             }
-            _legs[grant] = new Leg(spec);
+            _legs[grant] = new Leg(spec, now);
         }
         Tick(now);
     }
@@ -83,7 +101,8 @@ internal sealed class RelayLegs(Action<RelayDatagram> send)
     {
         foreach (var leg in _legs.Values)
         {
-            if (leg.LastHello == long.MinValue || now - leg.LastHello >= HelloEveryMs) Hello(leg, now);
+            if (Quiet(leg, now)) continue; // unanswered for 60 s: nothing more until the relay or the punch says otherwise
+            if (leg.LastHello == long.MinValue || now - leg.LastHello >= (leg.Answered ? HelloEveryMs : HelloRetryMs)) Hello(leg, now);
             if (leg.Spec.Forward && !leg.Ok && !leg.Unavailable && (leg.LastRelay == long.MinValue || now - leg.LastRelay >= RelayEveryMs))
             {
                 leg.LastRelay = now;
@@ -120,6 +139,8 @@ internal sealed class RelayLegs(Action<RelayDatagram> send)
         foreach (var candidate in _legs.Values)
             if (candidate.Spec.Relay.Equals(from) && body[..16].SequenceEqual(candidate.Id)) { leg = candidate; break; }
         if (leg is null) return Received.NotOurs;
+        // any datagram of this relay about this leg is an answer: the leg keeps (or resumes) its cadence
+        leg.LastHeard = now; leg.Answered = true;
         switch (kind)
         {
             case 0x07 when body.Length == 32: // challenge: say hello again with its cookie
