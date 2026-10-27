@@ -82,7 +82,13 @@ public sealed partial class ShellViewModel
     public SeedSourceRow? NewSeedSource
     {
         get => _newSeedSource is { } chosen && SeedSources.Contains(chosen) ? chosen : null;
-        set { _newSeedSource = value; ChangedSeedForm(); }
+        set
+        {
+            // the lists are rebuilt on every read: raising SeedSources here made the list re-select, set this again and overflow the stack
+            if (Equals(_newSeedSource, value)) return;
+            _newSeedSource = value;
+            Changed(nameof(NewSeedSource));
+        }
     }
 
     private void ChangedSeedForm()
@@ -108,7 +114,13 @@ public sealed partial class ShellViewModel
     public SeedSourceRow? SeedChoiceSource
     {
         get => _seedChoiceSource is { } chosen && SeedChoiceSources.Contains(chosen) ? chosen : null;
-        set { _seedChoiceSource = value; Changed(nameof(SeedChoiceSource)); Changed(nameof(CanCheckSeedChoice)); }
+        set
+        {
+            if (Equals(_seedChoiceSource, value)) return; // a rebuilt list re-selects an equal row: nothing changed
+            _seedChoiceSource = value;
+            Changed(nameof(SeedChoiceSource));
+            Changed(nameof(CanCheckSeedChoice));
+        }
     }
 
     public bool CanCheckSeedChoice => SeedChoiceSource is not null && Idle;
