@@ -383,7 +383,10 @@ public sealed class PlaySupervisor
         env.AddRange(_config.ModEnvironment);
         if (WineHost.Detected)
         {
+            // OD-125: the hook is ExtraOptions.Infinity's winmm.dll; Wine loads it only native-first (AppDefaults)
+            _emit(new SupervisorEvent.Note("wine: " + WineHost.HookModule + " " + WineHost.EnsureNativeDllOverride(WineHost.HookModule, true)));
             var overrides = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
+            overrides = WineHost.WithNativeDll(overrides, WineHost.HookModule) ?? overrides;
             foreach (var module in _config.NativeDllOverrides)
             {
                 overrides = WineHost.WithNativeDll(overrides, module) ?? overrides;
@@ -392,7 +395,8 @@ public sealed class PlaySupervisor
             if (overrides is not null) env.Add(("WINEDLLOVERRIDES", overrides));
         }
         // B1: an inherited FI_OFFLINE_* (Steam launch options, a shell) never names the identity: only FallbackIdentity does
-        var plan = new LaunchPlan(_config.Install.HostExe, [], _config.Install.Root, env, [Launch.EnvOfflineXuid, Launch.EnvOfflineGamertag]);
+        // Azimuth 1.0 opens its own launcher without arguments: --skip-launcher starts the added FH2 directly
+        var plan = new LaunchPlan(_config.Install.HostExe, [AzimuthSetup.SkipLauncher], _config.Install.Root, env, [Launch.EnvOfflineXuid, Launch.EnvOfflineGamertag]);
         var crashContext = new CrashContext(_clock);
         var startedUtc = _clock.GetUtcNow();
         CrashDumpSnapshot? dumpSnapshot = null;
