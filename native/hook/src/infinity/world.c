@@ -773,7 +773,7 @@ static int world_open(int listed, const wchar_t **why) {
     *why = L"";
     if (fi_launch_protocol()) {
         /* OD-54: worlds are opened from the overlay; the launcher runs the relay */
-        *why = L"Worlds are opened from the Infinity overlay (hold View).";
+        *why = L"Worlds are opened from the Infinity overlay (hold LB+RB).";
         return 0;
     }
     if (world_on) {

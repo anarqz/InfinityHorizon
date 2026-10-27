@@ -370,6 +370,7 @@
   "overlay.connected_free": "Online · notifications from Infinity",
   "overlay.offline": "Playing offline",
   "overlay.offline_body": "Infinity could not open the online session",
+  "overlay.open_hint": "Hold LB+RB to open the overlay",
   "overlay.unstable": "Connection unstable",
   "overlay.unstable_body": "Trying to reconnect…",
   "overlay.reconnected": "Back online",
