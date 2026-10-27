@@ -112,6 +112,8 @@ public sealed partial class ShellViewModel
         await VerifyBuildOriginAsync();
         if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
         else await FindAzimuthAsync(null, openSetupWhenNeeded: OpenSetupOnStart);
+        // Owner 2026-10-27: Azimuth before sign-in; none found, its setup is the first screen (local only, nothing sent: OD-118).
+        AskAzimuthFirstWhenMissing();
         await Task.WhenAll(updateCheck, onlineCheck);
         if (online) await ResumeSessionAsync();
         await RefreshIntegrityAutomaticallyAsync();

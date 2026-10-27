@@ -362,7 +362,8 @@ public sealed class PlaySupervisor
                     : e is Saves.SaveBlockedException blockedError ? OnlinePause.From(blockedError.Code, System.Net.HttpStatusCode.ServiceUnavailable) : null;
                 if (closure is not null) { _online.TryPause(closure); EmitPause(closure); }
                 var leftBlocked = await LeaveQuietly(sessionId, "player", saves.FenceToken ?? fence).ConfigureAwait(false);
-                _emit(new SupervisorEvent.Error("save: " + (e is Saves.SaveBlockedException blocked ? blocked.Code : e is ApiException api ? api.Code : e.Message)));
+                _emit(new SupervisorEvent.Error("save: " + (e is Saves.SaveBlockedException blocked ? Overlay.OverlayNotices.BlockedDetail(blocked.Code, blocked.RetryAfter)
+                    : e is ApiException api ? api.Code : e.Message)));
                 _emit(new SupervisorEvent.Ended("save_blocked", leftBlocked));
                 return null;
             }

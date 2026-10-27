@@ -22,7 +22,7 @@ public enum AzimuthStatus
 /// <summary>
 /// OD-46: finding Azimuth and saying what is missing. The launcher ships and downloads no Azimuth
 /// or game files; it points to the official page and remembers the folder the player chose
-/// (<c>&lt;state&gt;\azimuth.json</c>).
+/// (<c>&lt;state&gt;\azimuth.json</c>; owner 2026-10-27: once per PC, in the launcher root, for every server).
 /// </summary>
 public static class AzimuthSetup
 {
@@ -63,11 +63,14 @@ public static class AzimuthSetup
     /// <c>FI_AZIMUTH</c>), the one the player chose before, the launcher's own folder and its
     /// parent, then a shallow look (two levels) under the usual places (Desktop, Downloads,
     /// Documents, <c>&lt;drive&gt;:\Games</c>). Among several found by the look-around, a
-    /// compatible version wins.
+    /// compatible version wins. With <paramref name="launcherRoot"/> the choice is the PC's (<see cref="LoadRemembered"/>): kept in
+    /// the launcher root and found in any server's folder.
     /// </summary>
-    public static AzimuthInstall? Find(string? explicitFolder, string stateDirectory, string launcherFolder, IEnumerable<string>? searchRoots = null)
+    public static AzimuthInstall? Find(string? explicitFolder, string stateDirectory, string launcherFolder, IEnumerable<string>? searchRoots = null,
+        string? launcherRoot = null, Action<string>? log = null)
     {
-        foreach (var folder in new[] { explicitFolder, LoadChoice(stateDirectory), launcherFolder, Path.GetDirectoryName(launcherFolder.TrimEnd('\\', '/')) })
+        var remembered = launcherRoot is null ? LoadChoice(stateDirectory) : LoadRemembered(stateDirectory, launcherRoot, log);
+        foreach (var folder in new[] { explicitFolder, remembered, launcherFolder, Path.GetDirectoryName(launcherFolder.TrimEnd('\\', '/')) })
         {
             if (!string.IsNullOrEmpty(folder) && Detect(folder) is { } install)
             {
@@ -102,18 +105,55 @@ public static class AzimuthSetup
         }
     }
 
-    /// <summary>Remembers the folder the player chose (only one that holds azimuth.exe).</summary>
-    public static bool SaveChoice(string stateDirectory, string folder)
+    /// <summary>
+    /// Remembers the folder the player chose (only one that holds azimuth.exe): in the server's folder and, with
+    /// <paramref name="launcherRoot"/>, once for the PC in the launcher root, which every server's folder reads.
+    /// </summary>
+    public static bool SaveChoice(string stateDirectory, string folder, string? launcherRoot = null)
     {
         if (Detect(folder) is null)
         {
             return false;
         }
-        Directory.CreateDirectory(stateDirectory);
-        var path = Path.Combine(stateDirectory, FileName);
-        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(new Saved(Path.GetFullPath(folder))));
-        File.Move(path + ".tmp", path, overwrite: true);
+        var full = Path.GetFullPath(folder);
+        Write(stateDirectory, full);
+        if (launcherRoot is not null && !PcLocation.Same(launcherRoot, stateDirectory)) Write(launcherRoot, full);
         return true;
+    }
+
+    /// <summary>
+    /// The PC's remembered Azimuth folder (owner 2026-10-27): the launcher root's, else this server's folder's, else the newest of the
+    /// other servers' folders (<c>production</c>, <c>custom\*</c>, the root) that still holds azimuth.exe. One found elsewhere is
+    /// copied into the root and this server's folder (best effort), so the next start and every other server read it directly.
+    /// </summary>
+    public static string? LoadRemembered(string stateDirectory, string launcherRoot, Action<string>? log = null)
+    {
+        var found = PcLocation.Resolve(launcherRoot, stateDirectory, FileName, dir => LoadChoice(dir) is { } path && Detect(path) is not null ? path : null);
+        if (found is not { } choice) return null;
+        try
+        {
+            foreach (var dir in new[] { launcherRoot, stateDirectory }.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!string.Equals(LoadChoice(dir), choice.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    Write(dir, choice.Value);
+                    log?.Invoke($"setup: Azimuth location from {choice.From} kept for this PC in {dir}");
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke("setup: Azimuth location not copied: " + e.GetType().Name);
+        }
+        return choice.Value;
+    }
+
+    private static void Write(string dir, string folder)
+    {
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, FileName);
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(new Saved(folder)));
+        File.Move(path + ".tmp", path, overwrite: true);
     }
 
     public static string? LoadChoice(string stateDirectory)

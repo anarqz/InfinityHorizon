@@ -17,7 +17,13 @@ public static class CommitKinds
     /// <summary>CR-S51: a Hardcore line's revision 1 from Azimuth's own first save (<c>If-Match: "0"</c>, line <c>start: fresh_start</c>).</summary>
     public const string FreshStart = "fresh_start";
 
-    public static bool IsPlayerKind(string kind) => kind is Upload or ResolveKeepLocal or ImportOffline or FreshStart;
+    /// <summary>
+    /// CR-S52: a Hardcore line's revision 1 from another of the account's profiles' save, checked on receipt (<c>If-Match: "0"</c>,
+    /// <c>X-Fi-Seed-Source</c>, line <c>start: fresh_start</c>, only where <c>/info saves.hardcoreFromProfile</c>).
+    /// </summary>
+    public const string SeedFromProfile = "seed_from_profile";
+
+    public static bool IsPlayerKind(string kind) => kind is Upload or ResolveKeepLocal or ImportOffline or FreshStart or SeedFromProfile;
 }
 
 /// <summary>
@@ -192,7 +198,9 @@ public sealed record SaveFailure(
     TimeSpan? RetryAfter = null,
     ulong? Head = null,
     string? ParkedId = null,
-    string? Reason = null)
+    string? Reason = null,
+    string? Rule = null,
+    string? Review = null)
 {
     /// <summary>
     /// Kinds that keep a pending upload for a retry with the same key and bytes (SAVES_API.md §6). Every
@@ -233,7 +241,7 @@ public sealed record SaveFailure(
             _ when status == HttpStatusCode.TooManyRequests || (int)status >= 500 => SaveFailureKind.Transient,
             _ => SaveFailureKind.Rejected,
         };
-        return new SaveFailure(kind, error.Code, status, error.Message, retryAfter, Number("head"), Text("parkedId"), Text("reason"));
+        return new SaveFailure(kind, error.Code, status, error.Message, retryAfter, Number("head"), Text("parkedId"), Text("reason"), Text("rule"), Text("review"));
     }
 
     internal static SaveFailure Network(Exception e) => new(SaveFailureKind.Transient, "NETWORK", null, e.Message);
@@ -555,6 +563,25 @@ public sealed class CloudSaves
         return null;
     }
 
+    /// <summary>
+    /// CR-S52: the seed the player confirmed, recorded as the profile's pending <c>seed_from_profile</c> upload on top of revision 0:
+    /// exactly <paramref name="packed"/>'s bytes (the ones the dry run checked) and <paramref name="sourceXuid"/> for
+    /// <c>X-Fi-Seed-Source</c>. Nothing is sent: the profile's first launch sends it before the game starts. Null when recorded;
+    /// <see cref="SaveFailureKind.UploadPending"/> when another upload of the profile is pending.
+    /// </summary>
+    public SaveFailure? RecordSeed(ulong xuid, PackedRevision packed, ulong localRevision, ulong sourceXuid)
+    {
+        ArgumentNullException.ThrowIfNull(packed);
+        if (State(xuid)?.PendingUpload is { } waiting) return PendingFirst(waiting);
+        try
+        {
+            _store.BeginUpload(_realm, xuid, Guid.CreateVersion7().ToString(), 0, CommitKinds.SeedFromProfile, localRevision, packed.ContentSha256,
+                packed.Bundle, Wire(sourceXuid));
+        }
+        catch (InvalidOperationException) when (State(xuid)?.PendingUpload is { } raced) { return PendingFirst(raced); }
+        return null;
+    }
+
     private static SaveFailure PendingFirst(PendingUpload waiting) => SaveFailure.Local(SaveFailureKind.UploadPending,
         $"commit {waiting.CommitId} is still pending for this profile: send it or set it aside first");
 
@@ -586,7 +613,8 @@ public sealed class CloudSaves
             // The recorded bytes are gone or changed: nothing is sent under this key; the record stays for support.
             return new CommitOutcome(null, false, false, SaveFailure.Integrity(e.Message), pending);
         }
-        var request = new SaveCommitRequest(pending.Expected, pending.CommitId, lease.SessionId, lease.FenceToken, pending.Kind, pending.Content, bytes);
+        var request = new SaveCommitRequest(pending.Expected, pending.CommitId, lease.SessionId, lease.FenceToken, pending.Kind, pending.Content, bytes,
+            pending.Kind == CommitKinds.SeedFromProfile ? pending.SeedSource : null);
         SaveApiResult<CommitResponse> result;
         try
         {
@@ -616,7 +644,8 @@ public sealed class CloudSaves
         {
             lease.MarkLost();
         }
-        if (refused.KeepsPending)
+        // CR-S52: a seed lost with its lease stays recorded: the next Play sends the same checked bytes (no second dry run spent)
+        if (refused.KeepsPending || (refused.Kind == SaveFailureKind.LeaseLost && pending.Kind == CommitKinds.SeedFromProfile))
         {
             return new CommitOutcome(null, false, false, refused, pending);
         }

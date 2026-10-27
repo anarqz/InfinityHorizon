@@ -53,7 +53,8 @@ public sealed partial class ShellViewModel
     /// </summary>
     private void OfferSaves(Profile profile, bool always = false)
     {
-        if (_install is null)
+        // B2: a Hardcore career starts empty (or from an account profile, CR-S52), never from this PC's Azimuth saves
+        if (_install is null || profile.Mode == "hardcore")
         {
             return;
         }

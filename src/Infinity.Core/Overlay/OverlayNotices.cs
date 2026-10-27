@@ -19,15 +19,40 @@ public static class OverlayNotices
             title + "\n" + body.Trim());
     }
 
-    public static UiFrame.Toast SaveBlocked(Strings text, string code)
+    /// <summary>A blocked save's code, with <c> retry=&lt;seconds&gt;</c> when the server gave a <c>Retry-After</c> (read back by <see cref="ParseBlocked"/>).</summary>
+    public static string BlockedDetail(string code, TimeSpan? retryAfter) => retryAfter is { } wait
+        ? code + " retry=" + ((long)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        : code;
+
+    /// <summary>The code and <c>Retry-After</c> of <see cref="BlockedDetail"/>.</summary>
+    public static (string Code, TimeSpan? RetryAfter) ParseBlocked(string detail)
+    {
+        ArgumentNullException.ThrowIfNull(detail);
+        var at = detail.IndexOf(" retry=", StringComparison.Ordinal);
+        return at >= 0 && long.TryParse(detail.AsSpan(at + 7), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            ? (detail[..at], TimeSpan.FromSeconds(seconds))
+            : (detail, null);
+    }
+
+    /// <summary>Whole hours, at least 1, for "about {hours} h".</summary>
+    public static int Hours(TimeSpan wait) => Math.Max(1, (int)Math.Ceiling(wait.TotalHours));
+
+    public static UiFrame.Toast SaveBlocked(Strings text, string detail)
     {
         ArgumentNullException.ThrowIfNull(text);
+        var (code, retryAfter) = ParseBlocked(detail);
+        if (code == "SAVES.RATE_LIMITED" && retryAfter is { } wait)
+        {
+            return new UiFrame.Toast(UiLevel.Error, 3, 150, text["overlay.save_stopped"] + "\n"
+                + text.Format("saves.rate_limited_wait", ("hours", Hours(wait).ToString(System.Globalization.CultureInfo.CurrentCulture))));
+        }
         var key = code switch
         {
             "SERVICE.UNAVAILABLE" => "saves.seed_unavailable",
             "SAVES.REVISION_CONFLICT" => "saves.conflict",
             "SAVES.LOCAL_BUSY" => "saves.busy",
             "SAVES.SERVICE_MISSING" => "saves.service_missing",
+            "SAVES.RATE_LIMITED" => "saves.rate_limited", // CR-S52: a seed's commit waits for the day's checks (Retry-After)
             _ => "saves.blocked",
         };
         return new UiFrame.Toast(UiLevel.Error, 3, 150,
