@@ -196,6 +196,7 @@
   "error.SAVES.HARDCORE_NEEDS_FRESH_CAREER": "Um perfil Hardcore precisa começar de uma carreira nova.",
   "error.SAVES.NOT_ELIGIBLE": "Este perfil não guarda saves na nuvem agora.",
   "error.SAVES.RESTORE_OUTSIDE_RETENTION": "Este save é antigo demais para restaurar.",
+  "error.SAVES.RESTORE_FLAGGED": "Este save foi marcado para revisão e não pode ser restaurado.",
   "error.SAVES.RESTORE_BEHIND_RESET": "Este save é de antes de um reset. Peça ao suporte para restaurá-lo.",
   "error.SAVES.INVALID_ARGUMENT": "O pedido de save não foi aceito.",
   "error.SAVES.RATE_LIMITED": "Saves estão sendo enviados com frequência demais. Uma nova tentativa será feita em breve.",

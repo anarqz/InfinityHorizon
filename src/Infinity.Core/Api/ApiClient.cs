@@ -70,6 +70,8 @@ public static class ErrorCodes
     public const string SavesBundleInvalid = "SAVES.BUNDLE_INVALID";
     public const string SavesDigestMismatch = "SAVES.DIGEST_MISMATCH";
     public const string SavesGateRefused = "SAVES.GATE_REFUSED";
+    /// <summary>CR-S58: a revision moderation flagged cannot be restored (<c>details.revision</c>).</summary>
+    public const string SavesRestoreFlagged = "SAVES.RESTORE_FLAGGED";
     public const string SavesSummaryUnreadable = "SAVES.SUMMARY_UNREADABLE";
     public const string SavesHardcoreNeedsFreshCareer = "SAVES.HARDCORE_NEEDS_FRESH_CAREER";
     public const string SavesInvalidArgument = "SAVES.INVALID_ARGUMENT";

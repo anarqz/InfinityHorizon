@@ -196,6 +196,7 @@
   "error.SAVES.HARDCORE_NEEDS_FRESH_CAREER": "A Hardcore profile must start from a new career.",
   "error.SAVES.NOT_ELIGIBLE": "This profile does not keep cloud saves now.",
   "error.SAVES.RESTORE_OUTSIDE_RETENTION": "This save is too old to restore.",
+  "error.SAVES.RESTORE_FLAGGED": "This save was flagged for review and can't be restored.",
   "error.SAVES.RESTORE_BEHIND_RESET": "This save is from before a reset. Ask support to restore it.",
   "error.SAVES.INVALID_ARGUMENT": "The save request was not accepted.",
   "error.SAVES.RATE_LIMITED": "Saves are being sent too often. It will try again shortly.",
