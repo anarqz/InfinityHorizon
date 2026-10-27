@@ -485,8 +485,9 @@
                   </StackPanel>
                 </Button>
                 <TextBlock Text="{Binding S[seed.option]}" FontWeight="Bold" />
-                <ComboBox Margin="0,6,0,0" ItemsSource="{Binding SeedChoiceSources}" SelectedItem="{Binding SeedChoiceSource}" DisplayMemberPath="Name"
-                          AutomationProperties.Name="{Binding S[seed.source_label]}" />
+                <!-- a list, not a ComboBox: its popup froze the launcher under Proton on the DECK (2026-10-27) -->
+                <ListBox Margin="0,6,0,0" ItemsSource="{Binding SeedChoiceSources}" SelectedItem="{Binding SeedChoiceSource}" MaxHeight="160"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}" />
                 <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
                 <!-- the panel covers the status line: progress and early failures are shown here too -->
                 <TextBlock Text="{Binding Message}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
@@ -770,9 +771,9 @@
                       <StackPanel>
                         <CheckBox Content="{Binding S[seed.option]}" IsChecked="{Binding NewSeedFromProfile}" FontWeight="Bold" />
                         <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
-                        <ComboBox Margin="0,8,0,0" ItemsSource="{Binding SeedSources}" SelectedItem="{Binding NewSeedSource}" DisplayMemberPath="Name"
-                                  AutomationProperties.Name="{Binding S[seed.source_label]}"
-                                  Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
+                        <ListBox Margin="0,8,0,0" ItemsSource="{Binding SeedSources}" SelectedItem="{Binding NewSeedSource}" MaxHeight="160"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}"
+                                 Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
                         <TextBlock Text="{Binding S[seed.option_hint]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
                                    Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
                       </StackPanel>

@@ -13,7 +13,7 @@ public sealed record SeedSourceRow(Profile Profile)
 {
     public string Name => ProfileName.Plain(Profile.Gamertag) + " · " + (Profile.Mode == "hardcore" ? "HARDCORE" : "NOOB");
 
-    /// <summary>The app's ComboBox template shows the item's text, not <c>DisplayMemberPath</c>.</summary>
+    /// <summary>The source lists show the item's text.</summary>
     public override string ToString() => Name;
 }
 
