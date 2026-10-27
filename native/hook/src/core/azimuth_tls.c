@@ -3,7 +3,12 @@
    GPL-3.0-or-later. See LICENSE and NOTICE.md.
 
    The Azimuth static-TLS helper interface (the role of data\bin\azimuth-tls.dll), finding the
-   game image Azimuth mapped, and the paths the hook works with. */
+   game image Azimuth mapped, and the paths the hook works with.
+
+   FI_EO_BUILD (ExtraOptions.Infinity, Azimuth 1.0.2, OD-125): the hook is linked into the patched
+   ExtraOptions winmm.dll beside azimuth.exe. There is no TLS helper role: ExtraOptions' game-map
+   callback calls fi_eo_game_mapped with the image Azimuth just mapped, and the hook keeps its files
+   in <Azimuth>\data\bin as before. */
 #include "logging.h"
 #include "runtime.h"
 #include "support.h"
@@ -15,6 +20,7 @@ static wchar_t azimuth_root[PATH_CAPACITY];
    two data exports, the native TLS index and process-attach thread ID.
    The loader maps/relocates FH2 before loading this helper. No host addresses,
    remote injection, worker thread or LoadLibrary is needed. */
+#ifndef FI_EO_BUILD
 __declspec(dllexport) DWORD azimuth_tls_index = TLS_OUT_OF_INDEXES;
 __declspec(dllexport) DWORD azimuth_tls_attached;
 __attribute__((section(".tls"),
@@ -27,6 +33,7 @@ const IMAGE_TLS_DIRECTORY64 _tls_used = {
     (ULONGLONG)(uintptr_t)azimuth_tls_callbacks,
     0,
     0x00500000};
+#endif
 
 static int azimuth_region_is_readable(const MEMORY_BASIC_INFORMATION *m) {
     DWORD p = m->Protect & 0xff;
@@ -71,6 +78,7 @@ static int azimuth_image_is_complete(unsigned char *base) {
     return 1;
 }
 
+#ifndef FI_EO_BUILD
 static unsigned char *azimuth_find_game_image(void) {
     SYSTEM_INFO info;
     GetSystemInfo(&info);
@@ -109,6 +117,7 @@ static unsigned char *azimuth_find_game_image(void) {
     }
     return found;
 }
+#endif
 static wchar_t azimuth_folder[32768];
 
 static void azimuth_copy_path(wchar_t *dst, const wchar_t *src) {
@@ -142,6 +151,7 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
             break;
         }
     }
+#ifndef FI_EO_BUILD
     n = GetModuleFileNameW(instance, mod_directory, 32768);
     if (!n || n >= 32768) {
         return 0;
@@ -150,9 +160,18 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
         --n;
     }
     mod_directory[n] = 0;
+#else
+    (void)instance;
+#endif
     n = (DWORD)(name - exe_path);
     exe_path[n] = 0; /* Launcher directory. */
     azimuth_copy_path(azimuth_root, exe_path);
+#ifdef FI_EO_BUILD
+    /* the hook's files stay where the launcher looks for them: <Azimuth>\data\bin\ */
+    if (!path_join(mod_directory, azimuth_root, L"data\\bin\\")) {
+        return 0;
+    }
+#endif
     if (!path_join(file_path, exe_path, L"data\\azimuth.ini")) {
         goto path_error;
     }
@@ -189,6 +208,7 @@ path_error:
     return 0;
 }
 
+#ifndef FI_EO_BUILD
 /* The hook installs detours and callback pointers into the game and azimuth.exe: this DLL must
    never be unloaded before the process ends (ExtraOptions pins itself for the same reason). */
 static int fi_pin_module(void) {
@@ -233,3 +253,39 @@ void fi_process_attach(HINSTANCE instance) {
     ExitProcess(status_get()[0] == 'O' || status_get()[0] == 'D' ? 0 : 1);
 #endif
 }
+#else
+/* The status line of infinity.log (entry.c's export in the TLS-helper build). */
+__declspec(dllexport) const char *InfinityStatus(void) {
+    return status_get();
+}
+
+/* ExtraOptions' game-map callback (adapters/azimuth.c on_map_game, patched): the image Azimuth
+   just mapped, already checked by ExtraOptions to be the supported FH2 (title, timestamp, size).
+   Once, before ExtraOptions patches the game. */
+void fi_eo_game_mapped(unsigned char *game, HINSTANCE module) {
+    static volatile LONG started;
+    if (InterlockedCompareExchange(&started, 1, 0)) {
+        return;
+    }
+    if (!azimuth_resolve_game_paths(module)) {
+        return;
+    }
+    if (!azimuth_has_game_headers(game) || !azimuth_image_is_complete(game)) {
+        status_set("REFUSED: the image ExtraOptions handed over is not the supported FH2. No patches applied.");
+        log_start(mod_directory);
+        return;
+    }
+    if (fi_runtime_initialize(game, exe_path, mod_directory, azimuth_root)) {
+        char message[] = "AZIMUTH: mapped FH2 image at 0x0000000000000000; started from "
+                         "ExtraOptions.Infinity.\r\n";
+        const char digits[] = "0123456789abcdef";
+        uintptr_t value = (uintptr_t)game;
+        for (unsigned i = 0; i < 16; ++i) {
+            message[sizeof("AZIMUTH: mapped FH2 image at 0x") - 1 + i] =
+                digits[(value >> (60 - 4 * i)) & 15];
+        }
+        log_set_directory(mod_directory);
+        log_append(message);
+    }
+}
+#endif

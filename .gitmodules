@@ -1,0 +1,3 @@
+[submodule "native/extraoptions"]
+	path = native/extraoptions
+	url = https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions.git
