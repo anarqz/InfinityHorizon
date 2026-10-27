@@ -249,6 +249,11 @@ public sealed class SessionSaves
                 // The PC and the cloud both moved on: never pick for the player here.
                 throw new SaveBlockedException("SAVES.REVISION_CONFLICT", "this PC and the cloud both have newer progress");
             case SyncDecision.InSync or SyncDecision.Empty:
+                // the cloud's head is this PC's save: it becomes the mark the session's commits build on. A state folder without one
+                // (a new server origin, a reinstall) would otherwise send If-Match "0" and every commit would meet REVISION_CONFLICT.
+                if (decision.Decision is SyncDecision.InSync && head.Revision > 0 && head.ContentSha256 is { } content
+                    && _saves.State(_xuid)?.Mark?.Revision != head.Revision)
+                    _saves.MarkInSync(_xuid, head.Revision, content);
                 _report(SaveStep.InSync, null);
                 break;
             default:
