@@ -434,6 +434,7 @@ public sealed partial class ShellViewModel
             Log("mods: custom folders skipped: " + string.Join(", ", problems.Select(p => p.Folder + " " + p.Reason)));
         _customProblems = problems.Count;
         RefreshModCards();
+        await RefreshExtraOptionsModsAsync();
         if (_selectedMod is { HasOptions: true } && !_iniDirty) await LoadSelectedOptionsAsync();
         Changed(string.Empty);
     }
