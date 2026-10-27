@@ -36,6 +36,9 @@ public static class ErrorCodes
     public const string AuthConfirmationCodeInvalid = "AUTH.CONFIRMATION_CODE_INVALID";
     public const string AuthProviderNotAllowed = "AUTH.PROVIDER_NOT_ALLOWED";
     public const string AccountsBanned = "ACCOUNTS.BANNED";
+    /// <summary>404: an unknown XUID, another account's or an erased profile (CR-S61: a deleted one too, so a lost 204 reads as done).</summary>
+    public const string AccountsNotFound = "ACCOUNTS.NOT_FOUND";
+    public const string AccountsDeletionPending = "ACCOUNTS.DELETION_PENDING";
     public const string AccountsRegistrationDisabled = "ACCOUNTS.REGISTRATION_DISABLED";
     /// <summary><c>local</c> sign-in: unknown e-mail and wrong password alike (CR-L38).</summary>
     public const string AuthInvalidCredentials = "AUTH.INVALID_CREDENTIALS";

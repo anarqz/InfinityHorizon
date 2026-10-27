@@ -200,6 +200,27 @@ public sealed class SaveSyncStore
         return to;
     }
 
+    /// <summary>
+    /// CR-S61: the profile was deleted from the cloud (its XUID is retired, never reused): its entry goes, mark included. A pending
+    /// upload's bytes are moved to <c>pending\set-aside</c>, never deleted. True when there was an entry.
+    /// </summary>
+    public bool Forget(string realm, ulong xuid)
+    {
+        ArgumentNullException.ThrowIfNull(realm);
+        SetAside(realm, xuid);
+        lock (_lock)
+        {
+            var file = Load();
+            var profiles = file.Profiles.Where(p => !(p.Realm == realm && p.Xuid == xuid)).ToList();
+            if (profiles.Count == file.Profiles.Count)
+            {
+                return false;
+            }
+            Save(file with { Version = 2, Profiles = profiles });
+            return true;
+        }
+    }
+
     private SyncStateFile Load()
     {
         try

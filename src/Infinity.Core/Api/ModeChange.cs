@@ -63,4 +63,16 @@ public sealed partial class ApiClient
     /// </summary>
     public Task<Profile> RenameProfileAsync(string access, string xuid, NameChange change, string idempotencyKey, CancellationToken cancellation = default) =>
         SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/name", change, access, idempotencyKey, cancellation);
+
+    /// <summary>
+    /// <c>DELETE /launcher/v1/profiles/{xuid}</c> (CR-S61, ACCOUNTS.md §5 "Profile deletion"): no body → 204, the profile's cloud data
+    /// erased at once and for good. <paramref name="idempotencyKey"/> is required and reused on every retry of the same deletion (a
+    /// replay answers the 204 again).
+    /// </summary>
+    public async Task DeleteProfileAsync(string access, string xuid, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(idempotencyKey);
+        await SendAsync<System.Text.Json.JsonElement?>(HttpMethod.Delete, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}", null, access, idempotencyKey, cancellation)
+            .ConfigureAwait(false);
+    }
 }

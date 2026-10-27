@@ -984,5 +984,18 @@
   "seed.blocked_title": "A verificação da carreira precisa esperar",
   "seed.blocked": "Esta conta usou as verificações de carreira de hoje, então {name} ainda não pode enviar a carreira de origem. Espere, ou comece uma carreira nova.",
   "seed.blocked_wait": "Esta conta usou as verificações de carreira de hoje, então {name} só poderá enviar a carreira de origem em cerca de {hours} h. Espere, ou comece uma carreira nova.",
-  "seed.abandon": "Começar uma carreira nova em vez disso"
+  "seed.abandon": "Começar uma carreira nova em vez disso",
+  "profiles.delete": "Excluir da nuvem",
+  "profiles.delete_title": "Excluir {name} da nuvem?",
+  "profiles.delete_body": "Isso apaga tudo o que os servidores guardam de {name}, na hora e para sempre: os saves na nuvem e o histórico deles, as pinturas e criações, pontuações, mensagens e o resto. Não dá para desfazer, e o nome {name} fica livre para qualquer pessoa usar.",
+  "profiles.delete_keeps": "O save deste PC é mantido: ele vai para a pasta fi-launcher-archive, na pasta de saves. Sua conta e seus amigos continuam. Você pode excluir até 3 perfis por hora.",
+  "profiles.delete_type": "Digite {name} para confirmar.",
+  "profiles.delete_confirm": "Excluir para sempre",
+  "profiles.delete_cancel": "Manter o perfil",
+  "profiles.deleted": "{name} foi excluído da nuvem; o save deste PC foi arquivado.",
+  "profiles.deleted_not_archived": "{name} foi excluído da nuvem. O save deste PC está em uso e não pôde ser arquivado agora; ele continua onde estava.",
+  "profiles.delete_rate_limited": "Você pode excluir até 3 perfis por hora. Tente de novo em cerca de {minutes} min.",
+  "profiles.delete_rate_limited_later": "Você pode excluir até 3 perfis por hora. Tente de novo mais tarde.",
+  "profiles.delete_in_use": "Este perfil está em uso: feche o jogo ou espere a sessão terminar (cerca de {minutes} min) e tente de novo.",
+  "profiles.delete_in_use_now": "Este perfil está em uso: feche o jogo ou espere a sessão terminar e tente de novo."
 }

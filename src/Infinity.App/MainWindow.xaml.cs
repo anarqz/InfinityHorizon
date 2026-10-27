@@ -181,6 +181,18 @@ public partial class MainWindow : Window
 
     private void OnCancelConvert(object sender, RoutedEventArgs e) => _vm.CancelConvert();
 
+    /// <summary>CR-S61: the typed confirmation opens below the list and is scrolled into view.</summary>
+    private void OnDeleteProfile(object sender, RoutedEventArgs e)
+    {
+        _vm.AskDeleteProfile(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
+        if (_vm.ShowDeleteProfile)
+            Dispatcher.BeginInvoke(() => DeleteProfilePanel.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private async void OnConfirmDeleteProfile(object sender, RoutedEventArgs e) => await _vm.ConfirmDeleteProfileAsync();
+
+    private void OnCancelDeleteProfile(object sender, RoutedEventArgs e) => _vm.CancelDeleteProfile();
+
     private async void OnConfirmSeed(object sender, RoutedEventArgs e) => await _vm.ConfirmSeedAsync();
 
     private async void OnDismissSeed(object sender, RoutedEventArgs e) => await _vm.DismissSeedAsync();

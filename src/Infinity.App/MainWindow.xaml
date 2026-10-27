@@ -736,14 +736,21 @@
                   <DataTemplate>
                     <Grid Margin="0,5">
                       <Button Padding="20,14" HorizontalContentAlignment="Left" Click="OnChooseProfile">
-                        <StackPanel Margin="0,0,120,0">
+                        <StackPanel Margin="0,0,170,0">
                           <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="16" />
                           <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
                         </StackPanel>
                       </Button>
-                      <Button Content="{Binding DataContext.S[detail.convert], RelativeSource={RelativeSource AncestorType=Window}}"
-                              Style="{StaticResource LinkButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"
-                              Click="OnConvertProfile" Visibility="{Binding Hardcore, Converter={StaticResource Visible}}" />
+                      <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
+                        <Button Content="{Binding DataContext.S[detail.convert], RelativeSource={RelativeSource AncestorType=Window}}"
+                                Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
+                                Click="OnConvertProfile" Visibility="{Binding Hardcore, Converter={StaticResource Visible}}" />
+                        <!-- CR-S61: an account profile can be deleted from the cloud (a typed confirmation below). -->
+                        <Button Content="{Binding DataContext.S[profiles.delete], RelativeSource={RelativeSource AncestorType=Window}}"
+                                Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
+                                Click="OnDeleteProfile" Visibility="{Binding CanDeleteFromCloud, Converter={StaticResource Visible}}"
+                                IsEnabled="{Binding DataContext.CanAskDeleteProfile, RelativeSource={RelativeSource AncestorType=Window}}" />
+                      </StackPanel>
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -801,6 +808,27 @@
                     <Button Content="{Binding S[modes.convert_confirm]}" Click="OnConfirmConvert" IsEnabled="{Binding Idle}"
                             BorderBrush="{StaticResource InfinityDangerBorder}" />
                     <Button Content="{Binding S[modes.convert_cancel]}" Margin="10,0,0,0" Click="OnCancelConvert"
+                            Style="{StaticResource AccentButtonStyle}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+              <!-- CR-S61: delete an account profile from the cloud, at once and for good; the player types its name to confirm. -->
+              <Border x:Name="DeleteProfilePanel" Margin="0,16,0,0" Padding="18,16" CornerRadius="12" Background="{StaticResource InfinityDangerSurface}"
+                      BorderBrush="{StaticResource InfinityDangerBorder}" BorderThickness="1"
+                      Visibility="{Binding ShowDeleteProfile, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding DeleteProfileTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding DeleteProfileBody}" Margin="0,6,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}" />
+                  <TextBlock Text="{Binding S[profiles.delete_keeps]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding DeleteProfileTypeHint}" Margin="0,12,0,4" TextWrapping="Wrap" />
+                  <TextBox Text="{Binding DeleteProfileTyped, UpdateSourceTrigger=PropertyChanged}" MaxLength="20"
+                           AutomationProperties.Name="{Binding DeleteProfileTypeHint}" />
+                  <TextBlock Text="{Binding DeleteProfileStatus}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding HasDeleteProfileStatus, Converter={StaticResource Visible}}" AutomationProperties.LiveSetting="Polite" />
+                  <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                    <Button Content="{Binding S[profiles.delete_confirm]}" Click="OnConfirmDeleteProfile" IsEnabled="{Binding CanConfirmDeleteProfile}"
+                            BorderBrush="{StaticResource InfinityDangerBorder}" />
+                    <Button Content="{Binding S[profiles.delete_cancel]}" Margin="10,0,0,0" Click="OnCancelDeleteProfile"
                             Style="{StaticResource AccentButtonStyle}" />
                   </StackPanel>
                 </StackPanel>

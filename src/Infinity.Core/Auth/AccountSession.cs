@@ -232,6 +232,17 @@ public sealed class AccountSession : IDisposable
     public Task<Profile> ConfirmNoobAsync(string xuid, string idempotencyKey, CancellationToken cancellation = default) =>
         Tokens.WithAccessAsync(access => Api.ChangeModeAsync(access, xuid, new ModeChange("noob", true), idempotencyKey, cancellation), cancellation);
 
+    /// <summary>
+    /// CR-S61: deletes the profile from the cloud at once, for good. <paramref name="idempotencyKey"/> is the caller's, kept for every
+    /// retry of this deletion; 204 and 404 are <see cref="Shell.ProfileDeletionResult.Deleted"/>, the contract's refusals outcomes.
+    /// </summary>
+    public Task<Shell.ProfileDeletionOutcome> DeleteProfileAsync(string xuid, string idempotencyKey, CancellationToken cancellation = default) =>
+        Shell.ProfileDeletion.SendAsync(ct => Tokens.WithAccessAsync(async access =>
+        {
+            await Api.DeleteProfileAsync(access, xuid, idempotencyKey, ct).ConfigureAwait(false);
+            return true;
+        }, ct), () => Api.ServerNow(TimeProvider.System), cancellation); // a ticket's expiry is on the server's clock
+
     /// <summary>The session <see cref="SessionStore"/> kept from the last run; <see cref="RefreshMeAsync"/> proves it.</summary>
     public static AccountSession Resume(ApiClient api, ServerInfo info, Device device, SessionStore.Saved saved)
     {
