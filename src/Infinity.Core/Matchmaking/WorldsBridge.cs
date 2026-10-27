@@ -367,10 +367,12 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 _seat.Left();
                 InvalidateMine(reset: true);
             }
+            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            // the host's relay first (game exit, session end, pause): its legs stop with its socket
+            var stopping = StopRelayAsync();
             try {await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);}
             catch(Exception error) when(HostFailure(error)) { }
-            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await StopRelayAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+            await stopping.WaitAsync(budget.Token).ConfigureAwait(false);
             var close = world is not null ? CloseWorldAsync(world, budget.Token) : Task.CompletedTask;
             var leave = grant is not null ? ReleaseGrantAsync(grant, budget.Token) : Task.CompletedTask;
             await Task.WhenAll(close, leave).WaitAsync(budget.Token).ConfigureAwait(false);
@@ -549,6 +551,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
                             return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         }
+                        await ForceRelayAsync(grant.Id, cancellation).ConfigureAwait(false); // FI_RELAY_FORCE only
                         return new UiFrame.JoinResult(UiJoin.Reserved, _text("worlds.reserved"));
                     case JoinStatuses.Locked when attempt == 0:
                         // A used seat in this lobby is also Locked. An invite code does not
@@ -610,6 +613,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         {
             _seat.Left();
             InvalidateMine(reset: true);
+            await ClearSeatEndAsync().ConfigureAwait(false); // the hook's context and relay leg end with the seat
             return _text("worlds.seat_ended");
         }
         if (next.Step != SeatStep.Renew || next.GrantId is not { } grantId)
@@ -876,6 +880,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 case UiWorldAction.Leave:
                     InvalidateMine(reset: true);
                     _seat.Left();
+                    await ClearSeatEndAsync().ConfigureAwait(false); // no relay leg outlives the seat
                     var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
                     Observe(left);
                     _log(left.Ok ? "worlds: seat left from the overlay" : $"worlds: leave refused: {left.Error?.Kind}");
@@ -1312,12 +1317,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         if (id is not null) InvalidateMine(reset: true);
         _host.Stop();
         Volatile.Write(ref _hostedWorldId, null);
-        var hadRelay = _relay is not null;
         await StopRelayAsync().ConfigureAwait(false);
-        if (hadRelay)
-        {
-            _log("worlds: relay stopped");
-        }
         if (id is null)
         {
             return;
@@ -1342,11 +1342,17 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         }
     }
 
+    /// <summary>
+    /// Every end of a hosted world comes here (overlay close, free roam left, the server's end, a failed open, the session's
+    /// suspension at game exit): the relay's socket closes, so no hello, keep-alive or relay datagram leaves for its grants.
+    /// </summary>
     private async Task StopRelayAsync()
     {
         var relay = Interlocked.Exchange(ref _relay, null);
+        if (relay is null) return;
         if (relay is IAsyncDisposable asynchronous) await asynchronous.DisposeAsync().ConfigureAwait(false);
-        else if (relay is not null) await Task.Run(relay.Dispose).ConfigureAwait(false);
+        else await Task.Run(relay.Dispose).ConfigureAwait(false);
+        _log("worlds: relay stopped");
     }
 
     /// <summary>The relay's mapped port moved since the last heartbeat: announce early so new hints carry
@@ -1392,6 +1398,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private bool HostExpired() => Now >= _hostLastSuccess.AddSeconds(45)
         || _clock.GetElapsedTime(_hostLastStamp) >= TimeSpan.FromSeconds(45);
     private static bool HostFailure(Exception exception) => exception is HttpRequestException or OperationCanceledException or InvalidOperationException or IOException or SocketException or ArgumentException or TimeoutException;
+
+    /// <summary>A seat that ended here (left, lapsed): the hook's socket context and relay leg are cleared; a failed write is not the seat's.</summary>
+    private async Task ClearSeatEndAsync()
+    {
+        try { await ClearProofAsync(CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception error) when (HostFailure(error)) { }
+    }
 
     /// <summary>The play session is ending: the seat is let go (idempotent on the server).</summary>
     public async Task LeaveAsync(CancellationToken cancellation)

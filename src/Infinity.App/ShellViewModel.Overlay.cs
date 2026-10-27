@@ -95,6 +95,7 @@ public sealed partial class ShellViewModel
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
                 RelayReports=relayReports.ReportAsync,
+                ForceRelay=Infinity.Core.Matchmaking.RelayForce.Enabled(Log), // FI_RELAY_FORCE=1 (test switch): joins straight to the relay
             };
         };
     }

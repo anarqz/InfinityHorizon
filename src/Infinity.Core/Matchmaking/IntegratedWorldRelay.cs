@@ -56,8 +56,11 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
             _transport.PunchNetworkHints(_admission);
             _transport.SetRelayLegs(_admission.RelayLegs());
         }
-        catch { _admission.Clear(); _transport.SetRelayLegs([]); throw; }
+        catch { EndAdmission(); throw; }
     }
+
+    /// <summary>No admission, and no relay leg either: nothing more is said to a relay for a grant this world no longer holds.</summary>
+    private void EndAdmission() { _admission.Clear(); _transport.SetRelayLegs([]); }
 
     public Task<IReadOnlyList<string>> PeersAsync(CancellationToken cancellation) => _transport.PeersAsync(cancellation);
 
@@ -69,7 +72,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         var answer = await matchmaking.PunchesAsync(cancellation).ConfigureAwait(false);
         if (answer.Error is { } error && OnlinePause.From(error.Code, answer.Status, error.Details) is not null)
         {
-            _admission.Clear();
+            EndAdmission();
             throw new ApiException(answer.Status, error.Code, "Online activity closed", error.Details, answer.RetryAfter);
         }
         cancellation.ThrowIfCancellationRequested();
@@ -77,7 +80,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission);_transport.SetRelayLegs(_admission.RelayLegs());Diagnostics(); return; }
         if (answer.Error?.Kind is MmErrorKind.Unauthorized or MmErrorKind.WorldNotFound or MmErrorKind.NotHost or MmErrorKind.WrongPool)
         {
-            _admission.Clear();
+            EndAdmission();
             throw new InvalidOperationException("Integrated world admission ended");
         }
         // Keep the verified expiring snapshot, but preserve retry metadata for the bridge's circuit.
@@ -95,14 +98,14 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         Diagnostics(final:true);
-        _admission.Clear(); _transport.Dispose();
+        EndAdmission(); _transport.Dispose();
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         Diagnostics(final:true);
-        _admission.Clear();
+        EndAdmission();
         await Task.Run(_transport.Dispose).ConfigureAwait(false);
     }
 }
