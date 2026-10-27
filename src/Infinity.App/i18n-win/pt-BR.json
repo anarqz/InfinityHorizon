@@ -416,6 +416,7 @@
   "mods.title": "Mods",
   "mods.subtitle": "Só mods que o Infinity verificou como compatíveis e seguros. Eles são baixados das páginas oficiais e conferidos arquivo por arquivo.",
   "mods.not_installed": "Não instalado",
+  "mods.builtin_extraoptions": "Incluído no Infinity: o ExtraOptions roda dentro do hook do Infinity (ExtraOptions.Infinity). As opções dele ficam no FH2_ExtraOptions.ini ao lado do azimuth.exe.",
   "mods.update": "Atualizar",
   "mods.install": "Instalar",
   "mods.options": "Opções",

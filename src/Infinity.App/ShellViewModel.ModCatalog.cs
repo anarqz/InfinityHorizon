@@ -484,8 +484,9 @@ public sealed partial class ShellViewModel
         .Select(i => i.Manifest!.Text("name", S.Locale)).ToList();
 
     /// <summary>Names of <paramref name="mod"/>'s dependencies that are not installed and enabled (T5d).</summary>
+    // OD-125: ExtraOptions comes with Infinity (ExtraOptions.Infinity); it is never offered as a dependency to install
     private ModManifest? MissingDependency(ModManifest mod) => mod.Dependencies
-        .Where(d => !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
+        .Where(d => d.Id != ManagedModFiles.BuiltInExtraOptions && !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
         .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id && d.Versions.Contains(m.Version))).FirstOrDefault(m => m is not null);
 
     private List<string> MissingDependencyNames(ModManifest mod) => mod.Dependencies
@@ -579,6 +580,11 @@ public sealed partial class ShellViewModel
                 status = S["mods.hardcore_unavailable"]; badge = S["mods.badge_attention"];
                 if (installed is { Enabled: true } && fact.Next is null) action = S["mods.disable_action"];
                 else canAct = false;
+            }
+            if (mod.Id == ManagedModFiles.BuiltInExtraOptions)
+            {
+                // OD-125: ExtraOptions is part of Infinity's own winmm.dll (ExtraOptions.Infinity), never a mod to install
+                status = S["mods.builtin_extraoptions"]; badge = S["mods.badge_on"]; action = S["mods.install"]; canAct = false; dependency = null;
             }
             canAct &= ModsIdle && _install is not null && !ModRecoveryRequired;
             var requirements = mod.Dependencies.Count == 0 ? S["mods.no_dependencies"]

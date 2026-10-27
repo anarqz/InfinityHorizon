@@ -247,8 +247,26 @@ public sealed partial class ManagedModFiles
         InstallFrom(manifest, () => VerifyCustomFiles(manifest), progress, update, hardcore);
     }
 
+    /// <summary>OD-125: the catalog id of ExtraOptions, which comes with Infinity as ExtraOptions.Infinity (never installed as a mod).</summary>
+    public const string BuiltInExtraOptions = "extraoptions";
+
+    /// <summary>OD-125: ExtraOptions.Infinity's files beside azimuth.exe, which no mod may write.</summary>
+    private static readonly string[] BuiltInAzimuthFiles = [Infinity.Core.Process.HookInstaller.HookDll, Infinity.Core.Process.ExtraOptionsInfinity.IniFile];
+
+    private static void RejectBuiltInFiles(ModManifest manifest)
+    {
+        static bool BuiltIn(string root, string path) => root == "azimuth"
+            && BuiltInAzimuthFiles.Contains(path.Replace('\\', '/').TrimStart('/'), StringComparer.OrdinalIgnoreCase);
+        if (manifest.Id == BuiltInExtraOptions || manifest.Files.Any(f => BuiltIn(f.Root, f.Destination))
+            || manifest.ConfigPath is { } config && BuiltIn("azimuth", config))
+        {
+            throw new ModException("ExtraOptions comes with Infinity (ExtraOptions.Infinity); this mod would replace its files", ModErrors.Conflict);
+        }
+    }
+
     private void InstallFrom(ModManifest manifest, Func<Dictionary<ManifestFile, Func<byte[]>>> verify, IProgress<string>? progress, bool update, bool hardcore)
     {
+        RejectBuiltInFiles(manifest);
         if (!manifest.SupportedForInstall)
             throw new ModException("runtime or dependencies require coordination", ModErrors.Unsupported);
         using var gate = Lock();
