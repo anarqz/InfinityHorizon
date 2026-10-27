@@ -120,23 +120,73 @@ static const struct {
      0, 0},
 };
 
-/* net.c, in a launcher session: 1 the request is one of the livery calls (noted), 0 it is not.
-   Either way nothing is answered here: the request goes on to the server. */
-int fi_livery_route(const wchar_t *headers, const unsigned char *body, size_t size) {
+/* Which of lw_calls the request is (its X-ClassName and X-Method), or -1. */
+static int lw_call_of(const wchar_t *headers) {
     char cls[96], method[64];
     if (!headers || !lw_header(headers, L"X-ClassName", cls, sizeof(cls)) ||
         !lw_header(headers, L"X-Method", method, sizeof(method))) {
-        return 0;
+        return -1;
     }
     for (size_t i = 0; i < sizeof(lw_calls) / sizeof(lw_calls[0]); ++i) {
-        if (lw_text_is(cls, lw_calls[i].cls) && lw_text_is(method, lw_calls[i].method)) {
-            if (lw_calls[i].logged) {
-                lw_log_call(lw_calls[i].what, lw_calls[i].by_id && body && size >= 8 ? lw_be64(body) : 0, size);
-            }
-            return 1;
-        }
+        if (lw_text_is(cls, lw_calls[i].cls) && lw_text_is(method, lw_calls[i].method)) return (int)i;
     }
-    return 0;
+    return -1;
+}
+
+/* net.c, in a launcher session: 1 the request is one of the livery calls (noted), 0 it is not.
+   Either way nothing is answered here: the request goes on to the server. */
+int fi_livery_route(const wchar_t *headers, const unsigned char *body, size_t size) {
+    int i = lw_call_of(headers);
+    if (i < 0) return 0;
+    if (lw_calls[i].logged) {
+        lw_log_call(lw_calls[i].what, lw_calls[i].by_id && body && size >= 8 ? lw_be64(body) : 0, size);
+    }
+    return 1;
+}
+
+static size_t lw_put_number(char *line, size_t n, unsigned long long v) {
+    char digits[24];
+    size_t d = 0;
+    do {
+        digits[d++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    while (d) line[n++] = digits[--d];
+    return n;
+}
+
+static size_t lw_put_text(char *line, size_t n, const char *text) {
+    while (*text) line[n++] = *text++;
+    return n;
+}
+
+/* net.c, after the server answered a livery call: its HTTP status, the bin/xtsw reply's first two
+   words (0 0 when served; the Beta's Xls error 1 is "no such livery") and its size, beside the
+   request's line, so either side's log matches the server's (never the paint's bytes). */
+void fi_livery_reply(const wchar_t *headers, const unsigned char *request_body, size_t request_size,
+                     unsigned status, const unsigned char *reply, size_t reply_size) {
+    int i = lw_call_of(headers);
+    if (i < 0 || !lw_calls[i].logged) return;
+    char line[240];
+    size_t n = lw_put_text(line, 0, "LIVERY: ");
+    n = lw_put_text(line, n, lw_calls[i].what);
+    if (lw_calls[i].by_id && request_body && request_size >= 8) {
+        n = lw_put_text(line, n, " id ");
+        n = lw_put_number(line, n, lw_be64(request_body));
+    }
+    n = lw_put_text(line, n, " answered HTTP ");
+    n = lw_put_number(line, n, status);
+    if (reply && reply_size >= 8) {
+        n = lw_put_text(line, n, ", xtsw ");
+        n = lw_put_number(line, n, lw_be32(reply));
+        n = lw_put_text(line, n, "/");
+        n = lw_put_number(line, n, lw_be32(reply + 4));
+    }
+    n = lw_put_text(line, n, ", bytes ");
+    n = lw_put_number(line, n, reply_size);
+    n = lw_put_text(line, n, ".\r\n");
+    line[n] = 0;
+    log_append(line);
 }
 
 /* ------------------------------------------------------------- the world's LAN socket */
