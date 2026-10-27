@@ -67,7 +67,7 @@ public sealed partial class ShellViewModel
         var seedSource = hardcore && NewSeedFromProfile ? NewSeedSource?.Profile : null;
         if (hardcore && NewSeedFromProfile && seedSource is null) { Message = S["seed.pick_source"]; return; }
         LocalProfile created;
-        try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow); }
+        try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow, SignedIn ? _session?.Me?.AccountId : null); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
         catch (IOException) { Message = S["offline.profile_save_failed"]; return; }
         NewName = string.Empty;
