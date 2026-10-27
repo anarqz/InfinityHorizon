@@ -532,7 +532,9 @@ public sealed class DedicatedHost : IAsyncDisposable
             ErrorCodes.AuthRoleRequired => "lobby.role_required",
             ErrorCodes.RequestInvalid when admission && error.Status == HttpStatusCode.BadRequest && UnsupportedField(error) => "lobby.unsupported",
             ErrorCodes.SessionsInUseElsewhere => "lobby.in_use_elsewhere",
-            ErrorCodes.SessionsEnded => Reason(error) == "takeover" ? "lobby.taken_over" : "lobby.session_ended",
+            ErrorCodes.SessionsEnded => Reason(error) switch { "takeover" => "lobby.taken_over", "kicked" => "lobby.kicked", _ => "lobby.session_ended" },
+            ErrorCodes.SessionsKicked => "lobby.kicked", // CR-S62: the cooldown of a kick still refuses admission
+
             ErrorCodes.AccountsFrozen => "crash.frozen",
             ErrorCodes.GameUpdateRequired => "lobby.update_required",
             _ => admission ? "lobby.start_failed" : "lobby.session_ended",

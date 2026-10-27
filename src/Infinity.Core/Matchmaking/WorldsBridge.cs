@@ -685,6 +685,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// </summary>
     public Task<UiFrame.MyWorld> MyWorldAsync(CancellationToken cancellation) => MineAsync(background: false, cancellation);
 
+    /// <summary>The players of the world as last read (no request): the launcher's moderation panel lists them (CR-S62).</summary>
+    public IReadOnlyList<MemberRow> LastMembers => Volatile.Read(ref _mineSnapshot).Members;
+
     /// <summary>Periodic reconciliation sleeps after an idle free session has a confirmed empty seat.</summary>
     public Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) => MineAsync(background: true, cancellation);
 

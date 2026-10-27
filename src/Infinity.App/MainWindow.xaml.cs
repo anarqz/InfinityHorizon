@@ -474,6 +474,40 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    // CR-S62: the moderation pane, like the lobby pane: opening focuses its first control, Escape (B) closes it.
+    private void OnToggleModerationPane(object sender, RoutedEventArgs e)
+    {
+        _vm.ToggleModerationPane();
+        if (_vm.ShowModerationPane)
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_vm.HasModerationPlayers) ModerationPlayerList.Focus();
+                else ModerationLookupBox.Focus();
+            }, System.Windows.Threading.DispatcherPriority.Input);
+        else ModerationButton.Focus();
+    }
+
+    private void OnModerationPaneKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape || !_vm.ShowModerationPane) return;
+        _vm.CloseModerationPane();
+        ModerationButton.Focus();
+        e.Handled = true;
+    }
+
+    private async void OnModerationRefresh(object sender, RoutedEventArgs e) => await _vm.RefreshModerationPlayersAsync();
+
+    private async void OnModerationFind(object sender, RoutedEventArgs e) => await _vm.FindModerationTargetAsync();
+
+    private async void OnModerationLookupKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+        e.Handled = true;
+        await _vm.FindModerationTargetAsync();
+    }
+
+    private async void OnModerationApply(object sender, RoutedEventArgs e) => await _vm.ApplyModerationAsync();
+
     private async void OnStartLobby(object sender, RoutedEventArgs e)
     {
         await _vm.StartLobbyAsync();

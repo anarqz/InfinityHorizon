@@ -454,6 +454,7 @@ public sealed partial class ShellViewModel
                 {
                     "queue_cancelled" => S[ended.Left ? "queue.left" : "queue.leave_pending"],
                     "queue_ended" => S["queue.ended"],
+                    "queue_kicked" => S["kick.removed"], // CR-S62: a moderator ended the queued session; no re-queue
                     "save_blocked" => _playStatus ?? S["saves.blocked"],
                     "relaunch_loop" => S["supervisor.relaunch_loop"],
                     "error" => _playStatus ?? S["supervisor.launch_refused"],
@@ -498,6 +499,11 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Error content when content.Message is ErrorCodes.ContentIncompatible or ErrorCodes.ContentInconclusive or ErrorCodes.ContentRecheckRequired or ErrorCodes.ContentPolicyChanged or ErrorCodes.ContentPolicyUnavailable:
                 IntegrityRefused(content.Message, content.DuringAdmission); // OD-113: a mismatch is shown; any other refusal is re-checked silently
                 SetStatus(string.Empty);
+                break;
+            case SupervisorEvent.Error { Message: ErrorCodes.SessionsKicked } kicked:
+                // CR-S62: a kick's cooldown refuses Play; the minutes left come from Retry-After (or details.until)
+                Message = KickedRefusalText(kicked.Wait);
+                SetStatus(Message);
                 break;
             case SupervisorEvent.Error { DuringAdmission: true }:
                 // Admission errors belong on Play. Keep technical installation diagnostics in Configure.

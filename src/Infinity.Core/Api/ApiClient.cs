@@ -56,6 +56,10 @@ public static class ErrorCodes
     public const string SessionsInUseElsewhere = "SESSIONS.IN_USE_ELSEWHERE";
     public const string SessionsProfileInUse = "SESSIONS.PROFILE_IN_USE";
     public const string SessionsEnded = "SESSIONS.ENDED";
+    /// <summary>403 <c>{until}</c> + <c>Retry-After</c> on admission: a moderator's kick cooldown is in force (CR-S62, GATE_API.md §2).</summary>
+    public const string SessionsKicked = "SESSIONS.KICKED";
+    /// <summary>404 of the role routes: an unknown (or deleted) XUID or account (CORE_API.md §5).</summary>
+    public const string PortalNotFound = "PORTAL.NOT_FOUND";
     public const string SharingTooManyRecentDevices = "SHARING.TOO_MANY_RECENT_DEVICES";
     public const string PoolFull = "POOL.FULL";
     public const string ServiceMaintenance = "SERVICE.MAINTENANCE";
