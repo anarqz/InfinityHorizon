@@ -30,6 +30,9 @@ public sealed partial class WorldsBridge
     private readonly ConcurrentDictionary<string, string> _relayNames = new(StringComparer.Ordinal);
     private int _fallbackRunning;
     private string? _fallbackGrant;
+    // the grant the hook last reported direct for (no relay push until a new direct failure), and one whose fallback renew was refused
+    private string? _directGrant;
+    private string? _refusedGrant;
     // the last leg pushed (under _proofWrites): its grant, its relay's key, and whether it goes through the relay now
     private Guid? _legGrant;
     private string? _legRelayKey;
@@ -64,12 +67,15 @@ public sealed partial class WorldsBridge
         var grant = Guid.Parse(verified.Grant);
         if (verified.Relay is not { } named || !IPAddress.TryParse(named.Addr, out var address)
             || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || named.Addr.Count(c => c == '.') != 3
-            || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0)
+            || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0
+            || Volatile.Read(ref _refusedGrant) == verified.Grant) // the server refused this grant's relay: nothing for the hook to try
         {
             await ClearLegAsync(cancellation).ConfigureAwait(false);
             return;
         }
-        var viaRelay = transport == Transports.Relay || Volatile.Read(ref _fallbackGrant) == verified.Grant;
+        // the hook's own report wins: once it plays direct, a seat that still reads "relay" never sends it back to the relay
+        var viaRelay = Volatile.Read(ref _directGrant) != verified.Grant
+            && (transport == Transports.Relay || Volatile.Read(ref _fallbackGrant) == verified.Grant);
         byte[]? claims = null, signature = null;
         Frame.RelayLeg? leg = null;
         try
@@ -111,19 +117,35 @@ public sealed partial class WorldsBridge
         if (!RelayJoinerCapable || !OnlineOpen) return null;
         var grantId = frame.Grant.ToString("D");
         if (_seat.GrantId != grantId) return null;
+        var refused = Volatile.Read(ref _refusedGrant) == grantId;
         switch (frame.State)
         {
             case RelayFallbackState.RelayOk:
             case RelayFallbackState.DirectOk:
+                var direct = frame.State == RelayFallbackState.DirectOk;
                 await _proofWrites.WaitAsync(cancellation).ConfigureAwait(false);
-                try { if (_legGrant == frame.Grant) _legViaRelay = frame.State == RelayFallbackState.RelayOk; }
+                try
+                {
+                    if (direct)
+                    {
+                        // later re-pushes carry transport 0 until the hook reports a new direct failure
+                        Volatile.Write(ref _directGrant, grantId);
+                        Forget(ref _fallbackGrant, grantId);
+                    }
+                    else Forget(ref _directGrant, grantId);
+                    if (_legGrant == frame.Grant) _legViaRelay = !direct;
+                }
                 finally { _proofWrites.Release(); }
-                _log(frame.State == RelayFallbackState.RelayOk ? "worlds: the seat plays through its relay" : "worlds: the seat plays direct");
+                _log(direct ? "worlds: the seat plays direct" : "worlds: the seat plays through its relay");
                 return null;
             case RelayFallbackState.RelayUnavailable:
+                // a refused fallback already said why (no_relay, relay_busy): one message per grant
+                if (refused) return null;
                 _log("worlds: relay fallback failed; the host could not be reached");
                 return _text("worlds.host_unreachable");
         }
+        if (refused) return null; // the server refused this grant's relay; the hook's leg was cleared
+        Forget(ref _directGrant, grantId); // a new direct failure re-arms the relay
         Volatile.Write(ref _fallbackGrant, grantId);
         if (Interlocked.CompareExchange(ref _fallbackRunning, 1, 0) != 0) return null;
         try
@@ -136,7 +158,14 @@ public sealed partial class WorldsBridge
             if (!renewed.Ok || renewed.Value is not { } answer)
             {
                 _log($"worlds: relay fallback renew refused: {renewed.Error?.Kind} {renewed.Error?.Reason}");
-                return ConflictReasons.RelayKey(renewed.Error) is { } key ? _text(key) : null;
+                if (ConflictReasons.RelayKey(renewed.Error) is not { } key) return null;
+                // final for this grant: the toast once, and the hook's leg cleared so it stops trying the relay
+                if (Interlocked.Exchange(ref _refusedGrant, grantId) == grantId) return null;
+                Forget(ref _fallbackGrant, grantId);
+                await _proofWrites.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try { if (_legGrant == frame.Grant) await ClearLegAsync(CancellationToken.None).ConfigureAwait(false); }
+                finally { _proofWrites.Release(); }
+                return _text(key);
             }
             if (answer.Seat?.GrantId is { } returned && returned != grantId) { RequestReconcile(); return null; }
             if (!ClaimSeatProof(answer, ref epoch, grantId) || !await SendSeatProofAsync(answer.Seat, epoch, token).ConfigureAwait(false)) return null;
@@ -170,6 +199,12 @@ public sealed partial class WorldsBridge
     {
         var kept = new string((name ?? "").Where(c => !char.IsControl(c) && !char.IsSurrogate(c)).ToArray()).Trim();
         return kept.Length == 0 ? null : kept.Length > 48 ? kept[..48] : kept;
+    }
+
+    /// <summary>Clears <paramref name="slot"/> when it names <paramref name="grantId"/> (by value: grant ids are separate string instances).</summary>
+    private static void Forget(ref string? slot, string grantId)
+    {
+        if (string.Equals(Volatile.Read(ref slot), grantId, StringComparison.Ordinal)) Volatile.Write(ref slot, null);
     }
 
     private void RememberRelayName(WorldRelay? relay)
