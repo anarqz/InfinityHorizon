@@ -140,7 +140,8 @@ public static class ExtraOptionsMods
     }
 
     /// <summary>
-    /// Before a launch, game closed. Hardcore: every enabled mod not in <paramref name="allowedInHardcore"/> (folders) is
+    /// Before a launch, game closed. First <see cref="ArrangeLoadOrder"/>. Hardcore: every enabled mod not in
+    /// <paramref name="allowedInHardcore"/> (folders: the catalog's mods that change nothing for other players) is
     /// disabled and remembered in <paramref name="stateFile"/>; any other profile: the mods a Hardcore launch disabled, and that
     /// are still disabled, are enabled again. Returns one log line per change.
     /// </summary>
@@ -149,7 +150,7 @@ public static class ExtraOptionsMods
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(allowedInHardcore);
         ArgumentNullException.ThrowIfNull(stateFile);
-        var notes = new List<string>();
+        var notes = new List<string>(ArrangeLoadOrder(azimuthRoot));
         var held = ReadHeld(stateFile);
         var mods = Scan(azimuthRoot);
         if (hardcore)
@@ -173,6 +174,129 @@ public static class ExtraOptionsMods
         }
         if (held.Count > 0) File.Delete(stateFile);
         return notes;
+    }
+
+    /// <summary>
+    /// The <c>mods\</c> folder a catalog manifest installs (every <c>azimuth</c> file under <c>mods/&lt;folder&gt;/</c>), or null
+    /// for a mod that is not an ExtraOptions mod folder.
+    /// </summary>
+    public static string? FolderOf(ModManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        var folders = manifest.Files.Where(f => f.Root == "azimuth").Select(f => ModsSubfolder(f.Destination)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return folders.Count == 1 ? folders[0] : null;
+    }
+
+    /// <summary>
+    /// Before a catalog mod is installed or updated (OD-126): an ExtraOptions mod lives only in <c>mods/&lt;id&gt;/</c>, and its
+    /// own <c>mod.json</c> agrees with the Infinity manifest (id, version, dependencies), since ExtraOptions loads by the one
+    /// and the launcher installs by the other. <paramref name="read"/> returns a package file's verified bytes by destination.
+    /// </summary>
+    public static void CheckPackage(ModManifest manifest, Func<string, byte[]?> read)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(read);
+        var azimuth = manifest.Files.Where(f => f.Root == "azimuth").ToList();
+        if (!azimuth.Any(f => ModsSubfolder(f.Destination) is not null)) return; // not an ExtraOptions mod folder
+        var folder = FolderOf(manifest);
+        if (folder is null || manifest.Files.Any(f => f.Root != "azimuth"))
+            throw new ModException("an ExtraOptions mod installs only into its own mods folder", ModErrors.Unsupported);
+        if (!folder.Equals(manifest.Id, StringComparison.Ordinal))
+            throw new ModException("the ExtraOptions mod folder must be the mod's id", ModErrors.Unsupported);
+        var dependencies = manifest.Dependencies.Select(d => d.Id).Where(d => d != ManagedModFiles.BuiltInExtraOptions)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var file = azimuth.FirstOrDefault(f => f.Destination.Equals(ModsFolder + "/" + folder + "/mod.json", StringComparison.OrdinalIgnoreCase))
+            ?? azimuth.FirstOrDefault(f => f.Destination.Equals(ModsFolder + "/" + folder + "/addon.json", StringComparison.OrdinalIgnoreCase));
+        if (file is null)
+        {
+            // Without a manifest ExtraOptions names the mod by its folder and knows no dependencies to order or check.
+            if (dependencies.Count > 0) throw new ModException("an ExtraOptions mod with dependencies needs its mod.json", ModErrors.Unsupported);
+            return;
+        }
+        var bytes = read(file.Destination) ?? throw new ModException("the mod's mod.json is missing from the package", ModErrors.Unsupported);
+        string? id = null, version = null; var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("format_version", out var format) && format.ValueKind == JsonValueKind.Number && format.GetDouble() == 1)
+            {
+                if (root.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String) id = i.GetString();
+                if (root.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.String) version = v.GetString();
+                if (root.TryGetProperty("dependencies", out var d) && d.ValueKind == JsonValueKind.Array)
+                    foreach (var item in d.EnumerateArray()) declared.Add(item.ValueKind == JsonValueKind.String ? item.GetString()! : "?");
+            }
+        }
+        catch (JsonException) { }
+        if (id is null || !ValidId(id)) throw new ModException("the mod's mod.json is not an ExtraOptions manifest", ModErrors.Unsupported);
+        if (!id.Equals(manifest.Id, StringComparison.Ordinal))
+            throw new ModException("the mod's mod.json names another id than the Infinity manifest", ModErrors.Unsupported);
+        if (version is not null && version != manifest.Version)
+            throw new ModException("the mod's mod.json has another version than the Infinity manifest", ModErrors.Unsupported);
+        if (!declared.SetEquals(dependencies))
+            throw new ModException("the mod's mod.json and the Infinity manifest declare different dependencies", ModErrors.Unsupported);
+    }
+
+    /// <summary>
+    /// Before a launch, game closed (OD-126): every folder gets its line (an unlisted one is appended, enabled, as ExtraOptions
+    /// would), and a mod listed before one of its dependencies moves to just after the last of them, since ExtraOptions refuses
+    /// a mod whose dependency loads later. Other lines, comments and the remaining order stay. Returns one log line per move.
+    /// </summary>
+    public static IReadOnlyList<string> ArrangeLoadOrder(string azimuthRoot)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        var mods = Scan(azimuthRoot);
+        if (mods.Count == 0) return [];
+        var file = ReadLoadOrder(azimuthRoot);
+        var notes = new List<string>();
+        var changed = false;
+        if (file.Lines.Count > 0 && file.Lines[^1].Length == 0) file.Lines.RemoveAt(file.Lines.Count - 1);
+        foreach (var mod in mods.Where(m => !m.Listed)) { file.Lines.Add(mod.Folder); changed = true; }
+        int LineOf(ExtraOptionsMod mod) => file.Lines.FindIndex(l => Entry(l) is { } e && e.Folder.Equals(mod.Folder, StringComparison.OrdinalIgnoreCase));
+        ExtraOptionsMod? Named(string name) => mods.FirstOrDefault(m => m.Id.Equals(name, StringComparison.OrdinalIgnoreCase))
+            ?? mods.FirstOrDefault(m => m.Folder.Equals(name, StringComparison.OrdinalIgnoreCase));
+        // A mod in a dependency cycle has no valid place (ExtraOptions refuses it anyway): it stays where it is, so the file
+        // does not change at every launch.
+        var cyclic = mods.Where(m =>
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var next = new Stack<ExtraOptionsMod>(m.Dependencies.Select(Named).OfType<ExtraOptionsMod>());
+            while (next.TryPop(out var d))
+            {
+                if (d.Folder.Equals(m.Folder, StringComparison.OrdinalIgnoreCase)) return true;
+                if (seen.Add(d.Folder)) foreach (var x in d.Dependencies.Select(Named).OfType<ExtraOptionsMod>()) next.Push(x);
+            }
+            return false;
+        }).Select(m => m.Folder).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // At most one move per mod per pass; the order settles within mods.Count passes.
+        for (var pass = 0; pass < mods.Count; pass++)
+        {
+            var moved = false;
+            foreach (var mod in mods.Where(m => !cyclic.Contains(m.Folder)))
+            {
+                var at = LineOf(mod);
+                var last = mod.Dependencies.Select(Named).Where(d => d is not null && d.Folder != mod.Folder).Select(d => LineOf(d!)).DefaultIfEmpty(-1).Max();
+                if (at < 0 || last <= at) continue;
+                var line = file.Lines[at];
+                file.Lines.RemoveAt(at);
+                file.Lines.Insert(last, line); // `last` shifted down by one when the line above it left
+                notes.Add("extraoptions mods: " + mod.Folder + " moved after its dependencies in loadorder.txt");
+                moved = changed = true;
+            }
+            if (!moved) break;
+        }
+        if (changed) WriteLoadOrder(azimuthRoot, file);
+        return notes;
+    }
+
+    /// <summary>The <c>&lt;folder&gt;</c> of a <c>mods/&lt;folder&gt;/…</c> destination, or null.</summary>
+    private static string? ModsSubfolder(string destination)
+    {
+        var path = destination.Replace('\\', '/');
+        if (!path.StartsWith(ModsFolder + "/", StringComparison.OrdinalIgnoreCase)) return null;
+        var rest = path[(ModsFolder.Length + 1)..];
+        var slash = rest.IndexOf('/');
+        return slash > 0 ? rest[..slash] : null;
     }
 
     private static ExtraOptionsModState Classify(string message) => message switch

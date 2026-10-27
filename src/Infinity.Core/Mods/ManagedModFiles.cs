@@ -264,6 +264,11 @@ public sealed partial class ManagedModFiles
         }
     }
 
+    /// <summary>OD-126: an ExtraOptions mod's own <c>mod.json</c> (from the verified package) agrees with its manifest.</summary>
+    private static void CheckExtraOptionsPackage(ModManifest manifest, Dictionary<ManifestFile, Func<byte[]>> verified) =>
+        ExtraOptionsMods.CheckPackage(manifest, destination => verified.FirstOrDefault(v => v.Key.Root == "azimuth"
+            && v.Key.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase)).Value?.Invoke());
+
     private void InstallFrom(ModManifest manifest, Func<Dictionary<ManifestFile, Func<byte[]>>> verify, IProgress<string>? progress, bool update, bool hardcore)
     {
         RejectBuiltInFiles(manifest);
@@ -276,11 +281,14 @@ public sealed partial class ManagedModFiles
         if (installed is not null)
         {
             if (installed.Enabled) CheckProfile(manifest, hardcore); // an enabled mod stays enabled across its update
-            Update(manifest, installed, verify(), progress); return;
+            var next = verify();
+            CheckExtraOptionsPackage(manifest, next);
+            Update(manifest, installed, next, progress); return;
         }
         CheckProfile(manifest, hardcore);
         CheckDependencies(manifest);
         var verified = verify();
+        CheckExtraOptionsPackage(manifest, verified);
         var owned = new List<ManagedModFile>();
         var changes = new List<ModFileChange>();
         foreach (var (file, source) in verified)
