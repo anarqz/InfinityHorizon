@@ -108,6 +108,7 @@ public sealed partial class ShellViewModel
                 FillProfiles();
                 return;
             }
+            CancelDeleteProfile(); // one confirmation at a time (CR-S61)
             _converting = profile;
             _convertDetails = details;
             _convertKey = Guid.CreateVersion7().ToString(); // reused on every retry of the confirmation
@@ -320,10 +321,13 @@ public sealed partial class ShellViewModel
     }
 }
 
-/// <summary>One row of the profile picker.</summary>
-public sealed record ProfileRow(Profile Profile, string Line)
+/// <summary>One row of the profile picker. <see cref="OnAccount"/>: a profile of the signed-in account (not a local-only row).</summary>
+public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = false)
 {
     public string Gamertag => ProfileName.Plain(Profile.Gamertag);
 
     public bool Hardcore => Profile.Mode == "hardcore";
+
+    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only.</summary>
+    public bool CanDeleteFromCloud => OnAccount;
 }

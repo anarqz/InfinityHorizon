@@ -322,6 +322,9 @@ public sealed class CloudSaves
 
     public ProfileSyncState? State(ulong xuid) => _store.Get(_realm, xuid);
 
+    /// <summary>CR-S61: the profile was deleted from the cloud; its sync state on this server goes (pending bytes set aside).</summary>
+    public bool Forget(ulong xuid) => _store.Forget(_realm, xuid);
+
     /// <summary>
     /// Before every reconcile and launch: staging leftovers removed, unsealed folders above the newest
     /// sealed one archived. Busy folders (a file open for writing) stay; decide again once they settle.

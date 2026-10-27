@@ -143,6 +143,23 @@ public sealed class LocalProfileStore(string stateDirectory)
     /// <summary>Removes a profile from this launcher's list; its save folder is never touched.</summary>
     public void Remove(string id) => Write(Read().Where(p => p.Id != id));
 
+    /// <summary>
+    /// CR-S61: the account profile <paramref name="profileId"/> of <paramref name="accountId"/> was deleted from the cloud. Its entry
+    /// (a cached copy or the local profile it was uploaded from) leaves this launcher's list, so it is neither shown nor uploaded again
+    /// and its name is free here too; its save folders are never touched here (the caller archives them). Returns the entry removed,
+    /// or null when this launcher held none.
+    /// </summary>
+    public LocalProfile? ForgetAccountProfile(string accountId, string profileId)
+    {
+        var all = Load();
+        var index = all.FindIndex(p => p.Cloud is { } cloud && cloud.AccountId == accountId && cloud.ProfileId == profileId);
+        if (index < 0) return null;
+        var removed = all[index];
+        all.RemoveAt(index);
+        Write(all);
+        return removed;
+    }
+
     /// <summary>Stores the server's answer for an uploaded profile at once (its key's replay record is not kept forever).</summary>
     public LocalProfile Link(string id, CloudLink cloud)
     {

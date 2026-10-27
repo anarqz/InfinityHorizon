@@ -541,7 +541,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         foreach (var (profile, local) in rows)
         {
             Profiles.Add(profile);
-            ProfileRows.Add(new ProfileRow(profile, local is null ? ModeLine(profile) : ModeLine(profile) + " · " + LocalLine(local)));
+            ProfileRows.Add(new ProfileRow(profile, local is null ? ModeLine(profile) : ModeLine(profile) + " · " + LocalLine(local), OnAccount: local is null && !OfflineMode));
             if (local is not null) _rowLocals[profile.ProfileId] = local;
         }
         Changed(nameof(CanChooseHardcore));

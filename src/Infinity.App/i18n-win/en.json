@@ -984,5 +984,18 @@
   "seed.blocked_title": "The career check has to wait",
   "seed.blocked": "This account used today's career checks, so {name} cannot send the career it starts from yet. Wait, or start a new career instead.",
   "seed.blocked_wait": "This account used today's career checks, so {name} cannot send the career it starts from for about {hours} h. Wait, or start a new career instead.",
-  "seed.abandon": "Start a new career instead"
+  "seed.abandon": "Start a new career instead",
+  "profiles.delete": "Delete from the cloud",
+  "profiles.delete_title": "Delete {name} from the cloud?",
+  "profiles.delete_body": "This erases everything the servers keep for {name}, at once and for good: its cloud saves and their history, its liveries and creations, scores, messages and the rest. There is no undo, and the name {name} becomes free for anyone to take.",
+  "profiles.delete_keeps": "The save on this PC is kept: it moves to the saves folder's fi-launcher-archive. Your account and your friends stay. You can delete up to 3 profiles an hour.",
+  "profiles.delete_type": "Type {name} to confirm.",
+  "profiles.delete_confirm": "Delete for good",
+  "profiles.delete_cancel": "Keep the profile",
+  "profiles.deleted": "Deleted {name} from the cloud; the save on this PC is archived.",
+  "profiles.deleted_not_archived": "Deleted {name} from the cloud. The save on this PC is in use and could not be archived now; it stays where it was.",
+  "profiles.delete_rate_limited": "You can delete up to 3 profiles an hour. Try again in about {minutes} min.",
+  "profiles.delete_rate_limited_later": "You can delete up to 3 profiles an hour. Try again later.",
+  "profiles.delete_in_use": "This profile is in use: close the game or wait until its session ends (about {minutes} min), then try again.",
+  "profiles.delete_in_use_now": "This profile is in use: close the game or wait until its session ends, then try again."
 }
