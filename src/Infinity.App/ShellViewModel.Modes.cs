@@ -21,7 +21,12 @@ public sealed partial class ShellViewModel
     /// Signed in to an account: Hardcore can be chosen on every tier (owner 2026-10-27 "Follow the server's flags"); whether it keeps
     /// a cloud line is the server's (CR-S51 <see cref="CloudLines"/>), the admission decides.
     /// </summary>
-    public bool CanChooseHardcore => _session?.Me is not null;
+    public bool CanChooseHardcore
+    {
+        get { var can = _session?.Me is not null; InspectCanChooseHardcore(ref can); return can; }
+    }
+
+    partial void InspectCanChooseHardcore(ref bool can);
 
     private bool IsSupporter => _session?.Me?.Access.Tier == "vip";
 
@@ -39,6 +44,7 @@ public sealed partial class ShellViewModel
             Changed(nameof(NewHardcore));
             Changed(nameof(NewNoob));
             Changed(nameof(AzimuthNameWarning));
+            ChangedSeedForm(); // CR-S52: "Start from one of my profiles" is a Hardcore option
         }
     }
 
@@ -256,12 +262,16 @@ public sealed partial class ShellViewModel
             SaveStep.Uploaded => S.Format("saves.uploaded", ("rev", detail ?? "?")),
             SaveStep.Kept => S["saves.kept"],
             SaveStep.Refused => S["saves.refused"],
+            SaveStep.SeedAccepted => S.Format("saves.seed_accepted", ("rev", detail ?? "?")),
+            SaveStep.SeedRefused => S[ProfileSeed.CommitTextKey(detail)], // refused, not sent, unconfirmed or the account's review
             _ => null,
         };
         if (text is not null)
         {
             SetStatus(text);
         }
+        // CR-S52: the fall back to a new career is told where it stays on screen, not only on the status line the next steps replace
+        if (step == SaveStep.SeedRefused) Message = text;
     }
 
     /// <summary>Hardcore → Noob: the line's newest cloud revision onto this PC first (no lease needed to read).</summary>

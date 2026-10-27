@@ -541,6 +541,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Changed(nameof(CanChooseHardcore));
         Changed(nameof(NewHardcore));
         Changed(nameof(ProfilesText));
+        ChangedSeedForm();
     }
 
     private bool CheckName()
@@ -594,6 +595,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     private string Describe(Exception e) => e switch
     {
+        ApiException { Code: ErrorCodes.AccountsBanned } banned => BannedText(banned.Details), // CR-S52: the review of a seeded line
         ApiException api => ErrorText(api.Code),
         HttpRequestException => S["native.unreachable"],
         _ => S["native.failed"],

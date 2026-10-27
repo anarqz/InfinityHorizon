@@ -173,6 +173,18 @@ public partial class MainWindow : Window
 
     private void OnCancelConvert(object sender, RoutedEventArgs e) => _vm.CancelConvert();
 
+    private async void OnConfirmSeed(object sender, RoutedEventArgs e) => await _vm.ConfirmSeedAsync();
+
+    private async void OnDismissSeed(object sender, RoutedEventArgs e) => await _vm.DismissSeedAsync();
+
+    private async void OnSeedScratch(object sender, RoutedEventArgs e) => await _vm.StartFromScratchAsync();
+
+    private async void OnSeedCheckChoice(object sender, RoutedEventArgs e) => await _vm.CheckSeedChoiceAsync();
+
+    private void OnSeedCloseChoice(object sender, RoutedEventArgs e) => _vm.CloseSeedChoice();
+
+    private async void OnAbandonSeed(object sender, RoutedEventArgs e) => await _vm.AbandonSeedAsync();
+
     private void OnChooseProfile(object sender, RoutedEventArgs e) => _vm.ChooseProfile(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
 
     private async void OnCreateProfile(object sender, RoutedEventArgs e) => await _vm.CreateProfileAsync();

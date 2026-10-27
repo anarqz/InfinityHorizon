@@ -63,11 +63,15 @@ public sealed partial class ShellViewModel
         var hardcore = NewHardcore;
         var adoptsAzimuth = ShowAzimuthNameWarning;
         if (hardcore && adoptsAzimuth) { Message = S["profiles.azimuth_name_hardcore"]; return; }
+        // CR-S52: the source is chosen on the form; the check runs once the Hardcore profile exists on the server
+        var seedSource = hardcore && NewSeedFromProfile ? NewSeedSource?.Profile : null;
+        if (hardcore && NewSeedFromProfile && seedSource is null) { Message = S["seed.pick_source"]; return; }
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
         catch (IOException) { Message = S["offline.profile_save_failed"]; return; }
         NewName = string.Empty;
+        NewSeedFromProfile = false;
         Message = S.Format("offline.profile_created", ("name", created.Name));
         if (_session is { } session && SignedIn)
         {
@@ -82,6 +86,13 @@ public sealed partial class ShellViewModel
                     : S.Format(hardcore ? "modes.created_hardcore" : "profiles.created", ("name", result?.Profile.DisplayName ?? created.Name));
                 // OD-120: a name taken meanwhile (or no room) opens the panel, which asks for a new name or keeps it on this PC.
                 if (result is { Uploaded: false }) await OfferProfileUpsertAsync();
+                // CR-S52: the profile exists on the server now: the dry run of the chosen source, shown before anything is copied
+                else if (seedSource is not null && result?.Profile.Cloud is { } cloud
+                    && session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == cloud.ProfileId && p.Mode == "hardcore") is { } target)
+                {
+                    FillProfiles();
+                    await CheckSeedAsync(target, seedSource, fromPlay: false);
+                }
             });
         }
         FillProfiles();

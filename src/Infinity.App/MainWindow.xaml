@@ -446,6 +446,60 @@
             </StackPanel>
           </Border>
           </Grid>
+          <!-- CR-S52: a Hardcore line still empty starts from scratch or from one of the account's profiles, checked on the spot. The first
+               Play's choice, then the server's dry run, shown before the player confirms (nothing is copied before an accepted check). -->
+          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSeedPanel, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="540" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <StackPanel Visibility="{Binding ShowSeedChoice, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding SeedChoiceTitle}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding S[seed.first_launch_body]}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
+                <Button Margin="0,0,0,12" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnSeedScratch" IsEnabled="{Binding Idle}">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[seed.scratch]}" FontWeight="Bold" />
+                    <TextBlock Text="{Binding S[seed.scratch_detail]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Button>
+                <TextBlock Text="{Binding S[seed.option]}" FontWeight="Bold" />
+                <ComboBox Margin="0,6,0,0" ItemsSource="{Binding SeedChoiceSources}" SelectedItem="{Binding SeedChoiceSource}" DisplayMemberPath="Name"
+                          AutomationProperties.Name="{Binding S[seed.source_label]}" />
+                <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[seed.check]}" Click="OnSeedCheckChoice" IsEnabled="{Binding CanCheckSeedChoice}" Style="{StaticResource AccentButtonStyle}"
+                          Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+                </WrapPanel>
+              </StackPanel>
+              <StackPanel Visibility="{Binding ShowSeedCheck, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding SeedCheckTitle}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SeedCheckText}" Margin="0,8,0,6" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock Text="{Binding SeedCheckReasons}" Margin="8,0,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}"
+                           Visibility="{Binding SeedCheckRefused, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding SeedCheckSummary}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                           Visibility="{Binding SeedCheckAccepted, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding S[seed.commit_counts]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                           Visibility="{Binding SeedCommitMayBeLimited, Converter={StaticResource Visible}}" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[seed.confirm]}" Click="OnConfirmSeed" IsEnabled="{Binding Idle}" Margin="0,0,10,8" Padding="16,6"
+                          Style="{StaticResource AccentButtonStyle}" Visibility="{Binding SeedCheckAccepted, Converter={StaticResource Visible}}" />
+                  <Button Content="{Binding S[seed.start_fresh]}" Click="OnDismissSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8"
+                          Visibility="{Binding ShowSeedNotNow, Converter={StaticResource Visible}}" />
+                </WrapPanel>
+              </StackPanel>
+              <!-- A seed whose first upload waits on the day's checks (429): wait, or a new career instead (the seed set aside, kept). -->
+              <StackPanel Visibility="{Binding ShowSeedBlocked, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding S[seed.blocked_title]}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SeedBlockedText}" Margin="0,8,0,6" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[seed.abandon]}" Click="OnAbandonSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+                </WrapPanel>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+          </Grid>
           <!-- CR-L39: a custom server's pinned keys changed; this covers every screen until the player answers. -->
           <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowTrustChange, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="480" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -683,6 +737,20 @@
                   <StackPanel Margin="0,14,0,0" Visibility="{Binding CanChooseHardcore, Converter={StaticResource Visible}}">
                     <RadioButton Content="{Binding S[signin.form_hardcore]}" IsChecked="{Binding NewHardcore}" GroupName="NewMode" FontWeight="Bold" />
                     <TextBlock Text="{Binding HardcoreHint}" FontSize="11" Margin="30,2,0,10" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    <!-- CR-S52: on a server that allows it, the Hardcore profile may start from one of the account's Noob careers, checked on the spot.
+                         The owner's warning shows with the option, before anything is chosen. -->
+                    <Border Margin="30,0,0,12" Padding="12,10" CornerRadius="8" Background="{StaticResource InfinityWarnSurface}"
+                            Visibility="{Binding ShowSeedOption, Converter={StaticResource Visible}}">
+                      <StackPanel>
+                        <CheckBox Content="{Binding S[seed.option]}" IsChecked="{Binding NewSeedFromProfile}" FontWeight="Bold" />
+                        <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                        <ComboBox Margin="0,8,0,0" ItemsSource="{Binding SeedSources}" SelectedItem="{Binding NewSeedSource}" DisplayMemberPath="Name"
+                                  AutomationProperties.Name="{Binding S[seed.source_label]}"
+                                  Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
+                        <TextBlock Text="{Binding S[seed.option_hint]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
+                                   Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
+                      </StackPanel>
+                    </Border>
                     <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
                     <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
