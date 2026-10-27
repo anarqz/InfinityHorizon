@@ -17,6 +17,13 @@ public sealed partial record AzimuthInstall(string Root, string HostExe, string 
 {
     public const string HookFile = "winmm.dll";
 
+    /// <summary>
+    /// Tests only: the <see cref="HostSha256"/> <see cref="Detect"/> reports for an <c>azimuth.exe</c> (its full path), or null
+    /// to hash its bytes as always. A synthetic <c>azimuth.exe</c> cannot carry the real build's hash (OD-125). Scoped to the
+    /// calling async flow, so tests running in parallel never see each other's value; production never sets it.
+    /// </summary>
+    internal static readonly AsyncLocal<Func<string, string?>?> HostHashForTests = new();
+
     /// <summary>The folder's install, or null when it holds no <c>azimuth.exe</c>.</summary>
     public static AzimuthInstall? Detect(string root)
     {
@@ -42,7 +49,8 @@ public sealed partial record AzimuthInstall(string Root, string HostExe, string 
             hookSha = Convert.ToHexStringLower(SHA256.HashData([]));
         }
         var host = File.ReadAllBytes(exe);
-        return new AzimuthInstall(root, exe, bin, ReadVersion(host), hookVersion, hookSha, Convert.ToHexStringLower(SHA256.HashData(host)));
+        var hostSha = HostHashForTests.Value?.Invoke(exe) ?? Convert.ToHexStringLower(SHA256.HashData(host));
+        return new AzimuthInstall(root, exe, bin, ReadVersion(host), hookVersion, hookSha, hostSha);
     }
 
     /// <summary>The <c>"Azimuth x.y.z"</c> tag Azimuth carries in UTF-16 (0.9.x and 1.0.x).</summary>
