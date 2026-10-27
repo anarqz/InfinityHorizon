@@ -60,10 +60,12 @@ public sealed partial class ShellViewModel
         DeletionConfirmation = string.Empty;
         Message = null;
         Changed(string.Empty);
+        _ = RefreshDiscordAsync(); // CR-S63: the link and the switches as the server has them now
     }
 
     private void LeaveAccount()
     {
+        StopDiscordWait();
         _onAccount = false;
         _onOfflineStatus = false;
         DeletionEmail = DeletionConfirmation = string.Empty;
