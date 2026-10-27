@@ -7,7 +7,7 @@ namespace Infinity.Core.Process;
 
 /// <summary>
 /// An Azimuth folder (game::fh2 in the Rust launcher): <c>azimuth.exe</c> (Azimuth's launcher
-/// and the game host), <c>data\bin</c> (the hook's files), the Azimuth version and the SHA-256 of
+/// and the game host), <c>data\bin</c> (Azimuth's own files), the Azimuth version and the SHA-256 of
 /// <c>azimuth.exe</c> (OD-125: one exact build per release), and the installed hook's version and
 /// SHA-256 (the gate logs it; none installed = SHA-256 of zero bytes, CR-L20). The hook is
 /// ExtraOptions.Infinity, the <c>winmm.dll</c> beside <c>azimuth.exe</c> (OD-125). Read only:
