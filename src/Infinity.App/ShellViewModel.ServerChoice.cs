@@ -42,7 +42,7 @@ public sealed partial class ShellViewModel
     public bool ServerEditing => _serverEditing;
 
     /// <summary>The welcome screen's own content, while neither the server editor nor a changed-keys question covers it.</summary>
-    public bool ShowWelcomeHome => ShowWelcome && !_serverEditing && _trustChange is null;
+    public bool ShowWelcomeHome => ShowWelcome && !_serverEditing && _trustChange is null && !ShowAzimuthFirst;
 
     public bool ShowServerEditor => ShowWelcome && _serverEditing && _trustChange is null;
 
