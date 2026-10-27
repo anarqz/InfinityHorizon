@@ -176,6 +176,7 @@
   "error.MM.NOT_HOST": "Only the host can do this.",
   "error.MM.ALREADY_HOSTING": "You are already hosting a world.",
   "error.MM.GRANT_INVALID": "The connection to this world expired. Join again.",
+  "error.SESSIONS.KICKED": "A moderator removed you from online play. You can play online again when the wait ends.",
   "error.SESSIONS.IN_USE_ELSEWHERE": "Your account is playing on another PC.",
   "error.SESSIONS.PROFILE_IN_USE": "This profile is being played somewhere else.",
   "error.SESSIONS.ENDED": "The online session ended. Play again to start a new one.",

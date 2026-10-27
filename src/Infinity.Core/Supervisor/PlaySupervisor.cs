@@ -1003,14 +1003,17 @@ public sealed class PlaySupervisor
     }
 
     /// <summary>CR-S57: the hook's fallback report off the loop; a refusal or "the host could not be reached" is a toast.</summary>
-    private static async Task RelayFallbackAsync(Matchmaking.WorldsBridge worlds, OverlayChannel? overlay, Frame.RelayFallback fallback, CancellationToken cancellation)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "A fire-and-forget fallback report must never leave an unobserved task exception; the failure is logged by type only.")]
+    private async Task RelayFallbackAsync(Matchmaking.WorldsBridge worlds, OverlayChannel? overlay, Frame.RelayFallback fallback, CancellationToken cancellation)
     {
         try
         {
             if (await worlds.RelayFallbackAsync(fallback, cancellation).ConfigureAwait(false) is { } text && overlay is not null)
                 await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, text), cancellation).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or InvalidOperationException) { }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception error) { _emit(new SupervisorEvent.Note("worlds: relay fallback report failed (" + error.GetType().Name + ")")); }
     }
 
     private void RouteModsReport(Frame.ModsReport report)

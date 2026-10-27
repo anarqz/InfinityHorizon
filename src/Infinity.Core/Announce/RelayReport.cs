@@ -43,20 +43,26 @@ public sealed class RelayReporter(
     /// <summary>The cached report while fresh, else a new measurement (never throws for network trouble: <see cref="RelayReport.Empty"/>).</summary>
     public Task<RelayReport> ReportAsync(CancellationToken cancellation = default)
     {
+        var current = choice();
         lock (_gate)
         {
-            if (_cached is { } cached && _clock.GetElapsedTime(_cachedAt) < (cached.Relays.Count == 0 ? EmptyCacheFor : CacheFor))
+            // a changed relay choice (picked relay, official only) is a new measurement at once
+            if (_cached is { } cached && current == _cachedChoice
+                && _clock.GetElapsedTime(_cachedAt) < (cached.Relays.Count == 0 ? EmptyCacheFor : CacheFor))
                 return Task.FromResult(cached);
-            _running ??= MeasureAsync();
+            if (_running is not null && current != _runningChoice) _running = null; // the older run still finishes, unused
+            if (_running is null) { _runningChoice = current; _running = MeasureAsync(current); }
             return _running.WaitAsync(cancellation);
         }
     }
+
+    private RelayChoice.Saved? _cachedChoice, _runningChoice;
 
     private static Task<string?> DefaultNatAsync(Listing relay, CancellationToken cancellation) =>
         NodeProbe.TryEndpoint(relay.Endpoint, out var host, out var binding)
             ? NodeProbe.NatAsync(host, binding, relay.RendezvousOrDefault(), cancellation: cancellation) : Task.FromResult<string?>(null);
 
-    private async Task<RelayReport> MeasureAsync()
+    private async Task<RelayReport> MeasureAsync(RelayChoice.Saved saved)
     {
         await Task.Yield();
         try
@@ -66,7 +72,6 @@ public sealed class RelayReporter(
             try { listed = await relays(budget.Token).ConfigureAwait(false); }
             catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or InvalidDataException or JsonException
                 or InvalidOperationException) { listed = []; }
-            var saved = choice();
             var candidates = listed
                 .Where(l => NodeProbe.TryEndpoint(l.Endpoint, out _, out _) && CanonicalKey(l.PublicKey)
                     && (!saved.OfficialOnly || OfficialNodes.IsOfficialRelay(l))
@@ -88,10 +93,11 @@ public sealed class RelayReporter(
                 catch (Exception e) when (e is OperationCanceledException or System.Net.Sockets.SocketException or IOException) { }
             }
             var report = new RelayReport(kind, map, names);
-            lock (_gate) { _cached = report; _cachedAt = _clock.GetTimestamp(); }
+            lock (_gate) if (_runningChoice == saved) { _cached = report; _cachedChoice = saved; _cachedAt = _clock.GetTimestamp(); }
             return report;
         }
-        finally { lock (_gate) _running = null; }
+        // a run for an older choice never drops the newer one's task
+        finally { lock (_gate) if (_runningChoice == saved) _running = null; }
     }
 
     private async Task<Reachability> ProbeAsync(Listing relay, CancellationToken cancellation)

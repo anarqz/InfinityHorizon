@@ -176,6 +176,7 @@
   "error.MM.NOT_HOST": "Só o anfitrião pode fazer isto.",
   "error.MM.ALREADY_HOSTING": "Você já está hospedando um mundo.",
   "error.MM.GRANT_INVALID": "A conexão com este mundo expirou. Entre de novo.",
+  "error.SESSIONS.KICKED": "Um moderador removeu você do jogo online. Você pode voltar a jogar online quando a espera terminar.",
   "error.SESSIONS.IN_USE_ELSEWHERE": "Sua conta está jogando em outro PC.",
   "error.SESSIONS.PROFILE_IN_USE": "Este perfil está sendo jogado em outro lugar.",
   "error.SESSIONS.ENDED": "A sessão online terminou. Jogue de novo para começar outra.",
