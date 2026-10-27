@@ -539,6 +539,14 @@ public sealed class PlaySupervisor
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
                 await pipe.WriteAsync(candidates.Encode(),ct).ConfigureAwait(false);
             };
+            // CR-S57: the grant's relay for the hook's fallback; only built once the hook reported CaptureWhat.RelayJoiner
+            worlds.SendRelayLeg=async (leg,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                var bytes=leg.Encode();
+                try {await pipe.WriteAsync(bytes,ct).ConfigureAwait(false);}
+                finally {System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);}
+            };
             worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
@@ -659,6 +667,14 @@ public sealed class PlaySupervisor
                                 _=worlds.NetworkHintAsync(hint,onlineStop.Token);
                             continue;
                         }
+                        if(frame is Frame.RelayFallback fallback)
+                        {
+                            if(endpoint.Greeted && !suspended && tokensOpen && worlds is not null)
+                                _=RelayFallbackAsync(worlds,overlay,fallback,onlineStop.Token);
+                            continue;
+                        }
+                        if(frame is Frame.Capture{What:CaptureWhat.RelayJoiner} relayCapability && endpoint.Greeted && worlds is not null)
+                            worlds.RelayJoinerCapable=relayCapability.Ok;
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
@@ -984,6 +1000,17 @@ public sealed class PlaySupervisor
                 return;
             }
         }
+    }
+
+    /// <summary>CR-S57: the hook's fallback report off the loop; a refusal or "the host could not be reached" is a toast.</summary>
+    private static async Task RelayFallbackAsync(Matchmaking.WorldsBridge worlds, OverlayChannel? overlay, Frame.RelayFallback fallback, CancellationToken cancellation)
+    {
+        try
+        {
+            if (await worlds.RelayFallbackAsync(fallback, cancellation).ConfigureAwait(false) is { } text && overlay is not null)
+                await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, text), cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or InvalidOperationException) { }
     }
 
     private void RouteModsReport(Frame.ModsReport report)

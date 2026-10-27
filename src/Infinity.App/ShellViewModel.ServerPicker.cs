@@ -193,6 +193,15 @@ public sealed partial class ShellViewModel
         foreach (var item in items) target.Add(item);
     }
 
+    /// <summary>
+    /// CR-S57: the NAT test and relay round trips a world's open and a join report (the saved relay choice applies). Only the world
+    /// bridges of a signed-in play or dedicated session call it (OD-118), when a world opens or before a join; results kept 5 minutes.
+    /// </summary>
+    private RelayReporter RelayReports => _relayReporter ??= new RelayReporter(
+        async cancellation => (await new BeholderClient(_pickerHttp.Value, Announcer).ListsAsync(StateRoot, cancellation).ConfigureAwait(false)).Relays,
+        () => RelayChoice.Read(StateRoot));
+    private RelayReporter? _relayReporter;
+
     /// <summary>The relay part of Save: automatic or the picked relay, and "official relays only".</summary>
     private void SaveRelayChoice()
     {

@@ -13,6 +13,10 @@ void fi_mod_host_wait(unsigned ms);
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size);
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size);
 int azimuth_proxy_relay_candidates(const unsigned char *payload,size_t size);
+/* CR-S57 joiner relay fallback: RelayLeg (launcher frame 0x1d) in, RelayFallback (0x1e) out. */
+int azimuth_proxy_relay_leg(const unsigned char *payload,size_t size);
+void azimuth_proxy_relay_leg_clear(void);
+int fi_launch_relay_fallback(const unsigned char grant[16],unsigned state);
 
 /* cfg.c: <Azimuth>\Infinity.cfg. [hook] is the hook's (PLAN.md "Infinity.cfg [hook]"), read
    once at start (and written once, when the section is missing, from the older hooks'

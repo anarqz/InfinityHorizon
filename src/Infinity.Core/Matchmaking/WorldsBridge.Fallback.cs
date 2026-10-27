@@ -1,0 +1,179 @@
+// Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Collections.Concurrent;
+using System.Net;
+using System.Security.Cryptography;
+using Infinity.Core.Announce;
+using Infinity.Core.Session;
+
+namespace Infinity.Core.Matchmaking;
+
+/// <summary>
+/// CR-S57 relay fallback (MATCHMAKING_API.md §5b), the launcher's half: the NAT/relay report on open and join, the
+/// <see cref="Frame.RelayLeg"/> pushed beside every <see cref="Frame.RelayContext"/>, and the hook's
+/// <see cref="Frame.RelayFallback"/> answered with an immediate <c>transport: "relay"</c> renew.
+/// </summary>
+public sealed partial class WorldsBridge
+{
+    /// <summary>The hook reported <see cref="CaptureWhat.RelayJoiner"/> ok in this session: joins send <c>nat</c>/<c>relays</c>, legs are pushed.</summary>
+    public bool RelayJoinerCapable { get => Volatile.Read(ref _relayJoinerCapable); set => Volatile.Write(ref _relayJoinerCapable, value); }
+    private bool _relayJoinerCapable;
+
+    /// <summary>Writes a leg to the hook (the supervisor's control pipe).</summary>
+    public Func<Frame.RelayLeg, CancellationToken, Task>? SendRelayLeg { get; set; }
+
+    /// <summary>The relay report (<see cref="RelayReporter"/>); null: none is measured (the host sends neither field).</summary>
+    public Func<CancellationToken, Task<RelayReport>>? RelayReports { get; init; }
+
+    public static readonly TimeSpan RelayReportBound = TimeSpan.FromSeconds(8);
+
+    private readonly WorldOperationRetry _fallbackRetry = new(TimeProvider.System);
+    private readonly ConcurrentDictionary<string, string> _relayNames = new(StringComparer.Ordinal);
+    private int _fallbackRunning;
+    private string? _fallbackGrant;
+    // the last leg pushed (under _proofWrites): its grant, its relay's key, and whether it goes through the relay now
+    private Guid? _legGrant;
+    private string? _legRelayKey;
+    private bool _legViaRelay;
+    private string? _hostedTransport;
+    private string? _hostedRelayName;
+
+    private async Task<RelayReport?> RelayReportAsync(CancellationToken cancellation)
+    {
+        if (RelayReports is null) return null;
+        try
+        {
+            var report = await RelayReports(cancellation).WaitAsync(RelayReportBound, cancellation).ConfigureAwait(false);
+            foreach (var (key, name) in report.Names) _relayNames[key] = name;
+            return report;
+        }
+        catch (Exception error) when (error is TimeoutException or IOException or HttpRequestException or InvalidOperationException
+            || error is OperationCanceledException && !cancellation.IsCancellationRequested)
+        {
+            _log("worlds: relay report unavailable (" + error.GetType().Name + ")");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The leg of a verified grant, pushed right after its context (caller holds <c>_proofWrites</c>). No relay claim, or one
+    /// whose address is not an IPv4 literal: no leg (a previous one is cleared). A failed write never costs the seat.
+    /// </summary>
+    private async Task PushLegAsync(RelayGrant relay, RelayGrantClaims verified, string? transport, CancellationToken cancellation)
+    {
+        if (!RelayJoinerCapable || SendRelayLeg is null) return;
+        var grant = Guid.Parse(verified.Grant);
+        if (verified.Relay is not { } named || !IPAddress.TryParse(named.Addr, out var address)
+            || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || named.Addr.Count(c => c == '.') != 3
+            || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0)
+        {
+            await ClearLegAsync(cancellation).ConfigureAwait(false);
+            return;
+        }
+        var viaRelay = transport == Transports.Relay || Volatile.Read(ref _fallbackGrant) == verified.Grant;
+        byte[]? claims = null, signature = null;
+        Frame.RelayLeg? leg = null;
+        try
+        {
+            claims = Convert.FromBase64String(relay.Claims);
+            signature = Convert.FromBase64String(relay.Signature);
+            leg = Frame.RelayLeg.Build(grant, viaRelay, address, named.Port, claims, signature);
+            await SendRelayLeg(leg, cancellation).ConfigureAwait(false);
+            if (_legGrant != grant || _legViaRelay != viaRelay) _log($"worlds: relay leg pushed ({(viaRelay ? "relay" : "direct")})");
+            (_legGrant, _legRelayKey, _legViaRelay) = (grant, named.Key, viaRelay);
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ProtocolException or FormatException or ObjectDisposedException)
+        { _log("worlds: relay leg unavailable (" + error.GetType().Name + ")"); }
+        finally
+        {
+            if (claims is not null) CryptographicOperations.ZeroMemory(claims);
+            if (signature is not null) CryptographicOperations.ZeroMemory(signature);
+            if (leg is not null) CryptographicOperations.ZeroMemory(leg.Payload);
+        }
+    }
+
+    /// <summary>Clears the pushed leg (caller holds <c>_proofWrites</c>).</summary>
+    private async Task ClearLegAsync(CancellationToken cancellation)
+    {
+        if (_legGrant is null) return;
+        (_legGrant, _legRelayKey, _legViaRelay) = (null, null, false);
+        if (SendRelayLeg is null) return;
+        try { await SendRelayLeg(Frame.RelayLeg.Clear(), cancellation).ConfigureAwait(false); }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// The hook's fallback report. <see cref="RelayFallbackState.DirectFailed"/>: renew the seat with <c>transport: "relay"</c> at once
+    /// (idempotent; one at a time, repeats coalesce), then re-push the context and the leg (transport relay). Returns a toast text, or null.
+    /// </summary>
+    public async Task<string?> RelayFallbackAsync(Frame.RelayFallback frame, CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (!RelayJoinerCapable || !OnlineOpen) return null;
+        var grantId = frame.Grant.ToString("D");
+        if (_seat.GrantId != grantId) return null;
+        switch (frame.State)
+        {
+            case RelayFallbackState.RelayOk:
+            case RelayFallbackState.DirectOk:
+                await _proofWrites.WaitAsync(cancellation).ConfigureAwait(false);
+                try { if (_legGrant == frame.Grant) _legViaRelay = frame.State == RelayFallbackState.RelayOk; }
+                finally { _proofWrites.Release(); }
+                _log(frame.State == RelayFallbackState.RelayOk ? "worlds: the seat plays through its relay" : "worlds: the seat plays direct");
+                return null;
+            case RelayFallbackState.RelayUnavailable:
+                _log("worlds: relay fallback failed; the host could not be reached");
+                return _text("worlds.host_unreachable");
+        }
+        Volatile.Write(ref _fallbackGrant, grantId);
+        if (Interlocked.CompareExchange(ref _fallbackRunning, 1, 0) != 0) return null;
+        try
+        {
+            using var online = OnlineCancellation(cancellation);
+            var token = online.Token;
+            var epoch = Volatile.Read(ref _mineEpoch);
+            var renewed = await OperationAsync(_fallbackRetry, t => _mm.RenewSeatAsync(grantId, Transports.Relay, t), token).ConfigureAwait(false);
+            if (renewed is null || _seat.GrantId != grantId) return null;
+            if (!renewed.Ok || renewed.Value is not { } answer)
+            {
+                _log($"worlds: relay fallback renew refused: {renewed.Error?.Kind} {renewed.Error?.Reason}");
+                return ConflictReasons.RelayKey(renewed.Error) is { } key ? _text(key) : null;
+            }
+            if (answer.Seat?.GrantId is { } returned && returned != grantId) { RequestReconcile(); return null; }
+            if (!ClaimSeatProof(answer, ref epoch, grantId) || !await SendSeatProofAsync(answer.Seat, epoch, token).ConfigureAwait(false)) return null;
+            lock (_mineState)
+            {
+                if (OnlineOpen && epoch == Volatile.Read(ref _mineEpoch) && _seat.GrantId == grantId)
+                {
+                    _seat.Observe(answer, Now);
+                    Interlocked.Increment(ref _mineEpoch);
+                }
+            }
+            _log("worlds: seat moved to its relay");
+            return null;
+        }
+        catch (Exception error) when (HostFailure(error)) { return null; }
+        finally { Volatile.Write(ref _fallbackRunning, 0); }
+    }
+
+    /// <summary>"Direct" / "via &lt;relay name&gt;" for the connection details; null when this session has no seat or world.</summary>
+    private string? TransportText()
+    {
+        if (HostedWorldId is not null)
+            return Volatile.Read(ref _hostedTransport) == Transports.Relay ? Via(Volatile.Read(ref _hostedRelayName)) : _text("connection.direct");
+        if (_seat.GrantId is null || _legGrant is null) return null;
+        return _legViaRelay ? Via(_legRelayKey is { } key && _relayNames.TryGetValue(key, out var name) ? name : null) : _text("connection.direct");
+    }
+
+    private string Via(string? name) => _text("connection.via_relay").Replace("{relay}", DisplayName(name) ?? _text("connection.relay_unnamed"), StringComparison.Ordinal);
+
+    private static string? DisplayName(string? name)
+    {
+        var kept = new string((name ?? "").Where(c => !char.IsControl(c) && !char.IsSurrogate(c)).ToArray()).Trim();
+        return kept.Length == 0 ? null : kept.Length > 48 ? kept[..48] : kept;
+    }
+
+    private void RememberRelayName(WorldRelay? relay)
+    {
+        if (relay is { PublicKey.Length: > 0, Name.Length: > 0 }) _relayNames[relay.PublicKey] = relay.Name;
+    }
+}

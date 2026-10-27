@@ -69,11 +69,18 @@ public interface IMatchmakingApi
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
         JoinAsync(worldId, code, cancellation);
 
+    /// <summary>CR-S57: a join with the joiner's NAT test and relay round trips (both null: left out, direct only).</summary>
+    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) => JoinAsync(worldId, code, mods, cancellation);
+
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
 
     Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) => SeatAsync(cancellation);
 
     Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default);
+
+    /// <summary>CR-S57: <c>{grantId, transport}</c> (<c>"relay"</c>: the joiner fell back; null: the plain renew).</summary>
+    Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, string? transport, CancellationToken cancellation) => RenewSeatAsync(grantId, cancellation);
 
     Task<MmResult<MmNone>> LeaveSeatAsync(CancellationToken cancellation = default);
 
@@ -217,7 +224,12 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         JoinAsync(worldId, code, null, cancellation);
 
     /// <summary>OD-112: <paramref name="mods"/> is the caller's set (null or empty: vanilla, left out of the body).</summary>
-    public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation)
+    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
+        JoinAsync(worldId, code, mods, null, null, cancellation);
+
+    /// <summary>CR-S57: <paramref name="relays"/> is sent as given (also <c>{}</c>); null leaves <c>nat</c>/<c>relays</c> out.</summary>
+    public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation)
     {
         if (worldId is null && code is null)
         {
@@ -228,6 +240,8 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
             WorldId = worldId is null ? null : Id(worldId, nameof(worldId)),
             Code = code is null ? null : Code(code),
             Mods = mods is { Count: > 0 } ? mods : null,
+            Nat = nat,
+            Relays = relays,
         };
         var result = await SendAsync<JoinAnswer>(HttpMethod.Post, "/mm/v1/join", body, cancellation).ConfigureAwait(false);
         if (result.Error is { Kind: MmErrorKind.RateLimited } limited)
@@ -252,7 +266,10 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         SendAsync<Punches>(HttpMethod.Get, "/mm/v1/punches", null, cancellation);
 
     public Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default) =>
-        SendAsync<SeatAnswer>(HttpMethod.Post, "/mm/v1/seat/renew", new SeatRenew { GrantId = Id(grantId, nameof(grantId)) }, cancellation);
+        RenewSeatAsync(grantId, null, cancellation);
+
+    public Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, string? transport, CancellationToken cancellation) =>
+        SendAsync<SeatAnswer>(HttpMethod.Post, "/mm/v1/seat/renew", new SeatRenew { GrantId = Id(grantId, nameof(grantId)), Transport = transport }, cancellation);
 
     /// <summary><c>DELETE /mm/v1/seat</c> → 204: leaves the caller's live seat, whatever its id.</summary>
     public Task<MmResult<MmNone>> LeaveSeatAsync(CancellationToken cancellation = default) =>

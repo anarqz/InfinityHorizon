@@ -56,7 +56,12 @@ enum {
     FRAME_RELAY_CONTEXT = 0x16,
     FRAME_MODS_REPORT = 0x1b,
     FRAME_CUSTOM_TRUST = 0x1c,
+    FRAME_RELAY_LEG = 0x1d,      /* launcher -> hook, CR-S57: the joiner's relay leg (proxy.c) */
+    FRAME_RELAY_FALLBACK = 0x1e, /* hook -> launcher, CR-S57: {grant[16], u8 state 1-4} */
 };
+/* Capture.what 7 (CR-S57): this hook's joiner proxy speaks the relay fallback (RelayLeg and
+   RelayFallback); sent once with ok=1 at every handshake. */
+#define LAUNCH_CAPTURE_RELAY_JOINER 7u
 
 /* CustomTrust (0x1c, CR-L39): a custom server the player chose publishes its own launch-ticket keys
    (/launcher/v1/info trust, pinned by the launcher per realm). The launcher sends them right before
@@ -211,6 +216,7 @@ static void launch_suspend(unsigned reason) {
     InterlockedExchange(&launch_refresh_sent, 1);
     azimuth_freeroam_suspend();
     fi_udp_context_clear();
+    azimuth_proxy_relay_leg_clear();
     azimuth_proxy_stop();
     azimuth_world_lan_left();
     azimuth_world_launcher_host(0);
@@ -589,6 +595,13 @@ static int launch_queue_frame(unsigned type, const void *payload, size_t size) {
 }
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size) {
     return fi_launch_live() && size==25 && launch_queue_frame(0x17,payload,size);
+}
+/* RelayFallback (0x1e, CR-S57): 1 direct failed, moving to the relay; 2 relay ok; 3 relay
+   unavailable for good; 4 direct ok. */
+int fi_launch_relay_fallback(const unsigned char grant[16],unsigned state) {
+    if(!fi_launch_live() || state<1 || state>4)return 0;
+    unsigned char payload[17];memory_copy(payload,grant,16);payload[16]=(unsigned char)state;
+    return launch_queue_frame(FRAME_RELAY_FALLBACK,payload,sizeof(payload));
 }
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size) {
     if(!fi_launch_live() || size!=32 || payload[0]!=1 || payload[1]<1 || payload[1]>28 || payload[2]>2 || payload[3]>4)return 0;
@@ -1249,6 +1262,7 @@ static int launch_go_online(const LaunchTicket *t) {
        if the handshake ran first; every reconnect also gets the current fail-closed value. */
     fi_launch_capture(5, fi_livery_remote_ready());
     fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
+    fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
     return 1;
 }
 
@@ -1445,6 +1459,10 @@ static int launch_session_frame(void) {
     case 0x18:
         if(fi_launch_suspended())return 1;
         return azimuth_proxy_relay_candidates(r.at,r.left);
+    case FRAME_RELAY_LEG:
+        /* Malformed or foreign legs are logged and ignored there, never a protocol error. */
+        if(fi_launch_suspended()) { azimuth_proxy_relay_leg_clear();return 1; }
+        azimuth_proxy_relay_leg(r.at,r.left);return 1;
     case FRAME_RELAY_CONTEXT:
         if (fi_launch_suspended()) { fi_udp_context_clear();return 1; }
         return fi_udp_context_set(r.at,r.left);

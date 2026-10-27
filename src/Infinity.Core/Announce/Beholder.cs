@@ -12,10 +12,37 @@ using Infinity.Core.WorldServer;
 namespace Infinity.Core.Announce;
 
 /// <summary>
-/// One announced node (ANNOUNCER_API.md §3): <c>{publicKey, name, endpoint, region, version, capacity, firstSeen, lastSeen}</c>. Every field
-/// is the announcer's own words: shown, never trusted (a server is still checked as any typed address, CR-L39).
+/// One announced node (ANNOUNCER_API.md §3): <c>{publicKey, name, endpoint, region, version, capacity, firstSeen, lastSeen, rendezvousPort?}</c>.
+/// Every field is the announcer's own words: shown, never trusted (a server is still checked as any typed address, CR-L39).
+/// <paramref name="RendezvousPort"/> (relays only, CR-S57) absent means <see cref="Listing.DefaultRendezvousPort"/>.
 /// </summary>
-public sealed record Listing(string PublicKey, string Name, string Endpoint, string? Region, string? Version, int Capacity, string? FirstSeen, string? LastSeen);
+public sealed record Listing(string PublicKey, string Name, string Endpoint, string? Region, string? Version, int Capacity, string? FirstSeen, string? LastSeen,
+    int? RendezvousPort = null)
+{
+    /// <summary><c>DEFAULT_RENDEZVOUS_PORT</c> of fi_protocol::beholder and the TypeScript mirror (MATCHMAKING_API §5).</summary>
+    public const int DefaultRendezvousPort = 5101;
+
+    /// <summary>The relay's rendezvous port: the listed one, else 5101. For a relay leg the signed grant's claims win.</summary>
+    public int RendezvousOrDefault() => RendezvousPort is >= 1 and <= 65535 ? RendezvousPort.Value : DefaultRendezvousPort;
+}
+
+/// <summary>
+/// ANNOUNCER_API.md §2: the signed announce message, fi_protocol::beholder::AnnounceRequest::signed_message byte for byte
+/// (fields joined by <c>\n</c>, no trailing newline; <c>rendezvousPort</c> one more line after <c>issuedAt</c> only when present).
+/// </summary>
+public static class BeholderAnnounce
+{
+    public const string SignatureDomain = "fi-beholder-announce-v1";
+
+    public static string SignedMessage(string kind, string publicKey, string endpoint, string name, string region, string version, uint capacity,
+        long issuedAt, uint? rendezvousPort = null)
+    {
+        var lines = new List<string> { SignatureDomain, kind, publicKey, endpoint, name, region, version,
+            capacity.ToString(System.Globalization.CultureInfo.InvariantCulture), issuedAt.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+        if (rendezvousPort is { } port) lines.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return string.Join('\n', lines);
+    }
+}
 
 /// <summary><c>GET /beholder/v1/servers</c> and <c>/relays</c>: <c>{items}</c>.</summary>
 public sealed record ListingPage(IReadOnlyList<Listing> Items);
@@ -81,7 +108,8 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
     /// <summary>Malformed rows dropped, names trimmed to printable text, at most <see cref="MaxItems"/>, one row per endpoint.</summary>
     public static IReadOnlyList<Listing> Clean(IEnumerable<Listing?> items) => items
         .Where(l => l is { PublicKey.Length: > 0 and <= 128, Endpoint.Length: > 0 and <= 255 })
-        .Select(l => l! with { Name = Printable(l.Name, MaxName) is { Length: > 0 } name ? name : l.Endpoint, Region = Printable(l.Region, 32), Version = Printable(l.Version, 32) })
+        .Select(l => l! with { Name = Printable(l.Name, MaxName) is { Length: > 0 } name ? name : l.Endpoint, Region = Printable(l.Region, 32), Version = Printable(l.Version, 32),
+            RendezvousPort = l.RendezvousPort is >= 1 and <= 65535 ? l.RendezvousPort : null })
         .DistinctBy(l => l.Endpoint, StringComparer.OrdinalIgnoreCase)
         .Take(MaxItems)
         .ToList();
@@ -208,6 +236,72 @@ public static class NodeProbe
         if (times.Count == 0) return new(null);
         times.Sort();
         return new(times[times.Count / 2]);
+    }
+
+    /// <summary>
+    /// CR-S57 NAT test (MATCHMAKING_API §5b item 1): from ONE local socket, a binding request to the relay's binding port and one to
+    /// its rendezvous port (two tries each, 1 s), then <see cref="ClassifyNat"/> on the two XOR-MAPPED answers. Null: not measured.
+    /// </summary>
+    public static async Task<string?> NatAsync(string host, int bindingPort, int rendezvousPort, IEnumerable<IPAddress>? localAddresses = null,
+        CancellationToken cancellation = default)
+    {
+        if (bindingPort is < 1 or > 65535 || rendezvousPort is < 1 or > 65535) return null;
+        IPAddress? address;
+        try
+        {
+            address = IPAddress.TryParse(host, out var literal) ? literal
+                : (await Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, cancellation).ConfigureAwait(false)).FirstOrDefault();
+        }
+        catch (Exception e) when (e is SocketException or ArgumentException) { return null; }
+        if (address is null || address.AddressFamily != AddressFamily.InterNetwork) return null;
+        using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        async Task<IPEndPoint?> MappedAsync(int port)
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var transaction = RandomNumberGenerator.GetBytes(12);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                timeout.CancelAfter(TimeSpan.FromSeconds(1));
+                try
+                {
+                    await udp.SendAsync(StunCodec.BindingRequest(transaction), new IPEndPoint(address, port), timeout.Token).ConfigureAwait(false);
+                    while (true)
+                    {
+                        var answer = await udp.ReceiveAsync(timeout.Token).ConfigureAwait(false);
+                        if (StunCodec.Parse(answer.Buffer) is { Kind: StunCodec.BindingSuccessKind, Mapped: { } mapped } message
+                            && message.Transaction.AsSpan().SequenceEqual(transaction)) return StunCodec.Canonical(mapped);
+                    }
+                }
+                catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) { }
+                catch (SocketException) { }
+            }
+            return null;
+        }
+        var viaBinding = await MappedAsync(bindingPort).ConfigureAwait(false);
+        var viaRendezvous = await MappedAsync(rendezvousPort).ConfigureAwait(false);
+        return ClassifyNat(viaBinding, viaRendezvous, localAddresses ?? LocalAddresses());
+    }
+
+    /// <summary>
+    /// Different mapped ports (or addresses) → <c>symmetric</c>; the same and a mapped address that is one of this PC's → <c>open</c>;
+    /// the same otherwise → <c>restricted</c> (no unsolicited-inbound test is tried). Null when either answer is missing.
+    /// </summary>
+    public static string? ClassifyNat(IPEndPoint? viaBinding, IPEndPoint? viaRendezvous, IEnumerable<IPAddress> localAddresses)
+    {
+        ArgumentNullException.ThrowIfNull(localAddresses);
+        if (viaBinding is null || viaRendezvous is null) return null;
+        if (viaBinding.Port != viaRendezvous.Port || !viaBinding.Address.Equals(viaRendezvous.Address)) return Matchmaking.NatTypes.Symmetric;
+        return localAddresses.Any(a => a.Equals(viaBinding.Address)) ? Matchmaking.NatTypes.Open : Matchmaking.NatTypes.Restricted;
+    }
+
+    private static IReadOnlyList<IPAddress> LocalAddresses()
+    {
+        try
+        {
+            return [.. System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+                .SelectMany(n => n.GetIPProperties().UnicastAddresses).Select(u => u.Address).Where(a => a.AddressFamily == AddressFamily.InterNetwork)];
+        }
+        catch (System.Net.NetworkInformation.NetworkInformationException) { return []; }
     }
 
     /// <summary><c>host:port</c> with a port 1-65535 and an ASCII host.</summary>

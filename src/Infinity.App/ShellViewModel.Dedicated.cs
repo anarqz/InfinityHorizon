@@ -296,6 +296,7 @@ public sealed partial class ShellViewModel
         var relayKeys = IntegratedRelayKeys(mm);
         var devLan = DevLanAdmission(mm);
         TimeProvider? trusted = ProofClock(session);
+        var relayReports = RelayReports;
         return CreateDedicatedHost(new GateClient(session.Api, session.Tokens), (ticket, activity) =>
         {
             var portInUse = false;
@@ -315,6 +316,7 @@ public sealed partial class ShellViewModel
                 TrustedServerNow = session.Api.TrustedServerNow,
                 RelayFailureKey = () => portInUse ? "lobby.port_in_use" : null,
                 ModSet = mods,
+                RelayReports = relayReports.ReportAsync,
             };
         }, profile, mods);
     }

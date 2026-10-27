@@ -37,7 +37,7 @@ public sealed partial class WorldsBridge
         }
     }
 
-    private Frame.RelayContext ProofFrame(RelayGrant relay,string world,string grant)
+    private Frame.RelayContext ProofFrame(RelayGrant relay,string world,string grant,out RelayGrantClaims verified)
     {
         byte[]? key=null;
         try
@@ -46,7 +46,7 @@ public sealed partial class WorldsBridge
             if(key is null || SocketProofKeys is null || _ownXuid is null || relay.Claims is null || relay.Claims.Length>2048)throw new InvalidDataException();
             using var parsed=JsonDocument.Parse(Convert.FromBase64String(relay.Claims));
             var host=parsed.RootElement.GetProperty("host").GetProperty("xuid").GetString() ?? throw new InvalidDataException();
-            var verified=RelayGrantVerifier.Verify(relay,SocketProofKeys,Now.ToUnixTimeSeconds(),new(world,host,_ownXuid,"joiner",grant));
+            verified=RelayGrantVerifier.Verify(relay,SocketProofKeys,Now.ToUnixTimeSeconds(),new(world,host,_ownXuid,"joiner",grant));
             var header=UdpProofCodec.Header(Guid.Parse(verified.Grant),Guid.Parse(verified.World),ulong.Parse(verified.Host.Xuid,System.Globalization.CultureInfo.InvariantCulture),
                 ulong.Parse(verified.Xuid,System.Globalization.CultureInfo.InvariantCulture));
             var payload=new byte[89];payload[0]=1;header.AsSpan(8,48).CopyTo(payload.AsSpan(1));
@@ -57,11 +57,12 @@ public sealed partial class WorldsBridge
         { throw new InvalidDataException("Authenticated UDP socket context unavailable"); }
         finally { if(key is not null)CryptographicOperations.ZeroMemory(key); }
     }
-    private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation)
+    private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation,string? transport=null)
     {
         if(!ProofFor(relay))return true;
         Frame.RelayContext frame;
-        try { frame=ProofFrame(relay,world,grant); }
+        RelayGrantClaims verified;
+        try { frame=ProofFrame(relay,world,grant,out verified); }
         catch(InvalidDataException)
         {
             await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);
@@ -83,13 +84,15 @@ public sealed partial class WorldsBridge
             }
             if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch))
             {
-                await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);return false;
+                await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);
+                await ClearLegAsync(CancellationToken.None).ConfigureAwait(false);return false;
             }
             if(_proofPayload is null || !_proofPayload.AsSpan(1,48).SequenceEqual(frame.Payload.AsSpan(1,48))
                 || !CryptographicOperations.FixedTimeEquals(_proofPayload.AsSpan(57,32),frame.Payload.AsSpan(57,32)))
             { _networkRevision=0;_proofGeneration++; }
             if(_proofPayload is not null)CryptographicOperations.ZeroMemory(_proofPayload);
             _proofPayload=frame.Payload.ToArray();
+            await PushLegAsync(relay,verified,transport,cancellation).ConfigureAwait(false); // CR-S57: beside every context push
             if(!NeedsProof)_log("worlds: development guest installed the socket proof context");
             return true;
         }
@@ -100,7 +103,8 @@ public sealed partial class WorldsBridge
         if(!NeedsProof && !ProofFor(seat?.Relay))return ProofInstalled ? ClearSeatProofAsync(epoch) : Task.FromResult(true);
         if(seat is null || seat.State==SeatStates.Hosting)return ClearSeatProofAsync(epoch);
         if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync(epoch,success:false);
-        return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation);
+        RememberRelayName(seat.World.Relay);
+        return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation,seat.Transport);
     }
     private async Task<bool> ClearSeatProofAsync(long epoch,bool success=true) {await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);return success;}
     private async Task ClearProofAsync(CancellationToken cancellation,long? expectedEpoch=null)
@@ -115,6 +119,7 @@ public sealed partial class WorldsBridge
             if(_proofPayload is not null) {CryptographicOperations.ZeroMemory(_proofPayload);_proofPayload=null;_proofGeneration++;}
             _networkRevision=0;
             if(SendRelayContext is not null)await SendRelayContext(new([0]),bound.Token).ConfigureAwait(false);
+            await ClearLegAsync(bound.Token).ConfigureAwait(false);
         }
         finally {_proofWrites.Release();}
     }
