@@ -210,7 +210,7 @@ void azimuth_carstate_local(int lights, int roof) {
     cs_put16(v + 4, ++cs_seq);
     cs_put64(v + 8, xuid);
     /* the host from its loopback socket; a joiner from its proxy's socket, or, for a world on this
-       network the game reached directly (no proxy), from the livery channel's own socket */
+       network the game reached directly (no proxy), from the world's own LAN socket (livery_world.c) */
     int sent = azimuth_world_hosting() ? cs_host_send(m, (int)sizeof(m))
                : azimuth_proxy_send_world(m, (int)sizeof(m)) || azimuth_world_lan_send(m, (int)sizeof(m));
     if (sent) {

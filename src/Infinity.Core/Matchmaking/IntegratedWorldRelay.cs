@@ -35,13 +35,12 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     public Diagnostics.CrashContext? CrashContext { get => _transport.CrashContext; set => _transport.CrashContext = value; }
 
     public static IntegratedWorldRelay Start(uint maxPlayers, bool races, string ownXuid, RelayGrantVerifyKeys keys,
-        ushort port = HostRelay.DefaultPort, IntegratedRelayOptions? options = null, TimeProvider? clock = null, bool devLanPeers = false,
-        RelayContentPolicy? contentPolicy = null, bool requireSocketProof=false)
+        ushort port = HostRelay.DefaultPort, IntegratedRelayOptions? options = null, TimeProvider? clock = null, bool devLanPeers = false, bool requireSocketProof=false)
     {
         ArgumentNullException.ThrowIfNull(keys);
         if (keys.Count == 0 || !ulong.TryParse(ownXuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) || xuid == 0)
             throw new InvalidOperationException("Integrated relay trust is not configured");
-        return new(IntegratedHostRelay.Start(maxPlayers, races, port, options, contentPolicy), new(xuid, keys, clock, devLanPeers,requireSocketProof));
+        return new(IntegratedHostRelay.Start(maxPlayers, races, port, options), new(xuid, keys, clock, devLanPeers,requireSocketProof));
     }
 
     /// <summary>Only a successful authenticated PUT/announce may refresh the 45-second world lease.</summary>

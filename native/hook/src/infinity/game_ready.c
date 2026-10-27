@@ -110,7 +110,6 @@ static unsigned char gr_update(void *self, float dt) {
         int ready = gr_sample(&player, &record, &car, &garage_id);
         gr_observe(ready, player, record, car, garage_id, now);
     }
-    fi_livery_game_tick();
     return result;
 }
 

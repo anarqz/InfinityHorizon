@@ -140,36 +140,23 @@ void fi_launch_event(unsigned kind, const char *detail);
 #define FI_NOTICE_ERROR 2u
 void fi_launch_notice(unsigned level, const char *utf8);
 
-/* livery.c: the current car's paint to the server before a world (OD-65 amendment); the overlay
-   calls it through FiOverlayHost.livery_sync. Codes as include/fi_overlay.h FI_LIVERY_*. */
-#define FI_LIVERY_SYNCED 0
-#define FI_LIVERY_STOCK 1
-#define FI_LIVERY_TIMEOUT (-1)
-#define FI_LIVERY_FAILED (-2)
+/* livery.c: FiOverlayHost.livery_sync (the OD-65 pre-world upload, retired by CR-S59) answers
+   FI_LIVERY_UNAVAILABLE at once: the server keeps the liveries. Codes as include/fi_overlay.h. */
 #define FI_LIVERY_UNAVAILABLE (-3)
 int fi_livery_sync(unsigned timeout_ms);
 
-/* livery_world.c (OD-66, MATCHMAKING_API.md 5a): world mates' paints through the world's relay.
-   net.c routes the game's content-versioning calls here in a launcher session (1: answered,
-   `*reply` freed with fi_livery_free); freeroam.c says when a world is joined and left; proxy.c
-   hands the relay's livery messages on. */
-unsigned long long fi_livery_content_id(unsigned car, const unsigned char *data, size_t size);
-int fi_livery_route(const wchar_t *headers, const unsigned char *body, size_t size, unsigned char **reply,
-                    size_t *reply_size);
-void fi_livery_free(unsigned char *reply);
-void azimuth_livery_world_entered(const void *remote);
-void azimuth_livery_world_left(void);
-void azimuth_livery_received(const unsigned char *packet, int size);
+/* livery_world.c (CR-S59): net.c notes the game's livery calls here in a launcher session (1: a
+   livery call, logged; nothing is answered here, every one goes to the server). */
+int fi_livery_route(const wchar_t *headers, const unsigned char *body, size_t size);
+/* The world's own LAN socket for carstate.c: freeroam.c says when a world is joined and left. */
+void azimuth_world_lan_entered(const void *remote);
+void azimuth_world_lan_left(void);
 int azimuth_world_lan_send(const void *data, int size);
-/* the current paint's world id before a world: the game image (runtime.c), the game thread's
-   per-frame turn (game_ready.c's main update), the overlay's ask (livery.c fi_livery_sync) */
+/* The remote-paint receiver boundary, installed on the game image (runtime.c). Policy v1: mode 0
+   only, a pass-through since CR-S59; Capture.what 5 reports this readiness. */
 void fi_livery_apply(unsigned char *game_image);
-/* Remote-paint policy v1: mode 0 (stock_only) only. The queue boundary must be installed
-   before a launcher session may create/join a world; Capture.what 5 reports this readiness. */
 int fi_livery_remote_ready(void);
 int fi_livery_remote_policy(unsigned mode);
-void fi_livery_game_tick(void);
-int fi_livery_run_current(unsigned timeout_ms);
 /* OD-54: the launcher's relay port while this PC hosts in a launcher session (0: not hosting). */
 void azimuth_world_launcher_host(unsigned port);
 void fi_launch_capture(unsigned what, int ok);

@@ -733,10 +733,7 @@ static DWORD WINAPI px_thread(void *argument) {
                     azimuth_carstate_received(packet, n);
                 }
             } else if (kind == 0x3E92) {
-                /* the relay's livery channel (livery_world.c, OD-66): world mates' paints */
-                if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
-                    azimuth_livery_received(packet, n);
-                }
+                /* the retired livery channel (OD-66, CR-S59): an older relay's message, dropped unread */
             } else if (kind == 0x0101) {
                 for (unsigned i = 0; i < px_stun_count; ++i) {
                     if (!px_stun_accepted[i] && memory_equal(txid, px_txid[i], 12) && px_same(&from, &px_stun[i]) && has_mapped) {

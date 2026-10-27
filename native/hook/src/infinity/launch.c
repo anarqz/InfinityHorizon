@@ -212,7 +212,7 @@ static void launch_suspend(unsigned reason) {
     azimuth_freeroam_suspend();
     fi_udp_context_clear();
     azimuth_proxy_stop();
-    azimuth_livery_world_left();
+    azimuth_world_lan_left();
     azimuth_world_launcher_host(0);
     azimuth_world_left();
     launch_log("online suspended for this process (reason ", 1, reason, "); local play continues.");
@@ -1577,7 +1577,7 @@ typedef struct {
     void *(*capture)(unsigned what);
     void (*log)(const char *line);
     unsigned flags;
-    int (*livery_sync)(unsigned timeout_ms); /* livery.c (OD-65 amendment) */
+    int (*livery_sync)(unsigned timeout_ms); /* livery.c: retired by CR-S59, always unavailable */
 } LaunchOverlayHost;
 typedef int (*LaunchOverlayStart)(const LaunchOverlayHost *host);
 

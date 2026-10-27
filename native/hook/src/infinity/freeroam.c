@@ -972,7 +972,7 @@ static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **ou
     fr_log("association DestroyAsync -> completed.");
     azimuth_proxy_stop();
     azimuth_world_left();
-    azimuth_livery_world_left();
+    azimuth_world_lan_left();
     if (fi_launch_protocol()) {
         /* OD-54/OD-57: the launcher hosts; it closes the world when the game leaves free roam */
         azimuth_world_launcher_host(0);
@@ -1051,7 +1051,7 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
         if (out) *out = 0;
         return E_ACCESSDENIED;
     }
-    azimuth_livery_world_entered(&association->remote); /* OD-66: world mates' paints (launcher sessions) */
+    azimuth_world_lan_entered(&association->remote); /* carstate's own socket for a world on this network */
     if (fi_launch_protocol()) {
         /* OD-54: the world is the launcher's relay on loopback when this PC hosts it (the server
            answers the host 127.0.0.1:<port>, MATCHMAKING_API.md 4a); the launcher hears which */

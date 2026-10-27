@@ -12,17 +12,13 @@
    any azimuth.exe but 0.9.10's (adapters/azimuth.c arm_loader), so it never runs where this
    does, and on 0.9.10 this does nothing. Kept for the players a self-update brings from
    0.2.74+fh2online.58 on an older Azimuth (the launcher itself requires 0.9.10). */
-/* OD-65 amendment (owner, 2026-10-19): before a world, the current car's paint goes to the server
-   so world mates fetch it by its id. The overlay calls this (FiOverlayHost.livery_sync) on its own
-   thread once a world is created or a seat reserved, behind a "Syncing cars" screen, for at most
-   timeout_ms. The upload will drive the game's own save path (OnlineProfile.UpdateLivery, then
-   ContentVersioning.CreateVersionedLivery, whose id the game keeps on the car), which is still
-   being reverse engineered: until then this answers "unavailable" at once. */
+/* FiOverlayHost.livery_sync (OD-65 amendment, OD-66): the pre-world run of the current car's
+   paint is retired (CR-S59, owner 2026-10-27 "Liveries are stored on the server again; the live
+   lobby sync retires"): the server keeps every ticket's liveries from the game's own calls, so
+   this answers "unavailable" at once. The slot stays in the host so the overlay ABI is unchanged. */
 int fi_livery_sync(unsigned timeout_ms) {
-    /* OD-66: the active car's current paint gets its world id before the player enters (the
-       game's own ApplyLivery on the game thread, livery_world.c); the paint goes to the world's
-       relay once the world is joined */
-    return fi_livery_run_current(timeout_ms);
+    (void)timeout_ms;
+    return FI_LIVERY_UNAVAILABLE;
 }
 
 #define MASK_HELPER_RVA 0x100b70u

@@ -21,8 +21,10 @@
    In a launcher session (the platform, OD-40, CR-S14, GAME_PLATFORM.md §3a) the list is closed:
    a free ticket sends only the free roam services, profile.xboxlive.com (minus the friends
    list), userpresence (minus friends' presence) and, of the Forza services, User.Logon,
-   GetPermissionsTable, GetEconomySettings, Xls User.GetUserData and the paint calls of OD-65
-   (ContentVersioning Create/Retrieve/RemoveReferenceTo VersionedLivery, OnlineProfile.UpdateLivery);
+   GetPermissionsTable, GetEconomySettings, Xls User.GetUserData, Xls Notifications.RetrieveForUser
+   and the livery calls of CR-S59 (ContentVersioning Create/Retrieve/RemoveReferenceTo VersionedLivery,
+   OnlineProfile.UpdateLivery, Storefront GetLiveriesForDrivatar/GetFeaturedLiveriesForRandomCars:
+   the server keeps every ticket's liveries);
    the rest of OnlineProfile.* is answered as taken, as above, and every other game request, on
    any host, gets the offline 503 here.
    Nothing here changes for an Infinity Supporter (vip) on a Hardcore profile.
@@ -471,14 +473,17 @@ int fi_tier_free_route(const wchar_t *method, const wchar_t *url, const wchar_t 
             tier_equal(call, method_length, L"RetrieveForUser")) {
             return FI_ROUTE_PASS;
         }
-        /* OD-65: the player's own paint reaches world mates on every tier (temporary on a free or
-           noob ticket, kept for the session and served only to world mates by the server) */
+        /* CR-S59: the liveries are stored on the server for every ticket (each profile's own, served
+           to readers of its mode); the two Storefront livery lists are answered empty there */
         if (platform && class_name && call &&
             ((tier_equal(class_name, comma, L"Forza.WebServices.ContentVersioning") &&
               (tier_equal(call, method_length, L"CreateVersionedLivery") ||
                tier_equal(call, method_length, L"RetrieveVersionedLiveryById") ||
                tier_equal(call, method_length, L"RemoveReferenceToVersionedLivery"))) ||
-             (tier_equal(class_name, comma, L"Forza.WebServices.OnlineProfile") && tier_equal(call, method_length, L"UpdateLivery")))) {
+             (tier_equal(class_name, comma, L"Forza.WebServices.OnlineProfile") && tier_equal(call, method_length, L"UpdateLivery")) ||
+             (tier_equal(class_name, comma, L"Forza.WebServices.Storefront") &&
+              (tier_equal(call, method_length, L"GetLiveriesForDrivatar") ||
+               tier_equal(call, method_length, L"GetFeaturedLiveriesForRandomCars"))))) {
             return FI_ROUTE_PASS;
         }
         if (class_name && tier_equal(class_name, comma, L"Forza.WebServices.OnlineProfile")) {

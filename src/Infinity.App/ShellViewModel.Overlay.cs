@@ -138,7 +138,7 @@ public sealed partial class ShellViewModel
         try
         {
             var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys, devLanPeers: devLan,
-                contentPolicy: Infinity.Core.WorldServer.RelayContentPolicy.StockOnly,requireSocketProof:SocketProofRequired,clock:clock);
+                requireSocketProof:SocketProofRequired,clock:clock);
             Log($"worlds: relay bound on UDP {relay.Port}; awaiting world admission"
                 + (devLan ? " (development LAN admission: granted peers from private addresses, endpoint not verified)" : ""));
             return relay;

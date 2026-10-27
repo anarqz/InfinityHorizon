@@ -7,7 +7,8 @@ namespace Infinity.Core.WorldServer;
 
 internal sealed partial class RelayEngine
 {
-    private readonly LiveryBoard _liveries = new();
+    // The carstate channel only. OD-66's livery channel (0x3E92, MATCHMAKING_API.md 5a) is retired
+    // by CR-S59 (the server keeps the liveries): an older hook's livery messages are dropped unread.
     internal const int SideChannelPacketsPerSecond = 4096;
     internal const int SideChannelBytesPerSecond = 2 * 1024 * 1024;
     internal const int SideChannelControlsPerSecond = 128;
@@ -20,7 +21,6 @@ internal sealed partial class RelayEngine
     }
     private readonly Dictionary<RelayPeer, SideChannelRate> _sideChannelRates = [];
     internal long SideChannelRateDrops { get; private set; }
-    private long _lastLiveryTick;
 
     private bool TakeSideChannelRate(RelayPeer peer, int bytes, bool control)
     {
@@ -35,9 +35,6 @@ internal sealed partial class RelayEngine
         if (control) rate.Controls--;
         return true;
     }
-
-    private bool MayUseLivery(ulong xuid) => _peers.Any(peer => peer.Synced && peer.Xuid == xuid
-        && Allowed(peer.Xuid, peer.Endpoint) && (peer.LiveryHook is null || AllowedHook(peer.Xuid, peer.LiveryHook)));
 
     // A separate hook socket may bind only to a private peer on the same IP. Public NAT addresses
     // can represent unrelated players and therefore always require an exact endpoint.
@@ -60,11 +57,7 @@ internal sealed partial class RelayEngine
 
     private void ReceiveSideChannel(ReadOnlySpan<byte> data, IPEndPoint endpoint)
     {
-        switch (BinaryPrimitives.ReadUInt16BigEndian(data))
-        {
-            case CarStateCodec.Kind: ReceiveCarState(data, endpoint); break;
-            case LiveryCodec.Kind: ReceiveLivery(data, endpoint); break;
-        }
+        if (BinaryPrimitives.ReadUInt16BigEndian(data) == CarStateCodec.Kind) ReceiveCarState(data, endpoint);
     }
 
     private void ReceiveCarState(ReadOnlySpan<byte> data, IPEndPoint endpoint)
@@ -92,67 +85,8 @@ internal sealed partial class RelayEngine
             if (peer != from && peer.Synced && Allowed(peer.Xuid, peer.Endpoint) && peer.CarHook is { } hook && AllowedHook(peer.Xuid, hook)) Emit(hook, packet);
     }
 
-    private void ReceiveLivery(ReadOnlySpan<byte> data, IPEndPoint endpoint)
-    {
-        if (_contentPolicy is not null) return; // stock_only: no attribute traversal or blob allocation.
-        // Identify a known participant and apply its shared socket-independent work budget
-        // before Parse allocates a chunk. Rotating source ports cannot reset this allowance.
-        if (!StunCodec.TryAttribute(data, LiveryCodec.Kind, LiveryCodec.Attribute, out var value)
-            || value.Length < 2 || value[0] != 1) return;
-        var operation = value[1];
-        var claimed = operation switch
-        {
-            1 when value.Length >= 34 => (ulong?)BinaryPrimitives.ReadUInt64BigEndian(value[16..]),
-            3 when value.Length == 10 => BinaryPrimitives.ReadUInt64BigEndian(value[2..]),
-            _ => null,
-        };
-        RelayPeer? peer;
-        if (operation == 5 && value.Length == 12)
-            peer = _peers.FirstOrDefault(p => p.Synced && p.LiveryHook?.Equals(endpoint) == true);
-        else if (claimed is { } xuid)
-        {
-            peer = _peers.FirstOrDefault(p => p.Endpoint.Equals(endpoint));
-            if (peer is not null && (!peer.Synced || peer.Xuid != xuid)) return;
-            peer ??= _peers.FirstOrDefault(p => p.Synced && p.Xuid == xuid && HookSource(p, endpoint));
-        }
-        else return;
-        if (peer is null || !Allowed(peer.Xuid, peer.Endpoint) || !AllowedHook(peer.Xuid, endpoint)
-            || !TakeSideChannelRate(peer, data.Length, operation != 1)) return;
-        if (LiveryCodec.Parse(data) is not { } message) { Rejected(peer, "invalid_livery"); return; }
-        peer.LastSeen = _now;
-        if (claimed.HasValue) peer.LiveryHook = endpoint;
-        _liveries.Authorize = MayUseLivery;
-        SendLiveries(message switch
-        {
-            LiveryMessage.Put put => _liveries.OnPut(peer.Xuid, put.Chunk, _now),
-            LiveryMessage.Want => _liveries.OnWant(peer.Xuid, _now),
-            LiveryMessage.Ack ack => _liveries.OnAck(peer.Xuid, ack.Owner, ack.Sequence),
-            _ => []
-        });
-    }
-
-    private void SendLiveries(IReadOnlyList<LiveryOutput> output)
-    {
-        if (_contentPolicy is not null) return;
-        foreach (var item in output)
-        {
-            if (item.Message is LiveryMessage.Data data && !MayUseLivery(data.Chunk.Owner)) continue;
-            if (_peers.FirstOrDefault(p => p.Synced && p.Xuid == item.To && Allowed(p.Xuid, p.Endpoint)) is { LiveryHook: { } hook } peer
-                && AllowedHook(peer.Xuid, hook))
-                Emit(hook, LiveryCodec.Write(item.Message));
-        }
-        // Notes contain only IDs, reasons and sizes. This owner deliberately retains no log or history.
-        _liveries.TakeNotes();
-    }
-
     private void TickSideChannels()
     {
-        _liveries.Authorize = MayUseLivery;
-        if (_contentPolicy is null && _now - _lastLiveryTick >= LiveryBoard.OutputWindowMs)
-        {
-            _lastLiveryTick = _now;
-            SendLiveries(_liveries.Tick(_now));
-        }
         if (_now - _lastCarStates >= 1000)
         {
             _lastCarStates = _now;
@@ -160,12 +94,7 @@ internal sealed partial class RelayEngine
         }
     }
 
-    private void OnPeerLeft(RelayPeer peer)
-    {
-        _sideChannelRates.Remove(peer);
-        if (_contentPolicy is null && !_peers.Any(p => p.Xuid == peer.Xuid)) SendLiveries(_liveries.OnLeave(peer.Xuid));
-        if (_peers.Count == 0) _liveries.Clear();
-    }
+    private void OnPeerLeft(RelayPeer peer) => _sideChannelRates.Remove(peer);
 
-    private void ClearSideChannels() { _liveries.Clear(); _sideChannelRates.Clear(); SideChannelRateDrops = 0; }
+    private void ClearSideChannels() { _sideChannelRates.Clear(); SideChannelRateDrops = 0; }
 }

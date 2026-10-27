@@ -10,10 +10,15 @@ public sealed record ModeChange(string Mode, bool? Confirm);
 /// What a Hardcore → Noob change deletes for good (<c>ACCOUNTS.MODE_CHANGE_CONFIRM</c> <c>details</c>):
 /// the newest cloud save revision, which must be on the PC first, and the counts per kind
 /// (scores, ghosts, xp, drivatars, onlineProfile, inbox, saveRevisions; unknown kinds are kept as given).
+/// A <c>liveries</c> count from an older server is dropped: a mode change keeps the liveries (CR-S59,
+/// owner 2026-10-27 "a mode change keeps the liveries"; they follow the profile's current mode).
 /// </summary>
 public sealed record ModeChangeConfirm(ulong SaveRevision, IReadOnlyDictionary<string, long> Deletes)
 {
     public const string Code = "ACCOUNTS.MODE_CHANGE_CONFIRM";
+
+    /// <summary>Kinds a mode change no longer deletes, ignored when a server still counts them.</summary>
+    public static IReadOnlySet<string> KeptKinds { get; } = new HashSet<string>(StringComparer.Ordinal) { "liveries" };
 
     /// <summary>The details of a <see cref="Code"/> refusal; null when they are not that shape.</summary>
     public static ModeChangeConfirm? From(JsonElement? details)
@@ -32,7 +37,7 @@ public sealed record ModeChangeConfirm(ulong SaveRevision, IReadOnlyDictionary<s
         {
             foreach (var kind in counts.EnumerateObject())
             {
-                if (kind.Value.ValueKind == JsonValueKind.Number && kind.Value.TryGetInt64(out var n))
+                if (kind.Value.ValueKind == JsonValueKind.Number && kind.Value.TryGetInt64(out var n) && !KeptKinds.Contains(kind.Name))
                 {
                     deletes[kind.Name] = n;
                 }

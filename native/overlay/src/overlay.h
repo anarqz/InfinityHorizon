@@ -23,8 +23,6 @@ bool InPassthrough();
 bool DevHost();
 // OD-118: started by the launcher's Play offline: online-only tabs show "Offline mode".
 bool OfflineSession();
-// The hook's pre-world paint upload (fi_overlay.h FI_LIVERY_*); FI_LIVERY_UNAVAILABLE without one. Blocks: not on the render thread.
-int LiverySync(uint32_t timeout_ms);
 void SetGameReadiness(bool ready);
 bool GameReady();
 void SetWorldAccess(bool allowed, const std::string &message);
