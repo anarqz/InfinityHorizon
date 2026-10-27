@@ -163,6 +163,7 @@ public sealed partial class ShellViewModel
                 plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
                 _nativePlanPath = plan.Environment.FirstOrDefault(v => v.Name == "FI_MOD_PLAN").Value;
             }
+            PrepareAzimuth(install);
             var environment = OfflineLaunchEnvironment(profile, plan?.Environment, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.

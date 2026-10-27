@@ -1,0 +1,34 @@
+--- a/runtime.c
++++ b/runtime.c
+@@ -66,6 +66,16 @@
+     gamerpic_set_directory(settings_directory);
+     log_reset();
+     int initialized = settings_read(settings_directory, &options);
++#ifdef FH2_AZIMUTH
++    /* ExtraOptions.Infinity: what the Infinity server decides is never ExtraOptions' to change,
++       whatever FH2_ExtraOptions.ini says: Azimuth's save checks stay on (the cloud save and the
++       Hardcore checks read those saves), VIP comes from the account, and the licensed content
++       from the profile's expansions (the hook's ContentOffers statement). */
++    int infinity_forced = options.disable_azimuth_save_checksums || options.offline_vip || options.unlock_dlc;
++    options.disable_azimuth_save_checksums = 0;
++    options.offline_vip = 0;
++    options.unlock_dlc = 0;
++#endif
+     if (initialized) {
+         video_settings_load(settings_directory);
+         video_settings_seed(&options);
+@@ -80,6 +90,14 @@
+     }
+     log_start(settings_directory, &options);
+ #ifdef FH2_AZIMUTH
++    log_set_directory(settings_directory);
++    log_append(infinity_forced
++                   ? "INFINITY: DisableAzimuthSaveChecksums, OfflineVIP and UnlockDLC are the Infinity "
++                     "server's; the ini asked for one of them and it stays off.\r\n"
++                   : "INFINITY: DisableAzimuthSaveChecksums, OfflineVIP and UnlockDLC are the Infinity "
++                     "server's: off.\r\n");
++#endif
++#ifdef FH2_AZIMUTH
+     if (initialized && options.enabled) {
+         log_set_directory(settings_directory);
+         azimuth_apply_save_compatibility(options.disable_azimuth_save_checksums);
