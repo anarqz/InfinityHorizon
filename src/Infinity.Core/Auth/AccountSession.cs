@@ -243,6 +243,22 @@ public sealed class AccountSession : IDisposable
             return true;
         }, ct), () => Api.ServerNow(TimeProvider.System), cancellation); // a ticket's expiry is on the server's clock
 
+    /// <summary>CR-S62: a moderator's kick (the caller's key, kept for the retries of this one action).</summary>
+    public Task<KickApplied> KickAsync(NewKick kick, string idempotencyKey, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.KickAsync(access, kick, idempotencyKey, cancellation), cancellation);
+
+    /// <summary>A moderator's manual strike (CORE_API.md §5).</summary>
+    public Task<Strike> StrikeAsync(NewStrike strike, string idempotencyKey, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.StrikeAsync(access, strike, idempotencyKey, cancellation), cancellation);
+
+    /// <summary>An admin's ban (CORE_API.md §5).</summary>
+    public Task<BanApplied> BanAsync(NewBan ban, string idempotencyKey, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.BanAsync(access, ban, idempotencyKey, cancellation), cancellation);
+
+    /// <summary>The accounts a gamertag or XUID names (MOD, ADM).</summary>
+    public Task<AccountLookupList> LookupAccountsAsync(string xuidOrGamertag, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.LookupAccountsAsync(access, xuidOrGamertag, cancellation), cancellation);
+
     /// <summary>The session <see cref="SessionStore"/> kept from the last run; <see cref="RefreshMeAsync"/> proves it.</summary>
     public static AccountSession Resume(ApiClient api, ServerInfo info, Device device, SessionStore.Saved saved)
     {

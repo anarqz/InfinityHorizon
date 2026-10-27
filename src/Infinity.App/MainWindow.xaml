@@ -212,6 +212,11 @@
                          Visibility="{Binding DedicatedActive, Converter={StaticResource Visible}}" />
               </Grid>
             </Button>
+            <!-- CR-S62: quick moderation actions, top right, for moderator and admin accounts only. -->
+            <Button x:Name="ModerationButton" DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Margin="14,0,0,0"
+                    Content="{Binding S[moderation.open]}" Click="OnToggleModerationPane" VerticalAlignment="Center"
+                    AutomationProperties.Name="{Binding S[moderation.open]}"
+                    Visibility="{Binding CanModerate, Converter={StaticResource Visible}}" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                         IsEnabled="{Binding CanChangeIdentity}"
                         Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
@@ -319,6 +324,78 @@
                 </Border>
                 <TextBlock Text="{Binding S[lobby.running_hint]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,12,0,0" />
                 <TextBlock Text="{Binding S[lobby.close_hint]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0" />
+              </StackPanel>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+
+        <!-- CR-S62: the moderation pane (moderators and admins): a player of the world or one looked up, then Kick, Strike or Ban.
+             Escape (B) closes it. -->
+        <Border x:Name="ModerationPane" DockPanel.Dock="Right" Width="400" Padding="22,22,8,16" Background="{StaticResource InfinitySurface}"
+                BorderBrush="#3365184D" BorderThickness="1,0,0,0" KeyDown="OnModerationPaneKey"
+                Visibility="{Binding ShowModerationPane, Converter={StaticResource Visible}}">
+          <DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,12,0">
+              <Button DockPanel.Dock="Right" Content="{Binding S[moderation.close]}" Style="{StaticResource LinkButton}"
+                      Click="OnToggleModerationPane" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding S[moderation.title]}" FontSize="20" FontWeight="Bold" />
+            </DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{Binding S[moderation.subtitle]}" Style="{StaticResource PageSubtitle}" Margin="0,2,12,0" TextWrapping="Wrap" />
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+              <StackPanel Margin="0,0,12,0">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Content="{Binding S[moderation.refresh]}" Style="{StaticResource LinkButton}" Click="OnModerationRefresh" />
+                  <TextBlock Text="{Binding S[moderation.players_title]}" Style="{StaticResource SectionTag}" VerticalAlignment="Center" />
+                </DockPanel>
+                <TextBlock Text="{Binding S[moderation.players_empty]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0"
+                           Visibility="{Binding HasModerationPlayers, Converter={StaticResource Hidden}}" />
+                <ListBox x:Name="ModerationPlayerList" ItemsSource="{Binding ModerationPlayers}" SelectedItem="{Binding ModerationSelected}" DisplayMemberPath="Line"
+                         MaxHeight="180" Margin="0,6,0,12" AutomationProperties.Name="{Binding S[moderation.players_title]}"
+                         Visibility="{Binding HasModerationPlayers, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding S[moderation.lookup]}" Style="{StaticResource SectionTag}" Margin="0,6,0,0" />
+                <DockPanel Margin="0,6,0,0">
+                  <Button DockPanel.Dock="Right" Content="{Binding S[moderation.find]}" Click="OnModerationFind" IsEnabled="{Binding CanFindModerationTarget}" Margin="8,0,0,0" />
+                  <TextBox x:Name="ModerationLookupBox" Text="{Binding ModerationLookup, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"
+                           KeyDown="OnModerationLookupKey" AutomationProperties.Name="{Binding S[moderation.lookup]}" />
+                </DockPanel>
+                <ListBox ItemsSource="{Binding ModerationMatches}" SelectedItem="{Binding ModerationSelected}" DisplayMemberPath="Line"
+                         MaxHeight="140" Margin="0,6,0,0" AutomationProperties.Name="{Binding S[moderation.lookup]}"
+                         Visibility="{Binding HasModerationMatches, Converter={StaticResource Visible}}" />
+                <Border Style="{StaticResource Card}" Margin="0,14,0,0" Padding="16,12">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[moderation.target]}" Style="{StaticResource SectionTag}" />
+                    <TextBlock Text="{Binding ModerationTargetText}" FontWeight="Bold" Margin="0,4,0,10" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding S[moderation.action]}" Style="{StaticResource SectionTag}" />
+                    <WrapPanel Margin="0,6,0,10">
+                      <RadioButton Content="{Binding S[moderation.kick]}" IsChecked="{Binding ModerationKick}" GroupName="ModerationAction" Margin="0,0,14,6" />
+                      <RadioButton Content="{Binding S[moderation.strike]}" IsChecked="{Binding ModerationStrike}" GroupName="ModerationAction" Margin="0,0,14,6" />
+                      <RadioButton Content="{Binding S[moderation.ban]}" IsChecked="{Binding ModerationBan}" GroupName="ModerationAction" Margin="0,0,14,6"
+                                   Visibility="{Binding CanBan, Converter={StaticResource Visible}}" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding S[moderation.reason]}" TextWrapping="Wrap" FontSize="12" />
+                    <TextBox Text="{Binding ModerationReason, UpdateSourceTrigger=PropertyChanged}" MaxLength="500" Margin="0,4,0,2"
+                             TextWrapping="Wrap" AcceptsReturn="False" MinHeight="54" AutomationProperties.Name="{Binding S[moderation.reason]}" />
+                    <TextBlock Text="{Binding ModerationFormProblem}" FontSize="11" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" />
+                    <StackPanel Margin="0,8,0,0" Visibility="{Binding ShowModerationCooldown, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding S[moderation.cooldown]}" FontSize="12" />
+                      <ComboBox ItemsSource="{Binding ModerationCooldowns}" SelectedItem="{Binding ModerationCooldown}" DisplayMemberPath="Label" Margin="0,4,0,0"
+                                AutomationProperties.Name="{Binding S[moderation.cooldown]}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,8,0,0" Visibility="{Binding ShowModerationBanForm, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding S[moderation.ban_duration]}" FontSize="12" />
+                      <ComboBox ItemsSource="{Binding ModerationBanDurations}" SelectedItem="{Binding ModerationBanDuration}" DisplayMemberPath="Label" Margin="0,4,0,0"
+                                AutomationProperties.Name="{Binding S[moderation.ban_duration]}" />
+                      <TextBlock Text="{Binding S[moderation.ban_warning]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityRose}" Margin="0,8,0,0" />
+                      <TextBlock Text="{Binding ModerationBanTypeHint}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,4" />
+                      <TextBox Text="{Binding ModerationBanTyped, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"
+                               AutomationProperties.Name="{Binding ModerationBanTypeHint}" />
+                    </StackPanel>
+                    <Button Content="{Binding ModerationApplyText}" Click="OnModerationApply" IsEnabled="{Binding CanApplyModeration}"
+                            Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Margin="0,14,0,0" />
+                    <TextBlock Text="{Binding ModerationStatus}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding HasModerationStatus, Converter={StaticResource Visible}}" AutomationProperties.LiveSetting="Polite" />
+                  </StackPanel>
+                </Border>
               </StackPanel>
             </ScrollViewer>
           </DockPanel>

@@ -132,7 +132,11 @@ public abstract record SupervisorEvent
     /// <summary>The play session is over; <paramref name="Left"/> tells whether the gate leave was sent.</summary>
     public sealed record Ended(string Reason, bool Left) : SupervisorEvent;
 
-    public sealed record Error(string Message, bool DuringAdmission = false) : SupervisorEvent;
+    public sealed record Error(string Message, bool DuringAdmission = false) : SupervisorEvent
+    {
+        /// <summary>CR-S62: 403 <c>SESSIONS.KICKED</c> on admission, how long the kick's cooldown still lasts (null: unknown).</summary>
+        public TimeSpan? Wait { get; init; }
+    }
     public sealed record OnlinePaused(OnlinePause Pause) : SupervisorEvent;
 
     /// <summary>Something the launcher decided for this launch, for the log (Wine overrides, ...).</summary>
@@ -268,7 +272,8 @@ public sealed class PlaySupervisor
             {
                 if (e is ApiException apiClosed && OnlinePause.From(apiClosed) is { } pause)
                 { _online.TryPause(pause); EmitPause(pause); }
-                _emit(new SupervisorEvent.Error(e is ApiException api ? api.Code : e.Message, DuringAdmission: _admissionPending));
+                _emit(new SupervisorEvent.Error(e is ApiException api ? api.Code : e.Message, DuringAdmission: _admissionPending)
+                { Wait = e is ApiException kicked ? Shell.KickCooldown.Remaining(kicked, _clock.GetUtcNow()) : null });
                 _emit(new SupervisorEvent.Ended("error", false));
                 return;
             }
@@ -781,7 +786,8 @@ public sealed class PlaySupervisor
                             ? _config.Text?["crash.frozen"] ?? "Online access is temporarily frozen for security review. Sign-in and support remain available."
                             : e.Code == ErrorCodes.GameUpdateRequired
                                 ? _config.Text?["updater.session_required"] ?? "Update Infinity Launcher after this game session to return online. Your progress keeps saving."
-                                : e.Code == ErrorCodes.SessionsEnded && SessionEndedReason(e) == "idle" ? IdleEndedText() : SessionEndedText()).ConfigureAwait(false);
+                                : e.Code == ErrorCodes.SessionsEnded && SessionEndedReason(e) == "idle" ? IdleEndedText()
+                                : Shell.KickCooldown.IsKickedEnd(e) ? KickedEndedText() : SessionEndedText()).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (suspended || _online.IsPaused) { }
                     catch (Exception e) when (OperationBackoff.Transient(e) && !stop.IsCancellationRequested)
@@ -1077,6 +1083,10 @@ public sealed class PlaySupervisor
     /// <summary>OD-121 (GATE_API.md §4a): the seat went to a waiting player; the next Play joins at the end of the queue.</summary>
     private string IdleEndedText() => _config.Text?["overlay.session_ended_idle"]
         ?? "You were away while players waited, so your seat went to the next in line. Progress keeps saving on this PC. Close the game and press Play to queue again.";
+
+    /// <summary>CR-S62 (GATE_API.md §4): a moderator ended the session; online is suspended as after an idle end, never re-queued.</summary>
+    private string KickedEndedText() => _config.Text?["overlay.session_ended_kicked"]
+        ?? "You were removed by a moderator. The game keeps running offline and progress keeps saving on this PC.";
 
     private static string? SessionEndedReason(ApiException error)
     {

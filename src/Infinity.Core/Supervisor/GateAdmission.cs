@@ -74,7 +74,8 @@ public sealed class GateAdmission(IGate gate, Action<SupervisorEvent> emit, Time
                             var reason = Detail(e, "reason");
                             reason = reason is { Length: <= 40 } && reason.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') ? reason : "unknown";
                             emit(new SupervisorEvent.Note("queue ended: " + reason));
-                            emit(new SupervisorEvent.Ended("queue_ended", true));
+                            // CR-S62: a moderator's kick ends a queued session too; it is said as a kick, never re-queued.
+                            emit(new SupervisorEvent.Ended(reason == "kicked" ? "queue_kicked" : "queue_ended", true));
                             return null;
                         }
                         catch (ApiException e) when (Retryable(e))
