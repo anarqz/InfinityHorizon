@@ -39,6 +39,16 @@ public enum SaveStep
 
     /// <summary>Retention: the cloud copy of this profile's save expired; this PC's save is kept and nothing came down.</summary>
     CloudExpired,
+
+    /// <summary>CR-S52: the server took the career the player chose to start from (<c>seed_from_profile</c>; detail: the revision).</summary>
+    SeedAccepted,
+
+    /// <summary>
+    /// CR-S52: the seed did not become revision 1 (detail: <see cref="ProfileSeed.CommitDetail"/>, read with
+    /// <see cref="ProfileSeed.CommitTextKey"/>): refused by the server's final check, not sent, or answered for another revision; a
+    /// <see cref="FreshStart"/> follows when the line is still empty.
+    /// </summary>
+    SeedRefused,
 }
 
 /// <summary>The player's answer to a save conflict (owner 2026-10-26, "Cloud or PC, per the contract"; SAVES_API.md §4.4/§5).</summary>
@@ -62,9 +72,12 @@ public sealed record SaveConflict(SaveHead Cloud, int? LocalLevel, int? LocalCre
 }
 
 /// <summary>A save step that stops the launch: the game is not started over an unknown state.</summary>
-public sealed class SaveBlockedException(string code, string message) : Exception(message)
+public sealed class SaveBlockedException(string code, string message, TimeSpan? retryAfter = null) : Exception(message)
 {
     public string Code { get; } = code;
+
+    /// <summary>The server's <c>Retry-After</c> (CR-S52: a seed commit past the day's 5 checks), when it gave one.</summary>
+    public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
 /// <summary>
@@ -151,13 +164,31 @@ public sealed class SessionSaves
         var head = _line.Head;
         if (head.Revision == 0 && head.Start == SaveStarts.FreshStart && IsHardcore(active))
         {
-            // the first career an earlier session recorded but could not send (SAVES_API §4.9) goes now, before anything is archived
-            if (_saves.State(_xuid)?.PendingUpload is { Kind: CommitKinds.FreshStart, Expected: 0 })
+            // the first career an earlier session recorded but could not send (SAVES_API §4.9), or the career the player chose to start
+            // from at creation (CR-S52, §4.10: seed_from_profile, checked again on receipt), goes now, before anything is archived
+            if (_saves.State(_xuid)?.PendingUpload is { Kind: CommitKinds.FreshStart or CommitKinds.SeedFromProfile, Expected: 0 } first)
             {
-                var first = await _saves.SendPendingAsync(access, _xuid, _line.Lease, cancellation).ConfigureAwait(false);
-                if (first.Failure is { KeepsPending: true } kept)
+                var seed = first.Kind == CommitKinds.SeedFromProfile;
+                if (seed) _report(SaveStep.Uploading, null);
+                var sent = await _saves.SendPendingAsync(access, _xuid, _line.Lease, cancellation).ConfigureAwait(false);
+                if (sent.Failure is { KeepsPending: true } kept)
                 {
-                    throw new SaveBlockedException(kept.Code, "the new Hardcore career's first save is still waiting to reach the cloud");
+                    // the bytes stay recorded: a later Play sends them again (429 SAVES.RATE_LIMITED waits Retry-After)
+                    throw new SaveBlockedException(kept.Code, seed ? "the career this Hardcore profile starts from is still waiting for the server's check"
+                        : "the new Hardcore career's first save is still waiting to reach the cloud", kept.RetryAfter);
+                }
+                if (seed && sent.Failure is { Kind: SaveFailureKind.LeaseLost } lost)
+                {
+                    // the seed stays pending (CloudSaves keeps a seed on a lease loss): the next Play retries it without a new dry run
+                    throw new SaveBlockedException(lost.Code, "another session holds this profile"); // never a fresh start under a lost lease
+                }
+                if (seed)
+                {
+                    // refused (422 GATE_REFUSED NOT_PLAUSIBLE_SEED, 409 source_used or the option off, 400/404 on the source): the bytes were
+                    // set aside by the send, and the line, still at revision 0, starts a new career below (§4.10: fall back to fresh_start).
+                    // Not sent (the recorded bytes missing), or a 2xx for another revision: the head read below decides; told as such.
+                    if (sent is { Committed: { } committed, Failure: null }) _report(SaveStep.SeedAccepted, committed.Revision.ToString(CultureInfo.InvariantCulture));
+                    else _report(SaveStep.SeedRefused, ProfileSeed.CommitDetail(sent));
                 }
                 head = await FreshHeadAsync(access, head, cancellation).ConfigureAwait(false);
             }

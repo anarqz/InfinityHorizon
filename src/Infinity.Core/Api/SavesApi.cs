@@ -25,6 +25,8 @@ public sealed record SaveBundleDownload(byte[] Bytes, string? BundleSha256, stri
 /// <c>PUT .../save</c> (SAVES_API.md §4.3): <paramref name="Expected"/> becomes <c>If-Match: "&lt;n&gt;"</c>
 /// (<c>"0"</c> on an empty line), <paramref name="CommitId"/> the <c>Idempotency-Key</c> every retry reuses,
 /// <paramref name="SessionId"/>/<paramref name="FenceToken"/> the lease (<c>X-Fi-Session-Id</c>, <c>X-Fi-Fence</c>).
+/// <paramref name="SeedSource"/> is the source profile's decimal XUID of a <c>seed_from_profile</c> commit (<c>X-Fi-Seed-Source</c>,
+/// CR-S52), null otherwise.
 /// </summary>
 public sealed record SaveCommitRequest(
     ulong Expected,
@@ -33,7 +35,8 @@ public sealed record SaveCommitRequest(
     ulong FenceToken,
     string Kind,
     string ContentSha256,
-    byte[] Bundle);
+    byte[] Bundle,
+    string? SeedSource = null);
 
 /// <summary>The cloud save routes, behind an interface so the save logic tests with a fake.</summary>
 public interface ISaveApi
@@ -130,10 +133,34 @@ public sealed class SavesApiClient : ISaveApi
         request.Headers.TryAddWithoutValidation("X-Fi-Commit-Kind", commit.Kind);
         request.Headers.TryAddWithoutValidation("Repr-Digest", ReprDigest(commit.Bundle));
         request.Headers.TryAddWithoutValidation("X-Fi-Content-Sha256", commit.ContentSha256);
+        if (commit.SeedSource is { } source)
+        {
+            request.Headers.TryAddWithoutValidation(SeedSourceHeader, source);
+        }
         request.Content = new ByteArrayContent(commit.Bundle);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue(Infinity.Core.Saves.Fh2Bundle.MediaType);
         using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
         return await Json<CommitResponse>(response, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>fi-protocol <c>headers::FI_SEED_SOURCE</c> (CR-S52): the source profile of a seed check or a <c>seed_from_profile</c> commit.</summary>
+    public const string SeedSourceHeader = "X-Fi-Seed-Source";
+
+    /// <summary>
+    /// <c>POST .../save/check</c> (SAVES_API.md §4.10, CR-S52): the dry run of <paramref name="sourceXuid"/>'s save
+    /// (<paramref name="bundle"/>, its newest sealed revision on this PC) as the start of the Hardcore line of
+    /// <paramref name="targetXuid"/>, which must exist on the server already. No <c>Idempotency-Key</c>, no lease; nothing is
+    /// committed, but every check counts against the account's 5 a day (429 <c>SAVES.RATE_LIMITED</c>, <c>Retry-After</c>).
+    /// </summary>
+    public async Task<SaveApiResult<SeedCheck>> CheckSeedAsync(string access, string targetXuid, string sourceXuid, byte[] bundle, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        using var request = Request(HttpMethod.Post, Base(targetXuid) + "/check", access);
+        request.Headers.TryAddWithoutValidation(SeedSourceHeader, sourceXuid);
+        request.Content = new ByteArrayContent(bundle);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(Infinity.Core.Saves.Fh2Bundle.MediaType);
+        using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
+        return await Json<SeedCheck>(response, cancellation).ConfigureAwait(false);
     }
 
     /// <summary>
