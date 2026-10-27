@@ -1348,6 +1348,10 @@ static DWORD WINAPI net_worker(void *parameter) {
         answered = 0;
         error = E_ABORT;
     }
+    if (answered && net_mode == NET_MODE_PROXY && fi_launch_protocol()) {
+        fi_livery_reply(buffer_wide(&request->request_headers), request->request_body.data, request->request_body.size,
+                        (unsigned)request->status, request->response_body.data, request->response_body.size);
+    }
     net_capture(request, answered, error);
     /* Take the callback out of the request: msxml6 drops it after the final
        notification, and XSAPI's callback owns the request (cycle otherwise). */

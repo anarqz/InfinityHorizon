@@ -148,6 +148,8 @@ int fi_livery_sync(unsigned timeout_ms);
 /* livery_world.c (CR-S59): net.c notes the game's livery calls here in a launcher session (1: a
    livery call, logged; nothing is answered here, every one goes to the server). */
 int fi_livery_route(const wchar_t *headers, const unsigned char *body, size_t size);
+void fi_livery_reply(const wchar_t *headers, const unsigned char *request_body, size_t request_size,
+                     unsigned status, const unsigned char *reply, size_t reply_size);
 /* The world's own LAN socket for carstate.c: freeroam.c says when a world is joined and left. */
 void azimuth_world_lan_entered(const void *remote);
 void azimuth_world_lan_left(void);
