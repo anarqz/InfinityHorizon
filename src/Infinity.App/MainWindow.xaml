@@ -690,6 +690,54 @@
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowAccount, Converter={StaticResource Visible}}">
             <StackPanel MaxWidth="560" HorizontalAlignment="Center" Margin="24">
               <TextBlock Text="{Binding S[nav.account]}" Style="{StaticResource PageTitle}" />
+              <!-- CR-S63: the account's Discord link (verified by the bot's page) and each profile's announce switch. -->
+              <Border x:Name="DiscordCard" Style="{StaticResource Card}" Padding="24" Margin="0,18,0,0"
+                      Visibility="{Binding ShowDiscord, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[discord.title]}" FontSize="20" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding S[discord.body]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,14" TextWrapping="Wrap" />
+                  <!-- Linked: the avatar (the account's avatar; its initial until it loads) and the handle. -->
+                  <DockPanel Visibility="{Binding HasDiscordLink, Converter={StaticResource Visible}}" Margin="0,0,0,10">
+                    <Grid Width="48" Height="48" DockPanel.Dock="Left" Margin="0,0,14,0" VerticalAlignment="Center">
+                      <Ellipse Fill="{StaticResource InfinitySurfaceHigh}" />
+                      <TextBlock Text="{Binding DiscordInitial}" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      <Ellipse Visibility="{Binding HasDiscordAvatar, Converter={StaticResource Visible}}">
+                        <Ellipse.Fill><ImageBrush ImageSource="{Binding DiscordAvatar}" Stretch="UniformToFill" /></Ellipse.Fill>
+                      </Ellipse>
+                    </Grid>
+                    <Button DockPanel.Dock="Right" Content="{Binding S[discord.unlink]}" Click="OnUnlinkDiscord" IsEnabled="{Binding CanUseDiscord}"
+                            VerticalAlignment="Center" Padding="14,6" />
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="{Binding DiscordHandle}" FontWeight="Bold" FontSize="15" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding DiscordLinkedText}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                    </StackPanel>
+                  </DockPanel>
+                  <Button Content="{Binding S[discord.link]}" Click="OnLinkDiscord" IsEnabled="{Binding CanUseDiscord}" HorizontalAlignment="Left"
+                          Style="{StaticResource AccentButtonStyle}" Padding="18,8" Margin="0,0,0,10"
+                          Visibility="{Binding ShowLinkDiscord, Converter={StaticResource Visible}}" />
+                  <WrapPanel Visibility="{Binding DiscordWaiting, Converter={StaticResource Visible}}" Margin="0,0,0,10">
+                    <Button Content="{Binding S[discord.check]}" Click="OnCheckDiscord" Padding="14,6" Margin="0,0,10,0" />
+                    <Button Content="{Binding S[discord.cancel]}" Click="OnCancelDiscordLink" Padding="14,6" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding DiscordStatus}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}" Margin="0,0,0,10"
+                             Visibility="{Binding HasDiscordStatus, Converter={StaticResource Visible}}" />
+                  <StackPanel Visibility="{Binding HasAnnounceSwitches, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding S[discord.announce_title]}" FontWeight="SemiBold" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,4" />
+                    <ItemsControl ItemsSource="{Binding AnnounceSwitches}" Focusable="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <DockPanel Margin="0,4">
+                            <CheckBox DockPanel.Dock="Right" IsChecked="{Binding Announce, Mode=OneWay}" IsEnabled="{Binding Idle}" Click="OnAnnounceToggle"
+                                      Content="{Binding DataContext.S[discord.announce], RelativeSource={RelativeSource AncestorType=Window}}" />
+                            <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" VerticalAlignment="Center" />
+                          </DockPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding S[discord.announce_hint]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityFaint}" Margin="0,6,0,0" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
               <Border Style="{StaticResource Card}" Padding="24" Margin="0,18,0,0">
                 <StackPanel>
                   <TextBlock Text="{Binding S[account.delete_title]}" FontSize="20" FontWeight="SemiBold" />
@@ -816,6 +864,22 @@
                         <StackPanel Margin="0,0,170,0">
                           <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="16" />
                           <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                          <!-- CR-S63: the account's Discord link shows on every profile of the account. -->
+                          <StackPanel Orientation="Horizontal" Margin="0,4,0,0" Visibility="{Binding OnAccount, Converter={StaticResource Visible}}">
+                            <StackPanel Orientation="Horizontal"
+                                        Visibility="{Binding DataContext.HasDiscordLink, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource Visible}}">
+                              <Grid Width="18" Height="18" Margin="0,0,6,0">
+                                <Ellipse Fill="{StaticResource InfinitySurfaceHigh}" />
+                                <TextBlock Text="{Binding DataContext.DiscordInitial, RelativeSource={RelativeSource AncestorType=Window}}" FontSize="10" FontWeight="Bold"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Ellipse Visibility="{Binding DataContext.HasDiscordAvatar, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource Visible}}">
+                                  <Ellipse.Fill><ImageBrush ImageSource="{Binding DataContext.DiscordAvatar, RelativeSource={RelativeSource AncestorType=Window}}" Stretch="UniformToFill" /></Ellipse.Fill>
+                                </Ellipse>
+                              </Grid>
+                              <TextBlock Text="{Binding DataContext.DiscordHandle, RelativeSource={RelativeSource AncestorType=Window}}" FontSize="12"
+                                         VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
+                            </StackPanel>
+                          </StackPanel>
                         </StackPanel>
                       </Button>
                       <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">

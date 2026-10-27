@@ -415,6 +415,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         LeaveAccount(); _onNews = false;
         _onMods = _onSetup = _onBugReport = _loginOpen = false;
         _playStatus = null;
+        ClearDiscord(); // CR-S63
         _session?.Dispose();
         _session = null;
         SessionStore.Delete(_stateDirectory);
@@ -469,6 +470,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             Message = DeletionPendingText;
         }
         else Message = S["signin.done_toast"];
+        _ = RefreshDiscordAsync(); // CR-S63: the account's Discord handle on its profile rows (after sign-in only, OD-118)
         await RefreshIntegrityAutomaticallyAsync();
         await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
     }
@@ -652,6 +654,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _signIn?.Cancel();
         _nativeFlow.Dispose();
         LeaveAccount();
+        _discordAvatarHttp?.Dispose();
         _session?.Dispose();
         ReleaseInstanceLock();
     }

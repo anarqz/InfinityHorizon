@@ -189,6 +189,21 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() => DeleteProfilePanel.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
+    // CR-S63: the account page's Discord card.
+    private async void OnLinkDiscord(object sender, RoutedEventArgs e) => await _vm.LinkDiscordAsync();
+
+    private async void OnCheckDiscord(object sender, RoutedEventArgs e) => await _vm.CheckDiscordNowAsync();
+
+    private void OnCancelDiscordLink(object sender, RoutedEventArgs e) => _vm.CancelDiscordLink();
+
+    private async void OnUnlinkDiscord(object sender, RoutedEventArgs e) => await _vm.UnlinkDiscordAsync();
+
+    private async void OnAnnounceToggle(object sender, RoutedEventArgs e)
+    {
+        var box = (System.Windows.Controls.CheckBox)sender;
+        await _vm.SetAnnounceAsync((Infinity.Core.Shell.AnnounceSwitch)box.DataContext, box.IsChecked == true);
+    }
+
     private async void OnConfirmDeleteProfile(object sender, RoutedEventArgs e) => await _vm.ConfirmDeleteProfileAsync();
 
     private void OnCancelDeleteProfile(object sender, RoutedEventArgs e) => _vm.CancelDeleteProfile();

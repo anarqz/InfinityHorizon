@@ -259,6 +259,26 @@ public sealed class AccountSession : IDisposable
     public Task<AccountLookupList> LookupAccountsAsync(string xuidOrGamertag, CancellationToken cancellation = default) =>
         Tokens.WithAccessAsync(access => Api.LookupAccountsAsync(access, xuidOrGamertag, cancellation), cancellation);
 
+    /// <summary>CR-S63: the account's Discord link and each live profile's announce switch.</summary>
+    public Task<DiscordSettings> DiscordSettingsAsync(CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.DiscordSettingsAsync(access, cancellation), cancellation);
+
+    /// <summary>A new one-time link code (the bot's page to open in the browser).</summary>
+    public Task<DiscordLinkCode> CreateDiscordLinkAsync(CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.CreateDiscordLinkAsync(access, cancellation), cancellation);
+
+    /// <summary>Clears the account's Discord link (204 also when there was none).</summary>
+    public Task UnlinkDiscordAsync(CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(async access =>
+        {
+            await Api.UnlinkDiscordAsync(access, cancellation).ConfigureAwait(false);
+            return true;
+        }, cancellation);
+
+    /// <summary>A profile's announce switch.</summary>
+    public Task<ProfileAnnounce> SetAnnounceAsync(string xuid, bool announce, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.SetAnnounceAsync(access, xuid, announce, cancellation), cancellation);
+
     /// <summary>The session <see cref="SessionStore"/> kept from the last run; <see cref="RefreshMeAsync"/> proves it.</summary>
     public static AccountSession Resume(ApiClient api, ServerInfo info, Device device, SessionStore.Saved saved)
     {
