@@ -136,8 +136,36 @@ static const HostPatchSet tiled_patch_sets_0910[] = {
     {0x1b92bd, 0x0a, tiled_copy_original_hash, tiled_copy_patched_hash, tiled_patches,
      ARRAY_COUNT(tiled_patches)}};
 
+/* 1.0.2 (FH_AZIMUTH_102): CreatePlacementTexture2D 0x2f5790 tests BindFlags already in ecx, so
+   the two jne sit at +0x03 and +0x0d of a 0x13-byte range; the write and copy paths share one
+   check, 0x680e70 (cmp qword [rcx+0x148],0 / jne: the field moved from +0x128). */
+static const HostCodePatch placement_patches_102[] = {{0x03, sizeof(placement_nops), placement_nops},
+                                                      {0x0d, sizeof(placement_nops), placement_nops}};
+static const unsigned char placement_original_hash_102[32] = {
+    0x41, 0xde, 0xae, 0x9f, 0x9a, 0x5a, 0x32, 0x89, 0x93, 0x24, 0x0e, 0xa3, 0xdf, 0x50, 0x06, 0x20,
+    0x37, 0xf5, 0xf4, 0x92, 0xf2, 0x43, 0x1c, 0x27, 0xaa, 0x8b, 0x85, 0x3f, 0x92, 0xda, 0xd0, 0x85};
+static const unsigned char placement_patched_hash_102[32] = {
+    0x5f, 0x7b, 0x84, 0x38, 0xdd, 0x27, 0x15, 0x6c, 0xdf, 0x53, 0x0e, 0x0c, 0xd6, 0x15, 0x8b, 0x21,
+    0xab, 0x0f, 0x80, 0xa9, 0x8a, 0xdf, 0xe7, 0x4f, 0x21, 0x8f, 0x87, 0x3c, 0x87, 0x1d, 0xec, 0x33};
+static const HostPatchSet placement_patch_set_102 = {
+    0x2f59db, 0x13, placement_original_hash_102, placement_patched_hash_102,
+    placement_patches_102, ARRAY_COUNT(placement_patches_102)};
+static const unsigned char tiled_original_hash_102[32] = {
+    0x6f, 0x17, 0x14, 0x16, 0x8c, 0xd2, 0xa0, 0xd4, 0xdd, 0x71, 0x5a, 0x8c, 0x9f, 0x88, 0xe8, 0x19,
+    0xae, 0xaf, 0xda, 0x07, 0x58, 0x9a, 0xef, 0x02, 0x7e, 0x31, 0xb6, 0xd7, 0x22, 0x50, 0xa9, 0x51};
+static const unsigned char tiled_patched_hash_102[32] = {
+    0xea, 0x4d, 0xa0, 0x0b, 0x81, 0x82, 0x3e, 0x9e, 0x9e, 0xb3, 0x12, 0xcc, 0xa2, 0xbb, 0x86, 0x68,
+    0xa9, 0x29, 0xad, 0xb0, 0xec, 0xd3, 0x95, 0xbb, 0x01, 0x5e, 0x47, 0x1e, 0x79, 0x03, 0x4e, 0x65};
+static const HostPatchSet tiled_patch_sets_102[] = {
+    {0x680e8e, 0x0a, tiled_original_hash_102, tiled_patched_hash_102, tiled_patches,
+     ARRAY_COUNT(tiled_patches)}};
+
 static int apply_placement(unsigned char *base) {
     AzimuthBuild build = azimuth_host_build(base);
+    if (build == AZIMUTH_102) {
+        int writes = azimuth_patch_host_codes(base, tiled_patch_sets_102, ARRAY_COUNT(tiled_patch_sets_102));
+        return writes > 0 ? azimuth_patch_host_code(base, &placement_patch_set_102) : writes;
+    }
     if (build != AZIMUTH_099 && build != AZIMUTH_0910) {
         return 0;
     }
@@ -164,8 +192,10 @@ static int apply_livery(unsigned char *base) {
    0.9.10). */
 void azimuth_apply_livery_compatibility(void) {
     int result = apply_livery((unsigned char *)GetModuleHandleW(NULL));
-    if (azimuth_host_build((const unsigned char *)GetModuleHandleW(NULL)) == AZIMUTH_0910) {
-        log_append("AZIMUTH: 2x MSAA liveries are handled by Azimuth 0.9.10 itself.\r\n");
+    AzimuthBuild host = azimuth_host_build((const unsigned char *)GetModuleHandleW(NULL));
+    if (host == AZIMUTH_0910 || host == AZIMUTH_102) {
+        log_append(host == AZIMUTH_102 ? "AZIMUTH: 2x MSAA liveries are handled by Azimuth 1.0.2 itself.\r\n"
+                                       : "AZIMUTH: 2x MSAA liveries are handled by Azimuth 0.9.10 itself.\r\n");
     } else if (result > 0) {
         log_append("AZIMUTH: 2x MSAA livery fragment-mask compatibility applied; "
                    "texture resolution and sample count preserved.\r\n");
@@ -181,6 +211,6 @@ void azimuth_apply_livery_compatibility(void) {
                               "textures are made as shader resources.\r\n"
                : result < 0 ? "AZIMUTH: placement texture patch could not change memory "
                               "protection; host code left unchanged.\r\n"
-                            : "AZIMUTH: placement texture patch skipped; not a 0.9.9 or "
-                              "0.9.10 build with the inspected bytes.\r\n");
+                            : "AZIMUTH: placement texture patch skipped; not a 0.9.9, "
+                              "0.9.10 or 1.0.2 build with the inspected bytes.\r\n");
 }
