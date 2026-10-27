@@ -901,6 +901,22 @@ static int launch_mentions_production(const char *text, size_t size) {
     return 0;
 }
 
+/* OD122-L8: the owner's own server behind its Cloudflare tunnel is the one infinity-horizon.com host a
+   custom server's ticket may name, exactly https://play.infinity-horizon.com (an optional trailing '/');
+   the official service hosts never are (CustomServer.OwnerPublicOrigin in the launcher). */
+static int launch_owner_server(const char *text, size_t length) {
+    static const char owner[] = "https://play.infinity-horizon.com";
+    size_t n = sizeof(owner) - 1;
+    if (length == n + 1 && text[n] == '/') length = n;
+    if (length != n) return 0;
+    for (size_t i = 0; i < n; ++i) {
+        char c = text[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+        if (c != owner[i]) return 0;
+    }
+    return 1;
+}
+
 /* A custom server's game server (CR-L39, owner: "Plain http anywhere"): http:// or https://, a host of
    [A-Za-z0-9.-], an optional :port (1-65535), an optional trailing '/', nothing else; the shape
    azimuth_net_set_launch_server parses. */
@@ -1043,7 +1059,7 @@ static int launch_ticket_ok(const LaunchTicket *t) {
         return 0;
     }
     if (launch_custom_count) {
-        if (launch_mentions_production(text, length) || !launch_custom_server_ok(text, length)) {
+        if ((launch_mentions_production(text, length) && !launch_owner_server(text, length)) || !launch_custom_server_ok(text, length)) {
             launch_log("REFUSED: the custom server's ticket names an official or malformed game server: offline.", 0, 0, "");
             return 0;
         }
