@@ -891,6 +891,11 @@ static void lw_release(void *object) {
     if (f) ((LwObjectFn)f)(object);
 }
 
+/* A garage row id the game can load (game+0x2dadd0): never 0, nor the loaner's 0xFFFFFFFF, nor anything past INT_MAX. */
+static int lw_garage_row_id(unsigned garage_id) {
+    return garage_id != 0 && garage_id < 0x7fffffffu;
+}
+
 /* The run itself, on the game thread: 3 ran, 4 the car has no paint, 5 not possible. */
 static LONG lw_apply_current(void) {
     unsigned generation = 0;
@@ -902,7 +907,9 @@ static LONG lw_apply_current(void) {
     void *garage = get_garage ? ((LwObjectFn)get_garage)(player) : 0;
     void *current = get_current ? ((LwObjectFn)get_current)(player) : 0;
     unsigned garage_id = 0;
-    if (!garage || !current || !memory_read((unsigned char *)current + 0x260, &garage_id, 4) || !garage_id) {
+    /* a loaner (a Bucket List car) has no garage row: its id is 0xFFFFFFFF, and loading it by id makes the game's own
+       stats code crash on an unset record (2026-10-27): only a plausible row id is ever loaded */
+    if (!garage || !current || !memory_read((unsigned char *)current + 0x260, &garage_id, 4) || !lw_garage_row_id(garage_id)) {
         return 5;
     }
     lw_pre_garage_id = garage_id;
@@ -990,7 +997,7 @@ static void lw_watch(void) {
     void *garage = get_garage ? ((LwObjectFn)get_garage)(player) : 0;
     void *current = get_current ? ((LwObjectFn)get_current)(player) : 0;
     unsigned garage_id = 0;
-    if (garage && current && memory_read((unsigned char *)current + 0x260, &garage_id, 4) && garage_id) {
+    if (garage && current && memory_read((unsigned char *)current + 0x260, &garage_id, 4) && lw_garage_row_id(garage_id)) {
         void *car = 0;
         ((LwGarageCarFn)(uintptr_t)(lw_game + LW_GARAGE_CAR_RVA))(garage, &car, garage_id, 0);
         if (car) {
@@ -1047,7 +1054,12 @@ void fi_livery_game_tick(void) {
     if ((lw_pre_state == 1 || lw_pre_state == 3) && generation != lw_pre_generation) {
         InterlockedExchange(&lw_pre_state, 5);
     }
-    if (lw_game && fi_launch_protocol()) {
+    /* The watch reloads the current car as a garage car by its id (game+0x2dadd0), which the game itself
+       cannot survive when the current car is not a garage car: a Bucket List loaner has no garage row, the
+       load fills a record with the "unset" sentinels and the game's own stats code runs off the stack
+       (2026-10-27, SAURON's RE of the minidump). So it runs only while a paint run this player asked is
+       waiting for its confirmation (state 3), never every second for the whole session. */
+    if (lw_game && fi_launch_protocol() && lw_pre_state == 3) {
         lw_watch();
     }
     if (lw_pre_state != 1 || !lw_game || InterlockedCompareExchange(&lw_pre_state, 2, 1) != 1) {
