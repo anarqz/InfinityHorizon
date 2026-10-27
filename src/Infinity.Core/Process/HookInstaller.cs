@@ -21,7 +21,7 @@ public enum HookSigner
     Development,
 }
 
-/// <summary>What <c>data\bin\azimuth-tls.dll</c> is.</summary>
+/// <summary>What the hook, <c>winmm.dll</c> beside <c>azimuth.exe</c> (OD-125), is.</summary>
 public enum HookKind
 {
     Missing,
@@ -175,7 +175,7 @@ public static class HookInstaller
 
     private static string KeptSignature(string azimuthRoot) => Path.Combine(azimuthRoot, "data", "fi-launcher", "hook", HookDll + ".sig");
 
-    /// <summary>What <c>data\bin\azimuth-tls.dll</c> is, and whether the signature the launcher kept signs exactly these bytes.</summary>
+    /// <summary>What <c>&lt;Azimuth&gt;\winmm.dll</c> is, and whether the signature the launcher kept signs exactly these bytes.</summary>
     public static InstalledHook Inspect(string azimuthRoot, byte[]? devKey)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
@@ -236,7 +236,7 @@ public static class HookInstaller
     }
 
     /// <summary>
-    /// Installs a verified package into <c>data\bin</c>. Refuses while <paramref name="gameRunning"/>
+    /// Installs a verified package beside <c>azimuth.exe</c> (<see cref="HookFolder"/>). Refuses while <paramref name="gameRunning"/>
     /// or while the DLL is in use. The bytes are re-verified, written to <c>.new</c> (flushed, re-hashed),
     /// the current DLL renamed to <c>.previous</c> (Azimuth's own also copied to <c>.stock</c>),
     /// then <c>.new</c> renamed into place; a failed last step puts <c>.previous</c> back.

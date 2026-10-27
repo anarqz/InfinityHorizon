@@ -172,7 +172,8 @@ public static class ExtraOptionsMods
                 notes.Add("extraoptions mods: " + mod.Folder + " on again after Hardcore");
             }
         }
-        if (held.Count > 0) File.Delete(stateFile);
+        // Emptied rather than deleted: mod code removes files only through ManagedModFiles' remove path.
+        if (held.Count > 0) WriteHeld(stateFile, [], empty: true);
         return notes;
     }
 
@@ -410,9 +411,9 @@ public static class ExtraOptionsMods
         catch (JsonException) { return []; }
     }
 
-    private static void WriteHeld(string stateFile, List<string> held)
+    private static void WriteHeld(string stateFile, List<string> held, bool empty = false)
     {
-        if (held.Count == 0) return;
+        if (held.Count == 0 && !empty) return;
         Directory.CreateDirectory(Path.GetDirectoryName(stateFile)!);
         var temporary = stateFile + ".fi-new";
         File.WriteAllBytes(temporary, JsonSerializer.SerializeToUtf8Bytes(held));
