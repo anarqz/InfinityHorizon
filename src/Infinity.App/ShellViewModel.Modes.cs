@@ -17,8 +17,18 @@ public sealed partial class ShellViewModel
 {
     private bool _newHardcore;
 
-    /// <summary>The account is an Infinity Supporter (internal tier <c>vip</c>): Hardcore can be chosen.</summary>
-    public bool CanChooseHardcore => _session?.Me?.Access.Tier == "vip";
+    /// <summary>
+    /// Signed in to an account: Hardcore can be chosen on every tier (owner 2026-10-27 "Follow the server's flags"); whether it keeps
+    /// a cloud line is the server's (CR-S51 <see cref="CloudLines"/>), the admission decides.
+    /// </summary>
+    public bool CanChooseHardcore => _session?.Me is not null;
+
+    private bool IsSupporter => _session?.Me?.Access.Tier == "vip";
+
+    /// <summary>CR-S51: this server keeps a new Hardcore profile of this account in the cloud (absent policy = OD-52, a Supporter's).</summary>
+    public bool HardcoreKeepsCloud => IsSupporter ? _cloudLines?.HardcoreVip ?? true : _cloudLines?.HardcoreFree ?? false;
+
+    public string HardcoreHint => S[HardcoreKeepsCloud ? "modes.hardcore_hint" : "modes.hardcore_hint_local"];
 
     public bool NewHardcore
     {
@@ -292,9 +302,11 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(profile);
         if (profile.Mode != "hardcore")
         {
-            return "NOOB · " + (CanChooseHardcore ? S["modes.noob_supporter"] : S["profiles.local_saves"]);
+            return "NOOB · " + (profile.CloudLine == true ? S["modes.hardcore_cloud"] : IsSupporter ? S["modes.noob_supporter"] : S["profiles.local_saves"]);
         }
-        return "HARDCORE · " + (CanChooseHardcore ? S["modes.hardcore_cloud"] : S["modes.hardcore_lapsed"]);
+        // CR-S51: the server says whether this profile keeps a cloud line; an older server (absent) is OD-52, a Supporter's
+        return "HARDCORE · " + (profile.CloudLine is { } cloud ? S[cloud ? "modes.hardcore_cloud" : "modes.hardcore_local"]
+            : IsSupporter ? S["modes.hardcore_cloud"] : S["modes.hardcore_lapsed"]);
     }
 }
 

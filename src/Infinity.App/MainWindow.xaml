@@ -679,10 +679,10 @@
                   <!-- Owner 2026-10-26: the name is Azimuth's own player; a Noob profile adopts that career, a Hardcore one needs another name. -->
                   <TextBlock Text="{Binding AzimuthNameWarning}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
                              Visibility="{Binding ShowAzimuthNameWarning, Converter={StaticResource Visible}}" />
-                  <!-- OD-52, OD-60: Hardcore (an Infinity Supporter's, a new career the game seeds) or Noob (the offline save). -->
+                  <!-- OD-60: Hardcore (a new career the game seeds; cloud per the server's CR-S51 flags) or Noob (the offline save). -->
                   <StackPanel Margin="0,14,0,0" Visibility="{Binding CanChooseHardcore, Converter={StaticResource Visible}}">
                     <RadioButton Content="{Binding S[signin.form_hardcore]}" IsChecked="{Binding NewHardcore}" GroupName="NewMode" FontWeight="Bold" />
-                    <TextBlock Text="{Binding S[modes.hardcore_hint]}" FontSize="11" Margin="30,2,0,10" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    <TextBlock Text="{Binding HardcoreHint}" FontSize="11" Margin="30,2,0,10" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                     <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
                     <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
