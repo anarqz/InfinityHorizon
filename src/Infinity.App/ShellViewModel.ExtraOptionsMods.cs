@@ -45,8 +45,9 @@ public sealed partial class ShellViewModel
         if (parts.Count == 0) parts.Add(S["eomods.part_empty"]);
         var details = (mod.Version is { Length: > 0 } v ? "v" + v + " · " : "") + string.Join(" · ", parts)
             + (mod.Folder != mod.Name ? " · " + mod.Folder : "");
-        // ExtraOptions' own rules first (it will refuse these), then the last run's verdict.
-        var missing = mod.Dependencies.Where(d => !all.Any(o => o.Order < mod.Order && o.Enabled && o.ManifestError is null
+        // ExtraOptions' own rules first (it will refuse these), then the last run's verdict. The order is the launcher's to fix
+        // (every launch puts a mod after its dependencies), so only a missing or disabled dependency is the player's.
+        var missing = mod.Dependencies.Where(d => !all.Any(o => o.Enabled && o.ManifestError is null
             && (o.Id.Equals(d, StringComparison.OrdinalIgnoreCase) || o.Folder.Equals(d, StringComparison.OrdinalIgnoreCase)))).ToList();
         string text; var attention = false;
         if (!mod.Enabled) text = S["eomods.off"];
@@ -84,12 +85,24 @@ public sealed partial class ShellViewModel
         await RefreshExtraOptionsModsAsync();
     }
 
-    /// <summary>Before a launch: Hardcore online plays without the mods of <c>mods\</c>; any other launch gets back what it held.</summary>
+    /// <summary>
+    /// The <c>mods\</c> folders Hardcore keeps: installed, enabled catalog mods that change nothing for other players. A folder
+    /// copied by hand, or a catalog mod that affects multiplayer, plays only outside Hardcore.
+    /// </summary>
+    private HashSet<string> HardcoreSafeFolders() =>
+        _modFacts.Select(f => f.Installed is { Enabled: true, Problem: null } installed ? installed.Manifest ?? f.Manifest : null)
+            .Where(m => m is not null && !ModMultiplayer.AffectsMultiplayer(m))
+            .Select(m => ExtraOptionsMods.FolderOf(m!)).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Before a launch: <c>loadorder.txt</c> puts every mod after its dependencies; Hardcore online plays only with
+    /// <see cref="HardcoreSafeFolders"/>, and any other launch gets back what it held.
+    /// </summary>
     private void PrepareExtraOptionsMods(AzimuthInstall install, bool hardcore)
     {
         try
         {
-            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, HardcoreSafeFolders(),
                          Path.Combine(_stateDirectory, HardcoreHeldFile)))
                 Log(note);
         }
