@@ -123,6 +123,10 @@ public sealed partial class ShellViewModel
             Message = Playing ? S["supervisor.already"] : S["supervisor.not_ready"];
             return;
         }
+        // CR-S52: the first Play of a Hardcore profile whose cloud line is still empty asks how it starts (scratch or a checked career)
+        if (_session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game) is { } chosen
+            && await OfferSeedBeforePlayAsync(chosen)) return;
+        if (_session is null || !CanPlay) return;
         var startingSession = _session;
         // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
         // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
@@ -487,6 +491,7 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Error err when err.Message.StartsWith("save: ", StringComparison.Ordinal):
                 SetStatus(Infinity.Core.Overlay.OverlayNotices.SaveBlocked(S, err.Message[6..]).Text.Replace("\n", " · ", StringComparison.Ordinal));
+                ObserveSaveBlocked(err.Message[6..]); // CR-S52: a seed waiting on the day's checks may be given up for a new career
                 break;
             case SupervisorEvent.NoticeSent notice:
                 Message = notice.Text;

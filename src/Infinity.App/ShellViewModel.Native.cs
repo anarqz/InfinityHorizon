@@ -16,11 +16,14 @@ public sealed partial class ShellViewModel
     public bool CanCreateOnlineAccount => CanStartOnlineAccount && _registrationEnabled;
     public bool ShowRegistrationDisabled => !_registrationEnabled;
     private bool _localIdentity;
+    private CloudLines? _cloudLines;
 
     private void ObserveRegistration(ServerInfo info)
     {
         _registrationEnabled = info.RegistrationEnabled;
         _localIdentity = info.Idp?.IsLocal == true;
+        _cloudLines = info.Saves?.Cloud;
+        _hardcoreFromProfile = info.Saves?.HardcoreFromProfile == true; // CR-S52
         Changed(string.Empty);
     }
 
@@ -217,7 +220,7 @@ public sealed partial class ShellViewModel
             Message = e.Code switch
             {
                 ErrorCodes.AuthRateLimited or ErrorCodes.RequestRateLimited => S["native.too_many"],
-                ErrorCodes.AccountsBanned => S["native.banned"],
+                ErrorCodes.AccountsBanned => BannedText(e.Details), // CR-S52: {review: "seed_from_profile"}
                 ErrorCodes.SharingTooManyDevices or ErrorCodes.SharingTooManyRecentDevices => S["native.too_many_devices"],
                 _ => ErrorText(e.Code),
             };

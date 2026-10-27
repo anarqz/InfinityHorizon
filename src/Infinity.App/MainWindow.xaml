@@ -363,6 +363,30 @@
                          Visibility="{Binding ShowServerSecurity, Converter={StaticResource Visible}}" />
             </StackPanel>
           </StackPanel>
+          <!-- Owner 2026-10-27: Azimuth is found before sign-in. None found, its setup comes first (local only, OD-118). -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowAzimuthFirst, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="28,24" Width="560" Margin="0,20" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <TextBlock Text="{Binding S[setup.first_title]}" Style="{StaticResource PageTitle}" FontSize="24" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding S[setup.first_body]}" Margin="0,8,0,16" Style="{StaticResource PageSubtitle}" TextWrapping="Wrap" />
+              <DockPanel Margin="0,0,0,12">
+                <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}" />
+                <TextBlock Text="{Binding SetupFoundLine}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+              </DockPanel>
+              <TextBlock Text="{Binding SetupStep1}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,4" />
+              <TextBlock Text="{Binding S[setup.step2]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,4" />
+              <WrapPanel Margin="0,14,0,0">
+                <Button x:Name="AzimuthFirstChoose" Content="{Binding S[setup.choose]}" Click="OnChooseAzimuthFirst" Style="{StaticResource AccentButtonStyle}"
+                        Padding="16,6" Margin="0,0,10,8" IsEnabled="{Binding Idle}" AutomationProperties.Name="{Binding S[setup.choose]}" />
+                <Button Content="{Binding S[setup.recheck]}" Click="OnRecheckAzimuthFirst" Padding="16,6" Margin="0,0,10,8" IsEnabled="{Binding Idle}" />
+                <Button Content="{Binding S[setup.first_later]}" Click="OnAzimuthLater" Style="{StaticResource LinkButton}" Margin="0,0,0,8" VerticalAlignment="Center"
+                        AutomationProperties.Name="{Binding S[setup.first_later]}" />
+              </WrapPanel>
+              <Button Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,4,0,0" Click="OnOpenAzimuthPage" AutomationProperties.Name="{Binding S[setup.grab]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[setup.grab]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
+              <TextBlock Text="{Binding S[setup.first_note]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityFaint}" Margin="0,14,0,0" />
+            </StackPanel>
+          </Border>
+          </ScrollViewer>
           <!-- CR-L39: the server editor takes the welcome screen's place while it is open. -->
           <!-- OD122-L9: the beholder's servers and relays, the official server and a typed address; controller-first (D-pad, A, B). -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowServerEditor, Converter={StaticResource Visible}}">
@@ -443,6 +467,63 @@
                 <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnConflictNotNow" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
               </WrapPanel>
               <TextBlock Text="{Binding S[saves.conflict_backup]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityFaint}" />
+            </StackPanel>
+          </Border>
+          </Grid>
+          <!-- CR-S52: a Hardcore line still empty starts from scratch or from one of the account's profiles, checked on the spot. The first
+               Play's choice, then the server's dry run, shown before the player confirms (nothing is copied before an accepted check). -->
+          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSeedPanel, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="540" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <StackPanel Visibility="{Binding ShowSeedChoice, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding SeedChoiceTitle}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding S[seed.first_launch_body]}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
+                <Button Margin="0,0,0,12" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnSeedScratch" IsEnabled="{Binding Idle}">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[seed.scratch]}" FontWeight="Bold" />
+                    <TextBlock Text="{Binding S[seed.scratch_detail]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Button>
+                <TextBlock Text="{Binding S[seed.option]}" FontWeight="Bold" />
+                <!-- a list, not a ComboBox: its popup froze the launcher under Proton on the DECK (2026-10-27) -->
+                <ListBox Margin="0,6,0,0" ItemsSource="{Binding SeedChoiceSources}" SelectedItem="{Binding SeedChoiceSource}" MaxHeight="160"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}" />
+                <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                <!-- the panel covers the status line: progress and early failures are shown here too -->
+                <TextBlock Text="{Binding Message}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[seed.check]}" Click="OnSeedCheckChoice" IsEnabled="{Binding CanCheckSeedChoice}" Style="{StaticResource AccentButtonStyle}"
+                          Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+                </WrapPanel>
+              </StackPanel>
+              <StackPanel Visibility="{Binding ShowSeedCheck, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding SeedCheckTitle}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SeedCheckText}" Margin="0,8,0,6" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock Text="{Binding SeedCheckReasons}" Margin="8,0,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}"
+                           Visibility="{Binding SeedCheckRefused, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding SeedCheckSummary}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                           Visibility="{Binding SeedCheckAccepted, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding S[seed.commit_counts]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                           Visibility="{Binding SeedCommitMayBeLimited, Converter={StaticResource Visible}}" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[seed.confirm]}" Click="OnConfirmSeed" IsEnabled="{Binding Idle}" Margin="0,0,10,8" Padding="16,6"
+                          Style="{StaticResource AccentButtonStyle}" Visibility="{Binding SeedCheckAccepted, Converter={StaticResource Visible}}" />
+                  <Button Content="{Binding S[seed.start_fresh]}" Click="OnDismissSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8"
+                          Visibility="{Binding ShowSeedNotNow, Converter={StaticResource Visible}}" />
+                </WrapPanel>
+              </StackPanel>
+              <!-- A seed whose first upload waits on the day's checks (429): wait, or a new career instead (the seed set aside, kept). -->
+              <StackPanel Visibility="{Binding ShowSeedBlocked, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding S[seed.blocked_title]}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SeedBlockedText}" Margin="0,8,0,6" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[seed.abandon]}" Click="OnAbandonSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+                </WrapPanel>
+              </StackPanel>
             </StackPanel>
           </Border>
           </Grid>
@@ -679,10 +760,24 @@
                   <!-- Owner 2026-10-26: the name is Azimuth's own player; a Noob profile adopts that career, a Hardcore one needs another name. -->
                   <TextBlock Text="{Binding AzimuthNameWarning}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
                              Visibility="{Binding ShowAzimuthNameWarning, Converter={StaticResource Visible}}" />
-                  <!-- OD-52, OD-60: Hardcore (an Infinity Supporter's, a new career the game seeds) or Noob (the offline save). -->
+                  <!-- OD-60: Hardcore (a new career the game seeds; cloud per the server's CR-S51 flags) or Noob (the offline save). -->
                   <StackPanel Margin="0,14,0,0" Visibility="{Binding CanChooseHardcore, Converter={StaticResource Visible}}">
                     <RadioButton Content="{Binding S[signin.form_hardcore]}" IsChecked="{Binding NewHardcore}" GroupName="NewMode" FontWeight="Bold" />
-                    <TextBlock Text="{Binding S[modes.hardcore_hint]}" FontSize="11" Margin="30,2,0,10" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    <TextBlock Text="{Binding HardcoreHint}" FontSize="11" Margin="30,2,0,10" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    <!-- CR-S52: on a server that allows it, the Hardcore profile may start from one of the account's Noob careers, checked on the spot.
+                         The owner's warning shows with the option, before anything is chosen. -->
+                    <Border Margin="30,0,0,12" Padding="12,10" CornerRadius="8" Background="{StaticResource InfinityWarnSurface}"
+                            Visibility="{Binding ShowSeedOption, Converter={StaticResource Visible}}">
+                      <StackPanel>
+                        <CheckBox Content="{Binding S[seed.option]}" IsChecked="{Binding NewSeedFromProfile}" FontWeight="Bold" />
+                        <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                        <ListBox Margin="0,8,0,0" ItemsSource="{Binding SeedSources}" SelectedItem="{Binding NewSeedSource}" MaxHeight="160"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}"
+                                 Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
+                        <TextBlock Text="{Binding S[seed.option_hint]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
+                                   Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
+                      </StackPanel>
+                    </Border>
                     <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
                     <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>

@@ -27,8 +27,12 @@ public sealed record ServerInfo(
     TrustKeys? Trust = null,
     SavesPolicy? Saves = null);
 
-/// <summary><c>GET /info</c> <c>saves</c> (CR-S51): which profiles keep a cloud line on this server; absent = OD-52. Explanatory only.</summary>
-public sealed record SavesPolicy(CloudLines Cloud);
+/// <summary>
+/// <c>GET /info</c> <c>saves</c> (CR-S51): which profiles keep a cloud line on this server; absent = OD-52. Explanatory only.
+/// <see cref="HardcoreFromProfile"/> (CR-S52, <c>FI_HARDCORE_FROM_PROFILE</c>): a new Hardcore line may start from another of the
+/// account's profiles, checked on the spot; absent (a server before CR-S52) = false.
+/// </summary>
+public sealed record SavesPolicy(CloudLines Cloud, bool HardcoreFromProfile = false);
 
 /// <summary>The server's <c>FI_CLOUD_SAVES</c> over Noob/Hardcore × free/Supporter.</summary>
 public sealed record CloudLines(bool NoobFree, bool HardcoreFree, bool NoobVip, bool HardcoreVip);
@@ -338,6 +342,13 @@ public sealed record RevisionPage(IReadOnlyList<SaveRevision> Items, ulong? Next
 
 /// <summary><c>PUT .../save</c> → 201 (or 200 with <c>X-Fi-Replayed: true</c>): the new head.</summary>
 public sealed record CommitResponse(ulong Revision, string ContentSha256, string BlobSha256, string CommittedAt, SaveSummary Summary);
+
+/// <summary>
+/// <c>POST .../save/check</c> → 200 (CR-S52, SAVES_API.md §4.10): the dry run of a source profile's save as a Hardcore line's
+/// start. Nothing is committed; the server records the check by digest. <see cref="Reasons"/> are stable codes, empty when accepted;
+/// <see cref="Hours"/> the source's engaged play time recorded by this server.
+/// </summary>
+public sealed record SeedCheck(bool Accepted, IReadOnlyList<string> Reasons, byte Score, double Hours, string BlobSha256, SaveSummary Summary);
 
 /// <summary><c>{"code", "message", "details"}</c>: clients branch on <c>code</c>.</summary>
 public sealed record ErrorBody(string Code, string Message, System.Text.Json.JsonElement? Details);

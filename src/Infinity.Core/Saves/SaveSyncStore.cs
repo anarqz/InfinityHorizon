@@ -6,7 +6,8 @@ namespace Infinity.Core.Saves;
 
 /// <summary>
 /// A commit not confirmed yet: every retry resends exactly <see cref="BundleFile"/>'s bytes under
-/// <see cref="CommitId"/> (the <c>Idempotency-Key</c>), even after Azimuth pruned the folder.
+/// <see cref="CommitId"/> (the <c>Idempotency-Key</c>), even after Azimuth pruned the folder. <see cref="SeedSource"/>: the source
+/// profile's decimal XUID of a <c>seed_from_profile</c> commit (CR-S52, <c>X-Fi-Seed-Source</c>); null for every other kind.
 /// </summary>
 public sealed record PendingUpload(
     string CommitId,
@@ -15,7 +16,8 @@ public sealed record PendingUpload(
     ulong LocalRevision,
     string Content,
     string BundleFile,
-    string BundleSha256);
+    string BundleSha256,
+    string? SeedSource = null);
 
 /// <summary>One profile's sync state, keyed by the server realm (<c>/info</c> <c>realm</c>) and the XUID.</summary>
 public sealed record ProfileSyncState(string Realm, ulong Xuid, SyncMark? Mark, PendingUpload? PendingUpload);
@@ -97,7 +99,8 @@ public sealed class SaveSyncStore
     /// before the first send. Refused while another pending upload of the profile exists: it is sent
     /// (or set aside) first, so one key never names two different bundles.
     /// </summary>
-    public PendingUpload BeginUpload(string realm, ulong xuid, string commitId, ulong expected, string kind, ulong localRevision, string content, byte[] bundle)
+    public PendingUpload BeginUpload(string realm, ulong xuid, string commitId, ulong expected, string kind, ulong localRevision, string content, byte[] bundle,
+        string? seedSource = null)
     {
         ArgumentNullException.ThrowIfNull(commitId);
         ArgumentNullException.ThrowIfNull(bundle);
@@ -106,7 +109,7 @@ public sealed class SaveSyncStore
             throw new ArgumentException("a commit id is a lower-case UUID", nameof(commitId));
         }
         var relative = $"{PendingDir}/{commitId}.fh2save";
-        var pending = new PendingUpload(commitId, expected, kind, localRevision, content, relative, Convert.ToHexStringLower(SHA256.HashData(bundle)));
+        var pending = new PendingUpload(commitId, expected, kind, localRevision, content, relative, Convert.ToHexStringLower(SHA256.HashData(bundle)), seedSource);
         lock (_lock)
         {
             if (Get(realm, xuid)?.PendingUpload is { } existing)

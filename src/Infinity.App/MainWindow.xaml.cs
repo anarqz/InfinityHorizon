@@ -45,6 +45,14 @@ public partial class MainWindow : Window
                 System.Windows.Threading.DispatcherPriority.Loaded);
         };
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
+        // Owner 2026-10-27: the Azimuth setup before sign-in takes the focus when it opens (controller-first: A chooses the folder).
+        var azimuthFirstShown = false;
+        vm.PropertyChanged += (_, _) =>
+        {
+            if (vm.ShowAzimuthFirst == azimuthFirstShown) return;
+            azimuthFirstShown = vm.ShowAzimuthFirst;
+            if (azimuthFirstShown) _ = Dispatcher.InvokeAsync(() => AzimuthFirstChoose.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+        };
         vm.UpdateRestartRequested += () => { App.ExitReason = "update restart"; Application.Current.Shutdown(); };
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
@@ -172,6 +180,18 @@ public partial class MainWindow : Window
     private async void OnConfirmConvert(object sender, RoutedEventArgs e) => await _vm.ConfirmConvertAsync();
 
     private void OnCancelConvert(object sender, RoutedEventArgs e) => _vm.CancelConvert();
+
+    private async void OnConfirmSeed(object sender, RoutedEventArgs e) => await _vm.ConfirmSeedAsync();
+
+    private async void OnDismissSeed(object sender, RoutedEventArgs e) => await _vm.DismissSeedAsync();
+
+    private async void OnSeedScratch(object sender, RoutedEventArgs e) => await _vm.StartFromScratchAsync();
+
+    private async void OnSeedCheckChoice(object sender, RoutedEventArgs e) => await _vm.CheckSeedChoiceAsync();
+
+    private void OnSeedCloseChoice(object sender, RoutedEventArgs e) => _vm.CloseSeedChoice();
+
+    private async void OnAbandonSeed(object sender, RoutedEventArgs e) => await _vm.AbandonSeedAsync();
 
     private void OnChooseProfile(object sender, RoutedEventArgs e) => _vm.ChooseProfile(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
 
@@ -483,6 +503,17 @@ public partial class MainWindow : Window
             _vm.ChooseAzimuthFolder(dialog.FolderName);
         }
     }
+
+    // Owner 2026-10-27: the Azimuth setup shown before sign-in.
+    private void OnChooseAzimuthFirst(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = _vm.S["setup.choose_title"] };
+        if (dialog.ShowDialog(this) == true) _vm.ChooseAzimuthFirst(dialog.FolderName);
+    }
+
+    private async void OnRecheckAzimuthFirst(object sender, RoutedEventArgs e) => await _vm.RecheckAzimuthFirstAsync();
+
+    private void OnAzimuthLater(object sender, RoutedEventArgs e) => _vm.SetUpAzimuthLater();
 
     // Azimuth's official page only (Almost There Games on itch.io).
     private void OnOpenAzimuthPage(object sender, RoutedEventArgs e)

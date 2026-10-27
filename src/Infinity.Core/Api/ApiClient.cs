@@ -77,6 +77,8 @@ public static class ErrorCodes
     public const string SavesInvalidArgument = "SAVES.INVALID_ARGUMENT";
     public const string SavesRateLimited = "SAVES.RATE_LIMITED";
     public const string SavesUnavailable = "SAVES.UNAVAILABLE";
+    /// <summary>403 <c>{tier, mode}</c>: the profile keeps no cloud line on this server (SAVES_API.md §4.7).</summary>
+    public const string SavesNotEligible = "SAVES.NOT_ELIGIBLE";
 
 }
 
