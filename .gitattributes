@@ -18,3 +18,6 @@ native/overlay/third_party/** -whitespace
 src/Infinity.App/Assets/Fonts/*-LICENSE.txt -whitespace
 
 native/mod/third_party/** -whitespace
+
+# ExtraOptions.Infinity's patches carry ExtraOptions' CRLF source lines byte for byte.
+native/extraoptions-infinity/patches/*.patch -text
