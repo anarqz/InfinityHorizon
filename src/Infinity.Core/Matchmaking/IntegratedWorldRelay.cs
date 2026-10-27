@@ -55,8 +55,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
             await _transport.SetAdmissionPolicyAsync(_admission.Allowed,_admission.AllowedHook,
                 (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),cancellation).ConfigureAwait(false);
             _transport.PunchNetworkHints(_admission);
+            _transport.SetRelayLegs(_admission.RelayLegs());
         }
-        catch { _admission.Clear(); throw; }
+        catch { _admission.Clear(); _transport.SetRelayLegs([]); throw; }
     }
 
     public Task<IReadOnlyList<string>> PeersAsync(CancellationToken cancellation) => _transport.PeersAsync(cancellation);
@@ -74,7 +75,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         }
         cancellation.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(!Running, this);
-        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission);Diagnostics(); return; }
+        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission);_transport.SetRelayLegs(_admission.RelayLegs());Diagnostics(); return; }
         if (answer.Error?.Kind is MmErrorKind.Unauthorized or MmErrorKind.WorldNotFound or MmErrorKind.NotHost or MmErrorKind.WrongPool)
         {
             _admission.Clear();

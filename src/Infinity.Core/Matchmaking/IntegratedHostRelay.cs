@@ -15,6 +15,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly Socket _socket;
     private readonly RelayEngine _engine;
     private readonly RelayNetworkNat _nat;
+    private readonly RelayLegs _legs; // CR-S57: the joiners met at a relay (actor thread only)
     private readonly CancellationTokenSource _stop = new();
     private readonly Channel<Command> _commands = Channel.CreateBounded<Command>(new BoundedChannelOptions(256)
     { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
@@ -37,6 +38,7 @@ public sealed class IntegratedHostRelay : IHostRelay
         Port = checked((ushort)((IPEndPoint)socket.LocalEndPoint!).Port);
         var dual = socket.AddressFamily == AddressFamily.InterNetworkV6;
         _nat = new(dual, (long)options.StunInterval.TotalMilliseconds, Send);
+        _legs = new(SendRaw);
         if (options.EnableDiscovery && options.EnableUpnp) _nat.SetUpnp(RelayUpnpState.Pending);
         _network = _nat.Snapshot();
         // World admission must be installed before any game datagram can establish a seat.
@@ -139,7 +141,23 @@ public sealed class IntegratedHostRelay : IHostRelay
         Enqueue(() => _nat.SetServers(servers));
     }
 
+    /// <summary>CR-S57: the grants whose joiner meets this host at a relay (from the verified punches); the actor applies them.</summary>
+    internal void SetRelayLegs(IReadOnlyList<RelayLegSpec> legs)
+    {
+        ArgumentNullException.ThrowIfNull(legs);
+        var copy = legs.ToArray();
+        Enqueue(() => _legs.Update(copy, _clock.ElapsedMilliseconds));
+    }
+
+    /// <summary>The engine's and the proof's datagrams: to a relayed joiner as <c>data</c> to its relay; never to a virtual address.</summary>
     private void Send(RelayDatagram datagram)
+    {
+        if (_legs.TryWrap(datagram.Destination, datagram.Data, out var wrapped)) { SendRaw(wrapped); return; }
+        if (RelayLegs.IsVirtual(datagram.Destination)) return; // a relayed joiner whose leg is not confirmed (or gone)
+        SendRaw(datagram);
+    }
+
+    private void SendRaw(RelayDatagram datagram)
     {
         try { _socket.SendTo(datagram.Data, SocketFlags.None, StunCodec.ForSocket(datagram.Destination, _socket.AddressFamily == AddressFamily.InterNetworkV6)); }
         catch (SocketException) { if (_sendErrors != uint.MaxValue) _sendErrors++; /* UDP loss is handled by reliability or the next bounded discovery round. */ }
@@ -174,20 +192,27 @@ public sealed class IntegratedHostRelay : IHostRelay
                     catch (SocketException exception) when (exception.SocketErrorCode is SocketError.WouldBlock or SocketError.ConnectionReset or SocketError.MessageSize) { break; }
                     var now = _clock.ElapsedMilliseconds;
                     var peer = StunCodec.Canonical((IPEndPoint)from);
-                    if(count>=4 && buffer.AsSpan(0,4).SequenceEqual("FIUP"u8))
+                    var datagram = buffer.AsMemory(0, count);
+                    // CR-S57: a relay's FIR1 datagram for one of this host's legs; its `data` is the joiner's datagram from a virtual peer
+                    switch (_legs.Receive(datagram.Span, peer, now, out var relayed, out var payload))
                     {
-                        if(_proofReceiver?.Invoke(buffer.AsMemory(0,count),peer) is { } proofReply)Send(new(peer,proofReply));
+                        case RelayLegs.Received.Handled: activity = true; continue;
+                        case RelayLegs.Received.Data: peer = relayed!; datagram = payload; break;
+                    }
+                    if(datagram.Length>=4 && datagram.Span[..4].SequenceEqual("FIUP"u8))
+                    {
+                        if(_proofReceiver?.Invoke(datagram,peer) is { } proofReply)Send(new(peer,proofReply));
                         activity=true;continue;
                     }
-                    _nat.Receive(buffer.AsSpan(0, count), peer, now);
+                    if (!RelayLegs.IsVirtual(peer)) _nat.Receive(datagram.Span, peer, now);
                     // The engine ignores Binding messages and owns the STUN-framed hook side channels.
-                    _engine.Receive(buffer.AsSpan(0, count), peer, now);
+                    _engine.Receive(datagram.Span, peer, now);
                     activity = true;
                 }
                 var at = _clock.ElapsedMilliseconds;
                 if (at >= nextTick)
                 {
-                    _engine.Tick(at); _nat.Tick(at); nextTick = at + 20;
+                    _engine.Tick(at); _nat.Tick(at); _legs.Tick(at); nextTick = at + 20;
                     Volatile.Write(ref _network, _nat.Snapshot() with { SendErrors = _sendErrors });
                     Volatile.Write(ref _peers, Array.AsReadOnly(_engine.PeerXuids.Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
                 }

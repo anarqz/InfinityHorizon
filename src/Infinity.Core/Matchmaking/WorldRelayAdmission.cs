@@ -27,6 +27,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
     private readonly object _gate = new();
     private readonly Dictionary<string, long> _revoked = new(StringComparer.Ordinal);
     private Snapshot? _snapshot;
+    private IReadOnlyList<RelayLegSpec> _legs = [];
     private string? _worldId;
     private WorldAnnounced? _world;
     private UdpProofHost? _proof;
@@ -75,6 +76,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
             var entries = new Dictionary<(ulong, IPEndPoint), Entry>();
             var lanEntries = new Dictionary<ulong, Entry>();
             var proofGrants = new Dictionary<Guid,ProofGrant>();
+            var legs = new List<RelayLegSpec>();
             var duplicateGrants = world.Punches.GroupBy(p => p.GrantId, StringComparer.Ordinal).Where(p => p.Count() > 1).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
             foreach (var punch in world.Punches)
             {
@@ -98,15 +100,23 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
                 if(proofKey is not null)
                     proofGrants[Guid.Parse(grant.Grant)] = new(xuid,entry,new(UdpProofCodec.Header(Guid.Parse(grant.Grant),id,ownXuid,xuid),proofKey,grant.Exp));
                 if (observed) entries[(xuid, StunCodec.Canonical(new(address!, punch.Endpoint!.Port)))] = entry;
+                // CR-S57: the verified grant names the relay both sides meet at; only that signed relay is ever contacted
+                if (grant.Relay is { } relay && IPAddress.TryParse(relay.Addr, out var relayAddress) && relayAddress.AddressFamily == AddressFamily.InterNetwork)
+                    legs.Add(new(Guid.Parse(grant.Grant), Convert.FromBase64String(punch.Relay.Claims), Convert.FromBase64String(punch.Relay.Signature),
+                        StunCodec.Canonical(new IPEndPoint(relayAddress, relay.Port)), punch.Transport == Transports.Relay || world.Transport == Transports.Relay));
                 if (devLanPeers) lanEntries[xuid] = entry;
             }
             _world = world;
+            _legs = legs.AsReadOnly();
             Volatile.Write(ref _snapshot, new(renewHostLease ? started : previousSnapshot?.StartedAt ?? started,
                 renewHostLease ? now + HostLease : previousSnapshot?.HostUntil ?? now, entries, lanEntries,proofGrants));
             _proof?.Reconcile();
             if(previousSnapshot is not null) foreach(var old in previousSnapshot.ProofGrants.Values) CryptographicOperations.ZeroMemory(old.Authority.Key);
         }
     }
+
+    /// <summary>CR-S57: the grants whose punch names a relay (IPv4 literals; a DNS name waits for a later build), from the last snapshot.</summary>
+    internal IReadOnlyList<RelayLegSpec> RelayLegs() { lock (_gate) return _legs; }
 
     internal bool Allowed(ulong xuid, IPEndPoint endpoint, long unused)
         => AllowedKind(xuid,endpoint,0);
@@ -195,7 +205,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
         }
     }
 
-    internal void Clear() { lock (_gate) { _world = null; if(_snapshot is { } s) foreach(var p in s.ProofGrants.Values)CryptographicOperations.ZeroMemory(p.Authority.Key); Volatile.Write(ref _snapshot, null); _proof?.Clear(); } }
+    internal void Clear() { lock (_gate) { _world = null; _legs = []; if(_snapshot is { } s) foreach(var p in s.ProofGrants.Values)CryptographicOperations.ZeroMemory(p.Authority.Key); Volatile.Write(ref _snapshot, null); _proof?.Clear(); } }
 
     private DateTimeOffset EffectiveNow()
     {
