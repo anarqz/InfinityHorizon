@@ -99,6 +99,41 @@ public record WorldView : World
 
     /// <summary>OD-112: the players embedded on the list's rows, one world and by-code (≤ 12, host first unless dedicated); absent elsewhere.</summary>
     public IReadOnlyList<ListMember>? Members { get; init; }
+
+    /// <summary>CR-S57 (§5b): <c>relay</c> = the lobby was born on a relay; absent on older servers (reads as direct).</summary>
+    public string Transport { get; init; } = Transports.Direct;
+
+    /// <summary>The world's relay, only when <see cref="Transport"/> is <c>relay</c> (shown "via &lt;name&gt;").</summary>
+    public WorldRelay? Relay { get; init; }
+}
+
+/// <summary>CR-S57: how a pair's datagrams travel.</summary>
+public static class Transports
+{
+    public const string Direct = "direct", Relay = "relay";
+}
+
+/// <summary>CR-S57: a launcher's NAT test.</summary>
+public static class NatTypes
+{
+    public const string Open = "open", Restricted = "restricted", Symmetric = "symmetric";
+}
+
+/// <summary>A world's relay (CR-S57): its announce key and name (untrusted display text).</summary>
+public sealed record WorldRelay
+{
+    public required string PublicKey { get; init; }
+
+    public required string Name { get; init; }
+}
+
+/// <summary>CR-S57 signed <c>relay</c> claim: the relay both sides meet at (its key, host, binding and rendezvous ports).</summary>
+public sealed record RelayGrantRelay
+{
+    [JsonPropertyName("key")] public required string Key { get; init; }
+    [JsonPropertyName("addr")] public required string Addr { get; init; }
+    [JsonPropertyName("binding")] public required ushort Binding { get; init; }
+    [JsonPropertyName("port")] public required ushort Port { get; init; }
 }
 
 /// <summary>
@@ -207,6 +242,14 @@ public sealed record WorldSettings
     /// <summary>OD-112: the host's mod set (null: vanilla, left out); fixed once the world opens (another set is 409 <c>PORTAL.CONFLICT {reason: "mods"}</c>).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ModEntry>? Mods { get; init; }
+
+    /// <summary>CR-S57: the host's NAT test, read when the world opens (<see cref="NatTypes"/>).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Nat { get; init; }
+
+    /// <summary>CR-S57: measured relay round trips (announce key → ms, ≤ 16, 0-5000).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, int>? Relays { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/worlds/{worldId}/announce</c> body, every 15 s: <c>peers</c> are who is in the world now (≤ 11).</summary>
@@ -268,6 +311,9 @@ public sealed record Punch
     public required RelayGrant Relay { get; init; }
 
     public required bool Kicked { get; init; }
+
+    /// <summary>CR-S57: <c>relay</c> = hold a relay leg for this grant; absent on older servers (direct).</summary>
+    public string Transport { get; init; } = Transports.Direct;
 }
 
 /// <summary>Existing GET /mm/v1/punches response (fi_protocol::matchmaking::Punches).</summary>
@@ -312,6 +358,14 @@ public sealed record JoinRequest
     /// <summary>OD-112: the caller's mod set (null: vanilla, left out; every launcher up to 1.0.8 sends none).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ModEntry>? Mods { get; init; }
+
+    /// <summary>CR-S57: the joiner's NAT test.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Nat { get; init; }
+
+    /// <summary>CR-S57: the joiner's measured relay round trips.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, int>? Relays { get; init; }
 }
 
 /// <summary>A reserved seat (<c>expiresAt</c> ≤ 60 s away, renewable up to <c>holdUntil</c>).</summary>
@@ -326,6 +380,9 @@ public sealed record Grant
     public required string HoldUntil { get; init; }
 
     public required RelayGrant Relay { get; init; }
+
+    /// <summary>CR-S57: the joiner's expected transport now; absent on older servers (direct).</summary>
+    public string Transport { get; init; } = Transports.Direct;
 }
 
 /// <summary>Seats of a full world.</summary>
@@ -402,6 +459,9 @@ public sealed record Seat
 
     /// <summary>Reserved and seated: role <c>joiner</c>, fresh (≤ 60 s).</summary>
     public RelayGrant? Relay { get; init; }
+
+    /// <summary>CR-S57, reserved and seated: the joiner's expected transport now.</summary>
+    public string? Transport { get; init; }
 }
 
 /// <summary>How the caller's last seat ended (<c>reason</c>: one of <see cref="SeatEnds"/>).</summary>
@@ -449,6 +509,10 @@ public sealed record SeatAnswer
 public sealed record SeatRenew
 {
     public required string GrantId { get; init; }
+
+    /// <summary>CR-S57: <c>relay</c> once the joiner's punch failed and it moved to the grant's relay.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Transport { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/worlds/{worldId}/invites</c> body: any XUID of the friend account (a handle works).</summary>

@@ -20,6 +20,8 @@ public sealed record RelayGrantClaims
     [JsonPropertyName("role")] public required string Role { get; init; }
     [JsonPropertyName("iat")] public required long Iat { get; init; }
     [JsonPropertyName("exp")] public required long Exp { get; init; }
+    /// <summary>CR-S57: the signed relay both sides meet at (the last claim, absent when none). The only relay ever contacted.</summary>
+    [JsonPropertyName("relay"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public RelayGrantRelay? Relay { get; init; }
 }
 
 /// <summary>Exact fi_protocol::matchmaking::RelayGrantHost mirror.</summary>
@@ -163,7 +165,8 @@ public static class RelayGrantVerifier
             || verified.Exp <= verified.Iat || (Int128)verified.Exp - verified.Iat > MaxLifetimeSeconds
             || (Int128)verified.Iat - nowUnix > FutureSkewSeconds
             || !Uuid(verified.Grant) || !Uuid(verified.World) || !Uuid(verified.Sub)
-            || !Xuid(verified.Xuid) || !Xuid(verified.Host.Xuid)) throw Invalid();
+            || !Xuid(verified.Xuid) || !Xuid(verified.Host.Xuid)
+            || verified.Relay is { } relay && !ValidRelay(relay)) throw Invalid();
         if (verified.Exp <= nowUnix) throw new RelayGrantException(RelayGrantFailure.Expired);
         if (!string.Equals(verified.World, context.WorldId, StringComparison.Ordinal)
             || !string.Equals(verified.Host.Xuid, context.HostXuid, StringComparison.Ordinal)
@@ -185,6 +188,21 @@ public static class RelayGrantVerifier
             return bytes;
         }
         catch (FormatException) { throw Invalid(); }
+    }
+
+    /// <summary>CR-S57 <c>relay</c>: a 32-byte key in canonical base64, an IPv4 literal or a DNS name, two non-zero ports.</summary>
+    internal static bool ValidRelay(RelayGrantRelay relay)
+    {
+        byte[] key;
+        try { key = Convert.FromBase64String(relay.Key); }
+        catch (FormatException) { return false; }
+        if (key.Length != 32 || Convert.ToBase64String(key) != relay.Key || relay.Binding == 0 || relay.Port == 0) return false;
+        var addr = relay.Addr;
+        if (addr is not { Length: >= 1 and <= 253 } || addr.StartsWith('.') || addr.EndsWith('.') || addr.Contains("..", StringComparison.Ordinal)) return false;
+        if (System.Net.IPAddress.TryParse(addr, out var ip))
+            return ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && addr.Count(c => c == '.') == 3;
+        return addr.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '-')
+            && addr.Split('.').All(label => label.Length is >= 1 and <= 63 && label[0] != '-' && label[^1] != '-');
     }
 
     private static bool Uuid(string value) => Guid.TryParseExact(value, "D", out var id) && id != Guid.Empty
