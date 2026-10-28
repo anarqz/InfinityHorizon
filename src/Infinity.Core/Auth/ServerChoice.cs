@@ -44,10 +44,15 @@ public static class ServerChoice
     /// The configuration a launch uses: a saved custom server wins over the default (in a release build it always wins, since its
     /// command line can only name the official server); a development build's explicit non-official <c>--server</c> still wins.
     /// </summary>
+    /// <remarks>
+    /// Owner 2026-10-28 ("Only the play.infinity-horizon.com stays"): a release build has no official-server choice; with nothing
+    /// saved (or the official server saved earlier) it plays <see cref="CustomServer.OwnerPublicOrigin"/>.
+    /// </remarks>
     public static ServerConfig Apply(ServerConfig fromCommandLine, string root, bool explicitServer)
     {
         ArgumentNullException.ThrowIfNull(fromCommandLine);
-        if (Read(root) is not { } custom || (!BuildProfile.ProductionOnly && explicitServer && !fromCommandLine.Production))
+        var saved = Read(root) ?? (BuildProfile.ProductionOnly ? new Uri(CustomServer.OwnerPublicOrigin) : null);
+        if (saved is not { } custom || (!BuildProfile.ProductionOnly && explicitServer && !fromCommandLine.Production))
             return fromCommandLine;
         var config = ServerConfig.ForCustom(custom);
         // the pins live in that server's own state folder: two launchers on two servers never share the file
