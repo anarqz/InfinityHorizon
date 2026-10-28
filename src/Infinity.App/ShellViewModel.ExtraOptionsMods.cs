@@ -10,6 +10,9 @@ namespace Infinity.App;
 public sealed record ExtraOptionsModItem(string Folder, string Name, string Details, string Status, bool Attention, bool Enabled, bool CanToggle)
 {
     public string Toggle { get; init; } = "";
+    /// <summary>Owner 2026-10-28: a manual mod, once off, can be deleted from the mods folder (asked twice).</summary>
+    public bool CanDelete { get; init; }
+    public string DeleteLabel { get; init; } = "";
 }
 
 public sealed partial class ShellViewModel
@@ -70,7 +73,37 @@ public sealed partial class ShellViewModel
         }
         else text = S["eomods.not_seen"];
         return new(mod.Folder, mod.Name, details, text, attention, mod.Enabled, ModsIdle)
-        { Toggle = S[mod.Enabled ? "mods.disable_action" : "mods.enable_action"] };
+        {
+            Toggle = S[mod.Enabled ? "mods.disable_action" : "mods.enable_action"],
+            CanDelete = !mod.Enabled && ModsIdle,
+            DeleteLabel = S[string.Equals(_deletingManualMod, mod.Folder, StringComparison.OrdinalIgnoreCase) ? "eomods.delete_confirm" : "eomods.delete"],
+        };
+    }
+
+    /// <summary>The manual mod whose Delete was pressed once; the second press deletes it.</summary>
+    private string? _deletingManualMod;
+
+    /// <summary>Owner 2026-10-28: deletes an off manual mod's folder from <c>mods\</c> (and its load-order line), game closed, after a second press.</summary>
+    public async Task DeleteExtraOptionsModAsync(ExtraOptionsModItem item)
+    {
+        if (_install is not { } install || !ModsIdle || item.Enabled) return;
+        if (!string.Equals(_deletingManualMod, item.Folder, StringComparison.OrdinalIgnoreCase))
+        {
+            _deletingManualMod = item.Folder;
+            await RefreshExtraOptionsModsAsync();
+            return;
+        }
+        _deletingManualMod = null;
+        if (GameRunning()) { Message = S["mods.close_game"]; await RefreshExtraOptionsModsAsync(); return; }
+        try
+        {
+            await Task.Run(() => ExtraOptionsMods.DeleteFolder(install.Root, item.Folder));
+            Log("extraoptions mods: " + item.Folder + " deleted");
+            Message = S["eomods.deleted"];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        { Log("extraoptions mods: " + item.Folder + " not deleted (" + e.GetType().Name + ")"); Message = S["eomods.not_deleted"]; }
+        await RefreshExtraOptionsModsAsync();
     }
 
     /// <summary>Switches one mod in <c>loadorder.txt</c>; only with the game closed (ExtraOptions rewrites the file at start).</summary>

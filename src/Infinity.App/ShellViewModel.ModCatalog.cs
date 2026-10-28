@@ -458,6 +458,8 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
         { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray(), custom.Problems); }
         bool Confirmed(ModManifest m) { try { return m.IsCustom && manager.CustomConfirmed(m); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return false; } }
+        // OD-125/127: a receipt from when the catalog installed ExtraOptions as a mod no longer stands for anything (it is built in)
+        try { manager.RetireBuiltInReceipt(); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
         var health = manager.Inspect();
         var facts = new List<ModCardFacts>();
         foreach (var listed in catalog)

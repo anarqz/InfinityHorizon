@@ -1391,8 +1391,13 @@
                               <TextBlock Text="{Binding DataContext.S[eomods.manual_online], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                          FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,0" />
                             </StackPanel>
-                            <Button Grid.Column="1" Content="{Binding Toggle}" Click="OnToggleExtraOptionsMod" IsEnabled="{Binding CanToggle}"
-                                    Padding="12,7" Margin="12,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="{Binding Toggle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                              <Button Content="{Binding Toggle}" Click="OnToggleExtraOptionsMod" IsEnabled="{Binding CanToggle}"
+                                      Padding="12,7" Margin="12,0,0,0" AutomationProperties.Name="{Binding Toggle}" />
+                              <!-- Owner 2026-10-28: an off manual mod can be deleted from the mods folder (asked twice). -->
+                              <Button Content="{Binding DeleteLabel}" Click="OnDeleteExtraOptionsMod" IsEnabled="{Binding CanDelete}"
+                                      Padding="12,7" Margin="8,0,0,0" AutomationProperties.Name="{Binding DeleteLabel}" />
+                            </StackPanel>
                           </Grid>
                         </Border>
                       </DataTemplate>
