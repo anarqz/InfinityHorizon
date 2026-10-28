@@ -382,17 +382,6 @@ public partial class MainWindow : Window
     private async void OnRepairModSettings(object sender, RoutedEventArgs e) => await _vm.RepairModSettingsAsync();
     private async void OnUninstallMod(object sender, RoutedEventArgs e) => await _vm.UninstallModAsync();
     private async void OnPurgeMod(object sender, RoutedEventArgs e) => await _vm.PurgeModAsync();
-    private void OnOpenCustomModsFolder(object sender, RoutedEventArgs e) => _vm.OpenCustomModsFolder();
-    private async void OnAddModFromUrl(object sender, RoutedEventArgs e) => await _vm.AddModFromUrlAsync();
-
-    private void OnToggleModUrl(object sender, RoutedEventArgs e)
-    {
-        _vm.ToggleModUrl();
-        // The field opens focused, so the Steam keyboard (Game Mode / Big Picture only) opens with it.
-        if (_vm.ShowModUrl) _ = Dispatcher.InvokeAsync(() => { ModUrlBox.Focus(); _gamepad.OpenSteamKeyboard(); }, System.Windows.Threading.DispatcherPriority.Input);
-    }
-
-    private void OnOpenModSchemaPage(object sender, RoutedEventArgs e) => OpenCommunityLink(ShellViewModel.ModSchemaPage);
     private async void OnUseCustomCatalog(object sender, RoutedEventArgs e) => await _vm.UseCustomCatalogAsync();
 
     // OD-117: the set-up pane of a mod made of the player's own files, and its in-launcher browser.
@@ -444,13 +433,6 @@ public partial class MainWindow : Window
         if (_vm.ShowBrowser) _vm.StopBrowsing(); else _vm.CloseExternalSetup();
     }
     private async void OnUseOfficialCatalog(object sender, RoutedEventArgs e) => await _vm.UseOfficialCatalogAsync();
-
-    // Enter adds, Escape (the controller's B) closes the address field.
-    private async void OnModUrlKey(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key == System.Windows.Input.Key.Escape) { _vm.ToggleModUrl(); e.Handled = true; }
-        else if (e.Key == System.Windows.Input.Key.Enter) { e.Handled = true; await _vm.AddModFromUrlAsync(); }
-    }
 
 
 

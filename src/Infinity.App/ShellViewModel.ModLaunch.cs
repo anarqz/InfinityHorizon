@@ -19,31 +19,17 @@ public sealed partial class ShellViewModel
     private static string LauncherDirectory => AppContext.BaseDirectory;
 
     /// <summary>
-    /// OD-116: the runtime installed from the catalog's <c>infinity-mod-runtime</c> entry. The launcher no longer bundles one; a
-    /// development build still falls back to its own <c>mod\</c> folder, and production adopts once the signed one a 1.0.9 left there.
+    /// OD-126 (owner 2026-10-28: "Every mod should be added through ExtraOption plugin loader"): only a development package's own
+    /// <c>mod\</c> folder, for mods in the retired native format; a production launcher locates, adopts or installs none.
     /// </summary>
-    private ModRuntimePackage? LocateRuntime(string home, byte[] key) =>
-        ModRuntimePackage.LocateInstalled(home, key)
-        ?? (DevelopmentMods ? ModRuntimePackage.Locate(LauncherDirectory, key) : ModRuntimePackage.AdoptBundled(LauncherDirectory, home, key));
+    private ModRuntimePackage? LocateRuntime(byte[] key) => DevelopmentMods ? ModRuntimePackage.Locate(LauncherDirectory, key) : null;
 
-    /// <summary>
-    /// Installs (or updates to) the catalog's runtime when it differs from the installed one: before a native mod is installed,
-    /// enabled or updated, and before an online launch with native mods. With no catalog runtime the installed one is used; a
-    /// failed update keeps an earlier runtime that still verifies.
-    /// </summary>
+    /// <summary>The development runtime before a native mod is installed, enabled or updated, or a launch with one (never a download).</summary>
     private async Task<ModRuntimePackage?> EnsureRuntimeAsync(CancellationToken cancellation)
     {
-        var key = NativeModKey; var home = ModHome; var entry = _catalog?.Runtime;
-        var installed = await Task.Run(() => LocateRuntime(home, key), cancellation);
-        if (!ModRuntimePackage.NeedsInstall(installed, entry)) { _nativeRuntime = installed; return installed; }
-        // The runtime is shared by every catalog: an unofficial one may provide it when none is installed, never replace (or roll back) one.
-        if (UsingCustomCatalog && installed is not null) { Log("mods: unofficial catalog's runtime not applied over the installed " + installed.Version); _nativeRuntime = installed; return installed; }
-        _modProgress = S["mods.progress.runtime"]; Changed(nameof(ModProgress));
-        try { installed = await ModRuntimePackage.InstallAsync(ModDownloads, home, entry!, key, cancellation); Log("mods: runtime " + entry!.Version + " installed"); }
-        catch (Exception error) when (installed is not null && (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException))
-        { Log("mods: runtime update failed, keeping " + installed.Version + ": " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "")); }
-        _nativeRuntime = installed;
-        return installed;
+        var key = NativeModKey;
+        _nativeRuntime = await Task.Run(() => LocateRuntime(key), cancellation);
+        return _nativeRuntime;
     }
 
     /// <summary>Why the last launch could not prepare its mods (with the reason), shown on Play until the next attempt.</summary>
@@ -107,13 +93,8 @@ public sealed partial class ShellViewModel
     /// <summary>Data mods with SQL need the verified runtime package and a verified hook of <see cref="DataModSqlHookBuild"/>+.</summary>
     private bool DataModSqlReady => _nativeRuntime is not null && _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild;
 
-    /// <summary>
-    /// A data mod (SQL or database base) may be installed: the runtime is installed, or (OD-116) the catalog lists the one its install
-    /// brings, and the hook applies it. Before 1.0.11 the runtime came with the launcher; now a fresh install has none until a mod
-    /// that needs it installs it, as native mods already do (review, T2 M7).
-    /// </summary>
-    private bool DataModSqlInstallable => (_nativeRuntime is not null || _catalog?.Runtime is not null)
-        && _hook is { Verified: true } && HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild;
+    /// <summary>A data mod in the retired format (SQL or database base) installs only with the development runtime and a hook that applies it.</summary>
+    private bool DataModSqlInstallable => DataModSqlReady;
 
     /// <summary>
     /// OD-113: why a launch with enabled native mods (online, or Play offline since OD-118) cannot start (en/pt-BR), or null with the
@@ -123,13 +104,6 @@ public sealed partial class ShellViewModel
     private async Task<(ModRuntimePackage? Runtime, string? Refusal)> NativeModsForOnlineAsync(bool dataSql = false)
     {
         ModRuntimePackage? runtime;
-        // The update from 1.0.9 removes the bundled runtime: the catalog's comes first, so a Play right after startup waits for it.
-        if (_catalog is null && !DevelopmentMods && LocateRuntime(ModHome, NativeModKey) is null)
-        {
-            if (!_catalogLoading) await LoadModCatalogQuietlyAsync();
-            else for (var i = 0; i < 300 && _catalogLoading; i++) await Task.Delay(100);
-            if (_catalog?.Runtime is null) return (null, S["mods.runtime_catalog_needed"]);
-        }
         using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3)))
             try { runtime = await EnsureRuntimeAsync(timeout.Token); }
             catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)
