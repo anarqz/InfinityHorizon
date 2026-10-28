@@ -143,8 +143,18 @@ public sealed partial class ShellViewModel
     private void FillServerItems()
     {
         var chosen = _serverPick?.Kind == ServerPickItem.CustomKind ? null : _serverCustomSelected ? _serverAddress : null;
-        var items = new List<ServerPickItem> { new(ServerPickItem.OfficialKind, S["server.official"], S["picker.official_detail"], "", null) };
-        foreach (var server in _beholder?.Servers ?? [])
+        var items = new List<ServerPickItem>();
+        if (BuildProfile.ProductionOnly)
+        {
+            // Owner 2026-10-28: "Only the play.infinity-horizon.com stays": no official row and no other listed server in a release
+            var play = CustomServer.OwnerPublicOrigin;
+            var listed = (_beholder?.Servers ?? []).FirstOrDefault(s => SameOrigin(s.Endpoint, play));
+            var host = new Uri(play).Authority;
+            var detail = string.Join(" · ", new[] { host, listed?.Region ?? "", listed is null ? "" : ReachText(listed.Endpoint) }.Where(t => t.Length > 0));
+            items.Add(new(ServerPickItem.ListedKind, listed?.Name ?? S["picker.play_server"], detail, S["picker.badge_official"], play));
+        }
+        else items.Add(new(ServerPickItem.OfficialKind, S["server.official"], S["picker.official_detail"], "", null));
+        foreach (var server in BuildProfile.ProductionOnly ? [] : _beholder?.Servers ?? [])
         {
             string host;
             try { host = CustomServer.ParseOrigin(server.Endpoint).Authority; }
