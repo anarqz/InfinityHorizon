@@ -1,4 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using Infinity.Core.Mods;
+
 namespace Infinity.Core.Process;
 
 /// <summary>
@@ -10,6 +12,48 @@ namespace Infinity.Core.Process;
 public static class ExtraOptionsInfinity
 {
     public const string IniFile = "FH2_ExtraOptions.ini";
+
+    /// <summary>The upstream ExtraOptions release ExtraOptions.Infinity is built from (<c>native/extraoptions</c>, MOD_VERSION).</summary>
+    public const string ExtraOptionsVersion = "0.3.9";
+
+    private static readonly Lazy<ModManifest> BuiltIn = new(() =>
+    {
+        using var stream = typeof(ExtraOptionsInfinity).Assembly.GetManifestResourceStream("Infinity.Core.ExtraOptionsInfinity.manifest.json")
+            ?? throw new InvalidOperationException("the ExtraOptions.Infinity manifest is not embedded");
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return new ModManifest(buffer.ToArray());
+    });
+
+    /// <summary>
+    /// OD-125/127: ExtraOptions as part of Infinity, for the Mods page: its options (<c>FH2_ExtraOptions.ini</c>) and their locks.
+    /// No package or files: the hook install puts it in place, so it is never installed, disabled or removed as a mod.
+    /// </summary>
+    public static ModManifest Manifest => BuiltIn.Value;
+
+    /// <summary>The player's ExtraOptions settings; the ini is written first when there is none, as the hook needs it anyway.</summary>
+    public static ManifestIni ReadSettings(string azimuthRoot)
+    {
+        EnsureIni(azimuthRoot);
+        return new ManifestIni(Manifest, File.ReadAllBytes(Path.Combine(azimuthRoot, IniFile)));
+    }
+
+    /// <summary>
+    /// Writes edited settings with the locks enforced, only if the file is still the one they were read from
+    /// (otherwise <see cref="ModSettingsChangedException"/>); replaced in one step, never half written.
+    /// </summary>
+    public static void SaveSettings(string azimuthRoot, ManifestIni settings)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(settings);
+        if (settings.ManifestDigest != Manifest.Digest) throw new ModException("settings belong to another manifest", ModErrors.Settings);
+        var path = Path.Combine(azimuthRoot, IniFile);
+        if (!File.Exists(path) || ModManifest.Hash(File.ReadAllBytes(path)) != settings.SourceHash) throw new ModSettingsChangedException();
+        settings.EnforceLocks();
+        var temporary = path + ".fi-new";
+        File.WriteAllBytes(temporary, settings.ToBytes());
+        File.Move(temporary, path, overwrite: true);
+    }
     private const string Resource = "Infinity.Core.FH2_ExtraOptions.ini";
 
     /// <summary>Writes the embedded ini beside <c>azimuth.exe</c> when none is there; returns what happened, for the log.</summary>

@@ -1202,6 +1202,13 @@
                                Visibility="{Binding HookOk, Converter={StaticResource Hidden}}" />
                     <TextBlock Text="{Binding SetupHookLine}" TextWrapping="Wrap" />
                   </DockPanel>
+                  <!-- OD-125/127: ExtraOptions.Infinity is the hook's winmm.dll; another ExtraOptions there asks for Reinstall. -->
+                  <DockPanel Margin="0,4">
+                    <Path DockPanel.Dock="Left" Data="{StaticResource IconCheck}" Style="{StaticResource InlineIcon}" Width="14" Height="14" Margin="0,0,10,0" StrokeThickness="2.4" Stroke="{StaticResource InfinityGood}" Visibility="{Binding ExtraOptionsOk, Converter={StaticResource Visible}}" />
+                    <TextBlock DockPanel.Dock="Left" Width="24" Text="•" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                               Visibility="{Binding ExtraOptionsOk, Converter={StaticResource Hidden}}" />
+                    <TextBlock Text="{Binding SetupExtraOptionsLine}" TextWrapping="Wrap" />
+                  </DockPanel>
                   <TextBlock Text="{Binding HookPackageProblem}" Margin="24,4,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
                              Visibility="{Binding HasHookPackageProblem, Converter={StaticResource Visible}}" />
                   <TextBlock Text="{Binding EoAzimuthText}" Margin="24,4,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
@@ -1398,7 +1405,7 @@
                           <Button Click="OnSelectMod" Style="{StaticResource ModCardButton}" AutomationProperties.Name="{Binding Name}">
                             <StackPanel>
                               <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,24,0" ToolTip="{Binding Name}" />
-                              <TextBlock Text="{Binding Manifest.Version, StringFormat=v{0}}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
+                              <TextBlock Text="{Binding VersionText}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
                               <TextBlock Text="{Binding CustomBadge}" Foreground="{StaticResource InfinityPink}" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"
                                          Visibility="{Binding ShowSourceBadge, Converter={StaticResource Visible}}" />
                               <TextBlock Text="{Binding Badge}" Foreground="{StaticResource InfinityGold}" FontSize="12" Margin="0,12,0,0"
@@ -1410,7 +1417,7 @@
                                   ToolTip="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}"
                                   AutomationProperties.Name="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}" />
                           <Button Grid.Row="1" Content="{Binding Action}" Click="OnActOnMod" IsEnabled="{Binding CanAct}"
-                                  Padding="10,7" Margin="14,0,14,14" />
+                                  Visibility="{Binding ShowAction, Converter={StaticResource Visible}}" Padding="10,7" Margin="14,0,14,14" />
                         </Grid>
                       </Border>
                     </DataTemplate>

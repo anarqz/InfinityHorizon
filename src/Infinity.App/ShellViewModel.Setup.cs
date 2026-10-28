@@ -110,6 +110,20 @@ public sealed partial class ShellViewModel
         _ => S["setup.hook_missing"],
     };
 
+    /// <summary>
+    /// OD-125/127: the hook is ExtraOptions.Infinity's winmm.dll, so a verified hook is the right ExtraOptions. Another winmm.dll there
+    /// (a stock ExtraOptions copied over it, for one) is not, and Reinstall puts ExtraOptions.Infinity and its ini back.
+    /// </summary>
+    public bool ExtraOptionsOk => HookOk;
+
+    public string SetupExtraOptionsLine => _install is null ? S["setup.extraoptions_after"] : _hook switch
+    {
+        { Verified: true } => S.Format("setup.extraoptions_ok", ("version", ExtraOptionsInfinity.ExtraOptionsVersion)),
+        { Kind: HookKind.Unknown } => S["setup.extraoptions_replaced"],
+        { Kind: HookKind.Ours } => S["setup.extraoptions_unverified"],
+        _ => S["setup.extraoptions_missing"],
+    };
+
     /// <summary>Install, update or replace with the signed package (Azimuth must be the compatible version).</summary>
     public bool CanInstallHook => (InShell || DevelopmentMods) && AzimuthVersionOk && ModsIdle && _hook is not null && HookInstaller.CanInstallManually(_hook, _hookPackage);
 
@@ -234,6 +248,8 @@ public sealed partial class ShellViewModel
         {
             var installed = HookInstaller.Install(_install.Root, _hookPackage, DevHookKey, GameRunning);
             Log($"hook: {installed.Version} installed ({installed.Signer}) in {_install.Root}");
+            // OD-125/127: everything Infinity needs beside azimuth.exe, ExtraOptions.Infinity's ini included (an existing one is kept)
+            Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(_install.Root));
             Install = AzimuthInstall.Detect(_install.Root);
             ConfigurationMessage(S.Format("setup.hook_installed", ("version", installed.Version!)));
         }

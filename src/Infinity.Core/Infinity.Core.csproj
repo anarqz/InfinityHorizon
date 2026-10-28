@@ -20,6 +20,7 @@
   <!-- OD-125: ExtraOptions.Infinity's own settings file, written beside azimuth.exe when the player has none. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\native\extraoptions-infinity\FH2_ExtraOptions.ini" LogicalName="Infinity.Core.FH2_ExtraOptions.ini" />
+    <EmbeddedResource Include="Process\ExtraOptionsInfinity.manifest.json" LogicalName="Infinity.Core.ExtraOptionsInfinity.manifest.json" />
   </ItemGroup>
 
 </Project>
