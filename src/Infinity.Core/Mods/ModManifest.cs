@@ -124,6 +124,25 @@ public sealed class ModManifest
                 || size is < 100 or > MaxDatabaseBaseBytes || violations is < 0 or > int.MaxValue) throw new ModException("invalid database base", ModErrors.Unsupported);
             DatabaseBase = new(path, hash, size, (int)violations);
         }
+        if (Document.TryGetProperty("extraOptionsAddon", out var addon))
+        {
+            // OD-127: a car pack as ExtraOptions' own addon: its files under mods/<id>/media/ and the database.json ExtraOptions merges,
+            // built from the player's edited database on their PC (derived from their files, so never shipped). No runtime database.
+            if (!IsExternal || addon.ValueKind != JsonValueKind.Object || addon.EnumerateObject().Count() != 1 || DatabaseBase is not null
+                || Document.TryGetProperty("database", out _) || !addon.TryGetProperty("database", out var addonDb) || addonDb.ValueKind != JsonValueKind.Object
+                || addonDb.EnumerateObject().Count() != 8)
+                throw new ModException("unsupported addon", ModErrors.Unsupported);
+            string Field(string name) => addonDb.GetProperty(name).GetString()!;
+            var source = Field("source"); var hash = Field("sha256"); var size = addonDb.GetProperty("bytes").GetInt64(); var target = Field("target");
+            ValidatePath(source[(source.IndexOf(':') + 1)..]); ValidatePath(target);
+            // OD-127: the target is the one database the loader merges addons into; the exporter checks it is a database
+            if (ExternalSources.All(s => s.Id != ExternalSourceId(source)) || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c))
+                || size is < 100 or > MaxDatabaseBaseBytes || !target.StartsWith("media/", StringComparison.Ordinal) || !target.EndsWith(".slt", StringComparison.OrdinalIgnoreCase)
+                || Field("idConflicts") is not ("error" or "nearest") || Field("updates") is not ("error" or "override" or "ignore")
+                || Field("deletes") is not ("error" or "include" or "ignore") || Field("foreignKeys") is not ("error" or "allow"))
+                throw new ModException("invalid addon database", ModErrors.Unsupported);
+            AddonDatabase = new(source, hash, size, target, Field("idConflicts"), Field("updates"), Field("deletes"), Field("foreignKeys"));
+        }
         if (Document.TryGetProperty("database", out var db))
         {
             if (!(IsNative || DatabaseSql is not null || DatabaseBase is not null) || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
@@ -194,6 +213,9 @@ public sealed class ModManifest
         if (files.Count > 512 || files.Select(f => f.Root + "/" + f.Destination).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Count)
             throw new ModException("duplicate or excessive files");
         Files = files.AsReadOnly();
+        // OD-127: an ExtraOptions addon maps the pack's media only, under its own folder; mod.json and database.json are made at install
+        if (AddonDatabase is not null && Files.Any(f => f.Root != "azimuth" || !f.Destination.StartsWith("mods/" + Id + "/media/", StringComparison.Ordinal)))
+            throw new ModException("an addon's files go under mods/" + Id + "/media/", ModErrors.Unsupported);
         Dependencies = Document.GetProperty("dependencies").EnumerateArray().Select(d => new ManifestDependency(
             d.GetProperty("id").GetString()!, d.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray())).ToArray();
         if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
@@ -345,6 +367,8 @@ public sealed class ModManifest
     /// <summary>OD-114 follow-up: a car pack's whole replacement database, the session database's base; at most one enabled mod has one.</summary>
     public DatabaseBaseFile? DatabaseBase { get; }
     public const long MaxDatabaseBaseBytes = 64L * 1024 * 1024;
+    /// <summary>OD-127: an external pack installed as ExtraOptions' own addon, whose database.json is built from its edited database; null when not.</summary>
+    public ExtraOptionsAddonDatabase? AddonDatabase { get; }
     /// <summary>The session database's write permissions (<c>database.tables</c>), for native and SQL data mods alike.</summary>
     public IReadOnlyList<string> DatabaseTables => Document.TryGetProperty("database", out var db)
         ? db.GetProperty("tables").EnumerateArray().Select(t => t.GetString()!).ToArray() : [];
@@ -452,6 +476,23 @@ public sealed record ManifestFile(string Root, string Source, string Destination
 public sealed record DataModSqlFile(string Path, string Sha256, long Bytes);
 /// <summary>A car pack's whole database: its path in the mod folder, SHA-256, size and the foreign-key violations it ships with (recorded, not refused).</summary>
 public sealed record DatabaseBaseFile(string Path, string Sha256, long Bytes, int ForeignKeyViolations);
+
+/// <summary>
+/// OD-127: the edited database of an external pack (its source, pin and size) and the ExtraOptions exporter policies its
+/// database.json is built with on the player's PC, against the stock <see cref="Target"/> (game-relative) of the chosen game folder.
+/// </summary>
+public sealed record ExtraOptionsAddonDatabase(string Source, string Sha256, long Bytes, string Target, string IdConflicts, string Updates, string Deletes, string ForeignKeys)
+{
+    /// <summary>The exporter's options for this pack (the manifest's policies; the strings are checked when the manifest is read).</summary>
+    public ExtraOptionsDatabaseDiffOptions DiffOptions => new()
+    {
+        Target = Target,
+        IdConflicts = IdConflicts == "nearest" ? DatabaseDiffIdConflicts.Nearest : DatabaseDiffIdConflicts.Error,
+        Updates = Updates switch { "override" => DatabaseDiffUpdates.Override, "ignore" => DatabaseDiffUpdates.Ignore, _ => DatabaseDiffUpdates.Error },
+        Deletes = Deletes switch { "include" => DatabaseDiffDeletes.Include, "ignore" => DatabaseDiffDeletes.Ignore, _ => DatabaseDiffDeletes.Error },
+        ForeignKeys = ForeignKeys == "allow" ? DatabaseDiffForeignKeys.Allow : DatabaseDiffForeignKeys.Error,
+    };
+}
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 public sealed record ModWineOverride(string Module, bool AppDefaults);
 /// <summary>OD-117: one of the player's own sources a mod reads (a folder, a file such as a ZIP, or either), with its texts.</summary>

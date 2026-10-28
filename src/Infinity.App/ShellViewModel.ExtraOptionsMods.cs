@@ -31,7 +31,9 @@ public sealed partial class ShellViewModel
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         { Log("extraoptions mods: not read (" + e.GetType().Name + ")"); mods = []; status = new Dictionary<string, ExtraOptionsModStatus>(); }
         ExtraOptionsModItems.Clear();
-        foreach (var mod in mods) ExtraOptionsModItems.Add(Item(mod, mods, status));
+        // Owner 2026-10-28: the launcher's own mods (catalog or custom) have their cards; this list is what was put there by hand
+        var managed = ManagedExtraOptionsFolders();
+        foreach (var mod in mods.Where(m => !managed.Contains(m.Folder))) ExtraOptionsModItems.Add(Item(mod, mods, status));
         Changed(nameof(HasExtraOptionsMods)); Changed(nameof(ExtraOptionsModsFolder)); Changed(nameof(ExtraOptionsModsHint));
     }
 
@@ -84,6 +86,11 @@ public sealed partial class ShellViewModel
         { Log("extraoptions mods: " + item.Folder + " not changed (" + e.GetType().Name + ")"); Message = S["eomods.not_changed"]; }
         await RefreshExtraOptionsModsAsync();
     }
+
+    /// <summary>The <c>mods\</c> folders of the mods the launcher installed (any catalog or custom mod, on or off).</summary>
+    private HashSet<string> ManagedExtraOptionsFolders() =>
+        _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>()
+            .Select(ExtraOptionsMods.FolderOf).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The <c>mods\</c> folders Hardcore keeps: installed, enabled catalog mods that change nothing for other players. A folder
