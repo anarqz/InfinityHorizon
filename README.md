@@ -26,10 +26,14 @@ Visual Studio C++ build tools with a Windows SDK, Python 3.10+ and Zig 0.15.2.
 NuGet restores the pinned BouncyCastle package; ImGui, MinHook, SQLite and the embedded fonts are vendored.
 
 ```powershell
-git clone https://github.com/anarqz/InfinityHorizon.git
+git clone --recursive https://github.com/anarqz/InfinityHorizon.git
 cd InfinityHorizon
 pwsh -File build.ps1 -Zig C:\tools\zig\zig.exe
 ```
+
+`--recursive` fetches `native/extraoptions` (ExtraOptions, a submodule the hook is built into); in an
+existing clone, run `git submodule update --init native/extraoptions` once. The hook build applies
+Infinity's patches to a copy of it with `git apply`, so Git must be on `PATH`.
 
 The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
 `hook/infinity.dll`, `overlay/infinity-overlay.dll`, `mod/infinity_mod.dll`,

@@ -35,7 +35,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Launcher publish failed' }
 & dotnet publish "$root/src/Infinity.Updater/Infinity.Updater.csproj" -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
 if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
-# OD-125: the hook ships as ExtraOptions.Infinity (ExtraOptions 0.3.2 + patches + the hook, one winmm.dll for Azimuth 1.0.2);
+# OD-125: the hook ships as ExtraOptions.Infinity (ExtraOptions 0.3.2 + patches + the hook, one winmm.dll for Azimuth 1.0.3, OD-127);
 # the package keeps its name, the launcher installs it as <Azimuth>\winmm.dll
 $hookArgs = @("$root/native/extraoptions-infinity/build.py", $zigPath, '--output', "$out/hook/infinity.dll")
 if (!$Production) { $hookArgs += '--dev' }
