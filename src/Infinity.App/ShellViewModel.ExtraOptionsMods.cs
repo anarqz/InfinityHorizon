@@ -33,7 +33,9 @@ public sealed partial class ShellViewModel
         ExtraOptionsModItems.Clear();
         // Owner 2026-10-28: the launcher's own mods (catalog or custom) have their cards; this list is what was put there by hand
         var managed = ManagedExtraOptionsFolders();
-        foreach (var mod in mods.Where(m => !managed.Contains(m.Folder))) ExtraOptionsModItems.Add(Item(mod, mods, status));
+        // a folder ExtraOptions loads nothing from (what an uninstalled mod's own settings leave behind) is no mod: not listed
+        foreach (var mod in mods.Where(m => !managed.Contains(m.Folder) && (m.HasMedia || m.HasDatabase || m.HasStrings || m.Plugins > 0 || m.ManifestError is not null)))
+            ExtraOptionsModItems.Add(Item(mod, mods, status));
         Changed(nameof(HasExtraOptionsMods)); Changed(nameof(ExtraOptionsModsFolder)); Changed(nameof(ExtraOptionsModsHint));
     }
 
