@@ -1218,7 +1218,10 @@
                             Style="{StaticResource AccentButtonStyle}" Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}">
                             <TextBlock Text="{Binding HookInstallLabel}" TextWrapping="Wrap" TextAlignment="Center" /></Button>
                     <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[setup.recheck]}" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,0,8" />
+                    <Button Content="{Binding S[setup.recheck]}" Click="OnRecheckAzimuth" IsEnabled="{Binding ModsIdle}" Margin="0,0,8,8" />
+                    <!-- Owner 2026-10-28: Azimuth's own launcher, to change the game's settings there. -->
+                    <Button Content="{Binding S[setup.launch_azimuth]}" Click="OnLaunchAzimuthDirectly" IsEnabled="{Binding CanLaunchAzimuthDirectly}"
+                            Padding="10,5" FontSize="12" Margin="0,0,0,8" ToolTip="{Binding S[setup.launch_azimuth_hint]}" />
                   </WrapPanel>
                   <Button Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="-6,8,0,0" Click="OnOpenAzimuthPage" AutomationProperties.Name="{Binding S[setup.grab]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[setup.grab]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
                 </StackPanel>
@@ -1603,57 +1606,9 @@
                                         Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFolder, Converter={StaticResource Visible}}" />
                                 <Button Content="{Binding DataContext.S[external.choose_file], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                         Click="OnBrowseExternal" Padding="10,6" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" />
-                                <!-- The Windows dialogs (not under Wine or Steam's gamepad UI): one per kind the source accepts, both for "either" (REVIEW_LOG OD-117). -->
-                                <StackPanel Orientation="Horizontal" Visibility="{Binding DataContext.CanUseSystemPicker, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource Visible}}">
-                                  <Button Content="{Binding DataContext.S[external.system_folder], RelativeSource={RelativeSource AncestorType=ItemsControl}}" Tag="folder"
-                                          Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6" Visibility="{Binding PicksFolder, Converter={StaticResource Visible}}" />
-                                  <Button Content="{Binding DataContext.S[external.system_file], RelativeSource={RelativeSource AncestorType=ItemsControl}}" Tag="file"
-                                          Click="OnSystemPickExternal" Style="{StaticResource LinkButton}" Margin="0,0,8,6" Visibility="{Binding PicksFile, Converter={StaticResource Visible}}" />
-                                </StackPanel>
                               </WrapPanel>
                             </StackPanel>
                           </Border>
-                        </DataTemplate></ItemsControl.ItemTemplate>
-                      </ItemsControl>
-                    </StackPanel>
-                    <!-- The in-launcher browser: controller-friendly, quick locations, the path box opens the Steam keyboard. -->
-                    <StackPanel x:Name="BrowserPanel" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
-                      <TextBlock Text="{Binding S[external.browse_title]}" FontWeight="Bold" Margin="0,0,0,8" />
-                      <ItemsControl ItemsSource="{Binding BrowserPlaces}" Margin="0,0,0,8">
-                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate><DataTemplate>
-                          <Button Content="{Binding Label}" Click="OnBrowsePlace" Padding="8,4" Margin="0,0,6,6" />
-                        </DataTemplate></ItemsControl.ItemTemplate>
-                      </ItemsControl>
-                      <DockPanel Margin="0,0,0,8">
-                        <Button DockPanel.Dock="Right" Content="{Binding S[external.go]}" Click="OnBrowseDraft" Padding="10,6" Margin="6,0,0,0" />
-                        <TextBox x:Name="BrowserPathBox" Text="{Binding BrowserDraft, UpdateSourceTrigger=PropertyChanged}" Padding="8,6" KeyDown="OnBrowserPathKey"
-                                 AutomationProperties.Name="{Binding S[external.path]}" />
-                      </DockPanel>
-                      <WrapPanel Margin="0,0,0,8">
-                        <Button x:Name="BrowserUpButton" Content="{Binding S[external.up]}" Click="OnBrowseUp" Padding="10,6" Margin="0,0,8,6" />
-                        <Button Content="{Binding S[external.pick_this]}" Click="OnPickBrowserFolder" IsEnabled="{Binding BrowserCanPickFolder}"
-                                Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,6" />
-                        <Button Content="{Binding S[external.cancel]}" Click="OnStopBrowsing" Padding="10,6" Margin="0,0,8,6" />
-                      </WrapPanel>
-                      <TextBlock Text="{Binding S[external.empty_folder]}" Foreground="{StaticResource InfinityMuted}" FontSize="12"
-                                 Visibility="{Binding BrowserEmpty, Converter={StaticResource Visible}}" />
-                      <ItemsControl x:Name="BrowserList" ItemsSource="{Binding BrowserEntries}">
-                        <ItemsControl.ItemTemplate><DataTemplate>
-                          <Button Click="OnBrowserEntry" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,6" Margin="0,0,0,4" AutomationProperties.Name="{Binding Name}">
-                            <StackPanel Orientation="Horizontal">
-                              <!-- Bundled icons (Wine has no emoji font): a folder, or a ZIP or file to pick. -->
-                              <Path Width="16" Height="16" Margin="0,0,10,0">
-                                <Path.Style>
-                                  <Style TargetType="Path" BasedOn="{StaticResource InlineIcon}">
-                                    <Setter Property="Data" Value="{StaticResource IconArchive}" />
-                                    <Style.Triggers><DataTrigger Binding="{Binding Folder}" Value="True"><Setter Property="Data" Value="{StaticResource IconFolder}" /></DataTrigger></Style.Triggers>
-                                  </Style>
-                                </Path.Style>
-                              </Path>
-                              <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
-                            </StackPanel>
-                          </Button>
                         </DataTemplate></ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </StackPanel>
@@ -1800,6 +1755,28 @@
       </DockPanel>
     </Border>
   </Grid>
+    <!-- Owner 2026-10-28: an Azimuth never opened (data has only bin) blocks everything, like the mod progress dialog below. -->
+    <Border x:Name="AzimuthFirstRunOverlay" Background="#FF0E0B16" Panel.ZIndex="95"
+            Visibility="{Binding ShowAzimuthFirstRun, Converter={StaticResource Visible}}"
+            Focusable="True" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"
+              CornerRadius="18" Padding="40,32" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel>
+          <TextBlock Text="{Binding S[azimuth_firstrun.title]}" FontSize="22" FontWeight="Bold" TextAlignment="Center" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding AzimuthFirstRunBody}" Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" />
+          <TextBlock Text="{Binding AzimuthFirstRunStatus}" Margin="0,14,0,0" TextWrapping="Wrap" TextAlignment="Center" FontSize="12"
+                     Foreground="{StaticResource InfinityGold}" AutomationProperties.LiveSetting="Polite"
+                     Visibility="{Binding HasAzimuthFirstRunStatus, Converter={StaticResource Visible}}" />
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,22,0,0">
+            <Button x:Name="AzimuthFirstRunLaunch" Content="{Binding S[azimuth_firstrun.launch]}" Click="OnLaunchAzimuthFirstRun"
+                    Style="{StaticResource AccentButtonStyle}" Margin="0,0,10,0" />
+            <Button Content="{Binding S[azimuth_firstrun.check]}" Click="OnCheckAzimuthFirstRun" Padding="14,8" Margin="0,0,10,0" />
+            <!-- another Azimuth folder, when this one is a fresh copy beside the one the player uses -->
+            <Button Content="{Binding S[setup.choose]}" Click="OnChooseAzimuth" Padding="14,8" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Border>
     <!-- T2b/T4b: an opaque backdrop, and no opacity or effect on the content under it: under Wine, any composited dim or blur
          drew the text boxes behind it as solid grey bars. Nothing behind the dialog needs to show while a mod operation runs. -->
     <Border x:Name="ModProgressOverlay" Background="#FF0E0B16" Panel.ZIndex="100"
@@ -1834,5 +1811,62 @@
         </StackPanel>
       </Border>
     </Border>
+    <!-- Owner 2026-10-28: the launcher's own file and folder picker for every caller (never the Windows dialog): a pane on the
+         right above any screen (the first-run notice too); a pick goes back to the caller, the backdrop or Escape (B) cancels. -->
+    <Grid Panel.ZIndex="96" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
+      <!-- No dim: under Wine a composited backdrop draws the text boxes behind it as grey bars (T2b/T4b); a transparent one still takes the click. -->
+      <Border Background="Transparent" MouseDown="OnPickerBackdrop" />
+      <Border x:Name="PickerPane" HorizontalAlignment="Right" Width="440" Padding="22,22,16,16" Background="{StaticResource InfinitySurface}"
+              BorderBrush="#3365184D" BorderThickness="1,0,0,0" KeyDown="OnPickerPaneKey">
+        <DockPanel>
+          <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+            <Button DockPanel.Dock="Right" Content="{Binding S[external.cancel]}" Style="{StaticResource LinkButton}" Click="OnStopBrowsing" />
+            <TextBlock Text="{Binding BrowserTitle}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" />
+          </DockPanel>
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel x:Name="BrowserPanel" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
+            <ItemsControl ItemsSource="{Binding BrowserPlaces}" Margin="0,0,0,8">
+              <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate><DataTemplate>
+                <Button Content="{Binding Label}" Click="OnBrowsePlace" Padding="8,4" Margin="0,0,6,6" />
+              </DataTemplate></ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <DockPanel Margin="0,0,0,8">
+              <Button DockPanel.Dock="Right" Content="{Binding S[external.go]}" Click="OnBrowseDraft" Padding="10,6" Margin="6,0,0,0" />
+              <TextBox x:Name="BrowserPathBox" Text="{Binding BrowserDraft, UpdateSourceTrigger=PropertyChanged}" Padding="8,6" KeyDown="OnBrowserPathKey"
+                       AutomationProperties.Name="{Binding S[external.path]}" />
+            </DockPanel>
+            <WrapPanel Margin="0,0,0,8">
+              <Button x:Name="BrowserUpButton" Content="{Binding S[external.up]}" Click="OnBrowseUp" Padding="10,6" Margin="0,0,8,6" />
+              <Button Content="{Binding BrowserPickLabel}" Click="OnPickBrowserFolder" IsEnabled="{Binding BrowserCanPickFolder}"
+                                Visibility="{Binding BrowserPicksFolder, Converter={StaticResource Visible}}"
+                      Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,6" />
+              <Button Content="{Binding S[external.cancel]}" Click="OnStopBrowsing" Padding="10,6" Margin="0,0,8,6" />
+            </WrapPanel>
+            <TextBlock Text="{Binding S[external.empty_folder]}" Foreground="{StaticResource InfinityMuted}" FontSize="12"
+                       Visibility="{Binding BrowserEmpty, Converter={StaticResource Visible}}" />
+            <ItemsControl x:Name="BrowserList" ItemsSource="{Binding BrowserEntries}">
+              <ItemsControl.ItemTemplate><DataTemplate>
+                <Button Click="OnBrowserEntry" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,6" Margin="0,0,0,4" AutomationProperties.Name="{Binding Name}">
+                  <StackPanel Orientation="Horizontal">
+                    <!-- Bundled icons (Wine has no emoji font): a folder, or a ZIP or file to pick. -->
+                    <Path Width="16" Height="16" Margin="0,0,10,0">
+                      <Path.Style>
+                        <Style TargetType="Path" BasedOn="{StaticResource InlineIcon}">
+                          <Setter Property="Data" Value="{StaticResource IconArchive}" />
+                          <Style.Triggers><DataTrigger Binding="{Binding Folder}" Value="True"><Setter Property="Data" Value="{StaticResource IconFolder}" /></DataTrigger></Style.Triggers>
+                        </Style>
+                      </Path.Style>
+                    </Path>
+                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
+              </DataTemplate></ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Grid>
   </Grid>
 </Window>
