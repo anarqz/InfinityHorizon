@@ -57,7 +57,7 @@ public sealed record HookPackage(string Path, byte[] Bytes, byte[] Signature, st
 /// </summary>
 public static class HookInstaller
 {
-    /// <summary>OD-125: ExtraOptions.Infinity, the <c>winmm.dll</c> beside <c>azimuth.exe</c> (Azimuth 1.0.2 loads no TLS helper for FH2).</summary>
+    /// <summary>OD-125: ExtraOptions.Infinity, the <c>winmm.dll</c> beside <c>azimuth.exe</c> (Azimuth 1.0.x loads no TLS helper for FH2).</summary>
     public const string HookDll = "winmm.dll";
     public const string PackageFile = "infinity.dll";
     public const string SignPrefix = "fh2online-update-v1 ";

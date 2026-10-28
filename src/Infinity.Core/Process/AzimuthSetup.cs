@@ -27,15 +27,15 @@ public enum AzimuthStatus
 public static class AzimuthSetup
 {
     /// <summary>The Azimuth version Infinity and the hook support.</summary>
-    public const string CompatibleVersion = "1.0.2";
+    public const string CompatibleVersion = "1.0.3";
 
     /// <summary>Azimuth 1.0's flag that starts the added game directly instead of Azimuth's own launcher.</summary>
     public const string SkipLauncher = "--skip-launcher";
 
     /// <summary>OD-125: the exact <c>azimuth.exe</c> of <see cref="CompatibleVersion"/> (SHA-256); any other build is refused.</summary>
-    public const string CompatibleHostSha256 = "42527964f48c90a537f2414200b8598ab9a6f92919bfbe046dbecccb36e7c597";
+    public const string CompatibleHostSha256 = "ebfd5d43a165dcec5d4007b9d41ed5b2ed122fcd02ecfef7e4ed35b40826821f";
 
-    /// <summary>The Forza Horizon 2 (Xbox One) build Azimuth runs (unchanged from 0.9.10 to 1.0.2).</summary>
+    /// <summary>The Forza Horizon 2 (Xbox One) build Azimuth runs (unchanged from 0.9.10 to 1.0.3).</summary>
     public const string GameVersion = "1.0.0.64";
 
     /// <summary>Azimuth's official page (Almost There Games): the only place to get it.</summary>

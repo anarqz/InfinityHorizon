@@ -1,0 +1,84 @@
+--- a/adapters/azimuth.c
++++ b/adapters/azimuth.c
+@@ -15,10 +15,10 @@
+     const char *success;
+ } HostProfile;
+ static const HostProfile host_profiles[] = {
+-    {AZIMUTH_102, 9715712u, 0x3f2e0u, 0x9f4ebu, 0x903e0u, 0x9dbc0u,
+-     {0x42,0x52,0x79,0x64,0xf4,0x8c,0x90,0xa5,0x37,0xf2,0x41,0x42,0x00,0xb8,0x59,0x8a,
+-      0xb9,0xa6,0xf9,0x29,0x19,0xbf,0xbe,0x04,0x6d,0xbe,0xcc,0xcb,0x36,0xe7,0xc5,0x97},
+-     "AZIMUTH: 1.0.2 initialized for FH2 (1A96545B); native game loader and TLS retained.\r\n"},
++    {AZIMUTH_103, 9887232u, 0x3fd50u, 0xa697bu, 0x97aa0u, 0xa5150u,
++     {0xeb,0xfd,0x5d,0x43,0xa1,0x65,0xdc,0xec,0x5d,0x40,0x07,0xb9,0xd4,0x1e,0xd5,0xb2,
++      0xed,0x12,0x2f,0xcd,0x02,0xec,0xfe,0xf7,0xe4,0xed,0x35,0xb4,0x08,0x26,0x82,0x1f},
++     "AZIMUTH: 1.0.3 initialized for FH2 (1A96545B); native game loader and TLS retained.\r\n"},
+ };
+ static const HostProfile *host_profile;
+ #define MAP_GAME (host_profile->map_game)
+@@ -270,7 +270,7 @@
+         }
+     }
+     return refuse("REFUSED: unsupported Azimuth build. Extra Options " MOD_VERSION
+-                  " (ExtraOptions.Infinity) supports the inspected Azimuth 1.0.2 executable only. "
++                  " (ExtraOptions.Infinity) supports the inspected Azimuth 1.0.3 executable only. "
+                   "No game or save compatibility patches applied.");
+ }
+ 
+--- a/adapters/azimuth_host.c
++++ b/adapters/azimuth_host.c
+@@ -23,6 +23,7 @@
+ } supported_hosts[] = {
+     {AZIMUTH_101, 0x6adff280u, 0x9a6000u},
+     {AZIMUTH_102, 0x6ae05dd1u, 0x9af000u},
++    {AZIMUTH_103, 0x6ae0f17au, 0x9d8000u},
+ };
+ 
+ static unsigned host_image_size(AzimuthBuild build) {
+--- a/adapters/azimuth_host.h
++++ b/adapters/azimuth_host.h
+@@ -14,7 +14,7 @@
+     unsigned patch_count;
+ } HostPatchSet;
+ 
+-typedef enum { AZIMUTH_UNKNOWN, AZIMUTH_096, AZIMUTH_097, AZIMUTH_098, AZIMUTH_0910, AZIMUTH_101, AZIMUTH_102 } AzimuthBuild;
++typedef enum { AZIMUTH_UNKNOWN, AZIMUTH_096, AZIMUTH_097, AZIMUTH_098, AZIMUTH_0910, AZIMUTH_101, AZIMUTH_102, AZIMUTH_103 } AzimuthBuild;
+ 
+ AzimuthBuild azimuth_host_build(const unsigned char *base);
+ 
+--- a/adapters/azimuth_markers.c
++++ b/adapters/azimuth_markers.c
+@@ -313,7 +313,8 @@
+     scan->child[length - 1] = 0;
+     if (!path_join(scan->search, scan->child,
+                    (azimuth_host_build(host) == AZIMUTH_101 ||
+-                    azimuth_host_build(host) == AZIMUTH_102) ? L"data\\titles\\1A96545B\\saves"
++                    azimuth_host_build(host) == AZIMUTH_102 ||
++                    azimuth_host_build(host) == AZIMUTH_103) ? L"data\\titles\\1A96545B\\saves"
+                                                             : L"data\\saves")) {
+         goto done;
+     }
+--- a/adapters/azimuth_save.c
++++ b/adapters/azimuth_save.c
+@@ -27,10 +27,21 @@
+     0x5f7c9b, 0x3c1, reader_102_original_hash, reader_102_patched_hash,
+     reader_patches, ARRAY_COUNT(reader_patches)};
+ 
++/* v1.0.3 (ExtraOptions.Infinity): the same validator at 0x60403b (0x603da0+0x29b), the same jne at +0x8 and
++   +0x3bb; other call and RIP displacements change its hashes. */
++static const unsigned char reader_103_original_hash[32] = {
++    0x8e,0x31,0xb3,0xa6,0x6c,0x32,0x75,0x74,0xa8,0x51,0x94,0x30,0x3a,0x5e,0xfb,0x8b,0x3b,0x0e,0x03,0x6a,0x65,0x3f,0x77,0xaf,0x46,0xe9,0x5f,0x52,0x4b,0x66,0xd9,0x2d};
++static const unsigned char reader_103_patched_hash[32] = {
++    0x03,0xa0,0x64,0xa6,0x1c,0x4b,0x31,0xdc,0x6e,0x5f,0x83,0xeb,0x2e,0x90,0xad,0xc1,0x7b,0xf2,0x0d,0xd5,0xe9,0x6d,0x51,0xe3,0x70,0x00,0x2f,0x55,0x07,0xa3,0x45,0xe8};
++static const HostPatchSet validation_103_patch_set = {
++    0x60403b, 0x3c1, reader_103_original_hash, reader_103_patched_hash,
++    reader_patches, ARRAY_COUNT(reader_patches)};
++
+ static int apply_save(unsigned char *base) {
+     AzimuthBuild build = azimuth_host_build(base);
+     const HostPatchSet *set = build == AZIMUTH_101 ? &validation_patch_set
+-                             : build == AZIMUTH_102 ? &validation_102_patch_set : NULL;
++                             : build == AZIMUTH_102 ? &validation_102_patch_set
++                             : build == AZIMUTH_103 ? &validation_103_patch_set : NULL;
+     return set ? azimuth_patch_host_code(base, set) : 0;
+ }
+ 

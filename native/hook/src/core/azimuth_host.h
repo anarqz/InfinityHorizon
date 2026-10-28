@@ -31,7 +31,7 @@ typedef enum {
     AZIMUTH_099,
     AZIMUTH_0910,
     /* ExtraOptions.Infinity (OD-125): the only build of the winmm.dll route */
-    AZIMUTH_102
+    AZIMUTH_103
 } AzimuthBuild;
 
 AzimuthBuild azimuth_host_build(const unsigned char *base);
