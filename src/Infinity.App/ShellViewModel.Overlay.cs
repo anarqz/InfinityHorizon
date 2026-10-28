@@ -74,6 +74,7 @@ public sealed partial class ShellViewModel
         var relayKeys = IntegratedRelayKeys(mm);
         var devLan = DevLanAdmission(mm);
         var relayReports = RelayReports;
+        var gamertag = _gate.ProfileTag; // CR-L40 §4: the name of a lobby FREE ROAM ONLINE opens
         return ticket =>
         {
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
@@ -92,6 +93,7 @@ public sealed partial class ShellViewModel
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 ModSet = mods,
+                Gamertag = gamertag,
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
                 RelayReports=relayReports.ReportAsync,

@@ -54,6 +54,10 @@ public partial class MainWindow : Window
             if (azimuthFirstShown) _ = Dispatcher.InvokeAsync(() => AzimuthFirstChoose.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
         };
         vm.UpdateRestartRequested += () => { App.ExitReason = "update restart"; Application.Current.Shutdown(); };
+        // CR-L40: the sidebar's server status is read only while the window is shown (not hidden or minimized)
+        void Shown() => vm.SetWindowShown(IsVisible && WindowState != WindowState.Minimized);
+        IsVisibleChanged += (_, _) => Shown();
+        StateChanged += (_, _) => Shown();
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         var handled = false;

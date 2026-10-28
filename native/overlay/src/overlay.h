@@ -35,7 +35,10 @@ enum class Link : uint8_t { Connecting, Online, Offline, Reconnecting };
 enum class ToastKind : uint8_t { Info, Success, Warning, Error, Achievement, Update, Friend };
 
 void SetProfile(const std::string &gamertag, Tier tier);
+std::string ProfileGamertag(); // the gamertag the guide shows ("Infinity" before the launcher's Status)
 void SetLink(Link link, const std::string &detail);
+// CR-L40 §1.3: the connected server's figures for the guide's bottom block (0x19 ServerStatus)
+void SetServerStatus(const ServerStatus &status);
 void SetConnectionDetails(uint8_t state, const std::string &text);
 // ttl is the fully open hold time in tenths of a second; 0 uses the default, bounded to 1..30 s.
 void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl = 0);
@@ -76,8 +79,8 @@ void CodeEntryRefused(const std::string &why); // render thread
 bool CodeEntryMessage(UINT msg, WPARAM wp);
 void DrawCodeEntry(float width, float height, float dt);
 
-// --- worlds (worlds.cpp, OD-54/56/57/58): the guide's Worlds tab; the launcher answers through the pipe
-enum class WorldFilter : uint8_t { None, Friends, Near, Global };
+// --- worlds (worlds.cpp, OD-54/56/57/58, CR-L40): the guide's Lobbies tab; the launcher answers through the pipe
+enum class WorldFilter : uint8_t { None, Friends, Near, Global, All };
 // WorldRow is in ui_frames.h (protocol 2 adds modded, modsMatch, members and mods)
 struct HostedWorld {
     uint8_t status = 0; // 0 open, else refused
@@ -134,12 +137,16 @@ bool InstallGamepadHook(); // Windows.Gaming.Input: the game sees an idle pad wh
 
 // --- D3D12 (dx12.cpp)
 bool InstallRenderHooks();
+// CR-L40 §1.3 (0x1A Avatar): any thread; the render thread uploads it at its next frame. Side 0 clears it.
+void SetAvatar(AvatarImage avatar);
+// Render thread: the avatar's texture for ImDrawList::AddImageRounded, or 0 (draw the initials).
+uint64_t AvatarTexture();
 
 // --- the UI pipe to the launcher (pipe.cpp)
 void StartPipe(const wchar_t *name);
 void SendEvent(uint8_t kind, const std::string &detail); // UiEventKind: 1 first frame, 5 passthrough, 7 quit
 void SendPanel(bool open);
-void SendWorldsQuery(WorldFilter filter, bool not_full, bool modded); // 0x14 WorldsQueryV2
+void SendWorldsQuery(WorldFilter filter, bool not_full); // 0x14 WorldsQueryV2 (modded 0: every lobby of the filter)
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag);
 void SendPaneAction(const std::string &pane, const std::string &action);
 void SendJoinWorld(const std::string &world, const std::string &code);

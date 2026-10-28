@@ -153,9 +153,13 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     /// </summary>
     public Task<MmResult<WorldList>> ListAsync(string filter, bool notFull, bool modded, CancellationToken cancellation)
     {
-        if (filter is null || !WorldFilters.All.Contains(filter))
+        if (filter is null || !WorldFilters.All.Contains(filter) && filter != WorldFilters.Every)
         {
-            throw new ArgumentException("one of global, near, friends", nameof(filter));
+            throw new ArgumentException("one of global, near, friends, all", nameof(filter));
+        }
+        if (filter == WorldFilters.Every && modded)
+        {
+            throw new ArgumentException("the all filter takes no modded parameter (CR-L40)", nameof(modded));
         }
         var query = "?filter=" + filter + (notFull ? "&notFull=true" : "") + (modded ? "&modded=true" : "");
         return SendAsync<WorldList>(HttpMethod.Get, "/mm/v1/worlds" + query, null, cancellation);

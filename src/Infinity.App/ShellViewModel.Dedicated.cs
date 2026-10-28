@@ -188,7 +188,9 @@ public sealed partial class ShellViewModel
     {
         if (!ShowLobbyButton) return;
         _showLobbyPane = !_showLobbyPane;
-        if (_showLobbyPane && _lobbyName.Length == 0) _lobbyName = "Infinity";
+        // CR-L40 §4: "{gamertag}'s lobby" / "Lobby de {gamertag}", within the 48 characters
+        if (_showLobbyPane && _lobbyName.Length == 0)
+            _lobbyName = Infinity.Core.Matchmaking.WorldsBridge.DefaultLobbyName(S["worlds.default_name"], _gate.ProfileTag);
         // One right sidebar at a time: next to a mod panel the centre column is squeezed (the draft settings survive).
         if (_showLobbyPane) { _showModInfo = false; _showModOptions = false; _externalMod = null; _showModerationPane = false; }
         Changed(string.Empty);

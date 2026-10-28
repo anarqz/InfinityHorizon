@@ -203,9 +203,11 @@ public sealed partial class ShellViewModel
         }
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) { if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan); return; }
         using var onlineActivity = new OnlineActivity();
+        StartOverlayStatusFeed(_session); // CR-L40 §1.3: the guide's server status and avatar
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),
+            OverlayStatus = _overlayStatusFeed,
             NativeDllOverrides = mods.DllOverrides,
             ModEnvironment = nativePlan?.Environment ?? [],
             FallbackIdentity = FallbackIdentityFor(profile),

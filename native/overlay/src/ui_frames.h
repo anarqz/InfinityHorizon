@@ -5,17 +5,24 @@
 // length of type + body, u8 type), little-endian fields, strings u16 LE length + UTF-8, flags 0/1.
 //
 // Overlay -> launcher:
-//   0x14 WorldsQueryV2{u8 filter, u8 notFull, u8 modded (0 vanilla worlds only, 1 modded only)}
+//   0x14 WorldsQueryV2{u8 filter (1 friends, 2 close to me, 3 global, 4 all: every lobby, CR-L40),
+//        u8 notFull, u8 modded (0: every lobby of the filter, modded or not; 1, an OD-112 overlay: modded only)}
 //   0x17 PlayerDetailsQuery{str xuid (decimal), str gamertag (may be empty)}
 //   0x18 PaneActionClick{str paneId, str actionId} (enabled actions only)
 // Launcher -> overlay:
-//   0x15 WorldsListV2{u8 filter, u8 modded, u8 status, str message, u8 count <= 16, count x LobbyRow}
+//   0x15 WorldsListV2{u8 filter, u8 modded, u8 status, str message, u8 count <= 50, count x LobbyRow},
+//        the rows already ordered: matching ones (lock 0 and modsMatch) first, then the others
 //        LobbyRow{str id, str name, str host, u8 players, u8 max, u8 kind, u8 audience, u8 lock,
 //        u8 ping, u8 friendHost, u8 modded, u8 modsMatch, u8 members <= 12 x {str gamertag, u8 tier,
 //        u8 role}, u8 mods <= 32 x {str id, str version}}
 //   0x16 DetailPane{str paneId (empty closes), str title, str subtitle, str avatarKey, u8 sections
 //        <= 8 x {u8 kind (0 key/value rows, 1 items), str heading, u8 entries <= 32 x {str primary,
 //        str secondary, u8 icon}}, u8 actions <= 4 x {str id, str label, u8 enabled}}
+//   0x19 ServerStatus{str server (host, <= 128 B), u8 flags, u16 online, u16 capacity, u16 hardcore,
+//        u16 noob, u16 lobbies, u32 profilesHardcore, u32 profilesNoob} (CR-L40 §1.3): flags bit 0
+//        known (else "Status unavailable"), 1 capacity, 2 live mode and lobby figures, 3 profiles
+//   0x1A Avatar{u16 width, u16 height, width * height * 4 bytes of straight-alpha RGBA}: square,
+//        <= 128 (the launcher sends 96: 128 x 128 cannot fit the 64 KiB frame); {0, 0} clears it
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -27,7 +34,9 @@
 namespace fi {
 
 constexpr uint16_t kUiProtocol = 2;
-constexpr size_t kMaxLobbyRows = 16, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
+// CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
+constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
+constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
 constexpr size_t kMaxPaneSections = 8, kMaxPaneEntries = 32, kMaxPaneActions = 4;
 // UiFrame.cs' text limits in UTF-8 bytes: the launcher refuses anything longer, so neither side sends it
 constexpr size_t kMaxGamertag = 64, kMaxModId = 64, kMaxModVersion = 16, kMaxPaneText = 512, kMaxPaneId = 64;
@@ -85,7 +94,8 @@ struct WorldRow {
     uint8_t players = 0, max = 0;
     uint8_t kind = 0;      // 0 everyone's, 1 Infinity Supporter
     uint8_t audience = 0;  // 0 everyone, 1 supporters, 2 friends, 3 private
-    uint8_t lock = 0;      // 0 joinable, 1 tier, 2 friends, 3 code, 4 full, 5 latency
+    uint8_t lock = 0;      // 0 joinable, 1 tier, 2 friends, 3 code, 4 full, 5 latency, 6 other,
+                           // 7 another mode (a Hardcore world), 8 another mode (a Noob world)
     uint8_t ping = 0;      // 0 unknown, 1 good, 2 fair, 3 poor
     bool friend_host = false;
     // protocol 2 (OD-112)
@@ -143,6 +153,7 @@ struct Reader {
     bool ok = true;
     uint8_t U8() { if (left < 1) { ok = false; return 0; } --left; return *p++; }
     uint16_t U16() { const uint16_t lo = U8(); return static_cast<uint16_t>(lo | (U8() << 8)); }
+    uint32_t U32() { const uint32_t lo = U16(); return lo | (static_cast<uint32_t>(U16()) << 16); }
     bool Flag() { const uint8_t v = U8(); if (v > 1) ok = false; return v == 1; }
     size_t Count(size_t max) { const uint8_t n = U8(); if (n > max) ok = false; return ok ? n : 0; }
     std::string Str() {
@@ -315,6 +326,72 @@ inline bool DecodeDetailPane(const uint8_t *body, size_t size, DetailPane &out) 
     if (!r.Done()) return false;
     out = std::move(p);
     return true;
+}
+
+// CR-L40 §1.3: the connected server's figures for the guide's bottom block.
+struct ServerStatus {
+    enum : uint8_t { Known = 1, Capacity = 2, Live = 4, Profiles = 8, All = 15 };
+    std::string server; // the host shown under the status
+    uint8_t flags = 0;  // 0: nothing read yet, "Status unavailable"
+    uint16_t online = 0, capacity = 0, hardcore = 0, noob = 0, lobbies = 0;
+    uint32_t profiles_hardcore = 0, profiles_noob = 0;
+};
+
+inline bool DecodeServerStatus(const uint8_t *body, size_t size, ServerStatus &out) {
+    wire::Reader r{body, size};
+    ServerStatus s;
+    s.server = r.Text(kMaxServerHost);
+    s.flags = r.U8();
+    s.online = r.U16();
+    s.capacity = r.U16();
+    s.hardcore = r.U16();
+    s.noob = r.U16();
+    s.lobbies = r.U16();
+    s.profiles_hardcore = r.U32();
+    s.profiles_noob = r.U32();
+    if (s.flags > ServerStatus::All) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(s);
+    return true;
+}
+
+inline std::vector<uint8_t> EncodeServerStatus(const ServerStatus &s) {
+    std::vector<uint8_t> b;
+    wire::Str(b, s.server);
+    wire::U8(b, s.flags);
+    wire::U16(b, s.online);
+    wire::U16(b, s.capacity);
+    wire::U16(b, s.hardcore);
+    wire::U16(b, s.noob);
+    wire::U16(b, s.lobbies);
+    wire::U32(b, s.profiles_hardcore);
+    wire::U32(b, s.profiles_noob);
+    return b;
+}
+
+// CR-L40 §1.3: the player's avatar, square straight-alpha RGBA; side 0 clears it (the initials).
+struct AvatarImage {
+    uint16_t side = 0;
+    std::vector<uint8_t> rgba; // side * side * 4
+};
+
+inline bool DecodeAvatar(const uint8_t *body, size_t size, AvatarImage &out) {
+    wire::Reader r{body, size};
+    const uint16_t width = r.U16(), height = r.U16();
+    if (!r.ok || width != height || width > kMaxAvatarSide) return false;
+    const size_t bytes = static_cast<size_t>(width) * height * 4;
+    if (r.left != bytes) return false;
+    out.side = width;
+    out.rgba.assign(r.p, r.p + bytes);
+    return true;
+}
+
+inline std::vector<uint8_t> EncodeAvatar(const AvatarImage &a) {
+    std::vector<uint8_t> b;
+    wire::U16(b, a.side);
+    wire::U16(b, a.side);
+    b.insert(b.end(), a.rgba.begin(), a.rgba.end());
+    return b;
 }
 
 inline std::vector<uint8_t> EncodeDetailPane(const DetailPane &p) {

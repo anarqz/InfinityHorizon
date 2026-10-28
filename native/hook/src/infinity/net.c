@@ -1339,6 +1339,9 @@ static DWORD WINAPI net_worker(void *parameter) {
         /* a private free roam session opens this PC's world before the server sees it */
         azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
                                  request->request_body.data, request->request_body.size);
+        /* CR-L40: FREE ROAM ONLINE's matchmaking waits (this worker only, at most 20 s) until
+           the launcher has seated the player in a lobby; it is forwarded whatever the answer */
+        (void)fi_launch_free_roam(buffer_wide(&request->method), buffer_wide(&request->url), &request->aborted);
     }
     int answered = net_mode == NET_MODE_PROXY && !request->aborted &&
                    (net_answer_without_profile(request) || net_answer_foreign(request) || net_answer_livery(request) ||

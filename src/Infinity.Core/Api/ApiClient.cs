@@ -305,6 +305,31 @@ public sealed partial class ApiClient
 
     public Task<OnlineStatus> OnlineStatusAsync(CancellationToken cancellation = default) => OnlineStatusAsync(_http, Core, _client, cancellation);
 
+    /// <summary>
+    /// CR-L40 <c>GET /core/v1/status</c>: the server's public figures (no bearer token). Null when the server
+    /// does not list the game; a refusal or a malformed body throws.
+    /// </summary>
+    public static async Task<ServerStatus?> ServerStatusAsync(HttpClient http, Uri core, string clientHeader, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(CheckOrigin(core), ServerStatus.Path));
+        request.Headers.TryAddWithoutValidation("X-Fi-Client", clientHeader);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) throw new HttpRequestException("The server status answered " + (int)response.StatusCode + ".", null, response.StatusCode);
+        if (response.Content.Headers.ContentLength is > ServerStatus.MaxBytes) throw new InvalidDataException("The server status is too large.");
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
+        var bytes = new byte[ServerStatus.MaxBytes + 1]; var length = 0;
+        while (length < bytes.Length)
+        {
+            var read = await stream.ReadAsync(bytes.AsMemory(length), cancellation).ConfigureAwait(false);
+            if (read == 0) break; length += read;
+        }
+        if (length > ServerStatus.MaxBytes) throw new InvalidDataException("The server status is too large.");
+        return ServerStatus.Parse(bytes.AsSpan(0, length));
+    }
+
+    public Task<ServerStatus?> ServerStatusAsync(CancellationToken cancellation = default) => ServerStatusAsync(_http, Core, _client, cancellation);
+
     private static void ValidateStatusNames(ReadOnlySpan<byte> bytes)
     {
         var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 4 });

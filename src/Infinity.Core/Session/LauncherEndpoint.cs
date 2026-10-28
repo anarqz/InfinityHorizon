@@ -47,6 +47,9 @@ public abstract record EndpointEvent
 
     /// <summary>Frame 0x1b from the hook (N-H2): what the native mod runtime initialized for this launch.</summary>
     public sealed record ModsReported(Frame.ModsReport Report) : EndpointEvent;
+
+    /// <summary>Frame 0x1f from the hook (CR-L40): FREE ROAM ONLINE waits for <see cref="Frame.FreeRoamReady"/> with this nonce.</summary>
+    public sealed record FreeRoamNeeded(uint Nonce) : EndpointEvent;
 }
 
 /// <summary>
@@ -157,6 +160,7 @@ public sealed class LauncherEndpoint
             Frame.Bye b => new EndpointEvent.Closed(b.Reason),
             Frame.Capture c => new EndpointEvent.Capture(c.What, c.Ok),
             Frame.ModsReport m => new EndpointEvent.ModsReported(m),
+            Frame.FreeRoamNeed f => new EndpointEvent.FreeRoamNeeded(f.Nonce),
             _ => throw new ProtocolException($"unexpected frame from hook: type 0x{frame.Type:x2}"),
         };
         return ([], evt);

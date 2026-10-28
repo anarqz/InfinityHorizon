@@ -24,6 +24,12 @@ public static class CaptureWhat
     /// <see cref="Frame.RelayFallback"/>). Only when ok in this session does a join send <c>nat</c> and <c>relays</c>.
     /// </summary>
     public const byte RelayJoiner = 7;
+
+    /// <summary>
+    /// CR-L40: the hook asks for a lobby (<see cref="Frame.FreeRoamNeed"/>) before FREE ROAM ONLINE's matchmaking
+    /// request and waits for <see cref="Frame.FreeRoamReady"/>; sent with ok at every handshake.
+    /// </summary>
+    public const byte FreeRoam = 8;
 }
 
 /// <summary><see cref="Frame.RelayFallback"/> states (hook → launcher, CR-S57).</summary>
@@ -243,6 +249,29 @@ public abstract record Frame
         }
     }
 
+    /// <summary>
+    /// hook → launcher (0x1f, CR-L40): <c>{u32 LE nonce}</c>. FREE ROAM ONLINE's matchmaking request waits (at most 20 s)
+    /// until the launcher answers <see cref="FreeRoamReady"/> with the same nonce.
+    /// </summary>
+    public sealed record FreeRoamNeed(uint Nonce) : Frame
+    {
+        public override byte Type => 0x1f;
+    }
+
+    /// <summary>
+    /// launcher → hook (0x20, CR-L40): <c>{u32 LE nonce, u8 result}</c>, the result one of
+    /// <see cref="Matchmaking.FreeRoamResult"/> (0 a world is ready, 1 none, 2 not online).
+    /// </summary>
+    public sealed record FreeRoamReady(uint Nonce, byte Result) : Frame
+    {
+        public override byte Type => 0x20;
+
+        internal static void Validate(byte result)
+        {
+            if (result > Matchmaking.FreeRoamResult.NotOnline) throw new ProtocolException("Invalid free roam result");
+        }
+    }
+
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
     {
@@ -390,6 +419,11 @@ public abstract record Frame
                 RelayFallback.Validate(fallback.Grant, fallback.State);
                 var grant = new byte[16]; fallback.Grant.TryWriteBytes(grant, bigEndian: true, out _);
                 w.Fixed(grant, 16, "relay fallback grant"); w.U8(fallback.State); break;
+            case FreeRoamNeed need:
+                w.U32(need.Nonce); break;
+            case FreeRoamReady ready:
+                FreeRoamReady.Validate(ready.Result);
+                w.U32(ready.Nonce); w.U8(ready.Result); break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -484,6 +518,8 @@ public abstract record Frame
             0x1c => DecodeCustomTrust(ref r),
             0x1d => new RelayLeg(r.Take(length.Value - 1).ToArray()),
             0x1e => new RelayFallback(new Guid(r.Take(16), bigEndian: true), r.U8()),
+            0x1f => new FreeRoamNeed(r.U32()),
+            0x20 => new FreeRoamReady(r.U32(), r.U8()),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
@@ -492,6 +528,7 @@ public abstract record Frame
         if(frame is RelayContext context)RelayContext.Validate(context.Payload);
         if (frame is RelayLeg leg) RelayLeg.Validate(leg.Payload);
         if (frame is RelayFallback fallback) RelayFallback.Validate(fallback.Grant, fallback.State);
+        if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
         if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
         if(frame is RelayCandidates candidates)Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);

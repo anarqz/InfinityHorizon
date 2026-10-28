@@ -42,6 +42,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     // never applies the client alone-close; the overlay's bridge keeps both defaults.
     private readonly bool _requireGameReadiness = requireGameReadiness;
     private readonly bool _closeWhenAlone = closeWhenAlone;
+    // the session profile's mode: the mode of every world it opens, and what a matching lobby has (CR-L40)
+    private readonly string _mode = mode;
     private string? _hostedCode;
     private uint _hostedPlayers;
 
@@ -137,6 +139,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public IReadOnlyList<UiFrame.Toast> LobbyToasts()
     {
         var toasts = new List<UiFrame.Toast>();
+        while (_freeRoamToasts.TryDequeue(out var freeRoam)) toasts.Add(freeRoam); // CR-L40: the lobby FREE ROAM ONLINE joined or opened
         if (_publicWarning.Take()) toasts.Add(new(UiLevel.Warn, 2, 150, _text("worlds.public_warning")));
         toasts.AddRange(_roster.Drain().Select(change =>
             new UiFrame.Toast(UiLevel.Info, 0, 50, _text(change.Joined ? "worlds.player_joined" : "worlds.player_left")
@@ -986,7 +989,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var settings = new WorldSettings
             {
                 Name = string.IsNullOrWhiteSpace(request.Name) ? "Infinity" : request.Name.Trim()[..Math.Min(48, request.Name.Trim().Length)],
-                Mode = mode,
+                Mode = _mode,
                 MaxPlayers = players,
                 Audience = request.Audience switch { 1 => WorldAudiences.Supporters, 2 => WorldAudiences.Friends, 3 => WorldAudiences.Private, _ => WorldAudiences.Everyone },
                 MaxRttMs = request.Latency switch { 1 => 150u, 2 => 100u, 3 => 60u, _ => null },
@@ -1443,6 +1446,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             "code" => 3,
             "full" => 4,
             "latency" => 5,
+            "mode" => ModeLock(world.Mode), // CR-L40: the all list carries other modes' worlds
             _ => 6,
         };
         byte ping = world.PingClass switch

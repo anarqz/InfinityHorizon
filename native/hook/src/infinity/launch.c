@@ -58,10 +58,19 @@ enum {
     FRAME_CUSTOM_TRUST = 0x1c,
     FRAME_RELAY_LEG = 0x1d,      /* launcher -> hook, CR-S57: the joiner's relay leg (proxy.c) */
     FRAME_RELAY_FALLBACK = 0x1e, /* hook -> launcher, CR-S57: {grant[16], u8 state 1-4} */
+    FRAME_FREE_ROAM_NEED = 0x1f,  /* hook -> launcher, CR-L40: {u32 nonce} */
+    FRAME_FREE_ROAM_READY = 0x20, /* launcher -> hook, CR-L40: {u32 nonce, u8 result 0-2} */
 };
 /* Capture.what 7 (CR-S57): this hook's joiner proxy speaks the relay fallback (RelayLeg and
    RelayFallback); sent once with ok=1 at every handshake. */
 #define LAUNCH_CAPTURE_RELAY_JOINER 7u
+/* Capture.what 8 (CR-L40): this hook asks the launcher for a lobby before FREE ROAM ONLINE's
+   matchmaking request (FreeRoamNeed/FreeRoamReady); sent once with ok=1 at every handshake. */
+#define LAUNCH_CAPTURE_FREE_ROAM 8u
+/* How long the game's matchmaking request waits for FreeRoamReady before it goes on anyway. */
+#ifndef LAUNCH_FREE_ROAM_WAIT_MS
+#define LAUNCH_FREE_ROAM_WAIT_MS 20000u
+#endif
 
 /* CustomTrust (0x1c, CR-L39): a custom server the player chose publishes its own launch-ticket keys
    (/launcher/v1/info trust, pinned by the launcher per realm). The launcher sends them right before
@@ -664,6 +673,140 @@ void fi_launch_capture(unsigned what, int ok) {
     }
 }
 
+/* ------------------------------------------------------- free roam online */
+/* CR-L40 (LOBBIES_AND_SERVER_STATUS.md 3.1): FREE ROAM ONLINE's matchmaking request
+   (POST momatch.xboxlive.com/serviceconfigs/{scid}/hoppers/FreeRoam_qos) waits, on its own net
+   worker thread, until the launcher has a world for the player: FreeRoamNeed{u32 nonce} goes out,
+   FreeRoamReady{u32 nonce, u8 result} comes back to the reader loop. One handshake at a time: a
+   request that comes while one is in flight waits for the same answer, until the same deadline. A
+   timeout, a closed pipe or a suspension lets the request go on as before (the server's usual
+   answer). launch_fr_lock guards the four values. */
+static SRWLOCK launch_fr_lock = SRWLOCK_INIT;
+static unsigned launch_fr_nonce;          /* the handshake in flight, 0 none */
+static unsigned launch_fr_counter;        /* the last nonce sent */
+static unsigned launch_fr_done, launch_fr_result; /* the last answered nonce and its result */
+static unsigned long long launch_fr_deadline;
+
+static wchar_t launch_lower(wchar_t c) {
+    return c >= L'A' && c <= L'Z' ? (wchar_t)(c + 32) : c;
+}
+
+/* `text` starts with `prefix` (ASCII, lower case), ignoring case. */
+static int launch_wide_starts(const wchar_t *text, const wchar_t *prefix) {
+    for (; *prefix; ++text, ++prefix) {
+        if (launch_lower(*text) != *prefix) return 0;
+    }
+    return 1;
+}
+
+/* 1 for the game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos (case-insensitive; its
+   /tickets sub-paths and every other hopper are not it). */
+int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
+    static const wchar_t host[] = L"momatch.xboxlive.com", hopper[] = L"/hoppers/freeroam_qos";
+    if (!method || !url || !launch_wide_starts(method, L"post") || method[4]) return 0;
+    const wchar_t *at = url;
+    if (launch_wide_starts(at, L"https://")) at += 8;
+    else if (launch_wide_starts(at, L"http://")) at += 7;
+    else return 0;
+    if (!launch_wide_starts(at, host)) return 0;
+    at += sizeof(host) / sizeof(host[0]) - 1;
+    if (*at == L':') {
+        while (*++at >= L'0' && *at <= L'9') {}
+    }
+    if (*at != L'/') return 0;
+    for (; *at && *at != L'?' && *at != L'#'; ++at) {
+        if (!launch_wide_starts(at, hopper)) continue;
+        const wchar_t *end = at + sizeof(hopper) / sizeof(hopper[0]) - 1;
+        if (*end == L'/') ++end;
+        if (!*end || *end == L'?' || *end == L'#') return 1;
+    }
+    return 0;
+}
+
+/* The net worker, before it forwards a request (net.c): for the FreeRoam_qos POST in a live
+   launcher session, the FreeRoamNeed handshake. The result (0 a world is ready, 1 none, 2 not
+   online), -1 when nothing was asked or nothing came (the request goes on either way). */
+int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG *aborted) {
+    if (!fi_launch_protocol() || !fi_launch_free_roam_request(method, url)) return -1;
+    if (!fi_launch_live() || !launch_connected) {
+        static volatile LONG logged;
+        if (!InterlockedExchange(&logged, 1)) {
+            log_append("LAUNCH: FREE ROAM ONLINE without a live launcher session: the matchmaking request goes on.\r\n");
+        }
+        return -1;
+    }
+    unsigned nonce;
+    int first = 0;
+    AcquireSRWLockExclusive(&launch_fr_lock);
+    if (!launch_fr_nonce) {
+        if (!++launch_fr_counter) ++launch_fr_counter; /* 0 means none */
+        unsigned char payload[4] = {(unsigned char)launch_fr_counter, (unsigned char)(launch_fr_counter >> 8),
+                                    (unsigned char)(launch_fr_counter >> 16), (unsigned char)(launch_fr_counter >> 24)};
+        if (launch_queue_frame(FRAME_FREE_ROAM_NEED, payload, sizeof(payload))) {
+            launch_fr_nonce = launch_fr_counter;
+            launch_fr_deadline = GetTickCount64() + LAUNCH_FREE_ROAM_WAIT_MS;
+            first = 1;
+        }
+    }
+    nonce = launch_fr_nonce;
+    ReleaseSRWLockExclusive(&launch_fr_lock);
+    if (!nonce) {
+        log_append("LAUNCH: FreeRoamNeed could not be queued: the matchmaking request goes on.\r\n");
+        return -1;
+    }
+    if (first) {
+        log_append("LAUNCH: FREE ROAM ONLINE: asking the launcher for a lobby first (FreeRoamNeed).\r\n");
+    }
+    int result = -1;
+    for (;;) {
+        AcquireSRWLockExclusive(&launch_fr_lock);
+        int answered = launch_fr_nonce != nonce;
+        if (answered) {
+            result = launch_fr_done == nonce ? (int)launch_fr_result : -1;
+        } else if (GetTickCount64() >= launch_fr_deadline || !launch_connected || fi_launch_suspended()) {
+            launch_fr_nonce = 0; /* the next request asks again */
+            answered = 1;
+        } else if (aborted && *aborted) {
+            answered = 1; /* only this request leaves: other waiters keep the shared handshake */
+        }
+        ReleaseSRWLockExclusive(&launch_fr_lock);
+        if (answered) break;
+        Sleep(LAUNCH_POLL_MS);
+    }
+    if (first) {
+        launch_log(result < 0 ? "no FreeRoamReady (timeout, pipe or suspension): the matchmaking request goes on."
+                              : "FreeRoamReady (result ",
+                   result >= 0, (unsigned long long)result, result < 0 ? "" : "): the matchmaking request goes on.");
+    }
+    return result;
+}
+
+/* FreeRoamReady from the reader loop: 1 handled (another nonce or an unknown result is ignored),
+   0 a frame that does not parse (a protocol error, as for the other frames). */
+static int launch_free_roam_ready(LaunchReader *r) {
+    unsigned nonce = (unsigned)launch_le(r, 4), result = (unsigned)launch_le(r, 1);
+    if (r->bad || r->left) {
+        launch_log("REFUSED: a FreeRoamReady frame that does not parse.", 0, 0, "");
+        return 0;
+    }
+    if (result > 2) {
+        launch_log("a FreeRoamReady with an unknown result (", 1, result, "); ignored.");
+        return 1;
+    }
+    AcquireSRWLockExclusive(&launch_fr_lock);
+    int ours = nonce && nonce == launch_fr_nonce;
+    if (ours) {
+        launch_fr_done = nonce;
+        launch_fr_result = result;
+        launch_fr_nonce = 0;
+    }
+    ReleaseSRWLockExclusive(&launch_fr_lock);
+    if (!ours) {
+        launch_log("a FreeRoamReady for no handshake in flight; ignored.", 0, 0, "");
+    }
+    return 1;
+}
+
 /* --------------------------------------------------------------- ticket */
 
 /* The Ticket frame's parts (they point into launch_frame). */
@@ -1263,6 +1406,7 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(5, fi_livery_remote_ready());
     fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
     fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
+    fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
     return 1;
 }
 
@@ -1497,6 +1641,8 @@ static int launch_session_frame(void) {
     }
     case FRAME_OVERLAY:
         return launch_overlay_frame(&r);
+    case FRAME_FREE_ROAM_READY:
+        return launch_free_roam_ready(&r);
     default:
         launch_log("REFUSED: a frame the launcher does not send during a session (type ", 1, type, ").");
         return 0;
