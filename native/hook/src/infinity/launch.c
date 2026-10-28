@@ -1406,7 +1406,7 @@ static int launch_go_online(const LaunchTicket *t) {
     launch_log(launch_claims.line ? "save line: this profile's cloud data is kept; every game service goes to the server."
                                   : "no save line: this profile keeps no cloud data; the universe's services are answered here.",
                0, 0, "");
-    launch_log(free_tier ? "online through the launcher's session (free tier, display only); token for " :
+    launch_log(free_tier ? "online through the launcher's session (Infinity Racer, display only); token for " :
                            "online through the launcher's session (Infinity Supporter, display only); token for ",
                1, launch_token_left_ms() / 1000u, " s.");
     /* CR-L29 local capability, not attestation. A later livery_apply reports installation

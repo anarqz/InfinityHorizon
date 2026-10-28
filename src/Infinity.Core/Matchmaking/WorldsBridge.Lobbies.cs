@@ -9,7 +9,7 @@ namespace Infinity.Core.Matchmaking;
 // orders it (matching rows first, then the others with their reason) and fits it to one UI frame.
 public sealed partial class WorldsBridge
 {
-    /// <summary>What a list read gave: the worlds (each with whether it came from the Supporter section) or the <c>worlds.*</c> key of why not.</summary>
+    /// <summary>What a list read gave: the worlds (each with whether it came from an older server's <c>locked</c> section) or the <c>worlds.*</c> key of why not.</summary>
     private sealed record LobbyRead(string? FailureKey, IReadOnlyList<(WorldView World, bool Locked)> Worlds);
 
     /// <summary>
@@ -19,20 +19,19 @@ public sealed partial class WorldsBridge
     /// </summary>
     private async Task<LobbyRead> ReadLobbiesAsync(string filter, bool notFull, CancellationToken cancellation)
     {
-        static LobbyRead Failed(MmResult<WorldList>? answer) =>
-            new(answer?.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed", []);
+        static LobbyRead Failed() => new("worlds.list_failed", []); // CR-S69: no refusal is about the tier any more
         static IEnumerable<(WorldView, bool)> Of(WorldList list) =>
             list.Items.Select(w => (w, false)).Concat(list.Locked.Select(w => (w, true)));
         if (filter == WorldFilters.Every)
         {
             var all = await OperationAsync(_listRetry, token => _mm.ListAsync(WorldFilters.Every, notFull, false, token), cancellation).ConfigureAwait(false);
             if (all is { Ok: true, Value: { } every }) return new(null, Of(every).ToList());
-            if (all?.Error is not { Kind: MmErrorKind.Invalid, Field: "filter" }) return Failed(all);
+            if (all?.Error is not { Kind: MmErrorKind.Invalid, Field: "filter" }) return Failed();
             _log("worlds: the server has no all filter; two global reads instead");
             filter = WorldFilters.Global;
         }
         var vanilla = await OperationAsync(_listRetry, token => _mm.ListAsync(filter, notFull, false, token), cancellation).ConfigureAwait(false);
-        if (vanilla is not { Ok: true, Value: { } first }) return Failed(vanilla);
+        if (vanilla is not { Ok: true, Value: { } first }) return Failed();
         var worlds = Of(first).ToList();
         var modded = await OperationAsync(_listRetry, token => _mm.ListAsync(filter, notFull, true, token), cancellation).ConfigureAwait(false);
         if (modded is { Ok: true, Value: { } second })

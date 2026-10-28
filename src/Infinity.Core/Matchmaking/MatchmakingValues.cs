@@ -56,7 +56,7 @@ public static class WorldKinds
     public static IReadOnlyList<string> All { get; } = [Free, Supporter];
 }
 
-/// <summary>Who may join (OD-57); a free host only <see cref="Everyone"/> or <see cref="Private"/>.</summary>
+/// <summary>Who may join (OD-57); every host may pick any of them (OD-129).</summary>
 public static class WorldAudiences
 {
     public const string Everyone = "everyone";
@@ -67,7 +67,7 @@ public static class WorldAudiences
     public static IReadOnlyList<string> All { get; } = [Everyone, Supporters, Friends, Private];
 }
 
-/// <summary>The list's filter, required (OD-58); <see cref="Friends"/> is Supporter-only.</summary>
+/// <summary>The list's filter, required (OD-58); every ticket may use each of them (OD-129).</summary>
 public static class WorldFilters
 {
     public const string Global = "global";

@@ -189,7 +189,7 @@ public sealed record WorldList
 
     public required IReadOnlyList<WorldView> Items { get; init; }
 
-    /// <summary>Free tickets: at most 3 Supporter-only worlds (<c>why: "tier"</c>); else empty.</summary>
+    /// <summary>Always empty since OD-129; an older server listed up to 3 Supporter-only worlds here for a free ticket (<c>why: "tier"</c>).</summary>
     public required IReadOnlyList<WorldView> Locked { get; init; }
 
     public required string GeneratedAt { get; init; }
@@ -233,7 +233,7 @@ public sealed record WorldSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Message { get; init; }
 
-    /// <summary>Supporter hosts: the XUIDs that may join (≤ 256); ignored for a free host.</summary>
+    /// <summary>The XUIDs that may join (≤ 256), for every host (OD-129).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? Allow { get; init; }
 

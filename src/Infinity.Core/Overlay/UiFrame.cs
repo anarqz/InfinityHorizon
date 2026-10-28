@@ -28,13 +28,17 @@ public static class UiEventKind
     public const byte ConnectionDetails = 8;
 }
 
-/// <summary><c>Status.tier</c>.</summary>
+/// <summary><c>Status.tier</c>: only a badge (CR-S69, OD-129: nothing depends on it).</summary>
 public static class UiTier
 {
+    /// <summary>Infinity Racer (internal tier id <c>free</c>): every account.</summary>
     public const byte Free = 0;
 
-    /// <summary>Infinity Supporter (internal tier id <c>vip</c>; never shown as "VIP").</summary>
+    /// <summary>Infinity Supporter (internal tier id <c>vip</c>; never shown as "VIP"): the Supporter badge.</summary>
     public const byte Supporter = 1;
+
+    /// <summary>The badge of a wire tier: <c>vip</c> is a Supporter, anything else (<c>free</c>, absent, unknown) a Racer.</summary>
+    public static byte Of(string? tier) => tier == "vip" ? Supporter : Free;
 }
 
 /// <summary><c>Status.state</c>.</summary>

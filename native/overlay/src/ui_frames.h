@@ -82,7 +82,7 @@ constexpr uint8_t kPaneIconMax = static_cast<uint8_t>(PaneIcon::Check);
 
 struct LobbyMember {
     std::string gamertag;
-    uint8_t tier = 0; // 0 free, 1 Infinity Supporter
+    uint8_t tier = 0; // 0 Infinity Racer, 1 Infinity Supporter (the badge only, CR-S69)
     uint8_t role = 0; // 0 host, 1 in the world, 2 seat reserved
 };
 struct LobbyMod {
@@ -92,9 +92,9 @@ struct LobbyMod {
 struct WorldRow {
     std::string id, name, host;
     uint8_t players = 0, max = 0;
-    uint8_t kind = 0;      // 0 everyone's, 1 Infinity Supporter
+    uint8_t kind = 0;      // 0 an Infinity Racer host, 1 an Infinity Supporter host (the badge)
     uint8_t audience = 0;  // 0 everyone, 1 supporters, 2 friends, 3 private
-    uint8_t lock = 0;      // 0 joinable, 1 tier, 2 friends, 3 code, 4 full, 5 latency, 6 other,
+    uint8_t lock = 0;      // 0 joinable, 1 tier (an older server's; shown as 6), 2 friends, 3 code, 4 full, 5 latency, 6 other,
                            // 7 another mode (a Hardcore world), 8 another mode (a Noob world)
     uint8_t ping = 0;      // 0 unknown, 1 good, 2 fair, 3 poor
     bool friend_host = false;

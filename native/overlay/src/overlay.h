@@ -30,7 +30,7 @@ void InitToastSound(HMODULE self);
 void PlayToastSound();
 
 // --- the model the UI shows (ui.cpp); every setter is thread-safe
-enum class Tier : uint8_t { Unknown, Free, Supporter };
+enum class Tier : uint8_t { Unknown, Free, Supporter }; // Free: an Infinity Racer; the tier is a badge only (CR-S69)
 enum class Link : uint8_t { Connecting, Online, Offline, Reconnecting };
 enum class ToastKind : uint8_t { Info, Success, Warning, Error, Achievement, Update, Friend };
 
@@ -95,7 +95,7 @@ void SetHosted(const HostedWorld &hosted);
 // is the key of an action, never shown (OD-61).
 struct MemberRow {
     std::string xuid, gamertag;
-    uint8_t tier = 0;         // 0 free, 1 Infinity Supporter
+    uint8_t tier = 0;         // 0 Infinity Racer, 1 Infinity Supporter (the badge only, CR-S69)
     uint8_t role = 0;         // 0 host, 1 in the world, 2 on the way (seat reserved)
     uint8_t friend_state = 0; // 0 none, 1 friends, 2 request sent, 3 asked you, 4 you
 };
@@ -111,7 +111,7 @@ void SetActionResult(uint8_t action, uint8_t status, const std::string &message)
 void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
-void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool supporter, float dt);
+void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
 
 // --- the right pane (pane.cpp, OD-112): one component for every detail view, drawn beside the guide
 // The launcher's pane (DetailPane frame; any thread): a non-empty id opens it (and the guide), empty closes it.

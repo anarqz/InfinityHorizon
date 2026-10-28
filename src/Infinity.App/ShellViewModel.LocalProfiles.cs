@@ -30,7 +30,7 @@ public sealed partial class ShellViewModel
     /// <summary>OD-118: offline the create button makes a profile on this PC, not on an account.</summary>
     public string CreateProfileLabel => S[OfflineMode ? "offline.create_profile" : "profiles.add"];
 
-    /// <summary>The Supporter's Noob note is for signed-in players; offline has its own line (offline.create_noob).</summary>
+    /// <summary>The "new profiles are Noob" note is for signed-in players; offline has its own line (offline.create_noob).</summary>
     public bool ShowFreeNoobHint => !CanChooseHardcore && !OfflineMode;
 
     private static Profile AsRow(LocalProfile local) => new(local.Id, local.Game, local.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture),

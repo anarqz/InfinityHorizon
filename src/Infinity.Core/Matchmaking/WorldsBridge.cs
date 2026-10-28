@@ -428,8 +428,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 return new(query.Filter, 2, DeniedMessage(changed, "list"), []);
             if (answer is not { Ok: true, Value: { } list })
             {
-                var key = answer?.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed";
-                return new UiFrame.WorldsList(query.Filter, 2, _text(key), []);
+                return new UiFrame.WorldsList(query.Filter, 2, _text("worlds.list_failed"), []);
             }
             var rows = list.Items.Select(w => Row(w, false)).Concat(list.Locked.Select(w => Row(w, true))).ToList();
             return new UiFrame.WorldsList(query.Filter, 0, string.Empty, rows);
@@ -797,7 +796,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             else
             {
                 if (_mineId == seat.WorldId && _mineSnapshot.Named) { _mineUncertain = true; return _mineSnapshot; }
-                members.Add(new MemberRow(world.Host.Xuid, world.Host.Gamertag, world.Host.Tier == "vip" ? UiTier.Supporter : UiTier.Free, 0,
+                members.Add(new MemberRow(world.Host.Xuid, world.Host.Gamertag, UiTier.Of(world.Host.Tier), 0,
                     role == UiWorldRole.Hosting ? UiFriend.Self : UiFriend.None));
             }
             var row = Row(world, false);
@@ -850,7 +849,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public static MemberRow Member(WorldMember member)
     {
         ArgumentNullException.ThrowIfNull(member);
-        return new MemberRow(member.Xuid, member.Gamertag, member.Tier == "vip" ? UiTier.Supporter : UiTier.Free,
+        return new MemberRow(member.Xuid, member.Gamertag, UiTier.Of(member.Tier),
             member.Role switch { "host" => (byte)0, "seated" => (byte)1, _ => (byte)2 },
             member.Friend switch
             {
@@ -1058,7 +1057,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 _log($"worlds: open refused: {opened?.Error?.Kind}");
                 var key = opened?.Error?.Kind switch
                 {
-                    MmErrorKind.SupporterRequired => "worlds.host_supporters",
                     MmErrorKind.ModeMismatch => "worlds.host_mode",
                     MmErrorKind.Conflict when opened?.Error?.Reason == ConflictReasons.Mods => "worlds.mods_changed",
                     MmErrorKind.Conflict when ConflictReasons.RelayKey(opened?.Error) is { } relayKey => relayKey,
@@ -1441,7 +1439,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         byte lockReason = why switch
         {
             null => 0,
-            "tier" => 1,
+            "tier" => 1, // CR-S69: only an older server's; the overlay says "Not available", never an upsell
             "friends" => 2,
             "code" => 3,
             "full" => 4,

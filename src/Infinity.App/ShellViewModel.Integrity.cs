@@ -28,10 +28,11 @@ public sealed partial class ShellViewModel
     private bool CachedIntegrityReady => VerificationScope is { } scope && ContentLocation is { } location && VerificationCache.IsCurrent(scope, location.Mount);
     private Task _integrityRun = Task.CompletedTask;
 
-    /// <summary>OD-113: only a Supporter + Hardcore profile runs the integrity check; every other profile plays without it.</summary>
+    /// <summary>OD-113: only a profile the server checks (a Hardcore cloud line) runs the integrity check; every other profile plays without it.</summary>
     public bool IntegrityApplies
     {
         // CR-S51: the server says per profile (contentRequired); a server before CR-S51 leaves it out, which means OD-52's rule
+        // (that older server's own Supporter + Hardcore admission; CR-S69 keeps the fallback so Play matches what it enforces)
         get { var applies = LobbyProfile?.ContentRequired ?? IntegrityPolicy.Applies(_session?.Me?.Access.Tier, LobbyProfile?.Mode); InspectIntegrityApplies(ref applies); return applies; }
     }
     partial void InspectIntegrityApplies(ref bool applies);
@@ -113,7 +114,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// One event-driven background check (sign-in, profile selection, after a game exit); no timer/retry loop. Only a
-    /// Supporter + Hardcore profile with a selected folder is checked (OD-113); unchanged files reuse their digests.
+    /// profile with the check (<see cref="IntegrityApplies"/>) and a selected folder is checked (OD-113); unchanged files reuse their digests.
     /// </summary>
     public Task RefreshIntegrityAutomaticallyAsync() => RunIntegrityCheck(null, automatic: true);
 

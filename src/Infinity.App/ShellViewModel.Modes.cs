@@ -7,11 +7,11 @@ using Infinity.Core.Saves;
 namespace Infinity.App;
 
 /// <summary>
-/// OD-52: only an Infinity Supporter's Hardcore profile keeps data on the servers (the cloud save,
-/// the profile sync, the universe). OD-60: a Hardcore profile starts empty, and the game seeds it
+/// Which profiles keep data on the servers (the cloud save, the profile sync, the universe) is the
+/// server's cloud lines (CR-S51, OD-128); the tier is only a badge (CR-S69). OD-60: a Hardcore profile starts empty, and the game seeds it
 /// on the first launch (the opening race again, the starter car picked in the game); its first
 /// cloud revision is that career, uploaded at exit. A Noob one starts from the player's offline
-/// save (OD-41). Free accounts create Noob profiles; Hardcore → Noob is one-way.
+/// save (OD-41). Every account creates either; Hardcore → Noob is one-way.
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -28,6 +28,7 @@ public sealed partial class ShellViewModel
 
     partial void InspectCanChooseHardcore(ref bool can);
 
+    /// <summary>CR-S69: the account's badge (and which of the server's cloud lines is its), never a gate.</summary>
     private bool IsSupporter => _session?.Me?.Access.Tier == "vip";
 
     /// <summary>CR-S51: this server keeps a new Hardcore profile of this account in the cloud (absent policy = OD-52, a Supporter's).</summary>
@@ -179,7 +180,7 @@ public sealed partial class ShellViewModel
         return (_cloudSaves, _savesApi);
     }
 
-    /// <summary>OD-52 / OD-60: the cloud save around a Play (only a Supporter's Hardcore line does anything).</summary>
+    /// <summary>OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says).</summary>
     private SessionSaves? SessionSavesFor(Profile profile)
     {
         if (_install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
@@ -325,12 +326,11 @@ public sealed partial class ShellViewModel
         {
             // CR-S66: a Noob line is saved at once (no checks); without one, what this server does for Noob
             return "NOOB · " + (profile.CloudLine == true ? S["modes.noob_cloud"]
-                : profile.CloudLine is null && NoobKeepsCloud ? S["modes.noob_cloud"]
-                : IsSupporter && !NoobKeepsCloud ? S["modes.noob_supporter"] : S["profiles.local_saves"]);
+                : profile.CloudLine is null && NoobKeepsCloud ? S["modes.noob_cloud"] : S["profiles.local_saves"]);
         }
-        // CR-S51: the server says whether this profile keeps a cloud line; an older server (absent) is OD-52, a Supporter's
-        return "HARDCORE · " + (profile.CloudLine is { } cloud ? S[cloud ? "modes.hardcore_cloud" : "modes.hardcore_local"]
-            : IsSupporter ? S["modes.hardcore_cloud"] : S["modes.hardcore_lapsed"]);
+        // CR-S51: the server says whether this profile keeps a cloud line; without it (an older server), what this server's
+        // cloud lines say for the account (CR-S69: never a Supporter-only wording)
+        return "HARDCORE · " + S[(profile.CloudLine ?? HardcoreKeepsCloud) ?"modes.hardcore_cloud" : "modes.hardcore_local"];
     }
 }
 

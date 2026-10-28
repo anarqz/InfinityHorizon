@@ -41,7 +41,7 @@ public enum HostOutcome
     /// </summary>
     AlreadyHosting,
 
-    /// <summary>A refusal the settings caused (<c>REQUEST.INVALID</c>, <c>PORTAL.VIP_REQUIRED</c>, <c>PORTAL.MODE_MISMATCH</c>, …): the scheduler is idle until the caller fixes them.</summary>
+    /// <summary>A refusal the settings caused (<c>REQUEST.INVALID</c>, <c>PORTAL.MODE_MISMATCH</c>, an unknown 403, …): the scheduler is idle until the caller fixes them.</summary>
     Refused,
 
     /// <summary>The ticket was refused (401): refresh it and retry; the world id is kept.</summary>
@@ -127,7 +127,9 @@ public sealed class WorldHostScheduler(TimeSpan? announceEvery = null)
             case MmErrorKind.Unauthorized:
                 _due = now + RetryDelay;
                 return new HostRefusal(HostOutcome.Unauthorized, null, Next(now));
-            case MmErrorKind.Invalid or MmErrorKind.SupporterRequired or MmErrorKind.ModeMismatch or MmErrorKind.Conflict or MmErrorKind.WrongPool:
+            // an unknown 403 (an older server's PORTAL.VIP_REQUIRED, CR-S69) is refused too: retrying cannot change it
+            case MmErrorKind.Invalid or MmErrorKind.ModeMismatch or MmErrorKind.Conflict or MmErrorKind.WrongPool:
+            case MmErrorKind.Other when error.Status == System.Net.HttpStatusCode.Forbidden:
                 Stop();
                 return new HostRefusal(HostOutcome.Refused, null, Next(now));
             default:

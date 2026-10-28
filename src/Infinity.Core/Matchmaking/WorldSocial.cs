@@ -53,7 +53,6 @@ public sealed class WorldSocial(ApiClient api, Func<CancellationToken, Task<stri
     /// <summary>The overlay's words for a refused friend request.</summary>
     public static string FriendRefusal(string code) => code switch
     {
-        "PORTAL.VIP_REQUIRED" => "worlds.friend_supporters",
         "PORTAL.NOT_FOUND" => "worlds.friend_not_found",
         "SOCIAL.LIMIT_REACHED" => "worlds.friend_limit",
         ErrorCodes.RequestRateLimited => "worlds.slow_down",

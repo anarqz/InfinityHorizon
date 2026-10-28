@@ -8,8 +8,9 @@
 //   ones; selecting the active filter again returns to all; Y refreshes. Up to 50 rows, already
 //   ordered by the launcher: the matching ones (the profile's mode, the same mods, open to the
 //   player) first, then the others drawn dimmed with their reason under the name (another mode,
-//   mods, Infinity Supporter, friends only, a code, full, too far, not available). A code row opens
-//   the code entry, a Supporter row explains the Supporter tier, the rest say their reason. The list
+//   mods, friends only, a code, full, too far, not available). A code row opens the code entry, the
+//   rest say their reason. CR-S69 (OD-129): no lobby is shut by the tier any more; an older server's
+//   tier lock (1) reads "Not available". A Supporter host carries the "Supporter" badge. The list
 //   scrolls with the focus and the mouse wheel. A join answered "closed" or "full" refreshes it: the
 //   list was older than the world. No queue for worlds: a full world is just full.
 // - Join reserves a seat only (matchmaking's handshake); the game's own Free Roam Online then
@@ -18,7 +19,7 @@
 // - A private or friends world is joined with its code (code_entry.cpp); create gives the host
 //   the code to share.
 // - Create: name (the keyboard; "{gamertag}'s lobby" by default, CR-L40 §4), audience (Everyone,
-//   Supporters, Friends, Private; a free host gets Everyone or Private), players 2-12, latency limit.
+//   Supporters, Friends, Private; every host gets all four, OD-129), players 2-12, latency limit.
 // - My world (OD-63): while the profile hosts a world or holds a seat in one, the tab shows that
 //   world instead of the list (updated by the launcher): the host closes it or kicks players,
 //   a player leaves it; anyone adds a player as a friend or reports them with a reason. Player
@@ -87,7 +88,7 @@ const char *AccessMessage(const Shared &sh) {
 }
 
 // ---------------------------------------------------------------- render-thread state
-enum class Screen { List, Warning, Busy, Create, Hosted, Supporter, Member, Report, Confirm };
+enum class Screen { List, Warning, Busy, Create, Hosted, Member, Report, Confirm };
 Screen g_screen = Screen::List;
 WorldFilter g_filter = WorldFilter::All; // CR-L40: every lobby, no chip selected
 bool g_queried = false;                   // the list was asked since the guide opened
@@ -169,12 +170,12 @@ const char *LatencyName(int latency) {
 
 const char *LockName(uint8_t lock) {
     switch (lock) {
-    case 1: return T("Infinity Supporter", "Infinity Supporter");
+    case 1: // an older server's tier lock (CR-S69): no upsell, just not joinable here
+    case 6: return T("Not available", "Indisponível");
     case 2: return T("Friends only", "Só amigos");
     case 3: return T("Needs a code", "Precisa de código");
     case 4: return T("Full", "Cheio");
     case 5: return T("Too far", "Longe demais");
-    case 6: return T("Not available", "Indisponível");
     case 7: return T("Hardcore lobby", "Lobby Hardcore");
     case 8: return T("Noob lobby", "Lobby Noob");
     default: return "";
@@ -182,14 +183,13 @@ const char *LockName(uint8_t lock) {
 }
 
 // Why a row is not "matching" (CR-L40 §2.2), the first that applies; None: the player joins it as they are.
-enum class Why { None, Mode, Mods, Supporter, Friends, Code, Full, Far, Other };
+enum class Why { None, Mode, Mods, Friends, Code, Full, Far, Other };
 
 Why WhyOf(const WorldRow &w) {
     if (w.lock == 7 || w.lock == 8) return Why::Mode;
     if (!w.mods_match) return Why::Mods;
     switch (w.lock) {
     case 0: return Why::None;
-    case 1: return Why::Supporter;
     case 2: return Why::Friends;
     case 3: return Why::Code;
     case 4: return Why::Full;
@@ -308,13 +308,12 @@ std::string DefaultLobbyName(const std::string &gamertag) {
     return before + tag.substr(0, end) + after;
 }
 
-void StartCreate(bool supporter) {
+void StartCreate() {
     if (!GameReady() || !WorldAccessAllowed()) return;
-    WithWarning([supporter] {
+    WithWarning([] {
         if (!GameReady() || !WorldAccessAllowed()) return;
-        g_create = Create{};
+        g_create = Create{}; // Everyone; any of the four audiences for every host (OD-129)
         g_create.name = DefaultLobbyName(ProfileGamertag());
-        g_create.audience = supporter ? 0 : 0;
         g_screen = Screen::Create;
     });
 }
@@ -353,7 +352,7 @@ void DevAnswer() {
         modded.mods = {{"extraoptions", "2"}, {"nitrosystem", "3"}};
         g_shared.rows.push_back(modded);
         g_shared.rows.push_back({"h1", "Hardcore endurance", "Synthetic#00303", 6, 12, 0, 0, 7, 1, false});
-        g_shared.rows.push_back({"s1", "Supporters night race", "Synthetic#00301", 9, 12, 1, 1, 1, 0, false});
+        g_shared.rows.push_back({"s1", "Supporters night race", "Synthetic#00301", 9, 12, 1, 1, 0, 0, false});
         g_shared.rows.push_back({"c1", "Friday crew", "Synthetic#00230", 3, 8, 0, 3, 3, 1, false});
         if (!g_hide_full) {
             g_shared.rows.push_back({"w4", "Bucket list hunters", "Synthetic#00042", 12, 12, 0, 0, 4, 1, false});
@@ -477,18 +476,19 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     dl->PushClipRect(ImVec2(lx, a.y), ImVec2(b.x - 92 * s, b.y), true);
     TextAt(dl, f.body, ImVec2(lx, a.y + 10 * s), ready ? kText : kTextDim, w.name.c_str());
     std::string sub = w.host;
+    if (w.kind == 1) sub += " · Supporter"; // CR-S69: the host's badge, nothing more
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
     if (other) sub += " · " + WhyText(w, local_vanilla);
     if (!ready) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
-    const ImU32 sub_color = !ready ? kTextDim : why == Why::Supporter ? kPinkU : why == Why::Mods ? kAmber : kTextDim;
+    const ImU32 sub_color = !ready ? kTextDim : why == Why::Mods ? kAmber : kTextDim;
     TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), sub_color, sub.c_str());
     dl->PopClipRect();
     const std::string count = std::to_string(w.players) + "/" + std::to_string(w.max);
     const ImVec2 cs = Measure(f.body, count.c_str());
     TextAt(dl, f.body, ImVec2(b.x - 50 * s - cs.x, a.y + 10 * s), w.players >= w.max ? kRed : kText, count.c_str());
     PingBars(dl, ImVec2(b.x - 38 * s, a.y + 14 * s), w.ping);
-    if (why == Why::Supporter || why == Why::Code) {
-        dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 40 * s), why == Why::Supporter ? kPinkU : kText, kIconLock);
+    if (why == Why::Code) {
+        dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 40 * s), kText, kIconLock);
     } else if (why == Why::Mods) {
         // OD-112: the small "your mods don't match" mark
         dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 38 * s), kAmber, kIconWarning);
@@ -533,7 +533,7 @@ const DetailPane &LobbyPane(const WorldRow &w) {
     PaneSection players{1, T("PLAYERS", "JOGADORES"), {}};
     for (const auto &m : w.members) {
         std::string role = m.role == 0 ? T("Host", "Anfitrião") : m.role == 1 ? T("In the lobby", "No lobby") : T("On the way", "Chegando");
-        if (m.tier == 1) role += " · Infinity Supporter";
+        if (m.tier == 1) role += " · Supporter"; // CR-S69: the badge
         players.entries.push_back({m.gamertag, role, m.role == 0 ? PaneIcon::Host : m.tier == 1 ? PaneIcon::Supporter : PaneIcon::Player});
     }
     if (players.entries.empty()) players.entries.push_back({w.host, T("Host", "Anfitrião"), PaneIcon::Host});
@@ -670,7 +670,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, const Sha
     if (const WorldRow *shown = hovered ? hovered : focused) SetHoverPane(&LobbyPane(*shown));
 }
 
-void AcceptList(bool supporter, const Shared &sh) {
+void AcceptList(const Shared &sh) {
     if (!WorldAccessAllowed()) return;
     if (g_focus < 0 || g_focus >= static_cast<int>(g_items.size())) return;
     const Item item = g_items[g_focus];
@@ -685,7 +685,7 @@ void AcceptList(bool supporter, const Shared &sh) {
         }
         Query();
         break;
-    case Item::CreateTile: StartCreate(supporter); break;
+    case Item::CreateTile: StartCreate(); break;
     case Item::CodeTile: JoinByCode(); break;
     case Item::Row: {
         if (item.row < 0 || item.row >= static_cast<int>(sh.rows.size())) break;
@@ -693,7 +693,6 @@ void AcceptList(bool supporter, const Shared &sh) {
         switch (WhyOf(r)) {
         case Why::None: Join(r.id, std::string()); break;
         case Why::Code: JoinByCode(); break;            // a code row opens the code entry
-        case Why::Supporter: g_screen = Screen::Supporter; break;
         case Why::Mods:
             // OD-112: only the exact same mods join (a vanilla lobby: none); the server refuses it too
             PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"), MismatchText(r));
@@ -755,7 +754,7 @@ void DrawBusy(ImDrawList *dl, float x, float y, float w) {
     TextAt(dl, f.body, ImVec2(x + (w - ts.x) / 2, y + 80 * s), kText, g_busy.c_str());
 }
 
-void DrawCreate(ImDrawList *dl, float x, float y, float w, bool supporter) {
+void DrawCreate(ImDrawList *dl, float x, float y, float w) {
     y = Panel(dl, x, y, T("Create a lobby", "Criar um lobby"));
     const float fh = 66 * s, gap = 8 * s;
     const std::string players = std::to_string(g_create.players);
@@ -784,13 +783,7 @@ void DrawCreate(ImDrawList *dl, float x, float y, float w, bool supporter) {
         if (Clicked(a, b)) { g_create.field = i; g_accept = true; }
         y += fh + gap;
     }
-    if (!supporter) {
-        Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("Infinity Supporters can also open lobbies to Supporters only or to friends.",
-                                                          "Infinity Supporters também podem abrir lobbies só para Supporters ou para amigos."));
-        y += 44 * s;
-    } else {
-        y += 8 * s;
-    }
+    y += 8 * s;
     const ImVec2 a(x, y), b(x + w, y + 56 * s);
     Button(dl, a, b, g_create.field == 4, true, T("Create lobby", "Criar lobby"));
     if (Clicked(a, b)) { g_create.field = 4; g_accept = true; }
@@ -817,21 +810,6 @@ void DrawHosted(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
     Wrapped(dl, f.body, ImVec2(x, y), w, kText, T("Go to Free Roam Online in the game's menu to start your lobby.",
                                                   "Vá em Free Roam Online no menu do jogo para começar seu lobby."));
     y += 70 * s;
-    const ImVec2 a(x, y), b(x + w, y + 56 * s);
-    Button(dl, a, b, true, true, T("OK", "OK"));
-    if (Clicked(a, b)) g_accept = true;
-}
-
-void DrawSupporter(ImDrawList *dl, float x, float y, float w) {
-    y = Panel(dl, x, y, T("Infinity Supporter lobbies", "Lobbies Infinity Supporter"));
-    dl->AddText(f.icon_big, f.icon_big->FontSize, ImVec2(x, y), kPinkU, kIconStar);
-    y += 52 * s;
-    const char *text = T("These lobbies are open to Infinity Supporters. Supporters keep Infinity's servers running, and get lobbies for "
-                         "Supporters, friends and player profiles, cloud saves and leaderboards.\n\nBecome a Supporter in the Infinity launcher.",
-                         "Esses lobbies são abertos para Infinity Supporters. Os Supporters mantêm os servidores do Infinity no ar e ganham lobbies "
-                         "para Supporters, amigos e perfis de jogadores, saves na nuvem e placares.\n\nTorne-se um Supporter pelo launcher do Infinity.");
-    Wrapped(dl, f.body, ImVec2(x, y), w, kText, text);
-    y += WrappedHeight(f.body, w, text) + 28 * s;
     const ImVec2 a(x, y), b(x + w, y + 56 * s);
     Button(dl, a, b, true, true, T("OK", "OK"));
     if (Clicked(a, b)) g_accept = true;
@@ -959,7 +937,7 @@ void DrawMember(ImDrawList *dl, float x, float y, float w) {
     const float lx = x + f.icon_big->FontSize + 16 * s;
     TextAt(dl, f.title, ImVec2(lx, y), kText, g_member.gamertag.c_str());
     std::string sub = MemberStatus(g_member);
-    if (g_member.tier == 1) sub += " · Infinity Supporter";
+    if (g_member.tier == 1) sub += " · Supporter"; // CR-S69: the badge
     if (const char *fs = FriendStatus(g_member.friend_state); *fs) sub += std::string(" · ") + fs;
     TextAt(dl, f.small, ImVec2(lx, y + 40 * s), kTextDim, sub.c_str());
     y += 84 * s;
@@ -1111,7 +1089,6 @@ bool WorldsNavigate(Nav nav) {
         default: return true;
         }
     case Screen::Hosted:
-    case Screen::Supporter:
         if (nav == Nav::Accept || nav == Nav::Back) g_accept = true;
         return true;
     case Screen::Member:
@@ -1131,7 +1108,7 @@ bool WorldsNavigate(Nav nav) {
     return false;
 }
 
-void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool supporter, float dt) {
+void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt) {
     const char *warning = T(
         "Public lobbies: bugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
         "Lobbies públicos: bugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.");
@@ -1147,7 +1124,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     }
     const bool world_access = DevHost() || sh.access.Allowed(GetTickCount64());
     if (!world_access && (g_screen == Screen::Warning || g_screen == Screen::Create || g_screen == Screen::Hosted
-        || g_screen == Screen::Supporter || (g_screen == Screen::Busy && !g_world_action_busy))) {
+        || (g_screen == Screen::Busy && !g_world_action_busy))) {
         g_screen = Screen::List;
         g_after_warning = nullptr;
         g_accept = false;
@@ -1260,7 +1237,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         }
         DrawList(dl, x, y, w, bottom, sh);
         g_focus = std::clamp(g_focus, 0, std::max(0, static_cast<int>(g_items.size()) - 1));
-        if (accept) AcceptList(supporter, sh);
+        if (accept) AcceptList(sh);
         break;
     case Screen::Member: {
         DrawMember(dl, x, y, w);
@@ -1312,10 +1289,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         break;
     case Screen::Busy: DrawBusy(dl, x, y, w); break;
     case Screen::Create:
-        DrawCreate(dl, x, y, w, supporter);
-        if (!supporter && (g_create.audience == 1 || g_create.audience == 2)) {
-            g_create.audience = 3; // a free host: Everyone or Private (OD-57)
-        }
+        DrawCreate(dl, x, y, w);
         if (accept) {
             if (g_create.field == 0) {
                 KeyboardRequest r;
@@ -1332,10 +1306,6 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
         break;
     case Screen::Hosted:
         DrawHosted(dl, x, y, w, sh);
-        if (accept) g_screen = Screen::List;
-        break;
-    case Screen::Supporter:
-        DrawSupporter(dl, x, y, w);
         if (accept) g_screen = Screen::List;
         break;
     }

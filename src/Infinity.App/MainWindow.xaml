@@ -228,6 +228,12 @@
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                         IsEnabled="{Binding CanChangeIdentity}"
                         Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+              <!-- CR-S69: a Supporter's account carries a small badge; every account is an Infinity Racer otherwise. -->
+              <Border Background="{StaticResource InfinityPink}" CornerRadius="8" Padding="7,1" Margin="0,0,8,0" VerticalAlignment="Center"
+                      ToolTip="{Binding S[shell.supporter_badge_tip]}"
+                      Visibility="{Binding ShowSupporterBadge, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding S[shell.supporter_badge]}" FontSize="10" FontWeight="Bold" Foreground="White" />
+              </Border>
               <TextBlock Text="{Binding Email}" MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding Email}"
                          VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
               <Button Content="{Binding S[shell.exit]}" Style="{StaticResource LinkButton}" Click="OnSignOut" />
@@ -1059,8 +1065,6 @@
                   <ProgressBar Height="3" IsIndeterminate="True" Margin="0,16,0,16" Foreground="{StaticResource InfinityAccent}"
                                AutomationProperties.Name="{Binding AdmissionTitle}" />
                   <TextBlock Text="{Binding S[queue.keep_open]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                  <TextBlock Text="{Binding S[queue.priority_hint]}" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12"
-                             Foreground="{StaticResource InfinityMuted}" Visibility="{Binding ShowPriorityHint, Converter={StaticResource Visible}}" />
                   <Button Content="{Binding LeaveQueueLabel}" Click="OnLeaveQueue" HorizontalAlignment="Left" Margin="0,18,0,0"
                           IsEnabled="{Binding CanLeaveQueue}" />
                 </StackPanel>

@@ -213,7 +213,7 @@ struct Tile {
     const char *icon;
     std::string title, subtitle;
     bool locked;
-    int action; // 0 none, 1 close, 2 coming soon, 3 supporter info
+    int action; // 0 none, 1 close, 2 coming soon, 4 connection details, 5 quit
 };
 
 std::vector<Tile> TilesFor(int tab, const Model &m) {
@@ -245,8 +245,6 @@ void Activate(const Tile &tile) {
     switch (tile.action) {
     case 1: CloseSidebar(); break;
     case 2: PushToast(ToastKind::Info, T("Coming soon", "Em breve"), tile.title); break;
-    case 3: PushToast(ToastKind::Achievement, T("Infinity Supporter", "Infinity Supporter"),
-                      T("Unlock friends and player profiles in the launcher.", "Libere amigos e perfis de jogadores pelo launcher.")); break;
     case 4: g_connection_open = true; SendEvent(8, ""); break;
     case 5:
         if (!g_confirm_quit) {
@@ -398,9 +396,9 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     DrawAvatar(dl, ImVec2(x0 + pad + av / 2, y + av / 2), av / 2, f.heading, m.gamertag);
     const float hx = x0 + pad + av + 18 * s;
     TextAt(dl, f.heading, ImVec2(hx, y + 4 * s), kText, m.gamertag.c_str());
-    // tier chip
+    // tier chip (CR-S69: the account type, a badge only; the product names are not translated)
     const bool supporter = m.tier == Tier::Supporter;
-    const char *tier = supporter ? "INFINITY SUPPORTER" : m.tier == Tier::Free ? "FREE" : "INFINITY";
+    const char *tier = supporter ? "INFINITY SUPPORTER" : m.tier == Tier::Free ? "INFINITY RACER" : "INFINITY";
     const ImVec2 tsz = Measure(f.tag, tier);
     const ImVec2 ca(hx, y + 40 * s), cb(hx + tsz.x + 16 * s, y + 40 * s + tsz.y + 8 * s);
     dl->AddRectFilled(ca, cb, supporter ? kPinkU : Rgba(70, 70, 78), (cb.y - ca.y) / 2);
@@ -444,7 +442,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         g_pending.action = -1; // OD-118: lobbies and friends need the online session
         DrawOfflineMode(dl, x0 + pw / 2, (y + content_bottom) / 2, s);
     } else if (g_tab == kTabWorlds) {
-        DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, content_bottom, supporter, dt);
+        DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, content_bottom, dt);
     } else if (g_tab == kTabFriends) {
         g_pending.action = -1;
         const float center_x = x0 + pw / 2;

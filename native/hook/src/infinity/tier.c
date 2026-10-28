@@ -32,7 +32,8 @@
    OD-52: only a Supporter's Hardcore profile keeps data on the servers. A Supporter playing a
    Noob profile gets exactly what a free one gets (fi_tier_universe() is 0), so the hook never
    asks for what the server refuses to a vip noob ticket (OD-51, both sides). The tier itself
-   stays vip: the queue priority and the overlay's Supporter features are the account's.
+   stays vip: in a launcher session it is only the Supporter badge (CR-S69, OD-129: no queue
+   priority and no Supporter feature any more; the hook's [hook] diagnostics are every profile's).
 
    OD-128 (owner, 2026-10-28: "If cloud saves are enabled to the current profile, open all gates
    and send the requests. If cloud saves are off for the current profile type, gate it as well"):
