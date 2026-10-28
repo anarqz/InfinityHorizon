@@ -1035,6 +1035,28 @@ public sealed class PlaySupervisor
             _emit(new SupervisorEvent.ModsFailed(_config.Mods.State.Reason ?? "runtime"));
     }
 
+    /// <summary>How often <see cref="WatchExtraOptionsModsAsync"/> reads ExtraOptions' log until the set settles.</summary>
+    public static readonly TimeSpan ExtraOptionsLogPoll = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Owner 2026-10-28: after the handshake, ExtraOptions' log of this run is read until it answers for every planned mod, and the
+    /// lobby set is what it loaded; at <see cref="SupervisorConfig.ModReportDeadline"/> the set settles with what the log says.
+    /// </summary>
+    private async Task WatchExtraOptionsModsAsync(Matchmaking.ExtraOptionsModSetSource mods, CancellationToken cancellation)
+    {
+        var deadline = _clock.GetUtcNow() + _config.ModReportDeadline;
+        try
+        {
+            while (!mods.Refresh())
+            {
+                if (_clock.GetUtcNow() >= deadline) { mods.Expire("timeout"); break; }
+                await Task.Delay(ExtraOptionsLogPoll, _clock, cancellation).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { return; }
+        if (mods.State.Phase == Matchmaking.ModSetPhase.Failed) _emit(new SupervisorEvent.ModsFailed(mods.State.Reason ?? "not_loaded"));
+    }
+
     /// <summary>OD-113: a runtime set still not ready at the deadline fails for this launch (cancelled when this game process ends).</summary>
     private async Task ExpireModsAsync(Matchmaking.RuntimeModSetSource mods, CancellationToken cancellation)
     {
@@ -1064,6 +1086,7 @@ public sealed class PlaySupervisor
                 {
                     _emit(new SupervisorEvent.Running());
                     if (_config.Mods is Matchmaking.RuntimeModSetSource runtimeMods) _ = ExpireModsAsync(runtimeMods, cancellation);
+                    if (_config.Mods is Matchmaking.ExtraOptionsModSetSource extraOptionsMods) _ = WatchExtraOptionsModsAsync(extraOptionsMods, cancellation);
                     if (_config.Overlay is { } package)
                     {
                         // right after the handshake: the hook checks the file against this hash and loads it
