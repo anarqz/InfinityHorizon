@@ -12,6 +12,7 @@ public static class MatchmakingErrorCodes
     public const string NotHost = "MM.NOT_HOST";
     public const string AlreadyHosting = "MM.ALREADY_HOSTING";
     public const string GrantInvalid = "MM.GRANT_INVALID";
+    /// <summary>CR-S69 (OD-129): no route answers it any more; an older server's is a generic refusal (<see cref="MmErrorKind.Other"/>).</summary>
     public const string VipRequired = "PORTAL.VIP_REQUIRED";
     public const string NotFound = "PORTAL.NOT_FOUND";
     public const string Conflict = "PORTAL.CONFLICT";
@@ -64,14 +65,6 @@ public static class ConflictReasons
     } : null;
 }
 
-/// <summary><c>PORTAL.VIP_REQUIRED {capability}</c> values of §8.</summary>
-public static class Capabilities
-{
-    public const string WorldBan = "world_ban";
-    public const string WorldAudience = "world_audience";
-    public const string SocialFriends = "social.friends";
-}
-
 /// <summary>What an error means to the launcher, from its <c>code</c>.</summary>
 public enum MmErrorKind
 {
@@ -90,10 +83,7 @@ public enum MmErrorKind
     /// <summary><c>MM.GRANT_INVALID</c>.</summary>
     GrantInvalid,
 
-    /// <summary><c>PORTAL.VIP_REQUIRED {capability}</c>: an Infinity Supporter option (<see cref="MmError.Capability"/>).</summary>
-    SupporterRequired,
-
-    /// <summary><c>PORTAL.NOT_FOUND</c>: one answer for anyone but a Supporter friend, or an unknown request.</summary>
+    /// <summary><c>PORTAL.NOT_FOUND</c>: one answer for anyone but a friend, or an unknown request.</summary>
     NotFound,
 
     /// <summary><c>PORTAL.CONFLICT {reason}</c> (<see cref="MmError.Reason"/>, one of <see cref="ConflictReasons"/>).</summary>
@@ -130,9 +120,6 @@ public sealed record MmError(
     /// <summary><c>details.worldId</c> (<c>MM.ALREADY_HOSTING</c>).</summary>
     public string? WorldId => Detail("worldId");
 
-    /// <summary><c>details.capability</c> (<c>PORTAL.VIP_REQUIRED</c>).</summary>
-    public string? Capability => Detail("capability");
-
     /// <summary><c>details.reason</c> (<c>PORTAL.CONFLICT</c>).</summary>
     public string? Reason => Detail("reason");
 
@@ -153,7 +140,6 @@ public sealed record MmError(
         MatchmakingErrorCodes.NotHost => MmErrorKind.NotHost,
         MatchmakingErrorCodes.AlreadyHosting => MmErrorKind.AlreadyHosting,
         MatchmakingErrorCodes.GrantInvalid => MmErrorKind.GrantInvalid,
-        MatchmakingErrorCodes.VipRequired => MmErrorKind.SupporterRequired,
         MatchmakingErrorCodes.NotFound => MmErrorKind.NotFound,
         MatchmakingErrorCodes.Conflict => MmErrorKind.Conflict,
         MatchmakingErrorCodes.ModeMismatch => MmErrorKind.ModeMismatch,

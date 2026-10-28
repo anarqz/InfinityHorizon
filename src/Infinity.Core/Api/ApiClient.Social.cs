@@ -17,7 +17,7 @@ public sealed partial class ApiClient
     /// <summary>
     /// <c>GET /launcher/v1/invites[?asXuid=]</c>: pending invites to the account and requests to join
     /// its world; <paramref name="asXuid"/> decides <c>sameMode</c> (else the active session's profile).
-    /// A 403 <c>PORTAL.VIP_REQUIRED</c> means stop polling.
+    /// Open to every account (OD-129); a 403 means stop polling.
     /// </summary>
     public Task<InviteList> InvitesAsync(string access, string? asXuid = null, CancellationToken cancellation = default) =>
         SendAsync<InviteList>(HttpMethod.Get, Core, "/launcher/v1/invites" + AsXuid(asXuid), null, access, idempotent: false, cancellation);

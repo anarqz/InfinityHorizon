@@ -860,14 +860,16 @@ static FrSockaddrIn6 fr_world_address(const wchar_t *base64) {
     host[0] = 0;
     const wchar_t *spec = 0;
     wchar_t spec_buffer[128];
-    if (fr_world_override[0] && fi_tier_free()) {
-        /* a free profile goes only where the server places it (free with free, OD-25) */
+    /* the Beta protocol: a free profile goes only where the server places it (free with free,
+       OD-25). A launcher session has no tier gate (CR-S69, OD-129): every profile is a Racer. */
+    const int placed = fi_tier_free() && !fi_launch_protocol();
+    if (fr_world_override[0] && placed) {
         static volatile LONG said;
         if (!InterlockedExchange(&said, 1)) {
             log_append("FREEROAM: free profile: [hook] FreeRoamWorld ignored; the server places you.\r\n");
         }
     }
-    if (fr_world_override[0] && !fi_tier_free()) {
+    if (fr_world_override[0] && !placed) {
         spec = fr_world_override;
         source = "[hook] FreeRoamWorld";
     } else if (base64 && base64[0] && fr_base64_decode(base64, decoded, sizeof(decoded)) > 7 &&

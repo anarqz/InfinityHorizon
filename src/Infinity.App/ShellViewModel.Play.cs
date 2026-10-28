@@ -45,7 +45,6 @@ public sealed partial class ShellViewModel
     private bool _queued;
     private bool _leavingQueue;
     private QueuePlace? _queuePlace;
-    private string? _queueTier;
     private string? _admissionTitle;
     private string? _admissionDetail;
 
@@ -68,8 +67,6 @@ public sealed partial class ShellViewModel
     public string QueueEstimate => _queuePlace is { } place ? QueueText.Estimate(S, place) : string.Empty;
 
     public string QueueAhead => _queuePlace is { } place ? S.Format("queue.ahead", ("n", place.Ahead.ToString(CultureInfo.InvariantCulture))) : string.Empty;
-
-    public bool ShowPriorityHint => Queued && _queueTier == "free";
 
     public string LeaveQueueLabel => S[_leavingQueue ? "queue.leaving" : "queue.cancel"];
 
@@ -162,7 +159,7 @@ public sealed partial class ShellViewModel
         if (!await RefreshLauncherPolicyAsync()) return;
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var futureSessionId = Guid.CreateVersion7().ToString();
-        // OD-113: only a Supporter + Hardcore profile is checked, silently; any other declares no car database.
+        // OD-113: only a profile with the check (IntegrityApplies) is checked, silently; any other declares no car database.
         var (integrityProceed, integrity) = await IntegrityForPlayAsync(futureSessionId);
         if (!integrityProceed || !ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
             || !CanPlay) return;
@@ -395,7 +392,6 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Queued q:
                 _waitingForAdmission = _queued = true;
                 _queuePlace = q.Place;
-                _queueTier = q.Pool?.Tier;
                 _admissionTitle = S["queue.waiting_title"];
                 _admissionDetail = S.Format("queue.join_message", ("n", q.Place.Position.ToString(CultureInfo.InvariantCulture)));
                 SetStatus(_admissionDetail);

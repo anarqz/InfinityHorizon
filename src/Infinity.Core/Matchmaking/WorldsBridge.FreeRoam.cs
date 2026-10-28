@@ -78,7 +78,7 @@ public sealed partial class WorldsBridge
                     _log($"worlds: free roam: the lobby list failed ({failure})");
                     return FreeRoamResult.None;
                 }
-                // matching rows the player enters without a code: everyone's, or Supporters' for a Supporter (the server's canJoin)
+                // matching rows the player enters without a code: everyone's or Supporters' (the server's canJoin; OD-129 opens both to every ticket)
                 candidates = OrderLobbies(read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))))
                     .Where(r => Matching(r.Row) && !r.World.NeedsCode
                         && r.World.Audience is WorldAudiences.Everyone or WorldAudiences.Supporters)

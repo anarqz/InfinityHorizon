@@ -259,8 +259,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// "OFFLINE" means the server did not answer, never just "not signed in").
     /// </summary>
     // OD-118 T1c: offline (before SIGN IN, or Play offline) nothing is checked, so the pill says so, never "checking".
+    // CR-S69 (owner 2026-10-28): signed in, the account type: "CONNECTED - INFINITY RACER", or "... SUPPORTER" for a Supporter.
     public string Connection => !_onlineEngaged && _session is null ? S["shell.offline"]
-        : OnlineServicePaused ? S["online.paused_label"] : _session is not null ? S["shell.connected"]
+        : OnlineServicePaused ? S["online.paused_label"] : _session is not null ? S[IsSupporter ? "shell.connected_supporter" : "shell.connected_racer"]
         : _serverReachable switch { true => S["shell.reachable"], false => S["shell.offline"], null => S["shell.checking"] };
 
     /// <summary>The server answers (or a session is open): the top bar's status dot.</summary>
@@ -272,6 +273,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public Task ProbeServerAsync() => CheckLauncherUpdatesAsync();
 
     public string Email => _gate.AccountEmail ?? string.Empty;
+
+    /// <summary>CR-S69: a Supporter's account carries the small "Supporter" badge next to its e-mail; nothing else depends on it.</summary>
+    public bool ShowSupporterBadge => SignedIn && IsSupporter;
 
     public string GameLabel => _gate.Game is { } id ? Games.FirstOrDefault(g => g.Id == id)?.Title ?? id.ToUpperInvariant() : S["shell.pick_game"];
 
@@ -370,7 +374,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (OfflineMode && _chosenLocal is { } chosen) RememberLastLocalProfile(chosen.Id);
         Gate = _gate.ChooseProfile(ProfileName.Plain(profile.Gamertag), profile.ProfileId);
         Message = null;
-        _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a Supporter + Hardcore profile is checked in the background
+        _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a profile with the check is checked in the background
     }
 
     /// <summary>Re-opens the game picker (top bar "change").</summary>

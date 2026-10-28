@@ -10,8 +10,8 @@ namespace Infinity.App;
 /// <summary>
 /// OD-50: what the in-game overlay shows, decided here (the overlay holds no tokens and no strings
 /// of its own for these): the status line and the Xbox-style toasts, localised, sent through the
-/// supervisor's UI pipe. Every player gets these notifications; the Supporter sidebar features
-/// come with their own server routes (OD-51: refused there too for a free ticket).
+/// supervisor's UI pipe. Every player gets these notifications and every sidebar feature
+/// (CR-S69, OD-129); the tier is only the header's badge: Infinity Racer, or Infinity Supporter.
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -89,7 +89,8 @@ public sealed partial class ShellViewModel
                     ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
                 // OD-109: while this launcher hosts a dedicated lobby, the overlay offers no lobby actions.
                 checkWorldAccess: Infinity.Core.Supervisor.DedicatedHost.GuardPlayWorlds(() => DedicatedActive, ct => CheckWorldAccessAsync(integrityApplies, integrity, ct)),
-                onlineActivity: onlineActivity, idleWhenNoWorld: session.Me?.Access.Tier != "vip")
+                // CR-S69: invites and requests to join reach every ticket, so no tier skips the background seat read
+                onlineActivity: onlineActivity, idleWhenNoWorld: false)
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 ModSet = mods,
@@ -173,13 +174,13 @@ public sealed partial class ShellViewModel
         switch (e)
         {
             case SupervisorEvent.Admitted a:
-                _overlaySupporter = a.Pool.Tier == "vip";
+                _overlaySupporter = UiTier.Of(a.Pool.Tier) == UiTier.Supporter;
                 _overlayWarned = false;
                 break;
             case SupervisorEvent.Running:
                 OverlayStatus(UiState.Running, string.Empty);
                 // OD-125 follow-up: the first notice also says how to open the overlay (LB+RB; View is Azimuth's)
-                OverlayToast(1, S["overlay.connected"], (_overlaySupporter ? S["overlay.connected_supporter"] : S["overlay.connected_free"]) + "\n" + S["overlay.open_hint"]);
+                OverlayToast(1, S["overlay.connected"], (_overlaySupporter ? S["overlay.connected_supporter"] : S["overlay.connected_racer"]) + "\n" + S["overlay.open_hint"]);
                 break;
             case SupervisorEvent.Refused r:
                 OverlayStatus(UiState.Offline, r.Reason);
@@ -197,7 +198,7 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.TokenPushed when _overlayWarned:
                 _overlayWarned = false;
                 OverlayStatus(UiState.Running, string.Empty);
-                OverlayToast(1, S["overlay.reconnected"], _overlaySupporter ? S["overlay.connected_supporter"] : S["overlay.connected_free"]);
+                OverlayToast(1, S["overlay.reconnected"], _overlaySupporter ? S["overlay.connected_supporter"] : S["overlay.connected_racer"]);
                 break;
             case SupervisorEvent.OverlayConnected c:
                 Log("overlay: connected " + c.Version);

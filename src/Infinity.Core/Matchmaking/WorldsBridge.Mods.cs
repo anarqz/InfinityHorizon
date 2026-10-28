@@ -59,7 +59,7 @@ public sealed partial class WorldsBridge
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return Failed(DeniedMessage(changed, "list"));
                 if (answer is not { Ok: true, Value: { } list })
-                    return Failed(_text(answer?.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed"));
+                    return Failed(_text("worlds.list_failed"));
                 rows = list.Items.Select(w => (w, SessionRow(w, false, local))).Concat(list.Locked.Select(w => (w, SessionRow(w, true, local))))
                     // an older server ignores the filter: never show a world of the other kind
                     .Where(r => r.Item2.Modded).ToList();
@@ -89,7 +89,7 @@ public sealed partial class WorldsBridge
         var mods = world.Mods ?? [];
         var modded = mods.Count > 0;
         var members = (world.Members ?? []).Take(UiFrame.MaxLobbyMembers)
-            .Select(m => new LobbyMember(Clip(m.Gamertag, 64), m.Tier == "vip" ? UiTier.Supporter : UiTier.Free,
+            .Select(m => new LobbyMember(Clip(m.Gamertag, 64), UiTier.Of(m.Tier),
                 m.Role switch { "host" => (byte)0, "seated" => (byte)1, _ => (byte)2 }))
             .ToList();
         var shown = mods.Take(UiFrame.MaxLobbyMods).Select(m => new LobbyMod(Clip(m.Id, 64), Clip(m.Version, 16))).ToList();
@@ -149,7 +149,8 @@ public sealed partial class WorldsBridge
         var rows = new List<PaneEntry> { new(_text("pane.player_name"), name, UiPaneIcon.Player) };
         if (member is not null)
         {
-            rows.Add(new(_text("pane.player_tier"), _text(member.Tier == UiTier.Supporter ? "pane.tier_supporter" : "pane.tier_free"),
+            // CR-S69: every player is an Infinity Racer; a Supporter carries the badge
+            rows.Add(new(_text("pane.player_tier"), _text(member.Tier == UiTier.Supporter ? "pane.tier_supporter" : "pane.tier_racer"),
                 member.Tier == UiTier.Supporter ? UiPaneIcon.Supporter : UiPaneIcon.None));
             rows.Add(new(_text("pane.player_lobby"), _text(member.Role switch { 0 => "pane.role_host", 1 => "pane.role_in", _ => "pane.role_reserved" }),
                 member.Role == 0 ? UiPaneIcon.Host : UiPaneIcon.None));
