@@ -29,8 +29,7 @@ public static class AzimuthSetup
     /// <summary>The Azimuth version Infinity and the hook support.</summary>
     public const string CompatibleVersion = "1.0.3";
 
-    /// <summary>Azimuth 1.0's flag that starts the added game directly instead of Azimuth's own launcher. Not passed since owner
-    /// 2026-10-28 (a device-removed start on Windows): Azimuth's launcher opens and the player presses Play there.</summary>
+    /// <summary>Azimuth 1.0's flag that starts the added game directly instead of Azimuth's own launcher.</summary>
     public const string SkipLauncher = "--skip-launcher";
 
     /// <summary>OD-125: the exact <c>azimuth.exe</c> of <see cref="CompatibleVersion"/> (SHA-256); any other build is refused.</summary>
