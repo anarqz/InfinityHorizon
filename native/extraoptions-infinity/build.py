@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.3 made of ExtraOptions 0.3.2
+"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.3 made of ExtraOptions 0.3.9
 (native/extraoptions, a submodule pinned to an upstream release), Infinity's patch series
 (patches/*.patch, applied to a copy) and the ForzaInfinity hook (native/hook, built with
 FI_EO_BUILD and src/core/fi_rename.h).
@@ -32,6 +32,15 @@ def hook_build():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def extraoptions_version():
+    """MOD_VERSION of the submodule's extra_options.h, so the product version follows the pinned release."""
+    for line in (EXTRAOPTIONS / "extra_options.h").read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[:2] == ["#define", "MOD_VERSION"]:
+            return parts[2].strip('"')
+    raise SystemExit("native/extraoptions/extra_options.h has no MOD_VERSION")
 
 
 def run(command, **kwargs):
@@ -102,7 +111,7 @@ def build(zig, directory, output, options):
         "--build-dir",
         directory / "extraoptions-objects",
         "--product-version",
-        "ExtraOptions 0.3.2 + ForzaInfinity " + hook.mod_version(),
+        "ExtraOptions " + extraoptions_version() + " + ForzaInfinity " + hook.mod_version(),
         "--extra-library",
         library,
     ]

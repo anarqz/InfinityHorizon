@@ -20,7 +20,7 @@ public sealed record ExtraOptionsModStatus(ExtraOptionsModState State, IReadOnly
 
 /// <summary>
 /// OD-126: the launcher manages mods in ExtraOptions' own format, so a mod copied by hand and one from the catalog look the
-/// same. The rules are ExtraOptions 0.3.2's (<c>features/addons.c</c>, <c>tools/MODS.md</c>): every folder of
+/// same. The rules are ExtraOptions 0.3.9's (<c>features/addons.c</c>, <c>tools/MODS.md</c>): every folder of
 /// <c>&lt;Azimuth&gt;\mods</c> but dot folders and links is a mod; <c>loadorder.txt</c> (UTF-8, one folder per line, later =
 /// higher priority) enables a listed folder and disables one written <c># folder</c>; a folder it does not list is appended,
 /// enabled, when the game starts. Change the file only while the game is closed: ExtraOptions rewrites it at start.
