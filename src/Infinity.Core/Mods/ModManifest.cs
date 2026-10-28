@@ -15,6 +15,8 @@ public sealed class ModManifest
     public const string CustomPrefix = "custom.";
     /// <summary>A custom mod (OD-114): loaded from the player's custom folder, never from a catalog; its payload is a local <c>files/</c> tree.</summary>
     public bool IsCustom => IsCustomId(Id);
+    /// <summary>OD-125/127: part of Infinity (only ExtraOptions.Infinity, from the launcher itself): options only, nothing to install.</summary>
+    public bool IsBuiltIn => Document.TryGetProperty("builtIn", out var builtIn) && builtIn.ValueKind == JsonValueKind.True;
     /// <summary>A custom mod that maps executable code (a native binary): only a development native runtime may load it.</summary>
     public bool HasExecutableCode => Files.Any(f => f.Role == "binary" || ExecutableExtension(f.Destination));
     /// <summary>A custom mod whose manifest still lists review blockers: listed, never installed or enabled.</summary>
@@ -201,7 +203,13 @@ public sealed class ModManifest
         if (DatabaseBase is not null && Multiplayer is not { EntersLobbySet: true }) throw new ModException("a database base affects multiplayer", ModErrors.Unsupported);
         if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => c.GetString() is not { } other || !ValidId(other)))
             throw new ModException("invalid conflicts");
-        if (IsCustom)
+        if (IsBuiltIn)
+        {
+            // OD-125/127: ExtraOptions.Infinity comes with Infinity's hook; its manifest (embedded in the launcher) only describes its options.
+            if (Id != ManagedModFiles.BuiltInExtraOptions || IsCustom || IsExternal || Files.Count > 0 || Document.TryGetProperty("package", out _)
+                || Document.TryGetProperty("additionalPackages", out _) || Document.TryGetProperty("payload", out _)) throw new ModException("invalid built-in mod", ModErrors.Unsupported);
+        }
+        else if (IsCustom)
         {
             // A custom mod has no download: its payload is the player's own files tree next to its manifest.
             if (Document.TryGetProperty("package", out _) || Document.TryGetProperty("additionalPackages", out _)

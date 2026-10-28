@@ -30,6 +30,11 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     public bool ShowSourceBadge => CustomBadge.Length > 0;
     /// <summary>The player still has to confirm this exact custom manifest (the update's, when one is pending) before acting.</summary>
     public bool NeedsConfirmation { get; init; }
+    /// <summary>The version line under the name ("v1.2.0"; a <see cref="BuiltIn"/> card says it is part of Infinity).</summary>
+    public string VersionText { get; init; } = "";
+    /// <summary>OD-125/127: part of Infinity (ExtraOptions.Infinity): always there and on; only its options change.</summary>
+    public bool BuiltIn { get; init; }
+    public bool ShowAction => !BuiltIn;
 }
 
 /// <summary>What the background refresh learned about one manifest (M10: no disk access while building cards).</summary>
@@ -491,7 +496,7 @@ public sealed partial class ShellViewModel
         .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id && d.Versions.Contains(m.Version))).FirstOrDefault(m => m is not null);
 
     private List<string> MissingDependencyNames(ModManifest mod) => mod.Dependencies
-        .Where(d => !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
+        .Where(d => d.Id != ManagedModFiles.BuiltInExtraOptions && !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
         .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id).ToList();
 
     private static string? Blocker(Action check)
@@ -503,9 +508,19 @@ public sealed partial class ShellViewModel
     private void RefreshModCards()
     {
         ModCards.Clear();
+        // OD-125/127: ExtraOptions is part of Infinity (ExtraOptions.Infinity, the hook): pinned first, always on, no install, disable or
+        // removal; its options are the only thing to change (with the Azimuth folder known)
+        var extraOptions = Infinity.Core.Process.ExtraOptionsInfinity.Manifest;
+        ModCards.Add(new(extraOptions, extraOptions.Text("name", S.Locale), extraOptions.Text("description", S.Locale), S["mods.builtin_extraoptions"],
+            S["mods.no_dependencies"], "", false, _install is not null,
+            extraOptions.Document.GetProperty("author").GetString() + " · " + extraOptions.Document.GetProperty("license").GetString() + " · " + extraOptions.Version,
+            S["mods.badge_builtin"])
+        { BuiltIn = true, Enabled = true, VersionText = S.Format("mods.builtin_version", ("version", extraOptions.Version)) });
         var expired = CatalogExpired;
         foreach (var fact in _modFacts)
         {
+            // whatever an older catalog still lists for it
+            if (fact.Manifest.Id == ManagedModFiles.BuiltInExtraOptions) continue;
             var mod = fact.Manifest; var installed = fact.Installed;
             var compatible = _install is not null && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray().Any(v => v.GetString() == _install.Version);
             // Custom executable code runs only through the development runtime until custom signing is designed (OD-114).
@@ -582,11 +597,6 @@ public sealed partial class ShellViewModel
                 if (installed is { Enabled: true } && fact.Next is null) action = S["mods.disable_action"];
                 else canAct = false;
             }
-            if (mod.Id == ManagedModFiles.BuiltInExtraOptions)
-            {
-                // OD-125: ExtraOptions is part of Infinity's own winmm.dll (ExtraOptions.Infinity), never a mod to install
-                status = S["mods.builtin_extraoptions"]; badge = S["mods.badge_on"]; action = S["mods.install"]; canAct = false; dependency = null;
-            }
             canAct &= ModsIdle && _install is not null && !ModRecoveryRequired;
             var requirements = mod.Dependencies.Count == 0 ? S["mods.no_dependencies"]
                 : S["mods.dependencies"] + " " + string.Join(", ", mod.Dependencies.Select(d =>
@@ -596,6 +606,7 @@ public sealed partial class ShellViewModel
                 action, canAct, mod.ConfigPath is not null && installed is not null && installed.Problem is null,
                 mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version, badge)
             {
+                VersionText = "v" + mod.Version,
                 Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true, Dependency = dependency,
                 Held = installed is null && fact.Held,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,

@@ -117,6 +117,7 @@ public static class OfficialModCatalog
         var manifest = new ModManifest(Encoding.UTF8.GetBytes(node.ToJsonString()));
         // OD-114: the reserved custom prefix comes only from the player's custom folder, never from a catalog.
         if (manifest.IsCustom) throw new ModException("a catalog cannot carry a custom mod", ModErrors.Catalog);
+        if (manifest.IsBuiltIn) throw new ModException("a catalog cannot carry a built-in mod", ModErrors.Catalog);
         return manifest;
     }
 
@@ -128,6 +129,7 @@ public static class OfficialModCatalog
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (manifest.IsCustom) throw new ModException("a catalog cannot carry a custom mod", ModErrors.Catalog);
+        if (manifest.IsBuiltIn) throw new ModException("a catalog cannot carry a built-in mod", ModErrors.Catalog);
         var body = JsonNode.Parse(manifest.Document.GetRawText())!.AsObject();
         var entry = new JsonObject();
         foreach (var field in EntryFields) { entry[field] = body[field]?.DeepClone(); body.Remove(field); }

@@ -78,7 +78,10 @@ public sealed partial class ShellViewModel
         if (_selectedMod is not { HasOptions: true } selected || ModManagerFactory() is not { } factory) return;
         try
         {
-            var ini = await Task.Run(() => factory().ReadSettings(selected.Manifest));
+            var root = _install?.Root;
+            // OD-125/127: ExtraOptions.Infinity's own ini, beside azimuth.exe; no managed install behind it
+            var ini = await Task.Run(() => selected.BuiltIn && root is not null
+                ? Infinity.Core.Process.ExtraOptionsInfinity.ReadSettings(root) : factory().ReadSettings(selected.Manifest));
             if (!ReferenceEquals(_selectedMod, selected) && _selectedMod?.Manifest.Digest != selected.Manifest.Digest) return;
             _ini = ini; _iniManifest = selected.Manifest.Digest; ModOptions.Clear();
             foreach (var option in selected.Manifest.Document.GetProperty("config").GetProperty("options").EnumerateArray())
@@ -93,12 +96,13 @@ public sealed partial class ShellViewModel
     public void SaveIni()
     {
         if (_ini is null || _selectedMod is not { } selected || !ModsIdle || ModManagerFactory() is not { } factory) return;
-        var ini = _ini;
+        var ini = _ini; var root = _install?.Root;
         var edits = ModOptions.Where(o => o.Editable).Select(o => (o.Id, o.Text, o.Culture)).ToArray();
         _ = RunModOperationAsync(() => Task.Run(() =>
         {
             foreach (var option in edits) ini.Set(option.Id, option.Text, option.Culture);
-            factory().SaveSettings(selected.Manifest, ini);
+            if (selected.BuiltIn && root is not null) Infinity.Core.Process.ExtraOptionsInfinity.SaveSettings(root, ini);
+            else factory().SaveSettings(selected.Manifest, ini);
         }), S["mods.options_saved"], preserveOptionsOnFailure: true);
     }
     public async Task RevertIniAsync() { await LoadSelectedOptionsAsync(); Changed(string.Empty); }

@@ -107,6 +107,8 @@ public sealed partial class ManagedModFiles
         foreach (var dependency in manifest.Document.GetProperty("dependencies").EnumerateArray())
         {
             var id = dependency.GetProperty("id").GetString();
+            // OD-125/127: ExtraOptions comes with Infinity (ExtraOptions.Infinity), always on; never a managed mod to check
+            if (id == BuiltInExtraOptions) continue;
             var target = installed.SingleOrDefault(m => m.Id == id) ?? throw new ModException("required dependency is not managed", ModErrors.Dependency);
             if (!dependency.GetProperty("versions").EnumerateArray().Any(v => v.GetString() == target.Version)
                 || Receipt(target) is not { Enabled: true } || !Verified(target)) throw new ModException("required dependency is disabled or incompatible", ModErrors.Dependency);
