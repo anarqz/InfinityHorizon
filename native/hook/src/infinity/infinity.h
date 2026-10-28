@@ -166,6 +166,12 @@ int fi_livery_remote_policy(unsigned mode);
 /* OD-54: the launcher's relay port while this PC hosts in a launcher session (0: not hosting). */
 void azimuth_world_launcher_host(unsigned port);
 void fi_launch_capture(unsigned what, int ok);
+/* CR-L40: FREE ROAM ONLINE's matchmaking request (POST momatch .../hoppers/FreeRoam_qos) first
+   asks the launcher for a lobby and waits up to 20 s on the calling net worker (`aborted`: the
+   request's abort flag). The launcher's result (0 ready, 1 none, 2 not online), -1 when nothing
+   was asked or nothing came; the request is forwarded either way. */
+int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url);
+int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG *aborted);
 /* N-H2: the native mod runtime's snapshot as a ModsReport (0x1b) for the launcher; the session
    writer sends it once it changed. 0 outside a launcher session. */
 struct InfinityModsSnapshotV2;

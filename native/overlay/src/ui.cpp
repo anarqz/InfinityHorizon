@@ -9,6 +9,11 @@
 //   (avatar, gamertag, tier chip, connection), tabs Home, Lobbies, Friends and Settings,
 //   rounded tiles with the white focus ring, and controller hints. Friends is coming soon;
 //   Settings opens the connection diagnostic report. Transient toasts remain available.
+// - The guide's bottom block (CR-L40 §1.3), just above the controller hints: the avatar (the
+//   launcher's 0x1A image in a circle, the initials without one) and the gamertag, then the server's
+//   host and its status lines (Online 12/50 · Lobbies 3, Hardcore 5 (210) · Noob 7 (340); profiles
+//   in parentheses), "Status unavailable" until the launcher's 0x19 says otherwise. The header
+//   avatar is the same texture. The tab content ends above the block.
 //
 // Every text is UTF-8 (built with /utf-8); Portuguese when Windows' UI language is Portuguese.
 #include "overlay.h"
@@ -62,6 +67,7 @@ struct Model {
     std::string connection_details;
     uint8_t connection_state = 2;
     ULONGLONG connection_at = 0;
+    ServerStatus server; // flags 0: unknown
 };
 std::mutex g_lock;
 Model g_model;
@@ -298,6 +304,74 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, const Mod
     }
 }
 
+// The player's avatar in a circle: the launcher's image (0x1A), else the gamertag's initials on pink.
+void DrawAvatar(ImDrawList *dl, ImVec2 centre, float radius, ImFont *font, const std::string &gamertag) {
+    dl->AddCircleFilled(centre, radius + 3 * s, kText, 48);
+    if (const uint64_t texture = AvatarTexture()) {
+        dl->AddImageRounded(static_cast<ImTextureID>(texture), ImVec2(centre.x - radius, centre.y - radius), ImVec2(centre.x + radius, centre.y + radius),
+                            ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, radius);
+        return;
+    }
+    dl->AddCircleFilled(centre, radius, kPinkU, 48);
+    std::string initials = gamertag.substr(0, std::min<size_t>(2, gamertag.size()));
+    std::transform(initials.begin(), initials.end(), initials.begin(), [](char c) { return static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c); });
+    const ImVec2 isz = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, initials.c_str());
+    dl->AddText(font, font->FontSize, ImVec2(centre.x - isz.x / 2, centre.y - isz.y / 2), kText, initials.c_str());
+}
+
+// ServerStatus.Line() of the launcher in two lines: online and lobbies, then each mode (profiles in
+// parentheses); a figure the server did not send is left out, never shown as zero. Empty: unknown.
+std::vector<std::string> StatusLines(const ServerStatus &st) {
+    if (!(st.flags & ServerStatus::Known)) return {};
+    const bool live = st.flags & ServerStatus::Live, profiles = st.flags & ServerStatus::Profiles;
+    std::string first = "Online " + std::to_string(st.online) + (st.flags & ServerStatus::Capacity ? "/" + std::to_string(st.capacity) : "");
+    if (live) first += " · Lobbies " + std::to_string(st.lobbies);
+    std::vector<std::string> lines{first};
+    if (live || profiles) {
+        auto mode = [&](const char *name, uint16_t now, uint32_t registered) {
+            std::string out = name;
+            if (live) out += " " + std::to_string(now);
+            if (profiles) out += " (" + std::to_string(registered) + ")";
+            return out;
+        };
+        lines.push_back(mode("Hardcore", st.hardcore, st.profiles_hardcore) + " · " + mode("Noob", st.noob, st.profiles_noob));
+    }
+    return lines;
+}
+
+float StatusBlockHeight(const ServerStatus &st) {
+    const size_t lines = std::max<size_t>(1, StatusLines(st).size());
+    return 44 * s + 10 * s + static_cast<float>(lines) * 20 * s;
+}
+
+// The bottom block (CR-L40 §1.3) from `top`: avatar and gamertag, the server's host, its status.
+void DrawStatusBlock(ImDrawList *dl, float x, float top, float w, const Model &m) {
+    const float av = 44 * s;
+    DrawAvatar(dl, ImVec2(x + av / 2, top + av / 2), av / 2 - 2 * s, f.tag, m.gamertag);
+    const float tx = x + av + 14 * s;
+    dl->PushClipRect(ImVec2(tx, top), ImVec2(x + w, top + av), true);
+    TextAt(dl, f.body, ImVec2(tx, top), kText, m.gamertag.c_str());
+    const std::string host = m.server.server.empty() ? std::string(T("Infinity server", "Servidor Infinity")) : m.server.server;
+    TextAt(dl, f.small, ImVec2(tx, top + 25 * s), kTextDim, host.c_str());
+    dl->PopClipRect();
+    float y = top + av + 10 * s;
+    const auto lines = StatusLines(m.server);
+    if (lines.empty()) {
+        TextAt(dl, f.small, ImVec2(x, y), kTextDim, T("Status unavailable", "Status indisponível"));
+        return;
+    }
+    const ImVec2 a(x, y);
+    dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + lines.size() * 20 * s), true);
+    for (const auto &line : lines) {
+        TextAt(dl, f.small, ImVec2(x, y), kText, line.c_str());
+        y += 20 * s;
+    }
+    dl->PopClipRect();
+    if ((m.server.flags & ServerStatus::Profiles) && !PaneModal() && ImGui::IsMouseHoveringRect(a, ImVec2(x + w, y))) {
+        ImGui::SetTooltip("%s", T("In parentheses: registered profiles", "Entre parênteses: perfis registrados"));
+    }
+}
+
 void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Model &m) {
     const float target = g_open ? 1.0f : 0.0f;
     const float speed = dt / 0.22f;
@@ -321,13 +395,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     float y = 34 * s;
     // header: avatar, gamertag, tier, connection
     const float av = 72 * s;
-    const ImVec2 ac(x0 + pad + av / 2, y + av / 2);
-    dl->AddCircleFilled(ac, av / 2 + 3 * s, kText, 48);
-    dl->AddCircleFilled(ac, av / 2, kPinkU, 48);
-    std::string initials = m.gamertag.substr(0, std::min<size_t>(2, m.gamertag.size()));
-    std::transform(initials.begin(), initials.end(), initials.begin(), [](char c) { return static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c); });
-    const ImVec2 isz = Measure(f.heading, initials.c_str());
-    dl->AddText(f.heading, f.heading->FontSize, ImVec2(ac.x - isz.x / 2, ac.y - isz.y / 2), kText, initials.c_str());
+    DrawAvatar(dl, ImVec2(x0 + pad + av / 2, y + av / 2), av / 2, f.heading, m.gamertag);
     const float hx = x0 + pad + av + 18 * s;
     TextAt(dl, f.heading, ImVec2(hx, y + 4 * s), kText, m.gamertag.c_str());
     // tier chip
@@ -366,16 +434,21 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     TextAt(dl, f.title, ImVec2(x0 + pad, y), kText, names[g_tab]);
     y += 38 * s;
 
+    // the bottom block (CR-L40 §1.3) sits above the hints' line; the tab content ends above it
+    const float hy = height - 46 * s;
+    const float block_top = hy - 16 * s - 14 * s - StatusBlockHeight(m.server);
+    const float content_bottom = block_top - 26 * s;
+
     SetHoverPane(nullptr); // the worlds tab sets it again for its focused row
     if (OfflineSession() && (g_tab == kTabWorlds || g_tab == kTabFriends)) {
         g_pending.action = -1; // OD-118: lobbies and friends need the online session
-        DrawOfflineMode(dl, x0 + pw / 2, (y + height - 80 * s) / 2, s);
+        DrawOfflineMode(dl, x0 + pw / 2, (y + content_bottom) / 2, s);
     } else if (g_tab == kTabWorlds) {
-        DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, height - 80 * s, supporter, dt);
+        DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, content_bottom, supporter, dt);
     } else if (g_tab == kTabFriends) {
         g_pending.action = -1;
         const float center_x = x0 + pw / 2;
-        const float center_y = (y + height - 80 * s) / 2;
+        const float center_y = (y + content_bottom) / 2;
         const float icon_size = 84 * s;
         const ImVec2 icon = f.icon_big->CalcTextSizeA(icon_size, FLT_MAX, 0, kIconContact);
         dl->AddText(f.icon_big, icon_size, ImVec2(center_x - icon.x / 2, center_y - 66 * s), Rgba(255, 255, 255, 0.22f), kIconContact);
@@ -386,8 +459,9 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         DrawTiles(dl, x0, y, pw, pad, m);
     }
 
-    // hints
-    const float hy = height - 46 * s;
+    // the status block, then the hints
+    dl->AddLine(ImVec2(x0 + pad, block_top - 13 * s), ImVec2(x0 + pw - pad, block_top - 13 * s), Rgba(255, 255, 255, 0.08f));
+    DrawStatusBlock(dl, x0 + pad, block_top, pw - 2 * pad, m);
     dl->AddLine(ImVec2(x0 + pad, hy - 16 * s), ImVec2(x0 + pw - pad, hy - 16 * s), Rgba(255, 255, 255, 0.08f));
     float hx2 = x0 + pad;
     FaceButton(dl, ImVec2(hx2 + 11 * s, hy + 10 * s), 11 * s, kGreen, "A");
@@ -415,6 +489,16 @@ void SetProfile(const std::string &gamertag, Tier tier) {
     std::lock_guard<std::mutex> lock(g_lock);
     g_model.gamertag = gamertag.empty() ? "Infinity" : gamertag;
     g_model.tier = tier;
+}
+
+std::string ProfileGamertag() {
+    std::lock_guard<std::mutex> lock(g_lock);
+    return g_model.gamertag;
+}
+
+void SetServerStatus(const ServerStatus &status) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_model.server = status;
 }
 
 void SetLink(Link link, const std::string &detail) {
@@ -577,6 +661,7 @@ void DrawUi(float width, float height, float dt) {
         snapshot.connection_details = g_model.connection_details;
         snapshot.connection_state = g_model.connection_state;
         snapshot.connection_at = g_model.connection_at;
+        snapshot.server = g_model.server;
     }
     ImGui::GetIO().MouseDrawCursor = g_open;
     ImDrawList *dl = ImGui::GetForegroundDrawList();

@@ -10,6 +10,13 @@
 // A swapchain whose queue is unknown gets no overlay. A fence per back buffer keeps an allocator from being
 // reset while the GPU still reads it. Any structured exception in the draw sends the overlay to
 // passthrough (main.cpp): every hook is disabled and the game's calls run untouched.
+//
+// The avatar (CR-L40 §1.3, 0x1A) is the one texture besides ImGui's font: the pipe thread leaves its
+// pixels here, the render thread creates a texture and an upload buffer (never a wait), records the
+// copy into that frame's own command list ahead of the draw, and retires the previous pair once the
+// fence passes the last frame that read it. Two SRV slots after the font's alternate, and a new
+// avatar waits until the previous one is retired, so a slot is never rewritten while the GPU reads it.
+// The pixels stay in memory: a renderer initialised again uploads them again.
 #include "overlay.h"
 
 #include <MinHook.h>
@@ -18,6 +25,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <mutex>
 #include <vector>
 
 #include "imgui.h"
@@ -145,6 +154,146 @@ void ReleaseTargets() {
     }
 }
 
+// ---------------------------------------------------------------- the avatar (CR-L40 §1.3)
+constexpr UINT kSrvSlots = 3; // 0 ImGui's font, 1 and 2 the avatar's, alternating
+
+std::mutex g_avatar_lock;
+AvatarImage g_avatar_pending; // what the launcher sent last (side 0: none)
+uint64_t g_avatar_serial = 0; // bumped by every SetAvatar
+
+struct Retired {
+    ID3D12Resource *resource;
+    UINT64 fence; // released once the fence has passed it
+};
+struct AvatarGpu {
+    uint64_t seen = 0; // the serial the GPU side holds
+    ID3D12Resource *texture = nullptr;
+    ID3D12Resource *upload = nullptr; // the copy's source until the copy is recorded
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    bool copy = false; // still to be recorded into a frame's command list
+    UINT slot = 1;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    std::vector<Retired> retired;
+} g_av;
+
+void ReleaseRetired() {
+    const UINT64 done = g.fence->GetCompletedValue();
+    auto &list = g_av.retired;
+    for (size_t i = 0; i < list.size();) {
+        if (list[i].fence <= done) {
+            list[i].resource->Release();
+            list[i] = list.back();
+            list.pop_back();
+        } else {
+            ++i;
+        }
+    }
+}
+
+// Every frame recorded from now on signals at least fence_next: the frames that may still read this did not pass it yet.
+void Retire(ID3D12Resource *&resource) {
+    if (resource) {
+        g_av.retired.push_back({resource, g.fence_next});
+        resource = nullptr;
+    }
+}
+
+// Render thread, before the frame is drawn: a new avatar becomes a texture and an upload buffer (no wait).
+void PrepareAvatar() {
+    ReleaseRetired();
+    AvatarImage image;
+    {
+        std::lock_guard<std::mutex> lock(g_avatar_lock);
+        if (g_avatar_serial == g_av.seen || !g_av.retired.empty()) return; // nothing new, or the last one not retired yet
+        g_av.seen = g_avatar_serial;
+        image = g_avatar_pending;
+    }
+    Retire(g_av.texture);
+    Retire(g_av.upload);
+    g_av.copy = false;
+    g_av.gpu = {};
+    if (image.side == 0) return; // cleared: the initials
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = image.side;
+    desc.Height = image.side;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // straight alpha, as ImGui blends
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    UINT64 upload_bytes = 0;
+    g.device->GetCopyableFootprints(&desc, 0, 1, 0, &g_av.footprint, nullptr, nullptr, &upload_bytes);
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    if (FAILED(g.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(&g_av.texture)))) {
+        Log("avatar: texture not created");
+        return;
+    }
+    D3D12_RESOURCE_DESC buffer{};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = upload_bytes;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    void *mapped = nullptr;
+    const D3D12_RANGE none{0, 0};
+    if (FAILED(g.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                 IID_PPV_ARGS(&g_av.upload))) ||
+        FAILED(g_av.upload->Map(0, &none, &mapped))) {
+        Log("avatar: upload buffer not created");
+        Retire(g_av.texture);
+        Retire(g_av.upload);
+        return;
+    }
+    const size_t row = static_cast<size_t>(image.side) * 4;
+    for (UINT y = 0; y < image.side; ++y) {
+        memcpy(static_cast<uint8_t *>(mapped) + g_av.footprint.Offset + static_cast<size_t>(y) * g_av.footprint.Footprint.RowPitch,
+               image.rgba.data() + y * row, row);
+    }
+    g_av.upload->Unmap(0, nullptr);
+    g_av.slot = g_av.slot == 1 ? 2 : 1;
+    const UINT step = g.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = g.srv_heap->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(g_av.slot) * step;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = desc.Format;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1;
+    g.device->CreateShaderResourceView(g_av.texture, &srv, cpu);
+    g_av.gpu = g.srv_heap->GetGPUDescriptorHandleForHeapStart();
+    g_av.gpu.ptr += static_cast<UINT64>(g_av.slot) * step;
+    g_av.copy = true;
+}
+
+// Into the frame's command list, before ImGui draws: the upload, then the texture readable by the pixel shader.
+void RecordAvatarCopy(ID3D12GraphicsCommandList *list) {
+    if (!g_av.copy) return;
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = g_av.texture;
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = g_av.upload;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint = g_av.footprint;
+    list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = g_av.texture;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    list->ResourceBarrier(1, &barrier);
+    g_av.copy = false;
+    Retire(g_av.upload); // this frame's signal is fence_next: the buffer goes once it passed
+}
+
 void WaitIdle() {
     auto *queue = g.queue;
     if (!queue || !g.fence) {
@@ -207,7 +356,8 @@ bool Initialise(IDXGISwapChain3 *swapchain) {
     g.frames.assign(desc.BufferCount, {});
 
     D3D12_DESCRIPTOR_HEAP_DESC rtv{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, desc.BufferCount, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
-    D3D12_DESCRIPTOR_HEAP_DESC srv{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
+    D3D12_DESCRIPTOR_HEAP_DESC srv{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvSlots, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
+    g_av.seen = 0; // a new heap: the avatar is uploaded again from the pixels kept
     if (FAILED(g.device->CreateDescriptorHeap(&rtv, IID_PPV_ARGS(&g.rtv_heap))) ||
         FAILED(g.device->CreateDescriptorHeap(&srv, IID_PPV_ARGS(&g.srv_heap)))) {
         return false;
@@ -280,6 +430,7 @@ void Draw(IDXGISwapChain3 *swapchain) {
     dt = dt < 0.0f ? 0.0f : dt > 0.1f ? 0.1f : dt;
 
     PollController();
+    PrepareAvatar();
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     // The image is the back buffer, whatever size Windows gives the window (DPI scaling, a
@@ -311,6 +462,7 @@ void Draw(IDXGISwapChain3 *swapchain) {
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     g.list->ResourceBarrier(1, &barrier);
+    RecordAvatarCopy(g.list);
     g.list->OMSetRenderTargets(1, &frame.rtv, FALSE, nullptr);
     g.list->SetDescriptorHeaps(1, &g.srv_heap);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g.list);
@@ -466,5 +618,14 @@ bool InstallRenderHooks() {
 }
 
 float RenderScale() { return g.scale; }
+
+void SetAvatar(AvatarImage avatar) {
+    std::lock_guard<std::mutex> lock(g_avatar_lock);
+    if (avatar.side == 0) avatar.rgba.clear();
+    g_avatar_pending = std::move(avatar);
+    ++g_avatar_serial;
+}
+
+uint64_t AvatarTexture() { return g_av.texture ? g_av.gpu.ptr : 0; }
 
 } // namespace fi

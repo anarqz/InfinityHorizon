@@ -27,7 +27,11 @@ public sealed partial class WorldsBridge
     /// <summary>The world still carries the set it was opened with (a world's set is fixed, §2.7).</summary>
     private bool HostedModsCurrent() => ModSet.State is { Ready: true } state && ModSets.Same(state.Mods, Volatile.Read(ref _hostedMods));
 
-    /// <summary>The protocol 2 list (0x14 → 0x15): the modded filter, each row's players and mods, and whether its mods equal this session's.</summary>
+    /// <summary>
+    /// The protocol 2 list (0x14 → 0x15), CR-L40 §2.2: every lobby of the filter (4 all, the overlay's default),
+    /// modded and vanilla, ordered matching rows first (<see cref="OrderLobbies"/>), each with its players, mods
+    /// and whether its mods equal this session's. An OD-112 overlay's <c>modded</c> query still lists modded rows only.
+    /// </summary>
     public async Task<UiFrame.WorldsListV2> ListV2Async(UiFrame.WorldsQueryV2 query, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -39,26 +43,37 @@ public sealed partial class WorldsBridge
             return Failed(DeniedMessage(denied, "list"));
         var filter = query.Filter switch
         {
-            1 => WorldFilters.Friends,
-            2 => WorldFilters.Near,
+            UiLobby.FilterFriends => WorldFilters.Friends,
+            UiLobby.FilterNear => WorldFilters.Near,
+            UiLobby.FilterAll => WorldFilters.Every,
             _ => WorldFilters.Global,
         };
         try
         {
-            var answer = await OperationAsync(_listRetry, token => _mm.ListAsync(filter, query.NotFull, query.Modded, token), cancellation).ConfigureAwait(false);
-            if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
-                return Failed(DeniedMessage(changed, "list"));
-            if (answer is not { Ok: true, Value: { } list })
-            {
-                var key = answer?.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed";
-                return Failed(_text(key));
-            }
             var local = ModSet.State;
-            var rows = list.Items.Select(w => LobbyRow(w, false, local)).Concat(list.Locked.Select(w => LobbyRow(w, true, local)))
-                // an older server ignores the filter: never show a world of the other kind
-                .Where(r => r.Modded == query.Modded)
-                .Take(UiFrame.MaxLobbyRows).ToList();
-            return new UiFrame.WorldsListV2(query.Filter, query.Modded, 0, string.Empty, rows);
+            List<(WorldView World, LobbyRow Row)> rows;
+            if (query.Modded)
+            {
+                var answer = await OperationAsync(_listRetry, token => _mm.ListAsync(filter == WorldFilters.Every ? WorldFilters.Global : filter, query.NotFull, true, token),
+                    cancellation).ConfigureAwait(false);
+                if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
+                    return Failed(DeniedMessage(changed, "list"));
+                if (answer is not { Ok: true, Value: { } list })
+                    return Failed(_text(answer?.Error?.Kind == MmErrorKind.SupporterRequired ? "worlds.friends_supporters" : "worlds.list_failed"));
+                rows = list.Items.Select(w => (w, SessionRow(w, false, local))).Concat(list.Locked.Select(w => (w, SessionRow(w, true, local))))
+                    // an older server ignores the filter: never show a world of the other kind
+                    .Where(r => r.Item2.Modded).ToList();
+            }
+            else
+            {
+                var read = await ReadLobbiesAsync(filter, query.NotFull, cancellation).ConfigureAwait(false);
+                if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
+                    return Failed(DeniedMessage(changed, "list"));
+                if (read.FailureKey is { } key) return Failed(_text(key));
+                rows = read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))).ToList();
+            }
+            var ordered = OrderLobbies(rows).Select(r => r.Row).ToList();
+            return new UiFrame.WorldsListV2(query.Filter, query.Modded, 0, string.Empty, FitLobbyRows(ordered, string.Empty));
         }
         catch (Exception e) when (HostFailure(e))
         {

@@ -51,6 +51,9 @@ public sealed record SupervisorConfig(
     /// <summary>The overlay DLL the hook loads after the handshake (OD-50); null: no overlay.</summary>
     public OverlayPackage? Overlay { get; init; }
 
+    /// <summary>CR-L40 §1.3: the guide's server status and avatar (sent on the overlay's hello, refreshed while the guide is open); null: none.</summary>
+    public Overlay.OverlayServerStatusFeed? OverlayStatus { get; init; }
+
     /// <summary>The overlay's Worlds tab (OD-54): the bridge for a session, given its current game ticket; null: none.</summary>
     public Func<Func<string>, Matchmaking.WorldsBridge>? Worlds { get; init; }
 
@@ -687,6 +690,16 @@ public sealed class PlaySupervisor
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
+                        // CR-L40: FREE ROAM ONLINE waits in the hook until a lobby is ready; answered off this loop
+                        if (frame is Frame.FreeRoamNeed need && endpoint.Greeted)
+                        {
+                            var ensure = !suspended && tokensOpen && !_online.IsPaused && worlds is not null
+                                ? worlds.EnsureFreeRoamWorldAsync : (Func<CancellationToken, Task<byte>>?)null;
+                            // off the reader loop from the first line: the access check may do synchronous work
+                            var (freeRoamOnline, freeRoamStop) = (onlineStop.Token, stop.Token);
+                            _ = Task.Run(() => AnswerFreeRoamAsync(ensure, need.Nonce, pipe.WriteAsync, FreeRoamBudget, _clock,
+                                text => _emit(new SupervisorEvent.Note(text)), freeRoamOnline, freeRoamStop));
+                        }
                         if (frame is Frame.Event { Kind: HookEvents.GameReadiness } && worlds is not null)
                         {
                             ObserveReadiness(received, worlds.GameReadiness);
@@ -850,6 +863,11 @@ public sealed class PlaySupervisor
                                 await overlay.SendFrameAsync(worlds is null
                                     ? new Overlay.UiFrame.WorldAccess(false, _config.Text?["worlds.integrity_inconclusive"] ?? "Online installation verification is unavailable. Return to the launcher for help.")
                                     : await worlds.AccessFrameAsync(stop.Token).ConfigureAwait(false), stop.Token).ConfigureAwait(false);
+                                if (_config.OverlayStatus is { } overlayStatus)
+                                    _ = overlayStatus.AttachAsync(overlay.SendFrameAsync, stop.Token);
+                                break;
+                            case Overlay.UiIncoming.Panel panel:
+                                _config.OverlayStatus?.Panel(panel.Open);
                                 break;
                             case Overlay.UiIncoming.Event { Kind: Overlay.UiEventKind.Quit } when quit is null:
                                 quit = child.QuitAsync(_config.QuitGrace, stop.Token);
@@ -1024,6 +1042,47 @@ public sealed class PlaySupervisor
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception error) { _emit(new SupervisorEvent.Note("worlds: relay fallback report failed (" + error.GetType().Name + ")")); }
+    }
+
+    /// <summary>CR-L40: how long the launcher looks for a lobby before it answers <see cref="Frame.FreeRoamReady"/> (the hook waits 20 s).</summary>
+    public static readonly TimeSpan FreeRoamBudget = TimeSpan.FromSeconds(18);
+
+    /// <summary>
+    /// CR-L40 (LOBBIES_AND_SERVER_STATUS.md §3): the hook's <see cref="Frame.FreeRoamNeed"/>, answered with the same nonce.
+    /// <paramref name="ensure"/> (the bridge's <c>EnsureFreeRoamWorldAsync</c>) gets <paramref name="budget"/>; without it, or with
+    /// online gone, the answer is <see cref="Matchmaking.FreeRoamResult.NotOnline"/>, and a failure or timeout is
+    /// <see cref="Matchmaking.FreeRoamResult.None"/>. A failed write is dropped: the hook goes on at its own deadline.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "A fire-and-forget answer must never leave an unobserved task exception; the failure is logged by type only and answered None.")]
+    internal static async Task<byte> AnswerFreeRoamAsync(Func<CancellationToken, Task<byte>>? ensure, uint nonce,
+        Func<byte[], CancellationToken, Task> write, TimeSpan budget, TimeProvider clock, Action<string>? note,
+        CancellationToken online, CancellationToken cancellation)
+    {
+        var result = Matchmaking.FreeRoamResult.NotOnline;
+        if (ensure is not null && !online.IsCancellationRequested)
+        {
+            using var timeout = new CancellationTokenSource(budget, clock);
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(online, timeout.Token);
+            try
+            {
+                result = await ensure(bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
+                if (result > Matchmaking.FreeRoamResult.NotOnline) result = Matchmaking.FreeRoamResult.None;
+            }
+            catch (OperationCanceledException)
+            {
+                result = online.IsCancellationRequested ? Matchmaking.FreeRoamResult.NotOnline : Matchmaking.FreeRoamResult.None;
+                note?.Invoke("free roam: no lobby within " + (int)budget.TotalSeconds + " s");
+            }
+            catch (Exception error)
+            {
+                result = Matchmaking.FreeRoamResult.None;
+                note?.Invoke("free roam: the lobby search failed (" + error.GetType().Name + ")");
+            }
+        }
+        try { await write(new Frame.FreeRoamReady(nonce, result).Encode(), cancellation).ConfigureAwait(false); }
+        catch (Exception error) when (error is IOException or ObjectDisposedException or OperationCanceledException or TimeoutException) { }
+        return result;
     }
 
     private void RouteModsReport(Frame.ModsReport report)

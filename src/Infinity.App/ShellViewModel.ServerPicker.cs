@@ -10,10 +10,12 @@ using Infinity.Core.Auth;
 namespace Infinity.App;
 
 /// <summary>One row of the server picker: the official server, a server the beholder lists, or a typed address.</summary>
-public sealed record ServerPickItem(string Kind, string Title, string Detail, string Badge, string? Endpoint)
+public sealed record ServerPickItem(string Kind, string Title, string Detail, string Badge, string? Endpoint, string Status = "")
 {
     public const string OfficialKind = "official", ListedKind = "listed", CustomKind = "custom";
     public bool HasBadge => Badge.Length > 0;
+    /// <summary>CR-L40: the server's <c>/core/v1/status</c> line under the detail (empty while it is not read).</summary>
+    public bool HasStatus => Status.Length > 0;
 }
 
 /// <summary>One row of the relay picker: automatic (lowest latency) or a relay the beholder lists.</summary>
@@ -107,6 +109,7 @@ public sealed partial class ShellViewModel
         var generation = ++_pickerGeneration;
         _beholderLoading = true;
         Changed(string.Empty);
+        _ = ReadPickerStatusAsync(generation); // the rows known without the beholder: play, official, the typed address
         try
         {
             var lists = await new BeholderClient(_pickerHttp.Value, Announcer).ListsAsync(StateRoot);
@@ -115,6 +118,7 @@ public sealed partial class ShellViewModel
             Log($"picker: {lists.Servers.Count} server(s), {lists.Relays.Count} relay(s){(lists.Cached ? " (saved list)" : "")}");
             FillServerItems();
             FillRelayItems();
+            _ = ReadPickerStatusAsync(generation); // CR-L40: each row's /core/v1/status, beside the round trips
             var probes = lists.Servers.Select(async s => (s.Endpoint, await NodeProbe.ServerAsync(_pickerHttp.Value, s.Endpoint, ClientHeader)))
                 .Concat(lists.Relays.Select(async r => (r.Endpoint, await NodeProbe.RelayAsync(r.Endpoint))));
             foreach (var probe in probes.ToList())
@@ -151,18 +155,19 @@ public sealed partial class ShellViewModel
             var listed = (_beholder?.Servers ?? []).FirstOrDefault(s => SameOrigin(s.Endpoint, play));
             var host = new Uri(play).Authority;
             var detail = string.Join(" · ", new[] { host, listed?.Region ?? "", listed is null ? "" : ReachText(listed.Endpoint) }.Where(t => t.Length > 0));
-            items.Add(new(ServerPickItem.ListedKind, listed?.Name ?? S["picker.play_server"], detail, S["picker.badge_official"], play));
+            items.Add(new(ServerPickItem.ListedKind, listed?.Name ?? S["picker.play_server"], detail, S["picker.badge_official"], play, PickerStatusText(play)));
         }
-        else items.Add(new(ServerPickItem.OfficialKind, S["server.official"], S["picker.official_detail"], "", null));
+        else items.Add(new(ServerPickItem.OfficialKind, S["server.official"], S["picker.official_detail"], "", null, PickerStatusText(OfficialStatusOrigin)));
         foreach (var server in BuildProfile.ProductionOnly ? [] : _beholder?.Servers ?? [])
         {
             string host;
             try { host = CustomServer.ParseOrigin(server.Endpoint).Authority; }
             catch (ArgumentException) { continue; } // never offered: it could not be saved (an official host, a path, a bad port)
             var detail = string.Join(" · ", new[] { host, server.Region ?? "", ReachText(server.Endpoint) }.Where(t => t.Length > 0));
-            items.Add(new(ServerPickItem.ListedKind, server.Name, detail, S[OfficialNodes.IsOfficialServer(server) ? "picker.badge_official" : "picker.badge_community"], server.Endpoint));
+            items.Add(new(ServerPickItem.ListedKind, server.Name, detail, S[OfficialNodes.IsOfficialServer(server) ? "picker.badge_official" : "picker.badge_community"], server.Endpoint,
+                PickerStatusText(server.Endpoint)));
         }
-        items.Add(new(ServerPickItem.CustomKind, S["picker.custom"], S["picker.custom_detail"], "", null));
+        items.Add(new(ServerPickItem.CustomKind, S["picker.custom"], S["picker.custom_detail"], "", null, PickerStatusText(CustomStatusOrigin)));
         var previous = _serverPick;
         Replace(ServerItems, items);
         // keep the row the player is on; on open: the running choice (a listed one when its address matches, else the typed one)

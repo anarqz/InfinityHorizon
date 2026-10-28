@@ -1,20 +1,24 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: worlds (OD-54, OD-56, OD-57, OD-58). The guide's Worlds tab finds, joins
-// and creates worlds; the launcher talks to matchmaking (the overlay holds no tokens) and this
-// file only asks and shows.
+// Infinity overlay: worlds (OD-54, OD-56, OD-57, OD-58, CR-L40). The guide's Lobbies tab finds,
+// joins and creates worlds; the launcher talks to matchmaking (the overlay holds no tokens) and
+// this file only asks and shows.
 //
-// - The list: "Close to me" first, asked each time the guide opens (Friends, Close to me, Global;
-//   "Hide full" on top of any; Y refreshes), at most 5 joinable worlds of the profile's mode. A
-//   join answered "closed" or "full" refreshes it: the list was older than the world. A free player also sees
-//   up to 3 Infinity Supporter worlds below, locked, under their own heading (OD-58): selecting
-//   one explains the Supporter tier. No queue for worlds: a full world is just full.
+// - The list (CR-L40 §2.2): every lobby of the game, asked each time the guide opens with the "all"
+//   filter and no chip selected. Friends, Close to me and Global narrow it, Hide full drops full
+//   ones; selecting the active filter again returns to all; Y refreshes. Up to 50 rows, already
+//   ordered by the launcher: the matching ones (the profile's mode, the same mods, open to the
+//   player) first, then the others drawn dimmed with their reason under the name (another mode,
+//   mods, Infinity Supporter, friends only, a code, full, too far, not available). A code row opens
+//   the code entry, a Supporter row explains the Supporter tier, the rest say their reason. The list
+//   scrolls with the focus and the mouse wheel. A join answered "closed" or "full" refreshes it: the
+//   list was older than the world. No queue for worlds: a full world is just full.
 // - Join reserves a seat only (matchmaking's handshake); the game's own Free Roam Online then
 //   lands the player in it. Before the first join or create of the session, the not-rated
 //   online-play warning (OD-54).
 // - A private or friends world is joined with its code (code_entry.cpp); create gives the host
 //   the code to share.
-// - Create: name (the keyboard), audience (Everyone, Supporters, Friends, Private; a free host
-//   gets Everyone or Private), players 2-12, latency limit.
+// - Create: name (the keyboard; "{gamertag}'s lobby" by default, CR-L40 §4), audience (Everyone,
+//   Supporters, Friends, Private; a free host gets Everyone or Private), players 2-12, latency limit.
 // - My world (OD-63): while the profile hosts a world or holds a seat in one, the tab shows that
 //   world instead of the list (updated by the launcher): the host closes it or kicks players,
 //   a player leaves it; anyone adds a player as a friend or reports them with a reason. Player
@@ -22,10 +26,10 @@
 // - Once a world is created the Hosted screen follows; once a seat is reserved, the prompt to go
 //   to Free Roam Online. (The OD-65 "Syncing cars" hold is retired: the server keeps the liveries
 //   and world mates' games fetch them by the game's own calls, CR-S59.)
-// - Modded lobbies (OD-112): the "Modded" chip shows modded worlds only, off shows vanilla only. A
-//   world whose mods differ from the player's carries a warning icon and is never joined from
-//   here: the player is told which mods it uses. The focused or hovered world fills the right pane
-//   (pane.cpp) with its players and mods, from the list's own rows.
+// - Modded lobbies (OD-112): modded and vanilla worlds share the list (mods are a reason, not a
+//   filter, CR-L40). A world whose mods differ from the player's carries a warning icon and is never
+//   joined from here: the player is told which mods it uses. The focused or hovered world fills the
+//   right pane (pane.cpp) with its players and mods, from the list's own rows.
 #include "overlay.h"
 
 #include <algorithm>
@@ -45,8 +49,6 @@ namespace fi {
 using namespace ui;
 
 namespace {
-
-constexpr int kMaxJoinable = 5, kMaxLocked = 3;
 
 // ---------------------------------------------------------------- what the launcher sent (any thread)
 struct Shared {
@@ -87,14 +89,14 @@ const char *AccessMessage(const Shared &sh) {
 // ---------------------------------------------------------------- render-thread state
 enum class Screen { List, Warning, Busy, Create, Hosted, Supporter, Member, Report, Confirm };
 Screen g_screen = Screen::List;
-WorldFilter g_filter = WorldFilter::Near; // the default filter (Alex, 2026-10-19)
-bool g_queried = false;                    // the list was asked since the guide opened
+WorldFilter g_filter = WorldFilter::All; // CR-L40: every lobby, no chip selected
+bool g_queried = false;                   // the list was asked since the guide opened
 bool g_hide_full = false;
-bool g_modded = false; // OD-112: off vanilla worlds only, on modded only
 bool g_warned = false; // the online-play warning, once per game session
 int g_focus = 0;       // the list's focus: 0 the filter row, then the tiles
-int g_chip = 1;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full, 4 Modded
-constexpr int kLastChip = 4;
+int g_chip = 0;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full
+constexpr int kLastChip = 3;
+float g_scroll = 0;    // the rows' scroll, in pixels from the first row
 DetailPane g_lobby_pane; // the focused or hovered row's details, rebuilt every frame
 uint64_t g_seen_list = 0, g_seen_join = 0, g_seen_hosted = 0;
 std::string g_busy;    // what Busy says
@@ -173,8 +175,43 @@ const char *LockName(uint8_t lock) {
     case 4: return T("Full", "Cheio");
     case 5: return T("Too far", "Longe demais");
     case 6: return T("Not available", "Indisponível");
+    case 7: return T("Hardcore lobby", "Lobby Hardcore");
+    case 8: return T("Noob lobby", "Lobby Noob");
     default: return "";
     }
+}
+
+// Why a row is not "matching" (CR-L40 §2.2), the first that applies; None: the player joins it as they are.
+enum class Why { None, Mode, Mods, Supporter, Friends, Code, Full, Far, Other };
+
+Why WhyOf(const WorldRow &w) {
+    if (w.lock == 7 || w.lock == 8) return Why::Mode;
+    if (!w.mods_match) return Why::Mods;
+    switch (w.lock) {
+    case 0: return Why::None;
+    case 1: return Why::Supporter;
+    case 2: return Why::Friends;
+    case 3: return Why::Code;
+    case 4: return Why::Full;
+    case 5: return Why::Far;
+    default: return Why::Other;
+    }
+}
+
+// A vanilla row matches only a session without mods: one in the list tells whether the player has mods.
+// 1 no mods, 0 mods, -1 unknown.
+int LocalVanilla(const std::vector<WorldRow> &rows) {
+    for (const auto &r : rows) {
+        if (!r.modded && r.lock != 7 && r.lock != 8) return r.mods_match ? 1 : 0;
+    }
+    return -1;
+}
+
+// The reason in a row's subtitle.
+std::string WhyText(const WorldRow &w, int local_vanilla) {
+    if (WhyOf(w) != Why::Mods) return LockName(w.lock);
+    if (!w.modded) return T("No mods", "Sem mods");
+    return local_vanilla == 1 ? T("Modded lobby", "Lobby com mods") : T("Mods differ", "Mods diferentes");
 }
 
 std::string FormatCode(const std::string &code) {
@@ -202,16 +239,17 @@ void Query() {
     {
         std::lock_guard<std::mutex> lock(g_lock);
         g_shared.filter = g_filter;
-        g_shared.modded = g_modded;
+        g_shared.modded = false; // CR-L40: modded and vanilla lobbies in one list
         g_shared.list_status = 1; // loading
         g_shared.rows.clear();
         ++g_shared.list_serial;
     }
+    g_scroll = 0;
     if (DevHost()) {
         g_dev_wait = 0.5f;
         g_dev_kind = 1;
     } else {
-        SendWorldsQuery(g_filter, g_hide_full, g_modded);
+        SendWorldsQuery(g_filter, g_hide_full);
     }
 }
 
@@ -252,12 +290,30 @@ void JoinByCode() {
     });
 }
 
+constexpr size_t kMaxLobbyName = 48; // characters, as the launcher and the server cut it
+
+// CR-L40 §4: "{gamertag}'s lobby" / "Lobby de {gamertag}", at most 48 characters: the gamertag is cut
+// on a whole code point so the whole name fits. No profile yet: "Infinity".
+std::string DefaultLobbyName(const std::string &gamertag) {
+    const std::string tag = Utf8Cut(gamertag, gamertag.size()); // empty when not UTF-8
+    if (tag.empty()) return "Infinity";
+    const bool pt = Portuguese();
+    const std::string before = pt ? "Lobby de " : "", after = pt ? "" : "'s lobby"; // ASCII: a byte per character
+    const size_t room = kMaxLobbyName - before.size() - after.size();
+    size_t end = 0;
+    for (size_t chars = 0; end < tag.size() && chars < room; ++chars) {
+        const unsigned c = static_cast<unsigned char>(tag[end]);
+        end += c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
+    }
+    return before + tag.substr(0, end) + after;
+}
+
 void StartCreate(bool supporter) {
     if (!GameReady() || !WorldAccessAllowed()) return;
     WithWarning([supporter] {
         if (!GameReady() || !WorldAccessAllowed()) return;
         g_create = Create{};
-        g_create.name = T("Sunday drive", "Passeio de domingo");
+        g_create.name = DefaultLobbyName(ProfileGamertag());
         g_create.audience = supporter ? 0 : 0;
         g_screen = Screen::Create;
     });
@@ -285,34 +341,26 @@ void DevAnswer() {
         g_shared.list_status = 0;
         g_shared.rows.clear();
         const auto members = [](std::initializer_list<LobbyMember> list) { return std::vector<LobbyMember>(list); };
-        if (g_modded) {
-            WorldRow a{"m1", "Nitro drift night", "Synthetic#00117", 4, 8, 0, 0, 0, 1, false};
-            a.modded = true;
-            a.mods_match = false;
-            a.members = members({{"Synthetic#00117", 1, 0}, {"Synthetic#00230", 0, 1}, {"RallyFox98", 0, 1}, {"Synthetic#00042", 1, 2}});
-            a.mods = {{"extraoptions", "2"}, {"nitrosystem", "3"}};
-            WorldRow b{"m2", "Extra Options cruise", "RallyFox98", 2, 6, 0, 0, 0, 2, true};
-            b.modded = true;
-            b.members = members({{"RallyFox98", 0, 0}, {"Synthetic#00301", 1, 1}});
-            b.mods = {{"extraoptions", "2"}};
-            WorldRow c{"m3", "Modded Italia tour", "Synthetic#00302", 7, 10, 0, 0, 0, 1, false};
-            c.modded = true;
-            c.mods_match = false;
-            c.members = members({{"Synthetic#00302", 1, 0}, {"Synthetic#00303", 0, 1}});
-            c.mods = {{"nitrosystem", "3"}};
-            g_shared.rows = {a, b, c};
-            ++g_shared.list_serial;
-            break;
-        }
+        // in the launcher's order (CR-L40): the matching rows, then the others with their reason
         g_shared.rows.push_back({"w1", "Sunset Cruise", "RallyFox98", 5, 8, 0, 0, 0, 1, true});
         g_shared.rows.back().members = members({{"RallyFox98", 0, 0}, {"Synthetic#00117", 1, 1}, {"Synthetic#00230", 0, 1}, {"Synthetic#00042", 0, 1}, {"Synthetic#00301", 1, 2}});
         g_shared.rows.push_back({"w2", "Nice coastline run", "Synthetic#00117", 3, 6, 0, 0, 0, 0, false});
         g_shared.rows.push_back({"w3", "Drift crew", "Synthetic#00230", 11, 12, 0, 0, 0, 2, false});
+        WorldRow modded{"m1", "Nitro drift night", "Synthetic#00117", 4, 8, 0, 0, 0, 1, false};
+        modded.modded = true;
+        modded.mods_match = false;
+        modded.members = members({{"Synthetic#00117", 1, 0}, {"Synthetic#00230", 0, 1}, {"RallyFox98", 0, 1}, {"Synthetic#00042", 1, 2}});
+        modded.mods = {{"extraoptions", "2"}, {"nitrosystem", "3"}};
+        g_shared.rows.push_back(modded);
+        g_shared.rows.push_back({"h1", "Hardcore endurance", "Synthetic#00303", 6, 12, 0, 0, 7, 1, false});
+        g_shared.rows.push_back({"s1", "Supporters night race", "Synthetic#00301", 9, 12, 1, 1, 1, 0, false});
+        g_shared.rows.push_back({"c1", "Friday crew", "Synthetic#00230", 3, 8, 0, 3, 3, 1, false});
         if (!g_hide_full) {
             g_shared.rows.push_back({"w4", "Bucket list hunters", "Synthetic#00042", 12, 12, 0, 0, 4, 1, false});
         }
-        g_shared.rows.push_back({"s1", "Supporters night race", "Synthetic#00301", 9, 12, 1, 1, 1, 0, false});
-        g_shared.rows.push_back({"s2", "Italia full tour", "Synthetic#00302", 7, 10, 1, 1, 1, 1, false});
+        for (int i = 0; i < 6; ++i) { // enough rows to scroll
+            g_shared.rows.push_back({"n" + std::to_string(i), "Far away cruise " + std::to_string(i + 1), "Synthetic#0040" + std::to_string(i), 2, 8, 0, 0, 5, 3, false});
+        }
         ++g_shared.list_serial;
         break;
     }
@@ -390,27 +438,19 @@ float WrappedHeight(ImFont *font, float width, const char *text) {
 bool Clicked(ImVec2 a, ImVec2 b) { return !PaneModal() && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0); }
 
 struct Item {
-    enum Kind { Chips, CreateTile, CodeTile, Row, LockedRow } kind;
-    int row = -1;
+    enum Kind { Chips, CreateTile, CodeTile, Row } kind;
+    int row = -1; // a Row: its index in the launcher's rows
 };
 
 std::vector<Item> g_items; // what the focus walks, rebuilt every frame
 bool g_accept = false;     // A, applied at draw time on the focused item
 
-std::vector<WorldRow> Joinable(const std::vector<WorldRow> &rows) {
-    std::vector<WorldRow> out;
-    for (const auto &r : rows) {
-        if (r.lock != 1 && static_cast<int>(out.size()) < kMaxJoinable) out.push_back(r);
+// The vertices drawn since `first` at `alpha` of their own (a dimmed row keeps its look).
+void FadeSince(ImDrawList *dl, int first, float alpha) {
+    for (int v = first; v < dl->VtxBuffer.Size; ++v) {
+        ImU32 &c = dl->VtxBuffer[v].col;
+        c = (c & 0x00FFFFFF) | (static_cast<ImU32>(((c >> 24) & 0xFF) * alpha) << 24);
     }
-    return out;
-}
-
-std::vector<WorldRow> Locked(const std::vector<WorldRow> &rows) {
-    std::vector<WorldRow> out;
-    for (const auto &r : rows) {
-        if (r.lock == 1 && static_cast<int>(out.size()) < kMaxLocked) out.push_back(r);
-    }
-    return out;
 }
 
 void Tile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const char *icon, const char *title, const char *subtitle, bool dim = false) {
@@ -425,31 +465,36 @@ void Tile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const char *icon, cons
     dl->PopClipRect();
 }
 
-void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w) {
-    const bool locked = w.lock != 0 || !GameReady();
+// One lobby row. A matching row is drawn as is; any other at about 45% with its reason after the
+// host (CR-L40 §2.2). The focus ring stays at full strength on either.
+void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w, int local_vanilla) {
+    const Why why = WhyOf(w);
+    const bool other = why != Why::None;
+    const bool ready = GameReady();
+    const int first = dl->VtxBuffer.Size;
     dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
-    if (focus) FocusRing(dl, a, b, 6 * s);
     const float lx = a.x + 18 * s;
     dl->PushClipRect(ImVec2(lx, a.y), ImVec2(b.x - 92 * s, b.y), true);
-    TextAt(dl, f.body, ImVec2(lx, a.y + 10 * s), locked ? kTextDim : kText, w.name.c_str());
+    TextAt(dl, f.body, ImVec2(lx, a.y + 10 * s), ready ? kText : kTextDim, w.name.c_str());
     std::string sub = w.host;
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
-    if (locked) sub += std::string(" · ") + LockName(w.lock);
-    if (!GameReady()) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
-    const bool mismatch = !w.mods_match; // a vanilla row too, for a player with mods
-    if (mismatch && GameReady()) sub += std::string(" · ") + T("Mods differ", "Mods diferentes");
-    TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), w.lock == 1 ? kPinkU : mismatch && GameReady() ? kAmber : kTextDim, sub.c_str());
+    if (other) sub += " · " + WhyText(w, local_vanilla);
+    if (!ready) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
+    const ImU32 sub_color = !ready ? kTextDim : why == Why::Supporter ? kPinkU : why == Why::Mods ? kAmber : kTextDim;
+    TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), sub_color, sub.c_str());
     dl->PopClipRect();
     const std::string count = std::to_string(w.players) + "/" + std::to_string(w.max);
     const ImVec2 cs = Measure(f.body, count.c_str());
     TextAt(dl, f.body, ImVec2(b.x - 50 * s - cs.x, a.y + 10 * s), w.players >= w.max ? kRed : kText, count.c_str());
     PingBars(dl, ImVec2(b.x - 38 * s, a.y + 14 * s), w.ping);
-    if (w.lock == 1) {
-        dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 40 * s), kPinkU, kIconLock);
-    } else if (mismatch) {
+    if (why == Why::Supporter || why == Why::Code) {
+        dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 40 * s), why == Why::Supporter ? kPinkU : kText, kIconLock);
+    } else if (why == Why::Mods) {
         // OD-112: the small "your mods don't match" mark
         dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 38 * s), kAmber, kIconWarning);
     }
+    if (other) FadeSince(dl, first, 0.45f);
+    if (focus) FocusRing(dl, a, b, 6 * s);
 }
 
 std::string ModList(const WorldRow &w) {
@@ -504,7 +549,7 @@ const DetailPane &LobbyPane(const WorldRow &w) {
 }
 
 // ---------------------------------------------------------------- screens
-void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supporter, const Shared &sh) {
+void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, const Shared &sh) {
     g_items.clear();
     if (!DevHost() && !sh.access.Allowed(GetTickCount64())) {
         Wrapped(dl, f.body, ImVec2(x, y), w, kAmber, AccessMessage(sh));
@@ -513,8 +558,9 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
     const bool ready = GameReady();
     const char *load_hint = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
     // filter chips
+    // none selected: every lobby (CR-L40); Friends, Close to me and Global narrow it
     const char *chips[kLastChip + 1] = {FilterName(WorldFilter::Friends), FilterName(WorldFilter::Near), FilterName(WorldFilter::Global),
-                                        T("Hide full", "Sem cheios"), T("Modded", "Com mods")};
+                                        T("Hide full", "Sem cheios")};
     float cx = x;
     const float ch = 36 * s;
     for (int i = 0; i <= kLastChip; ++i) {
@@ -526,7 +572,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
             y += ch + 8 * s;
         }
         const ImVec2 a(cx, y), b(cx + cw, y + ch);
-        const bool on = i < 3 ? g_filter == static_cast<WorldFilter>(i + 1) : i == 3 ? g_hide_full : g_modded;
+        const bool on = i < 3 ? g_filter == static_cast<WorldFilter>(i + 1) : g_hide_full;
         const bool focus = g_focus == 0 && g_chip == i;
         dl->AddRectFilled(a, b, on ? kPinkU : kTile, ch / 2);
         if (focus) FocusRing(dl, a, b, ch / 2);
@@ -578,38 +624,47 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, bool supp
         Wrapped(dl, f.body, ImVec2(x, y), w, kRed, sh.list_message.empty() ? T("Could not load the lobbies.", "Não foi possível carregar os lobbies.") : sh.list_message.c_str());
         return;
     }
-    const auto joinable = Joinable(sh.rows);
-    const auto locked = supporter ? std::vector<WorldRow>{} : Locked(sh.rows);
-    const float wh = 64 * s;
-    if (joinable.empty()) {
-        TextAt(dl, f.body, ImVec2(x, y), kTextDim, T("No lobbies here right now. Create your own!", "Nenhum lobby aqui agora. Crie o seu!"));
+    // CR-L40: every row the launcher sent, in its order; the list scrolls inside [top, bottom)
+    const auto &rows = sh.rows;
+    const float wh = 64 * s, step = wh + gap;
+    const bool any_matching = std::any_of(rows.begin(), rows.end(), [](const WorldRow &r) { return WhyOf(r) == Why::None; });
+    if (!any_matching) {
+        TextAt(dl, f.body, ImVec2(x, y), kTextDim, rows.empty() ? T("No lobbies here right now. Create your own!", "Nenhum lobby aqui agora. Crie o seu!")
+                                                                : T("No lobby you can join right now. Create your own!", "Nenhum lobby em que você possa entrar agora. Crie o seu!"));
         y += 36 * s;
     }
-    const WorldRow *hovered = nullptr, *focused = nullptr;
-    for (size_t i = 0; i < joinable.size() && y + wh < bottom; ++i) {
-        const int index = static_cast<int>(g_items.size());
-        const ImVec2 a(x, y), b(x + w, y + wh);
-        WorldTile(dl, a, b, focus_of(index), joinable[i]);
-        if (Clicked(a, b)) { g_focus = index; g_accept = true; }
-        if (ImGui::IsMouseHoveringRect(a, b)) hovered = &joinable[i];
-        if (focus_of(index)) focused = &joinable[i];
-        g_items.push_back({Item::Row, static_cast<int>(i)});
-        y += wh + gap;
+    const float top = y, view = std::max(0.0f, bottom - top);
+    const float content = rows.empty() ? 0 : rows.size() * step - gap;
+    const int first_row = static_cast<int>(g_items.size());
+    if (!PaneModal() && ImGui::IsMouseHoveringRect(ImVec2(x, top), ImVec2(x + w, bottom))) g_scroll -= ImGui::GetIO().MouseWheel * step;
+    if (g_focus >= first_row && g_focus < first_row + static_cast<int>(rows.size())) {
+        // the focused row is always in view
+        const float row_top = (g_focus - first_row) * step;
+        if (row_top < g_scroll) g_scroll = row_top;
+        if (row_top + wh > g_scroll + view) g_scroll = row_top + wh - view;
     }
-    if (!locked.empty() && y + 40 * s < bottom) {
-        y += 10 * s;
-        TextAt(dl, f.tag, ImVec2(x, y), kPinkU, T("INFINITY SUPPORTER LOBBIES", "LOBBIES INFINITY SUPPORTER"));
-        y += 24 * s;
-        for (size_t i = 0; i < locked.size() && y + wh < bottom; ++i) {
-            const int index = static_cast<int>(g_items.size());
-            const ImVec2 a(x, y), b(x + w, y + wh);
-            WorldTile(dl, a, b, focus_of(index), locked[i]);
-            if (Clicked(a, b)) { g_focus = index; g_accept = true; }
-            if (ImGui::IsMouseHoveringRect(a, b)) hovered = &locked[i];
-            if (focus_of(index)) focused = &locked[i];
-            g_items.push_back({Item::LockedRow, static_cast<int>(i)});
-            y += wh + gap;
-        }
+    g_scroll = std::clamp(g_scroll, 0.0f, std::max(0.0f, content - view));
+    const int local_vanilla = LocalVanilla(rows);
+    const WorldRow *hovered = nullptr, *focused = nullptr;
+    dl->PushClipRect(ImVec2(x - 4 * s, top), ImVec2(x + w + 4 * s, bottom), true);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const int index = static_cast<int>(g_items.size());
+        g_items.push_back({Item::Row, static_cast<int>(i)});
+        const float ry = top + i * step - g_scroll;
+        if (focus_of(index)) focused = &rows[i];
+        if (ry + wh <= top || ry >= bottom) continue; // out of view: still walked by the focus
+        const ImVec2 a(x, ry), b(x + w, ry + wh);
+        WorldTile(dl, a, b, focus_of(index), rows[i], local_vanilla);
+        const bool inside = ImGui::GetIO().MousePos.y >= top && ImGui::GetIO().MousePos.y < bottom;
+        if (inside && Clicked(a, b)) { g_focus = index; g_accept = true; }
+        if (inside && ImGui::IsMouseHoveringRect(a, b)) hovered = &rows[i];
+    }
+    dl->PopClipRect();
+    if (content > view && view > 0) {
+        // the scroll's position, a thin bar at the right edge
+        const float bar = std::max(24 * s, view * view / content);
+        const float by = top + (view - bar) * (g_scroll / (content - view));
+        dl->AddRectFilled(ImVec2(x + w + 6 * s, by), ImVec2(x + w + 9 * s, by + bar), Rgba(255, 255, 255, 0.25f), 2 * s);
     }
     // the right pane: the row under the mouse, else the focused one (before A joins it)
     if (const WorldRow *shown = hovered ? hovered : focused) SetHoverPane(&LobbyPane(*shown));
@@ -622,36 +677,36 @@ void AcceptList(bool supporter, const Shared &sh) {
     switch (item.kind) {
     case Item::Chips:
         if (g_chip < 3) {
-            g_filter = static_cast<WorldFilter>(g_chip + 1);
-        } else if (g_chip == 3) {
-            g_hide_full = !g_hide_full;
+            // the active filter again: back to every lobby (CR-L40)
+            const auto chosen = static_cast<WorldFilter>(g_chip + 1);
+            g_filter = g_filter == chosen ? WorldFilter::All : chosen;
         } else {
-            g_modded = !g_modded;
+            g_hide_full = !g_hide_full;
         }
         Query();
         break;
     case Item::CreateTile: StartCreate(supporter); break;
     case Item::CodeTile: JoinByCode(); break;
     case Item::Row: {
-        const auto rows = Joinable(sh.rows);
-        if (item.row < static_cast<int>(rows.size())) {
-            const WorldRow &r = rows[item.row];
-            if (!r.mods_match) {
-                // OD-112: only the exact same mods join (a vanilla lobby: none); the server refuses it too
-                PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"), MismatchText(r));
-            } else if (r.lock == 4) {
-                PushToast(ToastKind::Info, r.name, T("This lobby is full. Try another one.", "Esse lobby está cheio. Tente outro."));
-            } else if (r.lock == 3) {
-                JoinByCode();
-            } else if (r.lock != 0) {
-                PushToast(ToastKind::Info, r.name, LockName(r.lock));
-            } else {
-                Join(r.id, std::string());
-            }
+        if (item.row < 0 || item.row >= static_cast<int>(sh.rows.size())) break;
+        const WorldRow &r = sh.rows[item.row];
+        switch (WhyOf(r)) {
+        case Why::None: Join(r.id, std::string()); break;
+        case Why::Code: JoinByCode(); break;            // a code row opens the code entry
+        case Why::Supporter: g_screen = Screen::Supporter; break;
+        case Why::Mods:
+            // OD-112: only the exact same mods join (a vanilla lobby: none); the server refuses it too
+            PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"), MismatchText(r));
+            break;
+        case Why::Mode:
+            PushToast(ToastKind::Info, r.name, r.lock == 7 ? T("This lobby is for Hardcore profiles.", "Este lobby é para perfis Hardcore.")
+                                                           : T("This lobby is for Noob profiles.", "Este lobby é para perfis Noob."));
+            break;
+        case Why::Full: PushToast(ToastKind::Info, r.name, T("This lobby is full. Try another one.", "Esse lobby está cheio. Tente outro.")); break;
+        default: PushToast(ToastKind::Info, r.name, LockName(r.lock)); break;
         }
         break;
     }
-    case Item::LockedRow: g_screen = Screen::Supporter; break;
     }
 }
 
@@ -1136,7 +1191,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
     }
     if (sh.list_serial != g_seen_list) {
         g_seen_list = sh.list_serial;
-        g_focus = std::min(g_focus, 2 + kMaxJoinable + kMaxLocked);
+        g_focus = std::min(g_focus, 2 + static_cast<int>(kMaxLobbyRows));
     }
     // The launcher owns active/pending reconciliation. An open tab must not create a second poll loop.
     if (g_mine_refresh) {
@@ -1203,7 +1258,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, bool
                 Query();
             }
         }
-        DrawList(dl, x, y, w, bottom, supporter, sh);
+        DrawList(dl, x, y, w, bottom, sh);
         g_focus = std::clamp(g_focus, 0, std::max(0, static_cast<int>(g_items.size()) - 1));
         if (accept) AcceptList(supporter, sh);
         break;

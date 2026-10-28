@@ -31,10 +31,12 @@
 // 1 seated, 2 reserved), u8 friend (0 none, 1 friends, 2 outgoing, 3 incoming, 4 self)}};
 // 0x10 ActionResult{u8 action, u8 status (0 done, 1 refused), str message}.
 //
-// Protocol 2 (OD-112; layouts in ui_frames.h): this overlay asks with 0x14 WorldsQueryV2 (the
-// modded filter) instead of 0x07 and still reads a 0x08 answer as vanilla; 0x15 WorldsListV2 rows
-// carry modded, modsMatch, players and mods; 0x16 DetailPane is the right pane; 0x17
-// PlayerDetailsQuery and 0x18 PaneActionClick go to the launcher.
+// Protocol 2 (OD-112; layouts in ui_frames.h): this overlay asks with 0x14 WorldsQueryV2 (filter 4
+// all by default, modded 0: every lobby, CR-L40) instead of 0x07 and still reads a 0x08 answer as
+// vanilla; 0x15 WorldsListV2 rows (at most 50, ordered by the launcher) carry modded, modsMatch,
+// players and mods; 0x16 DetailPane is the right pane; 0x17 PlayerDetailsQuery and 0x18
+// PaneActionClick go to the launcher. 0x19 ServerStatus and 0x1A Avatar (CR-L40 §1.3) fill the
+// guide's bottom block and its header avatar.
 //
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
@@ -95,6 +97,18 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         DetailPane pane;
         if (DecodeDetailPane(body, size, pane)) SetDetailPane(std::move(pane));
         else Log("ui pipe: malformed DetailPane ignored");
+        break;
+    }
+    case 0x19: {
+        ServerStatus status;
+        if (DecodeServerStatus(body, size, status)) SetServerStatus(status);
+        else Log("ui pipe: malformed ServerStatus ignored");
+        break;
+    }
+    case 0x1A: {
+        AvatarImage avatar;
+        if (DecodeAvatar(body, size, avatar)) SetAvatar(std::move(avatar));
+        else Log("ui pipe: malformed Avatar ignored");
         break;
     }
     case 0x13: {
@@ -346,8 +360,8 @@ void SendEvent(uint8_t kind, const std::string &detail) {
 
 void SendPanel(bool open) { Queue(0x04, {static_cast<uint8_t>(open ? 1 : 0)}); }
 
-void SendWorldsQuery(WorldFilter filter, bool not_full, bool modded) {
-    Queue(0x14, EncodeWorldsQueryV2(static_cast<uint8_t>(filter), not_full, modded));
+void SendWorldsQuery(WorldFilter filter, bool not_full) {
+    Queue(0x14, EncodeWorldsQueryV2(static_cast<uint8_t>(filter), not_full, false));
 }
 
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag) { Queue(0x17, EncodePlayerDetailsQuery(xuid, gamertag)); }

@@ -63,9 +63,10 @@ public enum UiDirection
 
 /// <summary>
 /// One UI-pipe frame between the launcher and the overlay (<c>&lt;control pipe&gt;-ui</c>; overlay_ui.rs).
-/// Same envelope as the control pipe, its own type space 0x01-0x18 (0x07-0x10: worlds, OD-54, OD-63;
-/// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; native/overlay/src/ui_frames.h
-/// and pipe.cpp are the other end). The hook never sees it.
+/// Same envelope as the control pipe, its own type space 0x01-0x1A (0x07-0x10: worlds, OD-54, OD-63;
+/// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
+/// status and avatar, CR-L40; native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
+/// never sees it.
 /// </summary>
 public abstract record UiFrame
 {
@@ -75,8 +76,19 @@ public abstract record UiFrame
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
 
-    public const int MaxLobbyRows = 16, MaxLobbyMembers = 12, MaxLobbyMods = 32;
+    // CR-L40 §2.2: every lobby of the game in one list; a row's players and mods are dropped from the
+    // tail when the whole list would pass the 64 KiB frame (see WorldsBridge.FitLobbyRows).
+    public const int MaxLobbyRows = 50, MaxLobbyMembers = 12, MaxLobbyMods = 32;
     public const int MaxPaneSections = 8, MaxPaneEntries = 32, MaxPaneActions = 4, MaxPaneText = 512, MaxPaneId = 64;
+
+    /// <summary>CR-L40 §1.3: the server's host in <see cref="ServerStatus"/>, in UTF-8 bytes.</summary>
+    public const int MaxServerHost = 128;
+
+    /// <summary>
+    /// CR-L40 §1.3: an avatar's side. A 128 x 128 image (65 536 bytes) cannot fit the 64 KiB frame with its
+    /// header, so the launcher sends <see cref="AvatarSide"/>; 127 is the largest square that fits.
+    /// </summary>
+    public const int MaxAvatarSide = 128, AvatarSide = 96;
 
     /// <summary>The lowest type that needs protocol 2.</summary>
     public const byte FirstProtocol2Type = 0x14;
@@ -242,7 +254,10 @@ public abstract record UiFrame
         public override UiDirection Direction => UiDirection.ToOverlay;
     }
 
-    /// <summary>0x14, overlay → launcher (protocol 2): <see cref="WorldsQuery"/> plus the modded filter (false: vanilla worlds only; true: modded only).</summary>
+    /// <summary>
+    /// 0x14, overlay → launcher (protocol 2): <see cref="WorldsQuery"/> (filter 4 every lobby, CR-L40) plus the
+    /// modded filter (false: every lobby of the filter, modded or not, CR-L40; true, an OD-112 overlay: modded only).
+    /// </summary>
     public sealed record WorldsQueryV2(byte Filter, bool NotFull, bool Modded) : UiFrame
     {
         public override byte Type => 0x14;
@@ -324,6 +339,60 @@ public abstract record UiFrame
         public override byte Type => 0x18;
 
         public override UiDirection Direction => UiDirection.ToLauncher;
+    }
+
+    /// <summary>
+    /// 0x19, launcher → overlay (protocol 2, CR-L40 §1.3): the connected server's host and figures for the
+    /// guide's bottom block. <c>Flags</c> <see cref="UiServerStatus"/>: without <c>Known</c> every figure is
+    /// ignored ("Status unavailable"); a figure without its flag is never shown (not as zero).
+    /// </summary>
+    public sealed record ServerStatus(string Server, byte Flags, ushort Online, ushort Capacity, ushort Hardcore, ushort Noob, ushort Lobbies,
+        uint ProfilesHardcore, uint ProfilesNoob) : UiFrame
+    {
+        public override byte Type => 0x19;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        /// <summary>The frame for <paramref name="status"/> (null: unreachable), each figure saturated at its field's maximum.</summary>
+        public static ServerStatus From(string server, Api.ServerStatus? status)
+        {
+            var host = Matchmaking.WorldsBridge.Clip(server, MaxServerHost);
+            if (status is null) return new(host, 0, 0, 0, 0, 0, 0, 0, 0);
+            static ushort U16(uint? value) => (ushort)Math.Min(value ?? 0, ushort.MaxValue);
+            static uint U32(ulong? value) => (uint)Math.Min(value ?? 0, uint.MaxValue);
+            var flags = UiServerStatus.Known;
+            if (status.Capacity is not null) flags |= UiServerStatus.Capacity;
+            if (status.HasLive) flags |= UiServerStatus.Live;
+            if (status.HasProfiles) flags |= UiServerStatus.Profiles;
+            return new(host, flags, U16(status.Online), U16(status.Capacity), U16(status.Hardcore), U16(status.Noob), U16(status.Lobbies),
+                U32(status.ProfilesHardcore), U32(status.ProfilesNoob));
+        }
+
+        internal void Validate()
+        {
+            Limit(Server, MaxServerHost, "server host");
+            if (Flags > UiServerStatus.All) throw new ProtocolException("invalid server status flags");
+        }
+    }
+
+    /// <summary>
+    /// 0x1A, launcher → overlay (protocol 2, CR-L40 §1.3): the player's avatar, square, straight-alpha RGBA,
+    /// exactly <c>Width * Height * 4</c> bytes after the header; <c>0x1A{0,0}</c> clears it (the initials).
+    /// <c>Rgba</c> compares by reference: compare encodings.
+    /// </summary>
+    public sealed record Avatar(ushort Width, ushort Height, byte[] Rgba) : UiFrame
+    {
+        public override byte Type => 0x1A;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        public static Avatar None { get; } = new(0, 0, []);
+
+        internal void Validate()
+        {
+            if (Width != Height || Width > MaxAvatarSide || Rgba is null || Rgba.Length != Width * Height * 4)
+                throw new ProtocolException("invalid avatar");
+        }
     }
 
     public static string PipeName(Handoff handoff)
@@ -536,6 +605,24 @@ public abstract record UiFrame
                 w.Str(c.PaneId);
                 w.Str(c.ActionId);
                 break;
+            case ServerStatus s:
+                s.Validate();
+                w.Str(s.Server);
+                w.U8(s.Flags);
+                w.U16(s.Online);
+                w.U16(s.Capacity);
+                w.U16(s.Hardcore);
+                w.U16(s.Noob);
+                w.U16(s.Lobbies);
+                w.U32(s.ProfilesHardcore);
+                w.U32(s.ProfilesNoob);
+                break;
+            case Avatar a:
+                a.Validate();
+                w.U16(a.Width);
+                w.U16(a.Height);
+                w.Fixed(a.Rgba, a.Rgba.Length, "avatar");
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -569,7 +656,7 @@ public abstract record UiFrame
         {
             return null;
         }
-        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x18)
+        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x1A)
         {
             throw new ProtocolException($"unknown ui frame type 0x{buffer[4]:x2}");
         }
@@ -603,12 +690,14 @@ public abstract record UiFrame
             0x15 => DecodeListV2(ref r),
             0x16 => DecodePane(ref r),
             0x17 => new PlayerDetailsQuery(r.Str(), r.Str()),
-            _ => new PaneActionClick(r.Str(), r.Str()),
+            0x18 => new PaneActionClick(r.Str(), r.Str()),
+            0x19 => new ServerStatus(r.Str(), r.U8(), r.U16(), r.U16(), r.U16(), r.U16(), r.U16(), r.U32(), r.U32()),
+            _ => DecodeAvatar(ref r),
         };
         r.End();
         switch (frame)
         {
-            case PlayerDetailsQuery or PaneActionClick:
+            case PlayerDetailsQuery or PaneActionClick or ServerStatus:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -616,6 +705,14 @@ public abstract record UiFrame
         if (frame is UiEvent { Kind: UiEventKind.ConnectionDetails } query && query.Detail.Length != 0) throw new ProtocolException("Connection query detail must be empty");
         used = 4 + length.Value;
         return frame;
+    }
+
+    private static Avatar DecodeAvatar(ref WireReader r)
+    {
+        var width = r.U16();
+        var height = r.U16();
+        if (width != height || width > MaxAvatarSide) throw new ProtocolException("invalid avatar");
+        return new Avatar(width, height, r.Take(width * height * 4).ToArray());
     }
 
     private static MyWorld DecodeMine(ref WireReader r)
@@ -812,7 +909,8 @@ public static class UiPaneIcon
 /// <summary>
 /// One row of the overlay's world list: <c>Kind</c> 0 everyone's / 1 Infinity Supporter host,
 /// <c>Audience</c> 0-3, <c>Lock</c> 0 joinable / 1 tier / 2 friends / 3 code / 4 full / 5 latency /
-/// 6 other, <c>Ping</c> 0 unknown / 1 good / 2 fair / 3 poor.
+/// 6 other / 7 another mode, the world Hardcore / 8 another mode, the world Noob (CR-L40), <c>Ping</c>
+/// 0 unknown / 1 good / 2 fair / 3 poor.
 /// </summary>
 public sealed record WorldRow(string Id, string Name, string Host, byte Players, byte Max, byte Kind, byte Audience, byte Lock, byte Ping, bool FriendHost);
 
@@ -865,6 +963,30 @@ public static class UiReport
     public const byte Cheating = 1;
     public const byte Abuse = 2;
     public const byte Other = 3;
+}
+
+/// <summary><c>ServerStatus.flags</c> (CR-L40 §1.3).</summary>
+public static class UiServerStatus
+{
+    /// <summary>The figures were read; without it the overlay shows "Status unavailable".</summary>
+    public const byte Known = 1;
+
+    public const byte Capacity = 2;
+
+    /// <summary>Hardcore, Noob and Lobbies came from the server's <c>live</c>.</summary>
+    public const byte Live = 4;
+
+    public const byte Profiles = 8;
+    public const byte All = Known | Capacity | Live | Profiles;
+}
+
+/// <summary><c>WorldsQueryV2.filter</c> and <c>LobbyRow.lock</c> values added by CR-L40.</summary>
+public static class UiLobby
+{
+    public const byte FilterFriends = 1, FilterNear = 2, FilterGlobal = 3, FilterAll = 4;
+
+    /// <summary>Another mode's world: the world is Hardcore / Noob.</summary>
+    public const byte LockHardcore = 7, LockNoob = 8;
 }
 
 /// <summary><c>JoinResult.status</c> (the overlay's worlds.cpp reads 0 and 3; the rest is a refusal).</summary>

@@ -334,5 +334,6 @@ public sealed partial class ShellViewModel
         foreach (var name in new[] { nameof(ShowDiscord), nameof(HasDiscordLink), nameof(ShowLinkDiscord), nameof(DiscordWaiting), nameof(CanUseDiscord),
             nameof(HasAnnounceSwitches), nameof(DiscordHandle), nameof(DiscordInitial), nameof(DiscordAvatar), nameof(HasDiscordAvatar), nameof(DiscordLinkedText) })
             Changed(name);
+        OverlayAvatarChanged(); // CR-L40: the in-game guide shows the same avatar
     }
 }

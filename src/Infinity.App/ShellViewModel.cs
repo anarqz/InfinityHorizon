@@ -416,6 +416,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _onMods = _onSetup = _onBugReport = _loginOpen = false;
         _playStatus = null;
         ClearDiscord(); // CR-S63
+        ClearShellStatus(); // CR-L40
         _session?.Dispose();
         _session = null;
         SessionStore.Delete(_stateDirectory);
@@ -471,6 +472,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
         else Message = S["signin.done_toast"];
         _ = RefreshDiscordAsync(); // CR-S63: the account's Discord handle on its profile rows (after sign-in only, OD-118)
+        RestartShellStatus(now: true); // CR-L40: the connected server's figures in the sidebar, then every 30 s
         await RefreshIntegrityAutomaticallyAsync();
         await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
     }

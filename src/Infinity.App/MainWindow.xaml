@@ -97,6 +97,14 @@
           <Button Content="{Binding S[nav.account]}" Style="{StaticResource NavButton}" IsEnabled="{Binding CanChangeIdentity}" Click="OnNavAccount" Tag="{Binding ShowAccount}" />
           <Button Content="{Binding S[nav.donate]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
           <TextBlock Text="{Binding ServerLabel}" Margin="20,14,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
+          <!-- CR-L40: the connected server's figures (online now, registered profiles in parentheses), read every 30 s -->
+          <StackPanel Margin="20,4,0,0" Background="Transparent" ToolTip="{Binding ServerStatusTip}" ToolTipService.ShowOnDisabled="True"
+                      Visibility="{Binding ShowShellStatus, Converter={StaticResource Visible}}" AutomationProperties.HelpText="{Binding ServerStatusTip}">
+            <TextBlock Text="{Binding ShellStatusPrimary}" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource InfinityMuted}"
+                       AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="{Binding ShellStatusSecondary}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap"
+                       Visibility="{Binding ShowShellStatusSecondary, Converter={StaticResource Visible}}" />
+          </StackPanel>
           <TextBlock Text="{Binding VersionLabel}" Margin="20,2,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
         </StackPanel>
         <StackPanel Margin="0,0,12,0">
@@ -488,6 +496,10 @@
                             </Border>
                           </StackPanel>
                           <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                          <!-- CR-L40: the server's figures under host · region · ping -->
+                          <TextBlock Text="{Binding Status}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap"
+                                     Visibility="{Binding HasStatus, Converter={StaticResource Visible}}"
+                                     ToolTip="{Binding DataContext.ServerStatusTip, RelativeSource={RelativeSource AncestorType=Window}}" />
                         </StackPanel>
                       </DataTemplate>
                     </ListBox.ItemTemplate>
