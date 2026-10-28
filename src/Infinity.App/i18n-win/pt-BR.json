@@ -991,6 +991,8 @@
   "seed.option": "Começar a partir de um dos meus perfis",
   "seed.warning": "É apenas uma verificação de plausibilidade. Use esta opção com consciência: se o perfil de origem for identificado com progressão alterada, este perfil Hardcore será deletado da nuvem e sua conta bloqueada até ser analisada por um moderador. Uma conta pode fazer 5 verificações por dia (verificações e primeiros envios juntos).",
   "seed.option_hint": "Assim que o perfil for criado, o servidor verifica essa carreira na hora e mostra o resultado antes de qualquer cópia. O save do outro perfil é apenas lido.",
+  "seed.noob_option": "Começar a partir de um dos meus perfis Hardcore",
+  "seed.noob_option_hint": "O save mais recente dessa carreira neste PC é copiado para o novo perfil Noob quando ele for criado. O perfil Hardcore mantém o próprio save, intacto.",
   "seed.first_launch_title": "Como {name} começa?",
   "seed.first_launch_body": "Este perfil Hardcore ainda não tem carreira na nuvem. Comece uma carreira nova, ou comece de um dos seus perfis nesta conta se a verificação do servidor aceitar.",
   "seed.scratch": "Começar do zero",

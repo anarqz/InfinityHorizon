@@ -550,6 +550,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Changed(nameof(NewHardcore));
         Changed(nameof(ProfilesText));
         ChangedSeedForm();
+        ChangedNoobSeedForm();
     }
 
     private bool CheckName()
