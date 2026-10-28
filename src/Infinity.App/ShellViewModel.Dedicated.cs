@@ -234,8 +234,16 @@ public sealed partial class ShellViewModel
                 await RefreshModsAsync();
                 if (HardcoreRefusedMods is { Count: > 0 } refused) { _lobbyLocalError = HardcoreRefusal(refused); return; }
             }
-            // OD-112: a dedicated host runs no game, so its lobby set is the enabled set of its launch plan (off the UI thread).
-            var mods = await LaunchPlanModSetSource.FromManagedModsAsync(() => _install is null ? null : ManagedMods());
+            // Owner 2026-10-28: a dedicated host runs no game, so its lobby set is ExtraOptions' plan for this folder, ready at once
+            // (the same ids and fingerprints the players' games report)
+            IModSetSource mods = VanillaModSet.Instance;
+            if (_install is { } install)
+            {
+                var cosmetic = HardcoreSafeFolders();
+                try { mods = ExtraOptionsModSetSource.ReadyWithPlan(await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic))); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModSetException)
+                { mods = LaunchPlanModSetSource.Failed(e.GetType().Name); }
+            }
             if (mods.State.Phase == ModSetPhase.Failed) Log("lobby: mod set unavailable (" + mods.State.Reason + ")");
             if (!ReferenceEquals(_session, session) || LobbyProfile != profile) { _lobbyLocalError = S["lobby.start_failed"]; return; }
             var host = NewDedicatedHost(profile, mods);

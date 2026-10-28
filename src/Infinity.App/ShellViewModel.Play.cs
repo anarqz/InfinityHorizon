@@ -178,29 +178,31 @@ public sealed partial class ShellViewModel
             // CR-L39: the keys this session's validated /info published and the realm's pin matched.
             : _config.Custom ? (TicketKeys.FromTrust(_session.Info.Trust!), TicketPolicy.ForCustom)
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
-        // OD-112: the session's lobby mod set, built off the UI thread from the enabled managed mods, each one's mapped files
-        // checked against its manifest (OD-113: data mods enter it from this verified plan); the gate's `modded` flag and the
-        // overlay's bridge share it.
-        var launchModSet = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
-        if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed)
-        {
-            Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")");
-            // never online as vanilla with multiplayer mods enabled: the session would be admitted unmodded
-            if (mods.MultiplayerMods.Count > 0) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
-        }
-        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
-        // N-H2/OD-113: a launch with native mods carries a FIMOD003 plan (this launch's nonce) to the hook and uses the runtime
-        // source: ready only on a verified ModsReport for that nonce and digest; file mods in it are ready from the verified plan.
+        // N-H2/OD-113: a development package's native mods carry a FIMOD003 plan (this launch's nonce) to the hook and use the
+        // runtime source: ready only on a verified ModsReport for that nonce and digest.
         NativeModPlan? nativePlan = null;
+        Infinity.Core.Matchmaking.IModSetSource modSet;
         if (nativeRuntime is not null)
         {
+            var launchModSet = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
+            if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed)
+            { Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")"); Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
             nativePlan = await PrepareOnlineNativePlanAsync(nativeRuntime);
             if (nativePlan is null) return;
             if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
+            modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
+            PrepareAzimuth(_install, ProfileHardcore);
         }
-        var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
+        else
+        {
+            // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
+            PrepareAzimuth(_install, ProfileHardcore);
+            var built = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
+            if (built is null) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
+            modSet = built;
+        }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) { if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan); return; }
         using var onlineActivity = new OnlineActivity();
-        PrepareAzimuth(_install, ProfileHardcore);
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Collections.ObjectModel;
 using System.IO;
+using Infinity.Core.Matchmaking;
 using Infinity.Core.Mods;
 using Infinity.Core.Process;
 
@@ -135,6 +136,30 @@ public sealed partial class ShellViewModel
         _modFacts.Select(f => f.Installed is { Enabled: true, Problem: null } installed ? installed.Manifest ?? f.Manifest : null)
             .Where(m => m is not null && !ModMultiplayer.AffectsMultiplayer(m))
             .Select(m => ExtraOptionsMods.FolderOf(m!)).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Owner 2026-10-28: the session's lobby set from what ExtraOptions loads (<see cref="ExtraOptionsModSetSource"/>), planned off the UI
+    /// thread after the load order was prepared; catalog mods whose manifest changes nothing for other players stay out. Null when the
+    /// mods could not be read while some are enabled (the session would otherwise be admitted as vanilla).
+    /// </summary>
+    private async Task<IModSetSource?> ExtraOptionsModSetAsync(AzimuthInstall install, DateTime launchUtc)
+    {
+        var cosmetic = HardcoreSafeFolders();
+        try
+        {
+            var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic));
+            Log("mods: lobby set planned from ExtraOptions: " + (plan.Count == 0 ? "none" : string.Join(", ", plan.Select(p => p.Entry.Id + " " + p.Entry.Version))));
+            return new ExtraOptionsModSetSource(install.Root, plan, launchUtc);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModSetException)
+        {
+            Log("mods: lobby set not planned (" + e.GetType().Name + ")");
+            bool anyEnabled;
+            try { anyEnabled = ExtraOptionsMods.Scan(install.Root).Any(m => m.Enabled); }
+            catch (Exception scan) when (scan is IOException or UnauthorizedAccessException or InvalidDataException) { anyEnabled = true; }
+            return anyEnabled ? null : VanillaModSet.Instance;
+        }
+    }
 
     /// <summary>
     /// Before a launch: <c>loadorder.txt</c> puts every mod after its dependencies; Hardcore online plays only with
