@@ -2,10 +2,12 @@
 // Infinity overlay: the D3D12 hooks and the per-frame draw.
 //
 // The vtables come from a dummy device, queue and swapchain on a hidden window; MinHook then
-// hooks IDXGISwapChain::Present / Present1 / ResizeBuffers and ID3D12CommandQueue::
-// ExecuteCommandLists (to learn the game's direct queue, the one its swapchain presents on).
-// In Present the overlay records one command list into the current back buffer and submits it
-// on that queue before the game's present. A fence per back buffer keeps an allocator from being
+// hooks IDXGISwapChain::Present / Present1 / ResizeBuffers and the factory's four swapchain
+// creators, which name the queue each swapchain presents on. In Present the overlay records one
+// command list into the current back buffer and submits it on that same queue before the game's
+// present. Never another queue: Azimuth 1.0.3 renders on a direct queue and presents on a second
+// one, and a back-buffer write from the render queue removed the device on Windows (2026-10-28).
+// A swapchain whose queue is unknown gets no overlay. A fence per back buffer keeps an allocator from being
 // reset while the GPU still reads it. Any structured exception in the draw sends the overlay to
 // passthrough (main.cpp): every hook is disabled and the game's calls run untouched.
 #include "overlay.h"
@@ -32,14 +34,74 @@ namespace {
 using PresentFn = HRESULT(STDMETHODCALLTYPE *)(IDXGISwapChain3 *, UINT, UINT);
 using Present1Fn = HRESULT(STDMETHODCALLTYPE *)(IDXGISwapChain3 *, UINT, UINT, const DXGI_PRESENT_PARAMETERS *);
 using ResizeFn = HRESULT(STDMETHODCALLTYPE *)(IDXGISwapChain3 *, UINT, UINT, UINT, DXGI_FORMAT, UINT);
-using ExecuteFn = void(STDMETHODCALLTYPE *)(ID3D12CommandQueue *, UINT, ID3D12CommandList *const *);
+using CreateSwapChainFn = HRESULT(STDMETHODCALLTYPE *)(IDXGIFactory2 *, IUnknown *, DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **);
+using ForHwndFn = HRESULT(STDMETHODCALLTYPE *)(IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
+                                               const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *, IDXGISwapChain1 **);
+using ForCoreWindowFn = HRESULT(STDMETHODCALLTYPE *)(IDXGIFactory2 *, IUnknown *, IUnknown *, const DXGI_SWAP_CHAIN_DESC1 *,
+                                                     IDXGIOutput *, IDXGISwapChain1 **);
+using ForCompositionFn = HRESULT(STDMETHODCALLTYPE *)(IDXGIFactory2 *, IUnknown *, const DXGI_SWAP_CHAIN_DESC1 *, IDXGIOutput *,
+                                                      IDXGISwapChain1 **);
 
 PresentFn g_present = nullptr;
 Present1Fn g_present1 = nullptr;
 ResizeFn g_resize = nullptr;
-ExecuteFn g_execute = nullptr;
+CreateSwapChainFn g_create = nullptr;
+ForHwndFn g_for_hwnd = nullptr;
+ForCoreWindowFn g_for_core = nullptr;
+ForCompositionFn g_for_composition = nullptr;
 
-std::atomic<ID3D12CommandQueue *> g_queue{nullptr}; // borrowed: the game's direct queue
+// Each swapchain created since the hooks went in, with the queue it presents on (one reference
+// held on the queue; a reused swapchain address finds its newest entry).
+struct ChainQueue {
+    IUnknown *chain = nullptr; // identity only, never called
+    ID3D12CommandQueue *queue = nullptr;
+};
+SRWLOCK g_chains_lock = SRWLOCK_INIT;
+std::vector<ChainQueue> g_chains;
+constexpr size_t kMaxChains = 16;
+
+IUnknown *Identity(IUnknown *object) {
+    IUnknown *identity = nullptr;
+    if (!object || FAILED(object->QueryInterface(IID_PPV_ARGS(&identity)))) {
+        return nullptr;
+    }
+    identity->Release(); // the object outlives this call: only the address is kept
+    return identity;
+}
+
+void Remember(IUnknown *device, IUnknown *chain, HRESULT hr) {
+    if (FAILED(hr) || !device || !chain) {
+        return;
+    }
+    ID3D12CommandQueue *queue = nullptr;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&queue)))) {
+        return; // a D3D11 swapchain: not the game's
+    }
+    IUnknown *identity = Identity(chain);
+    AcquireSRWLockExclusive(&g_chains_lock);
+    if (g_chains.size() >= kMaxChains) {
+        g_chains.front().queue->Release();
+        g_chains.erase(g_chains.begin());
+    }
+    g_chains.push_back({identity, queue});
+    ReleaseSRWLockExclusive(&g_chains_lock);
+}
+
+// The presenting queue of a swapchain, with a reference, or null.
+ID3D12CommandQueue *QueueOf(IUnknown *chain) {
+    IUnknown *identity = Identity(chain);
+    ID3D12CommandQueue *queue = nullptr;
+    AcquireSRWLockShared(&g_chains_lock);
+    for (auto it = g_chains.rbegin(); it != g_chains.rend(); ++it) {
+        if (it->chain == identity) {
+            queue = it->queue;
+            queue->AddRef();
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_chains_lock);
+    return queue;
+}
 
 struct FrameContext {
     ID3D12CommandAllocator *allocator = nullptr;
@@ -51,6 +113,7 @@ struct FrameContext {
 struct Renderer {
     bool ready = false;
     IDXGISwapChain3 *swapchain = nullptr; // the one we drew for (not owned)
+    ID3D12CommandQueue *queue = nullptr;  // the queue that swapchain presents on (one reference)
     ID3D12Device *device = nullptr;
     ID3D12DescriptorHeap *rtv_heap = nullptr;
     ID3D12DescriptorHeap *srv_heap = nullptr;
@@ -83,7 +146,7 @@ void ReleaseTargets() {
 }
 
 void WaitIdle() {
-    auto *queue = g_queue.load();
+    auto *queue = g.queue;
     if (!queue || !g.fence) {
         return;
     }
@@ -113,14 +176,31 @@ bool CreateTargets() {
 }
 
 bool Initialise(IDXGISwapChain3 *swapchain) {
-    auto *queue = g_queue.load();
+    // Only the queue this swapchain presents on, on the swapchain's own device; never a guess.
+    ID3D12CommandQueue *queue = QueueOf(swapchain);
     if (!queue) {
-        return false; // the game has not submitted on a direct queue yet
-    }
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (FAILED(swapchain->GetDesc(&desc)) || FAILED(swapchain->GetDevice(IID_PPV_ARGS(&g.device)))) {
+        static bool logged = false; // presented every frame: say it once
+        if (!logged) {
+            logged = true;
+            Log("no overlay on a swapchain whose presenting queue is unknown (created before the hooks)");
+        }
         return false;
     }
+    DXGI_SWAP_CHAIN_DESC desc{};
+    ID3D12Device *queue_device = nullptr;
+    if (FAILED(swapchain->GetDesc(&desc)) || FAILED(swapchain->GetDevice(IID_PPV_ARGS(&g.device))) ||
+        FAILED(queue->GetDevice(IID_PPV_ARGS(&queue_device)))) {
+        queue->Release();
+        return false;
+    }
+    const bool same_device = Identity(queue_device) == Identity(g.device);
+    queue_device->Release();
+    if (!same_device || queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        queue->Release();
+        Passthrough("the swapchain's presenting queue is not a direct queue of its device");
+        return false;
+    }
+    g.queue = queue;
     g.swapchain = swapchain;
     g.hwnd = desc.OutputWindow;
     g.format = desc.BufferDesc.Format;
@@ -187,7 +267,7 @@ void Draw(IDXGISwapChain3 *swapchain) {
     if (swapchain != g.swapchain) {
         return; // another swapchain (a launcher window, a video): only the game's gets the overlay
     }
-    auto *queue = g_queue.load();
+    auto *queue = g.queue;
     // Never wait inside the game's Present: when this back buffer's previous overlay pass has not
     // finished on the GPU, skip the overlay for this frame (the game is not held up).
     FrameContext &frame = g.frames[swapchain->GetCurrentBackBufferIndex()];
@@ -239,7 +319,8 @@ void Draw(IDXGISwapChain3 *swapchain) {
     g.list->ResourceBarrier(1, &barrier);
     g.list->Close();
     ID3D12CommandList *lists[] = {g.list};
-    g_execute(queue, 1, lists); // the original: our own submission is not observed
+    // the swapchain's own queue: ordered after the game's work on it for this frame, before its Present
+    queue->ExecuteCommandLists(1, lists);
     frame.fence_value = g.fence_next++;
     queue->Signal(g.fence, frame.fence_value);
 }
@@ -296,14 +377,33 @@ HRESULT STDMETHODCALLTYPE HookResize(IDXGISwapChain3 *swapchain, UINT count, UIN
     return hr;
 }
 
-void STDMETHODCALLTYPE HookExecute(ID3D12CommandQueue *queue, UINT count, ID3D12CommandList *const *lists) {
-    if (!g_queue.load()) {
-        const D3D12_COMMAND_QUEUE_DESC desc = queue->GetDesc();
-        if (desc.Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-            g_queue.store(queue);
-        }
-    }
-    g_execute(queue, count, lists);
+// The factory's swapchain creators: pDevice of a D3D12 swapchain is the queue it presents on.
+HRESULT STDMETHODCALLTYPE HookCreateSwapChain(IDXGIFactory2 *factory, IUnknown *device, DXGI_SWAP_CHAIN_DESC *desc,
+                                              IDXGISwapChain **chain) {
+    const HRESULT hr = g_create(factory, device, desc, chain);
+    Remember(device, chain ? *chain : nullptr, hr);
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE HookForHwnd(IDXGIFactory2 *factory, IUnknown *device, HWND window, const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen, IDXGIOutput *output, IDXGISwapChain1 **chain) {
+    const HRESULT hr = g_for_hwnd(factory, device, window, desc, fullscreen, output, chain);
+    Remember(device, chain ? *chain : nullptr, hr);
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE HookForCoreWindow(IDXGIFactory2 *factory, IUnknown *device, IUnknown *window,
+                                            const DXGI_SWAP_CHAIN_DESC1 *desc, IDXGIOutput *output, IDXGISwapChain1 **chain) {
+    const HRESULT hr = g_for_core(factory, device, window, desc, output, chain);
+    Remember(device, chain ? *chain : nullptr, hr);
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE HookForComposition(IDXGIFactory2 *factory, IUnknown *device, const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                             IDXGIOutput *output, IDXGISwapChain1 **chain) {
+    const HRESULT hr = g_for_composition(factory, device, desc, output, chain);
+    Remember(device, chain ? *chain : nullptr, hr);
+    return hr;
 }
 
 bool Hook(void *target, void *detour, void **original) {
@@ -346,8 +446,12 @@ bool InstallRenderHooks() {
             break;
         }
         void **chain = *reinterpret_cast<void ***>(swapchain);
-        void **queue_vtbl = *reinterpret_cast<void ***>(queue);
-        ok = Hook(queue_vtbl[10], reinterpret_cast<void *>(&HookExecute), reinterpret_cast<void **>(&g_execute)) &&
+        void **factory_vtbl = *reinterpret_cast<void ***>(factory);
+        // IDXGIFactory::CreateSwapChain 10, IDXGIFactory2::CreateSwapChainForHwnd 15, ForCoreWindow 16, ForComposition 24
+        ok = Hook(factory_vtbl[10], reinterpret_cast<void *>(&HookCreateSwapChain), reinterpret_cast<void **>(&g_create)) &&
+             Hook(factory_vtbl[15], reinterpret_cast<void *>(&HookForHwnd), reinterpret_cast<void **>(&g_for_hwnd)) &&
+             Hook(factory_vtbl[16], reinterpret_cast<void *>(&HookForCoreWindow), reinterpret_cast<void **>(&g_for_core)) &&
+             Hook(factory_vtbl[24], reinterpret_cast<void *>(&HookForComposition), reinterpret_cast<void **>(&g_for_composition)) &&
              Hook(chain[8], reinterpret_cast<void *>(&HookPresent), reinterpret_cast<void **>(&g_present)) &&
              Hook(chain[13], reinterpret_cast<void *>(&HookResize), reinterpret_cast<void **>(&g_resize)) &&
              Hook(chain[22], reinterpret_cast<void *>(&HookPresent1), reinterpret_cast<void **>(&g_present1));
