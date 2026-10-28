@@ -496,7 +496,23 @@ public sealed partial class ManagedModFiles
         var archive = Safe(BackupRoot, "uninstalled-" + id + "-" + Guid.NewGuid().ToString("N") + ".json");
         File.Move(ReceiptPath(id), archive);
         RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
+        // OD-127 (owner 2026-10-28): an ExtraOptions mod's folder leaves with it, with what the mod wrote there itself (its own settings),
+        // so nothing of it stays in mods\ to show as a manual mod
+        try { if (ExtraOptionsMods.FolderOf(SnapshotFor(receipt)) is { } folder) ExtraOptionsMods.DeleteFolder(_azimuth, folder); }
+        catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException or InvalidDataException) { }
         ReconcileWineOverrides();
+    }
+
+    /// <summary>
+    /// OD-125/127: ExtraOptions comes with Infinity; a receipt from when the catalog installed it as a mod is retired (archived),
+    /// its files left as they are (the hook's own now). True when there was one.
+    /// </summary>
+    public bool RetireBuiltInReceipt()
+    {
+        using var gate = Lock();
+        if (!File.Exists(ReceiptPath(BuiltInExtraOptions))) return false;
+        File.Move(ReceiptPath(BuiltInExtraOptions), Safe(BackupRoot, "retired-" + BuiltInExtraOptions + "-" + Guid.NewGuid().ToString("N") + ".json"));
+        return true;
     }
 
     /// <summary>A disabled receipt's own copies (by its manifest) still in the game with the mod's bytes.</summary>

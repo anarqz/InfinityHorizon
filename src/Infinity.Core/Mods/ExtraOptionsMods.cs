@@ -82,6 +82,30 @@ public static class ExtraOptionsMods
     }
 
     /// <summary>
+    /// Owner 2026-10-28: removes one folder of <c>mods\</c> and its <c>loadorder.txt</c> line: a manually installed mod the player
+    /// deletes, or what an uninstalled catalog mod still left in its own folder. Game closed (the caller's check). A linked folder,
+    /// or anything linked inside it, is refused, so only the folder's own files go, through the one safe delete.
+    /// </summary>
+    public static void DeleteFolder(string azimuthRoot, string folder)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        if (string.IsNullOrWhiteSpace(folder) || folder.IndexOfAny(['/', '\\', '\r', '\n', ':']) >= 0 || folder.StartsWith('.'))
+            throw new ArgumentException("not a mod folder name", nameof(folder));
+        var directory = new DirectoryInfo(Path.Combine(ModsDirectory(azimuthRoot), folder));
+        if (directory.Exists)
+        {
+            var everything = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 };
+            if (directory.LinkTarget is not null || directory.EnumerateFileSystemInfos("*", everything).Any(i => i.LinkTarget is not null))
+                throw new IOException("a linked mod folder is not deleted");
+            foreach (var file in directory.EnumerateFiles("*", everything).ToList()) ManagedModFiles.RemoveFile(file.FullName);
+            foreach (var inner in directory.EnumerateDirectories("*", everything).OrderByDescending(d => d.FullName.Length).ToList()) inner.Delete();
+            directory.Delete();
+        }
+        var order = ReadLoadOrder(azimuthRoot);
+        if (order.Lines.RemoveAll(l => Entry(l) is { } e && e.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase)) > 0) WriteLoadOrder(azimuthRoot, order);
+    }
+
+    /// <summary>
     /// The last game run's verdict per mod (keyed by id and by folder), from the <c>MODS:</c> and <c>PLUGINS:</c> lines of
     /// <c>FH2_ExtraOptions.log</c> beside <c>azimuth.exe</c> (ExtraOptions recreates it every start). No log: empty.
     /// </summary>
