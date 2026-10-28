@@ -48,9 +48,14 @@ def prepare_extraoptions(directory):
     # git apply, not GNU patch: Git for Windows ships no patch.exe, and git apply takes no fuzz, so
     # every platform applies the series byte for byte. The ceiling keeps it out of any repository
     # above the copy (inside one it would resolve the paths against that work tree instead).
+    # shutil.which honours PATHEXT: a git that is only a git.cmd shim on PATH still runs, which a
+    # bare "git" does not (CreateProcess resolves no .cmd).
+    git = shutil.which("git")
+    if not git:
+        raise SystemExit("git is not on PATH: the ExtraOptions.Infinity patches are applied with git apply")
     environment = dict(os.environ, GIT_CEILING_DIRECTORIES=str(tree.parent))
     for patch in sorted((HERE / "patches").glob("*.patch")):
-        run(["git", "apply", "-p1", "--whitespace=nowarn", patch], cwd=tree, env=environment)
+        run([git, "apply", "-p1", "--whitespace=nowarn", patch], cwd=tree, env=environment)
     return tree
 
 
