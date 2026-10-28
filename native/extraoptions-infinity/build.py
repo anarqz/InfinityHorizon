@@ -12,6 +12,7 @@ and the hook are the only difference.
 """
 import argparse
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -41,10 +42,15 @@ def prepare_extraoptions(directory):
     tree = directory / "extraoptions"
     shutil.rmtree(tree, ignore_errors=True)
     if not (EXTRAOPTIONS / "build.py").is_file():
-        raise SystemExit("native/extraoptions is empty: run git submodule update --init native/extraoptions")
+        raise SystemExit("native/extraoptions is empty: in the client checkout run "
+                         "git submodule update --init native/extraoptions (or clone it with --recursive)")
     shutil.copytree(EXTRAOPTIONS, tree, ignore=shutil.ignore_patterns(".git"))
+    # git apply, not GNU patch: Git for Windows ships no patch.exe, and git apply takes no fuzz, so
+    # every platform applies the series byte for byte. The ceiling keeps it out of any repository
+    # above the copy (inside one it would resolve the paths against that work tree instead).
+    environment = dict(os.environ, GIT_CEILING_DIRECTORIES=str(tree.parent))
     for patch in sorted((HERE / "patches").glob("*.patch")):
-        run(["patch", "-p1", "--binary", "--forward", "--no-backup-if-mismatch", "-s", "-i", patch], cwd=tree)
+        run(["git", "apply", "-p1", "--whitespace=nowarn", patch], cwd=tree, env=environment)
     return tree
 
 
