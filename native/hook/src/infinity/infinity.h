@@ -27,7 +27,7 @@ enum { FI_LANG_AUTO, FI_LANG_EN, FI_LANG_PT_BR };
 enum { FI_CFG_NONE, FI_CFG_UTF16LE, FI_CFG_UTF8, FI_CFG_UTF8_BOM, FI_CFG_ANSI };
 typedef struct {
     int net_mode;             /* NetMode: FI_NET_* (default Proxy) */
-    wchar_t server[256];      /* Server (default https://infinity.anarqz.dev) */
+    wchar_t server[256];      /* Server (default https://api.infinity-horizon.com) */
     int auto_update;          /* AutoUpdate 0/1 (1) */
     int freeroam;             /* FreeRoam 0/1 (1) */
     int freeroam_direct;      /* FreeRoamDirect 0/1 (0) */

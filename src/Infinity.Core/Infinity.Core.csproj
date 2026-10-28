@@ -17,4 +17,9 @@
     <InternalsVisibleTo Include="Infinity.Core.Tests" />
   </ItemGroup>
 
+  <!-- OD-125: ExtraOptions.Infinity's own settings file, written beside azimuth.exe when the player has none. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\native\extraoptions-infinity\FH2_ExtraOptions.ini" LogicalName="Infinity.Core.FH2_ExtraOptions.ini" />
+  </ItemGroup>
+
 </Project>

@@ -38,7 +38,8 @@ public sealed record CrashSubmission(CrashCreate Request)
         var module = incident.Dump?.FaultModule?.ToLowerInvariant() switch
         {
             "forza_durango_release_final.exe" => "game",
-            "azimuth-tls.dll" or "infinity.dll" => "hook",
+            // OD-125: winmm.dll is ExtraOptions.Infinity (the hook and ExtraOptions in one module)
+            "azimuth-tls.dll" or "infinity.dll" or "winmm.dll" => "hook",
             "infinity-overlay.dll" => "overlay",
             _ => "unknown",
         };

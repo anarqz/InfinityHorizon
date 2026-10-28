@@ -21,7 +21,7 @@ public enum HookSigner
     Development,
 }
 
-/// <summary>What <c>data\bin\azimuth-tls.dll</c> is.</summary>
+/// <summary>What the hook, <c>winmm.dll</c> beside <c>azimuth.exe</c> (OD-125), is.</summary>
 public enum HookKind
 {
     Missing,
@@ -57,7 +57,8 @@ public sealed record HookPackage(string Path, byte[] Bytes, byte[] Signature, st
 /// </summary>
 public static class HookInstaller
 {
-    public const string HookDll = "azimuth-tls.dll";
+    /// <summary>OD-125: ExtraOptions.Infinity, the <c>winmm.dll</c> beside <c>azimuth.exe</c> (Azimuth 1.0.2 loads no TLS helper for FH2).</summary>
+    public const string HookDll = "winmm.dll";
     public const string PackageFile = "infinity.dll";
     public const string SignPrefix = "fh2online-update-v1 ";
     public const string DevKeyEnv = "FI_DEV_HOOK_KEY";
@@ -169,15 +170,16 @@ public static class HookInstaller
         return new HookPackage(dll, bytes, signature, version, sha, signer);
     }
 
-    private static string Bin(string azimuthRoot) => Path.Combine(azimuthRoot, "data", "bin");
+    /// <summary>Where <see cref="HookDll"/> goes: beside <c>azimuth.exe</c> (OD-125).</summary>
+    private static string HookFolder(string azimuthRoot) => azimuthRoot;
 
     private static string KeptSignature(string azimuthRoot) => Path.Combine(azimuthRoot, "data", "fi-launcher", "hook", HookDll + ".sig");
 
-    /// <summary>What <c>data\bin\azimuth-tls.dll</c> is, and whether the signature the launcher kept signs exactly these bytes.</summary>
+    /// <summary>What <c>&lt;Azimuth&gt;\winmm.dll</c> is, and whether the signature the launcher kept signs exactly these bytes.</summary>
     public static InstalledHook Inspect(string azimuthRoot, byte[]? devKey)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
-        var path = Path.Combine(Bin(azimuthRoot), HookDll);
+        var path = Path.Combine(HookFolder(azimuthRoot), HookDll);
         if (!File.Exists(path))
         {
             return new InstalledHook(HookKind.Missing, null, null, HookSigner.None);
@@ -234,7 +236,7 @@ public static class HookInstaller
     }
 
     /// <summary>
-    /// Installs a verified package into <c>data\bin</c>. Refuses while <paramref name="gameRunning"/>
+    /// Installs a verified package beside <c>azimuth.exe</c> (<see cref="HookFolder"/>). Refuses while <paramref name="gameRunning"/>
     /// or while the DLL is in use. The bytes are re-verified, written to <c>.new</c> (flushed, re-hashed),
     /// the current DLL renamed to <c>.previous</c> (Azimuth's own also copied to <c>.stock</c>),
     /// then <c>.new</c> renamed into place; a failed last step puts <c>.previous</c> back.
@@ -245,7 +247,7 @@ public static class HookInstaller
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(gameRunning);
         var (version, sha, _) = Verify(package.Bytes, package.Signature, devKey);
-        var bin = Bin(azimuthRoot);
+        var bin = HookFolder(azimuthRoot);
         var target = Path.Combine(bin, HookDll);
         if (gameRunning() || InUse(target))
         {

@@ -370,6 +370,7 @@ public partial class MainWindow : Window
     private void OnCloseModPanel(object sender, RoutedEventArgs e) => _vm.CloseModPanel();
     private void OnClearModSearch(object sender, RoutedEventArgs e) => _vm.ModSearch = "";
     private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
+    private async void OnToggleExtraOptionsMod(object sender, RoutedEventArgs e) => await _vm.ToggleExtraOptionsModAsync((ExtraOptionsModItem)((FrameworkElement)sender).DataContext);
     private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
     private async void OnResolveMods(object sender, RoutedEventArgs e) => await _vm.ResolveModRecoveryAsync();
     private async void OnRelinkMods(object sender, RoutedEventArgs e) => await _vm.RelinkModsAsync();
