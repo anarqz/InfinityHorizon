@@ -23,13 +23,13 @@
 #include "../core/support.h"
 
 /* The ExtraOptions build headlight and roof sync supports: the player's 0.2.98 (the TLS-helper hook on
-   Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125), the ExtraOptions 0.3.2 linked into this
-   same winmm.dll: its version resource (FILEVERSION 0.3.2.0) and its Fh2TweaksStatus are this module's own. */
+   Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125), the ExtraOptions 0.3.9 linked into this
+   same winmm.dll: its version resource (FILEVERSION 0.3.9.0) and its Fh2TweaksStatus are this module's own. */
 #ifdef FI_EO_BUILD
 #define EO_SUPPORTED_MS 0x00000003u
-#define EO_SUPPORTED_LS 0x00020000u
-#define EO_SUPPORTED "0.3.2"
-#define EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.3.2)"
+#define EO_SUPPORTED_LS 0x00090000u
+#define EO_SUPPORTED "0.3.9"
+#define EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.3.9)"
 #else
 #define EO_SUPPORTED_MS 0x00000002u
 #define EO_SUPPORTED_LS 0x00620000u

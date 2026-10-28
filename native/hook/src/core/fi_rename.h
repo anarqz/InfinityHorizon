@@ -1,6 +1,6 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE).
 
-   ExtraOptions.Infinity (FI_EO_BUILD, OD-125): the hook and ExtraOptions 0.3.2 are linked into one
+   ExtraOptions.Infinity (FI_EO_BUILD, OD-125): the hook and ExtraOptions 0.3.9 are linked into one
    winmm.dll, and both trees define these external functions (the hook started as an ExtraOptions
    fork). native/extraoptions-infinity/build.py force-includes this header into every hook object
    only, so the hook keeps its own helpers, its own infinity.log and its own host checks, and
