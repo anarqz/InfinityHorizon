@@ -401,8 +401,9 @@ public sealed class PlaySupervisor
             if (overrides is not null) env.Add(("WINEDLLOVERRIDES", overrides));
         }
         // B1: an inherited FI_OFFLINE_* (Steam launch options, a shell) never names the identity: only FallbackIdentity does
-        // Azimuth 1.0 opens its own launcher without arguments: --skip-launcher starts the added FH2 directly
-        var plan = new LaunchPlan(_config.Install.HostExe, [AzimuthSetup.SkipLauncher], _config.Install.Root, env, [Launch.EnvOfflineXuid, Launch.EnvOfflineGamertag]);
+        // Owner 2026-10-28: Azimuth opens its own launcher (no --skip-launcher, which ended in a device-removed start on
+        // Windows), with FH2 added and chosen; the player presses Play there and the hook greets once the game is mapped
+        var plan = new LaunchPlan(_config.Install.HostExe, [], _config.Install.Root, env, [Launch.EnvOfflineXuid, Launch.EnvOfflineGamertag]);
         var crashContext = new CrashContext(_clock);
         var startedUtc = _clock.GetUtcNow();
         CrashDumpSnapshot? dumpSnapshot = null;

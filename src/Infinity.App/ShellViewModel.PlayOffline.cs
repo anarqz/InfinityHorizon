@@ -171,7 +171,8 @@ public sealed partial class ShellViewModel
             Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
             // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
             if (WineHost.Detected) Log("play: wine " + WineHost.HookModule + " " + WineHost.EnsureNativeDllOverride(WineHost.HookModule, true));
-            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [AzimuthSetup.SkipLauncher], install.Root, environment, OfflineOverlayNames));
+            // Owner 2026-10-28: Azimuth's own launcher first, as online (no --skip-launcher)
+            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, OfflineOverlayNames));
             using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
                 new UiFrame.Status(profile.DisplayName, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
             if (overlay is not null)
