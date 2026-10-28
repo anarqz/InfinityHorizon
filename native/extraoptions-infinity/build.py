@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.2 made of ExtraOptions 0.3.2
+"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.3 made of ExtraOptions 0.3.2
 (native/extraoptions, a submodule pinned to an upstream release), Infinity's patch series
 (patches/*.patch, applied to a copy) and the ForzaInfinity hook (native/hook, built with
 FI_EO_BUILD and src/core/fi_rename.h).
