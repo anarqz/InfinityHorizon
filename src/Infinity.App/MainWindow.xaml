@@ -939,7 +939,7 @@
                       </StackPanel>
                     </Border>
                     <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
-                    <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    <TextBlock Text="{Binding NoobHint}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
                   <!-- Owner 2026-10-28: a Noob profile may start from one of the player's Hardcore careers on this PC (a copy; no check). -->
                   <Border Margin="30,10,0,0" Padding="12,10" CornerRadius="8" Background="{StaticResource InfinitySurfaceHigh}"
@@ -952,7 +952,7 @@
                       <TextBlock Text="{Binding S[seed.noob_option_hint]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                     </StackPanel>
                   </Border>
-                  <TextBlock Text="{Binding S[modes.free_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
+                  <TextBlock Text="{Binding FreeNoobHint}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
                              Visibility="{Binding ShowFreeNoobHint, Converter={StaticResource Visible}}" />
                 <!-- OD-118: offline creation is Noob; Hardcore is created signed in. -->
                 <TextBlock Text="{Binding S[offline.create_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
@@ -967,7 +967,7 @@
                   <TextBlock Text="{Binding ConvertTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
                   <TextBlock Text="{Binding S[modes.convert_body]}" Margin="0,6,0,6" TextWrapping="Wrap" />
                   <TextBlock Text="{Binding ConvertDeletes}" Margin="8,0,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}" />
-                  <TextBlock Text="{Binding S[modes.convert_keeps]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding ConvertKeeps}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                     <Button Content="{Binding S[modes.convert_confirm]}" Click="OnConfirmConvert" IsEnabled="{Binding Idle}"
                             BorderBrush="{StaticResource InfinityDangerBorder}" />

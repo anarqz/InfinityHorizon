@@ -35,6 +35,15 @@ public sealed partial class ShellViewModel
 
     public string HardcoreHint => S[HardcoreKeepsCloud ? "modes.hardcore_hint" : "modes.hardcore_hint_local"];
 
+    /// <summary>CR-S66 (OD-128): this server keeps a Noob profile of this account in the cloud, saved without the checks (absent policy: none).</summary>
+    public bool NoobKeepsCloud => IsSupporter ? _cloudLines?.NoobVip ?? false : _cloudLines?.NoobFree ?? false;
+
+    public string NoobHint => S[NoobKeepsCloud ? "modes.noob_hint_cloud" : "modes.noob_hint"];
+
+    public string FreeNoobHint => S[NoobKeepsCloud ? "modes.free_noob_cloud" : "modes.free_noob"];
+
+    public string ConvertKeeps => S[NoobKeepsCloud ? "modes.convert_keeps_cloud" : "modes.convert_keeps"];
+
     public bool NewHardcore
     {
         get => _newHardcore && CanChooseHardcore;
@@ -136,7 +145,7 @@ public sealed partial class ShellViewModel
             CancelConvert();
             await _session.RefreshMeAsync();
             FillProfiles();
-            Message = S.Format("modes.converted", ("name", ProfileName.Plain(profile.Gamertag)));
+            Message = S.Format(NoobKeepsCloud ? "modes.converted_cloud" : "modes.converted", ("name", ProfileName.Plain(profile.Gamertag)));
         });
     }
 
@@ -314,7 +323,10 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(profile);
         if (profile.Mode != "hardcore")
         {
-            return "NOOB · " + (profile.CloudLine == true ? S["modes.hardcore_cloud"] : IsSupporter ? S["modes.noob_supporter"] : S["profiles.local_saves"]);
+            // CR-S66: a Noob line is saved at once (no checks); without one, what this server does for Noob
+            return "NOOB · " + (profile.CloudLine == true ? S["modes.noob_cloud"]
+                : profile.CloudLine is null && NoobKeepsCloud ? S["modes.noob_cloud"]
+                : IsSupporter && !NoobKeepsCloud ? S["modes.noob_supporter"] : S["profiles.local_saves"]);
         }
         // CR-S51: the server says whether this profile keeps a cloud line; an older server (absent) is OD-52, a Supporter's
         return "HARDCORE · " + (profile.CloudLine is { } cloud ? S[cloud ? "modes.hardcore_cloud" : "modes.hardcore_local"]

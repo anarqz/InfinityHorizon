@@ -323,6 +323,9 @@ int fi_tier_free(void);
 /* OD-52: the profile is a Supporter's Hardcore one, the only kind with data on the servers; a
    free or Noob profile's game requests get the free answers. */
 void fi_tier_set_noob(int noob);
+/* OD-128: in a launcher session the ticket's save line (CR-S51 `line`: 1 or 0) alone opens or shuts
+   every gate, whatever tier and mode; -1 (no ticket) leaves the tier and mode to decide. */
+void fi_tier_set_line(int line);
 int fi_tier_universe(void);
 /* For a free account: FI_ROUTE_PASS (to the server), FI_ROUTE_UNAVAILABLE (503 here),
    FI_ROUTE_EMPTY_XTSW (200, an empty bin/xtsw reply here) or FI_ROUTE_JSON (200, `*json` here);
