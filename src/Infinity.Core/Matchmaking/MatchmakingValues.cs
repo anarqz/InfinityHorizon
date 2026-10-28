@@ -74,13 +74,13 @@ public static class WorldFilters
     public const string Near = "near";
     public const string Friends = "friends";
 
-    public static IReadOnlyList<string> All { get; } = [Global, Near, Friends];
-
     /// <summary>
-    /// CR-L40 (b): every open world of the game, every mode, modded or not (never with <c>modded</c>). Not in
-    /// <see cref="All"/> until the contract's union has it; an older server answers 400 <c>{field: "filter"}</c>.
+    /// CR-L40 (b): every open world of the game, every mode, modded or not (never with <c>modded</c>); an older server
+    /// answers 400 <c>{field: "filter"}</c>.
     /// </summary>
     public const string Every = "all";
+
+    public static IReadOnlyList<string> All { get; } = [Global, Near, Friends, Every];
 }
 
 /// <summary>Caller → host estimate, best first (§3.5).</summary>

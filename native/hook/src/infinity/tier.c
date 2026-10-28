@@ -32,19 +32,31 @@
    OD-52: only a Supporter's Hardcore profile keeps data on the servers. A Supporter playing a
    Noob profile gets exactly what a free one gets (fi_tier_universe() is 0), so the hook never
    asks for what the server refuses to a vip noob ticket (OD-51, both sides). The tier itself
-   stays vip: the queue priority and the overlay's Supporter features are the account's. */
+   stays vip: the queue priority and the overlay's Supporter features are the account's.
+
+   OD-128 (owner, 2026-10-28: "If cloud saves are enabled to the current profile, open all gates
+   and send the requests. If cloud saves are off for the current profile type, gate it as well"):
+   in a launcher session the launch ticket's save line (CR-S51 `line`), known before the game's
+   first request, alone decides: with it every gate above is open, without it every one is shut,
+   whatever the tier and mode. Outside one (the Beta protocol) the tier and mode decide as above. */
 #include "infinity.h"
 #include "../core/support.h"
 
 static volatile LONG tier_value = FI_TIER_VIP;
 static volatile LONG tier_noob = 0;
+static volatile LONG tier_line = -1; /* -1 no launch ticket; 0 or 1 the ticket's save line */
 
 void fi_tier_set_noob(int noob) {
     InterlockedExchange(&tier_noob, noob ? 1 : 0);
 }
 
+void fi_tier_set_line(int line) {
+    InterlockedExchange(&tier_line, line < 0 ? -1 : line ? 1 : 0);
+}
+
 int fi_tier_universe(void) {
-    return tier_value != FI_TIER_FREE && !tier_noob;
+    const LONG line = tier_line;
+    return line >= 0 ? line == 1 : tier_value != FI_TIER_FREE && !tier_noob;
 }
 
 void fi_tier_set(int tier) {

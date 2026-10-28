@@ -1032,6 +1032,7 @@ static struct {
     char xuid[24], gamertag[40], tier[16], mode[16], server[256];
     unsigned long long iat, exp;
     int storm_island;
+    int line; /* CR-S51: the session holds its save line (the server keeps this profile's cloud data) */
 } launch_claims;
 
 static int launch_copy(char *out, size_t cap, const char *text, size_t size) {
@@ -1254,6 +1255,9 @@ static int launch_ticket_ok(const LaunchTicket *t) {
     const char *value, *end;
     launch_claims.storm_island = json_member(claims, size, "expansions", &value, &end) &&
                                  text_find(value, (size_t)(end - value), "06f06bff-35ee-4821-a289-fbc1765d6b76") != 0;
+    /* CR-S51 `line`: only a literal true counts; absent (older servers) is false */
+    launch_claims.line = json_member(claims, size, "line", &value, &end) && end - value == 4 &&
+                         memory_equal(value, "true", 4);
     launch_claims.iat = iat;
     launch_claims.exp = exp;
     return 1;
@@ -1397,7 +1401,11 @@ static int launch_go_online(const LaunchTicket *t) {
     int free_tier = text_equal_ignore_case(launch_claims.tier, "free");
     int noob = text_equal_ignore_case(launch_claims.mode, "noob");
     azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier, noob, launch_claims.storm_island);
-    fi_tier_set_noob(noob); /* OD-52: a vip noob ticket gets the free answers */
+    fi_tier_set_noob(noob);
+    fi_tier_set_line(launch_claims.line); /* OD-128: the save line alone opens or shuts every gate */
+    launch_log(launch_claims.line ? "save line: this profile's cloud data is kept; every game service goes to the server."
+                                  : "no save line: this profile keeps no cloud data; the universe's services are answered here.",
+               0, 0, "");
     launch_log(free_tier ? "online through the launcher's session (free tier, display only); token for " :
                            "online through the launcher's session (Infinity Supporter, display only); token for ",
                1, launch_token_left_ms() / 1000u, " s.");
