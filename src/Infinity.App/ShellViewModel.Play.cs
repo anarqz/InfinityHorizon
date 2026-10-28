@@ -23,6 +23,22 @@ public sealed partial class ShellViewModel
     private CancellationTokenSource? _play;
     private Channel<SupervisorCommand>? _commands;
     private Task? _playTask;
+    /// <summary>
+    /// OD-125, before every launch: FH2 added to Azimuth 1.0's <c>data\azimuth.ini</c> (so <c>--skip-launcher</c> starts it)
+    /// with the game folder chosen in Configure, and ExtraOptions.Infinity's <c>FH2_ExtraOptions.ini</c> when there is none.
+    /// A failure is logged and never stops the launch (without its ini ExtraOptions refuses; the hook still runs).
+    /// OD-126: the mods of <c>mods\</c> are prepared for the profile (Hardcore online plays without them).
+    /// </summary>
+    private void PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
+    {
+        if (install is null) return;
+        PrepareExtraOptionsMods(install, hardcore);
+        try { Log("azimuth: " + AzimuthTitles.EnsureFh2(install.Root, ContentLocation?.PackageRoot)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("azimuth: title not written (" + e.GetType().Name + ")"); }
+        try { Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(install.Root)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { Log("extraoptions: ini not written (" + e.GetType().Name + ")"); }
+    }
+
     private string? _playStatus;
     private string? _hookLine;
     private bool _waitingForAdmission;
@@ -184,6 +200,7 @@ public sealed partial class ShellViewModel
         }
         var modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
         using var onlineActivity = new OnlineActivity();
+        PrepareAzimuth(_install, ProfileHardcore);
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
             Overlay = LoadOverlayPackage(),

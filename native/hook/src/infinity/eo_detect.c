@@ -22,6 +22,21 @@
 #include "../core/logging.h"
 #include "../core/support.h"
 
+/* The ExtraOptions build headlight and roof sync supports: the player's 0.2.98 (the TLS-helper hook on
+   Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125), the ExtraOptions 0.3.2 linked into this
+   same winmm.dll: its version resource (FILEVERSION 0.3.2.0) and its Fh2TweaksStatus are this module's own. */
+#ifdef FI_EO_BUILD
+#define EO_SUPPORTED_MS 0x00000003u
+#define EO_SUPPORTED_LS 0x00020000u
+#define EO_SUPPORTED "0.3.2"
+#define EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.3.2)"
+#else
+#define EO_SUPPORTED_MS 0x00000002u
+#define EO_SUPPORTED_LS 0x00620000u
+#define EO_SUPPORTED "0.2.98"
+#define EO_NAME "ExtraOptions 0.2.98"
+#endif
+
 static FiEo eo_result;
 /* 0 not looked at yet, 1 looking, 2 known */
 static volatile LONG eo_stage;
@@ -105,20 +120,20 @@ static void eo_compose_line(void) {
     eo_line[0] = 0;
     switch (eo_result.state) {
     case FI_EO_0298_OK:
-        eo_add(eo_line, sizeof(eo_line), "EO: ExtraOptions 0.2.98 present and active (");
+        eo_add(eo_line, sizeof(eo_line), "EO: " EO_NAME " present and active (");
         eo_add(eo_line, sizeof(eo_line), eo_result.status);
         eo_add(eo_line, sizeof(eo_line), fi_eo_sync_enabled() ? "); headlight and roof sync on"
                                                                : "); headlight and roof sync off ([hook] CarState=off)");
         break;
     case FI_EO_0298_INACTIVE:
-        eo_add(eo_line, sizeof(eo_line), "EO: ExtraOptions 0.2.98 present but not active (");
+        eo_add(eo_line, sizeof(eo_line), "EO: " EO_NAME " present but not active (");
         eo_add(eo_line, sizeof(eo_line), eo_result.status);
         eo_add(eo_line, sizeof(eo_line), "); headlight and roof sync off");
         break;
     case FI_EO_OTHER_VERSION:
         eo_add(eo_line, sizeof(eo_line), "EO: ExtraOptions ");
         eo_add(eo_line, sizeof(eo_line), eo_result.version);
-        eo_add(eo_line, sizeof(eo_line), " present; not the supported 0.2.98; headlight and roof sync off");
+        eo_add(eo_line, sizeof(eo_line), " present; not the supported " EO_SUPPORTED "; headlight and roof sync off");
         break;
     case FI_EO_FOREIGN_WINMM:
         eo_add(eo_line, sizeof(eo_line), "EO: a winmm.dll that is not ExtraOptions is next to azimuth.exe; headlight "
@@ -166,7 +181,7 @@ void fi_eo_detect(void) {
         } else if (!eo_file_version(module, &ms, &ls)) {
             eo_result.state = FI_EO_OTHER_VERSION;
             eo_add(eo_result.version, sizeof(eo_result.version), "(no version)");
-        } else if (ms != 0x00000002u || ls != 0x00620000u) {
+        } else if (ms != EO_SUPPORTED_MS || ls != EO_SUPPORTED_LS) {
             eo_result.state = FI_EO_OTHER_VERSION;
             eo_number(eo_result.version, sizeof(eo_result.version), ms >> 16);
             eo_add(eo_result.version, sizeof(eo_result.version), ".");
@@ -174,7 +189,7 @@ void fi_eo_detect(void) {
             eo_add(eo_result.version, sizeof(eo_result.version), ".");
             eo_number(eo_result.version, sizeof(eo_result.version), ls >> 16);
         } else {
-            memory_copy(eo_result.version, "0.2.98", 7);
+            memory_copy(eo_result.version, EO_SUPPORTED, sizeof(EO_SUPPORTED));
             const char *text = status();
             size_t k = 0;
             char c = 0;

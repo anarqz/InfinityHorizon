@@ -28,7 +28,9 @@
 
 #define CFG_MAX_BYTES (64u * 1024u)
 #define CFG_LOG_CAP 4096u
-#define CFG_DEFAULT_SERVER L"https://infinity.anarqz.dev"
+#define CFG_DEFAULT_SERVER L"https://api.infinity-horizon.com"
+/* The Beta server (deleted, OD-69): older hooks wrote it into every new Infinity.cfg as the default. */
+#define CFG_RETIRED_SERVER L"https://infinity.anarqz.dev"
 
 static FiConfig cfg_values;
 static int cfg_migrated; /* this start brought the older hooks' INI over */
@@ -376,10 +378,13 @@ static void cfg_read_hook(FiConfig *c) {
         }
     }
     if (cfg_lookup(L"hook", L"Server", v, ARRAY_COUNT(v), 0) && v[0]) {
-        if (cfg_server_ok(v) && wlen(v) < ARRAY_COUNT(c->server)) {
+        if (wequal(v, CFG_RETIRED_SERVER)) {
+            /* the default an older hook wrote, a host that no longer exists: the current default */
+            cfg_note("CFG: [hook] Server is the retired Beta host; using https://api.infinity-horizon.com.\r\n");
+        } else if (cfg_server_ok(v) && wlen(v) < ARRAY_COUNT(c->server)) {
             wcopy(c->server, ARRAY_COUNT(c->server), v, wlen(v));
         } else {
-            cfg_invalid(L"Server", v, "https://infinity.anarqz.dev");
+            cfg_invalid(L"Server", v, "https://api.infinity-horizon.com");
         }
     }
     if (cfg_lookup(L"hook", L"AutoUpdate", v, ARRAY_COUNT(v), 0)) {
@@ -525,7 +530,7 @@ static size_t cfg_block(const FiConfig *c, int from_legacy, wchar_t *out, size_t
     static const wchar_t *const header[] = {
         L"[hook]",
         L"; ForzaInfinity hook settings. Every key is optional; a missing key uses its default:",
-        L"; NetMode=Proxy (or Capture, Off), Server=https://infinity.anarqz.dev, AutoUpdate=1,",
+        L"; NetMode=Proxy (or Capture, Off), Server=https://api.infinity-horizon.com, AutoUpdate=1,",
         L"; FreeRoam=1, FreeRoamDirect=0, FreeRoamWorld= (host:port), CarState=auto (or off),",
         L"; Language=auto (or en, pt-BR), Log=1, RelayCommand=auto (or legacy).",
     };

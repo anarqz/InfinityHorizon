@@ -124,6 +124,8 @@ public sealed partial class ShellViewModel
         if (WineHost.Detected)
         {
             var inherited = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
+            // OD-125: the hook (ExtraOptions.Infinity's winmm.dll) loads native-first; the AppDefaults entry is set in PlayOfflineAsync
+            inherited = WineHost.WithNativeDll(inherited, WineHost.HookModule) ?? inherited;
             foreach (var module in overrides) inherited = WineHost.WithNativeDll(inherited, module) ?? inherited;
             if (inherited is not null) environment.Add(("WINEDLLOVERRIDES", inherited));
         }
@@ -161,19 +163,21 @@ public sealed partial class ShellViewModel
                 plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
                 _nativePlanPath = plan.Environment.FirstOrDefault(v => v.Name == "FI_MOD_PLAN").Value;
             }
+            PrepareAzimuth(install);
             var environment = OfflineLaunchEnvironment(profile, plan?.Environment, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
             using var uiPipe = OfflineOverlay(environment);
             Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
             // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
-            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [], install.Root, environment, OfflineOverlayNames));
+            if (WineHost.Detected) Log("play: wine " + WineHost.HookModule + " " + WineHost.EnsureNativeDllOverride(WineHost.HookModule, true));
+            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [AzimuthSetup.SkipLauncher], install.Root, environment, OfflineOverlayNames));
             using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
                 new UiFrame.Status(profile.DisplayName, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
             if (overlay is not null)
             {
                 // The first notice the overlay shows (queued until its hello): Playing offline.
-                await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"]), CancellationToken.None);
+                await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 80, S["offline.playing_offline_status"] + "\n" + S["overlay.open_hint"]), CancellationToken.None);
                 // OD-120: a Hardcore profile offline plays Noob-like on its own local folder; the player is told so in the game too.
                 if (profile.Hardcore) await overlay.ToastAsync(new UiFrame.Toast(UiLevel.Info, 0, 160, S["offline.hardcore_offline"]), CancellationToken.None);
                 _ = overlay.RunAsync(child.Pid, child.Exited, TimeSpan.FromMinutes(5), _play.Token);

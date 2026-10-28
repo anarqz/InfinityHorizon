@@ -1362,6 +1362,30 @@
               </StackPanel>
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel>
+                <!-- OD-126: the mods of ExtraOptions' loader (<Azimuth>\mods), whether from the catalog or copied by hand. -->
+                <StackPanel Margin="0,0,0,18" Visibility="{Binding HasExtraOptionsMods, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[eomods.title]}" FontSize="16" FontWeight="Bold" />
+                  <TextBlock Text="{Binding ExtraOptionsModsHint}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding ExtraOptionsModsFolder}" TextWrapping="Wrap" Margin="0,2,0,10" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                  <ItemsControl ItemsSource="{Binding ExtraOptionsModItems}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource Card}" Padding="14,10" Margin="0,0,12,8">
+                          <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel>
+                              <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Folder}" />
+                              <TextBlock Text="{Binding Details}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                              <TextBlock Text="{Binding Status}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="{Binding Toggle}" Click="OnToggleExtraOptionsMod" IsEnabled="{Binding CanToggle}"
+                                    Padding="12,7" Margin="12,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="{Binding Toggle}" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
                 <TextBlock Text="{Binding S[mods.search_none]}" TextWrapping="Wrap" Margin="0,18,0,0" Foreground="{StaticResource InfinityMuted}"
                            Visibility="{Binding NoMatchingMods, Converter={StaticResource Visible}}" />
                 <ItemsControl ItemsSource="{Binding FilteredModCards}" Visibility="{Binding HasModCards, Converter={StaticResource Visible}}">

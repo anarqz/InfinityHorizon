@@ -29,6 +29,9 @@ public static class WineHost
         return string.Join(';', entries.Append(module + "=n,b"));
     }
 
+    /// <summary>OD-125: the module of ExtraOptions.Infinity (the hook), native-first on every launch.</summary>
+    public const string HookModule = "winmm";
+
     /// <summary>The per-application override key Wine reads when azimuth.exe loads (HKCU, the prefix's registry).</summary>
     public const string AppDefaultsKey = @"Software\Wine\AppDefaults\azimuth.exe\DllOverrides";
 

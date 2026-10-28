@@ -176,11 +176,12 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.Running:
                 OverlayStatus(UiState.Running, string.Empty);
-                OverlayToast(1, S["overlay.connected"], _overlaySupporter ? S["overlay.connected_supporter"] : S["overlay.connected_free"]);
+                // OD-125 follow-up: the first notice also says how to open the overlay (LB+RB; View is Azimuth's)
+                OverlayToast(1, S["overlay.connected"], (_overlaySupporter ? S["overlay.connected_supporter"] : S["overlay.connected_free"]) + "\n" + S["overlay.open_hint"]);
                 break;
             case SupervisorEvent.Refused r:
                 OverlayStatus(UiState.Offline, r.Reason);
-                OverlayToast(3, S["overlay.offline"], S["overlay.offline_body"]);
+                OverlayToast(3, S["overlay.offline"], S["overlay.offline_body"] + "\n" + S["overlay.open_hint"]);
                 break;
             case SupervisorEvent.Error err when err.Message.StartsWith("heartbeat", StringComparison.Ordinal):
                 if (DateTimeOffset.UtcNow - _overlayLastWarning > TimeSpan.FromMinutes(1))

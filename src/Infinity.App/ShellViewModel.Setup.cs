@@ -88,7 +88,7 @@ public sealed partial class ShellViewModel
 
     public bool AzimuthFound => _install is not null;
 
-    public bool AzimuthVersionOk => _install?.Version == AzimuthSetup.CompatibleVersion;
+    public bool AzimuthVersionOk => _install?.Version == AzimuthSetup.CompatibleVersion && _install.HostSha256 == AzimuthSetup.CompatibleHostSha256;
 
     public bool HookOk => _hook?.Verified == true;
 
