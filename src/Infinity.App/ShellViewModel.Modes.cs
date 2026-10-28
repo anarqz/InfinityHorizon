@@ -45,6 +45,7 @@ public sealed partial class ShellViewModel
             Changed(nameof(NewNoob));
             Changed(nameof(AzimuthNameWarning));
             ChangedSeedForm(); // CR-S52: "Start from one of my profiles" is a Hardcore option
+            ChangedNoobSeedForm(); // owner 2026-10-28: and "Start from one of my Hardcore profiles" a Noob one
         }
     }
 

@@ -929,6 +929,17 @@
                     <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
                     <TextBlock Text="{Binding S[modes.noob_hint]}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
+                  <!-- Owner 2026-10-28: a Noob profile may start from one of the player's Hardcore careers on this PC (a copy; no check). -->
+                  <Border Margin="30,10,0,0" Padding="12,10" CornerRadius="8" Background="{StaticResource InfinitySurfaceHigh}"
+                          Visibility="{Binding ShowNoobSeedOption, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <CheckBox Content="{Binding S[seed.noob_option]}" IsChecked="{Binding NewNoobFromHardcore}" FontWeight="Bold" />
+                      <ListBox Margin="0,8,0,0" ItemsSource="{Binding NoobSources}" SelectedItem="{Binding NewNoobSource}" MaxHeight="160"
+                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}"
+                               Visibility="{Binding NewNoobFromHardcore, Converter={StaticResource Visible}}" />
+                      <TextBlock Text="{Binding S[seed.noob_option_hint]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                    </StackPanel>
+                  </Border>
                   <TextBlock Text="{Binding S[modes.free_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
                              Visibility="{Binding ShowFreeNoobHint, Converter={StaticResource Visible}}" />
                 <!-- OD-118: offline creation is Noob; Hardcore is created signed in. -->

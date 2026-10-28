@@ -991,6 +991,8 @@
   "seed.option": "Start from one of my profiles",
   "seed.warning": "This is only a plausibility check. Use this option consciously: if the source profile is later found with altered progression, this Hardcore profile is deleted from the cloud and your account is blocked until a moderator reviews it. An account can run 5 checks a day (checks and first uploads together).",
   "seed.option_hint": "Once the profile is created, the server checks that career right away and shows the result before anything is copied. The other profile's save is only read.",
+  "seed.noob_option": "Start from one of my Hardcore profiles",
+  "seed.noob_option_hint": "That career's newest save on this PC is copied into the new Noob profile when it is created. The Hardcore profile keeps its own save, untouched.",
   "seed.first_launch_title": "How does {name} start?",
   "seed.first_launch_body": "This Hardcore profile has no career in the cloud yet. Start a new career, or start from one of your profiles on this account if the server's check accepts it.",
   "seed.scratch": "Start from scratch",

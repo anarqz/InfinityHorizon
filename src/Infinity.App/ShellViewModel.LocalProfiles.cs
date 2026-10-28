@@ -66,12 +66,16 @@ public sealed partial class ShellViewModel
         // CR-S52: the source is chosen on the form; the check runs once the Hardcore profile exists on the server
         var seedSource = hardcore && NewSeedFromProfile ? NewSeedSource?.Profile : null;
         if (hardcore && NewSeedFromProfile && seedSource is null) { Message = S["seed.pick_source"]; return; }
+        // owner 2026-10-28: a Noob profile may start from one of the player's Hardcore careers on this PC (a copy)
+        var noobSource = !hardcore && NewNoobFromHardcore ? NewNoobSource?.Profile : null;
+        if (!hardcore && NewNoobFromHardcore && noobSource is null) { Message = S["seed.pick_source"]; return; }
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow, SignedIn ? _session?.Me?.AccountId : null); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
         catch (IOException) { Message = S["offline.profile_save_failed"]; return; }
         NewName = string.Empty;
         NewSeedFromProfile = false;
+        NewNoobFromHardcore = false;
         Message = S.Format("offline.profile_created", ("name", created.Name));
         if (_session is { } session && SignedIn)
         {
@@ -98,6 +102,8 @@ public sealed partial class ShellViewModel
         FillProfiles();
         if (!hardcore && LocalProfiles.Read().FirstOrDefault(p => p.Id == created.Id) is { } stored)
         {
+            // the player's explicit choice first: the Hardcore career picked on the form
+            if (noobSource is not null && await StartNoobFromHardcoreAsync(AsRow(stored), noobSource)) return;
             // the name says it: this is the Azimuth career, copied into the new profile's folder without asking again
             if (adoptsAzimuth && await AdoptAzimuthCareerAsync(AsRow(stored))) return;
             OfferSaves(AsRow(stored)); // a Hardcore career starts empty (OD-60), never from a local save
