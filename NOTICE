@@ -46,6 +46,8 @@ Existing third-party copyright and permission notices remain applicable:
   contributors (https://github.com/conner-mcvay/fh2-mods); its MIT notice is preserved in
   licenses/fh2-mods-LICENSE.txt. The intermediate Rust port is not distributed here.
 - BouncyCastle.Cryptography 2.6.2: licenses/BouncyCastle-LICENSE.md.
+- Microsoft.Data.Sqlite 10.0.13 (MIT, .NET Foundation) with SQLitePCLRaw (Apache-2.0) and its bundled native SQLite
+  (public domain), which read the game database for ExtraOptions database diffs.
 - Markdig 0.40.0 (BSD-2-Clause, Alexandre Mutel), the news feed's markdown: its full licence is below.
 - Noto Emoji 3.002 (SIL OFL 1.1, Google): its monochrome outlines, extracted by tools/emoji into the news emoji shapes;
   its full licence is below.

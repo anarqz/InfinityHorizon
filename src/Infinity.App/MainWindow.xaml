@@ -1372,7 +1372,8 @@
               </StackPanel>
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel>
-                <!-- OD-126: the mods of ExtraOptions' loader (<Azimuth>\mods), whether from the catalog or copied by hand. -->
+                <!-- OD-126: the mods of ExtraOptions' loader (<Azimuth>\mods) copied there by hand (owner 2026-10-28: the launcher's own
+                     catalog and custom mods have their cards above), each marked as such with a note on online play. -->
                 <StackPanel Margin="0,0,0,18" Visibility="{Binding HasExtraOptionsMods, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding S[eomods.title]}" FontSize="16" FontWeight="Bold" />
                   <TextBlock Text="{Binding ExtraOptionsModsHint}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource InfinityMuted}" />
@@ -1387,6 +1388,8 @@
                               <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Folder}" />
                               <TextBlock Text="{Binding Details}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                               <TextBlock Text="{Binding Status}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                              <TextBlock Text="{Binding DataContext.S[eomods.manual_online], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                         FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,0" />
                             </StackPanel>
                             <Button Grid.Column="1" Content="{Binding Toggle}" Click="OnToggleExtraOptionsMod" IsEnabled="{Binding CanToggle}"
                                     Padding="12,7" Margin="12,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="{Binding Toggle}" />

@@ -63,7 +63,9 @@ public sealed partial class ShellViewModel
     public bool CanInstallExternal => ModsIdle && ExternalAllOk && !ExternalRows.Any(r => r.Checking) && _externalMod is not null && _install is not null && !ModRecoveryRequired
         && !ExternalNeedsGameFolder;
     /// <summary>The mod writes game files and no game folder is chosen: the pane asks for it before Install (never a refusal after it).</summary>
-    public bool ExternalNeedsGameFolder => _externalMod is { } mod && ContentLocation is null && mod.Files.Any(f => f.Root == "game");
+    public bool ExternalNeedsGameFolder => _externalMod is { } mod && ContentLocation is null && NeedsGameFolder(mod);
+    /// <summary>Game files to write, or (OD-127) the stock database an ExtraOptions addon's database.json is built from.</summary>
+    private static bool NeedsGameFolder(ModManifest mod) => mod.Files.Any(f => f.Root == "game") || mod.AddonDatabase is not null;
     public bool ExternalInstalled => _externalMod is { } mod && _modHealth.Installed.Any(i => i.Id == mod.Id);
     public string ExternalInstallLabel => ExternalInstalled && !ExternalUpdate ? S["external.recheck_done"]
         : ExternalReplaced.Count > 0 ? Counted("external.install_replacing", ExternalReplaced.Count) : S["external.install"];
@@ -82,7 +84,7 @@ public sealed partial class ShellViewModel
         }
     }
     /// <summary>The same install preview as every mod (Alex, 1.0.11); empty while a game folder it needs is missing (the pane says so).</summary>
-    public string ExternalTargetText => _externalMod is { } mod && !(ContentLocation is null && mod.Files.Any(f => f.Root == "game")) ? PreviewTextFor(mod) : "";
+    public string ExternalTargetText => _externalMod is { } mod && !(ContentLocation is null && NeedsGameFolder(mod)) ? PreviewTextFor(mod) : "";
     public bool ExternalReplaces => ExternalAllOk && ExternalReplaced.Count > 0;
     public string ExternalReplacesText => ExternalReplaced is { Count: > 0 } files
         ? Counted("external.replaces", files.Count, ("files", FileList(files))) : "";

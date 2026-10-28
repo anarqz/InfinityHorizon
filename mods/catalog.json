@@ -2,39 +2,21 @@
   "schemaVersion": 2,
   "mods": [
     {
-      "id": "infinity-mod-runtime",
-      "version": "1.0.0",
-      "name": {
-        "en": "Infinity mod runtime",
-        "pt-BR": "Runtime de mods do Infinity"
-      },
-      "description": {
-        "en": "Loads native mods inside the game. Installed automatically with the first mod that needs it.",
-        "pt-BR": "Carrega mods nativos dentro do jogo. Instalado automaticamente com o primeiro mod que precisar dele."
-      },
-      "author": "Infinity",
-      "download": {
-        "url": "https://github.com/anarqz/InfinityHorizon/releases/download/mod-runtime-1.0.0/infinity-mod-runtime-1.0.0.zip",
-        "sha256": "516d1d8b1496117b3438f9d66352b16a932a4ea3cbfd377bf2128703902efa6f",
-        "bytes": 839894
-      }
-    },
-    {
       "id": "nitrosystem",
-      "version": "1.1.0-infinity.2",
+      "version": "1.1.0-infinity.4",
       "name": {
         "en": "Nitro System · Infinity",
         "pt-BR": "Sistema de Nitro · Infinity"
       },
       "description": {
-        "en": "qiangqiang101's NitroSystem, built unchanged and started by the Infinity mod runtime through an FH2 Mod Platform adapter. Its game files come from the original release.",
-        "pt-BR": "O NitroSystem de qiangqiang101, compilado sem alterações e iniciado pelo runtime de mods do Infinity por um adaptador da FH2 Mod Platform. Os arquivos do jogo vêm da release original."
+        "en": "qiangqiang101's NitroSystem, built unchanged and loaded by ExtraOptions (built into Infinity) through an FH2 Mod Platform adapter. Its game files come from the original release.",
+        "pt-BR": "O NitroSystem de qiangqiang101, compilado sem alterações e carregado pelo ExtraOptions (embutido no Infinity) por um adaptador da FH2 Mod Platform. Os arquivos do jogo vêm da release original."
       },
       "author": "qiangqiang101; Infinity edition by anarqz",
       "download": {
-        "url": "https://github.com/anarqz/InfinityMods/releases/download/v2026.10.25/nitrosystem-1.1.0-infinity.2.zip",
-        "sha256": "29cb725b615979d2ad6135b9ec128d0962c7e64d7c423f2aba9cedad89bdf540",
-        "bytes": 113092
+        "url": "https://github.com/anarqz/InfinityMods/releases/download/v2026.10.28/nitrosystem-1.1.0-infinity.4.zip",
+        "sha256": "eb445fa0c026756ad8f4ed650c167ae3a3f50b33bfe3ece748811f214bb4c3f2",
+        "bytes": 121746
       },
       "additionalDownloads": {
         "upstream-assets": {
@@ -43,51 +25,31 @@
           "bytes": 2339419
         }
       },
-      "requires": [
-        "infinity-mod-runtime"
-      ],
       "install": {
         "schemaVersion": 1,
         "kind": "mod",
         "license": "MIT",
         "homepage": "https://github.com/anarqz/InfinityMods",
-        "runtime": "infinity-native",
+        "runtime": "standalone",
         "review": {
           "status": "reviewed",
           "blockers": []
         },
         "compatibility": {
           "azimuthVersions": [
-            "0.9.10"
+            "1.0.3"
           ],
           "gameBuilds": [],
           "verification": "unverified"
         },
-        "dependencies": [
-          {
-            "id": "extraoptions",
-            "versions": [
-              "0.2.98"
-            ],
-            "enabled": true,
-            "settings": [
-              {
-                "optionId": "global-enabled",
-                "value": true
-              },
-              {
-                "optionId": "files-enablemediaoverrides",
-                "value": true
-              }
-            ]
-          }
-        ],
+        "dependencies": [],
         "conflicts": [],
         "files": {
-          "game": [
+          "game": [],
+          "azimuth": [
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/backfire.materialbin",
-              "destination": "mediaoverride/Particles/Materials/backfire.materialbin",
+              "destination": "mods/nitrosystem/media/Particles/Materials/backfire.materialbin",
               "sha256": "217cbed2e44ec2797dd4e454c18383f6a4b090424cd4b0d20c33a675b76c72cb",
               "bytes": 352,
               "role": "asset",
@@ -96,7 +58,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/backfire_blue.materialbin",
-              "destination": "mediaoverride/Particles/Materials/backfire_blue.materialbin",
+              "destination": "mods/nitrosystem/media/Particles/Materials/backfire_blue.materialbin",
               "sha256": "c9c6309ec1a07a0da4f7ddb6a0c62619a87152a214b28eb7e37b8846e5aac22a",
               "bytes": 352,
               "role": "asset",
@@ -105,7 +67,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/backfire_purple.materialbin",
-              "destination": "mediaoverride/Particles/Materials/backfire_purple.materialbin",
+              "destination": "mods/nitrosystem/media/Particles/Materials/backfire_purple.materialbin",
               "sha256": "e79795726feea5367bba5bd8b5581803780a2fbc89aeab64b402a1467c60efb1",
               "bytes": 352,
               "role": "asset",
@@ -114,7 +76,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Systems/Backfire.xml",
-              "destination": "mediaoverride/Particles/Systems/Backfire.xml",
+              "destination": "mods/nitrosystem/media/Particles/Systems/Backfire.xml",
               "sha256": "2ac70254d35dbac5509fe793b3c236c013924a74c39f581ae6bc240ec2088f4a",
               "bytes": 1705,
               "role": "asset",
@@ -123,7 +85,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/Controls/HUDSpeedometerControl.xaml",
-              "destination": "mediaoverride/ui/Controls/HUDSpeedometerControl.xaml",
+              "destination": "mods/nitrosystem/media/ui/Controls/HUDSpeedometerControl.xaml",
               "sha256": "e53ad86d730591727c355ee0b380ddce4d0fc9f5a17df88c99c9e9972776a40d",
               "bytes": 75116,
               "role": "asset",
@@ -132,7 +94,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/Fire/backfire_blue.materialbin",
-              "destination": "mediaoverride/Particles/Materials/Fire/backfire_blue.materialbin",
+              "destination": "mods/nitrosystem/media/Particles/Materials/Fire/backfire_blue.materialbin",
               "sha256": "c9c6309ec1a07a0da4f7ddb6a0c62619a87152a214b28eb7e37b8846e5aac22a",
               "bytes": 352,
               "role": "asset",
@@ -141,7 +103,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Materials/Fire/carBackfire.materialbin",
-              "destination": "mediaoverride/Particles/Materials/Fire/carBackfire.materialbin",
+              "destination": "mods/nitrosystem/media/Particles/Materials/Fire/carBackfire.materialbin",
               "sha256": "c9c6309ec1a07a0da4f7ddb6a0c62619a87152a214b28eb7e37b8846e5aac22a",
               "bytes": 352,
               "role": "asset",
@@ -150,7 +112,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/Backfire.shaderbin",
-              "destination": "mediaoverride/Particles/Shaders/backfire/Backfire.shaderbin",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/Backfire.shaderbin",
               "sha256": "be571492903df723f38ca05f8a8f9bf4bfc489d22e16f56b57c2b422a06ec341",
               "bytes": 788,
               "role": "asset",
@@ -159,7 +121,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.pso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.pso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLightScenario.durango.pso",
               "sha256": "f35e386274aef1247c2c42d02aa135bfac6b765b3e948e68a1065e7543cf800f",
               "bytes": 10548,
               "role": "asset",
@@ -168,7 +130,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.vso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.durango.vso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLightScenario.durango.vso",
               "sha256": "fd8ec27ba38ac727ccdaf186314963125ea9f719f21312f078411db2506f95cb",
               "bytes": 28452,
               "role": "asset",
@@ -177,7 +139,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.pso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.pso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLightScenario.pc.pso",
               "sha256": "96ffcc3eb70cd6772f5535e78c9991df7efc5d3ef6d05296c16f61d1e00ad277",
               "bytes": 11020,
               "role": "asset",
@@ -186,7 +148,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.vso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLightScenario.pc.vso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLightScenario.pc.vso",
               "sha256": "b79f5e7e01f114e69eb7a656d5ac6222c8c799a1be91f66a3311035ef8af0fe6",
               "bytes": 31580,
               "role": "asset",
@@ -195,7 +157,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.pso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.pso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.pso",
               "sha256": "229bb0dc5b3cd40992f47c3d7b56dddfb4f886f74549dab48a6c8c184ccf22a8",
               "bytes": 11316,
               "role": "asset",
@@ -204,7 +166,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.vso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.vso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLowResLightScenario.durango.vso",
               "sha256": "567cc06f8a5bbfee521380d60e99403864048f06a1515ede1b5572b974d7fc00",
               "bytes": 28460,
               "role": "asset",
@@ -213,7 +175,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.pso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.pso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.pso",
               "sha256": "f9ed0f4cf7010c15a609a47f4492d8ab6996755e8de4601ccabcc0725467ff03",
               "bytes": 11692,
               "role": "asset",
@@ -222,7 +184,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.vso",
-              "destination": "mediaoverride/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.vso",
+              "destination": "mods/nitrosystem/media/Particles/Shaders/backfire/backfireParticleLowResLightScenario.pc.vso",
               "sha256": "b79f5e7e01f114e69eb7a656d5ac6222c8c799a1be91f66a3311035ef8af0fe6",
               "bytes": 31580,
               "role": "asset",
@@ -231,7 +193,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/HUD_XPBar_TipGlow.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/HUD_XPBar_TipGlow.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/HUD_XPBar_TipGlow.swatchbin",
               "sha256": "e74b50445a7e51bc516444f8032c26edfddbf4dece1a2b4bf076e18e7472cc5a",
               "bytes": 1107,
               "role": "asset",
@@ -240,7 +202,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/SkillBarTipGlow.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/SkillBarTipGlow.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/SkillBarTipGlow.swatchbin",
               "sha256": "cdf53b7a951f8b5d7b79948d246b141238bd2e4a195004926a9bafab74398e98",
               "bytes": 4179,
               "role": "asset",
@@ -249,7 +211,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/SkillsLargeGlow.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/SkillsLargeGlow.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/SkillsLargeGlow.swatchbin",
               "sha256": "c90784e0646e563cdf9e25f173586d59b55adb925da1a99b08bedeb00edcd8a1",
               "bytes": 65619,
               "role": "asset",
@@ -258,7 +220,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_Off.swatchbin",
-              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_Off.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_Off.swatchbin",
               "sha256": "be681511ebe073868b95c40449d4249a48adc5369f6b1396d86d2d15a9ad5b62",
               "bytes": 32851,
               "role": "asset",
@@ -267,7 +229,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_On.swatchbin",
-              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_On.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Analogue_NOS_On.swatchbin",
               "sha256": "5697ca24c536055c650cd9267c009858f399877969d530db99cc7724f1c20b75",
               "bytes": 32851,
               "role": "asset",
@@ -276,7 +238,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_Off.swatchbin",
-              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_Off.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_Off.swatchbin",
               "sha256": "14506b5176dfdb7e6965a979ecdae7a81c7e2546b2e7df0a4c35ccb8b145ff19",
               "bytes": 32851,
               "role": "asset",
@@ -285,7 +247,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_On.swatchbin",
-              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_On.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/data_bound/SpireHUD/HUD_Dial_Assist_Digital_NOS_On.swatchbin",
               "sha256": "24769047b89d0bc5981d54663c8889176c49ecd27d500d018ffdba502dd4b860",
               "bytes": 32851,
               "role": "asset",
@@ -294,7 +256,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Digital_Bar.swatchbin",
-              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Digital_Bar.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Digital_Bar.swatchbin",
               "sha256": "86d4111220ffa5158a535e3e6cff6a43ce3ca629378b497f9aa3ddae2eff7e82",
               "bytes": 9299,
               "role": "asset",
@@ -303,7 +265,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Radial_Bar.swatchbin",
-              "destination": "mediaoverride/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Radial_Bar.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/data_bound/SpireHUD/HUD_Nos_Outline_Radial_Bar.swatchbin",
               "sha256": "c8002c716093e5d7863cec786ebc7ff929933bb997eb72d7e9389aa85035b4bd",
               "bytes": 65619,
               "role": "asset",
@@ -312,7 +274,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_1.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_1.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_1.swatchbin",
               "sha256": "883bbee3c0c58af6659abb136205d37ecb983a359b85a6086c37bc64a5bebfe9",
               "bytes": 32851,
               "role": "asset",
@@ -321,7 +283,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_2.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_2.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_2.swatchbin",
               "sha256": "e478ef350020246a14c2942a933089513739b50b74c5586580cf309f11c21b34",
               "bytes": 32851,
               "role": "asset",
@@ -330,7 +292,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_3.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_3.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_3.swatchbin",
               "sha256": "225ef688a3e856edc811836b601a6a4e0873d13c407f16d0f61ada239fb4f62f",
               "bytes": 32851,
               "role": "asset",
@@ -339,7 +301,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_4.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_4.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_4.swatchbin",
               "sha256": "1653b7d09123c956d91fd8f7fb011f0f8efa286145ef2d403c57a12a665d70b3",
               "bytes": 32851,
               "role": "asset",
@@ -348,7 +310,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_5.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_5.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_5.swatchbin",
               "sha256": "02020c4e460aefd1ffe2d48249796c0321ae600b122009112f89daf9b1de44c9",
               "bytes": 32851,
               "role": "asset",
@@ -357,7 +319,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_6.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_6.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_6.swatchbin",
               "sha256": "cda525a446b5c23e45e9c113a9d93c2fd0368089e5fa4b5400e633b0afda70a7",
               "bytes": 32851,
               "role": "asset",
@@ -366,7 +328,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_7.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_7.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_7.swatchbin",
               "sha256": "033c5d18bc03fe18df1d640de27bdcd2b9fd0bc9c4ec83167045b6001d6469ce",
               "bytes": 32851,
               "role": "asset",
@@ -375,18 +337,16 @@
             },
             {
               "source": "FnFNitro-1.1.0/Mount/mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_8.swatchbin",
-              "destination": "mediaoverride/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_8.swatchbin",
+              "destination": "mods/nitrosystem/media/ui/textures/Anthem/HUD/Speedometer/HUD_Dial_Digital_Gear_8.swatchbin",
               "sha256": "a6d4bc22f9817a5c6e30a5435bf896659b576b30ce929b267743ecc0258198a2",
               "bytes": 32851,
               "role": "asset",
               "mode": "add-or-replace",
               "package": "upstream-assets"
-            }
-          ],
-          "azimuth": [
+            },
             {
               "source": "FnFNitro-1.1.0/azimuth-windows/FnFNitro/nos_boost.wav",
-              "destination": "infinity-mods/NitroSystem/FnFNitro/nos_boost.wav",
+              "destination": "mods/nitrosystem/FnFNitro/nos_boost.wav",
               "sha256": "8eaf24cc2714bda855a2f8596b6a69a88cd10b5318276075ff7a65c61d0cb3df",
               "bytes": 1440102,
               "role": "asset",
@@ -395,7 +355,7 @@
             },
             {
               "source": "FnFNitro-1.1.0/azimuth-windows/FnFNitro/nos_stop.wav",
-              "destination": "infinity-mods/NitroSystem/FnFNitro/nos_stop.wav",
+              "destination": "mods/nitrosystem/FnFNitro/nos_stop.wav",
               "sha256": "332f3b7ff32be6d5b8ff34cc9b6848be42c38977f81ea7e0eaf3b6d172169df0",
               "bytes": 264270,
               "role": "asset",
@@ -404,15 +364,15 @@
             },
             {
               "source": "FnFNitro.dll",
-              "destination": "infinity-mods/NitroSystem/FnFNitro.dll",
+              "destination": "mods/nitrosystem/plugins/FnFNitro.dll",
               "role": "binary",
               "mode": "add-or-replace",
-              "sha256": "847ce88fc0f6608c838aa1302e994fac0b61af60a334d4d5cd0d49f14cb930a4",
-              "bytes": 217600
+              "sha256": "d7678673129c00a6e6d08e821aaa2b3a64d92536d3bbf7e1581fa0dbf86ebe39",
+              "bytes": 228352
             },
             {
               "source": "LICENSE.txt",
-              "destination": "infinity-mods/NitroSystem/LICENSE.txt",
+              "destination": "mods/nitrosystem/LICENSE.txt",
               "role": "license",
               "mode": "add-or-replace",
               "sha256": "742109f80236c34e340712843a408c0f9fadf78339a833ce2de2742b9e221080",
@@ -420,7 +380,7 @@
             },
             {
               "source": "LICENSE-FH2-Mod-Platform.txt",
-              "destination": "infinity-mods/NitroSystem/LICENSE-FH2-Mod-Platform.txt",
+              "destination": "mods/nitrosystem/LICENSE-FH2-Mod-Platform.txt",
               "role": "license",
               "mode": "add-or-replace",
               "sha256": "592160090948f630b488f0766d5dda6c0345396dfb2f98cceeed54bea448dcf9",
@@ -428,25 +388,49 @@
             },
             {
               "source": "LICENSE-Infinity.txt",
-              "destination": "infinity-mods/NitroSystem/LICENSE-Infinity.txt",
+              "destination": "mods/nitrosystem/LICENSE-Infinity.txt",
               "role": "license",
               "mode": "add-or-replace",
-              "sha256": "e94defea699019542970e4b668288b7bc2152293a3c7bf51064ed3a3b51db1b3",
-              "bytes": 1170
+              "sha256": "273ac90b4f4411cc341cb66aa12c12cd8b2d462429f4e67b40472e8cf65c38b6",
+              "bytes": 1141
             },
             {
               "source": "NOTICE.md",
-              "destination": "infinity-mods/NitroSystem/NOTICE.md",
+              "destination": "mods/nitrosystem/NOTICE.md",
               "role": "license",
               "mode": "add-or-replace",
-              "sha256": "02fc3dbbd3b83ee6298085697da4451b6ff2e302415596e1ca37176162dda1d4",
-              "bytes": 953
+              "sha256": "d8fb22bc153d362f3a9776e963e751d44281eb579ab704284c62523e5c18dc1f",
+              "bytes": 1298
+            },
+            {
+              "source": "mod.json",
+              "destination": "mods/nitrosystem/mod.json",
+              "role": "asset",
+              "mode": "add-or-replace",
+              "sha256": "b2bfe0e2f1d0d67918151b67595ec562faf2e1b33d1a695b5f2bac8798f64933",
+              "bytes": 177
+            },
+            {
+              "source": "database.json",
+              "destination": "mods/nitrosystem/database.json",
+              "role": "asset",
+              "mode": "add-or-replace",
+              "sha256": "a35e92aa8740789f1584b7b3ce216a2001145c450e78a4454f0175c9fce74b0c",
+              "bytes": 187
+            },
+            {
+              "source": "LICENSE-MinHook.txt",
+              "destination": "mods/nitrosystem/LICENSE-MinHook.txt",
+              "role": "license",
+              "mode": "add-or-replace",
+              "sha256": "d5c2224982b0b95a16b098a561335fa93f3eaf4d0aa964b7843edb986df78dc8",
+              "bytes": 4365
             }
           ]
         },
         "config": {
           "root": "azimuth",
-          "path": "infinity-mods/NitroSystem/fh2-mods/FnFNitro.ini",
+          "path": "mods/nitrosystem/fh2-mods/FnFNitro.ini",
           "format": "ini",
           "create": "defaults",
           "preserveOnDisable": true,
@@ -736,15 +720,9 @@
           "FnFNitro-1.1.0/azimuth-windows/fh2-mods/FnFNitro.dll"
         ],
         "databaseMigrations": [],
-        "nativeHost": {
-          "abi": 1,
-          "runtime": "infinity_mod.dll",
-          "entryPoint": "InfinityModInitializeV1",
-          "binary": "infinity-mods/NitroSystem/FnFNitro.dll"
-        },
         "source": {
           "repository": "https://github.com/anarqz/InfinityMods",
-          "commit": "96cbe639789821425f8a6abf5b71f31e95c13c8f"
+          "commit": "d7c38bfcbc9aa538d215184ce3c09681c570a306"
         },
         "multiplayer": {
           "schemaVersion": 1,
@@ -761,16 +739,6 @@
             "backfireonallcars"
           ]
         },
-        "database": {
-          "root": "game",
-          "path": "mediaoverride/stripped/gamedbRC.slt",
-          "seedFrom": "media/stripped/gamedbRC.slt",
-          "access": "startup",
-          "revision": 1,
-          "tables": [
-            "BackfireLevels"
-          ]
-        },
         "incompatibleFiles": [
           {
             "root": "azimuth",
@@ -779,13 +747,17 @@
           {
             "root": "azimuth",
             "path": "fh2-mods/FnFNitro.dll"
+          },
+          {
+            "root": "azimuth",
+            "path": "infinity-mods/NitroSystem/FnFNitro.dll"
           }
         ]
       }
     },
     {
       "id": "remix-car-pack",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "name": {
         "en": "Remix Car Pack — Experimental Vol.1",
         "pt-BR": "Remix Car Pack — Experimental Vol.1"
@@ -810,9 +782,6 @@
           "hint": "Remix Car Pack"
         }
       ],
-      "requires": [
-        "infinity-mod-runtime"
-      ],
       "install": {
         "schemaVersion": 1,
         "kind": "mod",
@@ -824,36 +793,19 @@
         },
         "compatibility": {
           "azimuthVersions": [
-            "0.9.10"
+            "1.0.3"
           ],
           "gameBuilds": [],
           "verification": "unverified"
         },
-        "dependencies": [
-          {
-            "id": "extraoptions",
-            "versions": [
-              "0.2.98"
-            ],
-            "enabled": true,
-            "settings": [
-              {
-                "optionId": "global-enabled",
-                "value": true
-              },
-              {
-                "optionId": "files-enablemediaoverrides",
-                "value": true
-              }
-            ]
-          }
-        ],
+        "dependencies": [],
         "conflicts": [],
         "files": {
-          "game": [
+          "game": [],
+          "azimuth": [
             {
               "source": "pack:Mount/mediaoverride/cars/AST_007_DBR9_06.zip",
-              "destination": "mediaoverride/cars/AST_007_DBR9_06.zip",
+              "destination": "mods/remix-car-pack/media/cars/AST_007_DBR9_06.zip",
               "sha256": "222fc84bbd94e1bd50ce12c82a812af1ac016afe5839aebf53c32c6b0aac170e",
               "bytes": 13580646,
               "role": "asset",
@@ -861,7 +813,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/AST_DBS_09.zip",
-              "destination": "mediaoverride/cars/AST_DBS_09.zip",
+              "destination": "mods/remix-car-pack/media/cars/AST_DBS_09.zip",
               "sha256": "8995b1c6b08e6e8b3286d997317986031de876a1733ca566895e2aca00399894",
               "bytes": 10147809,
               "role": "asset",
@@ -869,7 +821,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/AUD_RS7_13.zip",
-              "destination": "mediaoverride/cars/AUD_RS7_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/AUD_RS7_13.zip",
               "sha256": "870f3a389a0198151a30b6bd79f97e8425c146f37545c51866026a5cb3202c03",
               "bytes": 16828137,
               "role": "asset",
@@ -877,7 +829,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/BMW_92_M3GTR_09.zip",
-              "destination": "mediaoverride/cars/BMW_92_M3GTR_09.zip",
+              "destination": "mods/remix-car-pack/media/cars/BMW_92_M3GTR_09.zip",
               "sha256": "0b453a45507981e49cf826b99219f2a6261504bacabb9349c3694c7a86774ddb",
               "bytes": 12304531,
               "role": "asset",
@@ -885,7 +837,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/BMW_E46M3_05.zip",
-              "destination": "mediaoverride/cars/BMW_E46M3_05.zip",
+              "destination": "mods/remix-car-pack/media/cars/BMW_E46M3_05.zip",
               "sha256": "efc2883f8c50597b81ab004af5ea9a29f30f66447db9588ba40d1e3761f5b024",
               "bytes": 12965206,
               "role": "asset",
@@ -893,7 +845,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/BMW_M3Touring_12.zip",
-              "destination": "mediaoverride/cars/BMW_M3Touring_12.zip",
+              "destination": "mods/remix-car-pack/media/cars/BMW_M3Touring_12.zip",
               "sha256": "897322d8c8645dc035f27da330f7c4c3d7f74db60f3011a81edf7daa71890d12",
               "bytes": 18322848,
               "role": "asset",
@@ -901,7 +853,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/BUG_VeyronFast7_12.zip",
-              "destination": "mediaoverride/cars/BUG_VeyronFast7_12.zip",
+              "destination": "mods/remix-car-pack/media/cars/BUG_VeyronFast7_12.zip",
               "sha256": "43f55e1f255bfb991adc4d871cd03042750bb2e330caa31cf9a979b3f977b818",
               "bytes": 17057534,
               "role": "asset",
@@ -909,7 +861,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/CHE_4_CorvetteZR1_11.zip",
-              "destination": "mediaoverride/cars/CHE_4_CorvetteZR1_11.zip",
+              "destination": "mods/remix-car-pack/media/cars/CHE_4_CorvetteZR1_11.zip",
               "sha256": "250ecc8b243f2954383d5051c314ea31e5af0050bb11688e26497261db6bb821",
               "bytes": 12677388,
               "role": "asset",
@@ -917,7 +869,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/DOD_ViperSRT10ACR_08.zip",
-              "destination": "mediaoverride/cars/DOD_ViperSRT10ACR_08.zip",
+              "destination": "mods/remix-car-pack/media/cars/DOD_ViperSRT10ACR_08.zip",
               "sha256": "17fd62db4d57b780c7077e99f96f918be9f29d36f298a9a6b21f193727c68678",
               "bytes": 11992406,
               "role": "asset",
@@ -925,7 +877,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/FER_62_F458_11.zip",
-              "destination": "mediaoverride/cars/FER_62_F458_11.zip",
+              "destination": "mods/remix-car-pack/media/cars/FER_62_F458_11.zip",
               "sha256": "bb9fac48f1609e878ac29259bdd1256a7b30801379650713ffb70289f41a52b2",
               "bytes": 11797987,
               "role": "asset",
@@ -933,7 +885,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/GMC_Vandura_83.zip",
-              "destination": "mediaoverride/cars/GMC_Vandura_83.zip",
+              "destination": "mods/remix-car-pack/media/cars/GMC_Vandura_83.zip",
               "sha256": "96c9101b7b440f78ea940f17bbbe1f4dc676c9a011b4928f9e8c5bddba10c48e",
               "bytes": 16433077,
               "role": "asset",
@@ -941,7 +893,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/HOL_10_CommodoreVF_13.zip",
-              "destination": "mediaoverride/cars/HOL_10_CommodoreVF_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/HOL_10_CommodoreVF_13.zip",
               "sha256": "1da0726ccf62cf2c61720838a25f137c26f347bf6726c9149c24f5ac33d82595",
               "bytes": 18096197,
               "role": "asset",
@@ -949,7 +901,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/HON_NSXR_05.zip",
-              "destination": "mediaoverride/cars/HON_NSXR_05.zip",
+              "destination": "mods/remix-car-pack/media/cars/HON_NSXR_05.zip",
               "sha256": "3f58447b00f6d8f0d1f1556c7c7c66c9f7c1d9f212bd1e20fb521aff461d62a8",
               "bytes": 13714369,
               "role": "asset",
@@ -957,7 +909,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/LAM_Reventon_08.zip",
-              "destination": "mediaoverride/cars/LAM_Reventon_08.zip",
+              "destination": "mods/remix-car-pack/media/cars/LAM_Reventon_08.zip",
               "sha256": "5f1791ff495c2f3e0f4ad59338467575dc7b497420592b155e633ae9da271119",
               "bytes": 23247312,
               "role": "asset",
@@ -965,7 +917,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/LEX_ISF_09.zip",
-              "destination": "mediaoverride/cars/LEX_ISF_09.zip",
+              "destination": "mods/remix-car-pack/media/cars/LEX_ISF_09.zip",
               "sha256": "4c807ac56d56eef828b73371095ff1edfbcc5f609822d09f2209a9e3d5dc5c3c",
               "bytes": 13075349,
               "role": "asset",
@@ -973,7 +925,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/LOT_E21_13.zip",
-              "destination": "mediaoverride/cars/LOT_E21_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/LOT_E21_13.zip",
               "sha256": "07d279c8ee1a847f2c4573d4bab3f1b9c090083cc879ce129a1edb243bffed46",
               "bytes": 17441174,
               "role": "asset",
@@ -981,7 +933,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/MAZ_MX5Cup_13.zip",
-              "destination": "mediaoverride/cars/MAZ_MX5Cup_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/MAZ_MX5Cup_13.zip",
               "sha256": "c4b741a3cdb1becab5bea401c196ee1ed1b932a560aa7ae4d8598360cffc5446",
               "bytes": 17207077,
               "role": "asset",
@@ -989,7 +941,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/MER_CLKGTR_98.zip",
-              "destination": "mediaoverride/cars/MER_CLKGTR_98.zip",
+              "destination": "mods/remix-car-pack/media/cars/MER_CLKGTR_98.zip",
               "sha256": "466fe88a8efefec33f3e20b85cad44ad1b7f6d54a71c67f3118adb91a121622d",
               "bytes": 17658821,
               "role": "asset",
@@ -997,7 +949,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/NIS_FairladyZ_03.zip",
-              "destination": "mediaoverride/cars/NIS_FairladyZ_03.zip",
+              "destination": "mods/remix-car-pack/media/cars/NIS_FairladyZ_03.zip",
               "sha256": "791ce14c65f3d7afdfbb6561e92527a5fa103cf611fe75f1c934de4c4ccfb098",
               "bytes": 14647135,
               "role": "asset",
@@ -1005,7 +957,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/NIS_GTRFast7_12.zip",
-              "destination": "mediaoverride/cars/NIS_GTRFast7_12.zip",
+              "destination": "mods/remix-car-pack/media/cars/NIS_GTRFast7_12.zip",
               "sha256": "dcfd8b996e75ae2731dab95bc6c127cc0b4ef5ba3592a771dfe5c94998b9e193",
               "bytes": 16858962,
               "role": "asset",
@@ -1013,7 +965,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/NIS_SkylineGTRVSpec_95.zip",
-              "destination": "mediaoverride/cars/NIS_SkylineGTRVSpec_95.zip",
+              "destination": "mods/remix-car-pack/media/cars/NIS_SkylineGTRVSpec_95.zip",
               "sha256": "ca5cb7d9252d6f892009ac96e7866d0b842b466f8adc5c4131a7c97818827ff8",
               "bytes": 17666048,
               "role": "asset",
@@ -1021,7 +973,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/REN_FormulaE_14.zip",
-              "destination": "mediaoverride/cars/REN_FormulaE_14.zip",
+              "destination": "mods/remix-car-pack/media/cars/REN_FormulaE_14.zip",
               "sha256": "a7396efc1f5a7ce2b79a4f5cc57120ce8b17527182aacd7f8499885593dfad20",
               "bytes": 17114314,
               "role": "asset",
@@ -1029,7 +981,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/ROL_Wraith_14.zip",
-              "destination": "mediaoverride/cars/ROL_Wraith_14.zip",
+              "destination": "mods/remix-car-pack/media/cars/ROL_Wraith_14.zip",
               "sha256": "05fad53549c6a798b7f5209e3c353de2b18bf2bd799a7b49aefabf63659c07e4",
               "bytes": 20710567,
               "role": "asset",
@@ -1037,7 +989,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/VAU_Astra16_13.zip",
-              "destination": "mediaoverride/cars/VAU_Astra16_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/VAU_Astra16_13.zip",
               "sha256": "d2fb0ed5741b552ecefeefececb47bfb09cf3a1d726c1f6c85559b79574a9113",
               "bytes": 19517402,
               "role": "asset",
@@ -1045,7 +997,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/VIP_91_Viper_13.zip",
-              "destination": "mediaoverride/cars/VIP_91_Viper_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/VIP_91_Viper_13.zip",
               "sha256": "b53b6399a7c34a6f858d9932ead98bccbef4db638d0544a054fcf4c07f1e0d59",
               "bytes": 14802965,
               "role": "asset",
@@ -1053,7 +1005,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/AST_DBS_09.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/AST_DBS_09.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/AST_DBS_09.zip",
               "sha256": "610080147c4a4b366786da45e0c7d7556b755577c9a133dcc2401e22826b0c44",
               "bytes": 571806,
               "role": "asset",
@@ -1061,7 +1013,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/AUD_RS7_13.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/AUD_RS7_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/AUD_RS7_13.zip",
               "sha256": "365bf5763337aefa6cf697568e587b9a2413ae5cfe30ee35135e0af765e3c9b5",
               "bytes": 603583,
               "role": "asset",
@@ -1069,7 +1021,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/BMW_92_M3GTR_09.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/BMW_92_M3GTR_09.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/BMW_92_M3GTR_09.zip",
               "sha256": "8975b9b9cf9427ca8c82bf356afb81223aa762c4ebe696e4e12a8bf67a1434d9",
               "bytes": 580695,
               "role": "asset",
@@ -1077,7 +1029,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/BMW_E46M3_05.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/BMW_E46M3_05.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/BMW_E46M3_05.zip",
               "sha256": "2719723adc0a01b177207f44e1b51bbec54bf752e0a29fe10f1da1c77d8ef0eb",
               "bytes": 645246,
               "role": "asset",
@@ -1085,7 +1037,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/BMW_M3Touring_12.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/BMW_M3Touring_12.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/BMW_M3Touring_12.zip",
               "sha256": "74879961f6d5b2f029822e736ddb8e332b065fd65c7870b49e5c2e79223d40c4",
               "bytes": 754948,
               "role": "asset",
@@ -1093,7 +1045,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/CHE_4_CorvetteZR1_11.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/CHE_4_CorvetteZR1_11.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/CHE_4_CorvetteZR1_11.zip",
               "sha256": "2784ddb5da889018bb47149a3327300d107d51f80a46c5f123bddbdd96e63b75",
               "bytes": 653631,
               "role": "asset",
@@ -1101,7 +1053,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/DOD_ViperSRT10ACR_08.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/DOD_ViperSRT10ACR_08.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/DOD_ViperSRT10ACR_08.zip",
               "sha256": "623a5919fa41e0ec7400ecc3a1ddb1703841d3fda558f4b68a8613d3ae956fae",
               "bytes": 610856,
               "role": "asset",
@@ -1109,7 +1061,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/FER_62_F458_11.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/FER_62_F458_11.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/FER_62_F458_11.zip",
               "sha256": "2e70e71eeeb2502d746c48de0e91ce53a09b3f07d19eb6839eb6f6fdb0c9ef40",
               "bytes": 491625,
               "role": "asset",
@@ -1117,7 +1069,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/GMC_Vandura_83.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/GMC_Vandura_83.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/GMC_Vandura_83.zip",
               "sha256": "e7a4416f3a698b20304ca96c4530274765051f974d48bd7cd883c6a6803166fc",
               "bytes": 554858,
               "role": "asset",
@@ -1125,7 +1077,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/HOL_10_CommodoreVF_13.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/HOL_10_CommodoreVF_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/HOL_10_CommodoreVF_13.zip",
               "sha256": "446741013e438c0a4a80102f355fc8d654604c6f76d8fe32860a7b90340ae993",
               "bytes": 533172,
               "role": "asset",
@@ -1133,7 +1085,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/HON_NSXR_05.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/HON_NSXR_05.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/HON_NSXR_05.zip",
               "sha256": "2f8b45644357b90784c42dfc278296bd4d12b0222a6c6d310fb2e99f7a0074da",
               "bytes": 585013,
               "role": "asset",
@@ -1141,7 +1093,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/LAM_Reventon_08.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/LAM_Reventon_08.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/LAM_Reventon_08.zip",
               "sha256": "c9af8f870f8a478e80b1e2291907f6adc48090f788a5c66a22795c9ecc5d0dcd",
               "bytes": 664014,
               "role": "asset",
@@ -1149,7 +1101,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/LEX_ISF_09.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/LEX_ISF_09.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/LEX_ISF_09.zip",
               "sha256": "b2f827c91512a340cceab255cb36a5c164a69d0ea10fd806fa5efc56d3204568",
               "bytes": 594181,
               "role": "asset",
@@ -1157,7 +1109,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/LOT_E21_13.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/LOT_E21_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/LOT_E21_13.zip",
               "sha256": "74dc2f7eb7a7e6fe54692f9a1ce4361d3f8c66ebdf47b187f6df75f3d23552d7",
               "bytes": 620130,
               "role": "asset",
@@ -1165,7 +1117,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/MAZ_MX5Cup_13.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/MAZ_MX5Cup_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/MAZ_MX5Cup_13.zip",
               "sha256": "32289cd75a0d75319bac3ead9a6d813e911b0d0dbc3c0c05b13940e79215e5bd",
               "bytes": 549838,
               "role": "asset",
@@ -1173,7 +1125,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/MER_CLKGTR_98.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/MER_CLKGTR_98.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/MER_CLKGTR_98.zip",
               "sha256": "2702a7ade276b510f77adb8f7c6836dac4b836a1a45113f18ce2ba8e5019b78d",
               "bytes": 727985,
               "role": "asset",
@@ -1181,7 +1133,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/NIS_FairladyZ_03.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/NIS_FairladyZ_03.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/NIS_FairladyZ_03.zip",
               "sha256": "6f53d294b3732a795eb15c9c35ec4b0b7f4dc51d1dd1607164cd262960dca97d",
               "bytes": 441579,
               "role": "asset",
@@ -1189,7 +1141,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/NIS_SkylineGTRVSpec_95.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/NIS_SkylineGTRVSpec_95.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/NIS_SkylineGTRVSpec_95.zip",
               "sha256": "4b4cf4302fcabb660001f3a350b2ee0996a3e9714d88cb5ea093c31e9e86bc15",
               "bytes": 534104,
               "role": "asset",
@@ -1197,7 +1149,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/REN_FormulaE_14.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/REN_FormulaE_14.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/REN_FormulaE_14.zip",
               "sha256": "cfdedb9d5b44de33f5b42274e6e7531805af20c2d2dd0b3484fe1a6db47e0c0d",
               "bytes": 688974,
               "role": "asset",
@@ -1205,7 +1157,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/ROL_Wraith_14.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/ROL_Wraith_14.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/ROL_Wraith_14.zip",
               "sha256": "04981fe887e4f462764e59661d6e7933d9a6257a55cc2cfc3ff3f3ac3adbb550",
               "bytes": 497355,
               "role": "asset",
@@ -1213,7 +1165,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/VAU_Astra16_13.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/VAU_Astra16_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/VAU_Astra16_13.zip",
               "sha256": "9241d0a12fcd1381db31f95437824cd00701c8bf520b760b137a58f03ecf363e",
               "bytes": 572258,
               "role": "asset",
@@ -1221,7 +1173,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/cars/_library/scene/wheels/VIP_91_Viper_13.zip",
-              "destination": "mediaoverride/cars/_library/scene/wheels/VIP_91_Viper_13.zip",
+              "destination": "mods/remix-car-pack/media/cars/_library/scene/wheels/VIP_91_Viper_13.zip",
               "sha256": "52f3a04605af6c7f9c5718d623953873e7b19ba24b7e7c9ab232ea195081b414",
               "bytes": 633634,
               "role": "asset",
@@ -1229,7 +1181,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/RC23.zip",
-              "destination": "mediaoverride/stripped/RC23.zip",
+              "destination": "mods/remix-car-pack/media/stripped/RC23.zip",
               "sha256": "4ecde0942d3e9f25d7c1f5d46cc6091a4d9e9e4d2c11ef278c2fbde7d7b719fb",
               "bytes": 185453,
               "role": "asset",
@@ -1237,7 +1189,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/RC4.zip",
-              "destination": "mediaoverride/stripped/RC4.zip",
+              "destination": "mods/remix-car-pack/media/stripped/RC4.zip",
               "sha256": "e9ee65cdb82f9e60251731ad4dde4ab8ad9aecfc043e3bd7a232e5490bfff8fd",
               "bytes": 6113205,
               "role": "asset",
@@ -1245,7 +1197,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/CHT.zip",
-              "destination": "mediaoverride/stripped/stringtables/CHT.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/CHT.zip",
               "sha256": "fc09e26b5fafc4d7a143ad0107531db853387e729bc90d8bb2d3c5e9b12f20f6",
               "bytes": 399598,
               "role": "asset",
@@ -1253,7 +1205,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/DE.zip",
-              "destination": "mediaoverride/stripped/stringtables/DE.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/DE.zip",
               "sha256": "5ab2a7bb52a6e40a36ec3ebb496e0561b2b7c1dd416e0587bd6187838811fe81",
               "bytes": 454641,
               "role": "asset",
@@ -1261,7 +1213,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/DEV.zip",
-              "destination": "mediaoverride/stripped/stringtables/DEV.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/DEV.zip",
               "sha256": "738c32574046b8e23d73b69a27c8bb75f2fdc6316b1b858183259a8c88d47560",
               "bytes": 431032,
               "role": "asset",
@@ -1269,7 +1221,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/EN.zip",
-              "destination": "mediaoverride/stripped/stringtables/EN.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/EN.zip",
               "sha256": "8d845fcd7a8ce3f4b72bf6b704c4a8a0fe89f0e879f9ef16187c3becd856a3c5",
               "bytes": 432118,
               "role": "asset",
@@ -1277,7 +1229,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/ES.zip",
-              "destination": "mediaoverride/stripped/stringtables/ES.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/ES.zip",
               "sha256": "ac847e76aaebf02222f72459fac93dc3fa43ff65261dbbce735db6b99cbf0fb2",
               "bytes": 448039,
               "role": "asset",
@@ -1285,7 +1237,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/FR.zip",
-              "destination": "mediaoverride/stripped/stringtables/FR.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/FR.zip",
               "sha256": "92e88de034456f65242e2af0087b470ea675f1f02a34b6cece249c5cf26d0bca",
               "bytes": 450161,
               "role": "asset",
@@ -1293,7 +1245,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/GB.zip",
-              "destination": "mediaoverride/stripped/stringtables/GB.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/GB.zip",
               "sha256": "85ed83f4d893bda46b5156360754b6cb58629a6b9665daef62d6d2ff95e53f40",
               "bytes": 432163,
               "role": "asset",
@@ -1301,7 +1253,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/HU.zip",
-              "destination": "mediaoverride/stripped/stringtables/HU.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/HU.zip",
               "sha256": "065f36b3375fb0aa948f6ecc6634a9da3da52e82c6bca7754cf74eb2aa35455f",
               "bytes": 314890,
               "role": "asset",
@@ -1309,7 +1261,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/IT.zip",
-              "destination": "mediaoverride/stripped/stringtables/IT.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/IT.zip",
               "sha256": "cf9267302ff80866f00029aa588ec5ef9c3198515031986ef68718226fb5931a",
               "bytes": 444666,
               "role": "asset",
@@ -1317,7 +1269,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/JP.zip",
-              "destination": "mediaoverride/stripped/stringtables/JP.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/JP.zip",
               "sha256": "6d6f1b34d369c569304b104b0f7b59324c8e6c3ed34420c9af16fec204e53e41",
               "bytes": 406683,
               "role": "asset",
@@ -1325,7 +1277,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/KO.zip",
-              "destination": "mediaoverride/stripped/stringtables/KO.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/KO.zip",
               "sha256": "fdc0440d416f940ee4a16138de2fa7cbeeb0a839368b0420f73b8eb65a223cd8",
               "bytes": 389914,
               "role": "asset",
@@ -1333,7 +1285,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/LOC.zip",
-              "destination": "mediaoverride/stripped/stringtables/LOC.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/LOC.zip",
               "sha256": "9fe7055d3e99e2aef300ccefe175a87d7640e88c560563b41ae677af187021da",
               "bytes": 234351,
               "role": "asset",
@@ -1341,7 +1293,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/MX.zip",
-              "destination": "mediaoverride/stripped/stringtables/MX.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/MX.zip",
               "sha256": "ee9e37e0d67aaf444602dd1e6925d58f4de105c43a9b1a38bc15ecb41b1a5f9b",
               "bytes": 446791,
               "role": "asset",
@@ -1349,7 +1301,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/PL.zip",
-              "destination": "mediaoverride/stripped/stringtables/PL.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/PL.zip",
               "sha256": "2a63bf105e8ee26138e7f70a385857362487c49ee4561a8c7146e6d578cad006",
               "bytes": 458768,
               "role": "asset",
@@ -1357,7 +1309,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/RU.zip",
-              "destination": "mediaoverride/stripped/stringtables/RU.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/RU.zip",
               "sha256": "e00e61ebb3f1c627210319a6c44a8921dcb81c8b670285c9ec7a8dc528548428",
               "bytes": 461701,
               "role": "asset",
@@ -1365,7 +1317,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/br.zip",
-              "destination": "mediaoverride/stripped/stringtables/br.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/br.zip",
               "sha256": "c5127d56b48bcca05a889a17881a52bbcbd8a20de83835f263fdafa82859efcd",
               "bytes": 444342,
               "role": "asset",
@@ -1373,7 +1325,7 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/cz.zip",
-              "destination": "mediaoverride/stripped/stringtables/cz.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/cz.zip",
               "sha256": "065f36b3375fb0aa948f6ecc6634a9da3da52e82c6bca7754cf74eb2aa35455f",
               "bytes": 314890,
               "role": "asset",
@@ -1381,41 +1333,18 @@
             },
             {
               "source": "pack:Mount/mediaoverride/stripped/stringtables/nl.zip",
-              "destination": "mediaoverride/stripped/stringtables/nl.zip",
+              "destination": "mods/remix-car-pack/media/stripped/stringtables/nl.zip",
               "sha256": "971354764a83deb0e8927385fbd021163945be25232cfbd1831cd48dd79b0736",
               "bytes": 413737,
               "role": "asset",
               "mode": "add-or-replace"
-            },
-            {
-              "source": "pack:Mount/mediaoverride/zipmanifest.xml",
-              "destination": "mediaoverride/zipmanifest.xml",
-              "sha256": "89ccf60862cb362d5ebf9d24947f4b31d7d165b43989200765dc67f9aa72934c",
-              "bytes": 86506,
-              "role": "asset",
-              "mode": "add-or-replace"
             }
-          ],
-          "azimuth": []
+          ]
         },
         "config": null,
         "runtimeOutputs": [],
         "excludedArchiveEntries": [],
         "databaseMigrations": [],
-        "database": {
-          "root": "game",
-          "path": "mediaoverride/stripped/gamedbRC.slt",
-          "seedFrom": "media/stripped/gamedbRC.slt",
-          "access": "startup",
-          "revision": 1,
-          "tables": []
-        },
-        "databaseBase": {
-          "source": "pack:Mount/mediaoverride/stripped/gamedbRC.slt",
-          "sha256": "26de1d5e867da82d76a5845d0820694a9fd271320935bfe4c7fd9a1346f0394a",
-          "bytes": 6282240,
-          "foreignKeyViolations": 42
-        },
         "multiplayer": {
           "schemaVersion": 1,
           "impact": "gameplay",
@@ -1423,12 +1352,24 @@
           "revision": 1,
           "match": "exact",
           "settings": []
+        },
+        "extraOptionsAddon": {
+          "database": {
+            "source": "pack:Mount/mediaoverride/stripped/gamedbRC.slt",
+            "sha256": "26de1d5e867da82d76a5845d0820694a9fd271320935bfe4c7fd9a1346f0394a",
+            "bytes": 6282240,
+            "target": "media/stripped/gamedbRC.slt",
+            "idConflicts": "nearest",
+            "updates": "override",
+            "deletes": "include",
+            "foreignKeys": "allow"
+          }
         }
       }
     },
     {
       "id": "discord-rpc",
-      "version": "1.1.0-infinity.1",
+      "version": "1.1.0-infinity.2",
       "name": {
         "en": "Discord RPC · Infinity",
         "pt-BR": "Discord RPC · Infinity"
@@ -1439,60 +1380,51 @@
       },
       "author": "Bullet4fun; Infinity edition by anarqz",
       "download": {
-        "url": "https://github.com/anarqz/InfinityMods/releases/download/v2026.10.25/discord-rpc-1.1.0-infinity.1.zip",
-        "sha256": "58875adc85ea34a41ea3023f4e34d4824a91b7f8185a0d621f2f14e328e780ab",
-        "bytes": 21153
+        "url": "https://github.com/anarqz/InfinityMods/releases/download/v2026.10.28/discord-rpc-1.1.0-infinity.2.zip",
+        "sha256": "4abebdd638dd86d0e1c345fbe29fd2259ed985b1ffd400a42b66bab2881bd49a",
+        "bytes": 22172
       },
-      "requires": [
-        "infinity-mod-runtime"
-      ],
       "install": {
         "schemaVersion": 1,
         "kind": "mod",
         "license": "GPL-3.0-or-later",
         "homepage": "https://github.com/anarqz/InfinityMods",
-        "runtime": "infinity-native",
+        "runtime": "standalone",
         "review": {
           "status": "reviewed",
           "blockers": []
         },
         "compatibility": {
           "azimuthVersions": [
-            "0.9.10"
+            "1.0.3"
           ],
           "gameBuilds": [],
           "verification": "unverified"
         },
-        "dependencies": [
-          {
-            "id": "extraoptions",
-            "versions": [
-              "0.2.98"
-            ],
-            "enabled": true,
-            "settings": [
-              {
-                "optionId": "global-enabled",
-                "value": true
-              }
-            ]
-          }
-        ],
+        "dependencies": [],
         "conflicts": [],
         "files": {
           "game": [],
           "azimuth": [
             {
               "source": "FH2_DiscordRPC.dll",
-              "destination": "infinity-mods/DiscordRPC/FH2_DiscordRPC.dll",
+              "destination": "mods/discord-rpc/plugins/FH2_DiscordRPC.dll",
               "role": "binary",
               "mode": "add-or-replace",
-              "sha256": "6d938213de5c36bbc765ad2934aa276ca51f7d9c208fd0616ba923eb364bf155",
-              "bytes": 16384
+              "sha256": "52cb193973bfcea1c514d3f7f408e575bc8657421eb725d2b5083ff3403aa3da",
+              "bytes": 17920
+            },
+            {
+              "source": "mod.json",
+              "destination": "mods/discord-rpc/mod.json",
+              "role": "asset",
+              "mode": "add-or-replace",
+              "sha256": "c4b370a950066fe3f2abb850ff6dcddf43f952791d0cf051b9088a79f5782a1f",
+              "bytes": 163
             },
             {
               "source": "LICENSE.txt",
-              "destination": "infinity-mods/DiscordRPC/LICENSE.txt",
+              "destination": "mods/discord-rpc/LICENSE.txt",
               "role": "license",
               "mode": "add-or-replace",
               "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
@@ -1500,25 +1432,25 @@
             },
             {
               "source": "LICENSE-Infinity.txt",
-              "destination": "infinity-mods/DiscordRPC/LICENSE-Infinity.txt",
+              "destination": "mods/discord-rpc/LICENSE-Infinity.txt",
               "role": "license",
               "mode": "add-or-replace",
-              "sha256": "a75d09dd91bb571c9adf31afe3792ec33ad0f8f4af4d27328fe85314270addc5",
-              "bytes": 1167
+              "sha256": "94945272a722d278d0b17c001cd79217f630138a8db178f315f072ef62840bb4",
+              "bytes": 1138
             },
             {
               "source": "NOTICE.md",
-              "destination": "infinity-mods/DiscordRPC/NOTICE.md",
+              "destination": "mods/discord-rpc/NOTICE.md",
               "role": "license",
               "mode": "add-or-replace",
-              "sha256": "5e56e3e6d2e411819d87f6c1af2b829aa7f97eab4190cb83c37535d99b40ecd9",
-              "bytes": 795
+              "sha256": "4157435a21ab6c86447b413982bc4f672d64e4fb9dd12c9698205b48ac1a65d6",
+              "bytes": 1061
             }
           ]
         },
         "config": {
           "root": "azimuth",
-          "path": "infinity-mods/DiscordRPC/FH2_DiscordRPC.ini",
+          "path": "mods/discord-rpc/FH2_DiscordRPC.ini",
           "format": "ini",
           "create": "defaults",
           "preserveOnDisable": true,
@@ -1546,15 +1478,9 @@
         "runtimeOutputs": [],
         "excludedArchiveEntries": [],
         "databaseMigrations": [],
-        "nativeHost": {
-          "abi": 1,
-          "runtime": "infinity_mod.dll",
-          "entryPoint": "InfinityModInitializeV1",
-          "binary": "infinity-mods/DiscordRPC/FH2_DiscordRPC.dll"
-        },
         "source": {
           "repository": "https://github.com/anarqz/InfinityMods",
-          "commit": "96cbe639789821425f8a6abf5b71f31e95c13c8f"
+          "commit": "d7c38bfcbc9aa538d215184ce3c09681c570a306"
         },
         "multiplayer": {
           "schemaVersion": 1,
@@ -1568,6 +1494,10 @@
           {
             "root": "azimuth",
             "path": "data/bin/mods/FH2_DiscordRPC.dll"
+          },
+          {
+            "root": "azimuth",
+            "path": "infinity-mods/DiscordRPC/FH2_DiscordRPC.dll"
           }
         ]
       }

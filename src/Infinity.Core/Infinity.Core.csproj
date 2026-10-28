@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" />
+    <!-- ExtraOptions database.json built on the player's PC (car packs); MIT, bundles the native e_sqlite3. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
 
   <ItemGroup>

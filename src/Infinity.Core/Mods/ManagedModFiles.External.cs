@@ -54,6 +54,7 @@ public sealed partial class ManagedModFiles
         static ExternalFile Of(string source, string sha256, long bytes) => new(ModManifest.ExternalSourceId(source), source[(source.IndexOf(':') + 1)..], sha256, bytes);
         var files = manifest.Files.Select(f => Of(f.Source, f.Hash.ToLowerInvariant(), f.Bytes)).ToList();
         if (manifest.DatabaseBase is { } baseDb) files.Add(Of(baseDb.Path, baseDb.Sha256, baseDb.Bytes));
+        if (manifest.AddonDatabase is { } addonDb) files.Add(Of(addonDb.Source, addonDb.Sha256, addonDb.Bytes));
         return files.DistinctBy(f => (f.SourceId, f.Path.ToLowerInvariant(), f.Sha256)).ToArray();
     }
 
@@ -246,7 +247,48 @@ public sealed partial class ManagedModFiles
             var bytes = ObjectBytes(baseDb.Sha256);
             if (bytes.LongLength != baseDb.Bytes || !StandaloneSqlite(bytes)) throw new ModException("database base must be a checkpointed rollback-journal SQLite file", ModErrors.Unsupported);
         }
+        if (manifest.AddonDatabase is { } addonDb) AddAddonFiles(manifest, addonDb, verified);
         return verified;
+    }
+
+    /// <summary>
+    /// OD-127: an ExtraOptions addon's own files, made on this PC: its mod.json, and its database.json exported (ExtraOptions'
+    /// exporter, ported) from the stock database of the chosen game folder to the pack's verified edited one. Installed, updated,
+    /// disabled and removed like the mapped files; the stock database is only read.
+    /// </summary>
+    private void AddAddonFiles(ModManifest manifest, ExtraOptionsAddonDatabase addonDb, Dictionary<ManifestFile, Func<byte[]>> verified)
+    {
+        if (_game is null) throw new ModException("the game folder is needed to build the addon's database", ModErrors.ExternalFiles);
+        // read only, so not through Target() (which refuses writing databases); the manifest's path was validated relative
+        var stock = Path.GetFullPath(Path.Combine(_game, addonDb.Target.Replace('/', Path.DirectorySeparatorChar)));
+        if (!stock.StartsWith(Path.GetFullPath(_game).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new ModException("the addon's database is outside the game folder", ModErrors.Unsupported);
+        if (!File.Exists(stock)) throw new ModException("the game folder has no " + addonDb.Target, ModErrors.ExternalFiles);
+        var edited = ObjectBytes(addonDb.Sha256);
+        if (edited.LongLength != addonDb.Bytes || !StandaloneSqlite(edited)) throw new ModException("the pack's database must be a checkpointed rollback-journal SQLite file", ModErrors.Unsupported);
+        var database = ExportAddonDatabase(stock, edited, addonDb);
+        var modJson = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?>
+        {
+            ["format_version"] = 1, ["id"] = manifest.Id, ["name"] = manifest.Text("name", "en"), ["version"] = manifest.Version,
+            ["database"] = "database.json", ["media"] = "media", ["strings"] = null,
+        }, IndentedJson);
+        var folder = "mods/" + manifest.Id + "/";
+        foreach (var (name, bytes) in new[] { ("mod.json", modJson), ("database.json", database) })
+            verified.Add(new("azimuth", "generated:" + name, folder + name, ModManifest.Hash(bytes), bytes.LongLength, "asset", "add-or-replace"), () => bytes);
+    }
+
+    private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
+
+    /// <summary>The database.json for <paramref name="edited"/> against <paramref name="stockPath"/>, with the manifest's exporter policies.</summary>
+    private static byte[] ExportAddonDatabase(string stockPath, byte[] edited, ExtraOptionsAddonDatabase addonDb)
+    {
+        var scratch = Path.Combine(Path.GetTempPath(), "fi-addon-db-" + Guid.NewGuid().ToString("N") + ".slt");
+        File.WriteAllBytes(scratch, edited);
+        try
+        {
+            return ExtraOptionsDatabaseDiff.Export(stockPath, scratch, addonDb.DiffOptions).Json.ToArray();
+        }
+        finally { RemoveFile(scratch); } // the one safe delete (ManagedModFiles.Paths.cs)
     }
 
     private string ExternalChoicesPath => Path.Combine(_state, "mods", "external-sources.json");
