@@ -59,7 +59,6 @@ public sealed partial class ShellViewModel
     private ModHealth _modHealth = ModHealth.Empty;
     private string? _modStateError;
     private IReadOnlyList<ModCardFacts> _modFacts = [];
-    private int _customProblems;
     private int _modRefresh;
     public ObservableCollection<ModCard> ModCards { get; } = [];
     public IEnumerable<ModCard> FilteredModCards => ModCards.Where(card => string.IsNullOrWhiteSpace(_modSearch)
@@ -143,13 +142,10 @@ public sealed partial class ShellViewModel
         }
     }
     /// <summary>
-    /// Native (infinity_mod.dll) mods need the signed runtime and helper next to the launcher (<see cref="ModRuntimePackage"/>): development
-    /// packages carry them; a production package only once WINDOWS ships them with a hook that hosts mods (OD-113, MODS.md §6).
+    /// OD-126 (owner 2026-10-28: "Every mod should be added through ExtraOption plugin loader"): mods in the retired native format
+    /// install and play only in a development package, which carries its own signed runtime; a production launcher never installs one.
     /// </summary>
-    /// <remarks>OD-116: or installable, the catalog listing <c>infinity-mod-runtime</c> (installing a native mod installs it first).</remarks>
-    public bool NativeModsAvailable => DevelopmentMods || _nativeRuntime is not null || _catalog?.Runtime is not null;
-    /// <summary>A native mod installs its runtime with it: none verified yet, but the catalog lists one.</summary>
-    private bool RuntimeComesWithMod => _nativeRuntime is null && _catalog?.Runtime is not null;
+    public bool NativeModsAvailable => DevelopmentMods && _nativeRuntime is not null;
     public bool HasManifestCatalog => _catalogLoaded;
     public bool ModOperationBusy => _modOperation;
     public bool ModContentEnabled => !_modOperation;
@@ -159,76 +155,7 @@ public sealed partial class ShellViewModel
         : CatalogExpired ? S["mods.catalog_expired"] : DevelopmentMods ? S["mods.catalog_dev"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"]
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
     public string ModCatalogSummary => S.Format((_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count") + (ModCards.Count == 1 ? "_one" : ""),
-        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
-        + (_customProblems > 0 ? " · " + Counted("mods.custom_problems", _customProblems) : "");
-    /// <summary>OD-114: where the player puts custom mods, one folder per mod (shown on the Mods page).</summary>
-    public string CustomModsFolderText => S.Format("mods.custom_folder", ("path", ManagedModFiles.CustomModsFolder(ModHome)))
-        + (Infinity.Core.Process.WineHost.Detected && Infinity.Core.Process.WineHost.UnixPath(ManagedModFiles.CustomModsFolder(ModHome)) is { } unix
-            ? "\n" + S.Format("mods.custom_folder_linux", ("path", unix)) : "");
-
-    /// <summary>Opens the custom mods folder (created if missing): Explorer on Windows, the prefix's explorer under Wine/Proton.</summary>
-    public void OpenCustomModsFolder()
-    {
-        try { Infinity.Core.Process.FolderOpener.Open(ManagedModFiles.CustomModsFolder(ModHome)); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            Log("mods: custom folder could not be opened: " + error.GetType().Name);
-            Message = S["mods.custom_folder_failed"];
-        }
-    }
-
-    private bool _showModUrl;
-    private string _modUrl = "";
-    /// <summary>Add from URL: the address field, shown under the Mods toolbar.</summary>
-    public bool ShowModUrl => _showModUrl && ModsIdle;
-    public string ModUrl
-    {
-        get => _modUrl;
-        set { _modUrl = value ?? ""; Changed(); Changed(nameof(CanAddModFromUrl)); }
-    }
-    public bool CanAddModFromUrl => ModsIdle && CustomModUrl(_modUrl) is not null;
-    /// <summary>The downloader's own rules (ModDownloads): HTTPS on the default port, no credentials or fragment.</summary>
-    private static Uri? CustomModUrl(string text) => Uri.TryCreate(text.Trim(), UriKind.Absolute, out var url) && url.Scheme == Uri.UriSchemeHttps
-        && url.IsDefaultPort && url.UserInfo.Length == 0 && url.Fragment.Length == 0 ? url : null;
-
-    /// <summary>Where modders learn to adapt a mod to Infinity's schema (shown when a ZIP has no infinity-mod.json).</summary>
-    public const string ModSchemaPage = "https://infinity-horizon.com/mods";
-    private bool _modUrlIncompatible;
-    /// <summary>The last ZIP had no infinity-mod.json: the field stays open with the warning and the schema page's link.</summary>
-    public bool ModUrlIncompatible => _modUrlIncompatible && ShowModUrl;
-    public string ModUrlIncompatibleText => S.Format("mods.error.archive_no_manifest", ("url", ModSchemaPage));
-
-    public void ToggleModUrl()
-    {
-        _showModUrl = !_showModUrl; _modUrlIncompatible = false;
-        Changed(string.Empty);
-    }
-
-    /// <summary>
-    /// Add from URL: downloads a ZIP with one custom mod, places it as <c>mods/custom/&lt;its custom. id&gt;</c>, then shows its card so the
-    /// player can read and confirm it. Adding never confirms nor installs it.
-    /// </summary>
-    public async Task AddModFromUrlAsync()
-    {
-        if (!CanAddModFromUrl) return;
-        var url = CustomModUrl(_modUrl)!; var home = ModHome;
-        CustomModImport? added = null;
-        _modUrlIncompatible = false;
-        await RunModOperationAsync(async () =>
-        {
-            var progress = new Progress<string>(stage => { _modProgress = S[stage == "download" ? "mods.progress.url_download" : "mods.progress.url_verify"]; Changed(nameof(ModProgress)); });
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(15));
-            try { added = await ManagedModFiles.ImportCustomFromUrlAsync(ModDownloads, home, url, progress, timeout.Token); }
-            catch (ModException error) when (error.Code == ModErrors.ArchiveNoManifest) { _modUrlIncompatible = true; throw; }
-        }, S["mods.action_done"]);
-        if (_modUrlIncompatible) { Message = ModUrlIncompatibleText; Changed(string.Empty); return; }
-        if (added is null) return;
-        Log("mods: custom mod added from URL: " + added.Manifest.Id + (added.Replaced ? " (replaced)" : added.Unchanged ? " (unchanged)" : ""));
-        Message = S.Format(added.Unchanged ? "mods.url_unchanged" : added.Replaced ? "mods.url_replaced" : "mods.url_added", ("mod", added.Manifest.Text("name", S.Locale)));
-        _modUrl = ""; _showModUrl = false;
-        if (ModCards.FirstOrDefault(c => c.Manifest.Id == added.Manifest.Id) is { } card) ShowModInformation(card);
-        Changed(string.Empty);
-    }
+        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "");
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
 
     /// <summary>Any interrupted operation in the bucket: mod changes wait for it (Play only for this folder, <see cref="ModPlayBlocked"/>).</summary>
@@ -430,33 +357,26 @@ public sealed partial class ShellViewModel
         var catalog = _manifestCatalog;
         var key = NativeModKey;
         var home = ModHome;
-        var (health, error, facts, problems) = await Task.Run(() => ReadModState(factory, catalog, home));
-        _nativeRuntime = await Task.Run(() => LocateRuntime(home, key));
+        var (health, error, facts) = await Task.Run(() => ReadModState(factory, catalog));
+        _nativeRuntime = await Task.Run(() => LocateRuntime(key));
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts;
-        if (problems.Count > 0 && problems.Count != _customProblems)
-            Log("mods: custom folders skipped: " + string.Join(", ", problems.Select(p => p.Folder + " " + p.Reason)));
-        _customProblems = problems.Count;
         RefreshModCards();
         await RefreshExtraOptionsModsAsync();
         if (_selectedMod is { HasOptions: true } && !_iniDirty) await LoadSelectedOptionsAsync();
         Changed(string.Empty);
     }
 
-    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts, IReadOnlyList<CustomModProblem> Problems) ReadModState(
-        Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official, string home)
+    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official)
     {
-        // OD-114: custom mods are rescanned on every refresh and listed with the official catalog (their ids can never collide).
-        CustomModScan custom;
-        try { custom = ManagedModFiles.ScanCustomMods(home); }
-        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { custom = new([], [new("", ManagedModFiles.Code(error))]); }
-        var catalog = official.Concat(custom.Mods.Where(m => official.All(o => o.Id != m.Id))).ToArray();
-        if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray(), custom.Problems);
+        // Owner 2026-10-28: the catalog's mods only; a custom mod installed earlier still has its card from its receipt (below), to disable or uninstall
+        var catalog = official.ToArray();
+        if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray());
         ManagedModFiles manager;
         try { manager = factory(); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
-        { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray(), custom.Problems); }
+        { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray()); }
         bool Confirmed(ModManifest m) { try { return m.IsCustom && manager.CustomConfirmed(m); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return false; } }
         // OD-125/127: a receipt from when the catalog installed ExtraOptions as a mod no longer stands for anything (it is built in)
         try { manager.RetireBuiltInReceipt(); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
@@ -483,7 +403,7 @@ public sealed partial class ShellViewModel
         }
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
             facts.Add(new(installed.Manifest!, installed, false, Blocker(() => { if (installed.Enabled) manager.CheckDependents(installed.Id); else manager.CheckDependencies(installed.Manifest!); }), null, Confirmed(installed.Manifest!)));
-        return (health, null, facts, custom.Problems);
+        return (health, null, facts);
     }
 
     /// <summary>Names of the enabled mods that depend on <paramref name="id"/> (T5d).</summary>
@@ -555,7 +475,7 @@ public sealed partial class ShellViewModel
             {
                 status = expired ? S["mods.catalog_expired"] : nativeBlocked ? S["mods.native_unavailable"]
                     : mod.IsExternal ? S.Format("external.card_status", ("hint", mod.ExternalSources[0].Hint ?? mod.ExternalSources[0].LabelText(S.Locale)))
-                    : mod.NeedsRuntime && !custom && RuntimeComesWithMod ? S["mods.runtime_with_mod"] : S["mods.not_installed"];
+                    : S["mods.not_installed"];
                 // OD-117: a mod of the player's own files opens its set-up pane instead of downloading anything.
                 badge = S[mod.IsExternal ? "external.badge" : "mods.not_installed"]; action = S[mod.IsExternal ? "external.setup" : "mods.install"];
                 // A custom mod needs no catalog (it has no download); an official one waits for a fresh catalog.
