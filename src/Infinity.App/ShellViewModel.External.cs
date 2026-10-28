@@ -46,21 +46,14 @@ public sealed record BrowserPlace(string Label, string Path);
 
 /// <summary>
 /// OD-117: the set-up pane of a mod made of the player's own files. One row per source; the player picks a folder (the pack or
-/// any parent), a file or a ZIP with the in-launcher browser (controller-navigable, Steam keyboard on the path box, quick
-/// locations that include Linux's home and SD cards under Wine) or, on Windows, the native dialog. Each pick is checked with
+/// any parent), a file or a ZIP with the launcher's own picker (<see cref="OpenPicker"/>). Each pick is checked with
 /// progress; Install is enabled only when every source verifies, after the short "your own copy" notice.
 /// </summary>
 public sealed partial class ShellViewModel
 {
     private ModManifest? _externalMod;
-    private bool _browsing;
-    private ExternalSourceRow? _browsingRow;
-    private string _browserPath = "";
-    private string _browserDraft = "";
     private readonly Dictionary<ExternalSourceRow, CancellationTokenSource> _externalChecks = [];
     public ObservableCollection<ExternalSourceRow> ExternalRows { get; } = [];
-    public ObservableCollection<BrowserEntry> BrowserEntries { get; } = [];
-    public ObservableCollection<BrowserPlace> BrowserPlaces { get; } = [];
 
     public bool ShowExternalSetup => _externalMod is not null && ShowMods;
     public string ExternalSetupTitle => _externalMod is null ? "" : S.Format("external.title", ("mod", _externalMod.Text("name", S.Locale)));
@@ -94,15 +87,6 @@ public sealed partial class ShellViewModel
     public string ExternalReplacesText => ExternalReplaced is { Count: > 0 } files
         ? Counted("external.replaces", files.Count, ("files", FileList(files))) : "";
 
-    public bool ShowBrowser => _browsing && ShowExternalSetup;
-    public string BrowserPath => _browserPath;
-    public string BrowserDraft { get => _browserDraft; set { _browserDraft = value ?? ""; Changed(); } }
-    public bool BrowserCanPickFolder => _browsingRow?.PicksFolder == true && Directory.Exists(_browserPath);
-    public bool BrowserEmpty => BrowserEntries.Count == 0;
-    /// <summary>Under Wine the Windows dialog shows Linux paths under Z: and is hard to use with a controller; only the browser is offered there.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binds to instance properties")]
-    public bool CanUseSystemPicker => !WineHost.Detected && !GamepadNavigator.SteamGamepadUi;
-
     /// <summary>
     /// Opens the pane for <paramref name="card"/>'s mod (<paramref name="update"/>: its reviewed pending update, from the update's own
     /// confirmation only): rows already copied show so; a remembered pick is checked again. "Check files again" never applies an update.
@@ -112,7 +96,8 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(card);
         var mod = update ? card.Next : card.Manifest;
         if (mod is not { IsExternal: true } || ModManagerFactory() is not { } factory || !ModsIdle || update && !card.CanAct) return;
-        _externalMod = mod; _showModInfo = false; _showModOptions = false; _showLobbyPane = false; _browsing = false; _selectedMod = card;
+        _externalMod = mod; _showModInfo = false; _showModOptions = false; _showLobbyPane = false; _selectedMod = card;
+        if (ShowBrowser) StopBrowsing();
         ExternalRows.Clear();
         foreach (var source in mod.ExternalSources)
             ExternalRows.Add(new(source, source.LabelText(S.Locale), source.HelpText(S.Locale), source.Kind) { Status = S["external.not_chosen"] });
@@ -140,7 +125,8 @@ public sealed partial class ShellViewModel
     public void CloseExternalSetup()
     {
         foreach (var check in _externalChecks.Values) check.Cancel();
-        _externalMod = null; _browsing = false; _browsingRow = null; _previewReplaced = null;
+        _externalMod = null; _previewReplaced = null;
+        if (ShowBrowser) StopBrowsing();
         ExternalRows.Clear(); BrowserEntries.Clear();
         Changed(string.Empty);
     }
@@ -246,114 +232,16 @@ public sealed partial class ShellViewModel
         if (_modHealth.Installed.Any(i => i.Id == mod.Id && i.Manifest?.SameContent(mod) == true)) CloseExternalSetup();
     }
 
-    // The in-launcher browser ------------------------------------------------------------------------------------------
+    // The launcher's picker (ShellViewModel.FilePicker.cs) ---------------------------------------------------------------
 
+    /// <summary>Opens the picker for <paramref name="row"/>: a folder or a file as it accepts (ZIPs only beside folders), checked at once.</summary>
     public void StartBrowsing(ExternalSourceRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        _browsingRow = row; _browsing = true;
-        RefreshPlaces();
-        var start = row.Picked is { } last && (Directory.Exists(last) || File.Exists(last)) ? (Directory.Exists(last) ? last : Path.GetDirectoryName(last)!)
-            : BrowserPlaces.FirstOrDefault()?.Path ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        Browse(start);
-    }
-
-    public void StopBrowsing() { _browsing = false; _browsingRow = null; BrowserEntries.Clear(); Changed(string.Empty); }
-
-    /// <summary>Lists a folder: its subfolders, then the files the row may pick (ZIPs; any file for a file source). Unreadable falls back to Home.</summary>
-    public void Browse(string path)
-    {
-        if (_browsingRow is not { } row) return;
-        string full;
-        try { full = Path.GetFullPath(path); } catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { Message = S["external.browse_failed"]; return; }
-        if (!Directory.Exists(full))
+        OpenPicker(new(row.Label, row.PicksFolder, row.PicksFile, path => CheckExternalAsync(row, path))
         {
-            if (File.Exists(full) && row.PicksFile) { _ = PickAsync(full); return; }
-            if (_browserPath.Length > 0) Message = S["external.browse_failed"]; // a typed path that does not exist says so; the first open falls back quietly
-            full = Home();
-        }
-        var entries = new List<BrowserEntry>();
-        try
-        {
-            var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.System | FileAttributes.Hidden };
-            entries.AddRange(new DirectoryInfo(full).EnumerateDirectories("*", options).Take(2000).OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase).Take(500)
-                .Select(d => new BrowserEntry(d.Name, d.FullName, true)));
-            if (row.PicksFile)
-                entries.AddRange(new DirectoryInfo(full).EnumerateFiles("*", options)
-                    .Where(f => row.PicksFolder ? f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) : true)
-                    .Take(2000).OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).Take(500).Select(f => new BrowserEntry(f.Name, f.FullName, false)));
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            if (!string.Equals(full, Home(), StringComparison.OrdinalIgnoreCase)) { Browse(Home()); return; }
-        }
-        _browserPath = full; _browserDraft = full;
-        BrowserEntries.Clear();
-        foreach (var entry in entries) BrowserEntries.Add(entry);
-        Changed(string.Empty);
-    }
-
-    public void BrowseUp() { if (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(_browserPath)) is { } parent) Browse(parent); }
-    public void BrowseDraft() => Browse(_browserDraft.Trim().Trim('"'));
-    public Task PickBrowserFolderAsync() => BrowserCanPickFolder ? PickAsync(_browserPath) : Task.CompletedTask;
-    public Task OpenBrowserEntryAsync(BrowserEntry entry) { ArgumentNullException.ThrowIfNull(entry); if (entry.Folder) { Browse(entry.FullPath); return Task.CompletedTask; } return PickAsync(entry.FullPath); }
-
-    /// <summary>A pick from the browser or the Windows dialog: checked at once.</summary>
-    public async Task PickAsync(string path)
-    {
-        if ((_browsingRow ?? ExternalRows.FirstOrDefault(r => !r.Ok)) is not { } target) return;
-        _browsing = false; _browsingRow = null; BrowserEntries.Clear(); Changed(string.Empty);
-        await CheckExternalAsync(target, path);
-    }
-
-    /// <summary>The Windows dialog's pick for <paramref name="row"/> (desktop Windows only).</summary>
-    public Task PickWithSystemDialogAsync(ExternalSourceRow row, string path) { _browsingRow = row; return PickAsync(path); }
-
-    private static string Home()
-    {
-        if (WineHost.Detected && WineHome() is { } linux && Directory.Exists(linux)) return linux;
-        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    }
-
-    /// <summary>Under Wine, the player's Linux home through Z: (<c>WINEHOMEDIR</c> is <c>\??\Z:\home\deck</c>; else HOME or /home/USER).</summary>
-    private static string? WineHome()
-    {
-        var wine = Environment.GetEnvironmentVariable("WINEHOMEDIR");
-        if (wine is { Length: > 0 }) return wine.StartsWith(@"\??\", StringComparison.Ordinal) ? wine[4..] : wine;
-        var home = Environment.GetEnvironmentVariable("HOME");
-        if (home is { Length: > 1 } && home.StartsWith('/')) return @"Z:" + home.Replace('/', '\\');
-        return Environment.GetEnvironmentVariable("USER") is { Length: > 0 } user ? @"Z:\home\" + user : null;
-    }
-
-    private void RefreshPlaces()
-    {
-        BrowserPlaces.Clear();
-        void Add(string key, string? path, string? label = null) { if (path is { Length: > 0 } && Directory.Exists(path) && BrowserPlaces.All(p => !string.Equals(p.Path, path, StringComparison.OrdinalIgnoreCase))) BrowserPlaces.Add(new(label ?? S[key], path)); }
-        var home = Home();
-        Add("external.place_home", home);
-        Add("external.place_downloads", Path.Combine(home, "Downloads"));
-        Add("external.place_desktop", Path.Combine(home, "Desktop"));
-        if (WineHost.Detected)
-        {
-            // SD cards and USB drives on a Deck / Linux desktop: /run/media/<user>/<card> (and /run/media/<card>), through Z:.
-            try
-            {
-                const string media = @"Z:\run\media";
-                if (Directory.Exists(media))
-                    foreach (var level in Directory.EnumerateDirectories(media))
-                    {
-                        // /run/media/<user>/<card> on SteamOS and most desktops; /run/media/<card> elsewhere.
-                        var children = Directory.EnumerateDirectories(level).ToArray();
-                        // /run/media/<user>/<card> (SteamOS 3.5+, desktops) or /run/media/<card> (older SteamOS): only a user folder holds cards.
-                        var user = Environment.GetEnvironmentVariable("USER");
-                        foreach (var card in user is { Length: > 0 } && Path.GetFileName(level) == user ? children : [level])
-                            Add("", card, S.Format("external.place_card", ("name", Path.GetFileName(card))));
-                    }
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-        }
-        foreach (var drive in DriveInfo.GetDrives())
-            try { if (drive.DriveType is DriveType.Fixed or DriveType.Removable && drive.IsReady && !(WineHost.Detected && drive.Name.StartsWith("Z", StringComparison.OrdinalIgnoreCase))) Add("", drive.RootDirectory.FullName, S.Format("external.place_drive", ("name", drive.Name.TrimEnd('\\')))); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            Start = row.Picked,
+            FileFilter = row.PicksFolder ? f => f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) : null,
+        });
     }
 }

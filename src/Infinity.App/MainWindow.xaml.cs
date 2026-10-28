@@ -416,28 +416,16 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private async void OnSystemPickExternal(object sender, RoutedEventArgs e)
-    {
-        var row = (ExternalSourceRow)((FrameworkElement)sender).DataContext;
-        string? picked = null;
-        // "either" sources offer both dialogs: the link's Tag says which one the player chose.
-        if (((FrameworkElement)sender).Tag as string == "folder" && row.PicksFolder)
-        {
-            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = row.Label };
-            if (dialog.ShowDialog(this) == true) picked = dialog.FolderName;
-        }
-        else
-        {
-            var dialog = new Microsoft.Win32.OpenFileDialog { Title = row.Label, CheckFileExists = true };
-            if (dialog.ShowDialog(this) == true) picked = dialog.FileName;
-        }
-        if (picked is not null) await _vm.PickWithSystemDialogAsync(row, picked);
-    }
-
     private void OnBrowsePlace(object sender, RoutedEventArgs e) { _vm.Browse(((BrowserPlace)((FrameworkElement)sender).DataContext).Path); FocusBrowser(); }
     private void OnBrowseDraft(object sender, RoutedEventArgs e) { _vm.BrowseDraft(); FocusBrowser(); }
     private void OnBrowseUp(object sender, RoutedEventArgs e) { _vm.BrowseUp(); FocusBrowser(); }
     private void OnStopBrowsing(object sender, RoutedEventArgs e) => _vm.StopBrowsing();
+    private void OnPickerBackdrop(object sender, System.Windows.Input.MouseButtonEventArgs e) => _vm.StopBrowsing();
+    private void OnPickerPaneKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true; _vm.StopBrowsing();
+    }
     private async void OnPickBrowserFolder(object sender, RoutedEventArgs e) => await _vm.PickBrowserFolderAsync();
     private async void OnBrowserEntry(object sender, RoutedEventArgs e) { await _vm.OpenBrowserEntryAsync((BrowserEntry)((FrameworkElement)sender).DataContext); if (_vm.ShowBrowser) FocusBrowser(); }
 
@@ -556,21 +544,16 @@ public partial class MainWindow : Window
 
     private async void OnRecheckAzimuth(object sender, RoutedEventArgs e) => await _vm.RecheckAzimuthAsync();
 
-    private void OnChooseAzimuth(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = _vm.S["setup.choose_title"] };
-        if (dialog.ShowDialog(this) == true)
-        {
-            _vm.ChooseAzimuthFolder(dialog.FolderName);
-        }
-    }
+    // Owner 2026-10-28: an Azimuth never opened blocks the launcher until it has been run once.
+    private void OnLaunchAzimuthFirstRun(object sender, RoutedEventArgs e) => _vm.LaunchAzimuthForFirstRun();
+    private void OnCheckAzimuthFirstRun(object sender, RoutedEventArgs e) => _vm.CheckAzimuthFirstRunAgain();
+    private void OnLaunchAzimuthDirectly(object sender, RoutedEventArgs e) => _vm.LaunchAzimuthFromConfigure();
+
+    // Owner 2026-10-28: every folder or file is chosen in the launcher's own picker (the right pane), never the Windows dialog.
+    private void OnChooseAzimuth(object sender, RoutedEventArgs e) => _vm.ChooseAzimuthWithPicker();
 
     // Owner 2026-10-27: the Azimuth setup shown before sign-in.
-    private void OnChooseAzimuthFirst(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = _vm.S["setup.choose_title"] };
-        if (dialog.ShowDialog(this) == true) _vm.ChooseAzimuthFirst(dialog.FolderName);
-    }
+    private void OnChooseAzimuthFirst(object sender, RoutedEventArgs e) => _vm.ChooseAzimuthFirstWithPicker();
 
     private async void OnRecheckAzimuthFirst(object sender, RoutedEventArgs e) => await _vm.RecheckAzimuthFirstAsync();
 
@@ -599,14 +582,7 @@ public partial class MainWindow : Window
         catch (System.Runtime.InteropServices.ExternalException) { _vm.CrashExportResult(false); }
     }
 
-    private void OnSaveCrashReport(object sender, RoutedEventArgs e)
-    {
-        if (_vm.CopyableCrashReport() is not { } report) return;
-        var dialog = new Microsoft.Win32.SaveFileDialog { FileName = "infinity-crash-report.json", DefaultExt = ".json", Filter = "JSON (*.json)|*.json", OverwritePrompt = true };
-        if (dialog.ShowDialog(this) != true) return;
-        try { File.WriteAllText(dialog.FileName, report, new System.Text.UTF8Encoding(false)); _vm.CrashExportResult(true); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { _vm.CrashExportResult(false); }
-    }
+    private void OnSaveCrashReport(object sender, RoutedEventArgs e) => _vm.SaveCrashReportWithPicker();
 
     private void OnPrivateCrashSupport(object sender, RoutedEventArgs e)
     {
@@ -615,34 +591,14 @@ public partial class MainWindow : Window
 
     private async void OnCheckIntegrity(object sender, RoutedEventArgs e) => await _vm.CheckIntegrityAsync();
     private void OnCancelIntegrity(object sender, RoutedEventArgs e) => _vm.CancelIntegrityCheck();
-    private async void OnChooseContent(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = _vm.S["integrity.choose_title"] };
-        if (dialog.ShowDialog(this) == true) await _vm.ChooseContentFolderAsync(dialog.FolderName);
-    }
+    private void OnChooseContent(object sender, RoutedEventArgs e) => _vm.ChooseContentWithPicker();
     private void OnCopyIntegrity(object sender, RoutedEventArgs e)
     {
         try { Clipboard.SetText(_vm.CopyableIntegrityReport()); _vm.IntegrityCopyResult(true); }
         catch (System.Runtime.InteropServices.ExternalException) { _vm.IntegrityCopyResult(false); }
     }
 
-    private async void OnSaveCrashDump(object sender, RoutedEventArgs e)
-    {
-        if (_vm.BeginManualCrashDumpExport() is not { } operation) return;
-        bool? success = null;
-        try
-        {
-            var dialog = new Microsoft.Win32.SaveFileDialog { FileName = "infinity-private-crash.dmp", DefaultExt = ".dmp", Filter = "Memory dump (*.dmp)|*.dmp", OverwritePrompt = true };
-            if (dialog.ShowDialog(this) != true || !_vm.IsCurrentCrashExport(operation)) return;
-            success = false;
-            var bytes = await _vm.ReadCrashDumpForManualExportAsync(operation);
-            if (bytes is null) return;
-            await File.WriteAllBytesAsync(dialog.FileName, bytes, operation.Stop.Token);
-            success = true;
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or OperationCanceledException) { success = false; }
-        finally { _vm.FinishManualCrashDumpExport(operation, success); }
-    }
+    private void OnSaveCrashDump(object sender, RoutedEventArgs e) => _vm.SaveCrashDumpWithPicker();
 
     // Only the catalog's https links are opened (the mods' official repositories).
     private void OnOpenLink(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)

@@ -266,6 +266,7 @@ public sealed partial class ShellViewModel
     /// <summary>The package next to the launcher (<c>hook\</c>, or <c>FI_HOOK_PACKAGE</c>) and the installed hook.</summary>
     internal void RefreshHook()
     {
+        RefreshAzimuthFirstRun();
         _hookPackageError = null;
         try
         {
