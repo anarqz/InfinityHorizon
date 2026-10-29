@@ -26,6 +26,7 @@ static const struct {
     {AZIMUTH_099, 0x6aceb567u, 0x3b9000u},
     {AZIMUTH_0910, 0x6ad14833u, 0x3d3000u},
     {AZIMUTH_103, 0x6ae0f17au, 0x9d8000u},
+    {AZIMUTH_104, 0x6ae393ebu, 0x8a2000u},
 };
 
 static unsigned host_image_size(AzimuthBuild build) {

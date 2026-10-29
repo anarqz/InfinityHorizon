@@ -160,11 +160,23 @@ static const HostPatchSet tiled_patch_sets_103[] = {
     {0x68cb6e, 0x0a, tiled_original_hash_103, tiled_patched_hash_103, tiled_patches,
      ARRAY_COUNT(tiled_patches)}};
 
+/* 1.0.4: the same bytes again, CreatePlacementTexture2D 0x1f0b20 (+0x24b) and the check 0x55c4d0
+   (+0x1e); the 1.0.3 hashes and patches. */
+static const HostPatchSet placement_patch_set_104 = {
+    0x1f0d6b, 0x13, placement_original_hash_103, placement_patched_hash_103,
+    placement_patches_103, ARRAY_COUNT(placement_patches_103)};
+static const HostPatchSet tiled_patch_sets_104[] = {
+    {0x55c4ee, 0x0a, tiled_original_hash_103, tiled_patched_hash_103, tiled_patches,
+     ARRAY_COUNT(tiled_patches)}};
+
 static int apply_placement(unsigned char *base) {
     AzimuthBuild build = azimuth_host_build(base);
-    if (build == AZIMUTH_103) {
-        int writes = azimuth_patch_host_codes(base, tiled_patch_sets_103, ARRAY_COUNT(tiled_patch_sets_103));
-        return writes > 0 ? azimuth_patch_host_code(base, &placement_patch_set_103) : writes;
+    if (build == AZIMUTH_103 || build == AZIMUTH_104) {
+        const HostPatchSet *tiled = build == AZIMUTH_103 ? tiled_patch_sets_103 : tiled_patch_sets_104;
+        int writes = azimuth_patch_host_codes(base, tiled, ARRAY_COUNT(tiled_patch_sets_103));
+        return writes > 0 ? azimuth_patch_host_code(base, build == AZIMUTH_103 ? &placement_patch_set_103
+                                                                               : &placement_patch_set_104)
+                          : writes;
     }
     if (build != AZIMUTH_099 && build != AZIMUTH_0910) {
         return 0;
@@ -193,9 +205,10 @@ static int apply_livery(unsigned char *base) {
 void azimuth_apply_livery_compatibility(void) {
     int result = apply_livery((unsigned char *)GetModuleHandleW(NULL));
     AzimuthBuild host = azimuth_host_build((const unsigned char *)GetModuleHandleW(NULL));
-    if (host == AZIMUTH_0910 || host == AZIMUTH_103) {
-        log_append(host == AZIMUTH_103 ? "AZIMUTH: 2x MSAA liveries are handled by Azimuth 1.0.3 itself.\r\n"
-                                       : "AZIMUTH: 2x MSAA liveries are handled by Azimuth 0.9.10 itself.\r\n");
+    if (host == AZIMUTH_0910 || host == AZIMUTH_103 || host == AZIMUTH_104) {
+        log_append(host == AZIMUTH_104   ? "AZIMUTH: 2x MSAA liveries are handled by Azimuth 1.0.4 itself.\r\n"
+                   : host == AZIMUTH_103 ? "AZIMUTH: 2x MSAA liveries are handled by Azimuth 1.0.3 itself.\r\n"
+                                         : "AZIMUTH: 2x MSAA liveries are handled by Azimuth 0.9.10 itself.\r\n");
     } else if (result > 0) {
         log_append("AZIMUTH: 2x MSAA livery fragment-mask compatibility applied; "
                    "texture resolution and sample count preserved.\r\n");
@@ -212,5 +225,5 @@ void azimuth_apply_livery_compatibility(void) {
                : result < 0 ? "AZIMUTH: placement texture patch could not change memory "
                               "protection; host code left unchanged.\r\n"
                             : "AZIMUTH: placement texture patch skipped; not a 0.9.9, "
-                              "0.9.10 or 1.0.3 build with the inspected bytes.\r\n");
+                              "0.9.10, 1.0.3 or 1.0.4 build with the inspected bytes.\r\n");
 }
