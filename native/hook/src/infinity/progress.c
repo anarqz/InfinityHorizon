@@ -129,11 +129,13 @@ int azimuth_progress_hold(const wchar_t *headers, const void *body, size_t size)
     if (azimuth_cloud_stopped()) {
         return 1;
     }
-    /* a Noob profile has no progress gates (its own save, as it is) */
-    if (azimuth_account_noob()) {
+    if (!azimuth_progress_read(body, size, now)) {
         return 0;
     }
-    if (!azimuth_progress_read(body, size, now)) {
+    /* a Noob profile has no progress gates (its own save, as it is); its sync still goes out, so
+       the launcher's presence gets its level and credits (CR-L41.3) */
+    if (azimuth_account_noob()) {
+        fi_launch_progress(now[1], now[0]);
         return 0;
     }
     AcquireSRWLockExclusive(&pg_lock);
@@ -155,6 +157,10 @@ int azimuth_progress_hold(const wchar_t *headers, const void *body, size_t size)
         log_append(" grew beyond what play earns since the last one sent).\r\n");
         /* fh2online.58: only this sync is held back; the session and its save go on (the server
            measures the save's own progress), and no restore is asked at the next start */
+    } else {
+        /* CR-L41.3: the sync goes out; the presence shows its XP level and credits
+           (playerRaceHistory[0].level, playerHistory[0].credits) */
+        fi_launch_progress(now[1], now[0]);
     }
     return over != 0;
 }

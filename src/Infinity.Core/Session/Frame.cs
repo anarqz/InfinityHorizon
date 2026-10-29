@@ -272,6 +272,31 @@ public abstract record Frame
         }
     }
 
+    /// <summary>
+    /// hook → launcher (0x21, CR-L41.3): <c>{u32 LE level, u64 LE credits}</c>, the XP level
+    /// (<c>playerRaceHistory[0].level</c>) and credits (<c>playerHistory[0].credits</c>) of an <c>UpdateAll</c> the hook let
+    /// through, sent only when they changed. For the Discord presence; never an authority on progress.
+    /// </summary>
+    public sealed record Progress(uint Level, ulong Credits) : Frame
+    {
+        public override byte Type => 0x21;
+    }
+
+    /// <summary>
+    /// hook → launcher (0x22, CR-L41.3): <c>{i32 LE carKey}</c>, the local player's current car when it changed: the raw i32 at
+    /// current+0x40, always &gt; 0, <c>Data_Car.Id × 1000</c> (<see cref="Infinity.Core.Process.CarNames"/> maps it to the name).
+    /// For the Discord presence.
+    /// </summary>
+    public sealed record Car(int CarKey) : Frame
+    {
+        public override byte Type => 0x22;
+
+        internal static void Validate(int key)
+        {
+            if (key <= 0) throw new ProtocolException("Invalid car key");
+        }
+    }
+
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
     {
@@ -424,6 +449,11 @@ public abstract record Frame
             case FreeRoamReady ready:
                 FreeRoamReady.Validate(ready.Result);
                 w.U32(ready.Nonce); w.U8(ready.Result); break;
+            case Progress progress:
+                w.U32(progress.Level); w.U64(progress.Credits); break;
+            case Car car:
+                Car.Validate(car.CarKey);
+                w.U32(unchecked((uint)car.CarKey)); break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -520,6 +550,8 @@ public abstract record Frame
             0x1e => new RelayFallback(new Guid(r.Take(16), bigEndian: true), r.U8()),
             0x1f => new FreeRoamNeed(r.U32()),
             0x20 => new FreeRoamReady(r.U32(), r.U8()),
+            0x21 => new Progress(r.U32(), r.U64()),
+            0x22 => new Car(unchecked((int)r.U32())),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
@@ -529,6 +561,7 @@ public abstract record Frame
         if (frame is RelayLeg leg) RelayLeg.Validate(leg.Payload);
         if (frame is RelayFallback fallback) RelayFallback.Validate(fallback.Grant, fallback.State);
         if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
+        if (frame is Car car) Car.Validate(car.CarKey);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
         if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
         if(frame is RelayCandidates candidates)Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);

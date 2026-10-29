@@ -1152,6 +1152,26 @@
                         Click="OnOpenCareerRestore" IsEnabled="{Binding CanRestoreCareer}" />
                 <TextBlock Text="{Binding CareerRestoreNote}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityFaint}" Margin="0,2,0,0" />
               </StackPanel>
+              <!-- CR-L41.2: Join from link (the Join lobby button of a Discord card; the path on Steam Deck). It only fills the field. -->
+              <StackPanel Margin="0,22,0,0" MaxWidth="560" HorizontalAlignment="Left" Visibility="{Binding ShowJoinFromLink, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding S[join.title]}" FontWeight="Bold" />
+                <TextBlock Text="{Binding S[join.hint]}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,6" Foreground="{StaticResource InfinityMuted}" />
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Content="{Binding S[join.button]}" Click="OnJoinFromLink" IsEnabled="{Binding CanJoinFromLink}" Margin="8,0,0,0" Padding="12,6" />
+                  <TextBox Text="{Binding JoinLinkDraft, UpdateSourceTrigger=PropertyChanged}" Padding="10,6" KeyDown="OnJoinLinkKey"
+                           AutomationProperties.Name="{Binding S[join.title]}" />
+                </DockPanel>
+                <TextBlock Text="{Binding S[join.invalid]}" FontSize="12" Margin="0,4,0,0" Foreground="{StaticResource InfinityGold}"
+                           Visibility="{Binding JoinLinkInvalid, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding JoinLinkStatus}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" AutomationProperties.LiveSetting="Polite"
+                           Visibility="{Binding HasJoinLinkStatus, Converter={StaticResource Visible}}" />
+                <WrapPanel Margin="0,6,0,0">
+                  <Button Content="{Binding JoinModeSwitchLabel}" Click="OnSwitchJoinMode" IsEnabled="{Binding CanSwitchJoinMode}" Padding="10,4" Margin="0,0,8,6"
+                          Visibility="{Binding ShowJoinModeSwitch, Converter={StaticResource Visible}}" />
+                  <Button Content="{Binding S[join.cancel]}" Style="{StaticResource LinkButton}" Click="OnCancelPendingJoin" Margin="-6,0,0,6"
+                          Visibility="{Binding HasPendingJoin, Converter={StaticResource Visible}}" />
+                </WrapPanel>
+              </StackPanel>
             </StackPanel>
             <ContentControl x:Name="NewsColumnBelow" Grid.Row="1" MaxWidth="600" HorizontalAlignment="Left" Margin="0,24,0,8" Focusable="False"
                             Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" Visibility="{Binding NewsBelow, Converter={StaticResource Visible}}" />
@@ -1374,6 +1394,25 @@
                   <WrapPanel Margin="0,10,0,0">
                     <Button Content="{Binding S[catalog.use_custom]}" Click="OnUseCustomCatalog" IsEnabled="{Binding CanUseCustomCatalog}" Margin="0,0,8,8" />
                     <Button Content="{Binding S[catalog.use_official]}" Click="OnUseOfficialCatalog" IsEnabled="{Binding CanUseOfficialCatalog}" Margin="0,0,8,8" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- OD-136 (CR-L41.1): Settings → Discord, per install; all on by default. -->
+              <Border x:Name="DiscordPresenceCard" Style="{StaticResource Card}" Margin="0,18,0,0">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[presence.settings_title]}" FontWeight="Bold" FontSize="18" Margin="0,0,0,8" />
+                  <TextBlock Text="{Binding S[presence.settings_hint]}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,10" Foreground="{StaticResource InfinityMuted}" />
+                  <CheckBox Content="{Binding S[presence.enabled]}" IsChecked="{Binding PresenceEnabled}" FontWeight="Bold" Margin="0,0,0,8" />
+                  <WrapPanel Margin="24,0,0,0" IsEnabled="{Binding PresenceEnabled}">
+                    <CheckBox Content="{Binding S[presence.toggle_club]}" IsChecked="{Binding PresenceClub}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_mode]}" IsChecked="{Binding PresenceMode}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_name]}" IsChecked="{Binding PresenceName}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_level]}" IsChecked="{Binding PresenceLevel}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_credits]}" IsChecked="{Binding PresenceCredits}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_car]}" IsChecked="{Binding PresenceCar}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_lobby]}" IsChecked="{Binding PresenceLobby}" Margin="0,0,18,6" />
+                    <CheckBox Content="{Binding S[presence.toggle_join]}" IsChecked="{Binding PresenceJoin}" Margin="0,0,18,6" />
                   </WrapPanel>
                 </StackPanel>
               </Border>

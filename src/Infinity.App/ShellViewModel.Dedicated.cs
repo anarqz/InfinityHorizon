@@ -391,6 +391,7 @@ public sealed partial class ShellViewModel
                 if (LauncherLock.TryAcquire(_stateDirectory, started, out var acquired, out var holder))
                 {
                     _instanceLock = acquired;
+                    StartLinkListener(); // CR-L41.2: a second launch hands its join link here
                     return true;
                 }
                 if (attempt + 1 >= attempts)
@@ -410,6 +411,8 @@ public sealed partial class ShellViewModel
 
     private void ReleaseInstanceLock()
     {
+        _handoff?.Dispose();
+        _handoff = null;
         _instanceLock?.Dispose();
         _instanceLock = null;
     }

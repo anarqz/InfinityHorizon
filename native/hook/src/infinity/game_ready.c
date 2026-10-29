@@ -101,6 +101,30 @@ int fi_game_ready(unsigned *generation) {
     return ready;
 }
 
+/* CR-L41.3: the current car for the launcher's Discord presence (re/car-name.md, T10). The current
+   car object sits at record+0xae8 (the object 0xced1e0 returns; its +0x260 is the garage id read
+   above): +0x40 is the car key (i32, sent raw; Data_Car.Id x 1000, verified live on two cars; the
+   launcher maps it). Re-read when the garage id or the record changes (or the last read gave no
+   key); a plain read through the safe reader, no game calls, no file I/O; 0 when it does not read.
+   The main game thread is the only caller. */
+#define GR_CURRENT_AT 0xae8u
+#define GR_KEY_AT 0x40u
+static int gr_read_car_key(const unsigned char *record) {
+    int key = 0;
+    return record && memory_read(record + GR_CURRENT_AT + GR_KEY_AT, &key, 4) ? key : 0;
+}
+static const void *gr_car_record;
+static unsigned gr_car_garage;
+static int gr_car_key;
+static int gr_current_car_key(const unsigned char *record, unsigned garage_id) {
+    if (record != gr_car_record || garage_id != gr_car_garage || gr_car_key <= 0) {
+        gr_car_record = record;
+        gr_car_garage = garage_id;
+        gr_car_key = gr_read_car_key(record);
+    }
+    return gr_car_key;
+}
+
 static unsigned char gr_update(void *self, float dt) {
     unsigned char result = gr_original(self, dt);
     unsigned long long now = GetTickCount64();
@@ -109,6 +133,7 @@ static unsigned char gr_update(void *self, float dt) {
         unsigned garage_id = 0;
         int ready = gr_sample(&player, &record, &car, &garage_id);
         gr_observe(ready, player, record, car, garage_id, now);
+        if (ready && fi_launch_protocol()) fi_launch_car(gr_current_car_key(record, garage_id), now);
     }
     return result;
 }
