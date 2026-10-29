@@ -1179,6 +1179,7 @@
   "presence.toggle_car": "Carro",
   "presence.toggle_lobby": "Lobby e jogadores",
   "presence.toggle_join": "Botão de entrar",
+  "presence.toggle_livery": "Mostrar minha pintura",
   "presence.duplicate_mod": "O mod Discord RPC está instalado, e o Infinity agora mostra seu status no Discord sozinho: você pode desinstalar esse mod em Mods para o status não aparecer duas vezes.",
   "join.title": "Entrar por link",
   "join.hint": "Cole um link de Entrar no lobby do Discord, ou o id de um lobby.",
