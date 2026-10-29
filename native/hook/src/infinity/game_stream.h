@@ -30,6 +30,10 @@ int fi_game_stream_read_all(void *stream, unsigned char *buffer, unsigned size);
 /* A new CDynamicMemoryStream with `data` (one reference, positioned at 0), built as
    game+0x11e48e0 builds one; 0 on any failure. */
 void *fi_game_stream_new(const unsigned char *data, unsigned size);
+/* 1 when `object` is an IOSys::CDynamicMemoryStream (its vtable is the checked one; after install). */
+int fi_game_stream_is_memory(void *object);
+/* The first `n` bytes of `stream` into `out`, the stream left at 0: 1 when all came. */
+int fi_game_stream_read_head(void *stream, unsigned char *out, unsigned n);
 /* Release one reference (vtable 0x18). */
 void fi_game_stream_release(void *object);
 
