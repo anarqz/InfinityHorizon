@@ -50,13 +50,121 @@ public interface ISaveApi
     Task<SaveApiResult<CommitResponse>> CommitAsync(string access, string xuid, SaveCommitRequest commit, CancellationToken cancellation = default);
 }
 
+/// <summary>What an upload dry run decided (OD-133, CR-S71).</summary>
+public enum UploadDryRunVerdict
+{
+    /// <summary>200 <c>pass: true</c>: the commit would be taken now.</summary>
+    Pass,
+
+    /// <summary>200 <c>pass: false</c>: the commit would be refused for this career (<c>SAVES.GATE_REFUSED</c> and its rule, unreadable, invalid).</summary>
+    Refused,
+
+    /// <summary>A server before CR-S71 (404 without the contract's body, 405): there is no dry run there.</summary>
+    Unsupported,
+
+    /// <summary>No verdict: the check could not run (429 with <c>Retry-After</c>, 412 the head moved, 403, 503…); try again later.</summary>
+    Error,
+}
+
+/// <summary>
+/// OD-133: the server's answer to an upload dry run (SAVES_API.md §4.11): its verdict, the code the commit would answer, the gate's
+/// <see cref="Rule"/> and reason codes, the commit's message, <c>Retry-After</c> and, on a 412, the head the server holds.
+/// </summary>
+public sealed record UploadDryRunResult(UploadDryRunVerdict Verdict, string? Code, string? Rule, IReadOnlyList<string> Reasons, string? Message = null,
+    TimeSpan? RetryAfter = null, ulong? Head = null)
+{
+    public bool Passes => Verdict == UploadDryRunVerdict.Pass;
+
+    public static UploadDryRunResult Pass() => new(UploadDryRunVerdict.Pass, null, null, []);
+
+    public static UploadDryRunResult Refused(string code, string? rule, params string[] reasons) => new(UploadDryRunVerdict.Refused, code, rule, reasons);
+
+    public static UploadDryRunResult Unsupported() => new(UploadDryRunVerdict.Unsupported, null, null, []);
+
+    public static UploadDryRunResult Error(string code, TimeSpan? retryAfter = null, ulong? head = null) =>
+        new(UploadDryRunVerdict.Error, code, null, [], RetryAfter: retryAfter, Head: head);
+
+    /// <summary>The answer of <c>POST .../save/upload-check</c> read as a verdict (a 2xx body, or the commit's error body).</summary>
+    public static UploadDryRunResult From(SaveApiResult<UploadCheck> answer)
+    {
+        ArgumentNullException.ThrowIfNull(answer);
+        if (answer is { Ok: true, Value: { } check })
+        {
+            return check.Pass ? Pass()
+                : new UploadDryRunResult(UploadDryRunVerdict.Refused, check.Code ?? ErrorCodes.SavesGateRefused, check.Rule, check.Reasons ?? [], check.Reason);
+        }
+        var error = answer.Error!;
+        // an older server has no such route: 405, or a 404 that is not the contract's SAVES.PROFILE_NOT_FOUND
+        if (answer.Status == HttpStatusCode.MethodNotAllowed || (answer.Status == HttpStatusCode.NotFound && error.Code != ErrorCodes.SavesProfileNotFound))
+        {
+            return Unsupported();
+        }
+        ulong? head = error.Details is { ValueKind: JsonValueKind.Object } d && d.TryGetProperty("head", out var h) && h.TryGetUInt64(out var n) ? n : null;
+        return Error(error.Code, answer.RetryAfter, head);
+    }
+}
+
+/// <summary>
+/// OD-133: "would this upload pass?" asked before a career restore changes anything on this PC (SAVES_API.md §4.11, CR-S71). A separate
+/// seam from <see cref="ISaveApi"/> so the save logic's fakes stay as they are. It takes exactly the <see cref="SaveCommitRequest"/> the
+/// real <see cref="ISaveApi.CommitAsync"/> would send (built by the same <c>CloudSaves.CommitRequest</c>, without the lease), so the
+/// check and the commit cannot diverge.
+/// </summary>
+public interface ISaveUploadDryRun
+{
+    bool SupportsUploadDryRun { get; }
+
+    Task<UploadDryRunResult> DryRunUploadAsync(string access, string xuid, SaveCommitRequest commit, CancellationToken cancellation = default);
+}
+
 /// <summary>
 /// HTTP client of SAVES_API.md §4's <c>/launcher/v1/profiles/{xuid}/save*</c> routes, served by the
 /// saves deployable (<c>/launcher/v1/info</c> <c>services.saves</c>; fi-protocol <c>routes::launcher::SAVE*</c>).
 /// Same origin rules and <c>X-Fi-Client</c> as <see cref="ApiClient"/>; holds no tokens.
 /// </summary>
-public sealed class SavesApiClient : ISaveApi
+public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
 {
+    /// <summary>CR-S71: the client speaks the upload dry run; a server without it answers 404/405 (<see cref="UploadDryRunVerdict.Unsupported"/>).</summary>
+    public bool SupportsUploadDryRun => true;
+
+    /// <summary>
+    /// <c>POST .../save/upload-check</c> (SAVES_API.md §4.11, CR-S71; fi-protocol <c>routes::launcher::SAVE_UPLOAD_CHECK</c>): the
+    /// commit's own headers and body (<see cref="CommitHeaders"/>: <c>If-Match</c>, <c>X-Fi-Commit-Kind</c>, <c>Repr-Digest</c>,
+    /// <c>X-Fi-Content-Sha256</c>, the bundle as <c>application/x-fh2save1</c>) without the lease or <c>Idempotency-Key</c>. Nothing is
+    /// stored; at most 10 an hour per account (429 <c>SAVES.RATE_LIMITED</c>, <c>Retry-After</c>).
+    /// </summary>
+    public async Task<UploadDryRunResult> DryRunUploadAsync(string access, string xuid, SaveCommitRequest commit, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        using var request = Request(HttpMethod.Post, Base(xuid) + "/upload-check", access);
+        CommitHeaders(request, commit, withLease: false);
+        using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
+        return UploadDryRunResult.From(await Json<UploadCheck>(response, cancellation).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// The headers and body of a commit (<c>PUT .../save</c>, §4.3) and of its dry run (§4.11), set in one place. <paramref name="withLease"/>
+    /// false (the dry run) leaves out <c>Idempotency-Key</c>, <c>X-Fi-Session-Id</c>, <c>X-Fi-Fence</c> and <c>X-Fi-Seed-Source</c>.
+    /// </summary>
+    private static void CommitHeaders(HttpRequestMessage request, SaveCommitRequest commit, bool withLease)
+    {
+        request.Headers.TryAddWithoutValidation("If-Match", string.Create(CultureInfo.InvariantCulture, $"\"{commit.Expected}\""));
+        if (withLease)
+        {
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", commit.CommitId);
+            request.Headers.TryAddWithoutValidation("X-Fi-Session-Id", commit.SessionId);
+            request.Headers.TryAddWithoutValidation("X-Fi-Fence", commit.FenceToken.ToString(CultureInfo.InvariantCulture));
+        }
+        request.Headers.TryAddWithoutValidation("X-Fi-Commit-Kind", commit.Kind);
+        request.Headers.TryAddWithoutValidation("Repr-Digest", ReprDigest(commit.Bundle));
+        request.Headers.TryAddWithoutValidation("X-Fi-Content-Sha256", commit.ContentSha256);
+        if (withLease && commit.SeedSource is { } source)
+        {
+            request.Headers.TryAddWithoutValidation(SeedSourceHeader, source);
+        }
+        request.Content = new ByteArrayContent(commit.Bundle);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(Infinity.Core.Saves.Fh2Bundle.MediaType);
+    }
     private readonly HttpClient _http;
     private readonly string _client;
 
@@ -126,19 +234,7 @@ public sealed class SavesApiClient : ISaveApi
     {
         ArgumentNullException.ThrowIfNull(commit);
         using var request = Request(HttpMethod.Put, Base(xuid), access);
-        request.Headers.TryAddWithoutValidation("If-Match", string.Create(CultureInfo.InvariantCulture, $"\"{commit.Expected}\""));
-        request.Headers.TryAddWithoutValidation("Idempotency-Key", commit.CommitId);
-        request.Headers.TryAddWithoutValidation("X-Fi-Session-Id", commit.SessionId);
-        request.Headers.TryAddWithoutValidation("X-Fi-Fence", commit.FenceToken.ToString(CultureInfo.InvariantCulture));
-        request.Headers.TryAddWithoutValidation("X-Fi-Commit-Kind", commit.Kind);
-        request.Headers.TryAddWithoutValidation("Repr-Digest", ReprDigest(commit.Bundle));
-        request.Headers.TryAddWithoutValidation("X-Fi-Content-Sha256", commit.ContentSha256);
-        if (commit.SeedSource is { } source)
-        {
-            request.Headers.TryAddWithoutValidation(SeedSourceHeader, source);
-        }
-        request.Content = new ByteArrayContent(commit.Bundle);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue(Infinity.Core.Saves.Fh2Bundle.MediaType);
+        CommitHeaders(request, commit, withLease: true);
         using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
         return await Json<CommitResponse>(response, cancellation).ConfigureAwait(false);
     }

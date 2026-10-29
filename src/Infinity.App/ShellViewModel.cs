@@ -430,6 +430,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _pending = null;
         _saveTarget = null;
         SaveChoices.Clear();
+        CloseCareerRestore(); // OD-133
         Games.Clear();
         Profiles.Clear();
         Gate = _gate.SignOut();

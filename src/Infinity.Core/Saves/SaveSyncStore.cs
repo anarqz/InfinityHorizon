@@ -8,6 +8,8 @@ namespace Infinity.Core.Saves;
 /// A commit not confirmed yet: every retry resends exactly <see cref="BundleFile"/>'s bytes under
 /// <see cref="CommitId"/> (the <c>Idempotency-Key</c>), even after Azimuth pruned the folder. <see cref="SeedSource"/>: the source
 /// profile's decimal XUID of a <c>seed_from_profile</c> commit (CR-S52, <c>X-Fi-Seed-Source</c>); null for every other kind.
+/// <see cref="Restore"/> (OD-133): set on a restored career's upload: the <c>before-restore-*</c> folder name holding this PC's save from
+/// before the restore ("" when there was none), put back if the commit is refused; null for every other upload.
 /// </summary>
 public sealed record PendingUpload(
     string CommitId,
@@ -17,10 +19,34 @@ public sealed record PendingUpload(
     string Content,
     string BundleFile,
     string BundleSha256,
-    string? SeedSource = null);
+    string? SeedSource = null,
+    string? Restore = null);
 
-/// <summary>One profile's sync state, keyed by the server realm (<c>/info</c> <c>realm</c>) and the XUID.</summary>
-public sealed record ProfileSyncState(string Realm, ulong Xuid, SyncMark? Mark, PendingUpload? PendingUpload);
+/// <summary>
+/// OD-133: the fresh start this PC set up for the profile's cloud line (CR-S51), at most once per line: when (UTC, ISO 8601) and the
+/// <c>fi-launcher-archive\User_x</c> folder the career on this PC was moved to (null when there was none to move). Once recorded, later
+/// launches with the line still at revision 0 keep the profile's current career and let its <c>fresh_start</c> upload proceed.
+/// <see cref="RefusedRule"/>/<see cref="RefusedAtUtc"/>: the server's gate refused the line's first save (the career is past its start):
+/// the next fresh start asks the player instead of keeping or archiving silently.
+/// </summary>
+public sealed record FreshStartRecord(string AtUtc, string? Archive, string? RefusedRule = null, string? RefusedAtUtc = null);
+
+/// <summary>
+/// One profile's sync state, keyed by the server realm (<c>/info</c> <c>realm</c>) and the XUID. A line belongs to one XUID for good (a
+/// deleted profile's XUID is retired, CR-S61), so realm + XUID is also the line's key: <see cref="FreshStart"/> is per line.
+/// </summary>
+public sealed record ProfileSyncState(string Realm, ulong Xuid, SyncMark? Mark, PendingUpload? PendingUpload, FreshStartRecord? FreshStart = null,
+    RestoreRecord? Restore = null);
+
+/// <summary>
+/// OD-133: a career restore recorded for the cloud and not settled yet: the <c>before-restore-*</c> folder (""/none), the head it goes on
+/// top of and its content digest. Kept until the commit is confirmed (the mark moves to <see cref="Expected"/> + 1 with
+/// <see cref="Content"/>), a conflict hands it to the conflict screen, the undo succeeds, or the player keeps the restored career.
+/// <see cref="OwedReason"/> set: the restore will never be committed and this PC's save from before it is owed back; until then the
+/// profile does not play. <see cref="UndoFailed"/>: the last attempt could not pay it (no usable backup, no cloud head to install).
+/// This record is the only one: a lost sync state forgets the debt (nothing is lost; the restored career stays this PC's save).
+/// </summary>
+public sealed record RestoreRecord(string Backup, ulong Expected, string Content, string? OwedReason = null, string? OwedAtUtc = null, bool UndoFailed = false);
 
 /// <summary><c>sync-state.json</c> (saves.rs <c>SyncStateFile</c>, version 2).</summary>
 public sealed record SyncStateFile(uint Version, IReadOnlyList<ProfileSyncState> Profiles);
@@ -100,7 +126,7 @@ public sealed class SaveSyncStore
     /// (or set aside) first, so one key never names two different bundles.
     /// </summary>
     public PendingUpload BeginUpload(string realm, ulong xuid, string commitId, ulong expected, string kind, ulong localRevision, string content, byte[] bundle,
-        string? seedSource = null)
+        string? seedSource = null, string? restore = null)
     {
         ArgumentNullException.ThrowIfNull(commitId);
         ArgumentNullException.ThrowIfNull(bundle);
@@ -109,7 +135,7 @@ public sealed class SaveSyncStore
             throw new ArgumentException("a commit id is a lower-case UUID", nameof(commitId));
         }
         var relative = $"{PendingDir}/{commitId}.fh2save";
-        var pending = new PendingUpload(commitId, expected, kind, localRevision, content, relative, Convert.ToHexStringLower(SHA256.HashData(bundle)), seedSource);
+        var pending = new PendingUpload(commitId, expected, kind, localRevision, content, relative, Convert.ToHexStringLower(SHA256.HashData(bundle)), seedSource, restore);
         lock (_lock)
         {
             if (Get(realm, xuid)?.PendingUpload is { } existing)

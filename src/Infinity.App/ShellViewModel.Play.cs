@@ -493,6 +493,7 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Error err when err.Message.StartsWith("save: ", StringComparison.Ordinal):
                 SetStatus(Infinity.Core.Overlay.OverlayNotices.SaveBlocked(S, err.Message[6..]).Text.Replace("\n", " · ", StringComparison.Ordinal));
                 ObserveSaveBlocked(err.Message[6..]); // CR-S52: a seed waiting on the day's checks may be given up for a new career
+                ObserveRestoreBlocked(); // OD-133: a restored career waiting for the cloud may be set aside
                 break;
             case SupervisorEvent.NoticeSent notice:
                 Message = notice.Text;
