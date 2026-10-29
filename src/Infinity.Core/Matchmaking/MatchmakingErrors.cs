@@ -43,6 +43,9 @@ public static class ConflictReasons
     /// <summary>OD-112: another mod set on an open world, or a request to join with another set.</summary>
     public const string Mods = "mods";
 
+    /// <summary>OD-141 (CR-S76, §2.8): another <c>modes</c> on an open world (a world's modes are fixed once it opens).</summary>
+    public const string Modes = "modes";
+
     /// <summary>CR-S57 §5b: a symmetric host with no trusted relay in its map, or a fallback renew of a grant without one.</summary>
     public const string NoRelay = "no_relay";
 
@@ -53,7 +56,7 @@ public static class ConflictReasons
     public const string RelayBusy = "relay_busy";
 
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        NoRelay, LauncherUpdateRequired, RelayBusy];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

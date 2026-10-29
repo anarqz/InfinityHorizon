@@ -205,8 +205,12 @@ public abstract record UiFrame
         public override UiDirection Direction => UiDirection.ToOverlay;
     }
 
-    /// <summary>0x0B, overlay → launcher: open a world (audience 0 everyone, 1 supporters, 2 friends, 3 private; latency 0 any, 1 &lt; 150, 2 &lt; 100, 3 &lt; 60 ms).</summary>
-    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency) : UiFrame
+    /// <summary>
+    /// 0x0B, overlay → launcher: open a world (audience 0 everyone, 1 supporters, 2 friends, 3 private; latency 0 any,
+    /// 1 &lt; 150, 2 &lt; 100, 3 &lt; 60 ms; <c>AnyMode</c> u8 0 the host's own mode, 1 open to Hardcore and Noob, OD-141).
+    /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode.
+    /// </summary>
+    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false) : UiFrame
     {
         public override byte Type => 0x0B;
 
@@ -232,10 +236,11 @@ public abstract record UiFrame
     /// <summary>
     /// 0x0E, launcher → overlay: the world this profile hosts or holds a seat in (<see cref="UiWorldRole"/>;
     /// <c>None</c>: no world, the other fields empty), its code (host only) and its players. <c>Named</c>
-    /// false: the server gave no roster (only the host is known).
+    /// false: the server gave no roster (only the host is known). <c>AnyMode</c> (OD-141, after the members): the world is
+    /// open to Hardcore and Noob (the header's "Hardcore + Noob" badge).
     /// </summary>
     public sealed record MyWorld(byte Role, string WorldId, string Name, string Host, string Code, byte Audience, byte Players, byte Max,
-        bool Named, IReadOnlyList<MemberRow> Members) : UiFrame
+        bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false) : UiFrame
     {
         public override byte Type => 0x0E;
 
@@ -486,6 +491,7 @@ public abstract record UiFrame
                 w.U8(c.Audience);
                 w.U8(c.MaxPlayers);
                 w.U8(c.Latency);
+                w.Flag(c.AnyMode);
                 break;
             case Hosted h:
                 w.U8(h.Result);
@@ -515,6 +521,7 @@ public abstract record UiFrame
                     w.U8(member.Role);
                     w.U8(member.Friend);
                 }
+                w.Flag(m.AnyMode);
                 break;
             case WorldAction a:
                 w.U8(a.Action);
@@ -555,6 +562,7 @@ public abstract record UiFrame
                     w.Flag(world.FriendHost);
                     w.Flag(row.Modded);
                     w.Flag(row.ModsMatch);
+                    w.Flag(row.AnyMode);
                     w.U8((byte)row.Members.Count);
                     foreach (var member in row.Members)
                     {
@@ -681,7 +689,7 @@ public abstract record UiFrame
             0x08 => DecodeList(ref r),
             0x09 => new JoinWorld(r.Str(), r.Str()),
             0x0A => new JoinResult(r.U8(), r.Str()),
-            0x0B => new CreateWorld(r.Str(), r.U8(), r.U8(), r.U8()),
+            0x0B => DecodeCreate(ref r),
             0x0C => new Hosted(r.U8(), r.Str(), r.Str(), r.Str()),
             0x0D => new MyWorldQuery(),
             0x0E => DecodeMine(ref r),
@@ -736,7 +744,17 @@ public abstract record UiFrame
         {
             members.Add(new MemberRow(r.Str(), r.Str(), r.U8(), r.U8(), r.U8()));
         }
-        return new MyWorld(role, id, name, host, code, audience, players, max, named, members);
+        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, r.Flag("MyWorld.anyMode"));
+    }
+
+    /// <summary>0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode).</summary>
+    private static CreateWorld DecodeCreate(ref WireReader r)
+    {
+        var name = r.Str();
+        var audience = r.U8();
+        var players = r.U8();
+        var latency = r.U8();
+        return new CreateWorld(name, audience, players, latency, !r.IsEmpty && r.Flag("CreateWorld.anyMode"));
     }
 
     private static WorldsListV2 DecodeListV2(ref WireReader r)
@@ -753,6 +771,7 @@ public abstract record UiFrame
             var world = new WorldRow(r.Str(), r.Str(), r.Str(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8(), r.Flag("LobbyRow.friendHost"));
             var rowModded = r.Flag("LobbyRow.modded");
             var match = r.Flag("LobbyRow.modsMatch");
+            var anyMode = r.Flag("LobbyRow.anyMode");
             var memberCount = r.U8();
             Bound(memberCount, MaxLobbyMembers, "lobby members");
             var members = new List<LobbyMember>(memberCount);
@@ -761,7 +780,7 @@ public abstract record UiFrame
             Bound(modCount, MaxLobbyMods, "lobby mods");
             var mods = new List<LobbyMod>(modCount);
             for (var m = 0; m < modCount; ++m) mods.Add(new LobbyMod(r.Str(), r.Str()));
-            var row = new LobbyRow(world, rowModded, match, members, mods);
+            var row = new LobbyRow(world, rowModded, match, members, mods, anyMode);
             row.Validate();
             rows.Add(row);
         }
@@ -850,9 +869,12 @@ public abstract record UiIncoming
 /// One row of <see cref="UiFrame.WorldsListV2"/> (OD-112): the protocol 1 <see cref="WorldRow"/>, whether
 /// the world is modded, whether its mods equal the local set (a false <c>ModsMatch</c> blocks the join in
 /// the overlay), its players (host first unless dedicated, at most 12) and its mods (sorted by id, at most
-/// 32; empty for a vanilla world). Members carry no XUID (OD-61).
+/// 32; empty for a vanilla world). Members carry no XUID (OD-61). <c>AnyMode</c> (OD-141, CR-L43; on the wire after
+/// <c>ModsMatch</c>): the world is open to Hardcore and Noob, the row's "Hardcore + Noob" badge; such a world is never
+/// locked for mode.
 /// </summary>
-public sealed record LobbyRow(WorldRow World, bool Modded, bool ModsMatch, IReadOnlyList<LobbyMember> Members, IReadOnlyList<LobbyMod> Mods)
+public sealed record LobbyRow(WorldRow World, bool Modded, bool ModsMatch, IReadOnlyList<LobbyMember> Members, IReadOnlyList<LobbyMod> Mods,
+    bool AnyMode = false)
 {
     internal void Validate()
     {

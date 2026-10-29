@@ -67,6 +67,27 @@ public static class WorldAudiences
     public static IReadOnlyList<string> All { get; } = [Everyone, Supporters, Friends, Private];
 }
 
+/// <summary>
+/// Who may play in a world (OD-141, CR-S76, MATCHMAKING_API.md §2.8): <c>WorldSettings.modes</c> is the host's own
+/// mode (the default) or <see cref="Any"/>, fixed once the world opens; <c>WorldView.modes</c> says which.
+/// </summary>
+public static class WorldModes
+{
+    public const string Hardcore = "hardcore";
+    public const string Noob = "noob";
+
+    /// <summary>Open to Hardcore and Noob profiles.</summary>
+    public const string Any = "any";
+
+    public static IReadOnlyList<string> All { get; } = [Hardcore, Noob, Any];
+
+    /// <summary>
+    /// The world is open to both modes. An absent or empty <c>modes</c> (a server before CR-S76) reads as the world's
+    /// own <c>mode</c> (CR-L43 (4)), so it is not.
+    /// </summary>
+    public static bool OpenToBoth(WorldView? world) => string.Equals(world?.Modes, Any, StringComparison.Ordinal);
+}
+
 /// <summary>The list's filter, required (OD-58); every ticket may use each of them (OD-129).</summary>
 public static class WorldFilters
 {

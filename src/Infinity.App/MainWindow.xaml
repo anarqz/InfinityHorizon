@@ -289,19 +289,20 @@
                     <RadioButton Content="{Binding S[lobby.latency_100]}" IsChecked="{Binding LobbyLatency100}" GroupName="LobbyLatency" Margin="0,0,14,6" />
                     <RadioButton Content="{Binding S[lobby.latency_60]}" IsChecked="{Binding LobbyLatency60}" GroupName="LobbyLatency" Margin="0,0,14,6" />
                   </WrapPanel>
+                  <!-- OD-141 (CR-L43): the profile's mode or both; fixed while the lobby runs (the form is disabled then) -->
+                  <TextBlock Text="{Binding S[lobby.mode]}" Style="{StaticResource SectionTag}" />
+                  <WrapPanel Margin="0,6,0,2">
+                    <RadioButton Content="{Binding LobbyModesOwnText}" IsChecked="{Binding LobbyModesOwn}" GroupName="LobbyModes" Margin="0,0,14,6" />
+                    <RadioButton Content="{Binding S[lobby.modes_any]}" IsChecked="{Binding LobbyModesAny}" GroupName="LobbyModes" Margin="0,0,14,6" />
+                  </WrapPanel>
+                  <TextBlock Text="{Binding S[lobby.modes_hint]}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,0,0,14" />
                   <Grid Margin="0,0,0,6">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                      <RowDefinition Height="Auto" />
-                      <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
                     <TextBlock Text="{Binding S[lobby.races]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,4" />
                     <TextBlock Grid.Column="1" Text="{Binding LobbyRaces}" FontWeight="Bold" />
-                    <TextBlock Grid.Row="1" Text="{Binding S[lobby.mode]}" Foreground="{StaticResource InfinityMuted}" Margin="0,0,14,0" />
-                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LobbyMode}" FontWeight="Bold" />
                   </Grid>
                 </StackPanel>
                 <Border Style="{StaticResource Card}" Margin="0,14,0,0" Padding="16,12">

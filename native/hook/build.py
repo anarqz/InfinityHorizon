@@ -41,6 +41,8 @@ SOURCES = [
     "src/infinity/tier.c",
     "src/infinity/livery.c",
     "src/infinity/livery_world.c",
+    "src/infinity/game_stream.c",
+    "src/infinity/livery_share.c",
     "src/infinity/game_ready.c",
     "src/infinity/offsets.c",
     "src/infinity/net.c",

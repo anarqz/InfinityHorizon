@@ -66,6 +66,42 @@ __declspec(dllexport) int32_t fi_overlay_start(const FiOverlayHost *host);
  * player's pane. xuid: decimal digits; gamertag: UTF-8, may be NULL. Both NUL-terminated, copied. */
 __declspec(dllexport) void fi_overlay_player_card(const char *xuid, const char *gamertag);
 
+/* Optional exports (T19, OD-138; resolve with GetProcAddress, absent before; docs/launcher/PNG_FIT.md):
+ * fit a picture into a byte budget as a PNG the game reads (the game decodes through WIC as 24/32bpp
+ * BGR(A)/RGBA only, livery-share.md §4d). The input is any picture WIC decodes. Each step scales it
+ * (Fant, aspect kept) to steps_permille[i]/1000 of its sides and writes an 8-bit, non-interlaced PNG
+ * with only IHDR/IDAT/IEND (colour type 6 RGBA with keep_alpha, else 2 RGB), adaptive row filters,
+ * zlib level 9; the first step at most max_bytes wins. Inputs over 4096x4096 pixels (16.8 Mpx) are
+ * refused from their header, before any decode (part of version 1). Any thread: COM is initialised
+ * for the call (an STA thread keeps its apartment). Nothing is allocated for the caller. */
+#define FI_PNG_FIT_VERSION 1u     /* FiPngFit.version this overlay reads (fi_overlay_png_fit_version) */
+#define FI_PNG_FIT_MAX_STEPS 16u
+typedef struct FiPngFit {
+    uint32_t version;        /* FI_PNG_FIT_VERSION; a newer version than the overlay's is refused */
+    uint32_t size;           /* sizeof(FiPngFit): 92 for version 1 */
+    uint32_t max_bytes;      /* the PNG answered is at most this many bytes */
+    uint32_t hard_cap_bytes; /* and never more than this, whatever out_cap (0: out_cap only) */
+    uint32_t keep_alpha;     /* 1: colour type 6 (RGBA); 0: colour type 2 (RGB, alpha dropped) */
+    uint32_t min_width;      /* a step narrower than this ends the search (at least 1) */
+    uint32_t step_count;     /* used entries of steps_permille (1..FI_PNG_FIT_MAX_STEPS) */
+    uint32_t steps_permille[FI_PNG_FIT_MAX_STEPS]; /* 1..1000, tried in order (1000: original size) */
+} FiPngFit;
+
+#define FI_PNG_FIT_OK 0
+#define FI_PNG_FIT_E_ARGS (-1)    /* a null pointer, empty or > 4 MiB input, a bad step list */
+#define FI_PNG_FIT_E_VERSION (-2) /* fit->version newer than this overlay, or size too small */
+#define FI_PNG_FIT_E_COM (-3)     /* COM or the WIC factory unavailable on this thread */
+#define FI_PNG_FIT_E_DECODE (-4)  /* not a picture WIC decodes, a side over 16384, or over 4096x4096 pixels */
+#define FI_PNG_FIT_E_ENCODE (-5)  /* scaling or writing failed */
+#define FI_PNG_FIT_E_TOO_BIG (-6) /* no step came within max_bytes (and the caps) */
+
+/* Returns FI_PNG_FIT_OK with *out_size bytes in `out` and the PNG's sides, or < 0 (outputs 0). */
+__declspec(dllexport) int32_t fi_overlay_fit_png(const void *in, size_t in_size, const FiPngFit *fit, void *out,
+                                                 size_t out_cap, size_t *out_size, uint32_t *out_width,
+                                                 uint32_t *out_height);
+/* The highest FiPngFit.version fi_overlay_fit_png reads. */
+__declspec(dllexport) uint32_t fi_overlay_png_fit_version(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -14,7 +14,8 @@ namespace Infinity.Core.Supervisor;
 /// <param name="Audience">0 everyone, 1 supporters, 2 friends, 3 private (as <see cref="Overlay.UiFrame.CreateWorld"/>).</param>
 /// <param name="MaxPlayers">Guests, 2-12: the dedicated host is not a player.</param>
 /// <param name="Latency">0 any, 1 150 ms, 2 100 ms, 3 60 ms.</param>
-public sealed record DedicatedLobbySettings(string Name, byte Audience, byte MaxPlayers, byte Latency);
+/// <param name="AnyMode">OD-141 (CR-L43): open to Hardcore and Noob; false: the profile's own mode. Fixed while the lobby runs.</param>
+public sealed record DedicatedLobbySettings(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false);
 
 public enum DedicatedPhase
 {
@@ -354,7 +355,7 @@ public sealed class DedicatedHost : IAsyncDisposable
         try
         {
             bridge = _bridges(() => Volatile.Read(ref ticket), activity);
-            var hosted = await bridge.CreateAsync(new Overlay.UiFrame.CreateWorld(settings.Name, settings.Audience, settings.MaxPlayers, settings.Latency),
+            var hosted = await bridge.CreateAsync(new Overlay.UiFrame.CreateWorld(settings.Name, settings.Audience, settings.MaxPlayers, settings.Latency, settings.AnyMode),
                 run.Token).ConfigureAwait(false);
             if (activity.IsPaused) return PausedEnd(activity);
             if (run.IsCancellationRequested) return End.Stopped;

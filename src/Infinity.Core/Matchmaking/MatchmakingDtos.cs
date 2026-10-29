@@ -62,6 +62,12 @@ public record WorldView : World
     /// <summary>One of <see cref="WorldAudiences"/>.</summary>
     public required string Audience { get; init; }
 
+    /// <summary>
+    /// OD-141 (CR-S76, §2.8): one of <see cref="WorldModes"/>, the host's mode or <c>any</c> (Hardcore and Noob).
+    /// Absent from a server before CR-S76 (null here): read it as <see cref="World.Mode"/> (<see cref="WorldModes.OpenToBoth"/>).
+    /// </summary>
+    public string? Modes { get; init; }
+
     public required bool NeedsCode { get; init; }
 
     public required uint OpenSeats { get; init; }
@@ -220,6 +226,14 @@ public sealed record WorldSettings
     public required string Name { get; init; }
 
     public required string Mode { get; init; }
+
+    /// <summary>
+    /// OD-141 (CR-S76, §2.8): the host's own mode or <c>any</c> (<see cref="WorldModes"/>); null: left out (the server
+    /// takes the host's mode). Fixed once the world opens: another value is 409 <c>PORTAL.CONFLICT {reason: "modes"}</c>;
+    /// the other mode alone is 409 <c>PORTAL.MODE_MISMATCH</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Modes { get; init; }
 
     public required uint MaxPlayers { get; init; }
 
