@@ -24,10 +24,8 @@ public partial class MainWindow : Window
         var strings = Strings.Load(Path.Combine(AppContext.BaseDirectory, "i18n"), locale)
             .With(Path.Combine(AppContext.BaseDirectory, "i18n-win"));
         var arguments = cli.Skip(1).ToList();
-        var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
-        // CR-L39: the server the player chose on the screen, else the command line's (official in a release build).
-        var config = ServerChoice.Apply(ServerConfig.From(arguments, Environment.GetEnvironmentVariable), state,
-            explicitServer: arguments.Contains("--server") || Environment.GetEnvironmentVariable("FI_SERVER") is { Length: > 0 });
+        var state = StateRoot;
+        var config = ConfigFor(arguments);
         var vm = new ShellViewModel(strings, config, state);
 
         DataContext = vm;
@@ -79,8 +77,25 @@ public partial class MainWindow : Window
                 return;
             }
             await vm.StartupAsync(azimuth);
+            // OD-136 / CR-L41: the Discord presence, the infinity-horizon:// registration (release builds) and a link this launch carries
+            vm.StartPresence();
+            vm.RegisterJoinLinks();
+            if (Infinity.Core.Presence.JoinLink.FromArguments(arguments) is { } link) vm.ReceiveJoinLink(link);
+        };
+        vm.ActivateRequested += () =>
+        {
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
         };
     }
+
+    /// <summary>The launcher's state root (each server's own folder below it, <see cref="ServerConfig.StateDirectory"/>).</summary>
+    internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
+
+    /// <summary>CR-L39: the server the player chose on the screen, else the command line's (official in a release build).</summary>
+    internal static ServerConfig ConfigFor(IReadOnlyList<string> arguments) =>
+        ServerChoice.Apply(ServerConfig.From(arguments, Environment.GetEnvironmentVariable), StateRoot,
+            explicitServer: arguments.Contains("--server") || Environment.GetEnvironmentVariable("FI_SERVER") is { Length: > 0 });
 
     partial void ConfigureHarness(string[] args, ShellViewModel vm, ref bool handled);
 
@@ -540,6 +555,17 @@ public partial class MainWindow : Window
     private void OnLobbyMore(object sender, RoutedEventArgs e) => _vm.LobbyMore();
 
     private void OnNavSetup(object sender, RoutedEventArgs e) => _vm.OpenSetup();
+
+    // CR-L41.2: Join from link
+    private async void OnJoinFromLink(object sender, RoutedEventArgs e) => await _vm.JoinFromLinkAsync();
+    private async void OnJoinLinkKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+        e.Handled = true;
+        await _vm.JoinFromLinkAsync();
+    }
+    private void OnCancelPendingJoin(object sender, RoutedEventArgs e) => _vm.CancelPendingJoin();
+    private void OnSwitchJoinMode(object sender, RoutedEventArgs e) => _vm.SwitchJoinMode();
 
     /// <summary>Mods' "Use a different catalog…": Configure, scrolled to its catalog card.</summary>
     private void OnOpenCatalogSetting(object sender, RoutedEventArgs e)

@@ -450,6 +450,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
+        Volatile.Write(ref _lastJoinRefusal, null);
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
         if (HostingOrOpening || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting)
@@ -582,6 +583,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     case JoinStatuses.NotAllowed when join.Reason == NotAllowedReasons.Mods:
                         return new UiFrame.JoinResult(UiJoin.NotAllowed, ModsRefusal(join.Details));
                     case JoinStatuses.NotAllowed:
+                        Volatile.Write(ref _lastJoinRefusal, join.Reason);
                         return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.not_allowed_" + (join.Reason ?? "host")));
                 }
                 break;
@@ -689,6 +691,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>The players of the world as last read (no request): the launcher's moderation panel lists them (CR-S62).</summary>
     public IReadOnlyList<MemberRow> LastMembers => Volatile.Read(ref _mineSnapshot).Members;
+
+    /// <summary>"My world" as last read (no request): the launcher's Discord presence reads it (OD-136, CR-L41.1).</summary>
+    public UiFrame.MyWorld LastMyWorld => Volatile.Read(ref _mineSnapshot);
+
+    /// <summary>The <c>not_allowed</c> reason of the last join (e.g. <c>mode</c>), null when it was not one: a link join offers a profile of that mode (CR-L41.2).</summary>
+    public string? LastJoinRefusal => Volatile.Read(ref _lastJoinRefusal);
+    private string? _lastJoinRefusal;
 
     /// <summary>Periodic reconciliation sleeps after an idle free session has a confirmed empty seat.</summary>
     public Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) => MineAsync(background: true, cancellation);

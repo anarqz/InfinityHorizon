@@ -60,7 +60,17 @@ enum {
     FRAME_RELAY_FALLBACK = 0x1e, /* hook -> launcher, CR-S57: {grant[16], u8 state 1-4} */
     FRAME_FREE_ROAM_NEED = 0x1f,  /* hook -> launcher, CR-L40: {u32 nonce} */
     FRAME_FREE_ROAM_READY = 0x20, /* launcher -> hook, CR-L40: {u32 nonce, u8 result 0-2} */
+    FRAME_PROGRESS = 0x21,        /* hook -> launcher, CR-L41.3: {u32 level, u64 credits} */
+    FRAME_CAR = 0x22,             /* hook -> launcher, CR-L41.3: {i32 carKey} */
 };
+/* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
+   object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
+#ifndef LAUNCH_CAR_STABLE_MS
+#define LAUNCH_CAR_STABLE_MS 1000u
+#endif
+#ifndef LAUNCH_CAR_MIN_MS
+#define LAUNCH_CAR_MIN_MS 5000u
+#endif
 /* Capture.what 7 (CR-S57): this hook's joiner proxy speaks the relay fallback (RelayLeg and
    RelayFallback); sent once with ok=1 at every handshake. */
 #define LAUNCH_CAPTURE_RELAY_JOINER 7u
@@ -611,6 +621,77 @@ int fi_launch_relay_fallback(const unsigned char grant[16],unsigned state) {
     if(!fi_launch_live() || state<1 || state>4)return 0;
     unsigned char payload[17];memory_copy(payload,grant,16);payload[16]=(unsigned char)state;
     return launch_queue_frame(FRAME_RELAY_FALLBACK,payload,sizeof(payload));
+}
+
+/* ------------------------------------------------------- Discord presence */
+/* CR-L41.3 (DISCORD_PRESENCE.md 2): what the launcher's presence shows from the game. Both go out
+   only in a live launcher session and only when they changed since the last one queued. The
+   values never reach the log (counts only). launch_presence_lock guards the state below. */
+static SRWLOCK launch_presence_lock = SRWLOCK_INIT;
+static int launch_progress_have;
+static unsigned launch_progress_level;
+static unsigned long long launch_progress_credits;
+static unsigned launch_progress_count;
+static int launch_car_seen_have, launch_car_sent_have, launch_car_seen_key, launch_car_sent_key;
+static unsigned long long launch_car_seen_at, launch_car_sent_at;
+static unsigned launch_car_count;
+
+static void launch_le_bytes(unsigned char *out, unsigned long long value, unsigned size) {
+    for (unsigned i = 0; i < size; ++i) out[i] = (unsigned char)(value >> (8 * i));
+}
+
+/* Progress (0x21): {u32 LE level, u64 LE credits}, after an UpdateAll this hook lets through
+   (progress.c). 1 queued, 0 not live, unchanged or no room. */
+int fi_launch_progress(unsigned level, unsigned long long credits) {
+    if (!fi_launch_live()) return 0;
+    unsigned char payload[12];
+    launch_le_bytes(payload, level, 4);
+    launch_le_bytes(payload + 4, credits, 8);
+    AcquireSRWLockExclusive(&launch_presence_lock);
+    int send = (!launch_progress_have || launch_progress_level != level || launch_progress_credits != credits) &&
+               launch_queue_frame(FRAME_PROGRESS, payload, sizeof(payload));
+    if (send) {
+        launch_progress_have = 1;
+        launch_progress_level = level;
+        launch_progress_credits = credits;
+        ++launch_progress_count;
+    }
+    unsigned count = launch_progress_count;
+    ReleaseSRWLockExclusive(&launch_presence_lock);
+    if (send) launch_log("presence: Progress queued (", 1, count, " this session).");
+    return send;
+}
+
+/* Car (0x22): {i32 LE carKey}, the key raw from current+0x40 (Data_Car.Id x 1000; the launcher
+   maps it to the car's name). Called with every readiness sample's key (game_ready.c, main thread,
+   every 250 ms; `now_ms` GetTickCount64). A key <= 0 (not read) sends nothing and leaves the last
+   one as it was. A key goes out once it held for LAUNCH_CAR_STABLE_MS, differs from the last one
+   queued, and LAUNCH_CAR_MIN_MS passed since the previous Car. */
+int fi_launch_car(int key, unsigned long long now_ms) {
+    if (key <= 0) return 0;
+    AcquireSRWLockExclusive(&launch_presence_lock);
+    if (!launch_car_seen_have || key != launch_car_seen_key) {
+        launch_car_seen_have = 1;
+        launch_car_seen_key = key;
+        launch_car_seen_at = now_ms;
+    }
+    int send = (!launch_car_sent_have || key != launch_car_sent_key) && now_ms - launch_car_seen_at >= LAUNCH_CAR_STABLE_MS &&
+               (!launch_car_sent_have || now_ms - launch_car_sent_at >= LAUNCH_CAR_MIN_MS);
+    if (send) {
+        unsigned char payload[4];
+        launch_le_bytes(payload, (unsigned)key, 4);
+        send = fi_launch_live() && launch_queue_frame(FRAME_CAR, payload, sizeof(payload));
+    }
+    if (send) {
+        launch_car_sent_have = 1;
+        launch_car_sent_key = key;
+        launch_car_sent_at = now_ms;
+        ++launch_car_count;
+    }
+    unsigned count = launch_car_count;
+    ReleaseSRWLockExclusive(&launch_presence_lock);
+    if (send) launch_log("presence: Car queued (", 1, count, " this session).");
+    return send;
 }
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size) {
     if(!fi_launch_live() || size!=32 || payload[0]!=1 || payload[1]<1 || payload[1]>28 || payload[2]>2 || payload[3]>4)return 0;

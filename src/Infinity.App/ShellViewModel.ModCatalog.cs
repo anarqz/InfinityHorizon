@@ -362,6 +362,7 @@ public sealed partial class ShellViewModel
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts;
+        NoteDuplicateDiscordMod(); // OD-136: once, when Bullet4fun's Discord RPC is installed
         RefreshModCards();
         await RefreshExtraOptionsModsAsync();
         if (_selectedMod is { HasOptions: true } && !_iniDirty) await LoadSelectedOptionsAsync();

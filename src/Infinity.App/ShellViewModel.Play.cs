@@ -376,6 +376,7 @@ public sealed partial class ShellViewModel
             : e is SupervisorEvent.AdmissionRetry retryLog ? $"Admission retry {retryLog.Code} after={retryLog.Delay.TotalSeconds:F0}s" : e.ToString());
         IntegrityOn(e);
         OverlayOn(e);
+        PresenceOn(e); // OD-136: the Discord card
         switch (e)
         {
             case SupervisorEvent.ModsReported reported:

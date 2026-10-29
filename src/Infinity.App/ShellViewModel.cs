@@ -636,6 +636,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         // session's own cleanup; both finish (bounded) before the session's token manager is disposed.
         var dedicated = _dedicated is { Active: true } host ? Task.Run(host.StopAsync) : Task.CompletedTask;
         _integrityLifetime.Cancel();
+        StopPresenceForExit(); // OD-136: the Discord card is cleared when the launcher exits
         DisposeOnlineStatus();
         _updateStop.Cancel();
         _updater?.Dispose();

@@ -35,6 +35,31 @@ public partial class App : Application
         SessionEnding += (_, e) => ExitReason = "Windows session ending (" + e.ReasonSessionEnding + ")";
     }
 
+    /// <summary>
+    /// CR-L41.2: a launch carrying an <c>infinity-horizon://join/…</c> link while another launcher holds <c>launcher.lock</c> hands the
+    /// link to it and ends here, before any window. With no launcher running it starts normally and takes the link itself.
+    /// </summary>
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        if (Infinity.Core.Presence.JoinLink.FromArguments(e.Args) is { } worldId && OperatingSystem.IsWindows())
+        {
+            string? state = null;
+            try { state = Infinity.App.MainWindow.ConfigFor(e.Args).StateDirectory(Infinity.App.MainWindow.StateRoot); }
+            catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or UriFormatException)
+            { Log("link: hand-off skipped (" + error.GetType().Name + ")"); }
+            if (state is not null && Infinity.Core.Process.LauncherHandoff.TrySend(state, worldId))
+            {
+                ExitReason = "join link handed to the running launcher";
+                StartupUri = null;
+                base.OnStartup(e);
+                Shutdown(0);
+                return;
+            }
+        }
+        base.OnStartup(e);
+    }
+
     /// <summary>How the launcher is ending, for the exit line in launcher.log; the window close is the default.</summary>
     internal static string ExitReason { get; set; } = "window closed";
 

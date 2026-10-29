@@ -151,6 +151,15 @@ public abstract record SupervisorEvent
     /// <summary>The overlay said hello on the UI pipe (its version).</summary>
     public sealed record OverlayConnected(string Version) : SupervisorEvent;
 
+    /// <summary>CR-L41.3: the hook's reading of an <c>UpdateAll</c> it sent (the game's XP level and credits), for the Discord presence.</summary>
+    public sealed record GameProgress(uint Level, ulong Credits) : SupervisorEvent;
+
+    /// <summary>
+    /// CR-L41.3: the local player's current car changed: its car key (the raw i32 at current+0x40, &gt; 0,
+    /// <c>Data_Car.Id × 1000</c>; name through <see cref="Process.CarNames.Name"/>), for the Discord presence.
+    /// </summary>
+    public sealed record GameCar(int CarKey) : SupervisorEvent;
+
     /// <summary>
     /// N-H2 (OD-112): the hook forwarded the native mod runtime's report. Unverified here: check the nonce and
     /// plan digest against this launch's plan and each mod's hashes against what was prepared before using it.
@@ -1158,6 +1167,13 @@ public sealed class PlaySupervisor
                 break;
             case EndpointEvent.Capture c:
                 _emit(new SupervisorEvent.Capture(c.What, c.Ok) { ReceivedTimestamp = TimeProvider.System.GetTimestamp() });
+                break;
+            // CR-L41.3: the Discord presence's level, credits and car; only emitted, nothing waits on them
+            case EndpointEvent.ProgressReported progress:
+                _emit(new SupervisorEvent.GameProgress(progress.Level, progress.Credits));
+                break;
+            case EndpointEvent.CarChanged car:
+                _emit(new SupervisorEvent.GameCar(car.CarKey));
                 break;
         }
         return state;

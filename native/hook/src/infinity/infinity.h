@@ -17,6 +17,12 @@ int azimuth_proxy_relay_candidates(const unsigned char *payload,size_t size);
 int azimuth_proxy_relay_leg(const unsigned char *payload,size_t size);
 void azimuth_proxy_relay_leg_clear(void);
 int fi_launch_relay_fallback(const unsigned char grant[16],unsigned state);
+/* CR-L41.3 Discord presence (launch.c): Progress (0x21) after an UpdateAll the hook lets through,
+   Car (0x22) from the readiness sample's current car key (current+0x40, `now_ms` GetTickCount64);
+   each sent only in a live session and only when changed (Car also held 1 s and at most one per
+   5 s; a key <= 0 never). */
+int fi_launch_progress(unsigned level, unsigned long long credits);
+int fi_launch_car(int car_key, unsigned long long now_ms);
 
 /* cfg.c: <Azimuth>\Infinity.cfg. [hook] is the hook's (PLAN.md "Infinity.cfg [hook]"), read
    once at start (and written once, when the section is missing, from the older hooks'
