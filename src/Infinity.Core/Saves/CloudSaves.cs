@@ -322,6 +322,43 @@ public sealed class CloudSaves
 
     public ProfileSyncState? State(ulong xuid) => _store.Get(_realm, xuid);
 
+    /// <summary>OD-133: records the line's one fresh start (the career moved aside, or none to move); the mark and any pending upload stay.</summary>
+    public void RecordFreshStart(ulong xuid, FreshStartRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        _store.Update(_realm, xuid, s => s with { FreshStart = record });
+    }
+
+    /// <summary>OD-133: the profile's unsettled career restore (null: none, or settled).</summary>
+    public void SetRestore(ulong xuid, RestoreRecord? record) => _store.Update(_realm, xuid, s => s with { Restore = record });
+
+    /// <summary>
+    /// OD-133: the pending upload's recorded bytes: <see cref="PendingBytesState.Ok"/>, <see cref="PendingBytesState.Gone"/> (the file is
+    /// missing, or its hash does not match: they can never be sent), or <see cref="PendingBytesState.Unreadable"/> (a lock, a sharing
+    /// violation, no rights: try again later). Gone without a pending upload.
+    /// </summary>
+    public PendingBytesState PendingBytesOf(ulong xuid)
+    {
+        if (State(xuid)?.PendingUpload is not { } pending) return PendingBytesState.Gone;
+        try { _store.PendingBytes(pending); return PendingBytesState.Ok; }
+        catch (SaveException) { return PendingBytesState.Gone; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return PendingBytesState.Unreadable; }
+    }
+
+    /// <summary>OD-133: the pending upload was committed after all (its answer lost): the mark moves to it and the record goes, as a 2xx would.</summary>
+    public bool ConfirmPendingCommitted(ulong xuid, ulong revision)
+    {
+        if (State(xuid)?.PendingUpload is not { } pending || SaveReconcile.NormalizeDigest(pending.Content) is not { } content) return false;
+        return _store.FinishUpload(_realm, xuid, pending.CommitId, new SyncMark(revision, content));
+    }
+
+    /// <summary>OD-133: the line's first save was refused by the server's gate (<paramref name="rule"/>): the next fresh start asks the player.</summary>
+    public void RecordFreshStartRefused(ulong xuid, string? rule, DateTime atUtc)
+    {
+        var at = atUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        _store.Update(_realm, xuid, s => s with { FreshStart = (s.FreshStart ?? new FreshStartRecord(at, null)) with { RefusedRule = rule, RefusedAtUtc = at } });
+    }
+
     /// <summary>CR-S61: the profile was deleted from the cloud; its sync state on this server goes (pending bytes set aside).</summary>
     public bool Forget(ulong xuid) => _store.Forget(_realm, xuid);
 
@@ -550,9 +587,9 @@ public sealed class CloudSaves
     /// <summary>
     /// Records <paramref name="revision"/> as the profile's pending upload without sending it (no token needed): its bytes are kept
     /// whatever happens next and <see cref="SendPendingAsync"/> sends exactly them. CR-S51: a new career's first save is captured the
-    /// moment it is seen. Null when recorded; a failure when the revision is no longer sealed or another upload is pending.
+    /// moment it is seen. OD-133: <paramref name="restore"/> marks a restored career's upload (<see cref="PendingUpload.Restore"/>). Null when recorded; a failure when the revision is no longer sealed or another upload is pending.
     /// </summary>
-    public SaveFailure? RecordUpload(ulong xuid, LocalRevision revision, ulong expected, string kind)
+    public SaveFailure? RecordUpload(ulong xuid, LocalRevision revision, ulong expected, string kind, string? restore = null)
     {
         ArgumentNullException.ThrowIfNull(revision);
         if (!CommitKinds.IsPlayerKind(kind)) throw new ArgumentException("a player commit kind", nameof(kind));
@@ -561,7 +598,7 @@ public sealed class CloudSaves
         try { packed = CloudSaveFiles.Pack(revision); }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
         { return SaveFailure.Integrity(e.Message); }
-        try { _store.BeginUpload(_realm, xuid, Guid.CreateVersion7().ToString(), expected, kind, packed.Number, packed.ContentSha256, packed.Bundle); }
+        try { _store.BeginUpload(_realm, xuid, Guid.CreateVersion7().ToString(), expected, kind, packed.Number, packed.ContentSha256, packed.Bundle, restore: restore); }
         catch (InvalidOperationException) when (State(xuid)?.PendingUpload is { } raced) { return PendingFirst(raced); }
         return null;
     }
@@ -596,9 +633,14 @@ public sealed class CloudSaves
     /// (<see cref="SaveFailure.KeepsPending"/>) keep the bytes for the next retry; every other answer,
     /// <c>REVISION_CONFLICT</c> and <c>LEASE_LOST</c> included, sets them aside (kept on disk) and is
     /// returned typed, so the caller decides again. <c>LEASE_LOST</c> marks the lease lost. Only the
-    /// upload that was sent is finished or set aside: a newer one begun meanwhile is left untouched.
+    /// upload that was sent is finished or set aside: a newer one begun meanwhile is left untouched. <paramref name="beforeSetAside"/>
+    /// runs right before the bytes are set aside (OD-133: a restore's outcome is recorded first, so a crash cannot misjudge it).
     /// </summary>
-    public async Task<CommitOutcome> SendPendingAsync(string access, ulong xuid, SaveLease lease, CancellationToken cancellation = default)
+    public Task<CommitOutcome> SendPendingAsync(string access, ulong xuid, SaveLease lease, CancellationToken cancellation = default) =>
+        SendPendingAsync(access, xuid, lease, null, cancellation);
+
+    /// <summary>As <see cref="SendPendingAsync(string, ulong, SaveLease, CancellationToken)"/>, with <paramref name="beforeSetAside"/>.</summary>
+    public async Task<CommitOutcome> SendPendingAsync(string access, ulong xuid, SaveLease lease, Action<SaveFailure>? beforeSetAside, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(lease);
         if (lease.Lost)
@@ -616,8 +658,7 @@ public sealed class CloudSaves
             // The recorded bytes are gone or changed: nothing is sent under this key; the record stays for support.
             return new CommitOutcome(null, false, false, SaveFailure.Integrity(e.Message), pending);
         }
-        var request = new SaveCommitRequest(pending.Expected, pending.CommitId, lease.SessionId, lease.FenceToken, pending.Kind, pending.Content, bytes,
-            pending.Kind == CommitKinds.SeedFromProfile ? pending.SeedSource : null);
+        var request = CommitRequest(pending.Expected, pending.CommitId, lease, pending.Kind, pending.Content, bytes, pending.SeedSource);
         SaveApiResult<CommitResponse> result;
         try
         {
@@ -637,6 +678,7 @@ public sealed class CloudSaves
                 // Not the commit that was sent: the mark stays, the bytes are kept (set aside) for support.
                 var failure = SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture,
                     $"the server confirmed revision {committed.Revision} ({committed.ContentSha256}) for a commit on {pending.Expected} with {pending.Content}"));
+                beforeSetAside?.Invoke(failure);
                 return new CommitOutcome(committed, result.Replayed, false, failure, null, _store.SetAside(_realm, xuid, pending.CommitId));
             }
             _store.FinishUpload(_realm, xuid, pending.CommitId, new SyncMark(committed.Revision, content));
@@ -647,12 +689,37 @@ public sealed class CloudSaves
         {
             lease.MarkLost();
         }
-        // CR-S52: a seed lost with its lease stays recorded: the next Play sends the same checked bytes (no second dry run spent)
-        if (refused.KeepsPending || (refused.Kind == SaveFailureKind.LeaseLost && pending.Kind == CommitKinds.SeedFromProfile))
+        // CR-S52: a seed lost with its lease stays recorded: the next Play sends the same checked bytes (no second dry run spent);
+        // OD-133: so does a restored career (another session holding the profile says nothing about the career)
+        if (refused.KeepsPending || (refused.Kind == SaveFailureKind.LeaseLost && (pending.Kind == CommitKinds.SeedFromProfile || pending.Restore is not null)))
         {
             return new CommitOutcome(null, false, false, refused, pending);
         }
+        beforeSetAside?.Invoke(refused);
         return new CommitOutcome(null, false, false, refused, null, _store.SetAside(_realm, xuid, pending.CommitId));
+    }
+
+    /// <summary>
+    /// The commit request of <see cref="SendPendingAsync"/> and of <see cref="DryRunUploadAsync"/>, built in one place so the dry run
+    /// checks exactly what the commit sends. <paramref name="lease"/> null (the OD-133 dry run, which sends no lease) leaves the
+    /// session id empty and the fence 0; a real commit always passes its lease.
+    /// </summary>
+    internal static SaveCommitRequest CommitRequest(ulong expected, string commitId, SaveLease? lease, string kind, string content, byte[] bundle, string? seedSource) =>
+        new(expected, commitId, lease?.SessionId ?? string.Empty, lease?.FenceToken ?? 0, kind, content, bundle,
+            kind == CommitKinds.SeedFromProfile ? seedSource : null);
+
+    /// <summary>
+    /// OD-133: asks <paramref name="dryRun"/> whether <paramref name="packed"/> would be taken as <paramref name="kind"/> on top of
+    /// <paramref name="expected"/>, with the same request the commit would send (a new key; nothing is recorded or committed). Throws
+    /// what the seam throws (network errors). Never with a lease (SAVES_API.md §4.11: none is checked; the restore runs from the idle launcher).
+    /// </summary>
+    public static Task<UploadDryRunResult> DryRunUploadAsync(ISaveUploadDryRun dryRun, string access, ulong xuid, PackedRevision packed, ulong expected,
+        string kind = CommitKinds.Upload, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(dryRun);
+        ArgumentNullException.ThrowIfNull(packed);
+        if (!CommitKinds.IsPlayerKind(kind)) throw new ArgumentException("a player commit kind", nameof(kind));
+        return dryRun.DryRunUploadAsync(access, Wire(xuid), CommitRequest(expected, Guid.CreateVersion7().ToString(), null, kind, packed.ContentSha256, packed.Bundle, null), cancellation);
     }
 
     /// <summary>Drops the profile's pending upload without touching the mark (its bytes move to <c>pending\set-aside</c>), e.g. after a conflict the player resolved.</summary>
@@ -663,4 +730,12 @@ public sealed class CloudSaves
 
     private static bool IsNetwork(Exception e, CancellationToken cancellation) =>
         e is HttpRequestException || (e is TaskCanceledException && !cancellation.IsCancellationRequested);
+}
+
+/// <summary>OD-133: what a pending upload's recorded bytes are now (<see cref="CloudSaves.PendingBytesOf"/>).</summary>
+public enum PendingBytesState
+{
+    Ok,
+    Gone,
+    Unreadable,
 }

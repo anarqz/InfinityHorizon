@@ -192,6 +192,8 @@ public sealed partial class ShellViewModel
         {
             ResolveConflict = AskSaveConflictAsync,
             Checkpoints = session.Info.Checkpoints, // OD122-L3: the server's cadence while the game runs
+            Note = Log, // OD-133: the fresh-start guard's decisions
+            ResolveRefusedFreshStart = AskRefusedFreshStartAsync, // OD-133: a first save refused as past its start
         };
     }
 
@@ -229,6 +231,44 @@ public sealed partial class ShellViewModel
             Changed(string.Empty);
         }, null);
         return answer.Task;
+    }
+
+    private FreshStartRefusal? _freshRefusal;
+    private TaskCompletionSource<FreshStartChoice>? _freshRefusalAnswer;
+
+    /// <summary>
+    /// OD-133: the line's first save was refused because the career is past its start. Asked before the game starts, like the conflict
+    /// screen (same wait); closing it, cancelling the Play or the wait running out is "not now": nothing archived, nothing sent.
+    /// </summary>
+    private Task<FreshStartChoice> AskRefusedFreshStartAsync(FreshStartRefusal refusal, CancellationToken cancellation)
+    {
+        var answer = new TaskCompletionSource<FreshStartChoice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Clear() => _ui.Post(_ => { if (ReferenceEquals(_freshRefusalAnswer, answer)) { _freshRefusal = null; _freshRefusalAnswer = null; Changed(string.Empty); } }, null);
+        var registration = cancellation.Register(() => { if (answer.TrySetResult(FreshStartChoice.NotNow)) Clear(); });
+        _ = answer.Task.ContinueWith(_ => registration.Dispose(), TaskScheduler.Default);
+        _ = Task.Delay(SaveConflictWait, cancellation).ContinueWith(_ => { if (answer.TrySetResult(FreshStartChoice.NotNow)) Clear(); }, TaskScheduler.Default);
+        _ui.Post(_ =>
+        {
+            _freshRefusalAnswer?.TrySetResult(FreshStartChoice.NotNow);
+            _freshRefusal = refusal;
+            _freshRefusalAnswer = answer;
+            Log($"save: first save refused ({refusal.Rule}); asking the player");
+            Changed(string.Empty);
+        }, null);
+        return answer.Task;
+    }
+
+    public bool ShowFreshStartRefused => _freshRefusal is not null;
+
+    /// <summary>The player's answer to the refused first save (the panel's two buttons).</summary>
+    public void AnswerFreshStartRefused(FreshStartChoice choice)
+    {
+        if (_freshRefusalAnswer is not { } answer) return;
+        Log("save: refused first save answered " + choice);
+        _freshRefusal = null;
+        _freshRefusalAnswer = null;
+        answer.TrySetResult(choice);
+        Changed(string.Empty);
     }
 
     public bool ShowSaveConflict => _saveConflict is not null;
@@ -274,6 +314,12 @@ public sealed partial class ShellViewModel
             SaveStep.Uploaded => S.Format("saves.uploaded", ("rev", detail ?? "?")),
             SaveStep.Kept => S["saves.kept"],
             SaveStep.Refused => S["saves.refused"],
+            SaveStep.FreshStartHeld => S["saves.fresh_refused_held"],
+            SaveStep.RestoreRefused => detail == "LOCAL.SET_ASIDE" ? S["restore.set_aside_done"]
+                : CareerRestore.IsCeiling(detail) ? S["restore.commit_refused_ceiling"]
+                : detail?.Contains('.', StringComparison.Ordinal) == true ? S.Format("restore.commit_failed_undone", ("code", detail))
+                : S["restore.commit_refused"],
+            SaveStep.RestoreUndoFailed => S["restore.undo_failed"],
             SaveStep.SeedAccepted => S.Format("saves.seed_accepted", ("rev", detail ?? "?")),
             SaveStep.SeedRefused => S[ProfileSeed.CommitTextKey(detail)], // refused, not sent, unconfirmed or the account's review
             _ => null,
@@ -283,7 +329,7 @@ public sealed partial class ShellViewModel
             SetStatus(text);
         }
         // CR-S52: the fall back to a new career is told where it stays on screen, not only on the status line the next steps replace
-        if (step == SaveStep.SeedRefused) Message = text;
+        if (step is SaveStep.SeedRefused or SaveStep.RestoreRefused or SaveStep.RestoreUndoFailed or SaveStep.FreshStartHeld) Message = text;
     }
 
     /// <summary>Hardcore → Noob: the line's newest cloud revision onto this PC first (no lease needed to read).</summary>

@@ -244,6 +244,27 @@ public partial class MainWindow : Window
 
     private void OnSkipSave(object sender, RoutedEventArgs e) => _vm.SkipSave();
 
+    // OD-133: restore a career a fresh start moved aside on this PC
+    private async void OnOpenCareerRestore(object sender, RoutedEventArgs e) => await _vm.OpenCareerRestoreAsync();
+
+    private void OnPickCareerRestore(object sender, RoutedEventArgs e) => _vm.PickCareerRestore((CareerRestoreRow)((FrameworkElement)sender).DataContext);
+
+    private async void OnConfirmCareerRestore(object sender, RoutedEventArgs e) => await _vm.ConfirmCareerRestoreAsync();
+
+    private void OnBackCareerRestore(object sender, RoutedEventArgs e) => _vm.BackCareerRestore();
+
+    private void OnCloseCareerRestore(object sender, RoutedEventArgs e) => _vm.CloseCareerRestore();
+
+    private async void OnRestoreSetAside(object sender, RoutedEventArgs e) => await _vm.SetRestoreAsideAsync();
+
+    private void OnRestoreKeep(object sender, RoutedEventArgs e) => _vm.KeepRestoredCareer();
+
+    private void OnRestoreLater(object sender, RoutedEventArgs e) => _vm.CloseRestoreWaiting();
+
+    private void OnFreshRefusedNewCareer(object sender, RoutedEventArgs e) => _vm.AnswerFreshStartRefused(Infinity.Core.Saves.FreshStartChoice.StartNewCareer);
+
+    private void OnFreshRefusedNotNow(object sender, RoutedEventArgs e) => _vm.AnswerFreshStartRefused(Infinity.Core.Saves.FreshStartChoice.NotNow);
+
     private void OnNavHome(object sender, RoutedEventArgs e) => _vm.OpenHome();
 
     private void OnOpenSignIn(object sender, RoutedEventArgs e) => _vm.OpenSignIn();

@@ -350,5 +350,13 @@ public sealed record CommitResponse(ulong Revision, string ContentSha256, string
 /// </summary>
 public sealed record SeedCheck(bool Accepted, IReadOnlyList<string> Reasons, byte Score, double Hours, string BlobSha256, SaveSummary Summary);
 
+/// <summary>
+/// <c>POST .../save/upload-check</c> → 200 (CR-S71, SAVES_API.md §4.11, fi-protocol <c>saves::UploadCheck</c>): the dry run of a player's
+/// <c>upload</c> on top of <c>If-Match</c>; nothing stored, parked or recorded. <see cref="Code"/> is the code the commit would answer
+/// (<c>SAVES.GATE_REFUSED</c> with <see cref="Rule"/>, <see cref="Score"/> and <see cref="Reasons"/>, <c>SAVES.SUMMARY_UNREADABLE</c>,
+/// <c>SAVES.BUNDLE_INVALID</c>), null when it passes; <see cref="Summary"/> only when it passes.
+/// </summary>
+public sealed record UploadCheck(bool Pass, string? Code, string? Rule, string? Reason, byte? Score, IReadOnlyList<string> Reasons, string BlobSha256, SaveSummary? Summary);
+
 /// <summary><c>{"code", "message", "details"}</c>: clients branch on <c>code</c>.</summary>
 public sealed record ErrorBody(string Code, string Message, System.Text.Json.JsonElement? Details);

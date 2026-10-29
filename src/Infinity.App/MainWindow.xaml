@@ -565,6 +565,73 @@
             </StackPanel>
           </Border>
           </Grid>
+          <!-- OD-133: the line's first save was refused as past its start: a new career only on the player's word (this one backed up first). -->
+          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowFreshStartRefused, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <TextBlock Text="{Binding S[saves.fresh_refused_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding S[saves.fresh_refused_body]}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
+              <WrapPanel>
+                <Button Content="{Binding S[saves.fresh_refused_new]}" Click="OnFreshRefusedNewCareer" Style="{StaticResource AccentButtonStyle}" Padding="16,6" Margin="0,0,10,8" />
+                <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnFreshRefusedNotNow" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+              </WrapPanel>
+            </StackPanel>
+          </Border>
+          </Grid>
+          <!-- OD-133: a restored career still waiting for the cloud (the Play stopped), or an undo owed: the way out, nothing deleted. -->
+          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowRestoreWaiting, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <TextBlock Text="{Binding S[restore.blocked_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding S[restore.blocked_body]}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
+              <WrapPanel>
+                <Button Content="{Binding S[restore.blocked_set_aside]}" Click="OnRestoreSetAside" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}"
+                        Padding="16,6" Margin="0,0,10,8" />
+                <Button Content="{Binding S[restore.blocked_keep]}" Click="OnRestoreKeep" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8"
+                        Visibility="{Binding CanKeepRestoredCareer, Converter={StaticResource Visible}}" />
+                <Button Content="{Binding S[restore.blocked_later]}" Click="OnRestoreLater" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+              </WrapPanel>
+            </StackPanel>
+          </Border>
+          </Grid>
+          <!-- OD-133: restore a career a fresh start moved aside: the list, then the confirmation (the server's dry run runs on confirm). -->
+          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowCareerRestore, Converter={StaticResource Visible}}">
+          <Border Style="{StaticResource Card}" Padding="24,20" Width="540" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel>
+              <TextBlock Text="{Binding S[restore.title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
+              <StackPanel Visibility="{Binding ShowCareerRestoreList, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding CareerRestoreListText}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,12" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="300">
+                  <ItemsControl ItemsSource="{Binding CareerRestoreRows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Button Margin="0,5" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                Click="OnPickCareerRestore" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
+                          <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontWeight="Bold" />
+                            <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+                          </StackPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+                <Button Content="{Binding S[restore.cancel]}" Click="OnCloseCareerRestore" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="0,12,0,0" />
+              </StackPanel>
+              <StackPanel Visibility="{Binding ShowCareerRestoreConfirm, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding S[restore.confirm_title]}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                <TextBlock Text="{Binding CareerRestoreConfirmText}" TextWrapping="Wrap" Margin="0,0,0,8" />
+                <TextBlock Text="{Binding Message}" FontSize="12" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button Content="{Binding S[restore.confirm]}" Click="OnConfirmCareerRestore" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}"
+                          Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[restore.back]}" Click="OnBackCareerRestore" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
+                  <Button Content="{Binding S[restore.cancel]}" Click="OnCloseCareerRestore" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
+                </WrapPanel>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+          </Grid>
           <!-- CR-S52: a Hardcore line still empty starts from scratch or from one of the account's profiles, checked on the spot. The first
                Play's choice, then the server's dry run, shown before the player confirms (nothing is copied before an accepted check). -->
           <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSeedPanel, Converter={StaticResource Visible}}">
@@ -1079,6 +1146,12 @@
                 <TextBlock Text="{Binding S[saves.hardcore_fresh]}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
                            VerticalAlignment="Center" Visibility="{Binding ShowHardcoreSaveNote, Converter={StaticResource Visible}}" />
               </WrapPanel>
+              <!-- OD-133: a career a fresh start moved aside on this PC comes back (server dry run first; disabled until MB-133-1). -->
+              <StackPanel Margin="0,8,0,0" Visibility="{Binding ShowCareerRestoreEntry, Converter={StaticResource Visible}}">
+                <Button Content="{Binding S[restore.entry]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="0"
+                        Click="OnOpenCareerRestore" IsEnabled="{Binding CanRestoreCareer}" />
+                <TextBlock Text="{Binding CareerRestoreNote}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityFaint}" Margin="0,2,0,0" />
+              </StackPanel>
             </StackPanel>
             <ContentControl x:Name="NewsColumnBelow" Grid.Row="1" MaxWidth="600" HorizontalAlignment="Left" Margin="0,24,0,8" Focusable="False"
                             Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" Visibility="{Binding NewsBelow, Converter={StaticResource Visible}}" />

@@ -40,6 +40,24 @@ public enum SaveStep
     /// <summary>Retention: the cloud copy of this profile's save expired; this PC's save is kept and nothing came down.</summary>
     CloudExpired,
 
+    /// <summary>
+    /// OD-133: the line's first save was refused as past its start and the player chose "not now": this session plays on this PC only
+    /// and sends nothing; the next Play asks again.
+    /// </summary>
+    FreshStartHeld,
+
+    /// <summary>
+    /// OD-133: the restored career's commit was refused (detail: the gate's rule): this PC's save from before the restore is back; the
+    /// restored career stays in its backup folder.
+    /// </summary>
+    RestoreRefused,
+
+    /// <summary>
+    /// OD-133: the restored career will not be committed but this PC's earlier save could not be put back yet (detail: why the restore
+    /// failed): the game does not start on the refused career; every launch tries again, and the shell offers to keep it.
+    /// </summary>
+    RestoreUndoFailed,
+
     /// <summary>CR-S52: the server took the career the player chose to start from (<c>seed_from_profile</c>; detail: the revision).</summary>
     SeedAccepted,
 
@@ -63,6 +81,19 @@ public enum ConflictChoice
     /// <summary>This PC's newest sealed revision is committed on top of the cloud's (<c>resolve_keep_local</c>); the cloud keeps its history.</summary>
     KeepThisPc,
 }
+
+/// <summary>OD-133: the player's answer when a line's first save was refused as past a new career's start.</summary>
+public enum FreshStartChoice
+{
+    /// <summary>Nothing is archived and nothing is sent this session; asked again at the next Play.</summary>
+    NotNow,
+
+    /// <summary>The current career is archived (<c>fresh-start-*</c>) and the game starts a new one, whose first save goes up as <c>fresh_start</c>.</summary>
+    StartNewCareer,
+}
+
+/// <summary>OD-133: what the player is told of a refused first save: the gate's rule (null when unknown) and when (UTC, ISO 8601).</summary>
+public sealed record FreshStartRefusal(string? Rule, string? RefusedAtUtc);
 
 /// <summary>What the player sees of a conflict: the cloud's head and this PC's newest sealed revision (each number null when unknown).</summary>
 public sealed record SaveConflict(SaveHead Cloud, int? LocalLevel, int? LocalCredits, DateTime? LocalSavedUtc)
@@ -127,7 +158,7 @@ public sealed class SessionSaves
     private (ulong Number, string Content)? _seen;
 
     /// <summary>Something runs while the game does: a fresh start's first save, or checkpoints (SAVES_API §4.4).</summary>
-    public bool Watches => _line is not null && (AwaitsFreshStart || _checkpointing);
+    public bool Watches => _line is not null && !_holdUploads && (AwaitsFreshStart || _checkpointing);
 
     /// <summary>The line's fence now (heartbeats may have moved it); null without a line.</summary>
     public ulong? FenceToken => _line?.Lease.FenceToken;
@@ -142,6 +173,8 @@ public sealed class SessionSaves
         _line = CloudSaveLine.FromGate(active);
         if (_line is null)
         {
+            // OD-133: a lapsed line still never plays a refused restore: the owed undo is paid from the backup (no head to fall back on)
+            if (RestoreUndo.Owed(_saves, _savesRoot, _xuid) is not null) await PayUndoAsync(string.Empty, null, cancellation).ConfigureAwait(false);
             return; // free, Noob, or a lapsed Hardcore: no cloud line (OD-52)
         }
         // the pre-launch sync counts as the previous commit (SAVES_API §4.4); a relaunch under a new lease starts the schedule over
@@ -151,12 +184,20 @@ public sealed class SessionSaves
         _seen = null;
         _freshStart = false;
         _freshSettled = false;
+        _holdUploads = false;
         var access = await _access(cancellation).ConfigureAwait(false);
         var xuid = _xuid.ToString(CultureInfo.InvariantCulture);
         var prepared = CloudSaves.PrepareFolders(_savesRoot, _xuid);
         if (prepared.Busy.Count > 0)
         {
             throw new SaveBlockedException("SAVES.LOCAL_BUSY", "a save of this profile is still being written");
+        }
+        // OD-133: a restore whose upload is gone without being committed (an interruption) owes its undo; an owed undo is paid before
+        // anything else, and while it cannot be, nothing of this profile is sent (the restored career plays on this PC only)
+        RestoreUndo.Reconcile(_saves, _savesRoot, _xuid, Clock().UtcDateTime, Note);
+        if (RestoreUndo.Owed(_saves, _savesRoot, _xuid) is not null)
+        {
+            await PayUndoAsync(access, _line.Head, cancellation).ConfigureAwait(false); // unpaid: the launch stops here
         }
         // CR-S51: a Hardcore line at revision 0 that starts "fresh_start" has no seed: Azimuth writes the first career, and its first
         // sealed revision is the line's revision 1. Anything this PC kept for the profile goes to the archive first, so the game starts
@@ -190,12 +231,22 @@ public sealed class SessionSaves
                     if (sent is { Committed: { } committed, Failure: null }) _report(SaveStep.SeedAccepted, committed.Revision.ToString(CultureInfo.InvariantCulture));
                     else _report(SaveStep.SeedRefused, ProfileSeed.CommitDetail(sent));
                 }
+                else if (sent.Failure is { Kind: SaveFailureKind.GateRefused } firstRefused)
+                {
+                    RecordFirstSaveRefused(firstRefused); // OD-133: the next fresh start asks the player instead of archiving or resending
+                }
                 head = await FreshHeadAsync(access, head, cancellation).ConfigureAwait(false);
             }
             if (head.Revision == 0)
             {
                 if (_saves.State(_xuid)?.PendingUpload is not null) _saves.SetAsidePending(_xuid); // nothing else is taken at revision 0
-                ArchiveForFreshStart();
+                if (!await FreshStartOnceAsync(cancellation).ConfigureAwait(false))
+                {
+                    // OD-133: the first save was refused as past its start and the player chose "not now": nothing is sent this session
+                    _holdUploads = true;
+                    _report(SaveStep.FreshStartHeld, null);
+                    return;
+                }
                 _freshStart = true;
                 _report(SaveStep.FreshStart, null);
                 return;
@@ -203,12 +254,22 @@ public sealed class SessionSaves
         }
         // A pending upload from an earlier session goes first, with this session's lease; then the head is read again, so the decision
         // is made on what the cloud holds now (never on the admission's head, which that upload may have moved).
+        else if (_saves.State(_xuid)?.PendingUpload is { Restore: not null } restore)
+        {
+            await SendRestoreAsync(access, head, restore, cancellation).ConfigureAwait(false);
+            head = await FreshHeadAsync(access, head, cancellation).ConfigureAwait(false);
+        }
         else if (_saves.State(_xuid)?.PendingUpload is not null)
         {
             var sent = await _saves.SendPendingAsync(access, _xuid, _line.Lease, cancellation).ConfigureAwait(false);
             if (sent.Failure is { } f && f.KeepsPending)
             {
                 _report(SaveStep.Kept, f.Code);
+            }
+            else if (sent.Failure is { Kind: SaveFailureKind.GateRefused } refused)
+            {
+                Note?.Invoke($"save: the pending upload was refused ({refused.Rule ?? refused.Reason ?? refused.Code}); parked by the server");
+                _report(SaveStep.Refused, refused.Reason); // this PC's save is kept
             }
             head = await FreshHeadAsync(access, head, cancellation).ConfigureAwait(false);
         }
@@ -347,18 +408,159 @@ public sealed class SessionSaves
     /// <summary>CR-S51: this session starts a Hardcore career whose first save is not in the cloud yet.</summary>
     public bool AwaitsFreshStart => _freshStart && !_freshSettled;
 
-    /// <summary>The profile's whole folder moves to <c>fi-launcher-archive\User_x\fresh-start-&lt;stamp&gt;</c> (same volume, nothing deleted).</summary>
-    private void ArchiveForFreshStart()
+    /// <summary>Each save decision in words for the launcher's log (ids, revisions and folder names only).</summary>
+    public Action<string>? Note { get; init; }
+
+    /// <summary>
+    /// OD-133: asked before the game starts when the line is still at revision 0 and its first save was refused as past a new career's
+    /// start: start a new career (this one archived first) or not now (nothing archived, nothing sent this session). Null: not now.
+    /// </summary>
+    public Func<FreshStartRefusal, CancellationToken, Task<FreshStartChoice>>? ResolveRefusedFreshStart { get; init; }
+
+    private bool _holdUploads;
+
+    /// <summary>
+    /// OD-133: a profile's career is moved aside for a fresh start at most once per cloud line. The first fresh start is recorded in the
+    /// profile's sync state (<see cref="FreshStartRecord"/>) and, when there was nothing to move, by an empty
+    /// <c>fresh-start-&lt;stamp&gt;-empty</c> marker folder too; a later launch with the line still at revision 0 keeps the profile's
+    /// current career and lets its <c>fresh_start</c> upload proceed. A <c>fresh-start-*</c> folder without a record (a launcher before
+    /// this rule, or a lost state file) counts as that one fresh start. When the recorded line's first save was refused by the server's
+    /// gate (the career is past its start), the player is asked (<see cref="ResolveRefusedFreshStart"/>): only their "start a new career"
+    /// archives the folder again. False when the fresh start does not happen this session (the player said not now).
+    /// </summary>
+    private async Task<bool> FreshStartOnceAsync(CancellationToken cancellation)
     {
-        var profile = CloudSaveFiles.ProfileDir(_savesRoot, _xuid);
-        if (!Directory.Exists(profile)) return;
-        var archive = Path.Combine(_savesRoot, AzimuthSaves.ArchiveDir, AzimuthSaves.FolderFor(_xuid));
-        Directory.CreateDirectory(archive);
-        var target = Path.Combine(archive, "fresh-start-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture));
-        for (var n = 1; Directory.Exists(target); n++) target = Path.Combine(archive, $"fresh-start-{DateTime.UtcNow:yyyyMMdd'T'HHmmss'Z'}-{n}");
-        Directory.Move(profile, target);
+        var now = Clock().UtcDateTime;
+        var stamp = now.ToString("O", CultureInfo.InvariantCulture);
+        if (_saves.State(_xuid)?.FreshStart is { RefusedAtUtc: not null } refused)
+        {
+            var choice = ResolveRefusedFreshStart is { } ask
+                ? await ask(new FreshStartRefusal(refused.RefusedRule, refused.RefusedAtUtc), cancellation).ConfigureAwait(false)
+                : FreshStartChoice.NotNow;
+            Note?.Invoke($"save: the line's first save was refused ({refused.RefusedRule ?? "gate"}) at {refused.RefusedAtUtc}; the player chose {choice}");
+            if (choice != FreshStartChoice.StartNewCareer) return false;
+            var again = ArchiveForFreshStart(now);
+            _saves.RecordFreshStart(_xuid, new FreshStartRecord(stamp, again)); // a new fresh start, the refusal cleared
+            Note?.Invoke(again is null ? "save: new career: no career on this PC to move aside" : $"save: new career: the refused career moved to {again}");
+            return true;
+        }
+        if (_saves.State(_xuid)?.FreshStart is { } done)
+        {
+            Note?.Invoke($"save: fresh start already set up for this line at {done.AtUtc} ({done.Archive ?? "nothing archived"}): the current career stays");
+            return true;
+        }
+        var earlier = FreshStartArchives.Names(_savesRoot, _xuid);
+        if (earlier.Count > 0)
+        {
+            var newest = earlier.OrderByDescending(n => FreshStartArchives.ArchivedAt(n) ?? DateTime.MinValue).ThenByDescending(n => n, StringComparer.Ordinal).First();
+            _saves.RecordFreshStart(_xuid, new FreshStartRecord(stamp, FreshStartArchives.IsMarker(newest) ? null : newest));
+            Note?.Invoke($"save: {earlier.Count} fresh-start folder(s) already on this PC ({newest}): counted as this line's fresh start; the current career stays");
+            return true;
+        }
+        var moved = ArchiveForFreshStart(now);
+        if (moved is null) MarkEmptyFreshStart(now);
+        // recorded after the move: a crash in between leaves the archive (or the marker), which the rule above counts
+        _saves.RecordFreshStart(_xuid, new FreshStartRecord(stamp, moved));
+        Note?.Invoke(moved is null ? "save: fresh start: no career on this PC to move aside" : $"save: fresh start: the career on this PC moved to {moved}");
+        return true;
     }
 
+    /// <summary>OD-133: an empty <c>fresh-start-&lt;stamp&gt;-empty</c> folder, the record of a fresh start that had nothing to move, outside sync-state.json.</summary>
+    private void MarkEmptyFreshStart(DateTime nowUtc)
+    {
+        var archive = FreshStartArchives.ArchiveRoot(_savesRoot, _xuid);
+        var stamp = FreshStartArchives.Stamp(nowUtc);
+        var marker = Path.Combine(archive, FreshStartArchives.Prefix + stamp + FreshStartArchives.MarkerSuffix);
+        for (var n = 1; Directory.Exists(marker); n++) marker = Path.Combine(archive, $"{FreshStartArchives.Prefix}{stamp}-{n}{FreshStartArchives.MarkerSuffix}");
+        Directory.CreateDirectory(marker);
+    }
+
+    /// <summary>OD-133: the server refused the line's first save; the next fresh start asks the player.</summary>
+    private void RecordFirstSaveRefused(SaveFailure refused)
+    {
+        var rule = refused.Rule ?? refused.Reason ?? refused.Code;
+        _saves.RecordFreshStartRefused(_xuid, rule, Clock().UtcDateTime);
+        Note?.Invoke($"save: the line's first save was refused ({rule}); the next Play asks before archiving anything");
+    }
+
+    /// <summary>
+    /// OD-133: a restored career's upload, sent first under this session's lease. Committed: settled. A retryable answer, a lost lease
+    /// or bytes that cannot be read now keep it and stop the launch (a restored career never plays unsynced; the shell offers to set it
+    /// aside). A conflict hands it to the conflict screen (the record cleared before the bytes are set aside, so a crash leaves the conflict
+    /// path, not an undo). Every other answer (refused, unreadable, invalid, not eligible, digest or integrity mismatch), and recorded
+    /// bytes that are gone, owe the undo before the bytes are set aside, then pay it.
+    /// </summary>
+    private async Task<bool> SendRestoreAsync(string access, SaveHead head, PendingUpload restore, CancellationToken cancellation)
+    {
+        switch (_saves.PendingBytesOf(_xuid))
+        {
+            case PendingBytesState.Unreadable:
+                throw new SaveBlockedException("SAVES.LOCAL_BUSY", "the restored career's recorded bytes cannot be read right now");
+            case PendingBytesState.Gone:
+                Note?.Invoke($"save: the restored career's recorded bytes ({restore.CommitId}) are gone or changed: set aside");
+                RestoreUndo.Owe(_saves, _savesRoot, _xuid, "LOCAL.INTEGRITY", Clock().UtcDateTime, Note); // owed before the set-aside
+                _saves.SetAsidePending(_xuid);
+                await PayUndoAsync(access, head, cancellation).ConfigureAwait(false);
+                return true;
+        }
+        _report(SaveStep.Uploading, null);
+        var sent = await _saves.SendPendingAsync(access, _xuid, _line!.Lease, beforeSetAside: failure =>
+        {
+            if (failure.Kind == SaveFailureKind.RevisionConflict) _saves.SetRestore(_xuid, null); // the conflict screen decides
+            else RestoreUndo.Owe(_saves, _savesRoot, _xuid, Reason(failure), Clock().UtcDateTime, Note);
+        }, cancellation).ConfigureAwait(false);
+        switch (sent)
+        {
+            case { Committed: { } committed, Failure: null }:
+                _saves.SetRestore(_xuid, null);
+                Note?.Invoke($"save: the restored career is revision {committed.Revision}");
+                _report(SaveStep.Uploaded, committed.Revision.ToString(CultureInfo.InvariantCulture));
+                return true;
+            case { Failure: { } kept, Pending: not null }:
+                // retryable, the lease lost (kept as a seed is), or the bytes not read now: still recorded; the game does not start on it
+                throw new SaveBlockedException(kept.Code, "the restored career is still waiting to reach the cloud", kept.RetryAfter);
+            case { Failure: { Kind: SaveFailureKind.RevisionConflict } }:
+                Note?.Invoke("save: the head moved since the restore was checked: the conflict screen decides");
+                return true;
+            case { Failure: { } failure }:
+                Note?.Invoke($"save: the restored career was not committed ({failure.Code} {Reason(failure)})");
+                await PayUndoAsync(access, head, cancellation).ConfigureAwait(false);
+                return true;
+            default:
+                return true;
+        }
+
+        static string Reason(SaveFailure failure) => failure.Kind == SaveFailureKind.GateRefused ? failure.Rule ?? failure.Reason ?? failure.Code : failure.Code;
+    }
+
+    /// <summary>
+    /// OD-133: pays the owed undo (<see cref="RestoreUndo.UndoAsync"/>) and tells the player. Unpaid: the game does not start on the
+    /// refused career (<see cref="RestoreUndo.OwedCode"/>); the shell offers to try again or, when it cannot be paid, to keep the career.
+    /// </summary>
+    private async Task PayUndoAsync(string access, SaveHead? head, CancellationToken cancellation)
+    {
+        var owed = RestoreUndo.Owed(_saves, _savesRoot, _xuid);
+        if (await RestoreUndo.UndoAsync(_saves, access, _savesRoot, _xuid, head, Clock().UtcDateTime, Note, cancellation).ConfigureAwait(false))
+        {
+            _report(SaveStep.RestoreRefused, owed?.OwedReason);
+            return;
+        }
+        _report(SaveStep.RestoreUndoFailed, owed?.OwedReason);
+        throw new SaveBlockedException(RestoreUndo.OwedCode, "this PC's save from before the restore could not be put back yet");
+    }
+    /// <summary>The profile's whole folder moves to <c>fi-launcher-archive\User_x\fresh-start-&lt;stamp&gt;</c> (same volume, nothing deleted); its name, or null when there was no folder.</summary>
+    private string? ArchiveForFreshStart(DateTime nowUtc)
+    {
+        var profile = CloudSaveFiles.ProfileDir(_savesRoot, _xuid);
+        if (!Directory.Exists(profile)) return null;
+        var archive = FreshStartArchives.ArchiveRoot(_savesRoot, _xuid);
+        Directory.CreateDirectory(archive);
+        var stamp = FreshStartArchives.Stamp(nowUtc);
+        var target = Path.Combine(archive, FreshStartArchives.Prefix + stamp);
+        for (var n = 1; Directory.Exists(target); n++) target = Path.Combine(archive, $"{FreshStartArchives.Prefix}{stamp}-{n}");
+        Directory.Move(profile, target);
+        return Path.GetFileName(target);
+    }
     /// <summary>
     /// CR-S51 while the game runs: Azimuth's first sealed revision goes up as <c>fresh_start</c> as soon as it appears (the server's
     /// ceilings are those of a new career, before the intro race's rewards, and Azimuth keeps only its two newest revisions). Ends when
@@ -494,8 +696,10 @@ public sealed class SessionSaves
                     _report(SaveStep.Uploaded, committed.Revision.ToString(CultureInfo.InvariantCulture));
                     return null;
                 case { Failure: { Kind: SaveFailureKind.GateRefused } refused }:
-                    // NOT_FRESH_START: parked by the server for a moderator; nothing more is sent on this line this session
+                    // NOT_FRESH_START: parked by the server for a moderator; nothing more is sent on this line this session, and the next
+                    // fresh start asks the player before archiving anything (OD-133)
                     _freshSettled = true;
+                    RecordFirstSaveRefused(refused);
                     _report(SaveStep.Refused, refused.Reason);
                     return null;
                 case { Failure: { KeepsPending: true } waiting }:
@@ -521,6 +725,11 @@ public sealed class SessionSaves
     {
         if (_line is null)
         {
+            return null;
+        }
+        if (_holdUploads)
+        {
+            Note?.Invoke("save: nothing sent: the line's first save was refused and the player chose not now");
             return null;
         }
         // CR-S51: a first career the watcher did not send yet goes now: the recorded first save, or else the oldest sealed revision on

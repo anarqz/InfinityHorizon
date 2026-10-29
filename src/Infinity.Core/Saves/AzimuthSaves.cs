@@ -274,24 +274,34 @@ public static class AzimuthSaves
             }
             ulong? xuid = ulong.TryParse(folder.AsSpan(5), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var x) ? x : null;
             var played = File.GetLastWriteTimeUtc(Path.Combine(revision.Path, "commit"));
-            byte[]? profile = null;
-            if (revision.Entries.Any(e => e.Name == "ProfileData"))
-            {
-                try
-                {
-                    profile = File.ReadAllBytes(Path.Combine(revision.Path, "data", "ProfileData"));
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                    // Listed without its numbers.
-                }
-            }
-            // ProfileData's Level counts from 0: the game shows 7 for a stored 6 (seen 2026-10-19).
-            found.Add(new SaveProfile(folder, xuid, revision, played,
-                profile is null ? null : ProfileInt(profile, "Level") + 1,
-                profile is null ? null : ProfileInt(profile, "Credits")));
+            var (level, credits) = Numbers(revision);
+            found.Add(new SaveProfile(folder, xuid, revision, played, level, credits));
         }
         return [.. found.OrderByDescending(p => p.LastPlayedUtc)];
+    }
+
+    /// <summary>
+    /// The level the game shows and the credits of a revision's ProfileData (each null when not found exactly once, or the file does not
+    /// read): what the picker and the OD-133 career restore list show.
+    /// </summary>
+    public static (int? Level, int? Credits) Numbers(LocalRevision revision)
+    {
+        ArgumentNullException.ThrowIfNull(revision);
+        if (!revision.Entries.Any(e => e.Name == "ProfileData"))
+        {
+            return (null, null);
+        }
+        byte[] profile;
+        try
+        {
+            profile = File.ReadAllBytes(Path.Combine(revision.Path, "data", "ProfileData"));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return (null, null); // listed without its numbers
+        }
+        // ProfileData's Level counts from 0: the game shows 7 for a stored 6 (seen 2026-10-19).
+        return (ProfileInt(profile, "Level") + 1, ProfileInt(profile, "Credits"));
     }
 
     /// <summary>
