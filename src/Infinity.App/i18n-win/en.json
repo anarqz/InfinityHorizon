@@ -1179,6 +1179,7 @@
   "presence.toggle_car": "Car",
   "presence.toggle_lobby": "Lobby and players",
   "presence.toggle_join": "Join button",
+  "presence.toggle_livery": "Show my livery",
   "presence.duplicate_mod": "The Discord RPC mod is installed, and Infinity now shows your Discord status itself: you can uninstall that mod in Mods so your status is not shown twice.",
   "join.title": "Join from link",
   "join.hint": "Paste a Join lobby link from Discord, or a lobby id.",

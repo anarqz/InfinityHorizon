@@ -22,7 +22,7 @@ public sealed partial class ShellViewModel
     /// <summary>Bullet4fun's Discord RPC (the catalog's <c>discord-rpc</c>): duplicates this presence (DISCORD_PRESENCE.md §3).</summary>
     internal const string DuplicateDiscordModId = "discord-rpc";
     private static readonly TimeSpan PresenceTick = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan ServerPresenceEvery = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ServerPresenceWake = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan PresenceWorldPollEvery = TimeSpan.FromSeconds(30);
 
     private DiscordPresenceService? _presence;
@@ -55,7 +55,7 @@ public sealed partial class ShellViewModel
         azimuthRoot.Length == 0 || ContentLocation?.Mount is not { } mount ? null : new Infinity.Core.Process.CarNames(azimuthRoot, mount, locale).Name(carKey);
     private (string Xuid, ProfilePresence Value)? _serverPresence;
     private CancellationTokenSource? _serverPresencePoll;
-    private long _serverPresenceNextTicks;
+    private readonly PresenceReads _presenceReads = new(); // CR-L44: when to read, and the current car's livery image
     private bool _presenceOverlay;
     private bool _presenceClearPending;
     private DateTimeOffset _presenceWorldPolled = DateTimeOffset.MinValue;
@@ -71,15 +71,17 @@ public sealed partial class ShellViewModel
     public bool PresenceCar { get => PresenceToggles.Car; set => SetPresenceToggles(PresenceToggles with { Car = value }); }
     public bool PresenceLobby { get => PresenceToggles.Lobby; set => SetPresenceToggles(PresenceToggles with { Lobby = value }); }
     public bool PresenceJoin { get => PresenceToggles.Join; set => SetPresenceToggles(PresenceToggles with { Join = value }); }
+    public bool PresenceLivery { get => PresenceToggles.ShowLivery; set => SetPresenceToggles(PresenceToggles with { ShowLivery = value }); }
 
     private void SetPresenceToggles(PresenceToggles next)
     {
         if (next == PresenceToggles) return;
+        if (next.ShowLivery && !PresenceToggles.ShowLivery) _presenceReads.LiveryWanted();
         _presenceToggles = next;
         try { next.Save(_stateDirectory); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Log("discord: settings not saved (" + error.GetType().Name + ")"); }
         foreach (var name in new[] { nameof(PresenceEnabled), nameof(PresenceClub), nameof(PresenceMode), nameof(PresenceName), nameof(PresenceLevel),
-            nameof(PresenceCredits), nameof(PresenceCar), nameof(PresenceLobby), nameof(PresenceJoin) }) Changed(name);
+            nameof(PresenceCredits), nameof(PresenceCar), nameof(PresenceLobby), nameof(PresenceJoin), nameof(PresenceLivery) }) Changed(name);
         RefreshPresence(); // the card follows at the next coalesced send
     }
 
@@ -157,6 +159,7 @@ public sealed partial class ShellViewModel
             Level = game ? _hookLevel ?? server?.Level : server?.Level,
             Credits = game ? _hookCredits ?? server?.Credits : server?.Credits,
             CarName = game ? _hookCarName : null, // T10: "<Year> <Make> <Model>" from the player's own install; empty until resolved
+            LiveryImage = game ? _presenceReads.Image(PresenceToggles.ShowLivery) : null, // CR-L44: only the current car's answer
             Activity = activity,
             World = world,
             StartedAt = game ? _gameStarted!.Value : _launcherStarted,
@@ -196,6 +199,7 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Spawned:
                 _gameStarted = DateTimeOffset.UtcNow;
                 _hookLevel = null; _hookCredits = null; _hookCarName = null; _carNames.Clear();
+                _presenceReads.CarChanged(null);
                 StartServerPresence();
                 break;
             case SupervisorEvent.OverlayConnected:
@@ -207,11 +211,13 @@ public sealed partial class ShellViewModel
                 break;
             case SupervisorEvent.GameCar car:
                 _hookCarName = CarName(car.CarKey); // T10: the key is Data_Car.Id × 1000; CarNames maps it
+                _presenceReads.CarChanged(Infinity.Core.Process.CarNames.CarId(car.CarKey)); // CR-L44: the old image goes now; a read follows
                 break;
             case SupervisorEvent.Exited or SupervisorEvent.Ended:
                 if (_gameStarted is null && e is SupervisorEvent.Ended && _presence is null) break;
                 _gameStarted = null;
                 _hookLevel = null; _hookCredits = null; _hookCarName = null; _carNames.Clear();
+                _presenceReads.CarChanged(null);
                 _presenceOverlay = false;
                 _serverPresencePoll?.Cancel();
                 _serverPresencePoll = null;
@@ -223,51 +229,50 @@ public sealed partial class ShellViewModel
         RefreshPresence();
     }
 
-    /// <summary>CR-S72 at game start and every 5 minutes in game; a server without the route gives nothing (no club).</summary>
+    /// <summary>
+    /// CR-S72 at game start and every 5 minutes in game, and CR-L44 after a car change (<see cref="PresenceReads"/>: one per 60 s, within
+    /// the 60 an hour, never before a 429's Retry-After); <c>?car=</c> only with "Show my livery" on. A server without the route gives
+    /// nothing (no club, no image).
+    /// </summary>
     private void StartServerPresence()
     {
         _serverPresencePoll?.Cancel();
         if (_session is not { } session || Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey) is not { } profile || OfflineMode) return;
         var stop = _serverPresencePoll = new CancellationTokenSource();
         var xuid = profile.Xuid;
+        var reads = _presenceReads;
         _ = Task.Run(async () =>
         {
-            // a relaunch or a new session never reads sooner than 5 minutes (or the last Retry-After) after the previous read
-            var early = Volatile.Read(ref _serverPresenceNextTicks) - DateTimeOffset.UtcNow.UtcTicks;
-            if (early > 0)
-            {
-                try { await Task.Delay(TimeSpan.FromTicks(early), stop.Token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return; }
-            }
             while (!stop.IsCancellationRequested)
             {
-                var wait = ServerPresenceEvery;
-                Volatile.Write(ref _serverPresenceNextTicks, (DateTimeOffset.UtcNow + wait).UtcTicks);
-                try
+                var toggles = Volatile.Read(ref _presenceToggles);
+                if (reads.TryStart(DateTimeOffset.UtcNow, toggles?.ShowLivery ?? true, out var car))
                 {
-                    var presence = await session.Tokens.WithAccessAsync(access => session.Api.ProfilePresenceAsync(access, xuid, stop.Token), stop.Token).ConfigureAwait(false);
-                    _ui.Post(_ =>
+                    try
                     {
-                        if (stop.IsCancellationRequested) return;
-                        _serverPresence = presence is null ? null : (xuid, presence);
-                        if (presence is null) Log("discord: server presence not offered (CR-S72)");
-                        RefreshPresence();
-                    }, null);
-                    if (presence is null) return; // not supported: no retries this session
-                }
-                catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
-                catch (Exception error) when (error is ApiException or HttpRequestException or IOException or System.Text.Json.JsonException
-                    or OperationCanceledException or InvalidOperationException)
-                {
-                    Log("discord: server presence " + (error is ApiException api ? api.Code : error.GetType().Name));
-                    // 429 REQUEST.RATE_LIMITED: never before its Retry-After (and never faster than every 5 minutes)
-                    if (error is ApiException { RetryAfter: { } retry } && retry > wait)
+                        var presence = await session.Tokens.WithAccessAsync(access => session.Api.ProfilePresenceAsync(access, xuid, car, stop.Token), stop.Token)
+                            .ConfigureAwait(false);
+                        reads.Answered(car, presence?.LiveryImage);
+                        _ui.Post(_ =>
+                        {
+                            if (stop.IsCancellationRequested) return;
+                            _serverPresence = presence is null ? null : (xuid, presence);
+                            if (presence is null) Log("discord: server presence not offered (CR-S72)");
+                            RefreshPresence();
+                        }, null);
+                        if (presence is null) return; // not supported: no retries this session
+                    }
+                    catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+                    catch (Exception error) when (error is ApiException or HttpRequestException or IOException or System.Text.Json.JsonException
+                        or OperationCanceledException or InvalidOperationException)
                     {
-                        wait = retry;
-                        Volatile.Write(ref _serverPresenceNextTicks, (DateTimeOffset.UtcNow + wait).UtcTicks);
+                        Log("discord: server presence " + (error is ApiException api ? api.Code : error.GetType().Name));
+                        reads.Failed(car);
+                        // 429 REQUEST.RATE_LIMITED: never before its Retry-After
+                        if (error is ApiException { RetryAfter: { } retry }) reads.Throttled(DateTimeOffset.UtcNow + retry);
                     }
                 }
-                try { await Task.Delay(wait, stop.Token).ConfigureAwait(false); }
+                try { await Task.Delay(ServerPresenceWake, stop.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
             }
         });

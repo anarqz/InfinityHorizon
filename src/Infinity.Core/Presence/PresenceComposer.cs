@@ -37,6 +37,9 @@ public sealed record PresenceInputs
     public uint? Level { get; init; }
     public ulong? Credits { get; init; }
     public string? CarName { get; init; }
+
+    /// <summary>CR-L44: the current car's Storefront livery preview (an https URL checked by the API client), or null.</summary>
+    public string? LiveryImage { get; init; }
     public PresenceActivity Activity { get; init; }
     public PresenceWorld? World { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
@@ -58,6 +61,10 @@ public sealed record PresenceToggles
     public bool Car { get; init; } = true;
     public bool Lobby { get; init; } = true;
     public bool Join { get; init; } = true;
+
+    /// <summary>CR-L44 (OD-137): "Show my livery": the current car's livery preview as the large image; off sends no <c>?car=</c>. A
+    /// file saved before this toggle existed reads as on.</summary>
+    public bool ShowLivery { get; init; } = true;
 
     public static PresenceToggles AllOn { get; } = new();
 
@@ -94,7 +101,7 @@ public sealed record PresenceToggles
 /// unchanged card. <c>details</c> = <c>[TAG] · HC · Name · Lv 42</c>, <c>state</c> = <c>activity · 1,234,567 CR · car</c> (the
 /// locale's digit grouping), each piece behind its toggle; the party (hex SHA-256 of the world id, never the id) behind the lobby
 /// toggle; Join (§4) only for an <c>everyone</c>/<c>supporters</c>/<c>friends</c> world with an open seat, never <c>private</c>;
-/// Infinity Discord always. A line longer than 128 characters is cut at a grapheme with <c>…</c>: the car first, then the name.
+/// Infinity Discord always. The large image is the livery preview (CR-L44) behind its toggle, else <c>infinity</c>. A line longer than 128 characters is cut at a grapheme with <c>…</c>: the car first, then the name.
 /// </summary>
 public static class PresenceComposer
 {
@@ -138,7 +145,8 @@ public static class PresenceComposer
         activity["timestamps"] = new JsonObject { ["start"] = inputs.StartedAt.ToUnixTimeMilliseconds() };
         var assets = new JsonObject
         {
-            ["large_image"] = LargeImage,
+            ["large_image"] = toggles.ShowLivery && inputs.LiveryImage is { } livery && livery.StartsWith("https://", StringComparison.Ordinal)
+                ? livery : LargeImage,
             ["large_text"] = Cut("Infinity Horizon " + inputs.LauncherVersion, MaxField),
         };
         if (toggles.Mode)
