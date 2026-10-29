@@ -97,13 +97,10 @@ public sealed class SaveLease
 /// <summary>A profile's cloud save line for one play session: its lease and the head at admission.</summary>
 public sealed record CloudSaveLine(SaveLease Lease, SaveHead Head)
 {
-    /// <summary>OD-52: only a Supporter's (<c>vip</c>) Hardcore profile keeps data on the servers.</summary>
-    public static bool Eligible(string tier, string mode) => tier == "vip" && mode == "hardcore";
-
     /// <summary>
     /// The line of a gate admission, or null when the gate gave none (<c>lease</c> and <c>save</c> only
-    /// for an eligible profile, GATE_API.md §2, OD-52): then the session plays without cloud saves and
-    /// nothing is uploaded or downloaded.
+    /// for a profile the server keeps, GATE_API.md §2, CR-S51; the client never decides it from the tier,
+    /// OD-140): then the session plays without cloud saves and nothing is uploaded or downloaded.
     /// </summary>
     public static CloudSaveLine? FromGate(GateActive active)
     {

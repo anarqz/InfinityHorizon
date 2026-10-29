@@ -569,11 +569,11 @@ void azimuth_account_launch_done(void) {
 
 /* launch.c, once the ticket checked out and before account_ready: the identity it names. Nothing
    is written to FH2Online_Accounts.ini (the launcher owns profiles). */
-void azimuth_account_launch_identity(const char *xuid, const char *gamertag, int free_tier, int noob, int storm_island) {
+void azimuth_account_launch_identity(const char *xuid, const char *gamertag, int tier, int noob, int storm_island) {
     char tag[32];
     utf8_to_wide(xuid, account_xuid, ARRAY_COUNT(account_xuid));
     utf8_to_wide(gamertag, account_gamertag, ARRAY_COUNT(account_gamertag));
-    fi_tier_set(free_tier ? FI_TIER_FREE : FI_TIER_VIP);
+    fi_tier_set(tier); /* display only (OD-140) */
     InterlockedExchange(&account_noob, noob);
     InterlockedExchange(&account_storm_island, storm_island);
     if (storm_island) {
@@ -646,9 +646,6 @@ int azimuth_account_noob(void) {
     return account_noob != 0;
 }
 
-/* The last reply account_take read had "tier". */
-static int account_tier_said;
-
 static int account_take(const char *reply) {
     char value[96];
     if (!json_string(reply, "xuid", value, sizeof(value)) || !value[0]) {
@@ -668,17 +665,13 @@ static int account_take(const char *reply) {
     if (json_string(reply, "mode", value, sizeof(value))) {
         InterlockedExchange(&account_noob, text_equal_ignore_case(value, "noob"));
     }
-    /* the tier is the server's word (tier.c): "free" or "vip", in every reply taken here
-       (/register, /login, device/recover, /me). A reply without one keeps the tier known so far
-       (the Beta server never sends it: vip, the default); it never turns a free profile into a
-       Supporter. Kept as Tier= for a start when the server does not answer. */
+    /* the tier is the server's word (tier.c): "free" or "vip", display text only (OD-140: nothing
+       is gated by it). A reply without one keeps the tier known so far (the Beta server never
+       sends it: vip, the default). Kept as Tier= for a start when the server does not answer. */
     if (json_string(reply, "tier", value, sizeof(value))) {
         int free_tier = text_equal_ignore_case(value, "free");
         fi_tier_set(free_tier ? FI_TIER_FREE : FI_TIER_VIP);
         account_write(L"Tier", free_tier ? L"free" : L"vip");
-        account_tier_said = 1;
-    } else {
-        account_tier_said = 0;
     }
     size_t length = text_length(reply);
     if (text_find(reply, length, "\"expansions\"")) {
@@ -735,24 +728,13 @@ static DWORD WINAPI account_thread(void *unused) {
     DWORD status = azimuth_net_call(L"GET", L"/infinity/v1/me", account_token_header(), 0, reply, sizeof(reply));
     if (status == 200 && account_take(reply)) {
         account_active = 1;
-        if (!account_tier_said) {
-            /* the Beta server: every profile is a Supporter's. The new server always says it (PLAN
-               9.1): a /me without it there is a server fault, and nothing here opens anything a
-               free profile had not (the tier stays what it was) */
-            log_append(fi_tier_free() ? "ACCOUNT: the server's /me has no tier; the profile stays free (as last said).\r\n"
-                                      : "ACCOUNT: the server's /me has no tier (the Beta server): Supporter, as before.\r\n");
-        }
         /* the server's word for the player, in their language (a moderation reset: db/reset.rs) */
         if (json_string(reply, "notice", text, sizeof(text)) && text[0]) {
             log_append("ACCOUNT: legacy server notice received; no overlay in a Beta session.\r\n");
         }
         InterlockedExchange(&account_link, 1);
-        if (fi_tier_free()) {
-            /* a free profile has no cloud save: its saves stay on this PC, nothing is restored */
-            log_append("CLOUD: free profile: saves stay on this PC (no cloud save, no restore).\r\n");
-        } else {
-            azimuth_cloud_start(account_directory, account_xuid, account_token, account_file, account_server);
-        }
+        /* OD-140: every profile's cloud save starts; the server decides what it keeps */
+        azimuth_cloud_start(account_directory, account_xuid, account_token, account_file, account_server);
     } else if (status == 401) {
         /* the profile logged in on another PC (or the server forgot it): this token is dead */
         account_token[0] = 0;
@@ -765,7 +747,7 @@ static DWORD WINAPI account_thread(void *unused) {
         /* server unreachable: keep the stored identity, the token is sent anyway */
         account_active = account_xuid[0] && account_gamertag[0];
         account_log("server unreachable; using the stored account.", "");
-        if (account_active && !fi_tier_free()) {
+        if (account_active) {
             azimuth_cloud_put_aside(account_directory, account_xuid);
         }
     }

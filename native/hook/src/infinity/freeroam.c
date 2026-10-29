@@ -28,8 +28,8 @@
    secureDeviceAddress: base64 of "fh2inf:<host>:<port>" (an IPv6 host in
    brackets). [hook] FreeRoamWorld=<host>:<port> (Infinity.cfg) overrides it for tests. A world on
    another PC is reached through azimuth_proxy.c (F3: STUN, punching, the source
-   filter); [hook] FreeRoamDirect=1 sends the game straight to it instead. Neither applies to a
-   free profile: it goes where the server's world list places it, through the proxy.
+   filter); [hook] FreeRoamDirect=1 sends the game straight to it instead. Both are every
+   profile's (OD-140: no tier gate).
 
    [hook] FreeRoam=0 turns all of it off (on by default since fh2online.46). */
 #include "infinity.h"
@@ -860,16 +860,8 @@ static FrSockaddrIn6 fr_world_address(const wchar_t *base64) {
     host[0] = 0;
     const wchar_t *spec = 0;
     wchar_t spec_buffer[128];
-    /* the Beta protocol: a free profile goes only where the server places it (free with free,
-       OD-25). A launcher session has no tier gate (CR-S69, OD-129): every profile is a Racer. */
-    const int placed = fi_tier_free() && !fi_launch_protocol();
-    if (fr_world_override[0] && placed) {
-        static volatile LONG said;
-        if (!InterlockedExchange(&said, 1)) {
-            log_append("FREEROAM: free profile: [hook] FreeRoamWorld ignored; the server places you.\r\n");
-        }
-    }
-    if (fr_world_override[0] && !placed) {
+    /* [hook] FreeRoamWorld is every profile's (OD-140: no tier gate, in any protocol) */
+    if (fr_world_override[0]) {
         spec = fr_world_override;
         source = "[hook] FreeRoamWorld";
     } else if (base64 && base64[0] && fr_base64_decode(base64, decoded, sizeof(decoded)) > 7 &&

@@ -1197,13 +1197,7 @@ int azimuth_proxy_start(const void *world, void *local) {
         if(!ready)return -1;
         px_direct=0;
     }
-    if (px_direct && fi_tier_free() && !fi_launch_protocol()) {
-        /* the Beta protocol: [hook] FreeRoamDirect is a diagnostic for Supporters, a free profile
-           always goes through the proxy, to the world the server named. A launcher session has
-           no tier gate (CR-S69, OD-129). */
-        px_direct = 0;
-        log_append("PROXY: free profile: [hook] FreeRoamDirect ignored; the world is reached through the proxy.\r\n");
-    }
+    /* [hook] FreeRoamDirect is every profile's diagnostic (OD-140: no tier gate, in any protocol) */
     if (px_direct || px_loopback(&target)) {
         return 0;
     }

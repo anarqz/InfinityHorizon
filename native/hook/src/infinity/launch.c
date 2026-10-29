@@ -1519,12 +1519,13 @@ static int launch_go_online(const LaunchTicket *t) {
         launch_log("the ticket checked out after the game read its identity: offline this session.", 0, 0, "");
         return 0;
     }
+    /* the tier is display text only (OD-140, CR-S69: the Supporter badge) */
     int free_tier = text_equal_ignore_case(launch_claims.tier, "free");
     int noob = text_equal_ignore_case(launch_claims.mode, "noob");
-    azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier, noob, launch_claims.storm_island);
-    fi_tier_set_noob(noob);
-    /* OD-128: the save line alone opens or shuts every gate; it is the session token's (a launch
-       ticket naming one is honoured too) */
+    azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier ? FI_TIER_FREE : FI_TIER_VIP,
+                                    noob, launch_claims.storm_island);
+    /* OD-128 (kept by OD-140): the save line alone opens or shuts the universe's services, whatever
+       the tier and mode; it is the session token's (a launch ticket naming one is honoured too) */
     const int line = launch_claims.line || launch_token_line(t->token, t->token_size);
     fi_tier_set_line(line);
     launch_log(line ? "save line: this profile's cloud data is kept; every game service goes to the server."

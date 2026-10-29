@@ -753,7 +753,8 @@ static int server_info(char commit[65]) {
 }
 
 /* The HTTP status of the last upload (0: never sent), and whether its refusal said the profile
-   is free (403 {"why":"free"}: a free profile has no cloud save, PLAN 9.1). */
+   is free (403 {"why":"free"}: an older server's refusal, PLAN 9.1; only reported, the hook itself
+   gates nothing by tier, OD-140). */
 static DWORD cloud_upload_status;
 static int cloud_upload_free;
 
@@ -1571,7 +1572,7 @@ static int cloud_profile_for(const wchar_t *bin, const wchar_t *xuid, wchar_t he
     return xuid[0] && saves_folder(bin) && wjoin(cloud_profile, cloud_saves, L"\\player-1\\User_", at);
 }
 
-/* A session that plays a Supporter's online profile while the server cannot be reached: its
+/* A session that plays an online profile while the server cannot be reached: its
    revisions without a commit at start go aside too, or one the player's ExtraOptions sealed
    would be the "newer save" the next start uploads. */
 void azimuth_cloud_put_aside(const wchar_t *bin, const wchar_t *xuid) {

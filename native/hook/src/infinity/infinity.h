@@ -99,7 +99,7 @@ void azimuth_cloud_start(const wchar_t *bin, const wchar_t *xuid, const wchar_t 
    session, and the online profile's are put aside (saves\fh2online-backup) before the game
    opens its save: ExtraOptions' DisableAzimuthSaveChecksums=1 seals such a revision as it is. */
 void azimuth_cloud_note_unsealed(const wchar_t *bin);
-/* The same putting aside for a Supporter's online profile played while the server cannot be
+/* The same putting aside for an online profile played while the server cannot be
    reached at start (`xuid` decimal). */
 void azimuth_cloud_put_aside(const wchar_t *bin, const wchar_t *xuid);
 int azimuth_cloud_upload_offline(const wchar_t *bin, const wchar_t *token, const wchar_t *ini, const wchar_t *section,
@@ -201,8 +201,9 @@ void fi_activity_answer(const wchar_t *response_headers);
 void fi_launch_relaunch(unsigned reason);
 /* account.c: the handshake is over (the identity getters stop waiting). */
 void azimuth_account_launch_done(void);
-/* account.c: the identity of the launcher's ticket (xuid decimal, gamertag UTF-8). */
-void azimuth_account_launch_identity(const char *xuid, const char *gamertag, int free_tier, int noob, int storm_island);
+/* account.c: the identity of the launcher's ticket (xuid decimal, gamertag UTF-8; tier FI_TIER_*,
+   display only). */
+void azimuth_account_launch_identity(const char *xuid, const char *gamertag, int tier, int noob, int storm_island);
 /* The header line(s) that authenticate the hook's requests: X-Fi-Session and X-Fi-Hook in a
    launcher session, else the Beta X-Fh2-Token. Its length, 0 when there is none. */
 size_t azimuth_account_auth_header(wchar_t *out, size_t cap);
@@ -318,35 +319,27 @@ void azimuth_expansions_after_eo(void);
    accounts file). */
 int azimuth_account_storm_island(void);
 
-/* tier.c: the account's tier, as the server says it (/me "tier"; none, as the Beta server
-   answers, is vip). A free account hosts and joins free worlds and has nothing else of the
-   universe: fi_tier_free_route says what its game requests get. */
+/* tier.c: the cloud line gate (OD-128) and the account's tier, display text only (OD-140: the
+   "Infinity Racer" / "Infinity Supporter" badge; nothing routes or gates by it). */
 enum { FI_TIER_VIP, FI_TIER_FREE };
 enum { FI_ROUTE_PASS, FI_ROUTE_UNAVAILABLE, FI_ROUTE_EMPTY_XTSW, FI_ROUTE_JSON };
 void fi_tier_set(int tier);
 int fi_tier(void);
-int fi_tier_free(void);
-/* OD-52: the profile is a Supporter's Hardcore one, the only kind with data on the servers; a
-   free or Noob profile's game requests get the free answers. */
-void fi_tier_set_noob(int noob);
 /* OD-128: in a launcher session the ticket's save line (CR-S51 `line`: 1 or 0) alone opens or shuts
-   every gate, whatever tier and mode; -1 (no ticket) leaves the tier and mode to decide. */
+   the universe's services, whatever tier and mode; -1 (no ticket, the Beta protocol): open (OD-140). */
 void fi_tier_set_line(int line);
 int fi_tier_universe(void);
-/* For a free account: FI_ROUTE_PASS (to the server), FI_ROUTE_UNAVAILABLE (503 here),
+/* Without a cloud line: FI_ROUTE_PASS (to the server), FI_ROUTE_UNAVAILABLE (503 here),
    FI_ROUTE_EMPTY_XTSW (200, an empty bin/xtsw reply here) or FI_ROUTE_JSON (200, `*json` here);
    `what` gets "Class.Method" or the host, for the log. */
-int fi_tier_free_route(const wchar_t *method, const wchar_t *url, const wchar_t *headers, const char **json,
-                       wchar_t *what, size_t what_capacity);
+int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char **json, wchar_t *what,
+                          size_t what_capacity);
 /* Foreign XUIDs (owner via the Mac, 2026-10-19, GAME_PLATFORM §3a): in a launcher session only
    the chosen profile (`own`) talks to the server. A URL naming another XUID (xuid(N), xuid=N):
-   free → userpresence GET answered Offline here, anything else 503 here; Supporter → reads sent,
-   writes 503 here. A free ticket's profile.xboxlive.com batch naming anyone but `own` (the
-   save's drivatars) is answered here with generated gamertags (`own_tag` for the player).
-   FI_ROUTE_JSON fills `json` (capacity `json_cap`). */
-int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
-                          unsigned long long own, const wchar_t *own_tag, int free_tier, char *json, size_t json_cap);
-void fi_tier_generated_gamertag(unsigned long long xuid, char *out, size_t cap);
+   no cloud line (`no_line`) → userpresence GET answered Offline here, anything else 503 here;
+   with a line → reads sent, writes 503 here. FI_ROUTE_JSON fills `json` (capacity `json_cap`). */
+int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned long long own, int no_line, char *json,
+                          size_t json_cap);
 
 /* eo_detect.c: the player's ExtraOptions in this process (looked at once, from the first game
    callback, when ExtraOptions has run): absent, 0.2.98 active or not, another version, or a

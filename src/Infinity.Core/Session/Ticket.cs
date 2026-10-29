@@ -36,7 +36,7 @@ public sealed record TicketClaims
     /// <summary>Base URL the hook sends game traffic to.</summary>
     [JsonPropertyName("server")] public required string Server { get; init; }
 
-    /// <summary><c>vip</c> or <c>free</c> (internal id; shown as "Infinity Supporter"). Display only: the server enforces it.</summary>
+    /// <summary><c>vip</c> or <c>free</c> (internal id; shown as "Infinity Supporter"). Display only (OD-140: nothing in the client depends on it).</summary>
     [JsonPropertyName("tier")] public required string Tier { get; init; }
 
     /// <summary>Game-plane pool the ticket admits to (<c>vip</c> or <c>matchmaking</c> on the platform).</summary>

@@ -1203,10 +1203,10 @@ static int net_answer_without_profile(NetRequest *request) {
     return 1;
 }
 
-/* A free account (tier.c): the universe's services are answered here, never sent (a free
-   profile has no records, rivals, ghosts, clubs, designs, friends or cloud copy on the
-   server). The first answer of each kind is logged. */
-static int net_answer_free(NetRequest *request) {
+/* A launcher session without a cloud line (tier.c, OD-128; never by tier, OD-140): the universe's
+   services are answered here, never sent (the server keeps nothing of a profile without a line).
+   The first answer of each kind is logged. */
+static int net_answer_no_line(NetRequest *request) {
     static unsigned logged[48];
     static volatile LONG logged_count;
     static SRWLOCK logged_lock = SRWLOCK_INIT;
@@ -1216,8 +1216,8 @@ static int net_answer_free(NetRequest *request) {
     }
     const char *json = 0;
     wchar_t what[96];
-    int route = fi_tier_free_route(buffer_wide(&request->method), buffer_wide(&request->url),
-                                   buffer_wide(&request->request_headers), &json, what, ARRAY_COUNT(what));
+    int route = fi_tier_no_line_route(buffer_wide(&request->url), buffer_wide(&request->request_headers), &json, what,
+                                      ARRAY_COUNT(what));
     if (route == FI_ROUTE_PASS) {
         return 0;
     }
@@ -1227,7 +1227,7 @@ static int net_answer_free(NetRequest *request) {
     buffer_free(&request->response_body);
     int ok = route == FI_ROUTE_UNAVAILABLE
                  ? buffer_append_wide(&request->status_text, L"Service Unavailable") &&
-                       buffer_append_text(&request->response_body, "free profile")
+                       buffer_append_text(&request->response_body, "no cloud line")
              : route == FI_ROUTE_EMPTY_XTSW
                  ? buffer_append_wide(&request->status_text, L"OK") &&
                        buffer_append_wide(&request->response_headers, L"Content-Type: bin/xtsw\r\n") &&
@@ -1253,13 +1253,13 @@ static int net_answer_free(NetRequest *request) {
     if (first) {
         char line[200];
         size_t n = 0;
-        static const char head[] = "NETWORK: free or Noob profile: ";
+        static const char head[] = "NETWORK: no cloud line: ";
         for (size_t i = 0; head[i]; ++i) line[n++] = head[i];
         for (size_t i = 0; what[i] && n + 80 < sizeof(line); ++i) line[n++] = what[i] < 128 ? (char)what[i] : '?';
-        const char *tail = route == FI_ROUTE_UNAVAILABLE ? " answered here, unavailable (not sent: free profiles have "
-                                                           "none of it).\r\n"
+        const char *tail = route == FI_ROUTE_UNAVAILABLE ? " answered here, unavailable (not sent: the server keeps "
+                                                           "none of it without a line).\r\n"
                            : route == FI_ROUTE_EMPTY_XTSW ? " answered here as taken (not sent: no cloud copy).\r\n"
-                                                          : " answered here, empty (not sent: no friends on free).\r\n";
+                                                          : " answered here, empty (not sent: no cloud line).\r\n";
         for (size_t i = 0; tail[i] && n + 1 < sizeof(line); ++i) line[n++] = tail[i];
         line[n] = 0;
         log_append(line);
@@ -1275,14 +1275,13 @@ static int net_answer_foreign(NetRequest *request) {
     if (!fi_launch_protocol() || !own) {
         return 0;
     }
-    enum { JSON_CAP = 16384 };
+    enum { JSON_CAP = 256 }; /* an Offline presence or an empty list */
     char *json = net_alloc(JSON_CAP);
     if (!json) {
         return 0;
     }
-    int route = fi_tier_foreign_route(buffer_wide(&request->method), buffer_wide(&request->url),
-                                      request->request_body.data, request->request_body.size, own,
-                                      azimuth_account_gamertag(), !fi_tier_universe(), json, JSON_CAP);
+    int route = fi_tier_foreign_route(buffer_wide(&request->method), buffer_wide(&request->url), own,
+                                      !fi_tier_universe(), json, JSON_CAP);
     int ok = 0;
     if (route != FI_ROUTE_PASS) {
         request->status = route == FI_ROUTE_JSON ? 200 : 503;
@@ -1296,8 +1295,8 @@ static int net_answer_foreign(NetRequest *request) {
                  : buffer_append_wide(&request->status_text, L"Service Unavailable") &&
                        buffer_append_text(&request->response_body, "another player");
         net_log_once(route == FI_ROUTE_JSON ? &logged_json : &logged_unavailable,
-                     route == FI_ROUTE_JSON ? "NETWORK: a lookup of other players (drivatars) answered here, with "
-                                              "generated names (not sent: only this profile talks to the server).\r\n"
+                     route == FI_ROUTE_JSON ? "NETWORK: no cloud line: another player's presence answered here, "
+                                              "offline (not sent: only this profile talks to the server).\r\n"
                                             : "NETWORK: a request about another player answered here, unavailable "
                                               "(not sent: only this profile talks to the server).\r\n");
     }
@@ -1345,7 +1344,7 @@ static DWORD WINAPI net_worker(void *parameter) {
     }
     int answered = net_mode == NET_MODE_PROXY && !request->aborted &&
                    (net_answer_without_profile(request) || net_answer_foreign(request) || net_answer_livery(request) ||
-                    net_answer_free(request) || net_hold_progress(request) ||
+                    net_answer_no_line(request) || net_hold_progress(request) ||
                     net_forward(request, &error));
     if (request->aborted) {
         answered = 0;
