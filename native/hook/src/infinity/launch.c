@@ -1265,6 +1265,46 @@ static int launch_ticket_ok(const LaunchTicket *t) {
 
 /* ---------------------------------------------------------------- token */
 
+/* OD-128: the session's save line. The launch ticket does not carry it (ACCOUNTS.md §4.2); the
+   session token does (GATE_API.md §3, CR-S51 `line`, omitted when false). The token is PASETO
+   v4.public: "v4.public." + base64url(claims JSON || 64-byte signature) [+ "." + footer]. Its
+   claims are read here, not verified: the game plane verifies the token on every request, so a
+   wrong value can only make the hook send what the server then refuses. 1 only for a literal
+   `"line":true`. */
+static int launch_token_line(const unsigned char *token, size_t size) {
+    static const char prefix[] = "v4.public.";
+    const size_t prefix_size = sizeof(prefix) - 1;
+    unsigned char payload[LAUNCH_MAX_TOKEN];
+    size_t n = 0;
+    unsigned bits = 0, value = 0;
+    if (!token || size <= prefix_size || !memory_equal(token, prefix, prefix_size)) {
+        return 0;
+    }
+    for (size_t i = prefix_size; i < size && token[i] != '.'; ++i) {
+        const unsigned char c = token[i];
+        int v = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ? c - '0' + 52
+              : c == '-' ? 62 : c == '_' ? 63 : -1;
+        if (v < 0) {
+            return 0;
+        }
+        value = (value << 6) | (unsigned)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (n >= sizeof(payload)) {
+                return 0;
+            }
+            payload[n++] = (unsigned char)(value >> bits);
+        }
+    }
+    if (n <= 64) {
+        return 0;
+    }
+    const char *value_at, *value_end;
+    return json_member((const char *)payload, n - 64, "line", &value_at, &value_end) && value_end - value_at == 4 &&
+           memory_equal(value_at, "true", 4);
+}
+
 /* The token `token` (`size` bytes, printable ASCII) that expires at `expires_unix` (the
    server's clock) becomes the one game traffic carries: 1, or 0 when it is not a token. */
 static int launch_set_token(const unsigned char *token, size_t size, unsigned long long expires_unix) {
@@ -1402,8 +1442,11 @@ static int launch_go_online(const LaunchTicket *t) {
     int noob = text_equal_ignore_case(launch_claims.mode, "noob");
     azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier, noob, launch_claims.storm_island);
     fi_tier_set_noob(noob);
-    fi_tier_set_line(launch_claims.line); /* OD-128: the save line alone opens or shuts every gate */
-    launch_log(launch_claims.line ? "save line: this profile's cloud data is kept; every game service goes to the server."
+    /* OD-128: the save line alone opens or shuts every gate; it is the session token's (a launch
+       ticket naming one is honoured too) */
+    const int line = launch_claims.line || launch_token_line(t->token, t->token_size);
+    fi_tier_set_line(line);
+    launch_log(line ? "save line: this profile's cloud data is kept; every game service goes to the server."
                                   : "no save line: this profile keeps no cloud data; the universe's services are answered here.",
                0, 0, "");
     launch_log(free_tier ? "online through the launcher's session (Infinity Racer, display only); token for " :
