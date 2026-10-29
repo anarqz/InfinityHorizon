@@ -119,8 +119,8 @@
           "pt-BR": "Mapa do Tesouro"
         },
         "description": {
-          "en": "Reveals every bonus board and barn find, on the mainland and Storm Island. Turning it on, saving in game and turning it off keeps them found.",
-          "pt-BR": "Revela todas as placas de bônus e carros de celeiro, no continente e na Storm Island. Ligar, salvar no jogo e desligar mantém tudo descoberto."
+          "en": "Reveals every bonus board and barn find, on the mainland and Storm Island. Turning it on, saving in game and turning it off keeps them found. Always off for Hardcore profiles.",
+          "pt-BR": "Revela todas as placas de bônus e carros de celeiro, no continente e na Storm Island. Ligar, salvar no jogo e desligar mantém tudo descoberto. Sempre desligado em perfis Hardcore."
         },
         "advanced": false,
         "apply": "next-launch",
@@ -216,12 +216,7 @@
         "apply": "next-launch",
         "type": "boolean",
         "default": true,
-        "encoding": "0/1",
-        "lockedValue": false,
-        "lockReason": {
-          "en": "Kept off by Infinity: Infinity serves this online tab itself.",
-          "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
-        }
+        "encoding": "0/1"
       },
       {
         "id": "frontend-enablesocial",
@@ -239,12 +234,7 @@
         "apply": "next-launch",
         "type": "boolean",
         "default": true,
-        "encoding": "0/1",
-        "lockedValue": false,
-        "lockReason": {
-          "en": "Kept off by Infinity: Infinity serves this online tab itself.",
-          "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
-        }
+        "encoding": "0/1"
       },
       {
         "id": "frontend-enableclubs",
@@ -262,12 +252,7 @@
         "apply": "next-launch",
         "type": "boolean",
         "default": true,
-        "encoding": "0/1",
-        "lockedValue": false,
-        "lockReason": {
-          "en": "Kept off by Infinity: Infinity serves this online tab itself.",
-          "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
-        }
+        "encoding": "0/1"
       },
       {
         "id": "frontend-enablerivals",
@@ -285,12 +270,7 @@
         "apply": "next-launch",
         "type": "boolean",
         "default": true,
-        "encoding": "0/1",
-        "lockedValue": false,
-        "lockReason": {
-          "en": "Kept off by Infinity: Infinity serves this online tab itself.",
-          "pt-BR": "Mantido desligado pelo Infinity: o próprio Infinity atende esta aba online."
-        }
+        "encoding": "0/1"
       },
       {
         "id": "photomode-freecamera",
