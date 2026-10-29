@@ -24,6 +24,7 @@ public sealed partial class ShellViewModel
     private bool _showLobbyPane, _lobbyStarting;
     private string _lobbyName = string.Empty;
     private byte _lobbyAudience, _lobbyLatency;
+    private bool _lobbyAnyMode;
     private int _lobbyMaxPlayers = 12;
     private string? _lobbyLocalError;
     private LauncherLock? _instanceLock;
@@ -86,13 +87,24 @@ public sealed partial class ShellViewModel
     public bool CanLobbyFewer => CanEditLobby && _lobbyMaxPlayers > 2;
     public bool CanLobbyMore => CanEditLobby && _lobbyMaxPlayers < 12;
 
-    /// <summary>The mode is the selected profile's (read-only): matchmaking refuses a world of another mode.</summary>
+    /// <summary>The world's mode is the selected profile's: matchmaking refuses a world of another mode.</summary>
     public string LobbyMode => LobbyProfile?.Mode switch
     {
         "hardcore" => S["signin.form_hardcore"],
         "noob" => S["signin.form_noob"],
         _ => "—",
     };
+
+    /// <summary>
+    /// OD-141 (CR-L43): the lobby is for the profile's own mode (the default) or open to Hardcore and Noob. Sent when the
+    /// world opens and fixed for its life (the server answers 409 <c>{reason: "modes"}</c> to a change), so the choice is
+    /// locked while the lobby runs (<see cref="CanEditLobby"/>).
+    /// </summary>
+    public bool LobbyModesOwn { get => !_lobbyAnyMode; set => SetLobbyModes(value, false); }
+    public bool LobbyModesAny { get => _lobbyAnyMode; set => SetLobbyModes(value, true); }
+
+    /// <summary>"Hardcore only" / "Só Hardcore": the own-mode choice.</summary>
+    public string LobbyModesOwnText => S["lobby.modes_own"].Replace("{mode}", LobbyMode, StringComparison.Ordinal);
 
     public string LobbyRaces => S["lobby.races_on"];
 
@@ -170,6 +182,13 @@ public sealed partial class ShellViewModel
     {
         if (!value || !CanEditLobby) return;
         _lobbyAudience = audience;
+        Changed(string.Empty);
+    }
+
+    private void SetLobbyModes(bool value, bool any)
+    {
+        if (!value || !CanEditLobby) return;
+        _lobbyAnyMode = any;
         Changed(string.Empty);
     }
 
@@ -251,8 +270,8 @@ public sealed partial class ShellViewModel
             var host = NewDedicatedHost(profile, mods);
             if (host is null) { _lobbyLocalError = S["lobby.unavailable"]; return; }
             _dedicated = host;
-            Log($"lobby: start requested (audience {_lobbyAudience}, {_lobbyMaxPlayers} guests, latency {_lobbyLatency})");
-            var status = await host.StartAsync(new DedicatedLobbySettings(_lobbyName, _lobbyAudience, (byte)_lobbyMaxPlayers, _lobbyLatency));
+            Log($"lobby: start requested (audience {_lobbyAudience}, {_lobbyMaxPlayers} guests, latency {_lobbyLatency}, {(_lobbyAnyMode ? "any mode" : "own mode")})");
+            var status = await host.StartAsync(new DedicatedLobbySettings(_lobbyName, _lobbyAudience, (byte)_lobbyMaxPlayers, _lobbyLatency, _lobbyAnyMode));
             _dedicatedStatus = status;
             Message = status.Phase == DedicatedPhase.Running ? S["lobby.started_toast"] : status.LastError?.Replace("\n", " · ", StringComparison.Ordinal);
         }

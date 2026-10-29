@@ -91,21 +91,7 @@ void SetWorlds(WorldFilter filter, bool modded, uint8_t status, const std::strin
 void SetJoinResult(uint8_t status, const std::string &message); // 0 seat reserved, 3 wrong code, else refused
 void SetHosted(const HostedWorld &hosted);
 
-// "My world" (OD-63): the world this profile hosts or holds a seat in, and its players. The XUID
-// is the key of an action, never shown (OD-61).
-struct MemberRow {
-    std::string xuid, gamertag;
-    uint8_t tier = 0;         // 0 Infinity Racer, 1 Infinity Supporter (the badge only, CR-S69)
-    uint8_t role = 0;         // 0 host, 1 in the world, 2 on the way (seat reserved)
-    uint8_t friend_state = 0; // 0 none, 1 friends, 2 request sent, 3 asked you, 4 you
-};
-struct MyWorld {
-    uint8_t role = 0; // 0 none, 1 hosting, 2 seat reserved, 3 seated
-    std::string world, name, host, code;
-    uint8_t audience = 0, players = 0, max = 0;
-    bool named = false; // false: the server gave no roster (only the host is known)
-    std::vector<MemberRow> members;
-};
+// "My world" (OD-63): MemberRow and MyWorld are in ui_frames.h (CR-L43 adds any_mode).
 void SetMyWorld(MyWorld mine);
 void SetActionResult(uint8_t action, uint8_t status, const std::string &message); // status 0 done
 void WorldsReset();
@@ -150,7 +136,8 @@ void SendWorldsQuery(WorldFilter filter, bool not_full); // 0x14 WorldsQueryV2 (
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag);
 void SendPaneAction(const std::string &pane, const std::string &action);
 void SendJoinWorld(const std::string &world, const std::string &code);
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency);
+// any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode
+void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode);
 void SendMyWorldQuery();
 // action: 1 close, 2 leave, 3 kick, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other)
 void SendWorldAction(uint8_t action, const std::string &xuid, const std::string &gamertag, uint8_t reason);

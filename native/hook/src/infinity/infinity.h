@@ -167,6 +167,12 @@ int azimuth_world_lan_send(const void *data, int size);
 /* The remote-paint receiver boundary, installed on the game image (runtime.c). Policy v1: mode 0
    only, a pass-through since CR-S59; Capture.what 5 reports this readiness. */
 void fi_livery_apply(unsigned char *game_image);
+/* livery_share.c (T19, OD-138): a share preview over 190000 bytes scaled down to an RGBA PNG by the
+   overlay's fi_overlay_fit_png (game_stream.c), or the share goes without one; the Create stub's
+   refusals logged. Install: bit 0 the preview detour, bit 1 the stub's. */
+int fi_livery_share_install(unsigned char *game_image);
+void fi_livery_share_apply(unsigned char *game_image);
+int fi_livery_share_original_fits(unsigned size);
 int fi_livery_remote_ready(void);
 int fi_livery_remote_policy(unsigned mode);
 /* OD-54: the launcher's relay port while this PC hosts in a launcher session (0: not hosting). */

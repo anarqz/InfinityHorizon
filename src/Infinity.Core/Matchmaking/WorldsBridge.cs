@@ -830,7 +830,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
                         m.Role switch { 0 => "host", 1 => "seated", _ => "reserved" })).ToArray()) : null);
-                return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.Gamertag, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members);
+                return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.Gamertag, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
+                    WorldModes.OpenToBoth(world));
             }
         }
         catch (Exception e) when (HostFailure(e) || e is TimeoutException)
@@ -998,6 +999,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 Name = string.IsNullOrWhiteSpace(request.Name) ? "Infinity" : request.Name.Trim()[..Math.Min(48, request.Name.Trim().Length)],
                 Mode = _mode,
+                // OD-141 (CR-L43): the host's own mode (the default) or open to Hardcore and Noob; fixed once the world opens
+                Modes = request.AnyMode ? WorldModes.Any : _mode,
                 MaxPlayers = players,
                 Audience = request.Audience switch { 1 => WorldAudiences.Supporters, 2 => WorldAudiences.Friends, 3 => WorldAudiences.Private, _ => WorldAudiences.Everyone },
                 MaxRttMs = request.Latency switch { 1 => 150u, 2 => 100u, 3 => 60u, _ => null },
@@ -1053,7 +1056,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _publicWarning.Observe(openingId, world.Audience);
                     }
                     hosted = true;
-                    _log($"worlds: world {openingId} open ({settings.Mode}, {settings.Audience}, {players} players)");
+                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players)");
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id
@@ -1067,6 +1070,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 var key = opened?.Error?.Kind switch
                 {
                     MmErrorKind.ModeMismatch => "worlds.host_mode",
+                    MmErrorKind.Conflict when opened?.Error?.Reason == ConflictReasons.Modes => "worlds.host_modes_fixed",
+                    MmErrorKind.Invalid when opened?.Error?.Field == "modes" => "worlds.host_mode",
                     MmErrorKind.Conflict when opened?.Error?.Reason == ConflictReasons.Mods => "worlds.mods_changed",
                     MmErrorKind.Conflict when ConflictReasons.RelayKey(opened?.Error) is { } relayKey => relayKey,
                     MmErrorKind.Invalid when opened?.Error?.Field == "mods" => "worlds.mods_failed",
@@ -1453,7 +1458,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             "code" => 3,
             "full" => 4,
             "latency" => 5,
-            "mode" => ModeLock(world.Mode), // CR-L40: the all list carries other modes' worlds
+            // CR-L40: the all list carries other modes' worlds; CR-L43: never a world open to both modes (an
+            // inconsistent answer is "not available", never dimmed as another mode's)
+            "mode" => WorldModes.OpenToBoth(world) ? (byte)6 : ModeLock(world.Mode),
             _ => 6,
         };
         byte ping = world.PingClass switch

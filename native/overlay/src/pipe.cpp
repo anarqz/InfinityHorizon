@@ -16,7 +16,7 @@
 // Overlay -> launcher: 0x07 WorldsQuery{u8 filter (1 friends, 2 near, 3 global), u8 notFull};
 // 0x09 JoinWorld{str worldId, str code (8 digits or empty)}; 0x0B CreateWorld{str name,
 // u8 audience (0 everyone, 1 supporters, 2 friends, 3 private), u8 maxPlayers, u8 latency
-// (0 any, 1 < 150 ms, 2 < 100 ms, 3 < 60 ms)}.
+// (0 any, 1 < 150 ms, 2 < 100 ms, 3 < 60 ms), u8 anyMode (OD-141: 0 the host's mode, 1 Hardcore and Noob)}.
 // Launcher -> overlay: 0x08 WorldsList{u8 filter, u8 status (0 ok, 2 error), str message,
 // u8 count, count x {str id, str name, str host, u8 players, u8 max, u8 kind, u8 audience,
 // u8 lock (0 none, 1 tier, 2 friends, 3 code, 4 full, 5 latency), u8 ping (0-3), u8 friendHost}};
@@ -28,7 +28,7 @@
 // str gamertag, u8 reason (1 cheating, 2 abuse, 3 other)}. Launcher -> overlay 0x0E MyWorld{u8 role
 // (0 none, 1 hosting, 2 reserved, 3 seated), str worldId, str name, str host, str code, u8 audience,
 // u8 players, u8 max, u8 named, u8 count, count x {str xuid, str gamertag, u8 tier, u8 role (0 host,
-// 1 seated, 2 reserved), u8 friend (0 none, 1 friends, 2 outgoing, 3 incoming, 4 self)}};
+// 1 seated, 2 reserved), u8 friend (0 none, 1 friends, 2 outgoing, 3 incoming, 4 self)}, u8 anyMode (OD-141)};
 // 0x10 ActionResult{u8 action, u8 status (0 done, 1 refused), str message}.
 //
 // Protocol 2 (OD-112; layouts in ui_frames.h): this overlay asks with 0x14 WorldsQueryV2 (filter 4
@@ -189,26 +189,7 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
     }
     case 0x0E: {
         MyWorld m;
-        m.role = r.U8();
-        m.world = r.Str();
-        m.name = r.Str();
-        m.host = r.Str();
-        m.code = r.Str();
-        m.audience = r.U8();
-        m.players = r.U8();
-        m.max = r.U8();
-        m.named = r.U8() != 0;
-        const uint8_t count = r.U8();
-        for (uint8_t i = 0; i < count && r.ok && i < 16; ++i) {
-            MemberRow p;
-            p.xuid = r.Str();
-            p.gamertag = r.Str();
-            p.tier = r.U8();
-            p.role = r.U8();
-            p.friend_state = r.U8();
-            m.members.push_back(std::move(p));
-        }
-        if (r.ok) SetMyWorld(std::move(m));
+        if (DecodeMyWorld(body, size, m)) SetMyWorld(std::move(m)); // ui_frames.h (anyMode, CR-L43)
         break;
     }
     case 0x10: {
@@ -375,13 +356,8 @@ void SendJoinWorld(const std::string &world, const std::string &code) {
     Queue(0x09, body);
 }
 
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency) {
-    std::vector<uint8_t> body;
-    PutStr(body, name);
-    body.push_back(audience);
-    body.push_back(max_players);
-    body.push_back(latency);
-    Queue(0x0B, body);
+void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode) {
+    Queue(0x0B, EncodeCreateWorld(name, audience, max_players, latency, any_mode));
 }
 
 void SendMyWorldQuery() { Queue(0x0D, {}); }

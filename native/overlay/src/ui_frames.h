@@ -13,8 +13,8 @@
 //   0x15 WorldsListV2{u8 filter, u8 modded, u8 status, str message, u8 count <= 50, count x LobbyRow},
 //        the rows already ordered: matching ones (lock 0 and modsMatch) first, then the others
 //        LobbyRow{str id, str name, str host, u8 players, u8 max, u8 kind, u8 audience, u8 lock,
-//        u8 ping, u8 friendHost, u8 modded, u8 modsMatch, u8 members <= 12 x {str gamertag, u8 tier,
-//        u8 role}, u8 mods <= 32 x {str id, str version}}
+//        u8 ping, u8 friendHost, u8 modded, u8 modsMatch, u8 anyMode (OD-141: open to Hardcore and Noob),
+//        u8 members <= 12 x {str gamertag, u8 tier, u8 role}, u8 mods <= 32 x {str id, str version}}
 //   0x16 DetailPane{str paneId (empty closes), str title, str subtitle, str avatarKey, u8 sections
 //        <= 8 x {u8 kind (0 key/value rows, 1 items), str heading, u8 entries <= 32 x {str primary,
 //        str secondary, u8 icon}}, u8 actions <= 4 x {str id, str label, u8 enabled}}
@@ -23,6 +23,12 @@
 //        known (else "Status unavailable"), 1 capacity, 2 live mode and lobby figures, 3 profiles
 //   0x1A Avatar{u16 width, u16 height, width * height * 4 bytes of straight-alpha RGBA}: square,
 //        <= 128 (the launcher sends 96: 128 x 128 cannot fit the 64 KiB frame); {0, 0} clears it
+// Protocol 1 frames with a CR-L43 (OD-141) field, also coded here so the golden vectors cover them:
+//   0x0B CreateWorld{str name, u8 audience, u8 maxPlayers, u8 latency, u8 anyMode (0 the host's own mode, 1 open
+//        to Hardcore and Noob)}; the launcher reads a frame without anyMode (an older overlay) as 0
+//   0x0E MyWorld{u8 role, str worldId, str name, str host, str code, u8 audience, u8 players, u8 max, u8 named,
+//        u8 count <= 16 x {str xuid, str gamertag, u8 tier, u8 role, u8 friend}, u8 anyMode}; an older launcher's
+//        frame ends after the members (anyMode 0), and as before trailing bytes are ignored
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -101,6 +107,7 @@ struct WorldRow {
     // protocol 2 (OD-112)
     bool modded = false;
     bool mods_match = true; // false: the join is blocked here
+    bool any_mode = false;  // OD-141: open to Hardcore and Noob (the "Hardcore + Noob" badge; never locked for mode)
     std::vector<LobbyMember> members;
     std::vector<LobbyMod> mods;
 };
@@ -126,6 +133,24 @@ struct DetailPane {
     std::vector<PaneSection> sections;
     std::vector<PaneAction> actions;
 };
+
+// "My world" (OD-63): the world this profile hosts or holds a seat in, and its players. The XUID
+// is the key of an action, never shown (OD-61).
+struct MemberRow {
+    std::string xuid, gamertag;
+    uint8_t tier = 0;         // 0 Infinity Racer, 1 Infinity Supporter (the badge only, CR-S69)
+    uint8_t role = 0;         // 0 host, 1 in the world, 2 on the way (seat reserved)
+    uint8_t friend_state = 0; // 0 none, 1 friends, 2 request sent, 3 asked you, 4 you
+};
+struct MyWorld {
+    uint8_t role = 0; // 0 none, 1 hosting, 2 seat reserved, 3 seated
+    std::string world, name, host, code;
+    uint8_t audience = 0, players = 0, max = 0;
+    bool named = false; // false: the server gave no roster (only the host is known)
+    std::vector<MemberRow> members;
+    bool any_mode = false; // OD-141: open to Hardcore and Noob (the header's badge)
+};
+constexpr size_t kMaxMineMembers = 16;
 
 namespace wire {
 
@@ -197,6 +222,68 @@ inline std::vector<uint8_t> EncodePaneActionClick(const std::string &pane, const
     wire::Str(b, action);
     return b;
 }
+// 0x0B (protocol 1; anyMode CR-L43)
+inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode) {
+    std::vector<uint8_t> b;
+    wire::Str(b, name);
+    wire::U8(b, audience);
+    wire::U8(b, max_players);
+    wire::U8(b, latency);
+    wire::Flag(b, any_mode);
+    return b;
+}
+
+// 0x0E (protocol 1, read as leniently as before: trailing bytes ignored; anyMode CR-L43, absent from an older launcher)
+inline bool DecodeMyWorld(const uint8_t *body, size_t size, MyWorld &out) {
+    wire::Reader r{body, size};
+    MyWorld m;
+    m.role = r.U8();
+    m.world = r.Str();
+    m.name = r.Str();
+    m.host = r.Str();
+    m.code = r.Str();
+    m.audience = r.U8();
+    m.players = r.U8();
+    m.max = r.U8();
+    m.named = r.U8() != 0;
+    const uint8_t count = r.U8();
+    for (uint8_t i = 0; i < count && r.ok; ++i) {
+        MemberRow p;
+        p.xuid = r.Str();
+        p.gamertag = r.Str();
+        p.tier = r.U8();
+        p.role = r.U8();
+        p.friend_state = r.U8();
+        if (m.members.size() < kMaxMineMembers) m.members.push_back(std::move(p));
+    }
+    if (r.ok && r.left > 0) m.any_mode = r.Flag();
+    if (!r.ok) return false;
+    out = std::move(m);
+    return true;
+}
+
+inline std::vector<uint8_t> EncodeMyWorld(const MyWorld &m) {
+    std::vector<uint8_t> b;
+    wire::U8(b, m.role);
+    wire::Str(b, m.world);
+    wire::Str(b, m.name);
+    wire::Str(b, m.host);
+    wire::Str(b, m.code);
+    wire::U8(b, m.audience);
+    wire::U8(b, m.players);
+    wire::U8(b, m.max);
+    wire::Flag(b, m.named);
+    wire::U8(b, static_cast<uint8_t>(m.members.size()));
+    for (const auto &p : m.members) {
+        wire::Str(b, p.xuid);
+        wire::Str(b, p.gamertag);
+        wire::U8(b, p.tier);
+        wire::U8(b, p.role);
+        wire::U8(b, p.friend_state);
+    }
+    wire::Flag(b, m.any_mode);
+    return b;
+}
 
 // ---------------------------------------------------------------- launcher -> overlay bodies
 struct WorldsListV2 {
@@ -229,6 +316,7 @@ inline bool DecodeWorldsListV2(const uint8_t *body, size_t size, WorldsListV2 &o
         w.friend_host = r.Flag();
         w.modded = r.Flag();
         w.mods_match = r.Flag();
+        w.any_mode = r.Flag();
         const size_t members = r.Count(kMaxLobbyMembers);
         for (size_t m = 0; m < members && r.ok; ++m) {
             LobbyMember p;
@@ -273,6 +361,7 @@ inline std::vector<uint8_t> EncodeWorldsListV2(const WorldsListV2 &l) {
         wire::Flag(b, w.friend_host);
         wire::Flag(b, w.modded);
         wire::Flag(b, w.mods_match);
+        wire::Flag(b, w.any_mode);
         wire::U8(b, static_cast<uint8_t>(w.members.size()));
         for (const auto &m : w.members) {
             wire::Str(b, m.gamertag);

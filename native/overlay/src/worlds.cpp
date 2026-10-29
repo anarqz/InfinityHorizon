@@ -6,8 +6,8 @@
 // - The list (CR-L40 §2.2): every lobby of the game, asked each time the guide opens with the "all"
 //   filter and no chip selected. Friends, Close to me and Global narrow it, Hide full drops full
 //   ones; selecting the active filter again returns to all; Y refreshes. Up to 50 rows, already
-//   ordered by the launcher: the matching ones (the profile's mode, the same mods, open to the
-//   player) first, then the others drawn dimmed with their reason under the name (another mode,
+//   ordered by the launcher: the matching ones (the profile's mode or open to both modes, the same
+//   mods, open to the player) first, then the others drawn dimmed with their reason under the name (another mode,
 //   mods, friends only, a code, full, too far, not available). A code row opens the code entry, the
 //   rest say their reason. CR-S69 (OD-129): no lobby is shut by the tier any more; an older server's
 //   tier lock (1) reads "Not available". A Supporter host carries the "Supporter" badge. The list
@@ -19,7 +19,12 @@
 // - A private or friends world is joined with its code (code_entry.cpp); create gives the host
 //   the code to share.
 // - Create: name (the keyboard; "{gamertag}'s lobby" by default, CR-L40 §4), audience (Everyone,
-//   Supporters, Friends, Private; every host gets all four, OD-129), players 2-12, latency limit.
+//   Supporters, Friends, Private; every host gets all four, OD-129), players 2-12, latency limit, and
+//   the modes (OD-141, CR-L43): the host's own mode (the default) or open to Hardcore and Noob, sent
+//   with the create and fixed while the lobby is open (a new lobby is needed to change it).
+// - Hardcore + Noob (OD-141): a lobby open to both modes carries the "Hardcore + Noob" badge in the
+//   list, the right pane and my world's header. The overlay never filters or dims by mode itself: a
+//   row is another mode's (lock 7/8) only when the launcher says so, from the server's answer.
 // - My world (OD-63): while the profile hosts a world or holds a seat in one, the tab shows that
 //   world instead of the list (updated by the launcher): the host closes it or kicks players,
 //   a player leaves it; anyone adds a player as a friend or reports them with a reason. Player
@@ -134,8 +139,10 @@ struct Create {
     int audience = 0; // WorldAudience
     int players = 8;
     int latency = 0;  // 0 any, 1 high (< 150 ms), 2 medium (< 100 ms), 3 low (< 60 ms)
-    int field = 0;    // 0 name, 1 audience, 2 players, 3 latency, 4 create
+    bool any_mode = false; // OD-141: open to Hardcore and Noob; false: the host's own mode
+    int field = 0;    // 0 name, 1 audience, 2 players, 3 latency, 4 modes, 5 create
 } g_create;
+constexpr int kCreateModes = 4, kCreateButton = 5;
 
 // the dev host answers by itself, as a launcher would
 float g_dev_wait = -1;
@@ -168,6 +175,13 @@ const char *LatencyName(int latency) {
     }
 }
 
+const char *ModesName(bool any_mode) {
+    return any_mode ? T("Open to Hardcore and Noob", "Aberto a Hardcore e Noob") : T("My mode only", "Só o meu modo");
+}
+
+// OD-141: the badge of a lobby open to both modes (the same words in both languages)
+constexpr const char *kAnyModeBadge = "Hardcore + Noob";
+
 const char *LockName(uint8_t lock) {
     switch (lock) {
     case 1: // an older server's tier lock (CR-S69): no upsell, just not joinable here
@@ -186,7 +200,8 @@ const char *LockName(uint8_t lock) {
 enum class Why { None, Mode, Mods, Friends, Code, Full, Far, Other };
 
 Why WhyOf(const WorldRow &w) {
-    if (w.lock == 7 || w.lock == 8) return Why::Mode;
+    if ((w.lock == 7 || w.lock == 8) && !w.any_mode) return Why::Mode; // a lobby open to both modes is never another mode's
+    if (w.lock == 7 || w.lock == 8) return Why::Other;
     if (!w.mods_match) return Why::Mods;
     switch (w.lock) {
     case 0: return Why::None;
@@ -328,7 +343,7 @@ void SubmitCreate() {
         g_dev_kind = 4;
     } else {
         SendCreateWorld(g_create.name, static_cast<uint8_t>(g_create.audience), static_cast<uint8_t>(g_create.players),
-                        static_cast<uint8_t>(g_create.latency));
+                        static_cast<uint8_t>(g_create.latency), g_create.any_mode);
     }
 }
 
@@ -351,6 +366,9 @@ void DevAnswer() {
         modded.members = members({{"Synthetic#00117", 1, 0}, {"Synthetic#00230", 0, 1}, {"RallyFox98", 0, 1}, {"Synthetic#00042", 1, 2}});
         modded.mods = {{"extraoptions", "2"}, {"nitrosystem", "3"}};
         g_shared.rows.push_back(modded);
+        WorldRow mixed{"a1", "Everyone's coast tour", "Synthetic#00412", 4, 10, 0, 0, 0, 1, false};
+        mixed.any_mode = true; // OD-141: open to Hardcore and Noob, matching for either mode
+        g_shared.rows.insert(g_shared.rows.begin() + 2, mixed);
         g_shared.rows.push_back({"h1", "Hardcore endurance", "Synthetic#00303", 6, 12, 0, 0, 7, 1, false});
         g_shared.rows.push_back({"s1", "Supporters night race", "Synthetic#00301", 9, 12, 1, 1, 0, 0, false});
         g_shared.rows.push_back({"c1", "Friday crew", "Synthetic#00230", 3, 8, 0, 3, 3, 1, false});
@@ -388,6 +406,7 @@ void DevAnswer() {
             m.host = g_dev_mine == 1 ? "Synthetic#00117" : "RallyFox98";
             m.code = g_dev_mine == 1 && g_create.audience >= 2 ? "48201573" : "";
             m.audience = static_cast<uint8_t>(g_dev_mine == 1 ? g_create.audience : 0);
+            m.any_mode = g_dev_mine == 1 && g_create.any_mode;
             m.players = 3;
             m.max = 8;
             m.named = true;
@@ -477,6 +496,7 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     TextAt(dl, f.body, ImVec2(lx, a.y + 10 * s), ready ? kText : kTextDim, w.name.c_str());
     std::string sub = w.host;
     if (w.kind == 1) sub += " · Supporter"; // CR-S69: the host's badge, nothing more
+    if (w.any_mode) sub += std::string(" · ") + kAnyModeBadge; // OD-141
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
     if (other) sub += " · " + WhyText(w, local_vanilla);
     if (!ready) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
@@ -522,7 +542,8 @@ const DetailPane &LobbyPane(const WorldRow &w) {
     p = DetailPane{};
     p.id = "lobby:" + w.id;
     p.title = w.name;
-    p.subtitle = w.host + " · " + AudienceName(w.audience) + " · " + std::to_string(w.players) + "/" + std::to_string(w.max) + T(" players", " jogadores");
+    p.subtitle = w.host + " · " + AudienceName(w.audience) + (w.any_mode ? std::string(" · ") + kAnyModeBadge : std::string()) + " · " +
+                 std::to_string(w.players) + "/" + std::to_string(w.max) + T(" players", " jogadores");
     p.avatar = "icon:world";
     if (!w.mods_match) {
         p.sections.push_back({1, "", {{T("Your mods don't match this lobby", "Seus mods não batem com os deste lobby"),
@@ -763,8 +784,10 @@ void DrawCreate(ImDrawList *dl, float x, float y, float w) {
         {T("Who can join", "Quem pode entrar"), AudienceName(g_create.audience), true},
         {T("Players", "Jogadores"), players, true},
         {T("Latency limit", "Limite de latência"), LatencyName(g_create.latency), true},
+        {T("Modes · set when it opens", "Modos · definidos ao abrir"), ModesName(g_create.any_mode), true}, // OD-141
     };
-    for (int i = 0; i < 4; ++i) {
+    static_assert(sizeof(fields) / sizeof(fields[0]) == kCreateButton, "one field per row before the button");
+    for (int i = 0; i < kCreateButton; ++i) {
         const ImVec2 a(x, y), b(x + w, y + fh);
         const bool focus = g_create.field == i;
         dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
@@ -785,15 +808,16 @@ void DrawCreate(ImDrawList *dl, float x, float y, float w) {
     }
     y += 8 * s;
     const ImVec2 a(x, y), b(x + w, y + 56 * s);
-    Button(dl, a, b, g_create.field == 4, true, T("Create lobby", "Criar lobby"));
-    if (Clicked(a, b)) { g_create.field = 4; g_accept = true; }
+    Button(dl, a, b, g_create.field == kCreateButton, true, T("Create lobby", "Criar lobby"));
+    if (Clicked(a, b)) { g_create.field = kCreateButton; g_accept = true; }
 }
 
 void DrawHosted(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
     y = Panel(dl, x, y, T("Your lobby is open", "Seu lobby está aberto"));
     TextAt(dl, f.body, ImVec2(x, y), kText, g_create.name.c_str());
     y += 30 * s;
-    TextAt(dl, f.small, ImVec2(x, y), kTextDim, AudienceName(g_create.audience));
+    const std::string kind = std::string(AudienceName(g_create.audience)) + (g_create.any_mode ? std::string(" · ") + kAnyModeBadge : std::string());
+    TextAt(dl, f.small, ImVec2(x, y), kTextDim, kind.c_str());
     y += 40 * s;
     if (!sh.hosted.code.empty()) {
         TextAt(dl, f.small, ImVec2(x, y), kTextDim, T("Share this code to let players in:", "Compartilhe este código para os jogadores entrarem:"));
@@ -860,7 +884,9 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
     TextAt(dl, f.title, ImVec2(x, y), kText, m.name.c_str());
     dl->PopClipRect();
     y += 42 * s;
-    const std::string sub = (m.role == 1 ? std::string() : m.host + " · ") + AudienceName(m.audience) + " · " + std::to_string(m.players) + "/" +
+    // OD-141: the lobby's modes are fixed while it is open, so they are shown, never offered
+    const std::string sub = (m.role == 1 ? std::string() : m.host + " · ") + AudienceName(m.audience) +
+                            (m.any_mode ? std::string(" · ") + kAnyModeBadge : std::string()) + " · " + std::to_string(m.players) + "/" +
                             std::to_string(m.max) + T(" players", " jogadores");
     TextAt(dl, f.small, ImVec2(x, y), kTextDim, sub.c_str());
     y += 28 * s;
@@ -1070,7 +1096,7 @@ bool WorldsNavigate(Nav nav) {
     case Screen::Create:
         switch (nav) {
         case Nav::Up: if (g_create.field > 0) --g_create.field; return true;
-        case Nav::Down: if (g_create.field < 4) ++g_create.field; return true;
+        case Nav::Down: if (g_create.field < kCreateButton) ++g_create.field; return true;
         case Nav::Left:
         case Nav::Right: {
             const int d = nav == Nav::Right ? 1 : -1;
@@ -1080,6 +1106,8 @@ bool WorldsNavigate(Nav nav) {
                 g_create.players = std::clamp(g_create.players + d, 2, 12);
             } else if (g_create.field == 3) {
                 g_create.latency = (g_create.latency + d + 4) % 4;
+            } else if (g_create.field == kCreateModes) {
+                g_create.any_mode = !g_create.any_mode; // two choices: either arrow switches
             }
             return true;
         }
@@ -1299,7 +1327,9 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
                 OpenKeyboard(r, [](bool ok, const std::string &text) {
                     if (ok && !text.empty()) g_create.name = text;
                 });
-            } else if (g_create.field == 4) {
+            } else if (g_create.field == kCreateModes) {
+                g_create.any_mode = !g_create.any_mode; // A (or a click) switches it too
+            } else if (g_create.field == kCreateButton) {
                 SubmitCreate();
             }
         }

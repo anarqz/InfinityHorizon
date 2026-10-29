@@ -93,7 +93,8 @@ public sealed partial class WorldsBridge
                 m.Role switch { "host" => (byte)0, "seated" => (byte)1, _ => (byte)2 }))
             .ToList();
         var shown = mods.Take(UiFrame.MaxLobbyMods).Select(m => new LobbyMod(Clip(m.Id, 64), Clip(m.Version, 16))).ToList();
-        return new LobbyRow(Row(world, lockedSection), modded, local.Ready && ModSets.Same(local.Mods, mods), members, shown);
+        return new LobbyRow(Row(world, lockedSection), modded, local.Ready && ModSets.Same(local.Mods, mods), members, shown,
+            WorldModes.OpenToBoth(world));
     }
 
     /// <summary>
