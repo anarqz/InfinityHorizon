@@ -79,6 +79,18 @@ public sealed class GitHubReleases : IDisposable
         IProgress<long>? progress = null, CancellationToken cancellation = default) =>
         DownloadAssetAsync(asset, destination, maxBytes, exactSize: true, progress, cancellation);
 
+    /// <summary>Attempts of one download; each after the first resumes where the last one stopped (HTTP Range).</summary>
+    public const int DownloadAttempts = 3;
+
+    /// <summary>A read that brings nothing for this long ends the attempt (a stalled CDN connection), never the size of the file.</summary>
+    public static readonly TimeSpan ReadStall = TimeSpan.FromSeconds(30);
+
+    /// <summary>The whole download's outer bound, every attempt included: only a runaway, never a slow line.</summary>
+    public static readonly TimeSpan DownloadLimit = TimeSpan.FromHours(1);
+
+    /// <summary>Download diagnostics (sizes, speeds, retry reasons; never a URL with a query): the launcher's log.</summary>
+    public Action<string>? Log { get; set; }
+
     /// <summary><paramref name="exactSize"/> false (the web fallback's descriptor): <see cref="GitHubReleaseAsset.Size"/> is only the bound.</summary>
     private async Task DownloadAssetAsync(GitHubReleaseAsset asset, Stream destination, long maxBytes, bool exactSize,
         IProgress<long>? progress = null, CancellationToken cancellation = default)
@@ -89,7 +101,52 @@ public sealed class GitHubReleases : IDisposable
         if (asset.Id <= 0 || !AssetName(asset.Name) || asset.Size < 0 || asset.Size > maxBytes || !Digest(asset.Sha256)
             || !DownloadUrl(asset.DownloadUrl, asset.Name)) Invalid();
         using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        bound.CancelAfter(TimeSpan.FromMinutes(5));
+        bound.CancelAfter(DownloadLimit);
+        // one digest over every attempt's bytes, in order: a resumed download hashes exactly what a single one would
+        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        long total = 0;
+        progress?.Report(0);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                total = await AttemptAsync(asset, destination, exactSize, progress, digest, total, bound.Token).ConfigureAwait(false);
+                break;
+            }
+            catch (Exception error) when (attempt < DownloadAttempts && !bound.IsCancellationRequested && Retryable(error))
+            {
+                Log?.Invoke($"update: download of {asset.Name} interrupted at {total} of {asset.Size} bytes ({error.GetType().Name}: {error.Message}); "
+                    + $"attempt {attempt + 1} of {DownloadAttempts} resumes there");
+                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), bound.Token).ConfigureAwait(false);
+            }
+        }
+        if (exactSize && total != asset.Size || asset.Sha256 is { } expected && Convert.ToHexStringLower(digest.GetHashAndReset()) != expected) Invalid();
+        await destination.FlushAsync(bound.Token).ConfigureAwait(false);
+        var seconds = Math.Max(0.001, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds);
+        if (asset.Size >= 1 << 20)
+            Log?.Invoke(FormattableString.Invariant($"update: downloaded {asset.Name}, {total} bytes in {seconds:0.0} s ({total / seconds / 1048576:0.00} MiB/s)"));
+    }
+
+    // a network hiccup, a stalled read or a refused 5xx/429: worth resuming; a wrong answer (InvalidDataException) never is
+    private static bool Retryable(Exception error) => error switch
+    {
+        HttpRequestException { StatusCode: { } status } => status == HttpStatusCode.TooManyRequests || (int)status >= 500,
+        HttpRequestException or IOException or TimeoutException or OperationCanceledException => true,
+        _ => false,
+    };
+
+    /// <summary>One request chain from <paramref name="offset"/> on (a Range when above 0); the bytes downloaded in all.</summary>
+    private async Task<long> AttemptAsync(GitHubReleaseAsset asset, Stream destination, bool exactSize, IProgress<long>? progress,
+        IncrementalHash digest, long offset, CancellationToken cancellation)
+    {
+        if (offset > 0 && destination.CanSeek)
+        {
+            // a write the last attempt left half done is cut back to what was hashed
+            destination.SetLength(offset);
+            destination.Position = offset;
+        }
+        else if (offset > 0) Invalid();
         var location = asset.DownloadUrl;
         var visited = new HashSet<string>(StringComparer.Ordinal);
         for (var redirects = 0; ; redirects++)
@@ -97,7 +154,8 @@ public sealed class GitHubReleases : IDisposable
             if (!AssetHost(location) || !visited.Add(location.AbsoluteUri)) Invalid();
             DedicatedClient();
             using var request = Request(location, metadata: false);
-            using var response = await SendHeadersAsync(request, bound.Token).ConfigureAwait(false);
+            if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
+            using var response = await SendHeadersAsync(request, cancellation).ConfigureAwait(false);
             CheckFinalUrl(response, location);
             if (response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther
                 or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect)
@@ -109,12 +167,31 @@ public sealed class GitHubReleases : IDisposable
                     && !location.AbsoluteUri.Equals(asset.DownloadUrl.AbsoluteUri, StringComparison.Ordinal)) Invalid();
                 continue;
             }
-            Status(response);
-            if (response.Content.Headers.ContentLength is { } length && (exactSize ? length != asset.Size : length > asset.Size)
+            var resumed = offset > 0 && response.StatusCode == HttpStatusCode.PartialContent;
+            if (resumed)
+            {
+                if (response.Content.Headers.ContentRange is not { From: { } from, HasLength: var hasLength } range || from != offset
+                    || hasLength && range.Length != asset.Size && exactSize) Invalid();
+            }
+            else
+            {
+                Status(response);
+                if (offset > 0)
+                {
+                    // the server sent the whole file again: start over, digest included
+                    Log?.Invoke($"update: {asset.Name} could not be resumed (HTTP 200); downloading it again");
+                    destination.SetLength(0);
+                    destination.Position = 0;
+                    digest.GetHashAndReset();
+                    offset = 0;
+                    progress?.Report(0);
+                }
+            }
+            var expected = asset.Size - offset;
+            if (response.Content.Headers.ContentLength is { } length && (exactSize ? length != expected : length > expected)
                 || response.Content.Headers.ContentEncoding.Count != 0
                 || response.Content.Headers.ContentType?.MediaType is "text/html" or "application/xhtml+xml") Invalid();
-            await CopyAsync(response.Content, destination, asset, exactSize, progress, bound.Token).ConfigureAwait(false);
-            return;
+            return await CopyAsync(response.Content, destination, asset, digest, offset, progress, cancellation).ConfigureAwait(false);
         }
     }
 
@@ -130,26 +207,27 @@ public sealed class GitHubReleases : IDisposable
         return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, bound.Token).ConfigureAwait(false);
     }
 
-    private static async Task CopyAsync(HttpContent content, Stream destination, GitHubReleaseAsset asset, bool exactSize, IProgress<long>? progress, CancellationToken cancellation)
+    /// <summary>The body appended from <paramref name="total"/> on, into the shared digest; the new total. A stalled read throws (resumable).</summary>
+    private static async Task<long> CopyAsync(HttpContent content, Stream destination, GitHubReleaseAsset asset, IncrementalHash digest, long total,
+        IProgress<long>? progress, CancellationToken cancellation)
     {
         await using var input = await content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
-        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[64 * 1024]; long total = 0;
-        progress?.Report(0);
+        var buffer = new byte[256 * 1024];
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
             using var readBound = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            readBound.CancelAfter(TimeSpan.FromSeconds(10));
-            var count = await input.ReadAsync(buffer, readBound.Token).ConfigureAwait(false);
+            readBound.CancelAfter(ReadStall);
+            int count;
+            try { count = await input.ReadAsync(buffer, readBound.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+            { throw new TimeoutException($"No data for {ReadStall.TotalSeconds:0} s"); }
             cancellation.ThrowIfCancellationRequested();
-            if (count == 0) break;
+            if (count == 0) return total;
             if (total > asset.Size - count) Invalid();
             await destination.WriteAsync(buffer.AsMemory(0, count), cancellation).ConfigureAwait(false);
             digest.AppendData(buffer, 0, count); total += count; progress?.Report(total);
         }
-        if (exactSize && total != asset.Size || asset.Sha256 is { } expected && Convert.ToHexStringLower(digest.GetHashAndReset()) != expected) Invalid();
-        await destination.FlushAsync(cancellation).ConfigureAwait(false);
     }
 
     private static HttpRequestMessage Request(Uri location, bool metadata)

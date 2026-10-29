@@ -86,7 +86,7 @@ public sealed partial class ShellViewModel
         if (_updateChecking) return;
         _updateFailureKey = null;
         _updateChecking = true; _launcherUpdatePhase = UpdatePhase.Checking; Changed(string.Empty);
-        _updater ??= new UpdateCoordinator(_stateDirectory);
+        _updater ??= new UpdateCoordinator(_stateDirectory) { Log = Log };
         try
         {
             using var bound = CancellationTokenSource.CreateLinkedTokenSource(_updateStop.Token);
@@ -216,8 +216,8 @@ public sealed partial class ShellViewModel
             // CR-L39: a custom server is the saved choice (ServerChoice), which the restarted launcher reads again.
             var arguments = _config.Custom ? new[] { "--locale", S.Locale }
                 : new[] { "--environment", _config.Production ? "production" : "development", "--server", _config.Server.ToString(), "--portal", _config.Portal.ToString(), "--locale", S.Locale };
-            var progress = new Progress<UpdateProgress>(value =>
-            { if (!acceptingProgress) return; (_launcherUpdatePhase, _updateBytes, _updateTotal) = (value.Phase, value.ReceivedBytes, value.TotalBytes); Changed(string.Empty); });
+            var progress = new ThrottledProgress(new Progress<UpdateProgress>(value =>
+            { if (!acceptingProgress) return; (_launcherUpdatePhase, _updateBytes, _updateTotal) = (value.Phase, value.ReceivedBytes, value.TotalBytes); Changed(string.Empty); }));
             var plan = await Task.Run(() => _updater.StageAsync(AppContext.BaseDirectory, arguments, progress, download.Token), download.Token);
             acceptingProgress = false;
             prepared = plan;
@@ -329,4 +329,27 @@ public sealed partial class ShellViewModel
     // TrustChangedException (CR-L39): the changed-keys question is already up; the update read simply did not happen
     private static bool UpdateFailure(Exception error) => error is ApiException or TrustChangedException or HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException
         or JsonException or InvalidOperationException or ArgumentException or OperationCanceledException or TimeoutException or System.ComponentModel.Win32Exception;
+
+    /// <summary>
+    /// The download and the verification report on every read (thousands per package), and each report refreshes the whole
+    /// window: queued faster than it can draw, the window froze. Only a new phase, the last bytes of a phase or a quarter second
+    /// since the last report pass on, so the UI never falls behind.
+    /// </summary>
+    private sealed class ThrottledProgress(IProgress<UpdateProgress> inner) : IProgress<UpdateProgress>
+    {
+        private readonly Lock _gate = new();
+        private UpdatePhase? _phase;
+        private long _last;
+
+        public void Report(UpdateProgress value)
+        {
+            var now = Environment.TickCount64;
+            lock (_gate)
+            {
+                if (value.Phase == _phase && value.ReceivedBytes < value.TotalBytes && now - _last < 250) return;
+                (_phase, _last) = (value.Phase, now);
+            }
+            inner.Report(value);
+        }
+    }
 }

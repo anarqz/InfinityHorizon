@@ -38,6 +38,9 @@ public sealed class UpdateCoordinator : IDisposable
         _clock = clock ?? TimeProvider.System;
     }
 
+    /// <summary>The package download's diagnostics (size, speed, resumes) go to the launcher's log.</summary>
+    public Action<string>? Log { set => _source.Log = value; }
+
     /// <summary>The verified GitHub release's version from the last discovery (signed descriptor), or null.</summary>
     public string? DiscoveredVersion => _discovery is { } discovery && Usable(discovery) ? discovery.Descriptor.Version : null;
 
