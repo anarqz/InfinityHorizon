@@ -52,7 +52,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>The resolver seam: Infinity.Core.Process.CarNames (T10) over the remembered game folder's Mount; the key is Data_Car.Id × 1000.</summary>
     private string? ResolveCarName(string azimuthRoot, int carKey, string locale) =>
-        azimuthRoot.Length == 0 || ContentLocation?.Mount is not { } mount ? null : new Infinity.Core.Process.CarNames(mount, locale).Name(carKey);
+        azimuthRoot.Length == 0 || ContentLocation?.Mount is not { } mount ? null : new Infinity.Core.Process.CarNames(azimuthRoot, mount, locale).Name(carKey);
     private (string Xuid, ProfilePresence Value)? _serverPresence;
     private CancellationTokenSource? _serverPresencePoll;
     private long _serverPresenceNextTicks;
