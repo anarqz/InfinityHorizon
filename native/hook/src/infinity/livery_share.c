@@ -7,6 +7,11 @@
    and the popup shows the generic Storefront error); one of 195,340 bytes shares. No fixed limit was
    found between the two, so the preview is fitted by size (owner, 2026-10-29):
 
+   - on every share, first: Create's adminLiveryTexture (+0xe0650, a paint texture of ~273 KB to over
+     512 KiB that made the Create stub refuse with 0x8050000C, §4e) is released and nulled when it is
+     the checked memory stream ("admin texture dropped (N bytes)");
+   - a stream that does not start with the PNG signature (the stock .swatchbin picture, "burG"):
+     no preview, as below ("not a PNG: sent without preview");
    - at most LS_PREVIEW_TARGET bytes: the original runs with the stream untouched ("passed");
    - larger: the overlay's fi_overlay_fit_png scales it down (75 %, then 2/3, then smaller steps)
      into an 8-bit RGBA PNG (colour type 6, only IHDR/IDAT/IEND, highest zlib level: the form the
@@ -40,6 +45,9 @@
 #define LS_POPUP_PREVIEW 0xe0658u
 #define LS_POPUP_STATE 0xe05e8u
 #define LS_POPUP_READY 0xe05d0u
+#define LS_POPUP_ADMIN 0xe0650u /* Create's adminLiveryTexture (§4e) */
+
+static const unsigned char ls_png_signature[8] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
 #define LS_STATE_PREVIEW_READY 6u
 
 #define LS_PREVIEW_TARGET 190000u /* below the largest preview known to share (195,340) */
@@ -102,9 +110,9 @@ static void ls_add_hex(char *text, unsigned cap, unsigned value) {
     ls_add(text, cap, out);
 }
 
-/* "LIVERY SHARE: preview <size> bytes: <what>[ <w>x<h> <n> bytes][ (<why>)]." */
-static void ls_log(unsigned size, const char *what, const unsigned *rgba, const char *why) {
-    char text[160];
+/* "LIVERY SHARE: preview <size> bytes: <what>[ <w>x<h> <n> bytes][ (<why>)]<admin>." */
+static void ls_log(unsigned size, const char *what, const unsigned *rgba, const char *why, const char *admin) {
+    char text[256];
     text[0] = 0;
     ls_add(text, sizeof(text), "LIVERY SHARE: preview ");
     ls_add_number(text, sizeof(text), size);
@@ -124,11 +132,41 @@ static void ls_log(unsigned size, const char *what, const unsigned *rgba, const 
         ls_add(text, sizeof(text), why);
         ls_add(text, sizeof(text), ")");
     }
+    ls_add(text, sizeof(text), admin);
     ls_add(text, sizeof(text), ".\r\n");
     log_append(text);
 }
 
 /* ------------------------------------------------------------------------ the completion */
+
+/* §4e: Create's sixth field, adminLiveryTexture (+0xe0650), a memory stream the paint booth's
+   ForzaLiverySetup filled in state 4 (built by 0x11e0430: the checked CDynamicMemoryStream vtable).
+   From about 273 KB to over the Xls blob writer's 0x80000 cap (0x8050000C before any request);
+   nothing reads it after Create and the server ignores it. Released and nulled on every share, so
+   0xe412b0 sends the field empty (it reads it only when +0xe0650 is not null). Another object is
+   left alone. `note` gets the log suffix. */
+static void ls_drop_admin(void **self, char *note, unsigned cap) {
+    unsigned char *popup = 0;
+    void *admin = 0, *none = 0;
+    note[0] = 0;
+    if (!self || !memory_read(self, &popup, sizeof(popup)) || !popup ||
+        !memory_read(popup + LS_POPUP_ADMIN, &admin, sizeof(admin)) || !admin)
+        return;
+    if (!fi_game_stream_is_memory(admin)) {
+        ls_add(note, cap, "; admin texture kept (not a memory stream)");
+        return;
+    }
+    long long size = fi_game_stream_size(admin);
+    memory_copy(popup + LS_POPUP_ADMIN, &none, sizeof(none));
+    fi_game_stream_release(admin);
+    ls_add(note, cap, "; admin texture dropped (");
+    if (size >= 0) {
+        ls_add_number(note, cap, (unsigned)size);
+        ls_add(note, cap, " bytes)");
+    } else {
+        ls_add(note, cap, "unknown size)");
+    }
+}
 
 /* §4a: the share continues without a preview. The completion owns the reference in *stream (a
    by-value TReference: the original releases it on return), so it is released here. */
@@ -153,38 +191,53 @@ static int ls_without_preview(void **self, void **stream) {
 
 /* The detour of game+0xe2d0a0: void (PopupShareLivery **self, TReference<CBinaryStream> stream). */
 static void ls_complete(void **self, void **stream) {
+    char admin[64];
+    ls_drop_admin(self, admin, sizeof(admin));
     void *source = 0;
     if (!stream || !memory_read(stream, &source, sizeof(source)) || !source) {
-        ls_complete_original(self, stream); /* no stream: the game's own error */
+        char text[128];
+        text[0] = 0;
+        ls_add(text, sizeof(text), "LIVERY SHARE: no preview stream (the game's own error)");
+        ls_add(text, sizeof(text), admin);
+        ls_add(text, sizeof(text), ".\r\n");
+        log_append(text);
+        ls_complete_original(self, stream);
         return;
     }
     long long measured = fi_game_stream_size(source);
     unsigned size = measured < 0 ? 0 : (unsigned)measured;
-    if (measured >= 0 && fi_livery_share_original_fits(size)) {
-        InterlockedExchange(&ls_last_preview, (LONG)size);
-        ls_log(size, "passed", 0, 0);
-        ls_complete_original(self, stream);
-        return;
-    }
+    unsigned char head[8];
+    const char *what = "sent without preview", *why = "stream size unknown";
     unsigned rgba[3] = {0, 0, 0};
     void *fitted = 0;
-    const char *why = "stream size unknown";
-    if (measured >= 0 && fi_game_stream_fit_png(source, size, &ls_fit, &fitted, &rgba[0], &rgba[1], &rgba[2], &why)) {
+    if (measured < 0) {
+        /* why set above */
+    } else if (!fi_game_stream_read_head(source, head, sizeof(head))) {
+        why = "stream read failed";
+    } else if (!memory_equal(head, ls_png_signature, sizeof(head))) {
+        what = "not a PNG: sent without preview"; /* a stock .swatchbin picture ("burG"/"BCXT"), §4e */
+        why = 0;
+    } else if (fi_livery_share_original_fits(size)) {
+        InterlockedExchange(&ls_last_preview, (LONG)size);
+        ls_log(size, "passed", 0, 0, admin);
+        ls_complete_original(self, stream);
+        return;
+    } else if (fi_game_stream_fit_png(source, size, &ls_fit, &fitted, &rgba[0], &rgba[1], &rgba[2], &why)) {
         memory_copy(stream, &fitted, sizeof(fitted));
         fi_game_stream_release(source);
         InterlockedExchange(&ls_last_preview, (LONG)rgba[2]);
-        ls_log(size, "rgba", rgba, 0);
+        ls_log(size, "rgba", rgba, 0, admin);
         ls_complete_original(self, stream);
         return;
     }
     if (!ls_without_preview(self, stream)) {
         InterlockedExchange(&ls_last_preview, (LONG)size);
-        ls_log(size, "passed", 0, "popup unreadable");
+        ls_log(size, "passed", 0, "popup unreadable", admin);
         ls_complete_original(self, stream);
         return;
     }
     InterlockedExchange(&ls_last_preview, 0);
-    ls_log(size, "sent without preview", 0, why);
+    ls_log(size, what, 0, why, admin);
 }
 
 /* The Create stub's result as the share step sees it: logged when negative and the caller is the

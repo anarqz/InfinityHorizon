@@ -105,6 +105,34 @@ int fi_game_stream_read_all(void *stream, unsigned char *buffer, unsigned size) 
     return 1;
 }
 
+int fi_game_stream_is_memory(void *object) {
+    void *vtable = 0;
+    return gs_vtable && object && memory_read(object, &vtable, sizeof(vtable)) && vtable == gs_vtable;
+}
+
+int fi_game_stream_read_head(void *stream, unsigned char *out, unsigned n) {
+    GsSeekFn seek = (GsSeekFn)(uintptr_t)gs_slot(stream, GS_SEEK);
+    long long size = fi_game_stream_size(stream);
+    if (!seek || size < (long long)n || !fi_game_stream_read_all(stream, out, n)) {
+        if (seek) seek(stream, 0, 0);
+        return 0;
+    }
+    return seek(stream, 0, 0) != 0;
+}
+
+/* The overlay's FI_PNG_FIT_E_* result as a log reason. */
+static const char *gs_fit_reason(int code) {
+    switch (code) {
+    case -1: return "fit: arguments refused";
+    case -2: return "fit: version refused";
+    case -3: return "fit: no COM or WIC";
+    case -4: return "fit: decode failed or over 4096x4096";
+    case -5: return "fit: scale or encode failed";
+    case -6: return "fit: too big at every step";
+    default: return "fit failed";
+    }
+}
+
 void *fi_game_stream_new(const unsigned char *data, unsigned size) {
     if (!gs_alloc || !gs_ctor || !gs_vtable || size > 0x7fffffffu) return 0;
     unsigned char *object = gs_alloc(GS_OBJECT_SIZE);
@@ -160,13 +188,13 @@ int fi_game_stream_fit_png(void *stream, unsigned size, const FiPngFitV1 *fit, v
     unsigned char *out = VirtualAlloc(0, FI_GAME_STREAM_FIT_CAP, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     size_t written = 0;
     unsigned w = 0, h = 0, png_w = 0, png_h = 0;
-    int ok = 0;
+    int ok = 0, result = 0;
     if (!in || !out) {
         *why = "no memory";
     } else if (!fi_game_stream_read_all(stream, in, size)) {
         *why = "stream read failed";
-    } else if (fit_png(in, size, fit, out, FI_GAME_STREAM_FIT_CAP, &written, &w, &h) != 0 || !written) {
-        *why = "fit failed";
+    } else if ((result = fit_png(in, size, fit, out, FI_GAME_STREAM_FIT_CAP, &written, &w, &h)) != 0 || !written) {
+        *why = result ? gs_fit_reason(result) : "fit: empty answer";
     } else if (written > fit->max_bytes || written > FI_GAME_STREAM_FIT_CAP ||
                (fit->hard_cap_bytes && written > fit->hard_cap_bytes)) {
         *why = "fit over budget";
