@@ -113,8 +113,8 @@ public sealed class SaveBlockedException(string code, string message, TimeSpan? 
 
 /// <summary>
 /// The cloud save around one Play (SAVES_API.md §3-§5, OD-52, OD-60), between the gate's admission
-/// and <c>azimuth.exe</c>, and after its exit, before the gate's leave. Only a Supporter's Hardcore
-/// profile has a line (<see cref="CloudSaveLine.FromGate"/>); everything else returns at once.
+/// and <c>azimuth.exe</c>, and after its exit, before the gate's leave. Only a profile the
+/// server gave a line has one (<see cref="CloudSaveLine.FromGate"/>, CR-S51; never the tier, OD-140); everything else returns at once.
 /// Before: a line at revision 0 is seeded (revision 1, the server's clean snapshot) and installed,
 /// a newer cloud revision is installed, and anything uncertain (a conflict, a busy or unreadable
 /// newest revision) stops the launch rather than play over it. After: the newest sealed revision

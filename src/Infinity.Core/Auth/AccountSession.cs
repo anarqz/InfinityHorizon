@@ -204,7 +204,7 @@ public sealed class AccountSession : IDisposable
     }
 
     /// <summary>
-    /// Creates a profile on the server: <c>noob</c>, or <c>hardcore</c> (an Infinity Supporter's, OD-52),
+    /// Creates a profile on the server: <c>noob</c>, or <c>hardcore</c> (every account's, OD-140),
     /// which starts empty: the game seeds it on the first launch and that career is its first cloud
     /// revision (OD-60; no starter car).
     /// </summary>

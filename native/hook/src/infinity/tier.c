@@ -1,63 +1,48 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE).
 
-   The account's tier, as the server says it (/me "tier": "free" or "vip"; no tier, as the Beta
-   server answers, is "vip", so nothing changes until a server sends it), and what a free
-   account's game requests get (OD-24, OD-25: a free account hosts a world and joins free worlds
-   through the server's directory; it sees and creates nothing of the universe: no records,
-   leaderboards, rivals, ghosts, clubs, designs or storefront, no friends, no Message Center, no
-   cloud data). The server is the authority; the hook only keeps the game from asking:
+   The cloud line gate, and the account's tier as display text only.
 
-   - the game's Forza services (*.forzamotorsport.net, by X-ClassName and X-Method):
-     User.Logon and User.GetPermissionsTable go to the server (the identity, and the table
-     without which the game takes the online services for down); OnlineProfile.* (the profile
-     and garage syncs: a free profile has no cloud copy) is answered here as the server answers
-     a sync it took (200, an empty bin/xtsw reply); everything else is answered here with the
-     503 the game already gets offline;
-   - Xbox Live: the friends list (social.xboxlive.com, profile.xboxlive.com .../people/...) and
-     friends' presence (userpresence.xboxlive.com .../groups/People) are answered here empty;
-     the player's own presence posts are taken here; another player's presence is 503; the free
-     roam services (sessiondirectory, gameserverds, gameserverms, momatch) and the rest go to the
-     server as for anyone.
-   In a launcher session (the platform, OD-40, CR-S14, GAME_PLATFORM.md §3a) the list is closed:
-   a free ticket sends only the free roam services, profile.xboxlive.com (minus the friends
-   list), userpresence (minus friends' presence) and, of the Forza services, User.Logon,
-   GetPermissionsTable, GetEconomySettings, Xls User.GetUserData, Xls Notifications.RetrieveForUser
-   and the livery calls of CR-S59 (ContentVersioning Create/Retrieve/RemoveReferenceTo VersionedLivery,
-   OnlineProfile.UpdateLivery, Storefront GetLiveriesForDrivatar/GetFeaturedLiveriesForRandomCars:
-   the server keeps every ticket's liveries);
-   the rest of OnlineProfile.* is answered as taken, as above, and every other game request, on
-   any host, gets the offline 503 here.
-   Nothing here changes for an Infinity Supporter (vip) on a Hardcore profile.
-
-   OD-52: only a Supporter's Hardcore profile keeps data on the servers. A Supporter playing a
-   Noob profile gets exactly what a free one gets (fi_tier_universe() is 0), so the hook never
-   asks for what the server refuses to a vip noob ticket (OD-51, both sides). The tier itself
-   stays vip: in a launcher session it is only the Supporter badge (CR-S69, OD-129: no queue
-   priority and no Supporter feature any more; the hook's [hook] diagnostics are every profile's).
+   OD-140 (owner, 2026-10-29: "Não deve mais ter nenhuma restrição de free-tier. Todos os players
+   podem tudo."): the hook keeps no tier gate. The tier ("free" or "vip", from the launch ticket
+   or the Beta server's /me) is kept only as the text shown for the account: "Infinity Racer" or
+   "Infinity Supporter", the Supporter badge (CR-S69, OD-129). Nothing routes, gates or logs by
+   it, and nothing by the profile's mode either.
 
    OD-128 (owner, 2026-10-28: "If cloud saves are enabled to the current profile, open all gates
-   and send the requests. If cloud saves are off for the current profile type, gate it as well"):
-   in a launcher session the launch ticket's save line (CR-S51 `line`), known before the game's
-   first request, alone decides: with it every gate above is open, without it every one is shut,
-   whatever the tier and mode. Outside one (the Beta protocol) the tier and mode decide as above. */
+   and send the requests. If cloud saves are off for the current profile type, gate it as well";
+   kept by the owner with OD-140): in a launcher session the launch ticket's save line (CR-S51
+   `line`), known before the game's first request, alone decides. `line: true` sends every game
+   service to the server. Without a line the universe's services are answered here
+   (fi_tier_no_line_route): the profile has no cloud line, so the server keeps nothing of it:
+   - the game's Forza services (*.forzamotorsport.net, by X-ClassName and X-Method): User.Logon,
+     GetPermissionsTable, GetEconomySettings, Xls User.GetUserData, Xls
+     Notifications.RetrieveForUser and the livery calls of CR-S59 (ContentVersioning
+     Create/Retrieve/RemoveReferenceTo VersionedLivery, OnlineProfile.UpdateLivery, Storefront
+     GetLiveriesForDrivatar/GetFeaturedLiveriesForRandomCars: the server keeps every ticket's
+     liveries) go to the server; the rest of OnlineProfile.* (the profile and garage syncs: no
+     cloud copy without a line) is answered here as the server answers a sync it took (200, an
+     empty bin/xtsw reply); everything else is answered here with the 503 the game already gets
+     offline;
+   - Xbox Live: the friends list (social.xboxlive.com, profile.xboxlive.com .../people/...) and
+     friends' presence (userpresence.xboxlive.com .../groups/People) are answered here empty; the
+     free roam services (sessiondirectory, gameserverds, gameserverms, momatch),
+     profile.xboxlive.com and userpresence go to the server; every other host gets the offline
+     503 here.
+   Outside a launcher session (the retired Beta protocol, OD-69) there is no line and no gate:
+   every request goes to the server, as a Supporter's Hardcore profile's always did. */
 #include "infinity.h"
 #include "../core/support.h"
 
-static volatile LONG tier_value = FI_TIER_VIP;
-static volatile LONG tier_noob = 0;
-static volatile LONG tier_line = -1; /* -1 no launch ticket; 0 or 1 the ticket's save line */
-
-void fi_tier_set_noob(int noob) {
-    InterlockedExchange(&tier_noob, noob ? 1 : 0);
-}
+static volatile LONG tier_value = FI_TIER_VIP; /* display only (OD-140) */
+static volatile LONG tier_line = -1;          /* -1 no launch ticket; 0 or 1 the ticket's save line */
 
 void fi_tier_set_line(int line) {
     InterlockedExchange(&tier_line, line < 0 ? -1 : line ? 1 : 0);
 }
 
 int fi_tier_universe(void) {
-    const LONG line = tier_line;
-    return line >= 0 ? line == 1 : tier_value != FI_TIER_FREE && !tier_noob;
+    /* OD-128: the ticket's line alone; no ticket (the Beta protocol): open (OD-140) */
+    return tier_line != 0;
 }
 
 void fi_tier_set(int tier) {
@@ -66,10 +51,6 @@ void fi_tier_set(int tier) {
 
 int fi_tier(void) {
     return (int)tier_value;
-}
-
-int fi_tier_free(void) {
-    return tier_value == FI_TIER_FREE;
 }
 
 static wchar_t tier_lower(wchar_t c) {
@@ -185,30 +166,16 @@ typedef struct {
     int ok;
 } TierText;
 
-static int strcmp_ascii(const char *a, const char *b) {
-    while (*a && *a == *b) {
-        ++a, ++b;
-    }
-    return (unsigned char)*a - (unsigned char)*b;
-}
-
 static void tier_put(TierText *t, const char *s) {
     for (; *s; ++s) {
         if (t->n + 1 >= t->cap) {
             t->ok = 0;
+            t->out[t->n] = 0;
             return;
         }
         t->out[t->n++] = *s;
     }
     t->out[t->n] = 0;
-}
-
-static void tier_put_wide(TierText *t, const wchar_t *s) {
-    char c[2] = {0, 0};
-    for (; s && *s; ++s) {
-        c[0] = *s >= 32 && *s < 127 && *s != L'"' && *s != L'\\' ? (char)*s : '?';
-        tier_put(t, c);
-    }
 }
 
 static void tier_put_number(TierText *t, unsigned long long v) {
@@ -222,34 +189,6 @@ static void tier_put_number(TierText *t, unsigned long long v) {
     while (n) {
         c[0] = digits[--n];
         tier_put(t, c);
-    }
-}
-
-static const char *const tier_first[] = {"Apex",  "Late",   "Neon",  "Curb",    "Ghost",    "Redline", "Slip",  "Turbo",
-                                         "Horizon", "Gravel", "Nitro", "Midnight", "Drift",  "Torque",  "Chrome", "Dusty",
-                                         "Rapid", "Silent", "Wild",  "Lucky",   "Brave",    "Crimson", "Solar", "Rally"};
-static const char *const tier_second[] = {"Hunter", "Braker", "Rider", "Kisser", "Line",  "Rita",  "Sam",   "Taxi",
-                                          "Hero",   "Grace",  "Nico",  "Mara",   "King",  "Fox",   "Wolf",  "Viper",
-                                          "Pilot",  "Comet",  "Duke",  "Nova",   "Rex",   "Joy",   "Blaze", "Storm"};
-
-void fi_tier_generated_gamertag(unsigned long long xuid, char *out, size_t cap) {
-    /* the Beta server's generated_gamertag (forza.rs): stable, readable, at most 15 characters */
-    unsigned long long h = xuid ^ 0x9e3779b97f4a7c15ull;
-    h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9ull;
-    h = (h ^ (h >> 27)) * 0x94d049bb133111ebull;
-    h ^= h >> 31;
-    char tag[40];
-    TierText t = {tag, 0, sizeof(tag), 1};
-    tag[0] = 0;
-    tier_put(&t, tier_first[h % (sizeof(tier_first) / sizeof(tier_first[0]))]);
-    tier_put(&t, tier_second[(h >> 16) % (sizeof(tier_second) / sizeof(tier_second[0]))]);
-    tier_put_number(&t, (h >> 32) % 100);
-    size_t n = 0;
-    for (; tag[n] && n < 15 && n + 1 < cap; ++n) {
-        out[n] = tag[n];
-    }
-    if (cap) {
-        out[n] = 0;
     }
 }
 
@@ -272,44 +211,8 @@ static unsigned long long tier_url_xuid(const wchar_t *url) {
     return 0;
 }
 
-/* The JSON array of `key` in `body`: its first byte after '[' and its end (']'), or 0. */
-static const unsigned char *tier_json_array(const unsigned char *body, size_t size, const char *key,
-                                            const unsigned char **end) {
-    size_t k = 0;
-    while (key[k]) {
-        ++k;
-    }
-    for (size_t i = 0; i + k + 2 < size; ++i) {
-        if (body[i] != '"') {
-            continue;
-        }
-        size_t j = 0;
-        while (j < k && body[i + 1 + j] == (unsigned char)key[j]) {
-            ++j;
-        }
-        if (j != k || body[i + 1 + k] != '"') {
-            continue;
-        }
-        size_t p = i + 2 + k;
-        while (p < size && (body[p] == ' ' || body[p] == ':' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) {
-            ++p;
-        }
-        if (p >= size || body[p] != '[') {
-            return 0;
-        }
-        for (size_t q = p + 1; q < size; ++q) {
-            if (body[q] == ']') {
-                *end = body + q;
-                return body + p + 1;
-            }
-        }
-        return 0;
-    }
-    return 0;
-}
-
-int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
-                          unsigned long long own, const wchar_t *own_tag, int free_tier, char *json, size_t json_cap) {
+int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned long long own, int no_line, char *json,
+                          size_t json_cap) {
     const wchar_t *host, *path;
     size_t host_length, path_length;
     int get = method && tier_lower(method[0]) == L'g' && tier_lower(method[1]) == L'e' &&
@@ -322,128 +225,29 @@ int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, const unsig
     }
     tier_split(url, &host, &host_length, &path, &path_length);
     unsigned long long named = tier_url_xuid(url);
-    if (named && named != own) {
-        /* another player's presence reads as offline; anything else about them is not sent */
-        if (free_tier && get && tier_host_is(host, host_length, L"userpresence.xboxlive.com")) {
-            TierText t = {json, 0, json_cap, 1};
-            if (tier_ends(path, path_length, L"/groups/People")) {
-                tier_put(&t, "[]"); /* a list: the friends' presence, empty (the server's own answer) */
-                return t.ok ? FI_ROUTE_JSON : FI_ROUTE_UNAVAILABLE;
-            }
-            tier_put(&t, "{\"xuid\":\"");
-            tier_put_number(&t, named);
-            tier_put(&t, "\",\"state\":\"Offline\"}");
+    if (!named || named == own) {
+        return FI_ROUTE_PASS;
+    }
+    /* another player: with a cloud line reads go to the server and writes are not sent; without
+       one their presence reads as offline here and anything else about them is not sent */
+    if (no_line && get && tier_host_is(host, host_length, L"userpresence.xboxlive.com")) {
+        TierText t = {json, 0, json_cap, 1};
+        if (tier_ends(path, path_length, L"/groups/People")) {
+            tier_put(&t, "[]"); /* a list: the friends' presence, empty (the server's own answer) */
             return t.ok ? FI_ROUTE_JSON : FI_ROUTE_UNAVAILABLE;
         }
-        return free_tier || !get ? FI_ROUTE_UNAVAILABLE : FI_ROUTE_PASS;
+        tier_put(&t, "{\"xuid\":\"");
+        tier_put_number(&t, named);
+        tier_put(&t, "\",\"state\":\"Offline\"}");
+        return t.ok ? FI_ROUTE_JSON : FI_ROUTE_UNAVAILABLE;
     }
-    if (!free_tier || get || !tier_host_is(host, host_length, L"profile.xboxlive.com") ||
-        !tier_ends(path, path_length, L"/batch/profile/settings")) {
-        return FI_ROUTE_PASS;
-    }
-    /* in a launcher session the server answers it (OD-63, Mac 2026-10-19): the real gamertags of
-       the players the ticket shares a world with, generated ones for everyone else (drivatars) */
-    if (fi_launch_protocol()) {
-        return FI_ROUTE_PASS;
-    }
-    /* outside one (the Beta), a free ticket's batch lookup naming anyone but the player (the
-       save's drivatars): answered here as the Beta server answered it, with a generated gamertag */
-    const unsigned char *ids_end = 0, *ids = tier_json_array(body, size, "userIds", &ids_end);
-    if (!ids) {
-        return FI_ROUTE_PASS;
-    }
-    int foreign = 0;
-    for (const unsigned char *p = ids; p < ids_end;) {
-        while (p < ids_end && (*p < '0' || *p > '9')) {
-            ++p;
-        }
-        unsigned long long v = 0;
-        int digits = 0;
-        for (; p < ids_end && *p >= '0' && *p <= '9'; ++p, ++digits) {
-            v = v * 10 + (unsigned long long)(*p - '0');
-        }
-        foreign |= digits && v != own;
-    }
-    if (!foreign) {
-        return FI_ROUTE_PASS;
-    }
-    const unsigned char *settings_end = 0, *settings = tier_json_array(body, size, "settings", &settings_end);
-    TierText t = {json, 0, json_cap, 1};
-    tier_put(&t, "{\"profileUsers\":[");
-    int first_user = 1;
-    for (const unsigned char *p = ids; p < ids_end;) {
-        while (p < ids_end && (*p < '0' || *p > '9')) {
-            ++p;
-        }
-        unsigned long long v = 0;
-        int digits = 0;
-        for (; p < ids_end && *p >= '0' && *p <= '9'; ++p, ++digits) {
-            v = v * 10 + (unsigned long long)(*p - '0');
-        }
-        if (!digits) {
-            continue;
-        }
-        char tag[16];
-        fi_tier_generated_gamertag(v, tag, sizeof(tag));
-        tier_put(&t, first_user ? "{\"id\":\"" : ",{\"id\":\"");
-        first_user = 0;
-        tier_put_number(&t, v);
-        tier_put(&t, "\",\"hostId\":\"");
-        tier_put_number(&t, v);
-        tier_put(&t, "\",\"settings\":[");
-        int first_setting = 1;
-        for (const unsigned char *s = settings; s && s < settings_end;) {
-            while (s < settings_end && *s != '"') {
-                ++s;
-            }
-            const unsigned char *name = ++s;
-            while (s < settings_end && *s != '"') {
-                ++s;
-            }
-            if (s >= settings_end) {
-                break;
-            }
-            char setting[32];
-            size_t n = 0;
-            for (const unsigned char *c = name; c < s && n + 1 < sizeof(setting); ++c) {
-                setting[n++] = (char)(*c >= 32 && *c < 127 && *c != '\\' ? *c : '?');
-            }
-            setting[n] = 0;
-            ++s;
-            tier_put(&t, first_setting ? "{\"id\":\"" : ",{\"id\":\"");
-            first_setting = 0;
-            tier_put(&t, setting);
-            tier_put(&t, "\",\"value\":\"");
-            int name_like = !strcmp_ascii(setting, "Gamertag") || !strcmp_ascii(setting, "GameDisplayName") ||
-                            !strcmp_ascii(setting, "AppDisplayName");
-            if (name_like) {
-                if (v == own && own_tag && *own_tag) {
-                    tier_put_wide(&t, own_tag);
-                } else {
-                    tier_put(&t, tag);
-                }
-            } else if (!strcmp_ascii(setting, "AccountTier")) {
-                tier_put(&t, "Gold");
-            } else if (!strcmp_ascii(setting, "Gamerscore")) {
-                tier_put(&t, "0");
-            } else if (!strcmp_ascii(setting, "GameDisplayPicRaw") || !strcmp_ascii(setting, "AppDisplayPicRaw")) {
-                /* an absolute URL: an empty one crashes the game (Beta, game+0x124f916) */
-                tier_put(&t, "http://gamerpic.fh2online/pic?xuid=");
-                tier_put_number(&t, v);
-            }
-            tier_put(&t, "\"}");
-        }
-        tier_put(&t, "],\"isSponsoredUser\":false}");
-    }
-    tier_put(&t, "]}");
-    return t.ok ? FI_ROUTE_JSON : FI_ROUTE_UNAVAILABLE;
+    return no_line || !get ? FI_ROUTE_UNAVAILABLE : FI_ROUTE_PASS;
 }
 
-int fi_tier_free_route(const wchar_t *method, const wchar_t *url, const wchar_t *headers, const char **json,
-                       wchar_t *what, size_t what_capacity) {
+int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char **json, wchar_t *what,
+                          size_t what_capacity) {
     const wchar_t *host, *path;
     size_t host_length, path_length;
-    int platform = fi_launch_protocol();
     *json = 0;
     if (what && what_capacity) {
         what[0] = 0;
@@ -473,22 +277,22 @@ int fi_tier_free_route(const wchar_t *method, const wchar_t *url, const wchar_t 
         }
         if (class_name && call && tier_equal(class_name, comma, L"Forza.WebServices.User") &&
             (tier_equal(call, method_length, L"Logon") || tier_equal(call, method_length, L"GetPermissionsTable") ||
-             (platform && tier_equal(call, method_length, L"GetEconomySettings")))) {
+             tier_equal(call, method_length, L"GetEconomySettings"))) {
             return FI_ROUTE_PASS;
         }
-        if (platform && class_name && call && tier_equal(class_name, comma, L"Xls.WebServices.User") &&
+        if (class_name && call && tier_equal(class_name, comma, L"Xls.WebServices.User") &&
             tier_equal(call, method_length, L"GetUserData")) {
             return FI_ROUTE_PASS;
         }
-        /* OD-121: the 30 s inbox poll carries the activity report (activity.c); the free game plane
-           answers it with the empty inbox */
-        if (platform && class_name && call && tier_equal(class_name, comma, L"Xls.WebServices.Notifications") &&
+        /* OD-121: the 30 s inbox poll carries the activity report (activity.c); the server answers a
+           ticket without a line with the empty inbox */
+        if (class_name && call && tier_equal(class_name, comma, L"Xls.WebServices.Notifications") &&
             tier_equal(call, method_length, L"RetrieveForUser")) {
             return FI_ROUTE_PASS;
         }
         /* CR-S59: the liveries are stored on the server for every ticket (each profile's own, served
            to readers of its mode); the two Storefront livery lists are answered empty there */
-        if (platform && class_name && call &&
+        if (class_name && call &&
             ((tier_equal(class_name, comma, L"Forza.WebServices.ContentVersioning") &&
               (tier_equal(call, method_length, L"CreateVersionedLivery") ||
                tier_equal(call, method_length, L"RetrieveVersionedLiveryById") ||
@@ -519,31 +323,17 @@ int fi_tier_free_route(const wchar_t *method, const wchar_t *url, const wchar_t 
         *json = "{\"profileUsers\":[]}";
         return FI_ROUTE_JSON;
     }
-    if (tier_host_is(host, host_length, L"userpresence.xboxlive.com")) {
-        if (tier_ends(path, path_length, L"/groups/People")) {
-            *json = "[]";
-            return FI_ROUTE_JSON;
-        }
-        if (platform) {
+    if (tier_host_is(host, host_length, L"userpresence.xboxlive.com") && tier_ends(path, path_length, L"/groups/People")) {
+        *json = "[]";
+        return FI_ROUTE_JSON;
+    }
+    static const wchar_t *const sent[] = {L"sessiondirectory.xboxlive.com", L"gameserverds.xboxlive.com",
+                                          L"gameserverms.xboxlive.com",     L"momatch.xboxlive.com",
+                                          L"profile.xboxlive.com",          L"userpresence.xboxlive.com"};
+    for (size_t i = 0; i < sizeof(sent) / sizeof(sent[0]); ++i) {
+        if (tier_host_is(host, host_length, sent[i])) {
             return FI_ROUTE_PASS;
         }
-        if (method && !(tier_lower(method[0]) == L'g' && tier_lower(method[1]) == L'e' &&
-                        tier_lower(method[2]) == L't' && !method[3])) {
-            *json = "{}";
-            return FI_ROUTE_JSON;
-        }
-        return FI_ROUTE_UNAVAILABLE;
     }
-    if (platform) {
-        static const wchar_t *const sent[] = {L"sessiondirectory.xboxlive.com", L"gameserverds.xboxlive.com",
-                                              L"gameserverms.xboxlive.com", L"momatch.xboxlive.com",
-                                              L"profile.xboxlive.com"};
-        for (size_t i = 0; i < sizeof(sent) / sizeof(sent[0]); ++i) {
-            if (tier_host_is(host, host_length, sent[i])) {
-                return FI_ROUTE_PASS;
-            }
-        }
-        return FI_ROUTE_UNAVAILABLE;
-    }
-    return FI_ROUTE_PASS;
+    return FI_ROUTE_UNAVAILABLE;
 }
