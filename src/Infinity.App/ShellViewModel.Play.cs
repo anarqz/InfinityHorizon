@@ -29,14 +29,28 @@ public sealed partial class ShellViewModel
     /// A failure is logged and never stops the launch (without its ini ExtraOptions refuses; the hook still runs).
     /// OD-126: the mods of <c>mods\</c> are prepared for the profile (Hardcore online plays without them).
     /// </summary>
-    private void PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
+    /// <returns>False only when a Hardcore launch could not hold the Treasure Map off: that launch must not start.</returns>
+    private bool PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
     {
-        if (install is null) return;
+        if (install is null) return true;
         PrepareExtraOptionsMods(install, hardcore);
         try { Log("azimuth: " + AzimuthTitles.EnsureFh2(install.Root, ContentLocation?.PackageRoot)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("azimuth: title not written (" + e.GetType().Name + ")"); }
         try { Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(install.Root)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { Log("extraoptions: ini not written (" + e.GetType().Name + ")"); }
+        // owner 2026-10-29: the online tabs on (once, they were Infinity's lock), the Treasure Map held off for Hardcore
+        try
+        {
+            Log("extraoptions: " + ExtraOptionsInfinity.EnableOnlineTabsOnce(install.Root, Path.Combine(_stateDirectory, "extraoptions-online-tabs-on")));
+            if (ExtraOptionsInfinity.HoldTreasureMapForHardcore(install.Root, hardcore, Path.Combine(_stateDirectory, "extraoptions-treasure-map-held")) is { } note)
+                Log("extraoptions: " + note);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or Infinity.Core.Mods.ModException)
+        {
+            Log("extraoptions: launch settings not applied (" + e.GetType().Name + ")");
+            return !hardcore; // fail closed: a Hardcore profile never plays with the Treasure Map
+        }
+        return true;
     }
 
     private string? _playStatus;
@@ -188,12 +202,13 @@ public sealed partial class ShellViewModel
             if (nativePlan is null) return;
             if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
             modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
-            PrepareAzimuth(_install, ProfileHardcore);
+            if (!PrepareAzimuth(_install, ProfileHardcore))
+            { Message = S["extraoptions.treasure_map_hold_failed"]; await EndNativeModSessionAsync(nativePlan); return; }
         }
         else
         {
             // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
-            PrepareAzimuth(_install, ProfileHardcore);
+            if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = S["extraoptions.treasure_map_hold_failed"]; return; }
             var built = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
             if (built is null) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
             modSet = built;

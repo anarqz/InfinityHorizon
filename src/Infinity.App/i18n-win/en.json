@@ -836,6 +836,7 @@
   "mods.native_unavailable_play": "Some enabled mods use the old Infinity mod format, which is no longer supported. Disable them on Mods to play; mods now load through ExtraOptions.",
   "mods.native_hook_required": "Native mods online need the official Infinity hook with mod support. Reinstall the hook in Configure, or disable the native mods.",
   "mods.online_unverified": "Your multiplayer mods' files don't match their installed versions, so modded lobbies can't be used. Open Mods to repair them, or disable them to play without mods.",
+  "extraoptions.treasure_map_hold_failed": "The Treasure Map could not be turned off for this Hardcore profile (FH2_ExtraOptions.ini could not be changed), so the game was not started. Close anything using that file and press Play again.",
   "mods.online_failed": "Your mods could not be confirmed, so this session can't host or join modded lobbies. Close the game and try again, or disable the mods.",
   "mods.runtime_failed": "The mod session could not start or ended unexpectedly.",
   "mods.session_prepare": "Preparing the session database…",
