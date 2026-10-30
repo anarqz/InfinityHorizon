@@ -257,6 +257,10 @@ int azimuth_proxy_send_world(const void *data, int size);
 void fi_carstate_apply(unsigned char *game_image);
 /* carmeet.c: car meet invitation joins and the online car meet entries (free roam on). */
 void fi_carmeet_apply(unsigned char *game_image);
+/* follow.c (OD-151): a seated guest's game starts its own matchmaking for the host's new activity
+   (the launcher's FollowHost; the player confirms with (X)). Applied with car meets (free roam on). */
+void fi_follow_apply(unsigned char *game_image);
+void fi_follow_host(unsigned lobby, unsigned is_public);
 void azimuth_carstate_local(int lights, int roof);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);

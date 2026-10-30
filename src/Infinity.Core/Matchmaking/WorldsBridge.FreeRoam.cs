@@ -350,11 +350,41 @@ public sealed partial class WorldsBridge
             _log($"worlds: activity {last.Activity} -> {activity} in {seat.WorldId} (the host's)");
             _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60,
                 _text("worlds.host_activity").Replace("{mode}", ActivityName(activity), StringComparison.Ordinal)));
+            // OD-151 follow-up: the guest's game starts its own matchmaking for the host's activity (the player confirms with (X))
+            Volatile.Write(ref _followHost, new Session.Frame.FollowHost(
+                activity == WorldActivities.RoadTrip ? Session.FollowHostLobby.RoadTrip : Session.FollowHostLobby.FreeRoam, Public: true));
         }
         _seatActivity = (seat.WorldId, activity);
     }
 
+    // OD-151 follow-up: the FollowHost frame of the last activity change, not sent yet (the latest change wins)
+    private Session.Frame.FollowHost? _followHost;
+
+    /// <summary>Writes <see cref="Session.Frame.FollowHost"/> to the hook (the supervisor's control pipe).</summary>
+    public Func<Session.Frame.FollowHost, CancellationToken, Task>? SendFollowHost { get; set; }
+
+    /// <summary>
+    /// OD-151 follow-up: sends the pending <see cref="Session.Frame.FollowHost"/> of a seat's activity change, once. Taken whether or not
+    /// it can be written: a change is never replayed later (a closed or suspended session, or no hook writer, drops it with a log line).
+    /// </summary>
+    public async Task FollowHostAsync(CancellationToken cancellation)
+    {
+        if (Interlocked.Exchange(ref _followHost, null) is not { } follow) return;
+        var name = follow.LobbyType == Session.FollowHostLobby.RoadTrip ? "Road Trip" : "free roam";
+        if (!OnlineOpen || SendFollowHost is null) { _log($"worlds: the host is in {name}; online is closed here, the game is not asked to follow"); return; }
+        try
+        {
+            await SendFollowHost(follow, cancellation).ConfigureAwait(false);
+            _log($"worlds: the host is in {name}; the game is asked to look for it (FollowHost, the player confirms)");
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ProtocolException or ObjectDisposedException)
+        { _log("worlds: FollowHost not sent (" + error.GetType().Name + ")"); }
+    }
+
     /// <summary>The player-facing name of an activity: "Online Free Roam" or "Online Road Trip" (both languages).</summary>
+    /// <summary>What a world ran when the lobby list last showed it (no extra read); null when it was not listed.</summary>
+    private string? ListedActivity(string worldId) => _listedActivity.TryGetValue(worldId, out var activity) ? activity : null;
+
     private string ActivityName(string activity) =>
         _text(activity == WorldActivities.RoadTrip ? "worlds.activity_roadtrip" : "worlds.activity_freeroam");
 

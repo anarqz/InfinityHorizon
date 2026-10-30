@@ -62,6 +62,7 @@ enum {
     FRAME_FREE_ROAM_READY = 0x20, /* launcher -> hook, CR-L40: {u32 nonce, u8 result 0-2} */
     FRAME_PROGRESS = 0x21,        /* hook -> launcher, CR-L41.3: {u32 level, u64 credits} */
     FRAME_CAR = 0x22,             /* hook -> launcher, CR-L41.3: {i32 carKey} */
+    FRAME_FOLLOW_HOST = 0x23,     /* launcher -> hook, OD-151: {u8 lobby type 1-2, u8 public 0-1} (follow.c) */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -1805,6 +1806,18 @@ static int launch_session_frame(void) {
         return launch_overlay_frame(&r);
     case FRAME_FREE_ROAM_READY:
         return launch_free_roam_ready(&r);
+    case FRAME_FOLLOW_HOST: {
+        /* OD-151: the seated guest's host changed activity; the game asks the player (follow.c) */
+        unsigned lobby = (unsigned)launch_le(&r, 1), is_public = (unsigned)launch_le(&r, 1);
+        if (r.bad || r.left || (lobby != 1 && lobby != 2) || is_public > 1) {
+            launch_log("REFUSED: a FollowHost frame that does not parse.", 0, 0, "");
+            return 0;
+        }
+        if (fi_launch_suspended()) return 1;
+        launch_log("FollowHost: the host is now in lobby type ", 1, lobby, "; the game is asked to look for it.");
+        fi_follow_host(lobby, is_public);
+        return 1;
+    }
     default:
         launch_log("REFUSED: a frame the launcher does not send during a session (type ", 1, type, ").");
         return 0;

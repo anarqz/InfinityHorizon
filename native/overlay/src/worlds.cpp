@@ -121,14 +121,15 @@ int g_buttons = 0;          // how many buttons the current card has
 uint64_t g_seen_mine = 0, g_seen_action = 0;
 int g_dev_mine = 0;         // the dev host's own world: 0 none, 1 hosting, 3 seated
 
-// a world created (the Hosted screen) or a seat reserved (the prompt to go to Free Roam Online)
-void Admitted(bool hosted) {
+// a world created (the Hosted screen) or a seat reserved (where the host is, from the launcher's answer)
+void Admitted(bool hosted, const std::string &message = std::string()) {
     if (hosted) {
         g_screen = Screen::Hosted;
     } else {
         g_screen = Screen::List;
         PushToast(ToastKind::Success, T("Seat reserved", "Lugar reservado"),
-                  T("Go to Free Roam Online to join the lobby", "Vá em Free Roam Online para entrar no lobby"));
+                  message.empty() ? T("Pick the host's online mode in the game's menu", "Escolha no menu do jogo o modo online do host")
+                                  : message.c_str());
         CloseSidebar();
     }
     g_mine_refresh = true;
@@ -896,7 +897,7 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         y += 32 * s;
     }
     if (m.role == 2) {
-        Wrapped(dl, f.small, ImVec2(x, y), w, kAmber, T("Go to Free Roam Online in the game's menu to join it.", "Vá em Free Roam Online no menu do jogo para entrar nele."));
+        Wrapped(dl, f.small, ImVec2(x, y), w, kAmber, T("Pick the host's online mode in the game's menu to join it.", "Escolha no menu do jogo o modo online do host para entrar nele."));
         y += 30 * s;
     }
     y += 6 * s;
@@ -989,7 +990,7 @@ void DrawConfirm(ImDrawList *dl, float x, float y, float w) {
     const char *title = g_confirm == 1 ? T("Close your lobby?", "Fechar seu lobby?") : g_confirm == 2 ? T("Leave this lobby?", "Sair deste lobby?")
                                                                                       : T("Remove this player?", "Remover este jogador?");
     const char *text = g_confirm == 1 ? T("Everyone in it goes back to their own lobby.", "Todos que estão nele voltam para o próprio lobby.")
-                       : g_confirm == 2 ? T("Your seat is let go. Leave Free Roam Online in the game's menu too.", "Seu lugar é liberado. Saia também do Free Roam Online no menu do jogo.")
+                       : g_confirm == 2 ? T("Your seat is let go. Leave the online mode in the game's menu too.", "Seu lugar é liberado. Saia também do modo online no menu do jogo.")
                                         : T("They leave your lobby now and cannot join it again while it is open.", "Ele sai do seu lobby agora e não pode voltar enquanto ele estiver aberto.");
     y = Panel(dl, x, y, title);
     if (g_confirm == 3) {
@@ -1166,7 +1167,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         g_seen_join = sh.join_serial;
         if (g_screen == Screen::Busy) {
             if (sh.join_status == 0 && world_access) {
-                Admitted(false); // the seat's prompt
+                Admitted(false, sh.join_message); // the seat's prompt: where the host is
             } else if (sh.join_status == 3) {
                 // a wrong code: back on the code screen, with the reason
                 g_screen = Screen::List;

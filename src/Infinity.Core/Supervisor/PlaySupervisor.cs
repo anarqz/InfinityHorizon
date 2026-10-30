@@ -568,6 +568,12 @@ public sealed class PlaySupervisor
                 try {await pipe.WriteAsync(bytes,ct).ConfigureAwait(false);}
                 finally {System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);}
             };
+            // OD-151 follow-up: a seated guest's game follows its host's activity through the game's own matchmaking
+            worlds.SendFollowHost=async (follow,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                await pipe.WriteAsync(follow.Encode(),ct).ConfigureAwait(false);
+            };
             worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
@@ -1043,6 +1049,7 @@ public sealed class PlaySupervisor
                 var mine = await worlds.PollMyWorldAsync(cancellation).ConfigureAwait(false);
                 await overlay.SendFrameAsync(mine, cancellation).ConfigureAwait(false);
                 foreach (var toast in worlds.LobbyToasts()) await overlay.ToastAsync(toast, cancellation).ConfigureAwait(false);
+                await worlds.FollowHostAsync(cancellation).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

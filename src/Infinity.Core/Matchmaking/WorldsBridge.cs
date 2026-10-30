@@ -170,6 +170,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 _roster.Reset();
                 _publicWarning.Reset();
                 _seatActivity = null; // a new seat's first read is never a change
+                Volatile.Write(ref _followHost, null); // nor does a change of a seat that is gone move the game
                 CrashContext?.ObserveWorld(null);
                 Volatile.Write(ref _mineSnapshot, NoWorld);
                 (_mineId, _mineRole) = (null, UiWorldRole.None);
@@ -442,6 +443,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 return new UiFrame.WorldsList(query.Filter, 2, _text("worlds.list_failed"), []);
             }
+            foreach (var world in list.Items.Concat(list.Locked)) _listedActivity[world.Id] = world.Activity;
             var rows = list.Items.Select(w => WithActivity(Row(w, false), w)).Concat(list.Locked.Select(w => WithActivity(Row(w, true), w))).ToList();
             return new UiFrame.WorldsList(query.Filter, 0, string.Empty, rows);
         }
@@ -578,7 +580,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         }
                         await ForceRelayAsync(grant.Id, cancellation).ConfigureAwait(false); // FI_RELAY_FORCE only
-                        return new UiFrame.JoinResult(UiJoin.Reserved, _text("worlds.reserved"));
+                        // where the host is now, so the player picks that mode in the game (never "go to free roam" blindly)
+                        return new UiFrame.JoinResult(UiJoin.Reserved, ListedActivity(grant.WorldId) is { } hostActivity
+                            ? _text("worlds.reserved_mode").Replace("{mode}", ActivityName(hostActivity), StringComparison.Ordinal)
+                            : _text("worlds.reserved"));
                     case JoinStatuses.Locked when attempt == 0:
                         // A used seat in this lobby is also Locked. An invite code does not
                         // reveal its target here, so never destroy a live seat on that ambiguity.

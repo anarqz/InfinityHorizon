@@ -1543,6 +1543,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
     fr_build_vtables();
     fr_apply_patches();
     fi_carmeet_apply(game_image);
+    fi_follow_apply(game_image);
     /* The Winsock imports are redirected on the first WinRT activation, on a game thread:
        loading ws2_32 here would happen under the loader lock. */
     log_append(fr_world_override[0] ? "FREEROAM: on; the world is [hook] FreeRoamWorld.\r\n"

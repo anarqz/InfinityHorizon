@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
 using System.Net;
 
 namespace Infinity.Core.WorldServer;
@@ -160,7 +161,9 @@ internal sealed partial class RelayEngine
             peer.Objects.Remove(key);
             if (peer.Objects.Count < 256)
             {
-                var history = new RelayObject(obj.Type, obj.Sequence, obj.Payload);
+                var (router, id, index) = (obj.Router, obj.Handle.Id, peer.Index);
+                var history = new RelayObject(obj.Type, obj.Sequence, obj.Payload, router,
+                    line => Note(string.Create(CultureInfo.InvariantCulture, $"peer {index} router {router} object {id}: {line}")));
                 var orphans = peer.Orphans.ToArray(); peer.Orphans.Clear();
                 foreach (var orphan in orphans)
                     if ((orphan.Router, orphan.Handle.Id) == key) history.Update(orphan.Sequence, orphan.Payload);
