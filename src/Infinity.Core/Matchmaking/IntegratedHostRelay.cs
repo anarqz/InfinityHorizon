@@ -23,6 +23,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly Dictionary<IPEndPoint, RelayEngine> _routes = []; // actor thread only: endpoints seated in a car meet
     private Func<ulong, IPEndPoint, long, bool> _authorize = static (_, _, _) => false;
     private Func<ulong, IPEndPoint, long, bool>? _authorizeHook;
+    private Func<ulong, bool>? _awaitsProof;
     private readonly RelayNetworkNat _nat;
     private readonly RelayLegs _legs; // CR-S57: the joiners met at a relay (actor thread only)
     private readonly CancellationTokenSource _stop = new();
@@ -105,7 +106,8 @@ public sealed class IntegratedHostRelay : IHostRelay
         return engine = new(_settings with { CarMeetLobby = carMeet, RoadTrip = roadTrip }, Send)
         {
             CreateGameSession = request => StartGameSession(engine!, request),
-            Authorize = _authorize, AuthorizeHook = _authorizeHook,
+            Authorize = _authorize, AuthorizeHook = _authorizeHook, AwaitsProof = _awaitsProof,
+            AdmittedLate = endpoint => Moved(engine!, endpoint, _clock.ElapsedMilliseconds),
             ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
             ConnectionOpened = (index, a, b, refusal) =>
             {
@@ -143,6 +145,13 @@ public sealed class IntegratedHostRelay : IHostRelay
         if (RelayEngine.LobbyTypeOf(datagram.Span) is not { } lobby) { current.Receive(datagram.Span, peer, now); return; }
         var target = RelayEngine.IsCarMeetLobby(lobby) ? CarMeet(lobby) : lobby == RelayEngine.RoadTripLobby && RoadTrip() is { } trip ? trip : _engine;
         target.Receive(datagram.Span, peer, now);
+        Moved(target, peer, now);
+    }
+
+    // the endpoint is seated in target (a datagram, or a held OpenConnection taken in after its proof): it follows it there
+    private void Moved(RelayEngine target, IPEndPoint peer, long now)
+    {
+        var current = _routes.GetValueOrDefault(peer) ?? _engine;
         if (target == current || !target.HasPeer(peer)) return;
         current.Forget(peer, now);
         if (target == _engine) _routes.Remove(peer); else _routes[peer] = target;
@@ -211,10 +220,11 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     /// <summary>Completes only after the actor installs the admission policy. Null is never allow-all.</summary>
     public Task SetAdmissionValidatorAsync(Func<ulong,IPEndPoint,long,bool>? validator,CancellationToken cancellation=default)
-        => SetAdmissionPolicyAsync(validator,null,null,cancellation);
+        => SetAdmissionPolicyAsync(validator,null,null,null,cancellation);
 
     internal async Task SetAdmissionPolicyAsync(Func<ulong, IPEndPoint, long, bool>? validator,
-        Func<ulong,IPEndPoint,long,bool>? hookValidator,Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? proofReceiver,CancellationToken cancellation=default)
+        Func<ulong,IPEndPoint,long,bool>? hookValidator,Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? proofReceiver,
+        Func<ulong,bool>? awaitsProof,CancellationToken cancellation=default)
     {
         ObjectDisposedException.ThrowIf(!Running, this);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -228,7 +238,8 @@ public sealed class IntegratedHostRelay : IHostRelay
             if (!_commands.Writer.TryWrite(new(() =>
                 {
                     _authorize = validator ?? (static (_, _, _) => false); _authorizeHook = hookValidator; _proofReceiver = proofReceiver;
-                    foreach (var engine in Engines) { engine.Authorize = _authorize; engine.AuthorizeHook = _authorizeHook; }
+                    _awaitsProof = validator is null ? null : awaitsProof;
+                    foreach (var engine in Engines) { engine.Authorize = _authorize; engine.AuthorizeHook = _authorizeHook; engine.AwaitsProof = _awaitsProof; }
                 }, completion, token)))
                 throw new IOException("The relay control queue is full or closed");
             await completion.Task.WaitAsync(token).ConfigureAwait(false);

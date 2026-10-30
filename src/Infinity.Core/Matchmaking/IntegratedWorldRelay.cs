@@ -57,7 +57,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         {
             _admission.Update(world);
             await _transport.SetAdmissionPolicyAsync(_admission.Allowed,_admission.AllowedHook,
-                (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),cancellation).ConfigureAwait(false);
+                (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),_admission.ProofExpected,cancellation).ConfigureAwait(false);
             _transport.PunchNetworkHints(_admission);
             _transport.SetRelayLegs(_admission.RelayLegs());
         }

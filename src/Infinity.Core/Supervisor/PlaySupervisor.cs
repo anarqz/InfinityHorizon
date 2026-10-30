@@ -737,6 +737,12 @@ public sealed class PlaySupervisor
                         {
                             _ = worlds.FreeRoamLeftAsync(stop.Token);
                         }
+                        // live (test.9): back from a Road Trip the game opens its free roam connection (Event 3) around
+                        // closing the Road Trip one (Event 4); joining again calls off the pending close or leave
+                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } && worlds is not null)
+                        {
+                            worlds.GameJoined();
+                        }
                         if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {
                             // A hook whose requests keep failing may ask again and again: one forced beat per

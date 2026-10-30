@@ -24,7 +24,7 @@ internal sealed partial class RelayEngine
         if (peer is null)
         {
             if (!hasFirst || first is not NerdMessage.OpenConnection open) return;
-            peer = Admit(endpoint, header, open, data.Length);
+            peer = Admit(endpoint, header, open, data);
             if (peer is null) return;
             admitted = true;
         }
@@ -218,6 +218,7 @@ internal sealed partial class RelayEngine
     {
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
+        TickHeldOpens();
         TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip();
         if (_now - _lastResend >= 50)
         {
