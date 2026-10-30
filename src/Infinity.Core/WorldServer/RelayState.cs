@@ -7,6 +7,8 @@ internal sealed record RelaySettings
 {
     public int MaxPlayers { get; init; } = 8;
     public bool Races { get; init; }
+    /// <summary>A car meet world (lobby type 3, or 6 on the island): SessionHost's LobbyType and a server-owned CarMeetSynced. Null: free roam.</summary>
+    public uint? CarMeetLobby { get; init; }
     public long QuietDropMs { get; init; } = 15000;
     public long KeepaliveMs { get; init; } = 500;
     public long ResendAfterMs { get; init; } = 500;
