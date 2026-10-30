@@ -13,6 +13,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     private readonly WorldRelayAdmission _admission;
     private int _disposed;
     public Action<string>? DiagnosticLog {get=>_transport.DiagnosticLog;set=>_transport.DiagnosticLog=value;}
+    /// <summary>The platform call a car meet invitation makes for its shared session (<see cref="IntegratedHostRelay.GameSessions"/>).</summary>
+    public Func<string, IReadOnlyList<string>, CancellationToken, Task<(string Name, string Template)?>>? GameSessions
+    { get => _transport.GameSessions; set => _transport.GameSessions = value; }
     private long _diagnosticAt;
     private int _diagnosticCount;
     private void Diagnostics(bool final=false)

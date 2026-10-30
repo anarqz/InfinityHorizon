@@ -529,6 +529,33 @@ public sealed record SeatRenew
     public string? Transport { get; init; }
 }
 
+/// <summary><see cref="GameModeSessionRequest.Kind"/>: <c>freeroam</c> only for now.</summary>
+public static class GameModeSessionKinds
+{
+    public const string FreeRoam = "freeroam";
+}
+
+/// <summary>
+/// <c>POST /mm/v1/worlds/{worldId}/game-sessions</c> body (§3.8): the shared session a car meet invitation takes its joiners to.
+/// <c>xuids</c>: decimal, 1-12, distinct; the host or players seated in this world.
+/// </summary>
+public sealed record GameModeSessionRequest
+{
+    public const int MaxMembers = 12;
+    public required string Kind { get; init; }
+    public required IReadOnlyList<string> Xuids { get; init; }
+}
+
+/// <summary>201 of <c>…/game-sessions</c>: the session every joiner is sent to (<c>name</c> and <c>templateName</c>).</summary>
+public sealed record GameModeSession
+{
+    public required string Kind { get; init; }
+    public required string Scid { get; init; }
+    public required string TemplateName { get; init; }
+    public required string Name { get; init; }
+    public required IReadOnlyList<string> Members { get; init; }
+}
+
 /// <summary><c>POST /mm/v1/worlds/{worldId}/invites</c> body: any XUID of the friend account (a handle works).</summary>
 public sealed record InviteRequest
 {
