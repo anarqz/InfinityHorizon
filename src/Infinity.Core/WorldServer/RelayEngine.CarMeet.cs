@@ -72,7 +72,7 @@ internal sealed partial class RelayEngine
         var bit = reader.Read(1) != 0;
         var type = reader.Read(2);
         if (type == 1) return; // a wager-race answer
-        // For game-mode invitations the bit reads the other way round (FH2MP, observed in game): accepting arrives as 0, and the
+        // For game-mode invitations the bit reads the other way round (observed in game): accepting arrives as 0, and the
         // game's own automatic 0-then-1 at the start therefore ends as "not joined" for a player who pressed nothing.
         var join = !bit;
         if (join && !_inviteJoined.Contains(peer)) _inviteJoined.Add(peer);
