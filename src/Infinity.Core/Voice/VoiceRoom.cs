@@ -59,6 +59,18 @@ public sealed class VoiceRoom
         lock (_lock) return _mutes.ContainsKey(xuid) || _sessionMutes.Contains(xuid) || _lobbyMutes.Contains(xuid);
     }
 
+    /// <summary>What the host's relay enforces (OD-147): null when this profile does not host the current world.</summary>
+    public (bool LobbyOn, IReadOnlyCollection<ulong> MutedForLobby)? RelayRules()
+    {
+        lock (_lock)
+        {
+            if (!_host || _world is null) return null;
+            var muted = _lobbyMutes.Select(x => ulong.TryParse(x, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0)
+                .Where(n => n != 0).ToArray();
+            return (_lobbyVoice ?? true, muted);
+        }
+    }
+
     /// <summary>The overlay asked to create a lobby with this switch.</summary>
     public void Creating(bool voice)
     {

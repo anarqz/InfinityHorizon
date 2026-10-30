@@ -193,6 +193,13 @@ public sealed class IntegratedHostRelay : IHostRelay
             Enqueue(() => { foreach (var engine in Engines) engine.Kick(value, _clock.ElapsedMilliseconds); });
     }
 
+    /// <summary>OD-147: the lobby's voice chat switch and the players the host muted for everyone, for every world of this relay.</summary>
+    public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby)
+    {
+        var copy = mutedForLobby.ToArray();
+        Enqueue(() => { foreach (var engine in Engines) engine.SetVoice(lobbyOn, copy); });
+    }
+
     /// <summary>Queues a bounded STUN punch; neither caller nor WPF dispatcher performs socket I/O.</summary>
     public void Punch(IPEndPoint endpoint)
     {

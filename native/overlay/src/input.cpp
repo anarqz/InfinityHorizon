@@ -19,7 +19,11 @@
 // - The Xbox (Guide) button also toggles, through XInputGetStateEx (xinput1_4 ordinal 100), for
 //   players without Steam or the Game Bar on it; WGI never reports it. XInput navigates only
 //   until the WGI hook is in.
+// - Voice chat (OD-147, voice_gestures.h), with the guide closed: R3 held is push-to-talk, RB then R3 the next mic
+//   mode with a notice on screen. Both still reach the game: they only read the pad.
 #include "overlay.h"
+#include "style.h"
+#include "voice_gestures.h"
 
 #include <MinHook.h>
 #include <roapi.h>
@@ -96,8 +100,26 @@ WORD g_previous = 0;
 Nav g_held = Nav::None;
 std::chrono::steady_clock::time_point g_next_repeat;
 
-constexpr WORD kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008, kStart = 0x0010, kBack = 0x0020, kLB = 0x0100, kRB = 0x0200, kGuide = 0x0400,
-               kA = 0x1000, kB = 0x2000, kX = 0x4000, kY = 0x8000;
+constexpr WORD kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008, kStart = 0x0010, kBack = 0x0020, kRThumb = 0x0080, kLB = 0x0100, kRB = 0x0200,
+               kGuide = 0x0400, kA = 0x1000, kB = 0x2000, kX = 0x4000, kY = 0x8000;
+VoiceGestures g_voice_gestures; // the render thread's
+
+// OD-147: R3 and RB + R3 while driving (the guide closed).
+void VoiceGesture(WORD buttons) {
+    const VoiceState v = CurrentVoice();
+    const auto result = g_voice_gestures.Update(buttons & kRB, buttons & kRThumb, v.mic == MicMode::PushToTalk);
+    SetPushToTalk(result.talk && (v.flags & VoiceState::Enabled));
+    if (!result.cycle) return;
+    if (!(v.flags & VoiceState::Enabled)) {
+        PushToast(ToastKind::Info, ui::T("Voice chat is off", "Chat de voz desligado"),
+                  ui::T("Turn it on in the guide: Settings > Voice chat", "Ligue no guia: Ajustes > Chat de voz"), 25);
+        return;
+    }
+    const auto next = static_cast<MicMode>((static_cast<uint8_t>(v.mic) + 1) % (kMicModeMax + 1));
+    VoiceCommand(VoiceOp::Mic, std::string(), static_cast<uint8_t>(next));
+    PushToast(ToastKind::Info, ui::T("Microphone", "Microfone"), MicModeName(next), 20);
+    Log("voice: mic mode %u by RB + R3", static_cast<unsigned>(next));
+}
 
 Nav Direction(const XState &s) {
     constexpr SHORT dead = 16000;
@@ -116,7 +138,8 @@ std::atomic<bool> g_pad_hooked{false};
 std::atomic<bool> g_open_seen{false}; // the render thread's SidebarOpen(), for the game's input thread
 
 // GamepadButtons
-constexpr UINT32 kWMenu = 0x1, kWView = 0x2, kWA = 0x4, kWB = 0x8, kWX = 0x10, kWY = 0x20, kWLB = 0x400, kWRB = 0x800, kWUp = 0x40, kWDown = 0x80, kWLeft = 0x100, kWRight = 0x200;
+constexpr UINT32 kWMenu = 0x1, kWView = 0x2, kWA = 0x4, kWB = 0x8, kWX = 0x10, kWY = 0x20, kWLB = 0x400, kWRB = 0x800, kWUp = 0x40, kWDown = 0x80, kWLeft = 0x100, kWRight = 0x200,
+                 kWRThumb = 0x2000;
 constexpr auto kTriggerHold = std::chrono::milliseconds(1000); // LB + RB held this long toggles the guide
 
 // Each pad's latest raw reading, for the render thread's navigation: merged, since an idle second
@@ -277,7 +300,7 @@ void PollController() {
                                           ((w & kWLeft) ? kLeft : 0) | ((w & kWRight) ? kRight : 0) | ((w & kWA) ? kA : 0) |
                                           ((w & kWB) ? kB : 0) | ((w & kWX) ? kX : 0) | ((w & kWY) ? kY : 0) |
                                           ((w & kWMenu) ? kStart : 0) | ((w & kWView) ? kBack : 0) |
-                                          ((w & kWLB) ? kLB : 0) | ((w & kWRB) ? kRB : 0));
+                                          ((w & kWLB) ? kLB : 0) | ((w & kWRB) ? kRB : 0) | ((w & kWRThumb) ? kRThumb : 0));
         state.lx = static_cast<SHORT>(lx);
         state.ly = static_cast<SHORT>(ly);
         state.lt = state.rt = 0;
@@ -285,6 +308,8 @@ void PollController() {
     }
     if (!any) {
         g_previous = 0;
+        g_voice_gestures.Reset();
+        SetPushToTalk(false);
         return;
     }
     const WORD pressed = state.buttons & static_cast<WORD>(~g_previous);
@@ -302,8 +327,11 @@ void PollController() {
     }
     if (!SidebarOpen()) {
         g_held = Nav::None;
+        VoiceGesture(state.buttons);
         return;
     }
+    g_voice_gestures.Reset(); // in the guide RB is a tab, and nobody talks by holding R3 in a menu
+    SetPushToTalk(false);
     if (pressed & kA) Navigate(Nav::Accept);
     if (pressed & kX) Navigate(Nav::X);
     if (pressed & kY) Navigate(Nav::Y);

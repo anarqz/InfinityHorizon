@@ -102,6 +102,23 @@ __declspec(dllexport) int32_t fi_overlay_fit_png(const void *in, size_t in_size,
 /* The highest FiPngFit.version fi_overlay_fit_png reads. */
 __declspec(dllexport) uint32_t fi_overlay_png_fit_version(void);
 
+/* Optional exports (OD-147, docs/launcher/VOICE_CHAT.md §11.4, §12; resolve with GetProcAddress, absent before):
+ * voice chat for the game's own UI. The hook answers the game's talking/muted/voice-ability queries from these,
+ * so the game's player list and HUD show our voice chat. Any thread, lock-free, returns at once (the game calls
+ * its queries every frame from its UI thread); never blocks on the pipe.
+ *
+ * fi_overlay_voice_state(xuid): FI_VOICE_* bits for that player as this player hears them, or 0 when the player
+ * is unknown or voice chat is off in the lobby or in this player's settings. xuid 0 is the local player (the hook
+ * knows its own XUID; the overlay does not): FI_VOICE_ABLE when voice is on and the microphone is not muted, plus
+ * FI_VOICE_TALKING while it sends (VC-3). */
+#define FI_VOICE_ABLE 0x1u    /* has voice: the game shows a microphone and offers Mute/Unmute */
+#define FI_VOICE_TALKING 0x2u /* heard talking now (never set while muted) */
+#define FI_VOICE_MUTED 0x4u   /* muted by this player, for the lobby by the host, or voice-blocked */
+__declspec(dllexport) uint32_t fi_overlay_voice_state(uint64_t xuid);
+
+/* The game's own Mute/Unmute action on a player (muted 1/0): becomes the overlay's mute (0x1C VoiceCommand). */
+__declspec(dllexport) void fi_overlay_voice_mute(uint64_t xuid, int32_t muted);
+
 #ifdef __cplusplus
 }
 #endif
