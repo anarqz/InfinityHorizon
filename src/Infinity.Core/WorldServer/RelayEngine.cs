@@ -108,7 +108,7 @@ internal sealed partial class RelayEngine
     {
         _now = Math.Max(_now, nowMilliseconds);
         endpoint = StunCodec.Canonical(endpoint);
-        foreach (var peer in _peers.Where(p => p.Endpoint.Equals(endpoint)).ToArray()) Drop(peer);
+        foreach (var peer in _peers.Where(p => p.Endpoint.Equals(endpoint)).ToArray()) Drop(peer, "moved to another world on this host");
     }
 
     internal void Receive(ReadOnlySpan<byte> data, IPEndPoint endpoint, long nowMilliseconds)
@@ -125,7 +125,7 @@ internal sealed partial class RelayEngine
     internal void Kick(ulong xuid, long nowMilliseconds)
     {
         _now = Math.Max(_now, nowMilliseconds);
-        foreach (var peer in _peers.Where(p => p.Xuid == xuid).ToArray()) Drop(peer);
+        foreach (var peer in _peers.Where(p => p.Xuid == xuid).ToArray()) Drop(peer, "kicked");
     }
 
     internal void Clear()
@@ -221,7 +221,7 @@ internal sealed partial class RelayEngine
         peer.OverLast = _now;
         if (_now - peer.OverSince >= _settings.AbuseMs)
         {
-            peer.Doomed = true;
+            Doom(peer, "over the rate limit");
             foreach (var key in _bans.Where(p => p.Value <= _now).Select(p => p.Key).ToArray()) _bans.Remove(key);
             if (_bans.Count >= 256) _bans.Remove(_bans.Keys.First());
             _bans[peer.Endpoint.Address] = _now + _settings.AbuseBanMs;
@@ -231,14 +231,14 @@ internal sealed partial class RelayEngine
 
     private void CompleteHandshake(RelayPeer peer)
     {
-        if (!Allowed(peer.Xuid, peer.Endpoint)) { Drop(peer); return; }
+        if (!Allowed(peer.Xuid, peer.Endpoint)) { Drop(peer, "not allowed at sync"); return; }
         var old = !SharedXuid(peer.Xuid) ? _peers.FirstOrDefault(p => p != peer && p.Synced && p.Xuid == peer.Xuid) : null;
         if (old is not null)
         {
-            if (_now - old.LastSeen < _settings.TakeoverQuietMs) { Drop(peer); return; }
-            Drop(old);
+            if (_now - old.LastSeen < _settings.TakeoverQuietMs) { Drop(peer, $"its player is still active as peer {old.Index}"); return; }
+            Drop(old, $"taken over by peer {peer.Index}");
         }
-        if (SyncedCount >= _settings.MaxPlayers) { Drop(peer); return; }
+        if (SyncedCount >= _settings.MaxPlayers) { Drop(peer, "world full at sync"); return; }
         peer.Synced = true; peer.JoinedAt = _now;
         SendCompletion(peer);
         var payload = NerdPayload.SessionHost(_hostVariables.Select(p => (p.Key, p.Value.Value, p.Value.Width)).ToArray());
@@ -272,9 +272,11 @@ internal sealed partial class RelayEngine
         Send(peer, [NerdCodec.Write(new NerdMessage.TimeSync(peer.SyncIndex++, NowWire)), NerdCodec.Write(new NerdMessage.SyncDone(peer.Attempt))], false);
     }
 
-    private void Drop(RelayPeer peer)
+    /// <summary>The peer leaves this world; <paramref name="reason"/> goes to the world log with its index (never an identity or address).</summary>
+    private void Drop(RelayPeer peer, string reason)
     {
         if (!_peers.Remove(peer)) return;
+        Note(string.Create(CultureInfo.InvariantCulture, $"peer {peer.Index} dropped: {reason}{(peer.Synced ? string.Empty : " (not synced)")}"));
         var deletes = peer.Objects.Select(p => NerdCodec.Write(new NerdMessage.Delete(p.Key.Router,
             new(HandleKind.Relay, p.Key.Id, peer.Index), AckWindow.SequenceAdd(AckWindow.SequenceNext(p.Value.Last), p.Value.Injected)))).ToArray();
         foreach (var other in _peers.Where(p => p.Synced)) SendSequenced(other, deletes);
@@ -295,15 +297,22 @@ internal sealed partial class RelayEngine
                 var ack = peer.Acks.Header;
                 Emit(peer.Endpoint, NerdCodec.Packet([NerdCodec.Write(new NerdMessage.Close())], NerdCodec.NoSequence, ack.Ack, ack.Bits));
             }
-            Drop(peer);
+            Drop(peer, peer.DoomedBy ?? "doomed");
         }
+    }
+
+    /// <summary>The peer is dropped at the end of this receive or tick; the first reason is kept for the log.</summary>
+    private static void Doom(RelayPeer peer, string reason)
+    {
+        peer.DoomedBy ??= reason;
+        peer.Doomed = true;
     }
     private void Emit(IPEndPoint endpoint, byte[] data) => _send(new(endpoint, data));
 
     private bool MaySend(RelayPeer peer)
     {
         if (!peer.Doomed && Allowed(peer.Xuid, peer.Endpoint)) return true;
-        peer.Doomed = true;
+        Doom(peer, "not allowed any more");
         return false;
     }
 
@@ -366,7 +375,7 @@ internal sealed partial class RelayEngine
     private bool QueueReliable(RelayPeer peer, BitBuffer message)
     {
         if (peer.Queue.Count >= _settings.QueueMaxMessages || peer.QueueBits + message.Length > _settings.QueueMaxBits)
-        { peer.Doomed = true; return false; }
+        { Doom(peer, "reliable queue full"); return false; }
         peer.Queue.Enqueue(message); peer.QueueBits += message.Length;
         return true;
     }

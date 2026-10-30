@@ -18,7 +18,7 @@ internal sealed partial class RelayEngine
         {
             if (restart.User != peer.Xuid || !restart.Version.AsSpan().SequenceEqual(NerdCodec.Version)
                 || !restart.Game.AsSpan().SequenceEqual(NerdCodec.Game)) return;
-            if (restart.Attempt != peer.ClientAttempt) { RetireAttempt(peer); Drop(peer); peer = null; }
+            if (restart.Attempt != peer.ClientAttempt) { RetireAttempt(peer); Drop(peer, "the game reconnected (new attempt)"); peer = null; }
         }
         var admitted = false;
         if (peer is null)
@@ -28,7 +28,7 @@ internal sealed partial class RelayEngine
             if (peer is null) return;
             admitted = true;
         }
-        if (!Allowed(peer.Xuid, endpoint)) { Drop(peer); return; }
+        if (!Allowed(peer.Xuid, endpoint)) { Drop(peer, "not allowed"); return; }
         if (!TakeRate(peer, header, data.Length)) return;
         peer.LastSeen = _now;
         if (!peer.Synced) peer.ReceivedBytes += data.Length;
@@ -67,7 +67,7 @@ internal sealed partial class RelayEngine
                     else if (synced && !peer.CompletionConfirmed && response.Reason == 6 && response.Attempt == peer.Attempt
                         && _now - peer.LastCompletion >= _settings.ResendAfterMs) SendCompletion(peer);
                     break;
-                case NerdMessage.Close: Drop(peer); return;
+                case NerdMessage.Close: Drop(peer, "the game closed its connection"); return;
                 case NerdMessage.Ping ping: answers.Add(NerdCodec.Write(new NerdMessage.Pong(ping.Time, NowWire))); break;
                 case NerdMessage.Pong pong:
                     if (pong.Echo == 0 && pong.Time <= NowWire && NowWire - pong.Time < 60000) peer.Rtt = NowWire - pong.Time;
@@ -117,7 +117,7 @@ internal sealed partial class RelayEngine
                 // Server-only, traffic, collidable, chat and other layouts are parsed but never relayed.
             }
         }
-        if (peer.HistoryBits > _settings.HistoryMaxBits) { peer.Doomed = true; return; }
+        if (peer.HistoryBits > _settings.HistoryMaxBits) { Doom(peer, "object history over its limit"); return; }
         Forward(peer, forward, true); ForwardCars(peer, carNow, cars);
         if (peer.UniverseDue) { peer.UniverseDue = false; PlayerObjectCreated(peer); }
         if (Finalise(peer) is { } finalised) reliable.Add(finalised);
@@ -226,14 +226,14 @@ internal sealed partial class RelayEngine
             {
                 if (peer.Synced && !peer.CompletionConfirmed)
                 {
-                    if (_now - peer.JoinedAt >= _settings.SyncCompleteMs) { peer.Doomed = true; continue; }
+                    if (_now - peer.JoinedAt >= _settings.SyncCompleteMs) { Doom(peer, "sync never confirmed"); continue; }
                     if (_now - peer.LastCompletion >= _settings.ResendAfterMs) SendCompletion(peer);
                 }
                 var wait = Math.Max(_settings.ResendAfterMs, 2L * (peer.Rtt ?? 0));
                 var due = peer.InFlight.Where(p => _now - p.SentAt >= wait).ToArray();
                 peer.InFlight.RemoveAll(p => _now - p.SentAt >= wait);
                 foreach (var packet in due)
-                    if (packet.Tries >= 20) peer.Doomed = true;
+                    if (packet.Tries >= 20) Doom(peer, "reliable packet unacknowledged after 20 tries");
                     else Send(peer, packet.Messages, true, packet.Tries + 1);
             }
         }
@@ -242,8 +242,9 @@ internal sealed partial class RelayEngine
         {
             _lastKeepalive = _now;
             foreach (var peer in _peers.ToArray())
-                if (!Allowed(peer.Xuid, peer.Endpoint) || _now - peer.LastSeen > _settings.QuietDropMs
-                    || (!peer.Synced && _now - peer.JoinedAt > _settings.UnsyncedTimeoutMs)) Drop(peer);
+                if (!Allowed(peer.Xuid, peer.Endpoint)) Drop(peer, "not allowed any more");
+                else if (_now - peer.LastSeen > _settings.QuietDropMs) Drop(peer, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"quiet for {_now - peer.LastSeen} ms"));
+                else if (!peer.Synced && _now - peer.JoinedAt > _settings.UnsyncedTimeoutMs) Drop(peer, "never synced");
                 else if (peer.Synced)
                 {
                     if (_now - peer.LastTimeSync >= _settings.TimeSyncMs)

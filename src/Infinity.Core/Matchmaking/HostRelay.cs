@@ -18,6 +18,12 @@ public interface IHostRelay : IDisposable
 
     /// <summary>Drops a player (the server's <c>kicked</c> punch, the host's moderation).</summary>
     void Kick(string xuid);
+
+    /// <summary>
+    /// The players synced now in the world's Road Trip and car meets (not its free roam): while there are any, leaving free
+    /// roam never closes the world (OD-148). A relay without those lobbies says 0.
+    /// </summary>
+    int LobbyPlayers => 0;
 }
 
 /// <summary>

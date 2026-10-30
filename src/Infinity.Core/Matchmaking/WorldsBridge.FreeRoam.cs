@@ -68,7 +68,8 @@ public sealed partial class WorldsBridge
     /// OD-148 (refines OD-57): the game left free roam. After <see cref="FreeRoamLeftGrace"/> with no lobby ask the hosted
     /// world closes (<see cref="CloseHostAsync"/>) or the seat is let go (<see cref="LeaveAsync"/>); a lobby ask, the overlay's
     /// own close, leave, join or open, the session's end or another leave of free roam ends this wait first. Only the close
-    /// or leave waits: the world's announces and the seat's renewals go on meanwhile.
+    /// or leave waits: the world's announces and the seat's renewals go on meanwhile. A hosted world whose Road Trip or car
+    /// meet still has players (<see cref="IHostRelay.LobbyPlayers"/>) is not closed: it is weighed again every grace.
     /// </summary>
     public async Task FreeRoamLeftAsync(CancellationToken cancellation)
     {
@@ -77,10 +78,24 @@ public sealed partial class WorldsBridge
         var world = HostedWorldId ?? Volatile.Read(ref _seatWorld);
         if (world is not null) _log($"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
         var due = false;
+        var held = false;
         try
         {
-            await Task.Delay(FreeRoamLeftGrace, _clock, pending.Token).ConfigureAwait(false);
-            due = Interlocked.CompareExchange(ref _freeRoamLeave, null, pending) == pending; // nothing called it off meanwhile
+            while (true)
+            {
+                await Task.Delay(FreeRoamLeftGrace, _clock, pending.Token).ConfigureAwait(false);
+                if (Volatile.Read(ref _freeRoamLeave) != pending) break; // called off meanwhile
+                // a hosted world whose Road Trip or car meet still has players stays for them (live, test.8: the host's game
+                // left its session between two Road Trip events while the other player drove on); it is weighed again later
+                if (HostedWorldId is { } kept && LobbyPlayers() is var players and > 0)
+                {
+                    if (!held) _log($"worlds: free roam left; {kept} stays: {players} player(s) in its road trip/car meet");
+                    held = true;
+                    continue;
+                }
+                due = Interlocked.CompareExchange(ref _freeRoamLeave, null, pending) == pending; // nothing called it off meanwhile
+                break;
+            }
         }
         catch (OperationCanceledException) { }
         finally
@@ -90,8 +105,18 @@ public sealed partial class WorldsBridge
         }
         if (!due) return;
         var hosted = HostedWorldId;
-        if ((hosted ?? Volatile.Read(ref _seatWorld)) is { } gone) _log($"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {(hosted is null ? "leaving" : "closing")} {gone}");
+        if ((hosted ?? Volatile.Read(ref _seatWorld)) is { } gone)
+            _log(held && hosted is not null ? $"worlds: free roam left; closing {gone}: no player left in its road trip/car meet"
+                : $"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {(hosted is null ? "leaving" : "closing")} {gone}");
         await (hosted is not null ? CloseHostAsync(cancellation) : LeaveAsync(cancellation)).ConfigureAwait(false);
+    }
+
+    // the hosted relay's Road Trip and car meet players (IHostRelay.LobbyPlayers); 0 without a relay
+    private int LobbyPlayers()
+    {
+        IHostRelay? relay;
+        lock (_hostState) relay = _relay;
+        return relay?.LobbyPlayers ?? 0;
     }
 
     /// <summary>A pending close or leave after free roam is called off (the world, or the player's own choice, stays).</summary>

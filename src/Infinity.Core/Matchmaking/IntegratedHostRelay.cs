@@ -33,6 +33,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly Task _discovery;
     private readonly Task _upnp;
     private IReadOnlyList<string> _peers = Array.Empty<string>();
+    private int _lobbyPlayers; // the synced players of the car meet and Road Trip engines, as the actor's last tick counted them
     private RelayNetworkStatus _network;
     private int _disposed, _running = 1;
     private uint _sendErrors; // actor thread only
@@ -191,6 +192,9 @@ public sealed class IntegratedHostRelay : IHostRelay
         return Task.FromResult(Running ? Volatile.Read(ref _peers) : (IReadOnlyList<string>)Array.Empty<string>());
     }
 
+    /// <summary>The players synced in the Road Trip and car meet engines (<see cref="IHostRelay.LobbyPlayers"/>), as of the actor's last tick.</summary>
+    public int LobbyPlayers => Running ? Volatile.Read(ref _lobbyPlayers) : 0;
+
     public void Kick(string xuid)
     {
         if (ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var value))
@@ -322,6 +326,7 @@ public sealed class IntegratedHostRelay : IHostRelay
                     Volatile.Write(ref _network, _nat.Snapshot() with { SendErrors = _sendErrors });
                     Volatile.Write(ref _peers, Array.AsReadOnly(Engines.SelectMany(e => e.PeerXuids).Distinct()
                         .Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
+                    Volatile.Write(ref _lobbyPlayers, _carMeets.Values.Sum(e => e.SyncedCount) + (_roadTrip?.SyncedCount ?? 0));
                 }
                 if (!activity) cancellation.WaitHandle.WaitOne(2);
             }
@@ -336,6 +341,7 @@ public sealed class IntegratedHostRelay : IHostRelay
             foreach (var engine in Engines) engine.Clear();
             _routes.Clear();
             Volatile.Write(ref _peers, Array.Empty<string>());
+            Volatile.Write(ref _lobbyPlayers, 0);
             _socket.Dispose();
         }
     }
