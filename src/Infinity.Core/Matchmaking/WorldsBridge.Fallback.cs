@@ -57,6 +57,8 @@ public sealed partial class WorldsBridge
     private string? _legRelayKey;
     private bool _legViaRelay;
     private string? _hostedTransport;
+    // a seat whose grant names no usable relay: if its direct path fails there is nothing to fall back to
+    private string? _noRelayGrant;
     private string? _hostedRelayName;
 
     private async Task<RelayReport?> RelayReportAsync(CancellationToken cancellation)
@@ -89,9 +91,12 @@ public sealed partial class WorldsBridge
             || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0
             || Volatile.Read(ref _refusedGrant) == verified.Grant) // the server refused this grant's relay: nothing for the hook to try
         {
+            if (Interlocked.Exchange(ref _noRelayGrant, verified.Grant) != verified.Grant)
+                _log("worlds: this seat's grant names no usable relay: direct only, no fallback if it fails");
             await ClearLegAsync(cancellation).ConfigureAwait(false);
             return;
         }
+        Forget(ref _noRelayGrant, verified.Grant);
         // the hook's own report wins: once it plays direct, a seat that still reads "relay" never sends it back to the relay;
         // FI_RELAY_FORCE (a test switch) sends every leg as relay-born, so the hook never tries the direct path
         var viaRelay = ForceRelay || (Volatile.Read(ref _directGrant) != verified.Grant
@@ -209,6 +214,7 @@ public sealed partial class WorldsBridge
     {
         if (HostedWorldId is not null)
             return Volatile.Read(ref _hostedTransport) == Transports.Relay ? Via(Volatile.Read(ref _hostedRelayName)) : _text("connection.direct");
+        if (_seat.GrantId is { } seat && _legGrant is null && Volatile.Read(ref _noRelayGrant) == seat) return _text("connection.direct_only");
         if (_seat.GrantId is null || _legGrant is null) return null;
         return _legViaRelay ? Via(_legRelayKey is { } key && _relayNames.TryGetValue(key, out var name) ? name : null) : _text("connection.direct");
     }
