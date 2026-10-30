@@ -331,7 +331,7 @@
   "worlds.host_idle_warning": "Ninguém entrou\nSeu lobby fecha em 1 minuto se ninguém entrar.",
   "worlds.host_idle_closed": "Lobby fechado\nNinguém entrou em 5 minutos. Abra de novo quando quiser jogar.",
   "worlds.default_name": "Lobby de {gamertag}",
-  "worlds.free_roam_joined": "Lobby encontrado\nO Free Roam Online está levando você para {lobby}.",
+  "worlds.free_roam_joined": "Lobby encontrado\nVocê vai jogar online em {lobby}.",
   "worlds.free_roam_opened": "Novo lobby aberto\n{lobby} está aberto para todos. Os jogadores já podem entrar.",
   "setup.update_first": "Atualize o hook do Infinity para {version} na página Azimuth primeiro: o instalado pode não conhecer este servidor.",
   "supervisor.hook_offline": "O jogo ficou offline: o hook não aceitou esta sessão (veja a página Azimuth). Ele joga no save do próprio perfil, e o progresso continua salvo neste PC.",
