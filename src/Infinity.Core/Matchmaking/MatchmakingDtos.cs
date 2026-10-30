@@ -63,6 +63,18 @@ public static class LobbyKinds
     public const string RoadTrip = "roadtrip";
 }
 
+/// <summary>
+/// OD-150 (MATCHMAKING_API.md §2.5): what a world runs now (TypeScript <c>ACTIVITY_KINDS</c>). Only its host sets it
+/// (OD-151); a car meet does not change it; <see cref="RoadTrip"/> needs <see cref="LobbyKinds.RoadTrip"/> in the world's lobbies.
+/// </summary>
+public static class WorldActivities
+{
+    public const string FreeRoam = "freeroam";
+    public const string RoadTrip = "roadtrip";
+
+    public static IReadOnlyList<string> All { get; } = [FreeRoam, RoadTrip];
+}
+
 /// <summary>A world as one caller sees it (MATCHMAKING_API.md §2.1).</summary>
 public record WorldView : World
 {
@@ -109,6 +121,9 @@ public record WorldView : World
     /// therefore never receive a car meet or Road Trip search.
     /// </summary>
     public IReadOnlyList<string> Lobbies { get; init; } = [];
+
+    /// <summary>OD-150: what the world runs now (<see cref="WorldActivities"/>); absent from an older server, read as free roam.</summary>
+    public string Activity { get; init; } = WorldActivities.FreeRoam;
 
     /// <summary>OD-112 (§2.7): the world has a mod set. Absent on older servers (reads as vanilla).</summary>
     public bool Modded { get; init; }
@@ -278,6 +293,10 @@ public sealed record WorldSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? Lobbies { get; init; }
 
+    /// <summary>OD-150: what the world runs now (<see cref="WorldActivities"/>); null: left out (unchanged; a new world is free roam).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Activity { get; init; }
+
     /// <summary>CR-S57: the host's NAT test, read when the world opens (<see cref="NatTypes"/>).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Nat { get; init; }
@@ -294,6 +313,10 @@ public sealed record Heartbeat
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnnouncePort? Endpoint { get; init; }
+
+    /// <summary>OD-150: the host's game changed activity (<see cref="WorldActivities"/>); null: left out (unchanged).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Activity { get; init; }
 }
 
 /// <summary>The host's answer to <c>PUT</c> and the announce: the world as its host sees it (<c>code</c> included) and the punches.</summary>
@@ -405,6 +428,10 @@ public sealed record JoinRequest
     /// <summary>OD-146 (§5b): <c>relay</c> asks for a relay-born seat (or <c>no_relay</c>), never a direct one; null: as before.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Transport { get; init; }
+
+    /// <summary>OD-150: the activity asked for (<see cref="WorldActivities"/>); a world running another is 409 <c>{reason: "activity"}</c>; null: any.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Activity { get; init; }
 }
 
 /// <summary>A reserved seat (<c>expiresAt</c> ≤ 60 s away, renewable up to <c>holdUntil</c>).</summary>

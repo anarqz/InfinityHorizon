@@ -97,6 +97,14 @@ internal sealed partial class RelayEngine
         return NerdCodec.TryRead(ref reader, out var first, out _) && first is NerdMessage.OpenConnection open ? open.A : null;
     }
 
+    /// <summary>
+    /// When the newest synced player reaching this world over loopback synced (the host's own game; OD-150, its activity),
+    /// on the caller's clock; null: none.
+    /// </summary>
+    internal long? LoopbackSyncedAt => _peers.Where(p => p.Synced && IsLoopback(p.Endpoint.Address)).Select(p => (long?)p.JoinedAt).Max();
+
+    private static bool IsLoopback(IPAddress address) => IPAddress.IsLoopback(address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address);
+
     internal bool HasPeer(IPEndPoint endpoint)
     {
         endpoint = StunCodec.Canonical(endpoint);

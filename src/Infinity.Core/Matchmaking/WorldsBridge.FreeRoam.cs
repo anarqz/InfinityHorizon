@@ -185,6 +185,8 @@ public sealed partial class WorldsBridge
     /// As <see cref="EnsureFreeRoamWorldAsync(CancellationToken)"/> for a car meet or an online Road Trip (<see cref="FreeRoamKind"/>):
     /// the world must run that lobby (its <see cref="WorldView.Lobbies"/>), so a seat in one that does not is left first and
     /// only such worlds are joined; a world of its own runs both. Asks of one kind share a run; another kind waits for it.
+    /// OD-150: a free roam or Road Trip ask joins only worlds running that activity now (and says so in its join), else opens
+    /// one with it; a car meet ask any activity. A seat is kept whatever its world runs now: the host decides (OD-151).
     /// </summary>
     public Task<byte> EnsureFreeRoamWorldAsync(byte kind, CancellationToken cancellation)
     {
@@ -224,6 +226,7 @@ public sealed partial class WorldsBridge
     private async Task<byte> FreeRoamCoreAsync(byte kind, CancellationToken cancellation)
     {
         var lobby = LobbyOf(kind);
+        var activity = ActivityOf(kind);
         if (HasFreeRoamWorld && (lobby is null || HostsOrOpensWorld)) return Decided(kind, FreeRoamResult.Ready, Staying());
         try
         {
@@ -254,7 +257,9 @@ public sealed partial class WorldsBridge
                 candidates = OrderLobbies(read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))))
                     .Where(r => Matching(r.Row) && !r.World.NeedsCode
                         && r.World.Audience is WorldAudiences.Everyone or WorldAudiences.Supporters
-                        && (lobby is null || r.World.Lobbies.Contains(lobby)))
+                        && (lobby is null || r.World.Lobbies.Contains(lobby))
+                        // OD-150: a free roam or Road Trip ask joins a world running that now; a car meet ask any world that runs one
+                        && (activity is null || r.World.Activity == activity))
                     .Take(FreeRoamJoinAttempts).ToList();
             }
             catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested)
@@ -266,7 +271,7 @@ public sealed partial class WorldsBridge
                 && (lobby is null || candidates.Any(c => c.World.Id == recent.WorldId)))
             {
                 cancellation.ThrowIfCancellationRequested();
-                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), cancellation).ConfigureAwait(false);
+                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, cancellation).ConfigureAwait(false);
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
                 _log($"worlds: {KindName(kind)}: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
@@ -279,7 +284,7 @@ public sealed partial class WorldsBridge
             {
                 if (HasFreeRoamWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
                 cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join or open past it
-                var joined = await JoinAsync(new UiFrame.JoinWorld(world.Id, string.Empty), cancellation).ConfigureAwait(false);
+                var joined = await JoinAsync(new UiFrame.JoinWorld(world.Id, string.Empty), activity, cancellation).ConfigureAwait(false);
                 if (joined.Result == UiJoin.Reserved)
                 {
                     FreeRoamToast("worlds.free_roam_joined", world.Name);
@@ -299,7 +304,7 @@ public sealed partial class WorldsBridge
             if (!OnlineOpen) return Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)");
             cancellation.ThrowIfCancellationRequested();
             var name = DefaultLobbyName(_text("worlds.default_name"), Gamertag);
-            var hosted = await CreateAsync(new UiFrame.CreateWorld(name, 0, FreeRoamPlayers, 0), cancellation).ConfigureAwait(false);
+            var hosted = await CreateAsync(new UiFrame.CreateWorld(name, 0, FreeRoamPlayers, 0), activity, cancellation).ConfigureAwait(false);
             if (hosted.Result == 0)
             {
                 FreeRoamToast("worlds.free_roam_opened", name);
@@ -326,6 +331,40 @@ public sealed partial class WorldsBridge
 
     private void FreeRoamToast(string key, string lobby) =>
         _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60, _text(key).Replace("{lobby}", lobby, StringComparison.Ordinal)));
+
+    // OD-151: the activity of the seat's world as last read (_mineState only); null: none read for this seat yet
+    private (string WorldId, string Activity)? _seatActivity;
+
+    /// <summary>
+    /// OD-151: a seat's world changed activity (its host's game went into a Road Trip or back to free roam): the guest follows
+    /// the host, so the seat stays and a toast says what the host runs now. The first read of a seat only records it; the
+    /// host's own world never toasts. Called under <c>_mineState</c> with each seat read and renewal.
+    /// </summary>
+    private void ObserveActivity(Seat seat)
+    {
+        if (seat.State == SeatStates.Hosting || seat.World.Id != seat.WorldId) { _seatActivity = null; return; }
+        var activity = seat.World.Activity;
+        if (activity is not (WorldActivities.FreeRoam or WorldActivities.RoadTrip)) return; // a value this launcher does not know
+        if (_seatActivity is { } last && last.WorldId == seat.WorldId && last.Activity != activity)
+        {
+            _log($"worlds: activity {last.Activity} -> {activity} in {seat.WorldId} (the host's)");
+            _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60,
+                _text("worlds.host_activity").Replace("{mode}", ActivityName(activity), StringComparison.Ordinal)));
+        }
+        _seatActivity = (seat.WorldId, activity);
+    }
+
+    /// <summary>The player-facing name of an activity: "Online Free Roam" or "Online Road Trip" (both languages).</summary>
+    private string ActivityName(string activity) =>
+        _text(activity == WorldActivities.RoadTrip ? "worlds.activity_roadtrip" : "worlds.activity_freeroam");
+
+    // OD-150: the activity a lobby ask joins by and opens with; a car meet does not change it, so it asks for none
+    private static string? ActivityOf(byte kind) => kind switch
+    {
+        FreeRoamKind.FreeRoam => WorldActivities.FreeRoam,
+        FreeRoamKind.RoadTrip => WorldActivities.RoadTrip,
+        _ => null,
+    };
 
     /// <summary>
     /// CR-L40 §4: <paramref name="template"/> (<c>{gamertag}'s lobby</c>, <c>Lobby de {gamertag}</c>) with the gamertag
