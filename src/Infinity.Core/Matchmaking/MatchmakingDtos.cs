@@ -56,6 +56,13 @@ public record World
     public required string Since { get; init; }
 }
 
+/// <summary>MATCHMAKING_API.md: the lobbies a host's world server can run besides free roam (TypeScript <c>LOBBY_KINDS</c>).</summary>
+public static class LobbyKinds
+{
+    public const string CarMeet = "carmeet";
+    public const string RoadTrip = "roadtrip";
+}
+
 /// <summary>A world as one caller sees it (MATCHMAKING_API.md §2.1).</summary>
 public record WorldView : World
 {
@@ -96,6 +103,12 @@ public record WorldView : World
     /// dedicated support omit it, so it is not <c>required</c> here (absent reads as false).
     /// </summary>
     public bool Dedicated { get; init; }
+
+    /// <summary>
+    /// The lobbies the host's world server runs besides free roam (<see cref="LobbyKinds"/>); empty for older hosts, which
+    /// therefore never receive a car meet or Road Trip search.
+    /// </summary>
+    public IReadOnlyList<string> Lobbies { get; init; } = [];
 
     /// <summary>OD-112 (§2.7): the world has a mod set. Absent on older servers (reads as vanilla).</summary>
     public bool Modded { get; init; }
@@ -260,6 +273,10 @@ public sealed record WorldSettings
     /// <summary>OD-112: the host's mod set (null: vanilla, left out); fixed once the world opens (another set is 409 <c>PORTAL.CONFLICT {reason: "mods"}</c>).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ModEntry>? Mods { get; init; }
+
+    /// <summary>The lobbies this host's world server runs besides free roam (<see cref="LobbyKinds"/>, distinct); null: left out.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Lobbies { get; init; }
 
     /// <summary>CR-S57: the host's NAT test, read when the world opens (<see cref="NatTypes"/>).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

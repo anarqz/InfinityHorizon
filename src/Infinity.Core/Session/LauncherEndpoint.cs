@@ -49,7 +49,7 @@ public abstract record EndpointEvent
     public sealed record ModsReported(Frame.ModsReport Report) : EndpointEvent;
 
     /// <summary>Frame 0x1f from the hook (CR-L40): FREE ROAM ONLINE waits for <see cref="Frame.FreeRoamReady"/> with this nonce.</summary>
-    public sealed record FreeRoamNeeded(uint Nonce) : EndpointEvent;
+    public sealed record FreeRoamNeeded(uint Nonce, byte Kind = Matchmaking.FreeRoamKind.FreeRoam) : EndpointEvent;
 
     /// <summary>Frame 0x21 from the hook (CR-L41.3): the XP level and credits of an <c>UpdateAll</c> it let through.</summary>
     public sealed record ProgressReported(uint Level, ulong Credits) : EndpointEvent;
@@ -166,7 +166,7 @@ public sealed class LauncherEndpoint
             Frame.Bye b => new EndpointEvent.Closed(b.Reason),
             Frame.Capture c => new EndpointEvent.Capture(c.What, c.Ok),
             Frame.ModsReport m => new EndpointEvent.ModsReported(m),
-            Frame.FreeRoamNeed f => new EndpointEvent.FreeRoamNeeded(f.Nonce),
+            Frame.FreeRoamNeed f => new EndpointEvent.FreeRoamNeeded(f.Nonce, f.Kind),
             Frame.Progress p => new EndpointEvent.ProgressReported(p.Level, p.Credits),
             Frame.Car c => new EndpointEvent.CarChanged(c.CarKey),
             _ => throw new ProtocolException($"unexpected frame from hook: type 0x{frame.Type:x2}"),

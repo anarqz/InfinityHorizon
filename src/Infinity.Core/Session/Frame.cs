@@ -250,12 +250,18 @@ public abstract record Frame
     }
 
     /// <summary>
-    /// hook → launcher (0x1f, CR-L40): <c>{u32 LE nonce}</c>. FREE ROAM ONLINE's matchmaking request waits (at most 20 s)
-    /// until the launcher answers <see cref="FreeRoamReady"/> with the same nonce.
+    /// hook → launcher (0x1f, CR-L40): <c>{u32 LE nonce, u8 kind}</c>, the kind a <see cref="Matchmaking.FreeRoamKind"/> (an
+    /// older hook's <c>{u32 nonce}</c> reads as free roam). FREE ROAM ONLINE's, a car meet's or an online Road Trip's matchmaking
+    /// request waits (at most 20 s) until the launcher answers <see cref="FreeRoamReady"/> with the same nonce.
     /// </summary>
-    public sealed record FreeRoamNeed(uint Nonce) : Frame
+    public sealed record FreeRoamNeed(uint Nonce, byte Kind = Matchmaking.FreeRoamKind.FreeRoam) : Frame
     {
         public override byte Type => 0x1f;
+
+        internal static void Validate(byte kind)
+        {
+            if (kind > Matchmaking.FreeRoamKind.RoadTrip) throw new ProtocolException("Invalid free roam kind");
+        }
     }
 
     /// <summary>
@@ -445,7 +451,8 @@ public abstract record Frame
                 var grant = new byte[16]; fallback.Grant.TryWriteBytes(grant, bigEndian: true, out _);
                 w.Fixed(grant, 16, "relay fallback grant"); w.U8(fallback.State); break;
             case FreeRoamNeed need:
-                w.U32(need.Nonce); break;
+                FreeRoamNeed.Validate(need.Kind);
+                w.U32(need.Nonce); w.U8(need.Kind); break;
             case FreeRoamReady ready:
                 FreeRoamReady.Validate(ready.Result);
                 w.U32(ready.Nonce); w.U8(ready.Result); break;
@@ -548,7 +555,7 @@ public abstract record Frame
             0x1c => DecodeCustomTrust(ref r),
             0x1d => new RelayLeg(r.Take(length.Value - 1).ToArray()),
             0x1e => new RelayFallback(new Guid(r.Take(16), bigEndian: true), r.U8()),
-            0x1f => new FreeRoamNeed(r.U32()),
+            0x1f => length.Value - 1 == 4 ? new FreeRoamNeed(r.U32()) : new FreeRoamNeed(r.U32(), r.U8()),
             0x20 => new FreeRoamReady(r.U32(), r.U8()),
             0x21 => new Progress(r.U32(), r.U64()),
             0x22 => new Car(unchecked((int)r.U32())),
@@ -561,6 +568,7 @@ public abstract record Frame
         if (frame is RelayLeg leg) RelayLeg.Validate(leg.Payload);
         if (frame is RelayFallback fallback) RelayFallback.Validate(fallback.Grant, fallback.State);
         if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
+        if (frame is FreeRoamNeed need) FreeRoamNeed.Validate(need.Kind);
         if (frame is Car car) Car.Validate(car.CarKey);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
         if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
