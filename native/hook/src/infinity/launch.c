@@ -780,10 +780,20 @@ static int launch_wide_starts(const wchar_t *text, const wchar_t *prefix) {
     return 1;
 }
 
-/* 1 for the game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos (case-insensitive; its
-   /tickets sub-paths and every other hopper are not it). */
+/* 1 for the game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos or .../hoppers/CarMeet_qos
+   (case-insensitive; their /tickets sub-paths and every other hopper are not it). A car meet
+   entered outside a lobby needs a world first, like FREE ROAM ONLINE: its ticket goes to the world
+   the player is seated in or hosts, whose car meet the world server keeps. */
+static int launch_hopper_at(const wchar_t *at, const wchar_t *hopper, size_t length) {
+    if (!launch_wide_starts(at, hopper)) return 0;
+    const wchar_t *end = at + length;
+    if (*end == L'/') ++end;
+    return !*end || *end == L'?' || *end == L'#';
+}
+
 int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
-    static const wchar_t host[] = L"momatch.xboxlive.com", hopper[] = L"/hoppers/freeroam_qos";
+    static const wchar_t host[] = L"momatch.xboxlive.com", free_roam[] = L"/hoppers/freeroam_qos",
+                         car_meet[] = L"/hoppers/carmeet_qos";
     if (!method || !url || !launch_wide_starts(method, L"post") || method[4]) return 0;
     const wchar_t *at = url;
     if (launch_wide_starts(at, L"https://")) at += 8;
@@ -796,10 +806,10 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
     }
     if (*at != L'/') return 0;
     for (; *at && *at != L'?' && *at != L'#'; ++at) {
-        if (!launch_wide_starts(at, hopper)) continue;
-        const wchar_t *end = at + sizeof(hopper) / sizeof(hopper[0]) - 1;
-        if (*end == L'/') ++end;
-        if (!*end || *end == L'?' || *end == L'#') return 1;
+        if (launch_hopper_at(at, free_roam, sizeof(free_roam) / sizeof(free_roam[0]) - 1) ||
+            launch_hopper_at(at, car_meet, sizeof(car_meet) / sizeof(car_meet[0]) - 1)) {
+            return 1;
+        }
     }
     return 0;
 }
