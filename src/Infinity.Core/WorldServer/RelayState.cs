@@ -11,8 +11,9 @@ internal sealed record RelaySettings
     public uint? CarMeetLobby { get; init; }
     /// <summary>An online Road Trip world (lobby type 1). Null: not one.</summary>
     public RoadTripSettings? RoadTrip { get; init; }
-    /// <summary>T11: refuse a Ready from a car outside the event's class/PI (MsgReadyRequestResponse 1). Off until verified in game.</summary>
-    public bool EnforceCarRule { get; init; }
+    /// <summary>T11: refuse a Ready from a car outside the event's class/PI (MsgReadyRequestResponse 1). Not a setting: only tests set
+    /// it, until the game's own handling is verified; then the rule becomes unconditional or is deleted.</summary>
+    internal bool EnforceCarRule { get; init; }
     /// <summary>The world's weather sequence; null picks a random seed.</summary>
     public int? WeatherSeed { get; init; }
     /// <summary>A TimeSync re-bases the game's network clock (remote cars are timed against it), so it is refreshed only rarely.</summary>

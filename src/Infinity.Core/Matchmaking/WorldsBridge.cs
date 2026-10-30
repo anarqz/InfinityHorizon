@@ -904,6 +904,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return Done("worlds.closed_done");
                 case UiWorldAction.Leave:
                     InvalidateMine(reset: true);
+                    // left on purpose: never the world the game's next "find me a lobby" goes back to
+                    LeftOnPurpose();
                     _seat.Left();
                     await ClearSeatEndAsync().ConfigureAwait(false); // no relay leg outlives the seat
                     var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);

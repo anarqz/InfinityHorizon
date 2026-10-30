@@ -37,6 +37,14 @@ public sealed partial class WorldsBridge
     private sealed record RecentWorld(string WorldId, DateTimeOffset LeftAt);
     private string? _seatWorld;
     private RecentWorld? _recentlyLeft;
+    private RecentWorld? _leftOnPurpose;
+
+    /// <summary>The player left its world itself (the overlay's Leave): no rejoin, and that world is not picked for a while.</summary>
+    private void LeftOnPurpose()
+    {
+        Volatile.Write(ref _recentlyLeft, null);
+        if (Interlocked.Exchange(ref _seatWorld, null) is { } world) Volatile.Write(ref _leftOnPurpose, new RecentWorld(world, Now));
+    }
     private readonly object _freeRoamState = new();
     private Task<byte>? _freeRoamRun;
 
@@ -108,6 +116,9 @@ public sealed partial class WorldsBridge
                 _log($"worlds: free roam: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
                 candidates = [.. candidates.Where(c => c.World.Id != recent.WorldId)];
             }
+            // a world the player left on purpose is not where its next lobby search sends it
+            if (Volatile.Read(ref _leftOnPurpose) is { } avoided && Now - avoided.LeftAt <= RejoinWindow)
+                candidates = [.. candidates.Where(c => c.World.Id != avoided.WorldId)];
             foreach (var (world, _) in candidates)
             {
                 if (HasFreeRoamWorld) return FreeRoamResult.Ready;
