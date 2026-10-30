@@ -78,7 +78,7 @@ public sealed partial class ShellViewModel
         return ticket =>
         {
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
-                _config.Production?ProductionMatchmakingHttp.Value:Http, mm, ClientHeader, ticket);
+                MatchmakingHttp(mm), mm, ClientHeader, ticket);
             // OD-109: kept so the dedicated lobby is not created while this session hosts a world.
             return _playWorlds = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], ProofClock(session), mode,
@@ -93,6 +93,7 @@ public sealed partial class ShellViewModel
                 onlineActivity: onlineActivity, idleWhenNoWorld: false)
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
+                AlwaysRelay = () => Infinity.Core.Announce.RelayChoice.Read(StateRoot).AlwaysRelay,
                 ModSet = mods,
                 Gamertag = gamertag,
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,

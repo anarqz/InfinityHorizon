@@ -18,6 +18,15 @@ public sealed partial class ShellViewModel
 {
     private readonly HttpClient Http;
     private readonly Lazy<HttpClient> ProductionMatchmakingHttp;
+
+    /// <summary>
+    /// CR-S40: matchmaking over IPv4 (A records only), so the server observes the same address family as the IPv4 STUN/UPnP
+    /// external port. Every HTTPS origin uses it, a custom choice of the production server included: with IPv6 internet
+    /// the server saw an IPv6 address beside an IPv4 port and refused the world's endpoint. Only a plain-HTTP development
+    /// stack on the LAN keeps the default client.
+    /// </summary>
+    private HttpClient MatchmakingHttp(Uri matchmaking) =>
+        _config.Production || matchmaking.Scheme == Uri.UriSchemeHttps ? ProductionMatchmakingHttp.Value : Http;
     private bool _onlineEngaged, _onlineAnswered, _onOfflineStatus;
 
     /// <summary>OD-118: an offline game has exited and the launcher is finishing locally: no Infinity request, signed in or not.</summary>

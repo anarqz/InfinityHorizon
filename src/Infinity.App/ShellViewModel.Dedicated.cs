@@ -329,7 +329,7 @@ public sealed partial class ShellViewModel
         return CreateDedicatedHost(new GateClient(session.Api, session.Tokens), (ticket, activity) =>
         {
             var portInUse = false;
-            var matchmaking = new MatchmakingClient(_config.Production ? ProductionMatchmakingHttp.Value : Http, mm, ClientHeader, ticket);
+            var matchmaking = new MatchmakingClient(MatchmakingHttp(mm), mm, ClientHeader, ticket);
             return new WorldsBridge(matchmaking, key => S[key], trusted, profile.Mode,
                 players => StartRelay(players, profile.Xuid, relayKeys, devLan, trusted,
                     error => portInUse = error is System.Net.Sockets.SocketError.AddressAlreadyInUse or System.Net.Sockets.SocketError.AccessDenied),
