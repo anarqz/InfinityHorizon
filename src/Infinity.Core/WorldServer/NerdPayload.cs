@@ -21,6 +21,45 @@ internal static class NerdPayload
     private static readonly int[] ConsoleVariables = [1, 1, 1, 1, 1, 1, 1, 2, 2];
     internal static int? MaxBits(byte router) => router switch { 1 => PlayerDataMaxBits, 2 => 787, 3 => 47, _ => null };
 
+    /// <summary>
+    /// Player object (router 1) variables past the mapped twelve whose width is known, so that an update carrying exactly one of
+    /// them, and nothing else, is superseded in a relayed object's history by a later such update of the same variable. Widths
+    /// from live captures, plus the ones this server writes itself. Ids 0-11 use <see cref="PlayerVariables"/> (fixed widths only:
+    /// 5 IsLeader is 1 bit there; the name's width varies, so a name update is never superseded). Anything absent is unknown.
+    /// </summary>
+    private static readonly Dictionary<int, int> PlayerSingleWidths = new()
+    {
+        [12] = 1,                                            // Ready
+        [RelayEngine.RoadTripLeaderVariable] = 1,            // 13 PlayerHost (this server writes it)
+        [16] = 1,                                            // InitialCarLoading
+        [19] = 4,                                            // PlayerStatus
+        [27] = 32,                                           // XP (a float)
+        [28] = 32,
+        [32] = 1,                                            // HasInitialCarBeenChosen
+        [RelayEngine.PrivateUniverseVariable] = RelayEngine.PrivateUniverseBits, // 40 PrivateUniverseId (this server writes it)
+        [41] = 64,                                           // an id
+    };
+
+    /// <summary>
+    /// The variable an update carries when its whole payload is exactly one variable of known width (id, then the value, nothing
+    /// else); null otherwise. Routers 2 and 3 use the sanitizer's own tables, which every stored payload was re-encoded with.
+    /// </summary>
+    internal static int? SingleVariable(byte router, BitBuffer payload)
+    {
+        var indexWidth = router switch { 1 => 8, 2 => 5, 3 => 4, _ => 0 };
+        if (indexWidth == 0 || payload.Length <= indexWidth) return null;
+        var index = (int)new BitReader(payload.Bytes, payload.Length).Read(indexWidth);
+        var width = router switch
+        {
+            1 when index < PlayerVariables.Length => PlayerVariables[index],
+            1 => PlayerSingleWidths.GetValueOrDefault(index),
+            2 when index < CarVariables.Length => CarVariables[index] == -1 ? 32 : CarVariables[index],
+            3 when index < ConsoleVariables.Length => ConsoleVariables[index],
+            _ => 0,
+        };
+        return width > 0 && payload.Length == indexWidth + width ? index : null;
+    }
+
     internal static bool TrySanitize(byte router, BitBuffer payload, out BitBuffer? clean, out PayloadFailure? failure)
     {
         clean = null;

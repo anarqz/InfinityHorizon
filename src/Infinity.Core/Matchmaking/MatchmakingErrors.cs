@@ -59,7 +59,7 @@ public static class ConflictReasons
     public const string Activity = "activity";
 
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

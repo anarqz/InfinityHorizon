@@ -49,19 +49,46 @@ internal sealed record RelaySettings
 internal sealed record RelayDatagram(IPEndPoint Destination, byte[] Data);
 internal sealed record ReliablePacket(ushort Id, BitBuffer[] Messages, long SentAt, int Tries);
 
-internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload)
+/// <summary>
+/// One relayed object's history, replayed to a late joiner: the create with the updates folded into it while they fit (Base),
+/// then every later update that still matters (Tail), in order. An update is only ever removed when it is provably superseded
+/// (<see cref="NerdPayload.SingleVariable"/>): a variable written once (a player's name after its create) is never lost.
+/// </summary>
+/// <remarks>
+/// Sequences: the game applies an object's updates in sequence order and waits on a gap, so a snapshot is a contiguous run that
+/// ENDS at the object's current sequence: the create carries <c>Last - Tail.Count</c> and the kept updates follow one by one up to
+/// <c>Last</c> (all plus <see cref="Injected"/>, as every live copy). Live updates then continue from <c>Last + 1</c> for every
+/// recipient alike, so no per-recipient offset is needed; a joiner never saw the original numbering of what compaction removed.
+/// </remarks>
+internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, byte router = 0, Action<string>? note = null)
 {
+    /// <summary>The kept updates are compacted when they reach this count, then when they double again (amortised).</summary>
+    internal const int CompactAt = 32;
+    /// <summary>... or these bits (the old fixed tail's bound), likewise doubling.</summary>
+    internal const int CompactBits = 64 * 1024;
+    /// <summary>The hard guard after compaction (updates, bits). Hit only by a stream of updates nothing supersedes; then the oldest
+    /// are folded into the create while they fit, else discarded, down to half of it, and the owner logs it once.</summary>
+    internal const int MaxKeptUpdates = 4096;
+    internal const int MaxKeptBits = 512 * 1024;
+    private int _compactCount = CompactAt, _compactBits = CompactBits, _tailBits;
+    private bool _guardNoted;
+
     internal byte Type { get; } = type;
-    internal byte BaseSequence { get; private set; } = sequence;
+    internal byte Router { get; } = router;
     internal BitBuffer Base { get; } = BitBuffer.From(payload.Bytes, payload.Length);
     internal byte Last { get; private set; } = sequence;
     internal byte Injected { get; set; }
     internal Dictionary<byte, bool> ServerVariables { get; } = [];
     /// <summary>A player object's server-set PrivateUniverseId (router 1, var 40), replayed to late joiners; null when 0.</summary>
     internal byte? Universe { get; set; }
+    /// <summary>The kept updates after Base, oldest first, with their original sequences (not contiguous once compacted).</summary>
     internal List<(byte Sequence, BitBuffer Payload)> Tail { get; } = [];
     internal List<(byte Sequence, BitBuffer Payload)> Pending { get; } = [];
-    internal int HistoryBits => Base.Length + Tail.Sum(p => p.Payload.Length) + Pending.Sum(p => p.Payload.Length);
+    /// <summary>Updates the hard guard discarded (0 unless it was ever hit).</summary>
+    internal int Discarded { get; private set; }
+    /// <summary>The create's sequence in a snapshot (before <see cref="Injected"/>): the kept updates end at <see cref="Last"/>.</summary>
+    internal byte CreateSequence => (byte)(((Last - Tail.Count) % 255 + 255) % 255);
+    internal int HistoryBits => Base.Length + _tailBits + Pending.Sum(p => p.Payload.Length);
 
     internal bool Update(byte next, BitBuffer update)
     {
@@ -87,20 +114,58 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload)
     private void Apply(byte next, BitBuffer update)
     {
         Last = next;
-        if (Tail.Count == 0 && Base.Length + update.Length <= NerdCodec.MaxPayloadBits)
-        { Base.Append(update); BaseSequence = next; return; }
-        Tail.Add((next, update));
-        var size = Tail.Sum(p => p.Payload.Length);
-        while (Tail.Count > 32 || size > 64 * 1024)
+        if (Tail.Count == 0 && Base.Length + update.Length <= NerdCodec.MaxPayloadBits) { Base.Append(update); return; }
+        Tail.Add((next, update)); _tailBits += update.Length;
+        if (Tail.Count >= _compactCount || _tailBits > _compactBits) Compact();
+    }
+
+    /// <summary>Removes, keeping the order, every update that a later one makes redundant: a single-variable update followed by a
+    /// later single-variable update of the same variable, and an empty update (it carries no variable). Then the hard guard.</summary>
+    private void Compact()
+    {
+        Supersede();
+        if (Tail.Count > MaxKeptUpdates || _tailBits > MaxKeptBits) Guard();
+        _compactCount = Math.Max(CompactAt, Tail.Count * 2);
+        _compactBits = Math.Max(CompactBits, _tailBits * 2);
+    }
+
+    private void Supersede()
+    {
+        var newer = new HashSet<int>();
+        var kept = new List<(byte Sequence, BitBuffer Payload)>(Tail.Count);
+        for (var i = Tail.Count - 1; i >= 0; i--)
         {
-            var oldest = Tail[0]; Tail.RemoveAt(0); size -= oldest.Payload.Length;
-            if (Base.Length + oldest.Payload.Length <= NerdCodec.MaxPayloadBits) Base.Append(oldest.Payload);
-            BaseSequence = oldest.Sequence;
+            var update = Tail[i].Payload;
+            if (update.Length == 0) continue;
+            if (NerdPayload.SingleVariable(Router, update) is { } variable && !newer.Add(variable)) continue;
+            kept.Add(Tail[i]);
         }
+        kept.Reverse();
+        Tail.Clear(); Tail.AddRange(kept);
+        _tailBits = Tail.Sum(p => p.Payload.Length);
+    }
+
+    /// <summary>The hard guard: the oldest kept updates go into the create while they fit, else they are lost; never silently.</summary>
+    private void Guard()
+    {
+        var discarded = 0;
+        while (Tail.Count > MaxKeptUpdates / 2 || _tailBits > MaxKeptBits / 2)
+        {
+            var oldest = Tail[0]; Tail.RemoveAt(0); _tailBits -= oldest.Payload.Length;
+            if (Base.Length + oldest.Payload.Length <= NerdCodec.MaxPayloadBits) Base.Append(oldest.Payload);
+            else discarded++;
+        }
+        Discarded += discarded;
+        if (discarded == 0 || _guardNoted) return;
+        _guardNoted = true;
+        note?.Invoke(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"object history over its guard ({MaxKeptUpdates} updates or {MaxKeptBits} bits after compaction): {discarded} oldest updates discarded, a late joiner may miss their values (logged once per object)"));
     }
 
     internal IEnumerable<BitBuffer> Snapshot(byte router, ObjectHandle handle)
     {
+        // a joiner gets the compacted history, whatever was appended since the last compaction
+        if (Tail.Count != 0) Compact();
         var payload = BitBuffer.From(Base.Bytes, Base.Length);
         if (router == 3 && payload.Length + ServerVariables.Count * 5 > NerdCodec.MaxPayloadBits)
         {
@@ -114,8 +179,15 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload)
         foreach (var (index, value) in ServerVariables) payload.Push(index, 4).Boolean(value);
         if (router == 1 && Universe is { } universe)
             payload.Push(RelayEngine.PrivateUniverseVariable, 8).Push(universe, RelayEngine.PrivateUniverseBits);
-        yield return NerdCodec.Write(new NerdMessage.Object(true, router, handle, Type, AckWindow.SequenceAdd(BaseSequence, Injected), payload));
-        foreach (var (seq, update) in Tail.Concat(Pending))
+        // a contiguous run ending at Last (see the class remarks); Pending sits past a gap, at its own sequences, as it did live
+        var sequence = AckWindow.SequenceAdd(CreateSequence, Injected);
+        yield return NerdCodec.Write(new NerdMessage.Object(true, router, handle, Type, sequence, payload));
+        foreach (var (_, update) in Tail)
+        {
+            sequence = AckWindow.SequenceNext(sequence);
+            yield return NerdCodec.Write(new NerdMessage.Object(false, router, handle, 0, sequence, update));
+        }
+        foreach (var (seq, update) in Pending)
             yield return NerdCodec.Write(new NerdMessage.Object(false, router, handle, 0, AckWindow.SequenceAdd(seq, Injected), update));
     }
 }

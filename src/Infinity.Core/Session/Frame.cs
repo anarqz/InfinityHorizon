@@ -32,6 +32,13 @@ public static class CaptureWhat
     public const byte FreeRoam = 8;
 }
 
+/// <summary><see cref="Frame.FollowHost"/> lobby types: the game's own <c>StartMatchmakingEventArgument</c> lobby type.</summary>
+public static class FollowHostLobby
+{
+    public const byte RoadTrip = 1;
+    public const byte FreeRoam = 2;
+}
+
 /// <summary><see cref="Frame.RelayFallback"/> states (hook → launcher, CR-S57).</summary>
 public static class RelayFallbackState
 {
@@ -303,6 +310,22 @@ public abstract record Frame
         }
     }
 
+    /// <summary>
+    /// launcher → hook (0x23, OD-151): <c>{u8 lobbyType, u8 public}</c>. The seated guest's host now hosts another activity:
+    /// the hook starts the game's own matchmaking for that lobby type (<see cref="FollowHostLobby"/>: 1 Road Trip, 2 free roam),
+    /// as the pause menu's ONLINE ROAD TRIP / ONLINE FREE ROAM does, so the game's FINDING SESSION banner asks the player to
+    /// confirm with (X). Nothing happens when the game is already in, or already looking for, that lobby type.
+    /// </summary>
+    public sealed record FollowHost(byte LobbyType, bool Public) : Frame
+    {
+        public override byte Type => 0x23;
+
+        internal static void Validate(byte lobby)
+        {
+            if (lobby is not (FollowHostLobby.RoadTrip or FollowHostLobby.FreeRoam)) throw new ProtocolException("Invalid follow-host lobby type");
+        }
+    }
+
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
     {
@@ -461,6 +484,9 @@ public abstract record Frame
             case Car car:
                 Car.Validate(car.CarKey);
                 w.U32(unchecked((uint)car.CarKey)); break;
+            case FollowHost follow:
+                FollowHost.Validate(follow.LobbyType);
+                w.U8(follow.LobbyType); w.Flag(follow.Public); break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -559,6 +585,7 @@ public abstract record Frame
             0x20 => new FreeRoamReady(r.U32(), r.U8()),
             0x21 => new Progress(r.U32(), r.U64()),
             0x22 => new Car(unchecked((int)r.U32())),
+            0x23 => new FollowHost(r.U8(), r.Flag("follow-host public")),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
@@ -570,6 +597,7 @@ public abstract record Frame
         if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
         if (frame is FreeRoamNeed need) FreeRoamNeed.Validate(need.Kind);
         if (frame is Car car) Car.Validate(car.CarKey);
+        if (frame is FollowHost follow) FollowHost.Validate(follow.LobbyType);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
         if(frame is RelayNetworkHint hint)Matchmaking.RelayNetworkFrames.Hint(hint.Payload);
         if(frame is RelayCandidates candidates)Matchmaking.RelayNetworkFrames.ValidateCandidates(candidates.Payload);

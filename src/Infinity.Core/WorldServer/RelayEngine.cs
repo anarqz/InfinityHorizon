@@ -266,7 +266,11 @@ internal sealed partial class RelayEngine
                 _heldOpens.Remove(endpoint);
                 try { ReceivePacket(held.Data, endpoint); }
                 catch (WireFormatException) { continue; }
-                if (_peers.Any(p => p.Endpoint.Equals(endpoint))) AdmittedLate?.Invoke(endpoint);
+                if (_peers.Any(p => p.Endpoint.Equals(endpoint)))
+                {
+                    Note(string.Create(CultureInfo.InvariantCulture, $"OpenConnection lobby type {held.Open.A} admitted after {_now - held.At} ms waiting for its proof"));
+                    AdmittedLate?.Invoke(endpoint);
+                }
                 continue;
             }
             if (_now - held.At < HeldOpenMs && AwaitsProof?.Invoke(held.Open.User) == true) continue;
