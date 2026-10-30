@@ -42,6 +42,7 @@ typedef struct {
     int language;             /* Language: FI_LANG_* (auto) */
     int log;                  /* Log 0/1 (1) */
     int relay_legacy;         /* RelayCommand: 0 auto, 1 legacy */
+    int voice_ui;             /* VoiceUi 0/1 (0): voice chat in the game's own UI (voice_ui.c) */
     int encoding;             /* FI_CFG_*: how Infinity.cfg is written (FI_CFG_NONE: no file) */
     int has_hook_section;     /* the file has [hook] now */
     int launch;               /* FI_LAUNCH_*: started by the launcher (FI_LAUNCH set) */
@@ -195,6 +196,9 @@ void *fi_launch_overlay_export(const char *name);
 /* OD-112: the game's PLAYER DETAILS opens the overlay's player pane instead of the system
    profile card (gamer_card.c; one vtable slot, guarded by the game build and its bytes). */
 void fi_gamer_card_apply(unsigned char *game_image);
+/* OD-147 VC-2b: the game's own player list and HUD show the overlay's voice chat (voice_ui.c;
+   only with Infinity.cfg [hook] VoiceUi=1, guarded by the game build and its bytes). */
+void fi_voice_ui_apply(unsigned char *game_image);
 /* activity.c (OD-121): the odometer, input idle and screen wrappers (launcher sessions only). */
 void fi_activity_apply(unsigned char *game_image);
 /* "X-Fi-Activity: v1.<seq>.<odo_m>.<idle_s>.<rp>" for a RetrieveForUser request (no CRLF): its

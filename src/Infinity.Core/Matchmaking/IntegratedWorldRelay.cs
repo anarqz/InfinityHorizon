@@ -91,6 +91,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
             answer.Error?.Details, answer.RetryAfter ?? answer.Error?.RetryAfter);
     }
 
+    /// <summary>OD-147: the host's voice chat switch and lobby mutes, enforced by the relay.</summary>
+    public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby) => _transport.SetVoice(lobbyOn, mutedForLobby);
+
     public void Kick(string xuid)
     {
         if (ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var id)) _admission.Revoke(id);

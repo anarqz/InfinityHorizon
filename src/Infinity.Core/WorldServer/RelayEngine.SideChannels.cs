@@ -57,7 +57,12 @@ internal sealed partial class RelayEngine
 
     private void ReceiveSideChannel(ReadOnlySpan<byte> data, IPEndPoint endpoint)
     {
-        if (BinaryPrimitives.ReadUInt16BigEndian(data) == CarStateCodec.Kind) ReceiveCarState(data, endpoint);
+        switch (BinaryPrimitives.ReadUInt16BigEndian(data))
+        {
+            case CarStateCodec.Kind: ReceiveCarState(data, endpoint); break;
+            case VoiceCodec.VoiceKind: ReceiveVoice(data, endpoint); break; // OD-147 (RelayEngine.Voice.cs)
+            case VoiceCodec.ControlKind: ReceiveVoiceControl(data, endpoint); break;
+        }
     }
 
     private void ReceiveCarState(ReadOnlySpan<byte> data, IPEndPoint endpoint)
@@ -92,9 +97,14 @@ internal sealed partial class RelayEngine
             _lastCarStates = _now;
             foreach (var peer in _peers) PassCarState(peer);
         }
+        TickVoice();
     }
 
-    private void OnPeerLeft(RelayPeer peer) => _sideChannelRates.Remove(peer);
+    private void OnPeerLeft(RelayPeer peer)
+    {
+        _sideChannelRates.Remove(peer);
+        OnVoicePeerLeft(peer);
+    }
 
-    private void ClearSideChannels() { _sideChannelRates.Clear(); SideChannelRateDrops = 0; }
+    private void ClearSideChannels() { _sideChannelRates.Clear(); SideChannelRateDrops = 0; ClearVoice(); }
 }

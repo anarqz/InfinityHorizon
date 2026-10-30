@@ -110,9 +110,10 @@ void VoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value);
 // A microphone drawn with lines (the icon font has none), centred on `c`, `size` tall; `muted` adds the slash,
 // cut in `behind` (the surface's colour). Colours are ImU32.
 void DrawMic(ImDrawList *dl, ImVec2 c, float size, uint32_t color, bool muted, uint32_t behind = 0xFF2A2626);
-// The talking players over the game while the guide is closed: the fallback until the game's own HUD shows them.
-void DrawTalkers(ImDrawList *dl, float width, float height, float dt);
 const char *MicModeName(MicMode mode);
+// R3 push-to-talk is held now (input.cpp sets it; the audio engine, VC-3, reads it).
+void SetPushToTalk(bool held);
+bool PushToTalkHeld();
 
 // --- the right pane (pane.cpp, OD-112): one component for every detail view, drawn beside the guide
 // The launcher's pane (DetailPane frame; any thread): a non-empty id opens it (and the guide), empty closes it.

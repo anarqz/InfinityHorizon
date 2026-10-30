@@ -269,6 +269,19 @@ struct VoiceState {
     }
 };
 
+// fi_overlay_voice_state's answer (fi_overlay.h FI_VOICE_*) for the game's own UI: `xuid` empty is this player.
+constexpr uint32_t kGameVoiceAble = 1, kGameVoiceTalking = 2, kGameVoiceMuted = 4;
+inline uint32_t GameVoiceBits(const VoiceState &v, const std::string &xuid) {
+    if (!v.lobby_on() || !(v.flags & VoiceState::Enabled)) return 0; // no microphones in the game's UI at all
+    if (xuid.empty()) return v.mic == MicMode::Muted ? 0 : kGameVoiceAble;
+    for (const auto &m : v.members) {
+        if (m.xuid != xuid) continue;
+        const bool muted = m.state & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked);
+        return kGameVoiceAble | (muted ? kGameVoiceMuted : 0) | (!muted && (m.state & VoiceMember::Talking) ? kGameVoiceTalking : 0);
+    }
+    return 0;
+}
+
 enum class VoiceOp : uint8_t { LobbyVoice = 1, Mute = 2, MuteEveryone = 3, Mic = 4, Enabled = 5, MuteForLobby = 6 };
 constexpr uint8_t kVoiceOpMax = static_cast<uint8_t>(VoiceOp::MuteForLobby);
 

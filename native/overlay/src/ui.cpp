@@ -697,7 +697,6 @@ void DrawUi(float width, float height, float dt) {
     }
     ImGui::GetIO().MouseDrawCursor = g_open;
     ImDrawList *dl = ImGui::GetForegroundDrawList();
-    DrawTalkers(dl, width, height, dt); // OD-147: under the guide, which dims it while open
     if (!g_connection_open) DrawSidebar(dl, width, height, dt, snapshot);
     if (g_connection_open) {
         ImGui::SetNextWindowPos(ImVec2(width / 2, height / 2), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
