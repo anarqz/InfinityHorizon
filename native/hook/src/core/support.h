@@ -14,6 +14,11 @@ int memory_read(const void *address, void *output, size_t size);
 int memory_read_pointer(const void *address, void **value);
 int float_is_finite(float value);
 int memory_is_writable(const void *address, size_t size);
+/* A 14-byte absolute jump at `at` to `hook`; the first `size` bytes (checked equal to `expected`,
+   position independent, at least 14) move to `trampoline`, which goes on after them. The
+   trampoline (callable as the original function), or 0 when the bytes differ. */
+void *memory_detour14(unsigned char *at, const unsigned char *expected, unsigned size, const void *hook,
+                      unsigned char *trampoline);
 void status_set(const char *message);
 void status_append(const char *message);
 const char *status_get(void);

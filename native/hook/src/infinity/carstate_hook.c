@@ -400,30 +400,8 @@ static void cs_car_update(void *self, float dt, float frame_dt, unsigned frame) 
 
 /* ------------------------------------------------------------- installing */
 
-/* A 14-byte jump at `at` to `hook`, the first `size` bytes (checked equal to `expected`) moved
-   to a trampoline that goes on after them. The trampoline, or 0. */
-static void *cs_detour(unsigned char *at, const unsigned char *expected, unsigned size, const void *hook,
-                       unsigned char *trampoline) {
-    unsigned char current[16];
-    if (size > sizeof(current) || !memory_read(at, current, size) || !memory_equal(current, expected, size)) {
-        return 0;
-    }
-    uintptr_t back = (uintptr_t)(at + size), target = (uintptr_t)hook;
-    memory_copy(trampoline, current, size);
-    unsigned char jump[14] = {0xff, 0x25, 0, 0, 0, 0};
-    memory_copy(jump + 6, &back, 8);
-    memory_copy(trampoline + size, jump, sizeof(jump));
-    FlushInstructionCache(GetCurrentProcess(), trampoline, size + sizeof(jump));
-    memory_copy(jump + 6, &target, 8);
-    DWORD old_protection, ignored;
-    if (!VirtualProtect(at, sizeof(jump), PAGE_EXECUTE_READWRITE, &old_protection)) {
-        return 0;
-    }
-    memory_copy(at, jump, sizeof(jump));
-    FlushInstructionCache(GetCurrentProcess(), at, sizeof(jump));
-    VirtualProtect(at, sizeof(jump), old_protection, &ignored);
-    return trampoline;
-}
+/* memory_detour14 (support.c): a 14-byte jump, the checked prologue moved to a trampoline. */
+#define cs_detour memory_detour14
 
 /* 1 both detours in place. */
 static int cs_install(unsigned char *game_image) {
