@@ -1,6 +1,6 @@
 --- a/adapters/azimuth.c
 +++ b/adapters/azimuth.c
-@@ -15,14 +15,6 @@
+@@ -18,17 +18,6 @@
      const char *success;
  } HostProfile;
  static const HostProfile host_profiles[] = {
@@ -12,10 +12,13 @@
 -     {0x42,0x52,0x79,0x64,0xf4,0x8c,0x90,0xa5,0x37,0xf2,0x41,0x42,0x00,0xb8,0x59,0x8a,
 -      0xb9,0xa6,0xf9,0x29,0x19,0xbf,0xbe,0x04,0x6d,0xbe,0xcc,0xcb,0x36,0xe7,0xc5,0x97},
 -     "AZIMUTH: 1.0.2 initialized for FH2 (1A96545B); native game loader and TLS retained.\r\n"},
-     {AZIMUTH_103, 9887232u, 0x3fd50u, 0xa697bu, 0xa0454u, 0xa5150u,
-      {0xeb,0xfd,0x5d,0x43,0xa1,0x65,0xdc,0xec,0x5d,0x40,0x07,0xb9,0xd4,0x1e,0xd5,0xb2,0xed,0x12,0x2f,0xcd,0x02,0xec,0xfe,0xf7,0xe4,0xed,0x35,0xb4,0x08,0x26,0x82,0x1f},
-      "AZIMUTH: 1.0.3 initialized for FH2 (1A96545B); native game loader and TLS retained.\r\n"},
-@@ -33,6 +25,8 @@
+-    {AZIMUTH_103, 9887232u, 0x3fd50u, 0xa697bu, 0xa0454u, 0xa5150u,
+-     {0xeb,0xfd,0x5d,0x43,0xa1,0x65,0xdc,0xec,0x5d,0x40,0x07,0xb9,0xd4,0x1e,0xd5,0xb2,0xed,0x12,0x2f,0xcd,0x02,0xec,0xfe,0xf7,0xe4,0xed,0x35,0xb4,0x08,0x26,0x82,0x1f},
+-     "AZIMUTH: 1.0.3 initialized for FH2 (1A96545B); native game loader and TLS retained.\r\n"},
+     {AZIMUTH_104, 8613376u, 0x3f2c0u, 0xa684bu, 0xa1384u, 0xa4e09u,
+      {0x56,0xd2,0xc9,0xcb,0x6c,0xcf,0x3a,0xe1,0x83,0x6d,0xee,0x96,0x76,0xb6,0x42,0x85,
+       0xf3,0xa2,0x47,0xef,0xa2,0xd1,0x2c,0xf0,0x2c,0x6c,0x74,0x26,0x96,0xb3,0xb0,0x92},
+@@ -40,6 +29,8 @@
  #define MAP_GAME_THUNK (host_profile->thunk)
  
  typedef void *(*MapGame)(void *, const void *, const void *, const void *);
@@ -24,7 +27,7 @@
  typedef int(WINAPI *MessageBoxFunction)(HWND, LPCWSTR, LPCWSTR, UINT);
  static HINSTANCE mod_instance;
  static unsigned char *host_image;
-@@ -221,10 +215,16 @@
+@@ -250,10 +241,16 @@
              nt.FileHeader.TimeDateStamp != GAME_TIMESTAMP ||
              nt.OptionalHeader.SizeOfImage != GAME_IMAGE_SIZE || !game_image_is_readable(game)) {
              refuse("REFUSED: Azimuth's mapped game does not match FH2. No game patches applied.");
@@ -44,18 +47,18 @@
          }
      }
      SetLastError(error);
-@@ -269,7 +269,7 @@
+@@ -298,7 +295,7 @@
          }
      }
      return refuse("REFUSED: unsupported Azimuth build. Extra Options " MOD_VERSION
--                  " supports the inspected Azimuth 1.0.1, 1.0.2 and 1.0.3 executables only. "
-+                  " (ExtraOptions.Infinity) supports the inspected Azimuth 1.0.3 executable only. "
+-                  " supports the inspected Azimuth 1.0.1, 1.0.2, 1.0.3 and 1.0.4 executables only. "
++                  " (ExtraOptions.Infinity) supports the inspected Azimuth 1.0.4 executable only. "
                    "No game or save compatibility patches applied.");
  }
  
 --- a/build.py
 +++ b/build.py
-@@ -97,6 +97,10 @@
+@@ -100,6 +100,10 @@
      parser.add_argument("--build-dir", type=Path)
      parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
      parser.add_argument("--rebuild", action="store_true", help="Ignore cached build inputs")
@@ -66,32 +69,32 @@
      arguments = parser.parse_args()
      if arguments.jobs < 1:
          parser.error("--jobs must be positive")
-@@ -133,6 +137,9 @@
+@@ -140,6 +144,9 @@
      return arguments
  
  
 +PRODUCT_VERSION = ""
 +
 +
- def version_resource(filename):
+ def version_resource(filename, fm5=False):
      version = re.search(r'#define MOD_VERSION "([\d.]+)"',
                          (SOURCE / "extra_options.h").read_text()).group(1)
-@@ -155,10 +162,11 @@
-             data = padded(data) + children
+@@ -163,10 +170,11 @@
          return struct.pack("<H", len(data)) + data[2:]
  
--    strings = {"FileDescription": "Forza Horizon 2 Extra Options - " + ("Azimuth adapter" if filename == "winmm.dll" else "Mezcal adapter"),
+     title = "Forza Horizon 2 / Motorsport 5 Extra Options" if fm5 else "Forza Horizon 2 Extra Options"
+-    strings = {"FileDescription": title + " - " + ("Azimuth adapter" if filename == "winmm.dll" else "Mezcal adapter"),
 +    strings = {"FileDescription": "ExtraOptions.Infinity: Forza Horizon 2 Extra Options with the ForzaInfinity hook",
                 "FileVersion": version, "InternalName": "FH2_ExtraOptions",
--               "OriginalFilename": filename, "ProductName": "Forza Horizon 2 Extra Options",
+-               "OriginalFilename": filename, "ProductName": title,
 -               "ProductVersion": version, "LegalCopyright": "Arthur (RokkuDayo)",
 +               "OriginalFilename": filename, "ProductName": "ExtraOptions.Infinity",
 +               "ProductVersion": PRODUCT_VERSION or version,
 +               "LegalCopyright": "GPL-3.0; Arthur (RokkuDayo); ForzaInfinity",
                 "CompanyName": "Arthur (RokkuDayo)",
-                "Comments": "Unofficial Forza Horizon 2 mod. In-process game hooks; title ID 1A96545B."}
-     entries = b"".join(padded(block(key, wide(value), text=True)) for key, value in strings.items())
-@@ -272,8 +280,10 @@
+                "Comments": ("Unofficial in-process game mod. FH2: 1A96545B. FM5: 7B35D917 (Azimuth only)."
+                             if fm5 else "Unofficial in-process game mod. Forza Horizon 2 only: 1A96545B.")}
+@@ -283,8 +291,10 @@
          "/out:" + str(output),
          "/implib:" + str(directory / "extra_options.lib"),
          *objects,
@@ -102,7 +105,7 @@
          str(resource),
      ]
      if options.azimuth:
-@@ -284,7 +294,9 @@
+@@ -295,7 +305,9 @@
  
  
  def main():

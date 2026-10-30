@@ -3,7 +3,7 @@
   "kind": "mod",
   "builtIn": true,
   "id": "extraoptions",
-  "version": "0.3.9",
+  "version": "0.4.4",
   "name": {
     "en": "Extra Options",
     "pt-BR": "Extra Options"
@@ -22,7 +22,7 @@
   },
   "compatibility": {
     "azimuthVersions": [
-      "1.0.3"
+      "1.0.4"
     ],
     "gameBuilds": [],
     "verification": "built-in"
