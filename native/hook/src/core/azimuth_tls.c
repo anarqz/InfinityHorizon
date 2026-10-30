@@ -5,7 +5,7 @@
    The Azimuth static-TLS helper interface (the role of data\bin\azimuth-tls.dll), finding the
    game image Azimuth mapped, and the paths the hook works with.
 
-   FI_EO_BUILD (ExtraOptions.Infinity, Azimuth 1.0.3, OD-125/OD-127): the hook is linked into the patched
+   FI_EO_BUILD (ExtraOptions.Infinity, Azimuth 1.0.4, OD-125/OD-127): the hook is linked into the patched
    ExtraOptions winmm.dll beside azimuth.exe. There is no TLS helper role: ExtraOptions' game-map
    callback calls fi_eo_game_mapped with the image Azimuth just mapped, and the hook keeps its files
    in <Azimuth>\data\bin as before. */

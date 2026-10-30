@@ -14,7 +14,7 @@ public static class ExtraOptionsInfinity
     public const string IniFile = "FH2_ExtraOptions.ini";
 
     /// <summary>The upstream ExtraOptions release ExtraOptions.Infinity is built from (<c>native/extraoptions</c>, MOD_VERSION).</summary>
-    public const string ExtraOptionsVersion = "0.3.9";
+    public const string ExtraOptionsVersion = "0.4.4";
 
     private static readonly Lazy<ModManifest> BuiltIn = new(() =>
     {
