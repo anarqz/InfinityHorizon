@@ -51,11 +51,12 @@ internal sealed partial class RelayEngine
     {
         _tag = null;
         if (!GameOptionsFields.TryRead(_gameOptions.Records, out var fields) || fields.Tag is not { } rules) return;
-        var limit = fields.EndCondition == 2 && fields.TimedRaceLength is { } seconds && seconds > 0
-            ? Math.Min(TagLongestLimitMs, (long)(seconds * 1000)) : TagDefaultLimitMs;
+        // EndConditionOptions' TimeOptions.Time (var 420, f32 seconds) is the event's length whatever its end condition (a host's
+        // one-minute King set it with another end condition type); the default applies only when it is unset
+        var limit = fields.TimedRaceLength is { } seconds && seconds > 0 ? Math.Min(TagLongestLimitMs, (long)(seconds * 1000)) : TagDefaultLimitMs;
         _tag = new(rules, limit, _now + TagAssignDelayMs);
         Note(string.Create(CultureInfo.InvariantCulture,
-            $"tag: {Describe(rules.Mode)} event, {limit / 1000} s, It bucket {rules.ItBucket}, players per It {rules.PlayersPerIt?.ToString(CultureInfo.InvariantCulture) ?? "unset"}"));
+            $"tag: {Describe(rules.Mode)} event, {limit / 1000} s, It bucket {rules.ItBucket}, players per It {rules.PlayersPerIt?.ToString(CultureInfo.InvariantCulture) ?? "unset"} (end condition {fields.EndCondition?.ToString(CultureInfo.InvariantCulture) ?? "unset"}, time {fields.TimedRaceLength?.ToString(CultureInfo.InvariantCulture) ?? "unset"})"));
     }
 
     /// <summary>The start was sent: crown time counts from "GO", and the buckets go out again for the start.</summary>
