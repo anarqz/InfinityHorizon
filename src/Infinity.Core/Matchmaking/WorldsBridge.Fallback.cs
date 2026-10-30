@@ -32,6 +32,14 @@ public sealed partial class WorldsBridge
     /// </summary>
     public bool ForceRelay { get; init; }
 
+    /// <summary>
+    /// OD-146, the player's "Always connect through the relay": joins ask for a relay-born seat (the hook skips the direct try) and a
+    /// hosted world is relay-born for every guest. Only with a hook that can play through a relay; read at every join and open.
+    /// </summary>
+    public Func<bool>? AlwaysRelay { get; init; }
+
+    private string? RelayTransport => RelayJoinerCapable && AlwaysRelay?.Invoke() == true ? Transports.Relay : null;
+
     /// <summary>After a granted join under <see cref="ForceRelay"/>: the immediate relay renew, or a log line and direct play.</summary>
     private async Task ForceRelayAsync(string grantId, CancellationToken cancellation)
     {

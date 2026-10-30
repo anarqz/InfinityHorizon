@@ -225,6 +225,10 @@ public sealed record WorldSettings
 {
     public required string Name { get; init; }
 
+    /// <summary>OD-146 (§5b): <c>relay</c> makes the world relay-born for every guest, for its whole life; null: as before.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Transport { get; init; }
+
     public required string Mode { get; init; }
 
     /// <summary>
@@ -380,6 +384,10 @@ public sealed record JoinRequest
     /// <summary>CR-S57: the joiner's measured relay round trips.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, int>? Relays { get; init; }
+
+    /// <summary>OD-146 (§5b): <c>relay</c> asks for a relay-born seat (or <c>no_relay</c>), never a direct one; null: as before.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Transport { get; init; }
 }
 
 /// <summary>A reserved seat (<c>expiresAt</c> ≤ 60 s away, renewable up to <c>holdUntil</c>).</summary>

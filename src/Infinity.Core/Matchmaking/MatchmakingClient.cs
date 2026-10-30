@@ -77,6 +77,10 @@ public interface IMatchmakingApi
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
         IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) => JoinAsync(worldId, code, mods, cancellation);
 
+    /// <summary>OD-146: as above, with <paramref name="transport"/> <c>relay</c> asking for a relay-born seat.</summary>
+    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation) => JoinAsync(worldId, code, mods, nat, relays, cancellation);
+
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
 
     Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) => SeatAsync(cancellation);
@@ -243,8 +247,12 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         JoinAsync(worldId, code, mods, null, null, cancellation);
 
     /// <summary>CR-S57: <paramref name="relays"/> is sent as given (also <c>{}</c>); null leaves <c>nat</c>/<c>relays</c> out.</summary>
+    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
+        JoinAsync(worldId, code, mods, nat, relays, null, cancellation);
+
     public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation)
+        IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation)
     {
         if (worldId is null && code is null)
         {
@@ -257,6 +265,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
             Mods = mods is { Count: > 0 } ? mods : null,
             Nat = nat,
             Relays = relays,
+            Transport = transport,
         };
         var result = await SendAsync<JoinAnswer>(HttpMethod.Post, "/mm/v1/join", body, cancellation).ConfigureAwait(false);
         if (result.Error is { Kind: MmErrorKind.RateLimited } limited)

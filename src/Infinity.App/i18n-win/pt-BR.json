@@ -365,6 +365,8 @@
   "worlds.launcher_update_required": "Atualize o launcher para entrar neste lobby.",
   "worlds.host_unreachable": "Não foi possível alcançar o anfitrião, nem direto nem pelo relay. Uma das conexões pode estar bloqueando o jogo online.",
   "connection.direct_only": "Só direta (este lobby não oferece relay)",
+  "picker.always_relay": "Sempre conectar pelo relay",
+  "picker.always_relay_note": "Para conexões que bloqueiam o jogo direto. Todo lobby em que você entrar ou que criar passa por um relay; pode aumentar um pouco a latência.",
   "worlds.seat_ended": "Lugar liberado\nSeu lugar reservado acabou: o lobby fechou ou o tempo esgotou.",
   "brand.tagline": "VÁ MAIS LONGE  /  UM HORIZONTE MAIS BRILHANTE",
   "worlds.not_hosting": "Só o anfitrião do lobby pode fazer isso.",
