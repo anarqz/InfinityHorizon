@@ -248,7 +248,7 @@ internal sealed partial class RelayEngine
         };
         // The car meet's one server-owned CarMeetSynced (router 11, id 0); the variables it omits keep their constructor defaults
         if (_settings.CarMeetLobby is not null)
-            snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, 0, NerdPayload.CarMeet())));
+            snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, _carMeetSequence, CarMeetState())));
         AppendGameOptionsSnapshot(peer, snapshot);
         foreach (var owner in _peers.Where(p => p != peer && p.Synced))
             foreach (var (key, obj) in owner.Objects) snapshot.AddRange(obj.Snapshot(key.Router, new(HandleKind.Relay, key.Id, owner.Index)));
@@ -277,6 +277,7 @@ internal sealed partial class RelayEngine
         if (_peers.Count == 0) _groupNode = 0;
         RacePeerLeft(peer);
         LeaveEventSide(peer);
+        CarMeetPeerLeft(peer);
     }
 
     private void DropDoomed()

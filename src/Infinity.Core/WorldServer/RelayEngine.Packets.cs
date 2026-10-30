@@ -98,6 +98,8 @@ internal sealed partial class RelayEngine
                     Rejected(peer, "invalid_car_event", carEvent.Kind); break;
                 case NerdMessage.GroupSatNav nav when nav.Node is >= 0 and <= NerdCodec.SatNavNodeMax:
                     peer.CompletionConfirmed = true; SetGroupNode(nav.Node); break;
+                case NerdMessage.Other { Kind: 26 } invite: InviteRequest(peer, invite.Body); break;
+                case NerdMessage.Other { Kind: 27 } answer: JoinOrCancel(peer, answer.Body); break;
                 case NerdMessage.Other other when _settings.Races:
                     switch (other.Kind)
                     {
@@ -197,7 +199,7 @@ internal sealed partial class RelayEngine
     {
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
-        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather();
+        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet();
         if (_now - _lastResend >= 50)
         {
             _lastResend = _now;
