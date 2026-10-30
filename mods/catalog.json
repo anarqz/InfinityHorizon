@@ -37,7 +37,8 @@
         },
         "compatibility": {
           "azimuthVersions": [
-            "1.0.3"
+            "1.0.3",
+            "1.0.4"
           ],
           "gameBuilds": [],
           "verification": "unverified"
@@ -793,7 +794,8 @@
         },
         "compatibility": {
           "azimuthVersions": [
-            "1.0.3"
+            "1.0.3",
+            "1.0.4"
           ],
           "gameBuilds": [],
           "verification": "unverified"
