@@ -31,6 +31,9 @@ public sealed class IntegratedHostRelay : IHostRelay
     private Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? _proofReceiver;
 
     public Diagnostics.CrashContext? CrashContext { get => Volatile.Read(ref _crashContext); set => Volatile.Write(ref _crashContext, value); }
+    private Action<string>? _diagnosticLog;
+    /// <summary>The launcher log the world's connection lines go to (written off the actor thread).</summary>
+    public Action<string>? DiagnosticLog { get => Volatile.Read(ref _diagnosticLog); set => Volatile.Write(ref _diagnosticLog, value); }
 
     private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options)
     {
@@ -45,7 +48,16 @@ public sealed class IntegratedHostRelay : IHostRelay
         _engine = new(new RelaySettings { MaxPlayers = checked((int)Math.Clamp(maxPlayers, 1u, 12u)), Races = races }, Send)
         {
             Authorize = static (_, _, _) => false,
-            ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value)
+            ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
+            ConnectionOpened = (index, a, b, refusal) =>
+            {
+                // A is the lobby type the game asks for (1 Road Trip, 2 free roam, 3 car meet); no identity or address is logged
+                if (Volatile.Read(ref _diagnosticLog) is not { } sink) return;
+                var line = refusal is { } reason
+                    ? string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection refused reason {reason} lobby type {a} (A={a} B={b})")
+                    : string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection admitted peer {index} lobby type {a} -> free-roam engine (A={a} B={b})");
+                Diagnostics.UdpDiagnostics.Enqueue(sink, line);
+            }
         };
         var cancellation = _stop.Token;
         _actor = Task.Factory.StartNew(() => Run(cancellation), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
