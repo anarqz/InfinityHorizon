@@ -51,6 +51,7 @@ internal sealed partial class RelayEngine
 
     private void RequestRace(RelayPeer peer)
     {
+        if (IsRoadTrip) { Note($"race request from peer {peer.Index}: ignored (a Road Trip runs its own events)"); return; }
         if (_race is { } running)
         {
             // An event ends as soon as every participant finished or left, so a running one still has someone racing or loading.
@@ -117,8 +118,9 @@ internal sealed partial class RelayEngine
             }
         }
         else Note($"ready request from peer {peer.Index}: ready={(ready ? 1 : 0)} outside an invitation");
-        if (peer.ConsoleValues[4] == (ready ? 1UL : 0) && peer.ConsoleSequence is not null) return;
+        if (peer.ConsoleValues[4] == (ready ? 1UL : 0) && peer.ConsoleSequence is not null) { RoadTripReady(force: false); return; }
         SetConsoleVariables(peer, (4, ready));
+        RoadTripReady(force: false);
     }
 
     // The caller filters stale per-variable object sequences before reporting observations.
@@ -210,6 +212,7 @@ internal sealed partial class RelayEngine
         if (_eventOwner == race.Owner && !_peers.Contains(race.OwnerPeer)) _eventOwner = null;
         Note($"event closed: {why}");
         EventClosed(race);
+        RoadTripEventClosed();
         SetHostVariables((2, 0, 2), (4, 0, 1), (5, 0, 1), (6, 0, 1));
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));

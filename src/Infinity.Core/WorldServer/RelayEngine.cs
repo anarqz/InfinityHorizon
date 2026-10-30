@@ -69,6 +69,7 @@ internal sealed partial class RelayEngine
         if (_settings.CarMeetLobby is { } carMeet) _hostVariables[0] = (carMeet, 3);
         if (_settings.TimeSyncMs < 1 || _settings.InviteCloseMs < 0) throw new ArgumentOutOfRangeException(nameof(settings));
         _weather = new(_settings.WeatherSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue), _now, NowWire);
+        StartRoadTrip();
     }
 
     private readonly RelayWeather _weather;
@@ -250,6 +251,7 @@ internal sealed partial class RelayEngine
         if (_settings.CarMeetLobby is not null)
             snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, _carMeetSequence, CarMeetState())));
         AppendGameOptionsSnapshot(peer, snapshot);
+        AppendRoadTripSnapshot(peer, snapshot);
         foreach (var owner in _peers.Where(p => p != peer && p.Synced))
             foreach (var (key, obj) in owner.Objects) snapshot.AddRange(obj.Snapshot(key.Router, new(HandleKind.Relay, key.Id, owner.Index)));
         foreach (var message in snapshot)
@@ -258,6 +260,7 @@ internal sealed partial class RelayEngine
         }
         // During an event a newcomer needs a private universe of its own too (it is on the free-roam side)
         if (_phasing) AssignUniverse(peer);
+        RoadTripJoined(peer);
         Pace(peer);
     }
 
@@ -278,6 +281,7 @@ internal sealed partial class RelayEngine
         RacePeerLeft(peer);
         LeaveEventSide(peer);
         CarMeetPeerLeft(peer);
+        RoadTripPeerLeft(peer);
     }
 
     private void DropDoomed()

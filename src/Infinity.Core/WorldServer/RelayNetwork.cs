@@ -25,6 +25,12 @@ public sealed record IntegratedRelayOptions
     public bool EnableUpnp { get; init; } = true;
     public IReadOnlyList<string> StunServers { get; init; } = DefaultServers;
     public TimeSpan StunInterval { get; init; } = TimeSpan.FromSeconds(25);
+    /// <summary>The host's installed game database (gamedbRC.slt, read-only): the events of an online Road Trip. Null: no Road Trip worlds.</summary>
+    public string? GameDatabase { get; init; }
+
+    /// <summary>The game database under a Mount folder, as the game maps it (the first of mediaoverride, mediapc, media); null when none.</summary>
+    public static string? FindGameDatabase(string mount) =>
+        Process.CarNames.MediaRoots.Select(root => Path.Combine(mount, root, "stripped", "gamedbRC.slt")).FirstOrDefault(File.Exists);
 }
 
 internal static class RelayNetwork

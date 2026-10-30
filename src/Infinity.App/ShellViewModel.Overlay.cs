@@ -143,7 +143,10 @@ public sealed partial class ShellViewModel
     {
         try
         {
-            var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys, devLanPeers: devLan,
+            // T13: an online Road Trip takes its events from this PC's own game database (read-only)
+            var database = ContentLocation?.Mount is { } mount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(mount) : null;
+            var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys,
+                options: new Infinity.Core.WorldServer.IntegratedRelayOptions { GameDatabase = database }, devLanPeers: devLan,
                 requireSocketProof:SocketProofRequired,clock:clock);
             Log($"worlds: relay bound on UDP {relay.Port}; awaiting world admission"
                 + (devLan ? " (development LAN admission: granted peers from private addresses, endpoint not verified)" : ""));
