@@ -46,6 +46,8 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload)
     internal byte Last { get; private set; } = sequence;
     internal byte Injected { get; set; }
     internal Dictionary<byte, bool> ServerVariables { get; } = [];
+    /// <summary>A player object's server-set PrivateUniverseId (router 1, var 40), replayed to late joiners; null when 0.</summary>
+    internal byte? Universe { get; set; }
     internal List<(byte Sequence, BitBuffer Payload)> Tail { get; } = [];
     internal List<(byte Sequence, BitBuffer Payload)> Pending { get; } = [];
     internal int HistoryBits => Base.Length + Tail.Sum(p => p.Payload.Length) + Pending.Sum(p => p.Payload.Length);
@@ -99,6 +101,8 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload)
             foreach (var (index, value) in latest) payload.Push(index, 4).Push(value, index >= 7 ? 2 : 1);
         }
         foreach (var (index, value) in ServerVariables) payload.Push(index, 4).Boolean(value);
+        if (router == 1 && Universe is { } universe)
+            payload.Push(RelayEngine.PrivateUniverseVariable, 8).Push(universe, RelayEngine.PrivateUniverseBits);
         yield return NerdCodec.Write(new NerdMessage.Object(true, router, handle, Type, AckWindow.SequenceAdd(BaseSequence, Injected), payload));
         foreach (var (seq, update) in Tail.Concat(Pending))
             yield return NerdCodec.Write(new NerdMessage.Object(false, router, handle, 0, AckWindow.SequenceAdd(seq, Injected), update));
@@ -145,6 +149,12 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal bool Doomed { get; set; }
     internal CarState? CarState { get; set; }
     internal System.Numerics.Vector3? CarPosition { get; set; }
+    /// <summary>The last car prediction, sent again with a newer time when the event boundary moves.</summary>
+    internal NerdMessage.Car? LastCar { get; set; }
+    /// <summary>This player's private universe while an event exists (0 outside, the shared default).</summary>
+    internal byte Universe { get; set; }
+    internal byte? PlayerSequence { get; set; }
+    internal bool UniverseDue { get; set; }
     internal IPEndPoint? CarHook { get; set; }
     internal long? CarStateAt { get; set; }
     internal int HistoryBits => Objects.Values.Sum(p => p.HistoryBits) + Orphans.Sum(p => p.Payload.Length);

@@ -118,6 +118,7 @@ internal sealed partial class RelayEngine
         _retiredAttempts.Clear(); _retiredOrder.Clear();
         ClearGameOptions();
         ClearSideChannels();
+        _eventSide.Clear(); _phasing = false;
     }
 
     private uint NowWire => unchecked((uint)_now + 1);
@@ -236,6 +237,8 @@ internal sealed partial class RelayEngine
         {
             if (!QueueReliable(peer, message)) break;
         }
+        // During an event a newcomer needs a private universe of its own too (it is on the free-roam side)
+        if (_phasing) AssignUniverse(peer);
         Pace(peer);
     }
 
@@ -254,6 +257,7 @@ internal sealed partial class RelayEngine
         OnPeerLeft(peer);
         if (_peers.Count == 0) _groupNode = 0;
         RacePeerLeft(peer);
+        LeaveEventSide(peer);
     }
 
     private void DropDoomed()

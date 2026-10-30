@@ -83,6 +83,7 @@ internal sealed partial class RelayEngine
         race.Stage = RaceStage.Gathering;
         race.StageUntil = _now + _settings.RacePrepareMs;
         Note($"event: {race.Participants.Count} participant(s) selected, loading cars");
+        BeginPhase(race.Participants);
         foreach (var peer in _peers.Where(p => race.Participants.Contains(p.Index)))
         { ResetConsoleObservation(peer, 5); ResetConsoleObservation(peer, 0); }
         SetHostVariables((5, 1, 1), (2, 0, 2));
@@ -120,6 +121,8 @@ internal sealed partial class RelayEngine
         foreach (var (index, value) in values)
         {
             peer.ConsoleValues[index] = value;
+            // RaceInProgress 0 after the event closed: this player left its results and is back in free roam
+            if (index == 3 && value == 0 && _race is null) LeaveEventSide(peer);
             if (index != 3 || _race is not { Stage: RaceStage.Started } race || !race.Participants.Contains(peer.Index)) continue;
             if (value != 0) race.InProgress.Add(peer.Index);
             else if (race.InProgress.Remove(peer.Index))
@@ -200,6 +203,7 @@ internal sealed partial class RelayEngine
         // keeps them for its next race request; another player's ownership request takes them over between events.
         if (_eventOwner == race.Owner && !_peers.Contains(race.OwnerPeer)) _eventOwner = null;
         Note($"event closed: {why}");
+        EventClosed(race);
         SetHostVariables((2, 0, 2), (4, 0, 1), (5, 0, 1), (6, 0, 1));
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));
@@ -210,6 +214,7 @@ internal sealed partial class RelayEngine
         if (_race is not { } race || !race.Participants.Remove(peer.Index)) return;
         race.Finished.Remove(peer.Index); race.InProgress.Remove(peer.Index);
         SetConsoleVariables(peer, (2, false), (4, false));
+        LeaveEventSide(peer);
         if (race.Participants.Count == 0) EndRace("every participant left");
         else if (ReferenceEquals(peer, race.OwnerPeer) && race.Stage != RaceStage.Started) EndRace("its owner left before the start");
         else ReevaluateRaceCompletion();
