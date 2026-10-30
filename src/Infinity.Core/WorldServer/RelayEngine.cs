@@ -67,6 +67,20 @@ internal sealed partial class RelayEngine
         _send = send ?? throw new ArgumentNullException(nameof(send));
         // SessionHostSynced var 0 LobbyType (3 bits); its constructor default is 2, free roam
         if (_settings.CarMeetLobby is { } carMeet) _hostVariables[0] = (carMeet, 3);
+        if (_settings.TimeSyncMs < 1 || _settings.InviteCloseMs < 0) throw new ArgumentOutOfRangeException(nameof(settings));
+        _weather = new(_settings.WeatherSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue), _now, NowWire);
+    }
+
+    private readonly RelayWeather _weather;
+    private byte _weatherSequence;
+
+    private void TickWeather()
+    {
+        if (!_peers.Any(p => p.Synced) || !_weather.Tick(_now, NowWire)) return;
+        _weatherSequence = AckWindow.SequenceNext(_weatherSequence);
+        var update = NerdCodec.Write(new NerdMessage.Object(false, 10, new(HandleKind.Own, 0), 0, _weatherSequence, _weather.Payload()));
+        foreach (var peer in _peers.Where(p => p.Synced)) SendSequenced(peer, [update]);
+        Note($"weather: level {_weather.Level}, ramp to {_weather.AtmosphereDesired:0.000}, rain to {_weather.RainDesired:0}");
     }
 
     /// <summary>OpenConnection's A: 3 is a car meet, 6 the island's car meet (the same world kind).</summary>
@@ -226,7 +240,12 @@ internal sealed partial class RelayEngine
         SendCompletion(peer);
         var payload = NerdPayload.SessionHost(_hostVariables.Select(p => (p.Key, p.Value.Value, p.Value.Width)).ToArray());
         if (_groupNode != 0) payload.Append(NerdPayload.GroupSatNav(_groupNode));
-        var snapshot = new List<BitBuffer> { NerdCodec.Write(new NerdMessage.Object(true, 6, new(HandleKind.Own, 0), 0, _hostSequence, payload)) };
+        var snapshot = new List<BitBuffer>
+        {
+            NerdCodec.Write(new NerdMessage.Object(true, 6, new(HandleKind.Own, 0), 0, _hostSequence, payload)),
+            // the world's shared weather (server-owned WeatherSynced, router 10, id 0) at its current sequence
+            NerdCodec.Write(new NerdMessage.Object(true, 10, new(HandleKind.Own, 0), 0, _weatherSequence, _weather.Payload())),
+        };
         // The car meet's one server-owned CarMeetSynced (router 11, id 0); the variables it omits keep their constructor defaults
         if (_settings.CarMeetLobby is not null)
             snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, 0, NerdPayload.CarMeet())));
@@ -244,7 +263,7 @@ internal sealed partial class RelayEngine
 
     private void SendCompletion(RelayPeer peer)
     {
-        peer.LastCompletion = _now;
+        peer.LastCompletion = _now; peer.LastTimeSync = _now;
         Send(peer, [NerdCodec.Write(new NerdMessage.TimeSync(peer.SyncIndex++, NowWire)), NerdCodec.Write(new NerdMessage.SyncDone(peer.Attempt))], false);
     }
 

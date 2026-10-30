@@ -12,7 +12,7 @@ internal sealed partial class RelayEngine
         internal HashSet<byte> Finished { get; } = [];
         internal HashSet<byte> InProgress { get; } = [];
         internal RaceStage Stage { get; set; }
-        internal long InviteUntil { get; } = inviteUntil;
+        internal long InviteUntil { get; set; } = inviteUntil;
         internal long StageUntil { get; set; }
         internal long? FirstFinishAt { get; set; }
     }
@@ -109,6 +109,12 @@ internal sealed partial class RelayEngine
             if (ready && !race.Participants.Contains(peer.Index)) race.Participants.Add(peer.Index);
             else if (!ready && peer.Index != race.Owner) race.Participants.Remove(peer.Index);
             Note($"ready request from peer {peer.Index}: ready={(ready ? 1 : 0)}, {race.Participants.Count} participant(s)");
+            // everybody invited has accepted: nobody is left to wait for
+            if (_peers.Where(p => p.Synced).All(p => race.Participants.Contains(p.Index)) && race.InviteUntil > _now + _settings.InviteCloseMs)
+            {
+                race.InviteUntil = _now + _settings.InviteCloseMs;
+                Note("event: everybody invited accepted, the invitation closes early");
+            }
         }
         else Note($"ready request from peer {peer.Index}: ready={(ready ? 1 : 0)} outside an invitation");
         if (peer.ConsoleValues[4] == (ready ? 1UL : 0) && peer.ConsoleSequence is not null) return;
