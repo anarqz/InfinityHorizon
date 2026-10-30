@@ -1071,7 +1071,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _publicWarning.Observe(openingId, world.Audience);
                     }
                     hosted = true;
-                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players)");
+                    Voice?.Creating(request.Voice); // OD-147: the lobby's voice chat switch, the host's to change later
+                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players, voice {(request.Voice ? "on" : "off")})");
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id

@@ -164,6 +164,7 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
     case 18: Navigate(Nav::Back); break;
     case 19: Navigate(Nav::TabRight); break;
     case 20: OpenPlayerCard("2535100000000042", "RallyFox98"); break; // as the game's PLAYER DETAILS would
+    case 21: Navigate(Nav::Left); break;
     default: break;
     }
 }
