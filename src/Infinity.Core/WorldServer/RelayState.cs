@@ -167,6 +167,8 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal byte? PlayerSequence { get; set; }
     internal long LastTimeSync { get; set; }
     internal byte? RoadTripSelectionSequence { get; set; }
+    /// <summary>When this player's RoadTripSynced leaves Initialising (its own state change); null once it has.</summary>
+    internal long? RoadTripStartAt { get; set; }
     /// <summary>The car this player chose (PlayerChoices CarClass and PerfIndex), once a car-choice update showed it.</summary>
     internal int? CarClass { get; set; }
     internal float CarPi { get; set; } = float.NaN;

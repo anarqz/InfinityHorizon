@@ -135,14 +135,22 @@ internal sealed partial class RelayEngine
             && (obj.Create ? obj.Type == 2 : peer.Objects.ContainsKey((9, obj.Handle.Id)));
         if (!roadTripPlayer)
         {
-            if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0) return null;
+            if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0)
+            {
+                if (obj.Router == 9) Note($"road trip: peer {peer.Index} router-9 object refused (create {obj.Create}, type {obj.Type}, {obj.Handle.Kind} id {obj.Handle.Id}, {obj.Payload.Length} bits)");
+                return null;
+            }
             if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
             { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
             obj = obj with { Payload = payload! };
             if (obj.Router == 1 && !obj.Create && obj.Payload.Length >= RoadTripCarChoiceBits) RoadTripCarPicked(peer);
             if (obj.Router == 1) ObserveCarChoice(peer, obj.Payload);
         }
-        else RoadTripPlayerUpdate(peer, obj.Payload);
+        else
+        {
+            if (obj.Create) Note($"road trip: peer {peer.Index} created its RoadTripPlayerSynced (router 9, type 2, id {obj.Handle.Id}): accepted");
+            RoadTripPlayerUpdate(peer, obj.Payload);
+        }
         var key = (obj.Router, obj.Handle.Id);
         var previous = peer.Objects.GetValueOrDefault(key);
         if (obj.Create)
