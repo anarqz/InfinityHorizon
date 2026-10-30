@@ -64,15 +64,29 @@ public sealed partial class WorldsBridge
     public static readonly TimeSpan FreeRoamLeftGrace = TimeSpan.FromSeconds(30);
     private CancellationTokenSource? _freeRoamLeave;
 
+    // when a lobby ask was last answered with the world kept (Ready), as Now's UTC ticks; 0: none since the last leave
+    private long _lobbyReadyTicks;
+
     /// <summary>
     /// OD-148 (refines OD-57): the game left free roam. After <see cref="FreeRoamLeftGrace"/> with no lobby ask the hosted
-    /// world closes (<see cref="CloseHostAsync"/>) or the seat is let go (<see cref="LeaveAsync"/>); a lobby ask, the overlay's
-    /// own close, leave, join or open, the session's end or another leave of free roam ends this wait first. Only the close
-    /// or leave waits: the world's announces and the seat's renewals go on meanwhile. A hosted world whose Road Trip or car
-    /// meet still has players (<see cref="IHostRelay.LobbyPlayers"/>) is not closed: it is weighed again every grace.
+    /// world closes (<see cref="CloseHostAsync"/>) or the seat is let go (<see cref="LeaveAsync"/>); a lobby ask, the game
+    /// joining a world again (<see cref="GameJoined"/>), the overlay's own close, leave, join or open, the session's end or
+    /// another leave of free roam ends this wait first. A lobby ask answered Ready within the grace BEFORE this leave counts
+    /// too (live, test.9: back from a Road Trip the game asks for free roam, opens it, and only then closes its Road Trip
+    /// connection): no wait starts. Only the close or leave waits: the world's announces and the seat's renewals go on
+    /// meanwhile. A hosted world whose Road Trip or car meet still has players (<see cref="IHostRelay.LobbyPlayers"/>) is
+    /// not closed: it is weighed again every grace.
     /// </summary>
     public async Task FreeRoamLeftAsync(CancellationToken cancellation)
     {
+        var asked = Interlocked.Exchange(ref _lobbyReadyTicks, 0); // one ask covers one leave
+        if (asked != 0 && Now - new DateTimeOffset(asked, TimeSpan.Zero) is var ago && ago >= TimeSpan.Zero && ago <= FreeRoamLeftGrace)
+        {
+            CancelFreeRoamLeave();
+            if ((HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } kept)
+                _log($"worlds: free roam left; {kept} stays: the game asked for its next lobby {(int)ago.TotalSeconds} s ago");
+            return;
+        }
         var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _onlineStop.Token);
         CancelFreeRoamLeave(Interlocked.Exchange(ref _freeRoamLeave, pending)); // a new leave starts the wait again
         var world = HostedWorldId ?? Volatile.Read(ref _seatWorld);
@@ -119,6 +133,18 @@ public sealed partial class WorldsBridge
         return relay?.LobbyPlayers ?? 0;
     }
 
+    /// <summary>
+    /// The game joined a world again (the hook's Event 3, <c>host:&lt;port&gt;</c> or <c>join</c>): a pending close or leave
+    /// after free roam is called off, the game is in the world (live, test.9: a joiner's Road Trip connection ended just
+    /// before its free roam one opened).
+    /// </summary>
+    public void GameJoined()
+    {
+        if (Interlocked.Exchange(ref _freeRoamLeave, null) is not { } pending) return;
+        CancelFreeRoamLeave(pending);
+        if ((HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } world) _log($"worlds: the game joined again; {world} stays");
+    }
+
     /// <summary>A pending close or leave after free roam is called off (the world, or the player's own choice, stays).</summary>
     private void CancelFreeRoamLeave() => CancelFreeRoamLeave(Interlocked.Exchange(ref _freeRoamLeave, null));
 
@@ -144,6 +170,7 @@ public sealed partial class WorldsBridge
     private byte Decided(byte kind, byte result, string what)
     {
         _log($"worlds: {KindName(kind)}: {what}");
+        if (result == FreeRoamResult.Ready) Interlocked.Exchange(ref _lobbyReadyTicks, Now.UtcTicks); // the next leave of free roam is this lobby's
         return result;
     }
 

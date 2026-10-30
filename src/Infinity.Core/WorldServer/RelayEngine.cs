@@ -108,6 +108,7 @@ internal sealed partial class RelayEngine
     {
         _now = Math.Max(_now, nowMilliseconds);
         endpoint = StunCodec.Canonical(endpoint);
+        _heldOpens.Remove(endpoint);
         foreach (var peer in _peers.Where(p => p.Endpoint.Equals(endpoint)).ToArray()) Drop(peer, "moved to another world on this host");
     }
 
@@ -132,7 +133,7 @@ internal sealed partial class RelayEngine
     {
         _closed = true;
         _peers.Clear(); _handshakes.Clear(); _bans.Clear(); _hostVariables.Clear();
-        _retiredAttempts.Clear(); _retiredOrder.Clear();
+        _retiredAttempts.Clear(); _retiredOrder.Clear(); _heldOpens.Clear();
         ClearGameOptions();
         ClearSideChannels();
         _eventSide.Clear(); _phasing = false;
@@ -175,9 +176,12 @@ internal sealed partial class RelayEngine
         return _settings.HandshakesPerSecond >= 1;
     }
 
-    private RelayPeer? Admit(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, int bytes)
+    private RelayPeer? Admit(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, ReadOnlySpan<byte> data)
     {
+        var bytes = data.Length;
         if (!HandshakeAllowed(endpoint, open.User)) return null;
+        // a seat whose endpoint proof may still come (a game moving to a new socket): no final refusal, the open waits for it
+        if (!Allowed(open.User, endpoint) && Hold(endpoint, header, open, data)) return null;
         byte? reason = !Allowed(open.User, endpoint) ? (byte)4
             : _bans.GetValueOrDefault(endpoint.Address) > _now ? (byte)3
             : !open.Version.AsSpan().SequenceEqual(NerdCodec.Version) ? (byte)1
@@ -187,10 +191,7 @@ internal sealed partial class RelayEngine
                 || (SyncedCount >= _settings.MaxPlayers && (SharedXuid(open.User) || !_peers.Any(p => p.Synced && p.Xuid == open.User))) ? (byte)4 : null;
         if (reason is { } refusal)
         {
-            ConnectionOpened?.Invoke(0, open.A, open.B, refusal);
-            var response = NerdCodec.Packet([NerdCodec.Write(new NerdMessage.OpenResponse(open.Flags, refusal, open.Attempt, 0))],
-                NerdCodec.NoSequence, header.Id == NerdCodec.NoSequence ? NerdCodec.NoAck : header.Id, 0);
-            if (response.Length <= bytes) Emit(endpoint, response);
+            Refuse(endpoint, header, open, bytes, refusal);
             return null;
         }
         byte index = 0;
@@ -206,6 +207,64 @@ internal sealed partial class RelayEngine
         _peers.Add(peer);
         ConnectionOpened?.Invoke(index, open.A, open.B, null);
         return peer;
+    }
+
+    private void Refuse(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, int bytes, byte refusal)
+    {
+        ConnectionOpened?.Invoke(0, open.A, open.B, refusal);
+        var response = NerdCodec.Packet([NerdCodec.Write(new NerdMessage.OpenResponse(open.Flags, refusal, open.Attempt, 0))],
+            NerdCodec.NoSequence, header.Id == NerdCodec.NoSequence ? NerdCodec.NoAck : header.Id, 0);
+        if (response.Length <= bytes) Emit(endpoint, response);
+    }
+
+    // An OpenConnection from an endpoint not proven yet, for an identity whose proof may still come (AwaitsProof): kept
+    // unanswered, the game's own retries included, and taken in again once that endpoint is allowed (TickHeldOpens). The
+    // game takes reason 4 as final (live, test.9: a joiner moving from its Road Trip to free roam on a new socket was
+    // refused before its proof completed and never connected again). Admission still needs Allowed: nothing is let in early.
+    private sealed record HeldOpen(byte[] Data, NerdHeader Header, NerdMessage.OpenConnection Open, long At);
+    private readonly Dictionary<IPEndPoint, HeldOpen> _heldOpens = [];
+    internal const long HeldOpenMs = 20000;
+    private const int MaxHeldOpens = 32;
+
+    /// <summary>Whether this identity holds a seat whose endpoint proof may still arrive; its unproven OpenConnection waits for it (null: none waits).</summary>
+    internal Func<ulong, bool>? AwaitsProof { get; set; }
+
+    /// <summary>A held OpenConnection was admitted after its endpoint proof (not from a datagram): its world now holds the endpoint.</summary>
+    internal Action<IPEndPoint>? AdmittedLate { get; set; }
+
+    private bool Hold(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, ReadOnlySpan<byte> data)
+    {
+        if (SharedXuid(open.User) || AwaitsProof?.Invoke(open.User) != true) return false;
+        if (_heldOpens.TryGetValue(endpoint, out var held))
+        {
+            if (held.Open.User != open.User) return false;
+            _heldOpens[endpoint] = new(data.ToArray(), header, open, held.At); // the latest attempt; the wait is not extended
+            return true;
+        }
+        if (_heldOpens.Count >= MaxHeldOpens) return false;
+        _heldOpens[endpoint] = new(data.ToArray(), header, open, _now);
+        Note(string.Create(CultureInfo.InvariantCulture, $"OpenConnection lobby type {open.A} waits for its endpoint proof"));
+        return true;
+    }
+
+    private void TickHeldOpens()
+    {
+        if (_heldOpens.Count == 0) return;
+        foreach (var (endpoint, held) in _heldOpens.ToArray())
+        {
+            if (_peers.Any(p => p.Endpoint.Equals(endpoint))) { _heldOpens.Remove(endpoint); continue; } // a retry got in
+            if (Allowed(held.Open.User, endpoint))
+            {
+                _heldOpens.Remove(endpoint);
+                try { ReceivePacket(held.Data, endpoint); }
+                catch (WireFormatException) { continue; }
+                if (_peers.Any(p => p.Endpoint.Equals(endpoint))) AdmittedLate?.Invoke(endpoint);
+                continue;
+            }
+            if (_now - held.At < HeldOpenMs && AwaitsProof?.Invoke(held.Open.User) == true) continue;
+            _heldOpens.Remove(endpoint); // no proof came: the refusal it was spared
+            Refuse(endpoint, held.Header, held.Open, held.Data.Length, 4);
+        }
     }
 
     private bool TakeRate(RelayPeer peer, NerdHeader header, int length)
