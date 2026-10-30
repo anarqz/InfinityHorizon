@@ -9,6 +9,12 @@ internal sealed record RelaySettings
     public bool Races { get; init; }
     /// <summary>A car meet world (lobby type 3, or 6 on the island): SessionHost's LobbyType and a server-owned CarMeetSynced. Null: free roam.</summary>
     public uint? CarMeetLobby { get; init; }
+    /// <summary>The world's weather sequence; null picks a random seed.</summary>
+    public int? WeatherSeed { get; init; }
+    /// <summary>A TimeSync re-bases the game's network clock (remote cars are timed against it), so it is refreshed only rarely.</summary>
+    public long TimeSyncMs { get; init; } = 30000;
+    /// <summary>When everybody invited has accepted, the invitation closes this soon instead of waiting out its window.</summary>
+    public long InviteCloseMs { get; init; } = 1500;
     public long QuietDropMs { get; init; } = 15000;
     public long KeepaliveMs { get; init; } = 500;
     public long ResendAfterMs { get; init; } = 500;
@@ -154,6 +160,7 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     /// <summary>This player's private universe while an event exists (0 outside, the shared default).</summary>
     internal byte Universe { get; set; }
     internal byte? PlayerSequence { get; set; }
+    internal long LastTimeSync { get; set; }
     internal bool UniverseDue { get; set; }
     internal IPEndPoint? CarHook { get; set; }
     internal long? CarStateAt { get; set; }

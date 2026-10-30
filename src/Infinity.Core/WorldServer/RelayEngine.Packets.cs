@@ -197,7 +197,7 @@ internal sealed partial class RelayEngine
     {
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
-        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing();
+        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather();
         if (_now - _lastResend >= 50)
         {
             _lastResend = _now;
@@ -223,7 +223,15 @@ internal sealed partial class RelayEngine
             foreach (var peer in _peers.ToArray())
                 if (!Allowed(peer.Xuid, peer.Endpoint) || _now - peer.LastSeen > _settings.QuietDropMs
                     || (!peer.Synced && _now - peer.JoinedAt > _settings.UnsyncedTimeoutMs)) Drop(peer);
-                else if (peer.Synced) Send(peer, [NerdCodec.Write(new NerdMessage.Ping(NowWire))], false);
+                else if (peer.Synced)
+                {
+                    if (_now - peer.LastTimeSync >= _settings.TimeSyncMs)
+                    {
+                        peer.LastTimeSync = _now;
+                        Send(peer, [NerdCodec.Write(new NerdMessage.Ping(NowWire)), NerdCodec.Write(new NerdMessage.TimeSync(peer.SyncIndex++, NowWire))], false);
+                    }
+                    else Send(peer, [NerdCodec.Write(new NerdMessage.Ping(NowWire))], false);
+                }
         }
         DropDoomed();
     }
