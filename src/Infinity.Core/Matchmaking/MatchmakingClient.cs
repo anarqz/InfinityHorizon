@@ -30,6 +30,10 @@ public interface IMatchmakingApi
     Task<MmResult<SeatNetworkAnswer>> SeatNetworkAsync(SeatNetworkRequest request,CancellationToken cancellation=default) =>
         Task.FromResult(new MmResult<SeatNetworkAnswer>(HttpStatusCode.NotFound,null,
             new MmError(HttpStatusCode.NotFound,"MM.WORLD_NOT_FOUND","unavailable",MmErrorKind.WorldNotFound,null,null),null));
+    /// <summary><c>POST /mm/v1/worlds/{worldId}/game-sessions</c> → 201 (§3.8): the host's car meet invitation session.</summary>
+    Task<MmResult<GameModeSession>> GameModeSessionAsync(string worldId, GameModeSessionRequest request, CancellationToken cancellation = default) =>
+        Task.FromResult(new MmResult<GameModeSession>(HttpStatusCode.NotFound, null,
+            new MmError(HttpStatusCode.NotFound, "MM.WORLD_NOT_FOUND", "unavailable", MmErrorKind.WorldNotFound, null, null), null));
     /// <summary>Retain only a short-lived credential for authenticated own-seat/host cleanup after suspension.</summary>
     void BeginCleanup() { }
     void EndCleanup() { }
@@ -192,6 +196,13 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     /// <summary><c>DELETE /mm/v1/worlds/{worldId}</c> → 204 (the host left free roam).</summary>
     public Task<MmResult<MmNone>> CloseAsync(string worldId, CancellationToken cancellation = default) =>
         SendAsync<MmNone>(HttpMethod.Delete, World(worldId), null, cancellation);
+
+    public Task<MmResult<GameModeSession>> GameModeSessionAsync(string worldId, GameModeSessionRequest request, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Xuids.Count is 0 or > GameModeSessionRequest.MaxMembers) throw new ArgumentException("1 to 12 XUIDs", nameof(request));
+        return SendAsync<GameModeSession>(HttpMethod.Post, World(worldId) + "/game-sessions", request, cancellation);
+    }
 
     public Task<MmResult<WorldMembers>> MembersAsync(string worldId, CancellationToken cancellation = default) =>
         SendAsync<WorldMembers>(HttpMethod.Get, World(worldId) + "/members", null, cancellation);

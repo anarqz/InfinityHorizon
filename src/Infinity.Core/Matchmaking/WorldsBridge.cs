@@ -83,6 +83,15 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private long _hostGeneration;
     private CancellationTokenSource? _hostStop;
     private string? _hostedWorldId;
+
+    /// <summary>A car meet invitation's shared session for the world this launcher hosts now; null when there is none or it was refused.</summary>
+    private async Task<(string Name, string Template)?> GameModeSessionAsync(string kind, IReadOnlyList<string> xuids, CancellationToken cancellation)
+    {
+        if (HostedWorldId is not { } worldId || xuids.Count is 0 or > GameModeSessionRequest.MaxMembers) return null;
+        var answer = await _mm.GameModeSessionAsync(worldId, new GameModeSessionRequest { Kind = kind, Xuids = xuids }, cancellation).ConfigureAwait(false);
+        if (answer is not { Ok: true, Value: { } session }) { _log?.Invoke($"world: car meet session refused ({answer.Error?.Code ?? "no answer"})"); return null; }
+        return (session.Name, session.TemplateName);
+    }
     private DateTimeOffset _nextAdmissionsRefresh;
     // OD-107: punches are read every 3 s only while a granted player is still connecting; else 10 s
     // (the 15 s announce carries punches too). A world with only its host closes after 5 minutes.
@@ -991,7 +1000,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var players = (uint)Math.Clamp((int)request.MaxPlayers, 2, 12);
             _relay = _startRelay?.Invoke(players);
             if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(RelayFailureKey?.Invoke() ?? relayUnavailableKey));
-            if (_relay is IntegratedWorldRelay integrated) {integrated.CrashContext = CrashContext;integrated.DiagnosticLog=_log;}
+            if (_relay is IntegratedWorldRelay integrated)
+            {
+                integrated.CrashContext = CrashContext; integrated.DiagnosticLog = _log;
+                integrated.GameSessions = GameModeSessionAsync;
+            }
             var relay = _relay;
             // CR-S57: the host's NAT test and relay round trips, read when the world opens (the host's relay legs already exist)
             var relayReport = await RelayReportAsync(stop.Token).ConfigureAwait(false);
