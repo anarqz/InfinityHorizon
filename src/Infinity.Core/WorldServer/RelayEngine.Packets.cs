@@ -131,7 +131,8 @@ internal sealed partial class RelayEngine
     {
         if (_settings.Races && obj.Router == 6 && obj.Handle.Kind == HandleKind.Transfer)
         { OnGameOptions(peer, obj); return null; }
-        var roadTripPlayer = IsRoadTrip && obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
+        // the game makes its RoadTripPlayerSynced in every session type (free roam and car meets too): relayed in every world
+        var roadTripPlayer = obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
             && (obj.Create ? obj.Type == 2 : peer.Objects.ContainsKey((9, obj.Handle.Id)));
         if (!roadTripPlayer)
         {
@@ -148,7 +149,7 @@ internal sealed partial class RelayEngine
         }
         else
         {
-            if (obj.Create) Note($"road trip: peer {peer.Index} created its RoadTripPlayerSynced (router 9, type 2, id {obj.Handle.Id}): accepted");
+            if (obj.Create && IsRoadTrip) Note($"road trip: peer {peer.Index} created its RoadTripPlayerSynced (router 9, type 2, id {obj.Handle.Id}): accepted");
             RoadTripPlayerUpdate(peer, obj.Payload);
         }
         var key = (obj.Router, obj.Handle.Id);
