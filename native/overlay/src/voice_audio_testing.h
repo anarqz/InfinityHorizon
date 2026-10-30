@@ -16,8 +16,12 @@ void ProcessCapture(const float *interleaved, size_t frames, uint32_t rate, uint
 size_t PullMix(float *out, size_t samples);
 // A fake millisecond clock for SeatTalking/Sending (< 0: the real clock).
 void SetClockMs(int64_t ms);
-// The decoder complexity the engine chose (7 NoLACE, 6 LACE under Wine or on a weak CPU).
+// The decoders' complexity now: 7 (NoLACE) at the start everywhere; 6/5 only under measured decode load.
 int DecoderComplexity();
+// Replaces each mix frame's measured decode cost (microseconds per 20 ms, all talkers); < 0 measures for real.
+void SetDecodeCostOverrideUs(double us);
+// The p95 decode cost of the controller's last full ~3 s window (0 until full).
+double DecodeCostP95Us();
 // Concealed 20 ms frames so far, over every seat.
 uint64_t ConcealedFrames();
 
