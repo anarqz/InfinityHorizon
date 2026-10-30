@@ -29,6 +29,15 @@ internal sealed class GameOptionsFields
     internal const int IdBits = 10;
     internal const int CarClassId = 30, MinimumPiId = 31, MaximumPiId = 32;
     internal const int EndConditionId = 418, NumLapsId = 419, NumTeamsId = 428, TeamScoringId = 429;
+    /// <summary>Var 0 GameTypePreset (7 King, 8 Infected); 420 TimedRaceLength (f32 seconds, read when EndConditionType is 2, time).</summary>
+    internal const int GameTypePresetId = 0, TimedRaceLengthId = 420;
+    /// <summary>
+    /// TagOptions, right after ScoringOptions: NoTagBacksTime 439 and GetAwayTime 440 (f32 seconds), then TagItBucket 441,
+    /// ItBucketBecomes 442, NotItBucketBecomes 443, TwoNotItsBecome 444 and NumPlayersPerIt 445 (8 bits each).
+    /// </summary>
+    internal const int NoTagBacksTimeId = 439, GetAwayTimeId = 440, TagItBucketId = 441, ItBucketBecomesId = 442,
+        NotItBucketBecomesId = 443, TwoNotItsBecomeId = 444, NumPlayersPerItId = 445;
+    internal const int KingPreset = 7, InfectedPreset = 8;
     /// <summary>A bucket name: a 5-bit count of up to 24 UTF-16 units.</summary>
     private const int Name = -24;
 
@@ -46,7 +55,7 @@ internal sealed class GameOptionsFields
         8, 8, 3, 4, 32, 32, 8, 32, 32, 8, 32, 32, 4, 4, 8, 3, 2, 3, 1, 3, 8, 8,
         .. Bucket, .. Bucket, .. Bucket, .. Bucket, .. Bucket, .. Bucket, .. Bucket, .. Bucket,
         32, 32, 2, 3, 1, 1, 1, 1, 8, 8, 32, 32, 32, 1, 8, 8, 8, 32, 32, 32, 3, 32,
-        // time, destination, tag, scoring, assists, hopper, weather and the top-level flags (436 is three floats)
+        // time, destination, scoring, tag (439-445), assists, hopper, weather and the top-level flags (436 is three floats)
         32, 8, 32, 32, 4, 1, 1, 1, 2, 3, 8, 1, 1, 1, 1, 8, 96, 1, 1,
         32, 32, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 2, 2, 2, 3, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 3, 32, 16, 16, 32, 32, 32, 32, 1, 1, 1,
@@ -118,4 +127,43 @@ internal sealed class GameOptionsFields
 
     /// <summary>ScoringOptions.NumTeams (0..2; 2 is "Teams: On"), when written.</summary>
     internal int? NumTeams => Number(NumTeamsId) is { } teams ? (int)teams : null;
+
+    /// <summary>GameTypePreset (7 King, 8 Infected), when written.</summary>
+    internal int? GameTypePreset => Number(GameTypePresetId) is { } preset ? (int)preset : null;
+
+    /// <summary>TimedRaceLength in seconds, when written as a finite value.</summary>
+    internal float? TimedRaceLength => Float(TimedRaceLengthId);
+
+    /// <summary>The tag rules, for a King or Infected event (null otherwise); a variable not written keeps the game's default.</summary>
+    internal TagRules? Tag => GameTypePreset switch
+    {
+        KingPreset => ReadTag(TagMode.King),
+        InfectedPreset => ReadTag(TagMode.Infected),
+        _ => null,
+    };
+
+    private TagRules ReadTag(TagMode mode)
+    {
+        int Byte(int id, int fallback) => Number(id) is { } value ? (int)value : fallback;
+        var players = Number(NumPlayersPerItId) is { } count ? (int?)count : null;
+        return new(mode, Byte(TagItBucketId, TagRules.It), Byte(ItBucketBecomesId, mode == TagMode.Infected ? TagRules.It : TagRules.NotIt),
+            Byte(NotItBucketBecomesId, TagRules.It), Byte(TwoNotItsBecomeId, TagRules.NotIt), players,
+            Float(NoTagBacksTimeId), Float(GetAwayTimeId));
+    }
+
+    private float? Float(int id) =>
+        Number(id) is { } bits && _values[id].Length == 32 && BitConverter.UInt32BitsToSingle((uint)bits) is var value && float.IsFinite(value)
+            ? value : null;
+}
+
+internal enum TagMode { King, Infected }
+
+/// <summary>
+/// A tag event's rules (TagOptions): which bucket is It, what each car of a hit between an It car and a not-It car becomes,
+/// and how many players share one It car at the start (King). Buckets are the game's 3-bit bucket indexes.
+/// </summary>
+internal sealed record TagRules(TagMode Mode, int ItBucket, int ItBecomes, int NotItBecomes, int TwoNotItsBecome, int? PlayersPerIt,
+    float? NoTagBacksTime, float? GetAwayTime)
+{
+    internal const int NotIt = 0, It = 1;
 }

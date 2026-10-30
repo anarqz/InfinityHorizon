@@ -94,6 +94,8 @@ public sealed partial class WorldsBridge
     {
         if (!RelayJoinerCapable || SendRelayLeg is null) return;
         var grant = Guid.Parse(verified.Grant);
+        // a seat given up after SeatGiveUp (or dropped unproven): a late renewal never pushes its leg again
+        if (Volatile.Read(ref _givenUpGrant) == verified.Grant) { await ClearLegAsync(cancellation).ConfigureAwait(false); return; }
         if (verified.Relay is not { } named || !IPAddress.TryParse(named.Addr, out var address)
             || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || named.Addr.Count(c => c == '.') != 3
             || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0
@@ -170,8 +172,10 @@ public sealed partial class WorldsBridge
                 }
                 finally { _proofWrites.Release(); }
                 _log(direct ? "worlds: the seat plays direct" : "worlds: the seat plays through its relay");
+                SeatPlays(direct ? "it plays direct" : "it plays through its relay");
                 return null;
             case RelayFallbackState.RelayUnavailable:
+                Volatile.Write(ref _unreachableGrant, grantId); // the give-up's reason: no route
                 // a refused fallback already said why (no_relay, relay_busy): one message per grant
                 if (refused) return null;
                 _log("worlds: relay fallback failed; the host could not be reached");

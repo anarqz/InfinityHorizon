@@ -99,6 +99,14 @@ internal static class NerdCodec
             case 20 or 21 or 35: return new NerdMessage.CarEvent(id, ObjectHandle.Read(ref reader, 7), reader.Take(CarEventBits(id)!.Value));
             case 36: return new NerdMessage.TagCollision(ObjectHandle.Read(ref reader, 7), ObjectHandle.Read(ref reader, 7),
                 [(byte)reader.Read(3), (byte)reader.Read(3), (byte)reader.Read(3), (byte)reader.Read(3)]);
+            case 37:
+            {
+                var cars = new ObjectHandle[NerdMessage.TagBuckets.Slots];
+                for (var i = 0; i < cars.Length; i++) cars[i] = ObjectHandle.Read(ref reader, 7);
+                var buckets = new byte[NerdMessage.TagBuckets.Slots];
+                for (var i = 0; i < buckets.Length; i++) buckets[i] = (byte)reader.Read(8);
+                return new NerdMessage.TagBuckets(cars, buckets);
+            }
             case 16 or 17 or 71 or 72 or 73 or 74: return new NerdMessage.Traffic(id, reader.Take(TrafficBits(id)!.Value));
             case 24:
             {
@@ -155,9 +163,15 @@ internal static class NerdCodec
             case NerdMessage.CarEvent m:
                 RequireLength(m.Body, CarEventBits(m.Kind)); m.Handle.Write(writer, 7); writer.Append(m.Body); break;
             case NerdMessage.TagCollision m:
-                if (m.Values.Length != 4) throw new WireFormatException(WireError.InvalidValue);
+                if (m.Values.Length != 4 || m.Values.Any(v => v > 7)) throw new WireFormatException(WireError.InvalidValue);
                 m.A.Write(writer, 7); m.B.Write(writer, 7);
                 foreach (var v in m.Values) writer.Push(v, 3);
+                break;
+            case NerdMessage.TagBuckets m:
+                if (m.Cars.Length != NerdMessage.TagBuckets.Slots || m.Buckets.Length != NerdMessage.TagBuckets.Slots
+                    || m.Cars.Any(c => c.Id > 127)) throw new WireFormatException(WireError.InvalidValue);
+                foreach (var car in m.Cars) car.Write(writer, 7);
+                foreach (var bucket in m.Buckets) writer.Push(bucket, 8);
                 break;
             case NerdMessage.Traffic m: RequireLength(m.Body, TrafficBits(m.Kind)); writer.Append(m.Body); break;
             case NerdMessage.DetachPart m:

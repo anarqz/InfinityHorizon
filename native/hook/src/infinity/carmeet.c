@@ -137,3 +137,137 @@ void fi_carmeet_apply(unsigned char *game_image) {
     log_append(cm_patch_same_session() ? "CARMEET: an offer of the current session is joined.\r\n"
                                        : "CARMEET: the found-session check is not as expected; left as is.\r\n");
 }
+
+/* ------------------------------------------------------------ ticket diagnostics */
+/* The game's POST .../hoppers/CarMeet_qos body (net.c, before it is forwarded): the scalar values
+   of its ticketAttributes and its giveUpDuration, one bounded line. Keys that could identify a
+   player or a session (xuid, gamertag, session, name, address, host, device, token, playerid, user,
+   member, party, friend) are left out; a string is shown only when short and plain, else <text>;
+   objects and arrays as {..} and [..]. Read only, never a protocol decision. */
+#define CM_TICKET_LINE 480u
+#define CM_TICKET_KEY 48u
+
+static void cm_line(char *line, size_t *n, const char *text, size_t length) {
+    for (size_t i = 0; i < length && text[i] && *n + 1 < CM_TICKET_LINE; ++i) line[(*n)++] = text[i];
+    line[*n] = 0;
+}
+
+static char cm_lower(char c) { return c >= 'A' && c <= 'Z' ? (char)(c + 32) : c; }
+
+/* `key` (length `length`) contains `needle` (lower case), ignoring case */
+static int cm_key_has(const char *key, size_t length, const char *needle) {
+    size_t m = 0;
+    while (needle[m]) ++m;
+    for (size_t i = 0; i + m <= length; ++i) {
+        size_t j = 0;
+        while (j < m && cm_lower(key[i + j]) == needle[j]) ++j;
+        if (j == m) return 1;
+    }
+    return 0;
+}
+
+static int cm_key_private(const char *key, size_t length) {
+    static const char *const words[] = {"xuid", "gamertag", "session", "name", "addr", "host", "device",
+                                        "token", "playerid", "user", "member", "party", "friend", "secure"};
+    for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); ++i) {
+        if (cm_key_has(key, length, words[i])) return 1;
+    }
+    return 0;
+}
+
+static size_t cm_space(const char *text, size_t size, size_t at) {
+    while (at < size && (text[at] == ' ' || text[at] == '\t' || text[at] == '\r' || text[at] == '\n')) ++at;
+    return at;
+}
+
+/* past the JSON string starting at `at` (its opening quote), or `size` when it does not end */
+static size_t cm_string_end(const char *text, size_t size, size_t at) {
+    for (++at; at < size; ++at) {
+        if (text[at] == '\\') ++at;
+        else if (text[at] == '"') return at + 1;
+    }
+    return size;
+}
+
+/* past the value at `at` (string, object, array or a bare literal) */
+static size_t cm_value_end(const char *text, size_t size, size_t at) {
+    if (at >= size) return size;
+    if (text[at] == '"') return cm_string_end(text, size, at);
+    if (text[at] == '{' || text[at] == '[') {
+        unsigned depth = 0;
+        while (at < size) {
+            char c = text[at];
+            if (c == '"') { at = cm_string_end(text, size, at); continue; }
+            if (c == '{' || c == '[') ++depth;
+            else if ((c == '}' || c == ']') && !--depth) return at + 1;
+            ++at;
+        }
+        return size;
+    }
+    while (at < size && text[at] != ',' && text[at] != '}' && text[at] != ']' && text[at] != ' ' && text[at] != '\r' &&
+           text[at] != '\n' && text[at] != '\t') {
+        ++at;
+    }
+    return at;
+}
+
+/* key=value for the line (the key already allowed); a plain short string as is, else <text> */
+static void cm_line_value(char *line, size_t *n, const char *key, size_t key_length, const char *value, size_t length) {
+    cm_line(line, n, " ", 1);
+    cm_line(line, n, key, key_length < CM_TICKET_KEY ? key_length : CM_TICKET_KEY);
+    cm_line(line, n, "=", 1);
+    if (!length) return;
+    if (value[0] == '{') { cm_line(line, n, "{..}", 4); return; }
+    if (value[0] == '[') { cm_line(line, n, "[..]", 4); return; }
+    if (value[0] == '"') {
+        int plain = length >= 2 && length - 2 <= 24;
+        for (size_t i = 1; plain && i + 1 < length; ++i) {
+            char c = value[i];
+            plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        }
+        if (plain) cm_line(line, n, value, length);
+        else cm_line(line, n, "<text>", 6);
+        return;
+    }
+    cm_line(line, n, value, length < 24 ? length : 24);
+}
+
+/* the value of the first `"key"` found at any depth in `text`: its start, or `size` */
+static size_t cm_find_value(const char *text, size_t size, const char *key) {
+    const char *found = text_find(text, size, key);
+    if (!found) return size;
+    size_t at = cm_space(text, size, (size_t)(found - text) + text_length(key));
+    if (at >= size || text[at] != ':') return size;
+    return cm_space(text, size, at + 1);
+}
+
+void fi_carmeet_ticket_log(const unsigned char *body, size_t size) {
+    const char *text = (const char *)body;
+    char line[CM_TICKET_LINE];
+    size_t n = 0;
+    line[0] = 0;
+    cm_line(line, &n, "CARMEET: ticket", 15);
+    size_t at = text && size ? cm_find_value(text, size, "\"ticketAttributes\"") : size;
+    if (!text || at >= size || text[at] != '{') {
+        cm_line(line, &n, " without ticketAttributes", 25);
+    } else {
+        size_t end = cm_value_end(text, size, at);
+        at = cm_space(text, end, at + 1);
+        for (unsigned count = 0; at < end && text[at] == '"' && count < 32; ++count) {
+            size_t key_end = cm_string_end(text, end, at);
+            const char *key = text + at + 1;
+            size_t key_length = key_end > at + 1 ? key_end - at - 2 : 0;
+            at = cm_space(text, end, key_end);
+            if (at >= end || text[at] != ':') break;
+            at = cm_space(text, end, at + 1);
+            size_t value_end = cm_value_end(text, end, at);
+            if (!cm_key_private(key, key_length)) cm_line_value(line, &n, key, key_length, text + at, value_end - at);
+            at = cm_space(text, end, value_end);
+            if (at < end && text[at] == ',') at = cm_space(text, end, at + 1);
+        }
+    }
+    at = text && size ? cm_find_value(text, size, "\"giveUpDuration\"") : size;
+    if (at < size) cm_line_value(line, &n, "giveUpDuration", 14, text + at, cm_value_end(text, size, at) - at);
+    cm_line(line, &n, "\r\n", 2);
+    log_append(line);
+}

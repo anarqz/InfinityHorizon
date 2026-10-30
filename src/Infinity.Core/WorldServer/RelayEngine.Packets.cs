@@ -87,6 +87,7 @@ internal sealed partial class RelayEngine
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own && NerdPayload.CarPosition(car.Body) is { } position:
                     peer.CompletionConfirmed = true;
                     peer.CarPosition = position;
+                    peer.CarId = car.Handle.Id;
                     carNow = car with { Handle = new(HandleKind.Relay, car.Handle.Id, peer.Index) };
                     break;
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own:
@@ -114,6 +115,7 @@ internal sealed partial class RelayEngine
                             break;
                     }
                     break;
+                case NerdMessage.TagCollision hit when _settings.Races: TagCollision(peer, hit); break;
                 case NerdMessage.FinaliseSessionEntry: peer.CompletionConfirmed = true; peer.FinaliseAsked = true; break;
                 // Server-only, traffic, collidable, chat and other layouts are parsed but never relayed.
             }

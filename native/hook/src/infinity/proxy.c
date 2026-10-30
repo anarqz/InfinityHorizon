@@ -1053,6 +1053,7 @@ static DWORD WINAPI px_thread(void *argument) {
                 continue;
             }
             if(px_proof_required() && (!px_proof_current() || !px_game_proved))continue;
+            fi_follow_datagram(packet, (size_t)n); /* an OpenConnection says the lobby type the game is in (follow.c) */
             if (px_have_world) {
                 px_send(packet, n, &px_world);
             } else if(!px_proof_required()) {

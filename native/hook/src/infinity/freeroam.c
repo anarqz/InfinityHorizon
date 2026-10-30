@@ -965,6 +965,7 @@ static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **ou
     (void)self;
     fr_log("association DestroyAsync -> completed.");
     azimuth_proxy_stop();
+    fi_follow_left(); /* no lobby type until the game's next OpenConnection */
     azimuth_world_left();
     azimuth_world_lan_left();
     if (fi_launch_protocol()) {
