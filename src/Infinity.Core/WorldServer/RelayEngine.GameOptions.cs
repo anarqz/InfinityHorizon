@@ -11,13 +11,23 @@ internal sealed partial class RelayEngine
         if (peer.Doomed) return [];
         if (NerdPayload.Ownership(body) is not { Router: 6, Type: 1, Handle.Kind: HandleKind.Transfer } request) return [];
         // A repeated ownership grant must not jump over an unresolved source fragment.
-        if (IsEventOwner(peer) && _gameOptions.PendingCount != 0) return [];
+        if (IsEventOwner(peer) && _gameOptions.PendingCount != 0) { Note($"options ownership request from peer {peer.Index}: held (fragments pending)"); return []; }
         var previous = peer.LobbySequences.GetValueOrDefault(request.Handle.Id, (Sequence: (byte)254, At: _now - 2000));
         if (_now - previous.At < 2000) return [];
         var sequence = AckWindow.SequenceNext(previous.Sequence);
         peer.LobbySequences[request.Handle.Id] = (sequence, _now);
-        if (_eventOwner is not null && !IsEventOwner(peer))
-            return [NerdPayload.TransferOwnership(6, request.Handle, sequence)];
+        if (_eventOwner is { } current && !IsEventOwner(peer))
+        {
+            // During an event its owner keeps the options. Between events they go to whoever opens the event menu next: the
+            // previous owner keeps them after its event (its game asks again only when it lost them), so nobody else waits on it.
+            if (_race is not null)
+            {
+                Note($"options ownership request from peer {peer.Index}: refused (peer {current} runs an event)");
+                return [NerdPayload.TransferOwnership(6, request.Handle, sequence)];
+            }
+            Note($"options ownership moves from peer {current} to peer {peer.Index} (no event running)");
+        }
+        else Note($"options ownership granted to peer {peer.Index}");
         _eventOwner = peer.Index;
         _gameOptions.BeginSourceEpoch(peer);
         if (_gameOptions.ObjectId != request.Handle.Id || _gameOptions.Records.Count == 0)

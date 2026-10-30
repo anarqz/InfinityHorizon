@@ -202,6 +202,10 @@ internal static class NerdCodec
     {
         switch (id)
         {
+            case 42: // MsgReadyRequestResponse, server to client: the lobby's event key and a 2-bit answer
+                ObjectHandle.Read(ref reader, 2);
+                reader.Skip(2);
+                return;
             case 39:
                 ObjectHandle.Read(ref reader, 2);
                 var count = (int)reader.Read(4);

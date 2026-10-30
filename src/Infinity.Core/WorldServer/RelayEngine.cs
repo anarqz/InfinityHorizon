@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 
@@ -27,6 +28,25 @@ internal sealed partial class RelayEngine
     internal Action<ulong, string, int?, int?, int?>? ValidationRejected { get; set; }
     /// <summary>An OpenConnection past the handshake rate: peer index (0 when refused), A (the lobby type), B, refusal reason or null.</summary>
     internal Action<byte, uint, uint, byte?>? ConnectionOpened { get; set; }
+    /// <summary>Event lifecycle lines (ownership, race requests, stages, readiness), peer indexes only: no identity or address.</summary>
+    internal Action<string>? WorldLog { get; set; }
+    private const int NotesPerWindow = 40;
+    private const long NoteWindowMs = 10000;
+    private long _noteWindow = long.MinValue;
+    private int _notes, _notesDropped;
+
+    // Bounded: a client repeating a request cannot flood the launcher log.
+    private void Note(string line)
+    {
+        if (WorldLog is not { } log) return;
+        if (_noteWindow == long.MinValue || _now - _noteWindow >= NoteWindowMs)
+        {
+            if (_notesDropped != 0) log(string.Create(CultureInfo.InvariantCulture, $"{_notesDropped} event lines suppressed"));
+            _noteWindow = _now; _notes = 0; _notesDropped = 0;
+        }
+        if (++_notes > NotesPerWindow) { _notesDropped++; return; }
+        log(line);
+    }
 
     private void Rejected(RelayPeer peer, string kind, int? message = null, int? router = null, int? value = null)
         => ValidationRejected?.Invoke(peer.Xuid, kind, message, router, value);

@@ -202,6 +202,14 @@ internal static class NerdPayload
         return output;
     }
 
+    /// <summary>MsgReadyRequestResponse (42): the lobby's event key, then the 2-bit answer (0 accepted).</summary>
+    internal static BitBuffer ReadyResponse(byte code)
+    {
+        var output = new BitBuffer().Push(42, 7);
+        new ObjectHandle(HandleKind.Own, 0).Write(output, 2);
+        return output.Push(code, 2);
+    }
+
     internal static BitBuffer StartRace(uint time)
     {
         var output = new BitBuffer().Push(40, 7);

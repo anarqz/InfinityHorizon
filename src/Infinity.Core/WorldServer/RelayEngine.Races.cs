@@ -51,11 +51,24 @@ internal sealed partial class RelayEngine
 
     private void RequestRace(RelayPeer peer)
     {
-        if (!IsEventOwner(peer) || _race is not null) return;
+        if (_race is { } running)
+        {
+            // An event ends as soon as every participant finished or left, so a running one still has someone racing or loading.
+            Note($"race request from peer {peer.Index}: ignored (peer {running.Owner}'s event is {Describe(running.Stage)})");
+            return;
+        }
+        if (!IsEventOwner(peer))
+        {
+            Note(_eventOwner is { } owner
+                ? $"race request from peer {peer.Index}: ignored (peer {owner} holds the event options)"
+                : $"race request from peer {peer.Index}: ignored (it never requested the event options)");
+            return;
+        }
         foreach (var other in _peers.Where(p => p.Synced && p.ConsoleValues[4] != 0)) SetConsoleVariables(other, (4, false));
         var others = _peers.Any(p => p != peer && p.Synced);
         var wait = others ? _settings.RaceInviteMs : 0;
         _race = new(peer, _now + wait);
+        Note($"race request from peer {peer.Index}: accepted, event opened ({_peers.Count(p => p != peer && p.Synced)} invited, {wait} ms to join)");
         if (others)
         {
             SetHostVariables((4, 1, 1), (6, 0, 1), (2, 1, 2), (3, unchecked(NowWire + (uint)wait), 32));
@@ -69,6 +82,7 @@ internal sealed partial class RelayEngine
         if (_race is not { Stage: RaceStage.Inviting } race) return;
         race.Stage = RaceStage.Gathering;
         race.StageUntil = _now + _settings.RacePrepareMs;
+        Note($"event: {race.Participants.Count} participant(s) selected, loading cars");
         foreach (var peer in _peers.Where(p => race.Participants.Contains(p.Index)))
         { ResetConsoleObservation(peer, 5); ResetConsoleObservation(peer, 0); }
         SetHostVariables((5, 1, 1), (2, 0, 2));
@@ -86,12 +100,16 @@ internal sealed partial class RelayEngine
 
     private void Ready(RelayPeer peer, bool ready)
     {
+        // The game waits for the answer to its Ready request (message 42: lobby key, then 0 = accepted).
+        SendSequenced(peer, [NerdPayload.ReadyResponse(0)]);
         // Membership belongs to this invitation, independently of a previously cached flag.
         if (_race is { Stage: RaceStage.Inviting } race)
         {
             if (ready && !race.Participants.Contains(peer.Index)) race.Participants.Add(peer.Index);
             else if (!ready && peer.Index != race.Owner) race.Participants.Remove(peer.Index);
+            Note($"ready request from peer {peer.Index}: ready={(ready ? 1 : 0)}, {race.Participants.Count} participant(s)");
         }
+        else Note($"ready request from peer {peer.Index}: ready={(ready ? 1 : 0)} outside an invitation");
         if (peer.ConsoleValues[4] == (ready ? 1UL : 0) && peer.ConsoleSequence is not null) return;
         SetConsoleVariables(peer, (4, ready));
     }
@@ -123,6 +141,7 @@ internal sealed partial class RelayEngine
             foreach (var peer in _peers.Where(p => race.Participants.Contains(p.Index))) ResetConsoleObservation(peer, 0);
             race.Stage = RaceStage.Grid;
             race.StageUntil = _now + _settings.RaceGridMs;
+            Note($"event: every car loaded, starting grid sent to {race.Participants.Count}");
             foreach (var receiver in race.Participants)
             {
                 var grid = race.Participants.Select(index => _peers.FirstOrDefault(p => p.Index == index))
@@ -138,6 +157,7 @@ internal sealed partial class RelayEngine
             foreach (var index in race.Participants)
                 if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SendSequenced(peer, [NerdPayload.StartRace(start)]);
             SetHostVariables((6, 1, 1), (9, start, 32));
+            Note($"event: race started with {race.Participants.Count}");
         }
     }
 
@@ -162,15 +182,24 @@ internal sealed partial class RelayEngine
     private void ReevaluateRaceCompletion()
     {
         if (_race is not { Stage: RaceStage.Started } race) return;
-        if (race.Participants.Count == 0 || race.Participants.All(race.Finished.Contains)
-            || race.FirstFinishAt is { } first && _now - first >= _settings.RaceFinishMs) EndRace();
+        if (race.Participants.Count == 0) EndRace("every participant left");
+        else if (race.Participants.All(race.Finished.Contains)) EndRace("every participant finished");
+        else if (race.FirstFinishAt is { } first && _now - first >= _settings.RaceFinishMs) EndRace("finish window over");
     }
 
-    private void EndRace()
+    private static string Describe(RaceStage stage) => stage switch
+    {
+        RaceStage.Inviting => "inviting", RaceStage.Gathering => "loading cars", RaceStage.Grid => "on the grid", _ => "racing",
+    };
+
+    private void EndRace(string why)
     {
         if (_race is not { } race) return;
         _race = null; ClearGameOptions();
-        if (_eventOwner == race.Owner) _eventOwner = null;
+        // The owner's game still holds the event options after its event and asks for them again only when it lost them, so it
+        // keeps them for its next race request; another player's ownership request takes them over between events.
+        if (_eventOwner == race.Owner && !_peers.Contains(race.OwnerPeer)) _eventOwner = null;
+        Note($"event closed: {why}");
         SetHostVariables((2, 0, 2), (4, 0, 1), (5, 0, 1), (6, 0, 1));
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));
@@ -181,7 +210,8 @@ internal sealed partial class RelayEngine
         if (_race is not { } race || !race.Participants.Remove(peer.Index)) return;
         race.Finished.Remove(peer.Index); race.InProgress.Remove(peer.Index);
         SetConsoleVariables(peer, (2, false), (4, false));
-        if (race.Participants.Count == 0 || ReferenceEquals(peer, race.OwnerPeer) && race.Stage != RaceStage.Started) EndRace();
+        if (race.Participants.Count == 0) EndRace("every participant left");
+        else if (ReferenceEquals(peer, race.OwnerPeer) && race.Stage != RaceStage.Started) EndRace("its owner left before the start");
         else ReevaluateRaceCompletion();
     }
 
@@ -201,7 +231,33 @@ internal sealed partial class RelayEngine
     {
         if (_race is not { } race) return;
         if (race.Stage == RaceStage.Inviting && _now >= race.InviteUntil) SelectParticipants();
-        else if (race.Stage is RaceStage.Gathering or RaceStage.Grid && _now >= race.StageUntil) EndRace();
+        else if (race.Stage is RaceStage.Gathering or RaceStage.Grid && _now >= race.StageUntil) StageTimedOut(race);
         else ReevaluateRaceCompletion();
     }
+
+    /// <summary>
+    /// Loading or the grid ran out of time. Those who reported keep the event: only the stuck players leave it. A game reports its
+    /// cars loaded only once it has loaded every other participant's car, so when nobody reported, one car may hold them all: the
+    /// newest joiner other than the owner leaves first, and the stage gets another step. With nobody left but the owner, it ends.
+    /// </summary>
+    private void StageTimedOut(Race race)
+    {
+        var variable = race.Stage == RaceStage.Gathering ? 5 : 0;
+        bool Reported(byte index) => _peers.FirstOrDefault(p => p.Index == index) is { } p && p.ConsoleValues[variable] != 0;
+        var stuck = race.Participants.Where(index => !Reported(index)).ToList();
+        if (stuck.Count == 0) return;
+        var stage = Describe(race.Stage);
+        List<byte> drop;
+        if (stuck.Count < race.Participants.Count) drop = stuck;
+        else if (stuck.FindLast(index => index != race.Owner) is var suspect and not 0) drop = [suspect];
+        else { EndRace($"nobody finished {stage} in time"); return; }
+        race.StageUntil = _now + Math.Min(_settings.RacePrepareMs, StuckStepMs);
+        Note($"event: {stage} timed out, peer(s) {string.Join(",", drop)} leave the event");
+        foreach (var index in drop)
+            if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) RemoveRaceParticipant(peer);
+            else race.Participants.Remove(index);
+        if (_race == race) RaceStep();
+    }
+
+    private const long StuckStepMs = 10000;
 }
