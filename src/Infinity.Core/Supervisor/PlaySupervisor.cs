@@ -633,6 +633,8 @@ public sealed class PlaySupervisor
                 if (done == exit)
                 {
                     crashContext.Freeze(child.ExitTimeUtc);
+                    // the hook's last frames can arrive together with its exit: the display-only ones still count
+                    if (nextFrame is not null && endpoint.Greeted) await DrainPresenceAsync(frames.Reader).ConfigureAwait(false);
                     return (await exit.ConfigureAwait(false), state);
                 }
                 if (done == accept)
@@ -1224,6 +1226,20 @@ public sealed class PlaySupervisor
     {
         if (received.Frame is Frame.Event { Kind: HookEvents.GameReadiness } sample)
             readiness.Observe(sample.Detail, received.Timestamp);
+    }
+
+    /// <summary>
+    /// After the game's exit, the frames its hook sent last (the pipe drains within a moment, ≤ 1 s): only CR-L41.3's progress and
+    /// car are emitted, since nothing waits on them; a frame that needs an answer or changes the session means nothing any more.
+    /// </summary>
+    private async Task DrainPresenceAsync(ChannelReader<ReceivedFrame> frames)
+    {
+        await Task.WhenAny(frames.Completion, Task.Delay(TimeSpan.FromSeconds(1), TimeProvider.System)).ConfigureAwait(false);
+        while (frames.TryRead(out var received))
+        {
+            if (received.Frame is Frame.Progress progress) _emit(new SupervisorEvent.GameProgress(progress.Level, progress.Credits));
+            else if (received.Frame is Frame.Car car) _emit(new SupervisorEvent.GameCar(car.CarKey));
+        }
     }
 
     internal static void StartReader(Stream stream, ChannelWriter<ReceivedFrame> writer, TimeProvider clock) =>
