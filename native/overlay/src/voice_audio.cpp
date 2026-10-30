@@ -3,10 +3,39 @@
 // the game's: capture (WASAPI shared, event-driven, the default communications microphone) → 48 kHz mono → 80 Hz
 // high-pass → AGC → RNNoise (noise suppression; its voice probability gates sending, 300 ms hangover) → Opus 20 ms
 // frames (SILK wideband 6 kbit/s, CVBR, complexity 10, no FEC/DTX) → repacketized 3 (or 6) per packet → SendFn; and
-// playback: per seat an adaptive 1-2 packet jitter buffer → Opus decoder (complexity 7 NoLACE, 6 LACE under Wine or on
-// a weak CPU) with deep PLC for gaps → mix → one XAudio2 source voice (3 × 20 ms queued, ~60 ms). Every failure logs
-// and turns voice off; a missing or unplugged device is retried every 2 s. Nothing here touches the network.
+// playback: per seat an adaptive 1-2 packet jitter buffer → Opus decoder with deep PLC for gaps → mix → one XAudio2
+// source voice (3 × 20 ms queued, ~60 ms). The decoder starts at complexity 7 (NoLACE) on every platform and steps
+// down only on measured decode cost (voice_audio_complexity.h): no platform-based quality choice, so a Deck player
+// gets what a Windows player gets. Releasing transmit (push-to-talk, mute) ends the spurt with a short packet that
+// carries the end flag. Every failure logs and turns voice off; a missing, unplugged or changed device is retried or
+// reopened every 2-3 s. Nothing here touches the network.
+//
+// Wine/Proton audit (Windows/Deck parity). Every API the engine calls, and why it behaves the same on both. "Known":
+// Wine's implementation (mmdevapi + winepulse, FAudio-backed xaudio2_9) has it, from its sources and Proton's use by
+// games; "inference": reasoned, not yet run here (SAURON's Deck run checks it: voice_audio_test + a device session).
+//
+// | API / behaviour                                | Windows | Wine/Proton                                   | Engine's choice                                        |
+// | ---------------------------------------------- | ------- | --------------------------------------------- | ------------------------------------------------------ |
+// | CoInitializeEx(MTA), CoCreateInstance(MMDeviceEnumerator) | yes | known (mmdevapi)                     | used as is                                             |
+// | GetDefaultAudioEndpoint(eCapture, eCommunications) | yes | known: accepted; every role maps to the one default (inference) | used; same device as eConsole there   |
+// | IMMDevice::GetId, Activate(IAudioClient)       | yes     | known                                         | used                                                   |
+// | GetMixFormat → WAVEFORMATEXTENSIBLE float32    | usual   | known: winepulse reports extensible float32 at the PulseAudio/PipeWire rate (44.1 or 48 kHz), N channels | any PCM16/24/32 or float32, any rate/channels, converted by voice_audio_dsp.h |
+// | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM / SRC_DEFAULT_QUALITY | Win10+ | newer Wine only; quality differs (inference) | **not used**: our own downmix + windowed-sinc resampler on both |
+// | Shared mode + AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 20 ms buffer | yes | known; Wine rounds the period to its own (~10 ms) | packet sizes are not assumed: every wake drains all packets; 500 ms wait timeout as a fallback |
+// | AUDCLNT_E_DEVICE_INVALIDATED on unplug         | yes     | not guaranteed: PulseAudio moves the stream (inference) | also: no data for 2 s = reopen; default device id polled every 3 s (capture and render) |
+// | IMMNotificationClient                          | yes     | partial (inference)                           | **not used**: polling works on both                    |
+// | MMCSS (AvSetMmThreadCharacteristics, avrt.dll) | yes     | stub / may be absent                          | **not used** (no avrt import); plain threads          |
+// | FTZ/DAZ via _mm_setcsr on each engine thread   | yes     | known: MXCSR is per thread CPU state, Wine keeps it | set on capture, playback and test-seam entry       |
+// | xaudio2_9.dll via LoadLibraryExW(SYSTEM32)     | yes     | known: Wine/Proton builtin, FAudio-backed     | loaded at run time (no import), as toast_audio.cpp     |
+// | XAudio2Create(0, XAUDIO2_DEFAULT_PROCESSOR)    | yes     | known (FAudio)                                | flags 0 only                                           |
+// | Mastering voice on the default device; float32 mono 48 kHz source voice; OnBufferEnd | yes | known (FAudio) | used; also a 100 ms wait timeout so a missed callback never starves the queue |
+// | GetState(XAUDIO2_VOICE_NOSAMPLESPLAYED)        | yes     | known (FAudio)                                | used                                                   |
+// | OnCriticalError on device loss                 | yes     | may not fire (inference)                      | plus the render default-device poll                    |
+// | Processor affinity / priority, GetActiveProcessorCount, IsProcessorFeaturePresent, wine_get_version | yes | yes | **not used**: no platform input anywhere |
+// | QueryPerformanceCounter, GetTickCount64, CreateThread, events | yes | known                                  | used (decode-cost timing, clocks, threads)             |
+// | libopus RTCD (cpuid: SSE4.1/AVX2)              | yes     | known: cpuid is the real CPU (Deck: Zen 2, AVX2) | same code paths on both CPUs with AVX2              |
 #include "voice_audio.h"
+#include "voice_audio_complexity.h"
 #include "voice_audio_dsp.h"
 #include "voice_audio_testing.h"
 
@@ -26,6 +55,7 @@
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <vector>
 
 #include "opus.h"
@@ -52,21 +82,11 @@ int64_t NowMs() {
 
 void FlushDenormals() { _mm_setcsr(_mm_getcsr() | 0x8040); } // FTZ | DAZ: RNNoise costs 3.7x without (§12.4)
 
-bool UnderWine() {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    return ntdll && GetProcAddress(ntdll, "wine_get_version");
-}
-
-// NoLACE is ~0.75 % of a weak core per talker (§12.4); LACE costs a third of that.
-int ChooseDecoderComplexity() {
-    if (UnderWine()) { Log("voice: Wine/Proton detected; decoder LACE (complexity 6)"); return 6; }
-    const DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    if (!IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) || cpus < 4) {
-        Log("voice: weak CPU (%lu threads, AVX2 %d); decoder LACE (complexity 6)", cpus,
-            IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) ? 1 : 0);
-        return 6;
-    }
-    return 7;
+double QpcUs() {
+    static const double ticks_per_us = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f.QuadPart / 1e6; }();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return c.QuadPart / ticks_per_us;
 }
 
 // ---------------------------------------------------------------- shared state
@@ -74,7 +94,8 @@ int ChooseDecoderComplexity() {
 std::atomic<bool> g_running{false}, g_failed{false}, g_allowed{false}, g_ptt{false};
 std::atomic<int> g_bundle{3};
 std::atomic<int64_t> g_sending_until{0};
-std::atomic<int> g_complexity{7};
+std::atomic<int> g_complexity{ComplexityController::kTop};
+std::atomic<double> g_cost_override{-1.0}, g_cost_p95{0.0};
 std::atomic<uint64_t> g_concealed{0};
 HANDLE g_stop = nullptr;
 
@@ -139,6 +160,8 @@ private:
         }
     }
     void Block() {
+        // transmit released (push-to-talk let go, muted, voice off) during a spurt: end it now, not at the bundle's end
+        if (prev_sent_ && !g_allowed.load()) EndSpurt();
         if (subs_ == 0) bundle_ = std::clamp(g_bundle.load(), 3, kMaxBundle) == 6 ? 6 : 3; // a packet's size is fixed at its start
         agc_.Process(sub_, kSub, prev_voice_, kVoiceThreshold);
         float clean[kSub];
@@ -158,19 +181,33 @@ private:
         open_ = false;
         if (!send) { prev_sent_ = false; return; }
         if (!prev_sent_) opus_encoder_ctl(enc_, OPUS_RESET_STATE); // a new spurt; the receiver resets at a ts gap
+        // the last packet of a spurt: the hangover runs out before the next block, unless new voice reopens it
+        const bool end = !ptt && since_voice_ + 1 > kHangoverSubs;
+        prev_sent_ = true;
+        EncodeAndSend(bundle_, ts, static_cast<uint8_t>((end ? 1 : 0) | (ptt ? 2 : 0)));
+    }
+    // The partial bundle, its last 10 ms padded with silence (one silent 20 ms frame if nothing is buffered), as a
+    // packet of 1..bundle frames with the end flag: listeners stop at once instead of concealing.
+    void EndSpurt() {
+        const int frames = std::max(1, (subs_ + 1) / 2);
+        std::fill(pcm_ + subs_ * kSub, pcm_ + frames * kFrame, 0.0f);
+        const uint32_t ts = frames_;
+        frames_ += static_cast<uint32_t>(frames);
+        subs_ = 0;
+        open_ = false;
+        prev_sent_ = false;
+        EncodeAndSend(frames, ts, static_cast<uint8_t>(1 | (g_ptt.load() ? 2 : 0)));
+    }
+    void EncodeAndSend(int frames, uint32_t ts, uint8_t flags) {
         opus_repacketizer_init(rp_);
-        for (int k = 0; k < bundle_; k++) {
+        for (int k = 0; k < frames; k++) {
             const int len = opus_encode_float(enc_, pcm_ + k * kFrame, kFrame, frames_buf_[k], static_cast<opus_int32>(sizeof frames_buf_[k]));
             if (len < 1) { Fail("the Opus encoder failed"); return; }
             if (opus_repacketizer_cat(rp_, frames_buf_[k], len) != OPUS_OK) { Fail("the Opus repacketizer failed"); return; }
         }
         const opus_int32 size = opus_repacketizer_out(rp_, packet_, static_cast<opus_int32>(sizeof packet_));
         if (size < 1) { Fail("the Opus repacketizer failed"); return; }
-        // the last packet of a spurt: the hangover runs out before the next block, unless new voice reopens it
-        const bool end = !ptt && since_voice_ + 1 > kHangoverSubs;
-        const uint8_t flags = static_cast<uint8_t>((end ? 1 : 0) | (ptt ? 2 : 0));
-        prev_sent_ = true;
-        g_sending_until = NowMs() + (end ? 0 : 20LL * bundle_ + 60);
+        g_sending_until = (flags & 1) ? 0 : NowMs() + 20LL * frames + 60;
         try {
             send_(packet_, static_cast<size_t>(size), flags, seq_++, ts);
         } catch (...) {
@@ -228,7 +265,7 @@ struct Seat {
 
 class Mixer {
 public:
-    explicit Mixer(int complexity) : complexity_(complexity) {}
+    Mixer() = default;
     ~Mixer() {
         for (auto &s : seats_) if (s.dec) opus_decoder_destroy(s.dec);
     }
@@ -236,9 +273,12 @@ public:
         int err = 0;
         OpusDecoder *probe = opus_decoder_create(kRate, 1, &err);
         if (err != OPUS_OK || !probe) { Log("voice: Opus decoder unavailable (%d)", err); return false; }
-        const bool ok = opus_decoder_ctl(probe, OPUS_SET_COMPLEXITY(complexity_)) == OPUS_OK;
+        bool ok = true;
+        for (int level = ComplexityController::kBottom; level <= ComplexityController::kTop; level++)
+            ok = ok && opus_decoder_ctl(probe, OPUS_SET_COMPLEXITY(level)) == OPUS_OK;
         opus_decoder_destroy(probe);
-        if (!ok) Log("voice: Opus decoder complexity %d refused", complexity_);
+        if (!ok) Log("voice: Opus decoder complexities 5-7 refused");
+        g_complexity = control_.Level();
         return ok;
     }
     void Receive(uint8_t seat, uint16_t seq, uint32_t ts, uint8_t flags, const uint8_t *opus, size_t size) {
@@ -287,7 +327,7 @@ private:
         if (s.dec) return true;
         int err = 0;
         s.dec = opus_decoder_create(kRate, 1, &err);
-        if (err != OPUS_OK || !s.dec || opus_decoder_ctl(s.dec, OPUS_SET_COMPLEXITY(complexity_)) != OPUS_OK) {
+        if (err != OPUS_OK || !s.dec || opus_decoder_ctl(s.dec, OPUS_SET_COMPLEXITY(control_.Level())) != OPUS_OK) {
             Fail("an Opus decoder could not be created");
             return false;
         }
@@ -314,6 +354,7 @@ private:
             if (!s.buffer.empty() && TsDiff(s.buffer.front().ts, s.next_ts) <= 0) {
                 Packet p = std::move(s.buffer.front());
                 s.buffer.pop_front();
+                decodes_ += p.frames;
                 const int got = opus_decode_float(s.dec, p.data.data(), static_cast<opus_int32>(p.data.size()), s.pcm, p.frames * kFrame, 0);
                 const uint32_t end_ts = p.ts + static_cast<uint32_t>(p.frames);
                 const int skip = TsDiff(s.next_ts, p.ts) * kFrame; // frames already concealed
@@ -332,6 +373,7 @@ private:
                 if (s.concealed_run == 0) { s.target = 2; s.stable = 0; }
                 if (s.concealed_run >= kMaxConcealFrames) { s.playing = false; return false; }
             }
+            decodes_++;
             const int got = opus_decode_float(s.dec, nullptr, 0, s.pcm, kFrame, 0); // deep PLC
             s.next_ts += 1;
             s.concealed_run++;
@@ -347,10 +389,14 @@ private:
         DrainInbox();
         std::fill(out, out + kFrame, 0.0f);
         const float volume = volume_.load();
+        decodes_ = 0;
+        int talkers = 0;
+        const double started = QpcUs();
         for (int i = 0; i < kSeats; i++) {
             Seat &s = seats_[i];
             if (silenced_[i].load()) { if (s.playing || !s.buffer.empty() || s.pcm_len) s.Clear(); continue; }
             int filled = 0;
+            const int decodes_before = decodes_;
             while (filled < kFrame) {
                 if (s.pcm_pos >= s.pcm_len && !Refill(s)) break;
                 const int take = std::min(kFrame - filled, s.pcm_len - s.pcm_pos);
@@ -358,11 +404,36 @@ private:
                 s.pcm_pos += take;
                 filled += take;
             }
+            if (filled || decodes_ != decodes_before) talkers++;
         }
+        const double cost = QpcUs() - started;
         for (int k = 0; k < kFrame; k++) out[k] = std::clamp(out[k], -1.0f, 1.0f);
+        // A packet decodes 3 (or 6) frames at once, so the raw time per mix frame is bursty. The load is the cost per
+        // 20 ms of audio times the talkers, reported once per 20 ms of audio decoded: the controller's frames are
+        // then 20 ms of talking time whatever the bundle.
+        if (decodes_) {
+            const int talking = std::max(talkers, 1);
+            const double load = g_cost_override.load() >= 0 ? g_cost_override.load() : cost * talking / decodes_;
+            for (int k = std::max(1, (decodes_ + talking / 2) / talking); k > 0; k--) Adapt(load);
+        }
+    }
+    // The measured decode cost of this frame (all talkers) drives the one adaptive rule.
+    void Adapt(double cost_us) {
+        const bool changed = control_.OnFrame(cost_us);
+        g_cost_p95 = control_.CurrentP95();
+        if (!changed) return;
+        const auto &c = control_.Last();
+        if (c.to < c.from)
+            Log("voice: decoder complexity %d -> %d: decode p95 %.0f us per 20 ms over the %.0f us budget", c.from, c.to, c.p95_us, control_.Budget());
+        else
+            Log("voice: decoder complexity %d -> %d: p95 %.0f us at %d, projected %.0f us at %d (budget %.0f us)", c.from, c.to, c.p95_us, c.from, c.projected_us, c.to, control_.Budget());
+        for (auto &s : seats_)
+            if (s.dec && opus_decoder_ctl(s.dec, OPUS_SET_COMPLEXITY(c.to)) != OPUS_OK) { Fail("decoder complexity change refused"); return; }
+        g_complexity = c.to;
     }
 
-    int complexity_;
+    ComplexityController control_;
+    int decodes_ = 0; // 20 ms frames decoded or concealed in this mix frame
     std::array<Seat, kSeats> seats_;
     std::array<std::atomic<bool>, kSeats> silenced_{};
     std::array<std::atomic<int64_t>, kSeats> last_rx_{};
@@ -440,12 +511,13 @@ void CaptureSession(HANDLE ready) {
         Log("voice: microphone open");
         FirstTry(0, true);
         g_capture->Restart();
-        ULONGLONG last_check = GetTickCount64();
+        ULONGLONG last_check = GetTickCount64(), last_data = last_check;
         for (;;) {
             HANDLE waits[2] = {g_stop, ready};
             if (WaitForMultipleObjects(2, waits, FALSE, 500) == WAIT_OBJECT_0) break;
             UINT32 packet = 0;
             while (SUCCEEDED(hr = capture->GetNextPacketSize(&packet)) && packet) {
+                last_data = GetTickCount64();
                 BYTE *data = nullptr;
                 UINT32 frames = 0;
                 DWORD flags = 0;
@@ -457,6 +529,9 @@ void CaptureSession(HANDLE ready) {
             }
             if (FAILED(hr)) { Log("voice: microphone lost (0x%08lx); retrying", static_cast<unsigned long>(hr)); break; }
             if (!g_running.load()) break;
+            // a live shared-mode stream always delivers (silence too); none for 2 s is a lost device that did not say
+            // so (Wine/PulseAudio may not report AUDCLNT_E_DEVICE_INVALIDATED)
+            if (GetTickCount64() - last_data > 2000) { Log("voice: microphone stalled; reopening"); break; }
             if (GetTickCount64() - last_check > 3000) { // the default communications microphone changed
                 last_check = GetTickCount64();
                 IMMDevice *now = nullptr;
@@ -517,7 +592,23 @@ struct EngineCallback final : IXAudio2EngineCallback {
     void STDMETHODCALLTYPE OnCriticalError(HRESULT) override { lost = true; SetEvent(event); }
 };
 
+// The default output's id (eConsole, what a default mastering voice uses), or empty: polled to follow a changed or
+// lost output on both platforms (no notification client).
+std::wstring DefaultRenderId(IMMDeviceEnumerator *enumerator) {
+    std::wstring result;
+    IMMDevice *device = nullptr;
+    LPWSTR id = nullptr;
+    if (enumerator && SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) && SUCCEEDED(device->GetId(&id))) result = id;
+    if (id) CoTaskMemFree(id);
+    SafeRelease(device);
+    return result;
+}
+
 void PlaybackSession(HMODULE library, HANDLE event) {
+    IMMDeviceEnumerator *enumerator = nullptr;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) enumerator = nullptr;
+    const std::wstring output = DefaultRenderId(enumerator);
+    ULONGLONG last_check = GetTickCount64();
     using Create = HRESULT(WINAPI *)(IXAudio2 **, UINT32, XAUDIO2_PROCESSOR);
     auto create = reinterpret_cast<Create>(GetProcAddress(library, "XAudio2Create"));
     IXAudio2 *engine = nullptr;
@@ -566,6 +657,10 @@ void PlaybackSession(HMODULE library, HANDLE event) {
             if (!started) { if (FAILED(voice->Start())) { Log("voice: playback start failed"); break; } started = true; }
             HANDLE waits[2] = {g_stop, event};
             if (WaitForMultipleObjects(2, waits, FALSE, 100) == WAIT_OBJECT_0) break;
+            if (GetTickCount64() - last_check > 3000) {
+                last_check = GetTickCount64();
+                if (DefaultRenderId(enumerator) != output) { Log("voice: default audio output changed; reopening"); break; }
+            }
         }
         if (engine_cb.lost.load()) Log("voice: audio output lost; retrying");
         voice->Stop();
@@ -574,6 +669,7 @@ void PlaybackSession(HMODULE library, HANDLE event) {
     if (voice) voice->DestroyVoice();
     if (master) master->DestroyVoice();
     if (engine) { engine->UnregisterForCallbacks(&engine_cb); engine->StopEngine(); engine->Release(); }
+    SafeRelease(enumerator);
 }
 
 DWORD WINAPI PlaybackThread(void *) {
@@ -614,9 +710,8 @@ void StopLocked() {
 bool CreateEngineLocked(SendFn send) {
     if (g_failed.load()) return false;
     try {
-        g_complexity = ChooseDecoderComplexity();
         auto capture = std::make_unique<CaptureChain>(std::move(send));
-        auto mixer = std::make_unique<Mixer>(g_complexity.load());
+        auto mixer = std::make_unique<Mixer>();
         if (!capture->Init() || !mixer->Init()) { Fail("a codec library failed to start"); return false; }
         g_capture = std::move(capture);
         g_mixer = std::move(mixer);
@@ -750,6 +845,8 @@ size_t PullMix(float *out, size_t samples) {
 
 void SetClockMs(int64_t ms) { g_fake_now = ms; }
 int DecoderComplexity() { return g_complexity.load(); }
+void SetDecodeCostOverrideUs(double us) { g_cost_override = us; }
+double DecodeCostP95Us() { return g_cost_p95.load(); }
 uint64_t ConcealedFrames() { return g_concealed.load(); }
 
 } // namespace testing
