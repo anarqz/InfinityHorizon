@@ -62,9 +62,9 @@ internal static class VoiceCodec
         return new(Header(data), data[16], opus.ToArray());
     }
 
-    internal static byte[] WriteUp(VoiceUp message) => Voice(VoiceUpAttribute, message.Header, null, message.Opus);
+    internal static byte[] WriteUp(VoiceUp message, ReadOnlySpan<byte> random = default) => Voice(VoiceUpAttribute, message.Header, null, message.Opus, random);
 
-    internal static byte[] WriteDown(VoiceDown message) => Voice(VoiceDownAttribute, message.Header, message.Seat, message.Opus);
+    internal static byte[] WriteDown(VoiceDown message, ReadOnlySpan<byte> random = default) => Voice(VoiceDownAttribute, message.Header, message.Seat, message.Opus, random);
 
     internal static VoiceControlUp? ParseControl(ReadOnlySpan<byte> data)
     {
@@ -77,7 +77,7 @@ internal static class VoiceCodec
         return new(op, BinaryPrimitives.ReadUInt64BigEndian(v[2..]), v[10], mutes);
     }
 
-    internal static byte[] WriteControl(VoiceControlUp message)
+    internal static byte[] WriteControl(VoiceControlUp message, ReadOnlySpan<byte> transaction = default)
     {
         if (message.Mutes.Count > MaxSeats || message.Op is < VoiceControlUp.Subscribe or > VoiceControlUp.Leave || message.Self > 3)
             throw new WireFormatException(WireError.InvalidValue);
@@ -86,7 +86,7 @@ internal static class VoiceCodec
         BinaryPrimitives.WriteUInt64BigEndian(v.AsSpan(2), message.Xuid);
         v[10] = message.Self; v[11] = (byte)message.Mutes.Count;
         for (var i = 0; i < message.Mutes.Count; i++) BinaryPrimitives.WriteUInt64BigEndian(v.AsSpan(12 + i * 8), message.Mutes[i]);
-        return StunCodec.Indication(ControlKind, ControlUpAttribute, v);
+        return StunCodec.Indication(ControlKind, ControlUpAttribute, v, transaction);
     }
 
     internal static VoiceStateDown? ParseState(ReadOnlySpan<byte> data)
@@ -104,7 +104,7 @@ internal static class VoiceCodec
         return new(v[1], v[2], seats);
     }
 
-    internal static byte[] WriteState(VoiceStateDown message)
+    internal static byte[] WriteState(VoiceStateDown message, ReadOnlySpan<byte> transaction = default)
     {
         if (message.Seats.Count > MaxSeats || message.Lobby > 1 || message.Bundle is not (3 or 6)) throw new WireFormatException(WireError.InvalidValue);
         var v = new byte[4 + message.Seats.Count * 10];
@@ -118,17 +118,19 @@ internal static class VoiceCodec
             BinaryPrimitives.WriteUInt64BigEndian(v.AsSpan(at + 1), seat.Xuid);
             v[at + 9] = seat.State;
         }
-        return StunCodec.Indication(ControlKind, StateDownAttribute, v);
+        return StunCodec.Indication(ControlKind, StateDownAttribute, v, transaction);
     }
 
     private static VoiceHeader Header(ReadOnlySpan<byte> data) =>
         new(data[9], BinaryPrimitives.ReadUInt16BigEndian(data[10..]), BinaryPrimitives.ReadUInt32BigEndian(data[12..]));
 
-    private static byte[] Voice(ushort attribute, VoiceHeader header, byte? seat, byte[] opus)
+    // random: the transaction id's random tail (4 bytes up, 3 down); empty draws it (golden vectors pass zeros)
+    private static byte[] Voice(ushort attribute, VoiceHeader header, byte? seat, byte[] opus, ReadOnlySpan<byte> random)
     {
         if (opus.Length is 0 or > MaxOpus) throw new WireFormatException(WireError.LengthLimit);
         Span<byte> transaction = stackalloc byte[12];
-        RandomNumberGenerator.Fill(transaction[8..]);
+        if (random.IsEmpty) RandomNumberGenerator.Fill(transaction[8..]);
+        else random.CopyTo(transaction[(seat is null ? 8 : 9)..]);
         transaction[0] = Version;
         transaction[1] = header.Flags;
         BinaryPrimitives.WriteUInt16BigEndian(transaction[2..], header.Sequence);

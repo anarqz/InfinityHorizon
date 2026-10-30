@@ -1,0 +1,24 @@
+// Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+// Infinity overlay: the voice audio engine's test seam (VC-3). The same processing, codec, jitter buffers and mixer as
+// Start(), with no device and no thread: the caller feeds capture buffers and pulls the mix. Used by the private
+// tests only; Stop() ends it like a real session.
+#pragma once
+
+#include "voice_audio.h"
+
+namespace fi::audio::testing {
+
+// Starts the engine without WASAPI or XAudio2. False: a library failed.
+bool StartHeadless(SendFn send);
+// One capture buffer as a device would give it: interleaved float32, any rate and channel count.
+void ProcessCapture(const float *interleaved, size_t frames, uint32_t rate, uint16_t channels);
+// The next `samples` of the 48 kHz mono mix (what the source voice would play).
+size_t PullMix(float *out, size_t samples);
+// A fake millisecond clock for SeatTalking/Sending (< 0: the real clock).
+void SetClockMs(int64_t ms);
+// The decoder complexity the engine chose (7 NoLACE, 6 LACE under Wine or on a weak CPU).
+int DecoderComplexity();
+// Concealed 20 ms frames so far, over every seat.
+uint64_t ConcealedFrames();
+
+} // namespace fi::audio::testing

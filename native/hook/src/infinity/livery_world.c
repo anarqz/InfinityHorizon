@@ -269,6 +269,9 @@ static DWORD WINAPI lw_worker(void *argument) {
         if (lw_serial != serial || !fi_launch_network_allowed()) break;
         if (n >= 2 && lw_be16(packet) == 0x3E91u) {
             azimuth_carstate_received(packet, n); /* the relay passing another car's headlights and roof */
+        } else if (n >= 2 && (lw_be16(packet) == 0x3E93u || lw_be16(packet) == 0x3E94u)) {
+            /* from the world itself: family and port, then the address (sockaddr_in6) */
+            if (from_size >= 24 && memory_equal(from, lw_world, 4) && memory_equal(from + 8, lw_world + 8, 16)) fi_voice_received(packet, n); /* voice chat for the overlay (voice_net.c) */
         } else if (n < 0) {
             Sleep(100); /* nothing sent from it yet (unbound), or the timeout */
         }
@@ -314,6 +317,11 @@ int azimuth_world_lan_send(const void *data, int size) {
     UINT_PTR s = lw_socket;
     if (!fi_launch_network_allowed() || !lw_lan || s == LW_INVALID) return 0;
     return lw_ws.sendto(s, (const char *)data, size, 0, lw_world, (int)sizeof(lw_world)) == size;
+}
+
+/* voice_net.c: the own socket speaks to a world on this network. */
+int azimuth_world_lan_ready(void) {
+    return fi_launch_network_allowed() && lw_lan && lw_socket != LW_INVALID;
 }
 
 /* freeroam.c and launch.c: the game left the world (or online was suspended). */

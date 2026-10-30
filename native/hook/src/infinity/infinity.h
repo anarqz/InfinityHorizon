@@ -199,6 +199,17 @@ void fi_gamer_card_apply(unsigned char *game_image);
 /* OD-147 VC-2b: the game's own player list and HUD show the overlay's voice chat (voice_ui.c;
    only with Infinity.cfg [hook] VoiceUi=1, guarded by the game build and its bytes). */
 void fi_voice_ui_apply(unsigned char *game_image);
+/* voice_net.c (OD-147 VC-2): FiOverlayHost.voice_send, and the voice kinds (0x3E93, 0x3E94) the
+   world's relay sends to this hook's sockets (proxy.c, carstate.c, livery_world.c): 1 when d is
+   one of them (passed to the overlay's fi_overlay_voice if well formed), 0 for any other kind. */
+int fi_voice_send(const uint8_t *datagram, uint32_t size);
+int fi_voice_received(const unsigned char *d, int n);
+int fi_voice_shape(const unsigned char *d, size_t n, unsigned kind, unsigned attribute);
+/* the sockets voice uses: carstate.c (host), proxy.c (joiner; passthrough), livery_world.c (LAN) */
+int azimuth_carstate_host_send(const void *data, int size);
+int azimuth_proxy_world_ready(void);
+int azimuth_proxy_passthrough(void);
+int azimuth_world_lan_ready(void);
 /* activity.c (OD-121): the odometer, input idle and screen wrappers (launcher sessions only). */
 void fi_activity_apply(unsigned char *game_image);
 /* "X-Fi-Activity: v1.<seq>.<odo_m>.<idle_s>.<rp>" for a RetrieveForUser request (no CRLF): its

@@ -19,6 +19,7 @@
    functions are looked up with GetProcAddress (as account.c does), the rest is in kernel32.def. */
 #include "infinity.h"
 #include "sign.h"
+#include "overlay_host.h"
 #include "../core/logging.h"
 #include "../core/support.h"
 #include "../core/sha256.h"
@@ -1880,15 +1881,19 @@ static DWORD WINAPI launch_thread(void *unused) {
    launcher names infinity-overlay.dll and its SHA-256; a worker thread checks the file, loads it
    (LoadLibraryExW with the full path, never in DllMain) and calls fi_overlay_start once. The
    overlay talks to the launcher on its own -ui pipe; Capture{4, ok} tells the launcher. */
-typedef struct {
-    unsigned abi, size;
-    const wchar_t *ui_pipe;
-    void *(*capture)(unsigned what);
-    void (*log)(const char *line);
-    unsigned flags;
-    int (*livery_sync)(unsigned timeout_ms); /* livery.c: retired by CR-S59, always unavailable */
-} LaunchOverlayHost;
+/* LaunchOverlayHost: overlay_host.h (64 bytes since OD-147 VC-2: voice_send, xuid) */
 typedef int (*LaunchOverlayStart)(const LaunchOverlayHost *host);
+
+/* The handoff's XUID (launch_claims.xuid, decimal) for FiOverlayHost.xuid: 0 without a ticket. */
+static uint64_t launch_claims_xuid(void) {
+    uint64_t v = 0;
+    for (size_t i = 0; i < sizeof(launch_claims.xuid) && launch_claims.xuid[i]; ++i) {
+        char c = launch_claims.xuid[i];
+        if (c < '0' || c > '9' || v > 1844674407370955161ull) return 0;
+        v = v * 10 + (uint64_t)(c - '0');
+    }
+    return v;
+}
 
 static wchar_t launch_overlay_path[PATH_CAPACITY];
 static unsigned char launch_overlay_sha[32];
@@ -1961,7 +1966,8 @@ static DWORD WINAPI launch_overlay_thread(void *unused) {
                 launch_log("overlay: the DLL has no fi_overlay_start.", 0, 0, "");
             } else {
                 LaunchOverlayHost host = {1u, (unsigned)sizeof(LaunchOverlayHost), launch_ui_pipe, 0,
-                                          launch_overlay_log, launch_overlay_flags, fi_livery_sync};
+                                          launch_overlay_log, launch_overlay_flags, fi_livery_sync,
+                                          fi_voice_send, launch_claims_xuid()};
                 int result = start(&host);
                 ok = result == 0;
                 if (ok) InterlockedExchangePointer((void *volatile *)&launch_overlay_module, dll);
