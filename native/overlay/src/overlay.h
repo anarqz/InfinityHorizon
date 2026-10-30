@@ -12,6 +12,7 @@
 #include "ui_frames.h"
 
 struct ImDrawList;
+struct ImVec2;
 
 namespace fi {
 
@@ -97,7 +98,21 @@ void SetActionResult(uint8_t action, uint8_t status, const std::string &message)
 void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
+bool WorldsMuteHint();        // X mutes the focused player (OD-147; the footer's hint)
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
+
+// --- voice chat (voice.cpp, OD-147, VOICE_CHAT.md §11): the launcher holds the state, the overlay shows it and asks
+// VoiceState and VoiceMember are in ui_frames.h (0x1B).
+void SetVoiceState(VoiceState state); // any thread
+VoiceState CurrentVoice();            // a copy, any thread
+// Asks the launcher (0x1C) and applies the change at once, so the screen follows the button before the answer.
+void VoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value);
+// A microphone drawn with lines (the icon font has none), centred on `c`, `size` tall; `muted` adds the slash,
+// cut in `behind` (the surface's colour). Colours are ImU32.
+void DrawMic(ImDrawList *dl, ImVec2 c, float size, uint32_t color, bool muted, uint32_t behind = 0xFF2A2626);
+// The talking players over the game while the guide is closed: the fallback until the game's own HUD shows them.
+void DrawTalkers(ImDrawList *dl, float width, float height, float dt);
+const char *MicModeName(MicMode mode);
 
 // --- the right pane (pane.cpp, OD-112): one component for every detail view, drawn beside the guide
 // The launcher's pane (DetailPane frame; any thread): a non-empty id opens it (and the guide), empty closes it.
@@ -136,8 +151,9 @@ void SendWorldsQuery(WorldFilter filter, bool not_full); // 0x14 WorldsQueryV2 (
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag);
 void SendPaneAction(const std::string &pane, const std::string &action);
 void SendJoinWorld(const std::string &world, const std::string &code);
-// any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode);
+// any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode. voice (OD-147): the lobby's voice chat
+void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, bool voice);
+void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value); // 0x1C
 void SendMyWorldQuery();
 // action: 1 close, 2 leave, 3 kick, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other)
 void SendWorldAction(uint8_t action, const std::string &xuid, const std::string &gamertag, uint8_t reason);

@@ -872,6 +872,8 @@ public sealed class PlaySupervisor
                                 await overlay.SendFrameAsync(worlds is null
                                     ? new Overlay.UiFrame.WorldAccess(false, _config.Text?["worlds.integrity_inconclusive"] ?? "Online installation verification is unavailable. Return to the launcher for help.")
                                     : await worlds.AccessFrameAsync(stop.Token).ConfigureAwait(false), stop.Token).ConfigureAwait(false);
+                                // OD-147: the voice settings at once, so the guide's Settings are right before any lobby
+                                if (worlds?.VoiceFrame() is { } helloVoice) await overlay.SendFrameAsync(helloVoice, stop.Token).ConfigureAwait(false);
                                 if (_config.OverlayStatus is { } overlayStatus)
                                     _ = overlayStatus.AttachAsync(overlay.SendFrameAsync, stop.Token);
                                 break;
@@ -917,7 +919,13 @@ public sealed class PlaySupervisor
                                 _ = ReplyAsync(overlay, async () => await worlds.CreateAsync(c.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
                             case Overlay.UiIncoming.Mine when worlds is not null && !suspended:
-                                _ = ReplyAsync(overlay, async () => await worlds.MyWorldAsync(stop.Token).ConfigureAwait(false), stop.Token);
+                                // the world, then its voice chat (OD-147; a protocol 3 overlay only: the channel drops it for older ones)
+                                _ = ReplyAsync(overlay, async () => await worlds.MyWorldAsync(stop.Token).ConfigureAwait(false), stop.Token)
+                                    .ContinueWith(_ => worlds.VoiceFrame() is { } voice ? overlay.SendFrameAsync(voice, stop.Token) : Task.CompletedTask,
+                                        CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+                                break;
+                            case Overlay.UiIncoming.Voice v when worlds is not null && !suspended:
+                                if (worlds.VoiceAct(v.Request) is { } voiceState) _ = overlay.SendFrameAsync(voiceState, stop.Token);
                                 break;
                             case Overlay.UiIncoming.Act a when worlds is not null && !suspended:
                                 // the result, then the world as it is now

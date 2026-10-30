@@ -230,9 +230,21 @@ std::vector<Tile> TilesFor(int tab, const Model &m) {
                          g_confirm_quit ? T("Your progress is saved", "Seu progresso fica salvo") : T("Closes Forza Horizon 2", "Fecha o Forza Horizon 2"), false, 5});
         break;
     }
-    default:
+    default: {
+        // OD-147: voice chat (VOICE_CHAT.md §5); A changes each one, the launcher keeps them per profile
+        const VoiceState v = CurrentVoice();
+        const bool enabled = v.flags & VoiceState::Enabled;
+        tiles.push_back({kIconMessage, enabled ? T("Voice chat: On", "Chat de voz: Ligado") : T("Voice chat: Off", "Chat de voz: Desligado"),
+                         enabled ? T("You hear and can talk to your lobby", "Você ouve e pode falar com seu lobby") : T("You hear nobody and nobody hears you", "Você não ouve ninguém e ninguém te ouve"),
+                         false, 6});
+        tiles.push_back({kIconMessage, std::string(T("Microphone: ", "Microfone: ")) + MicModeName(v.mic),
+                         T("RB + R3 also changes it while you drive", "RB + R3 também muda enquanto você dirige"), !enabled, 7});
+        const bool all_muted = !v.members.empty() && std::all_of(v.members.begin(), v.members.end(), [](const VoiceMember &m) { return m.state & VoiceMember::MutedByMe; });
+        tiles.push_back({kIconPeople, all_muted ? T("Unmute everyone", "Liberar todos") : T("Mute everyone", "Silenciar todos"),
+                         T("The players in your lobby now", "Os jogadores do seu lobby agora"), !enabled || v.members.empty(), 8});
         tiles.push_back({kIconGlobe, T("CONNECTION DETAILS", "DETALHES DA CONEXÃO"), "", false, 4});
         break;
+    }
     }
     return tiles;
 }
@@ -246,6 +258,22 @@ void Activate(const Tile &tile) {
     case 1: CloseSidebar(); break;
     case 2: PushToast(ToastKind::Info, T("Coming soon", "Em breve"), tile.title); break;
     case 4: g_connection_open = true; SendEvent(8, ""); break;
+    case 6: VoiceCommand(VoiceOp::Enabled, std::string(), (CurrentVoice().flags & VoiceState::Enabled) ? 0 : 1); break;
+    case 7:
+        if (!tile.locked) {
+            const MicMode next = static_cast<MicMode>((static_cast<uint8_t>(CurrentVoice().mic) + 1) % (kMicModeMax + 1));
+            VoiceCommand(VoiceOp::Mic, std::string(), static_cast<uint8_t>(next));
+        }
+        break;
+    case 8:
+        if (!tile.locked) {
+            const VoiceState v = CurrentVoice();
+            const bool all = std::all_of(v.members.begin(), v.members.end(), [](const VoiceMember &m) { return m.state & VoiceMember::MutedByMe; });
+            VoiceCommand(VoiceOp::MuteEveryone, std::string(), all ? 0 : 1);
+            PushToast(ToastKind::Info, all ? T("Everyone unmuted", "Todos liberados") : T("Everyone muted", "Todos silenciados"),
+                      T("Only the players in your lobby now", "Só os jogadores do seu lobby agora"));
+        }
+        break;
     case 5:
         if (!g_confirm_quit) {
             g_confirm_quit = true;
@@ -472,9 +500,15 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         FaceButton(dl, ImVec2(hx2 + 11 * s, hy + 10 * s), 11 * s, kYellow, "Y");
         TextAt(dl, f.small, ImVec2(hx2 + 28 * s, hy + 1 * s), kTextDim, T("Refresh", "Atualizar"));
     }
+    const bool mute_hint = g_tab == kTabWorlds && WorldsMuteHint();
+    if (mute_hint) { // OD-147; the brand gives it its place
+        hx2 += 112 * s;
+        FaceButton(dl, ImVec2(hx2 + 11 * s, hy + 10 * s), 11 * s, kBlue, "X");
+        TextAt(dl, f.small, ImVec2(hx2 + 28 * s, hy + 1 * s), kTextDim, T("Mute", "Silenciar"));
+    }
     const char *brand = "INFINITY";
     const ImVec2 bsz = Measure(f.tag, brand);
-    TextAt(dl, f.tag, ImVec2(x0 + pw - pad - bsz.x, hy + 4 * s), kPinkU, brand);
+    if (!mute_hint) TextAt(dl, f.tag, ImVec2(x0 + pw - pad - bsz.x, hy + 4 * s), kPinkU, brand);
 
     // the right pane (OD-112), beside the guide and sliding with it
     DrawPane(dl, b.x, 0, std::min(420 * s, width - b.x), height, ease);
@@ -663,6 +697,7 @@ void DrawUi(float width, float height, float dt) {
     }
     ImGui::GetIO().MouseDrawCursor = g_open;
     ImDrawList *dl = ImGui::GetForegroundDrawList();
+    DrawTalkers(dl, width, height, dt); // OD-147: under the guide, which dims it while open
     if (!g_connection_open) DrawSidebar(dl, width, height, dt, snapshot);
     if (g_connection_open) {
         ImGui::SetNextWindowPos(ImVec2(width / 2, height / 2), ImGuiCond_Always, ImVec2(0.5f, 0.5f));

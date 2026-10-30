@@ -100,6 +100,8 @@ public sealed partial class ShellViewModel
                 TrustedServerNow=session.Api.TrustedServerNow,
                 RelayReports=relayReports.ReportAsync,
                 ForceRelay=Infinity.Core.Matchmaking.RelayForce.Enabled(Log), // FI_RELAY_FORCE=1 (test switch): joins straight to the relay
+                // OD-147: voice chat's settings and this profile's mute history (voice.json), shown by the overlay
+                Voice = new Infinity.Core.Voice.VoiceRoom(new Infinity.Core.Voice.VoiceStore(_stateDirectory), mode, xuid),
             };
         };
     }

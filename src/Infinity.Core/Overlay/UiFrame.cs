@@ -75,7 +75,7 @@ public enum UiDirection
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 2;
+    public const ushort ProtocolVersion = 3;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -96,6 +96,15 @@ public abstract record UiFrame
 
     /// <summary>The lowest type that needs protocol 2.</summary>
     public const byte FirstProtocol2Type = 0x14;
+
+    /// <summary>The lowest type that needs protocol 3 (voice chat, OD-147).</summary>
+    public const byte FirstProtocol3Type = 0x1B;
+
+    /// <summary>The last type of the UI pipe.</summary>
+    public const byte LastType = 0x1C;
+
+    /// <summary>OD-147: the other players a <see cref="VoiceState"/> lists.</summary>
+    public const int MaxVoiceMembers = 16;
 
     private UiFrame()
     {
@@ -208,9 +217,10 @@ public abstract record UiFrame
     /// <summary>
     /// 0x0B, overlay → launcher: open a world (audience 0 everyone, 1 supporters, 2 friends, 3 private; latency 0 any,
     /// 1 &lt; 150, 2 &lt; 100, 3 &lt; 60 ms; <c>AnyMode</c> u8 0 the host's own mode, 1 open to Hardcore and Noob, OD-141).
-    /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode.
+    /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode. <c>Voice</c> (OD-147, after
+    /// <c>AnyMode</c>): the lobby's voice chat; an overlay before it sends none: on.
     /// </summary>
-    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false) : UiFrame
+    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false, bool Voice = true) : UiFrame
     {
         public override byte Type => 0x0B;
 
@@ -404,6 +414,55 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x1B, launcher → overlay (protocol 3, OD-147): the voice chat the overlay shows. <c>Flags</c>
+    /// <see cref="UiVoice"/>; <c>Mic</c> <see cref="UiMicMode"/>; <c>Members</c> the other players of the lobby (at most
+    /// 16; never this player, whose voice is <c>Mic</c>), each with its <see cref="UiVoiceMember"/> state.
+    /// </summary>
+    public sealed record VoiceState(byte Flags, byte Mic, IReadOnlyList<VoiceMember> Members) : UiFrame
+    {
+        public override byte Type => 0x1B;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        internal void Validate()
+        {
+            if (Flags > UiVoice.All || Mic > UiMicMode.Max) throw new ProtocolException("invalid voice state");
+            Bound(Members.Count, MaxVoiceMembers, "voice members");
+            foreach (var member in Members)
+            {
+                CheckXuid(member.Xuid, "voice member xuid");
+                Limit(member.Gamertag, 64, "voice member gamertag");
+                if (member.State > UiVoiceMember.All) throw new ProtocolException("invalid voice member state");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 0x1C, overlay → launcher (protocol 3, OD-147): <see cref="UiVoiceOp"/> with its <c>Value</c>; <c>Xuid</c> names
+    /// the player of ops 2 and 6 and is empty for the others.
+    /// </summary>
+    public sealed record VoiceCommand(byte Op, string Xuid, byte Value) : UiFrame
+    {
+        public override byte Type => 0x1C;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate()
+        {
+            if (Op is < UiVoiceOp.LobbyVoice or > UiVoiceOp.MuteForLobby) throw new ProtocolException("invalid voice op");
+            if (Op is UiVoiceOp.Mute or UiVoiceOp.MuteForLobby) CheckXuid(Xuid, "voice command xuid");
+            else if (Xuid.Length != 0) throw new ProtocolException("this voice op names no player");
+            if (Op == UiVoiceOp.Mic ? Value > UiMicMode.Max : Value > 1) throw new ProtocolException("invalid voice value");
+        }
+    }
+
+    /// <summary>A decimal XUID: 1-20 ASCII digits.</summary>
+    internal static void CheckXuid(string xuid, string what)
+    {
+        if (xuid.Length is 0 or > 20 || !xuid.All(char.IsAsciiDigit)) throw new ProtocolException($"invalid {what}");
+    }
+
     public static string PipeName(Handoff handoff)
     {
         ArgumentNullException.ThrowIfNull(handoff);
@@ -492,6 +551,7 @@ public abstract record UiFrame
                 w.U8(c.MaxPlayers);
                 w.U8(c.Latency);
                 w.Flag(c.AnyMode);
+                w.Flag(c.Voice);
                 break;
             case Hosted h:
                 w.U8(h.Result);
@@ -635,6 +695,24 @@ public abstract record UiFrame
                 w.U16(a.Height);
                 w.Fixed(a.Rgba, a.Rgba.Length, "avatar");
                 break;
+            case VoiceState v:
+                v.Validate();
+                w.U8(v.Flags);
+                w.U8(v.Mic);
+                w.U8((byte)v.Members.Count);
+                foreach (var member in v.Members)
+                {
+                    w.Str(member.Xuid);
+                    w.Str(member.Gamertag);
+                    w.U8(member.State);
+                }
+                break;
+            case VoiceCommand c:
+                c.Validate();
+                w.U8(c.Op);
+                w.Str(c.Xuid);
+                w.U8(c.Value);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -668,7 +746,7 @@ public abstract record UiFrame
         {
             return null;
         }
-        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > 0x1A)
+        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > LastType)
         {
             throw new ProtocolException($"unknown ui frame type 0x{buffer[4]:x2}");
         }
@@ -704,12 +782,14 @@ public abstract record UiFrame
             0x17 => new PlayerDetailsQuery(r.Str(), r.Str()),
             0x18 => new PaneActionClick(r.Str(), r.Str()),
             0x19 => new ServerStatus(r.Str(), r.U8(), r.U16(), r.U16(), r.U16(), r.U16(), r.U16(), r.U32(), r.U32()),
-            _ => DecodeAvatar(ref r),
+            0x1A => DecodeAvatar(ref r),
+            0x1B => DecodeVoiceState(ref r),
+            _ => new VoiceCommand(r.U8(), r.Str(), r.U8()),
         };
         r.End();
         switch (frame)
         {
-            case PlayerDetailsQuery or PaneActionClick or ServerStatus:
+            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -717,6 +797,17 @@ public abstract record UiFrame
         if (frame is UiEvent { Kind: UiEventKind.ConnectionDetails } query && query.Detail.Length != 0) throw new ProtocolException("Connection query detail must be empty");
         used = 4 + length.Value;
         return frame;
+    }
+
+    private static VoiceState DecodeVoiceState(ref WireReader r)
+    {
+        var flags = r.U8();
+        var mic = r.U8();
+        var count = r.U8();
+        Bound(count, MaxVoiceMembers, "voice members");
+        var members = new List<VoiceMember>(count);
+        for (var i = 0; i < count; ++i) members.Add(new VoiceMember(r.Str(), r.Str(), r.U8()));
+        return new VoiceState(flags, mic, members);
     }
 
     private static Avatar DecodeAvatar(ref WireReader r)
@@ -747,14 +838,18 @@ public abstract record UiFrame
         return new MyWorld(role, id, name, host, code, audience, players, max, named, members, r.Flag("MyWorld.anyMode"));
     }
 
-    /// <summary>0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode).</summary>
+    /// <summary>
+    /// 0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode); one before OD-147 after
+    /// <c>anyMode</c> (voice chat on).
+    /// </summary>
     private static CreateWorld DecodeCreate(ref WireReader r)
     {
         var name = r.Str();
         var audience = r.U8();
         var players = r.U8();
         var latency = r.U8();
-        return new CreateWorld(name, audience, players, latency, !r.IsEmpty && r.Flag("CreateWorld.anyMode"));
+        var anyMode = !r.IsEmpty && r.Flag("CreateWorld.anyMode");
+        return new CreateWorld(name, audience, players, latency, anyMode, r.IsEmpty || r.Flag("CreateWorld.voice"));
     }
 
     private static WorldsListV2 DecodeListV2(ref WireReader r)
@@ -863,6 +958,57 @@ public abstract record UiIncoming
     public sealed record PlayerDetails(UiFrame.PlayerDetailsQuery Request) : UiIncoming;
 
     public sealed record PaneClick(UiFrame.PaneActionClick Request) : UiIncoming;
+
+    /// <summary>Protocol 3 (OD-147): a voice chat change; answer with the new <see cref="UiFrame.VoiceState"/>.</summary>
+    public sealed record Voice(UiFrame.VoiceCommand Request) : UiIncoming;
+}
+
+/// <summary>One other player of <see cref="UiFrame.VoiceState"/>: <c>State</c> <see cref="UiVoiceMember"/>.</summary>
+public sealed record VoiceMember(string Xuid, string Gamertag, byte State);
+
+/// <summary><c>VoiceState.flags</c> (OD-147).</summary>
+public static class UiVoice
+{
+    /// <summary>The lobby's voice chat is on (meaningful with <see cref="LobbyKnown"/>).</summary>
+    public const byte LobbyOn = 1;
+
+    /// <summary>The lobby's switch is known (the host's own, or the host's relay said it).</summary>
+    public const byte LobbyKnown = 2;
+
+    /// <summary>This player hosts the lobby: it may change the switch and mute a player for everyone.</summary>
+    public const byte MayChange = 4;
+
+    /// <summary>Voice chat is on in this player's settings.</summary>
+    public const byte Enabled = 8;
+
+    public const byte All = 15;
+}
+
+/// <summary><c>VoiceState.mic</c> and the value of <see cref="UiVoiceOp.Mic"/>.</summary>
+public static class UiMicMode
+{
+    public const byte Open = 0, Muted = 1, PushToTalk = 2, Max = PushToTalk;
+}
+
+/// <summary><c>VoiceMember.state</c> bits.</summary>
+public static class UiVoiceMember
+{
+    public const byte MutedByMe = 1, Talking = 2, MutedForLobby = 4, Blocked = 8, All = 15;
+}
+
+/// <summary><c>VoiceCommand.op</c>.</summary>
+public static class UiVoiceOp
+{
+    /// <summary>The host turns the lobby's voice chat on (1) or off (0), at any time (OD-147).</summary>
+    public const byte LobbyVoice = 1;
+
+    public const byte Mute = 2;
+    public const byte MuteEveryone = 3;
+    public const byte Mic = 4;
+    public const byte Enabled = 5;
+
+    /// <summary>The host mutes a player for everyone in the lobby (1) or lifts it (0).</summary>
+    public const byte MuteForLobby = 6;
 }
 
 /// <summary>
@@ -1051,7 +1197,7 @@ public sealed class UiSession
     public bool Accepts(UiFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2);
+        return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1087,13 +1233,14 @@ public sealed class UiSession
             Protocol = hello.Protocol;
             return new UiIncoming.Hello(hello.OverlayVersion, [_status]);
         }
-        if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2)
+        if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }
         return frame switch
         {
             UiFrame.UiHello => throw new ProtocolException("second UiHello"),
+            UiFrame.VoiceCommand v => new UiIncoming.Voice(v),
             UiFrame.WorldsQueryV2 q => new UiIncoming.WorldsV2(q),
             UiFrame.PlayerDetailsQuery p => new UiIncoming.PlayerDetails(p),
             UiFrame.PaneActionClick c => new UiIncoming.PaneClick(c),

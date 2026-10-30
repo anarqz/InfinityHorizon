@@ -29,6 +29,17 @@
 //   0x0E MyWorld{u8 role, str worldId, str name, str host, str code, u8 audience, u8 players, u8 max, u8 named,
 //        u8 count <= 16 x {str xuid, str gamertag, u8 tier, u8 role, u8 friend}, u8 anyMode}; an older launcher's
 //        frame ends after the members (anyMode 0), and as before trailing bytes are ignored
+//   0x0B CreateWorld also carries u8 voice after anyMode (OD-147: the lobby's voice chat, 1 on; absent: on)
+// Protocol 3 (OD-147, docs/launcher/VOICE_CHAT.md §11): voice chat
+//   0x1B VoiceState, launcher -> overlay {u8 flags, u8 micMode (0 open, 1 muted, 2 push-to-talk),
+//        u8 count <= 16 x {str xuid (decimal), str gamertag (<= 64 B), u8 state}}, the other players of the lobby
+//        (never this one: its own voice is micMode and flag 3): flags bit 0 the lobby's voice chat is on, 1 it is known
+//        (else "set by the host"), 2 this player may change it (the host), 3 voice is on in this player's settings;
+//        state bit 0 muted by this player, 1 talking now, 2 muted for the lobby by the host, 3 voice blocked
+//   0x1C VoiceCommand, overlay -> launcher {u8 op, str xuid (decimal, empty for ops 1, 3, 4, 5), u8 value}:
+//        op 1 the lobby's voice chat (the host; value 0/1), 2 mute a player (1) or unmute (0), 3 mute (1) or unmute
+//        (0) everyone, 4 the mic mode (value as micMode), 5 voice on/off in the settings, 6 mute a player for the
+//        whole lobby (the host)
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -39,7 +50,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 2;
+constexpr uint16_t kUiProtocol = 3;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
@@ -222,14 +233,95 @@ inline std::vector<uint8_t> EncodePaneActionClick(const std::string &pane, const
     wire::Str(b, action);
     return b;
 }
-// 0x0B (protocol 1; anyMode CR-L43)
-inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode) {
+// 0x0B (protocol 1; anyMode CR-L43; voice OD-147)
+inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode,
+                                              bool voice = true) {
     std::vector<uint8_t> b;
     wire::Str(b, name);
     wire::U8(b, audience);
     wire::U8(b, max_players);
     wire::U8(b, latency);
     wire::Flag(b, any_mode);
+    wire::Flag(b, voice);
+    return b;
+}
+
+// ---------------------------------------------------------------- voice chat (protocol 3, OD-147)
+enum class MicMode : uint8_t { Open, Muted, PushToTalk };
+constexpr uint8_t kMicModeMax = static_cast<uint8_t>(MicMode::PushToTalk);
+constexpr size_t kMaxVoiceMembers = 16, kMaxXuid = 20;
+
+struct VoiceMember {
+    enum : uint8_t { MutedByMe = 1, Talking = 2, MutedForLobby = 4, Blocked = 8, All = 15 };
+    std::string xuid, gamertag; // the gamertag names a talker over the game (the HUD needs no roster)
+    uint8_t state = 0;
+};
+struct VoiceState {
+    enum : uint8_t { LobbyOn = 1, LobbyKnown = 2, MayChange = 4, Enabled = 8, AllFlags = 15 };
+    uint8_t flags = 0;
+    MicMode mic = MicMode::Open;
+    std::vector<VoiceMember> members;
+    bool lobby_on() const { return (flags & LobbyKnown) && (flags & LobbyOn); }
+    uint8_t StateOf(const std::string &xuid) const {
+        for (const auto &m : members)
+            if (m.xuid == xuid) return m.state;
+        return 0;
+    }
+};
+
+enum class VoiceOp : uint8_t { LobbyVoice = 1, Mute = 2, MuteEveryone = 3, Mic = 4, Enabled = 5, MuteForLobby = 6 };
+constexpr uint8_t kVoiceOpMax = static_cast<uint8_t>(VoiceOp::MuteForLobby);
+
+// A decimal XUID, 1 to 20 ASCII digits (the launcher's rule).
+inline bool XuidText(const std::string &xuid) {
+    if (xuid.empty() || xuid.size() > kMaxXuid) return false;
+    for (char c : xuid)
+        if (c < '0' || c > '9') return false;
+    return true;
+}
+
+// Ops 2 and 6 name a player; the others never do.
+inline bool VoiceOpNamesPlayer(VoiceOp op) { return op == VoiceOp::Mute || op == VoiceOp::MuteForLobby; }
+
+inline std::vector<uint8_t> EncodeVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value) {
+    std::vector<uint8_t> b;
+    wire::U8(b, static_cast<uint8_t>(op));
+    wire::Str(b, VoiceOpNamesPlayer(op) ? xuid : std::string());
+    wire::U8(b, value);
+    return b;
+}
+
+inline bool DecodeVoiceState(const uint8_t *body, size_t size, VoiceState &out) {
+    wire::Reader r{body, size};
+    VoiceState v;
+    v.flags = r.U8();
+    const uint8_t mic = r.U8();
+    if (v.flags > VoiceState::AllFlags || mic > kMicModeMax) r.ok = false;
+    v.mic = static_cast<MicMode>(mic);
+    const size_t count = r.Count(kMaxVoiceMembers);
+    for (size_t i = 0; i < count && r.ok; ++i) {
+        VoiceMember m;
+        m.xuid = r.Text(kMaxXuid);
+        m.gamertag = r.Text(kMaxGamertag);
+        m.state = r.U8();
+        if (!XuidText(m.xuid) || m.state > VoiceMember::All) r.ok = false;
+        v.members.push_back(std::move(m));
+    }
+    if (!r.Done()) return false;
+    out = std::move(v);
+    return true;
+}
+
+inline std::vector<uint8_t> EncodeVoiceState(const VoiceState &v) {
+    std::vector<uint8_t> b;
+    wire::U8(b, v.flags);
+    wire::U8(b, static_cast<uint8_t>(v.mic));
+    wire::U8(b, static_cast<uint8_t>(v.members.size()));
+    for (const auto &m : v.members) {
+        wire::Str(b, m.xuid);
+        wire::Str(b, m.gamertag);
+        wire::U8(b, m.state);
+    }
     return b;
 }
 

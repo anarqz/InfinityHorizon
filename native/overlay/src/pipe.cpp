@@ -38,6 +38,10 @@
 // PaneActionClick go to the launcher. 0x19 ServerStatus and 0x1A Avatar (CR-L40 §1.3) fill the
 // guide's bottom block and its header avatar.
 //
+// Protocol 3 (OD-147; layouts in ui_frames.h): 0x1B VoiceState from the launcher (the lobby's voice chat, the mic
+// mode, each player's mute and talking state); 0x1C VoiceCommand to it (the host's lobby switch, mutes, the mic
+// mode, voice on/off). 0x0B CreateWorld ends with u8 voice.
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
@@ -109,6 +113,12 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         AvatarImage avatar;
         if (DecodeAvatar(body, size, avatar)) SetAvatar(std::move(avatar));
         else Log("ui pipe: malformed Avatar ignored");
+        break;
+    }
+    case 0x1B: {
+        VoiceState voice;
+        if (DecodeVoiceState(body, size, voice)) SetVoiceState(std::move(voice));
+        else Log("ui pipe: malformed VoiceState ignored");
         break;
     }
     case 0x13: {
@@ -356,9 +366,11 @@ void SendJoinWorld(const std::string &world, const std::string &code) {
     Queue(0x09, body);
 }
 
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode) {
-    Queue(0x0B, EncodeCreateWorld(name, audience, max_players, latency, any_mode));
+void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, bool voice) {
+    Queue(0x0B, EncodeCreateWorld(name, audience, max_players, latency, any_mode, voice));
 }
+
+void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value) { Queue(0x1C, EncodeVoiceCommand(op, xuid, value)); }
 
 void SendMyWorldQuery() { Queue(0x0D, {}); }
 
