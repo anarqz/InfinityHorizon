@@ -1331,6 +1331,122 @@ static int net_hold_progress(NetRequest *request) {
            buffer_append(&request->response_body, empty_reply, sizeof(empty_reply));
 }
 
+/* A call the server does not serve (404 GAME.NOT_SERVED) is often retried by the game at once and
+   without end (Scoreboard.GetRival, 2026-10-30: about 18 a second until the game gave up). For
+   NET_BACKOFF_MS after such an answer, the same call (X-ClassName + X-Method) gets that answer from
+   here, after NET_BACKOFF_DELAY_MS, instead of going to the server again. Bounded: a few calls, a
+   short body, the oldest entry replaced. Nothing else changes (only this exact answer is replayed). */
+#define NET_BACKOFF_SLOTS 16
+#define NET_BACKOFF_BODY 512
+#define NET_BACKOFF_MS 30000u
+#define NET_BACKOFF_DELAY_MS 1000u
+typedef struct {
+    unsigned key;
+    ULONGLONG until;
+    unsigned size;
+    char body[NET_BACKOFF_BODY];
+} NetBackoff;
+static NetBackoff net_backoffs[NET_BACKOFF_SLOTS];
+static SRWLOCK net_backoff_lock = SRWLOCK_INIT;
+
+/* FNV-1a of one header's value (case kept), folded into `hash`; 0 when the header is absent. */
+static unsigned net_header_hash(const wchar_t *headers, const wchar_t *name, unsigned hash) {
+    size_t name_length = wide_length(name);
+    for (const wchar_t *line = headers; line && *line;) {
+        size_t length = 0;
+        while (line[length] && line[length] != L'\n') ++length;
+        if (length > name_length && line[name_length] == L':' && wide_starts_ignore_case(line, length, name)) {
+            const wchar_t *value = line + name_length + 1;
+            size_t value_length = length - name_length - 1;
+            while (value_length && *value == L' ') ++value, --value_length;
+            while (value_length && (value[value_length - 1] == L'\r' || value[value_length - 1] == L' ')) --value_length;
+            for (size_t i = 0; i < value_length; ++i) hash = (hash ^ (unsigned)value[i]) * 16777619u;
+            return hash ^ 0x5bd1e995u;
+        }
+        line += line[length] ? length + 1 : length;
+    }
+    return 0;
+}
+
+static unsigned net_call_key(NetRequest *request) {
+    if (!net_is_forza_service(buffer_wide(&request->url))) return 0;
+    const wchar_t *headers = buffer_wide(&request->request_headers);
+    unsigned cls = net_header_hash(headers, L"X-ClassName", 2166136261u);
+    unsigned key = cls ? net_header_hash(headers, L"X-Method", cls) : 0;
+    return key ? key : 0;
+}
+
+static int net_body_has(const Buffer *body, const char *text) {
+    size_t n = 0;
+    while (text[n]) ++n;
+    const char *data = (const char *)body->data;
+    for (size_t i = 0; data && i + n <= body->size; ++i) {
+        size_t k = 0;
+        while (k < n && data[i + k] == text[k]) ++k;
+        if (k == n) return 1;
+    }
+    return 0;
+}
+
+/* After a forwarded answer: a NOT_SERVED one starts (or renews) its call's backoff. */
+static void net_backoff_note(NetRequest *request) {
+    unsigned key;
+    if (request->status != 404 || request->response_body.size > NET_BACKOFF_BODY ||
+        !net_body_has(&request->response_body, "\"GAME.NOT_SERVED\"") || !(key = net_call_key(request))) {
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    int fresh = 1;
+    AcquireSRWLockExclusive(&net_backoff_lock);
+    NetBackoff *slot = &net_backoffs[0];
+    for (unsigned i = 0; i < NET_BACKOFF_SLOTS; ++i) {
+        if (net_backoffs[i].key == key) { slot = &net_backoffs[i]; fresh = net_backoffs[i].until <= now; break; }
+        if (net_backoffs[i].until < slot->until) slot = &net_backoffs[i];
+    }
+    slot->key = key;
+    slot->until = now + NET_BACKOFF_MS;
+    slot->size = (unsigned)request->response_body.size;
+    memory_copy(slot->body, request->response_body.data, slot->size);
+    ReleaseSRWLockExclusive(&net_backoff_lock);
+    if (fresh) log_append("NETWORK: a call the server does not serve: its repeats are answered here for 30 s, "
+                          "one a second at most (not sent).\r\n");
+}
+
+/* Before forwarding: a call in its backoff gets the server's last answer, after a pause. */
+static int net_answer_backoff(NetRequest *request) {
+    unsigned key = net_call_key(request);
+    if (!key) return 0;
+    char body[NET_BACKOFF_BODY];
+    unsigned size = 0;
+    int hit = 0;
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockShared(&net_backoff_lock);
+    for (unsigned i = 0; i < NET_BACKOFF_SLOTS; ++i) {
+        if (net_backoffs[i].key == key && net_backoffs[i].until > now) {
+            size = net_backoffs[i].size;
+            memory_copy(body, net_backoffs[i].body, size);
+            hit = 1;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&net_backoff_lock);
+    if (!hit) return 0;
+    for (unsigned waited = 0; waited < NET_BACKOFF_DELAY_MS && !request->aborted; waited += 100) Sleep(100);
+    request->status = 404;
+    buffer_free(&request->status_text);
+    buffer_free(&request->response_headers);
+    buffer_free(&request->response_body);
+    return buffer_append_wide(&request->status_text, L"Not Found") &&
+           buffer_append_wide(&request->response_headers, L"Content-Type: application/json\r\n") &&
+           buffer_append(&request->response_body, body, size);
+}
+
+static int net_forward_noted(NetRequest *request, HRESULT *error) {
+    int answered = net_forward(request, error);
+    if (answered) net_backoff_note(request);
+    return answered;
+}
+
 static DWORD WINAPI net_worker(void *parameter) {
     NetRequest *request = parameter;
     HRESULT error = NET_OFFLINE_ERROR;
@@ -1344,8 +1460,8 @@ static DWORD WINAPI net_worker(void *parameter) {
     }
     int answered = net_mode == NET_MODE_PROXY && !request->aborted &&
                    (net_answer_without_profile(request) || net_answer_foreign(request) || net_answer_livery(request) ||
-                    net_answer_no_line(request) || net_hold_progress(request) ||
-                    net_forward(request, &error));
+                    net_answer_no_line(request) || net_hold_progress(request) || net_answer_backoff(request) ||
+                    net_forward_noted(request, &error));
     if (request->aborted) {
         answered = 0;
         error = E_ABORT;
