@@ -158,6 +158,8 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal Queue<BitBuffer> Queue { get; } = new();
     internal int QueueBits { get; set; }
     internal bool Doomed { get; set; }
+    /// <summary>Why the peer was first doomed, for the drop's log line (no identity or address).</summary>
+    internal string? DoomedBy { get; set; }
     internal CarState? CarState { get; set; }
     internal System.Numerics.Vector3? CarPosition { get; set; }
     /// <summary>The last car prediction, sent again with a newer time when the event boundary moves.</summary>

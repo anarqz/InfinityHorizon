@@ -105,7 +105,18 @@ internal sealed partial class RelayEngine
 
     private static uint WireAt(long engineMs) => unchecked((uint)engineMs + 1);
 
-    private void RoadTripUpdate(params (byte Variable, long Value)[] variables) => RoadTripBroadcast(RoadTripVariables(variables));
+    private long? _roadTripStateSent; // the last RoadTripSynced State an update carried, for its one log line per change
+
+    private void RoadTripUpdate(params (byte Variable, long Value)[] variables)
+    {
+        foreach (var (variable, value) in variables)
+        {
+            if (variable != 8 || _roadTripStateSent == value) continue;
+            _roadTripStateSent = value;
+            Note(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"road trip: state {(RoadTripState)(byte)value} ({value}) sent"));
+        }
+        RoadTripBroadcast(RoadTripVariables(variables));
+    }
 
     // one sequence for the world's RoadTripSynced: every update goes to everybody (a repeat changes nothing for those already there)
     private void RoadTripBroadcast(BitBuffer variables)

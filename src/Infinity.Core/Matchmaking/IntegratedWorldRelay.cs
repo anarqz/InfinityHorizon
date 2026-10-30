@@ -69,6 +69,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
 
     public Task<IReadOnlyList<string>> PeersAsync(CancellationToken cancellation) => _transport.PeersAsync(cancellation);
 
+    /// <summary>The players in the world's Road Trip and car meets (<see cref="IntegratedHostRelay.LobbyPlayers"/>).</summary>
+    public int LobbyPlayers => Running ? _transport.LobbyPlayers : 0;
+
     /// <summary>Fresh grants/revocations every three seconds; this read never renews the world's host lease.</summary>
     public async Task RefreshAdmissionsAsync(IMatchmakingApi matchmaking, CancellationToken cancellation = default)
     {
