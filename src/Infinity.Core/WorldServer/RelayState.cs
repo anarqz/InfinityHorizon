@@ -11,6 +11,8 @@ internal sealed record RelaySettings
     public uint? CarMeetLobby { get; init; }
     /// <summary>An online Road Trip world (lobby type 1). Null: not one.</summary>
     public RoadTripSettings? RoadTrip { get; init; }
+    /// <summary>T11: refuse a Ready from a car outside the event's class/PI (MsgReadyRequestResponse 1). Off until verified in game.</summary>
+    public bool EnforceCarRule { get; init; }
     /// <summary>The world's weather sequence; null picks a random seed.</summary>
     public int? WeatherSeed { get; init; }
     /// <summary>A TimeSync re-bases the game's network clock (remote cars are timed against it), so it is refreshed only rarely.</summary>
@@ -164,6 +166,11 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal byte? PlayerSequence { get; set; }
     internal long LastTimeSync { get; set; }
     internal byte? RoadTripSelectionSequence { get; set; }
+    /// <summary>The car this player chose (PlayerChoices CarClass and PerfIndex), once a car-choice update showed it.</summary>
+    internal int? CarClass { get; set; }
+    internal float CarPi { get; set; } = float.NaN;
+    /// <summary>A Ready refused for the car: it counts as soon as the player's next car fits.</summary>
+    internal bool ReadyRefused { get; set; }
     internal bool UniverseDue { get; set; }
     internal IPEndPoint? CarHook { get; set; }
     internal long? CarStateAt { get; set; }

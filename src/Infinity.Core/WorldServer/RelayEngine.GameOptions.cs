@@ -78,6 +78,27 @@ internal sealed partial class RelayEngine
 
     private void ClearGameOptions() => _gameOptions.Clear();
 
+    /// <summary>The event's car rule from the options journal (any car when they do not read cleanly or set none).</summary>
+    private CarRule EventCarRule() => GameOptionsFields.TryRead(_gameOptions.Records, out var fields) ? fields.CarRule : CarRule.Any;
+
+    /// <summary>PlayerChoices (player object var 81 CarClass s32, 82 PerfIndex f32): read when a write begins there, as a car choice does.</summary>
+    private void ObserveCarChoice(RelayPeer peer, BitBuffer payload)
+    {
+        if (payload.Length < 8 + 32) return;
+        var reader = new BitReader(payload.Bytes, payload.Length);
+        if (reader.Read(8) != 81) return;
+        var carClass = unchecked((int)(uint)reader.Read(32));
+        var pi = float.NaN;
+        if (reader.Left >= 8 + 32 && reader.Read(8) == 82) pi = BitConverter.UInt32BitsToSingle((uint)reader.Read(32));
+        peer.CarClass = carClass;
+        peer.CarPi = pi;
+        if (peer.ReadyRefused && _race is { Stage: RaceStage.Inviting } && EventCarRule().Accepts(carClass, pi))
+        {
+            Note($"ready request from peer {peer.Index}: its new car fits, the refused Ready counts now");
+            Ready(peer, true);
+        }
+    }
+
     private void TickGameOptions()
     {
         if (_gameOptions.ExpiredSource(_now, _settings.GameOptionsGapMs) is { } owner) owner.Doomed = true;

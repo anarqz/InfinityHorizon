@@ -102,6 +102,16 @@ internal sealed partial class RelayEngine
 
     private void Ready(RelayPeer peer, bool ready)
     {
+        // T11: a car outside the event's class/PI is refused (1); its Ready counts once a car that fits is chosen
+        if (ready && _settings.EnforceCarRule && _race is { Stage: RaceStage.Inviting } invited && peer.Index != invited.Owner
+            && !EventCarRule().Accepts(peer.CarClass, peer.CarPi))
+        {
+            peer.ReadyRefused = true;
+            SendSequenced(peer, [NerdPayload.ReadyResponse(1)]);
+            Note($"ready request from peer {peer.Index}: refused, its car does not meet the event's class or PI");
+            return;
+        }
+        peer.ReadyRefused = false;
         // The game waits for the answer to its Ready request (message 42: lobby key, then 0 = accepted).
         SendSequenced(peer, [NerdPayload.ReadyResponse(0)]);
         // Membership belongs to this invitation, independently of a previously cached flag.
