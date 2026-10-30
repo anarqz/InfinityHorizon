@@ -113,13 +113,18 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
     }
 
     /// <summary>The replacement must keep Play disabled after its ACK until the worker durably commits.</summary>
-    public static async Task WaitForCommitAsync(UpdateApplyPlan plan, TimeSpan timeout, CancellationToken cancellation = default)
+    public static Task WaitForCommitAsync(UpdateApplyPlan plan, TimeSpan timeout, CancellationToken cancellation = default) =>
+        WaitForCommitAsync(plan, timeout, TimeProvider.System, cancellation);
+
+    /// <param name="time">The clock of the <paramref name="timeout"/>; the journal is polled in real time.</param>
+    public static async Task WaitForCommitAsync(UpdateApplyPlan plan, TimeSpan timeout, TimeProvider time, CancellationToken cancellation = default)
     {
+        ArgumentNullException.ThrowIfNull(time);
         ValidatePlan(plan);
         if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(45)) throw new ArgumentOutOfRangeException(nameof(timeout));
         var journalPath = Path.Combine(TransactionRoot(plan.InstallRoot, plan.TransactionId), "journal.json");
-        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        bound.CancelAfter(timeout);
+        using var deadline = new CancellationTokenSource(timeout, time);
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadline.Token);
         try
         {
             while (true)
