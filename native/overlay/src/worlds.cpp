@@ -114,7 +114,7 @@ bool g_mine_refresh = true; // one explicit reconcile on open/action/manual refr
 bool g_showing_mine = false; // the List screen shows my world this frame
 int g_mine_focus = 0;       // 0 the close or leave button, [1 the host's voice switch], then the players
 int g_mine_count = 0;       // what the focus walks: 1 [+ 1] + the players
-int g_mine_col = 0;         // on a player: 0 the row, 1 its microphone square (OD-147)
+int g_mine_col = 0;         // on a player: 0 the row, 1 its microphone square (OD-154)
 bool g_mine_voice_row = false; // the host's "Voice chat" switch is item 1
 bool g_mine_x = false;      // X on a player: mute or unmute them, applied at draw time
 MemberRow g_member;         // the player the card is about
@@ -124,14 +124,15 @@ int g_buttons = 0;          // how many buttons the current card has
 uint64_t g_seen_mine = 0, g_seen_action = 0;
 int g_dev_mine = 0;         // the dev host's own world: 0 none, 1 hosting, 3 seated
 
-// a world created (the Hosted screen) or a seat reserved (the prompt to go to Free Roam Online)
-void Admitted(bool hosted) {
+// a world created (the Hosted screen) or a seat reserved (where the host is, from the launcher's answer)
+void Admitted(bool hosted, const std::string &message = std::string()) {
     if (hosted) {
         g_screen = Screen::Hosted;
     } else {
         g_screen = Screen::List;
         PushToast(ToastKind::Success, T("Seat reserved", "Lugar reservado"),
-                  T("Go to Free Roam Online to join the lobby", "Vá em Free Roam Online para entrar no lobby"));
+                  message.empty() ? T("Pick the host's online mode in the game's menu", "Escolha no menu do jogo o modo online do host")
+                                  : message.c_str());
         CloseSidebar();
     }
     g_mine_refresh = true;
@@ -143,7 +144,7 @@ struct Create {
     int players = 8;
     int latency = 0;  // 0 any, 1 high (< 150 ms), 2 medium (< 100 ms), 3 low (< 60 ms)
     bool any_mode = false; // OD-141: open to Hardcore and Noob; false: the host's own mode
-    bool voice = true;     // OD-147: the lobby's voice chat, on by default; the host changes it any time
+    bool voice = true;     // OD-154: the lobby's voice chat, on by default; the host changes it any time
     int field = 0;    // 0 name, 1 audience, 2 players, 3 latency, 4 modes, 5 voice chat, 6 create
 } g_create;
 constexpr int kCreateModes = 4, kCreateVoice = 5, kCreateButton = 6;
@@ -180,7 +181,7 @@ const char *LatencyName(int latency) {
     }
 }
 
-// OD-147: the lobby's voice chat switch
+// OD-154: the lobby's voice chat switch
 const char *VoiceName(bool on) { return on ? T("On", "Ligado") : T("Off", "Desligado"); }
 const char *VoiceLabel(bool on) { return on ? T("Voice chat on", "Chat de voz ligado") : T("Voice chat off", "Chat de voz desligado"); }
 
@@ -796,7 +797,7 @@ void DrawCreate(ImDrawList *dl, float x, float y, float w) {
         {T("Players", "Jogadores"), players, true},
         {T("Latency limit", "Limite de latência"), LatencyName(g_create.latency), true},
         {T("Modes · set when it opens", "Modos · definidos ao abrir"), ModesName(g_create.any_mode), true}, // OD-141
-        {T("Voice chat · you can change it later", "Chat de voz · dá para mudar depois"), VoiceName(g_create.voice), true}, // OD-147
+        {T("Voice chat · you can change it later", "Chat de voz · dá para mudar depois"), VoiceName(g_create.voice), true}, // OD-154
     };
     static_assert(sizeof(fields) / sizeof(fields[0]) == kCreateButton, "one field per row before the button");
     for (int i = 0; i < kCreateButton; ++i) {
@@ -888,7 +889,7 @@ void MemberTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow 
     }
 }
 
-// ---------------------------------------------------------------- voice chat in my world (OD-147)
+// ---------------------------------------------------------------- voice chat in my world (OD-154)
 int FirstPlayerItem() { return g_mine_voice_row ? 2 : 1; }
 
 // Why the microphone squares do nothing now, or null when they work.
@@ -989,7 +990,7 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
                             (m.any_mode ? std::string(" · ") + kAnyModeBadge : std::string()) + " · " + std::to_string(m.players) + "/" +
                             std::to_string(m.max) + T(" players", " jogadores");
     TextAt(dl, f.small, ImVec2(x, y), kTextDim, sub.c_str());
-    if (m.role != 1) { // the host changes it below; everyone else reads it here (OD-147)
+    if (m.role != 1) { // the host changes it below; everyone else reads it here (OD-154)
         y += 20 * s;
         const char *said = voice.flags & VoiceState::LobbyKnown ? VoiceLabel(voice.lobby_on()) : T("Voice chat: set by the host", "Chat de voz: definido pelo anfitrião");
         TextAt(dl, f.small, ImVec2(x, y), voice.lobby_on() ? kText : kTextDim, said);
@@ -1001,7 +1002,7 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         y += 32 * s;
     }
     if (m.role == 2) {
-        Wrapped(dl, f.small, ImVec2(x, y), w, kAmber, T("Go to Free Roam Online in the game's menu to join it.", "Vá em Free Roam Online no menu do jogo para entrar nele."));
+        Wrapped(dl, f.small, ImVec2(x, y), w, kAmber, T("Pick the host's online mode in the game's menu to join it.", "Escolha no menu do jogo o modo online do host para entrar nele."));
         y += 30 * s;
     }
     y += 6 * s;
@@ -1025,7 +1026,7 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("Player names arrive with the next server update.", "Os nomes dos jogadores chegam na próxima atualização do servidor."));
         y += 30 * s;
     }
-    // OD-147: each row is the name's rectangle and, to its right, a square with the player's microphone
+    // OD-154: each row is the name's rectangle and, to its right, a square with the player's microphone
     const float th = 62 * s, gap = 8 * s;
     const int first = FirstPlayerItem();
     int shown = 0;
@@ -1051,7 +1052,7 @@ struct Choice {
 
 std::vector<Choice> MemberChoices(const MemberRow &m) {
     std::vector<Choice> out;
-    // OD-147: voice first, the most frequent reason to open a card in a loud lobby
+    // OD-154: voice first, the most frequent reason to open a card in a loud lobby
     const VoiceState v = CurrentVoice();
     const uint8_t st = v.StateOf(m.xuid);
     out.push_back({6, st & VoiceMember::MutedByMe ? T("Unmute voice", "Liberar voz") : T("Mute voice", "Silenciar voz"), true});
@@ -1114,7 +1115,7 @@ void DrawConfirm(ImDrawList *dl, float x, float y, float w) {
     const char *title = g_confirm == 1 ? T("Close your lobby?", "Fechar seu lobby?") : g_confirm == 2 ? T("Leave this lobby?", "Sair deste lobby?")
                                                                                       : T("Remove this player?", "Remover este jogador?");
     const char *text = g_confirm == 1 ? T("Everyone in it goes back to their own lobby.", "Todos que estão nele voltam para o próprio lobby.")
-                       : g_confirm == 2 ? T("Your seat is let go. Leave Free Roam Online in the game's menu too.", "Seu lugar é liberado. Saia também do Free Roam Online no menu do jogo.")
+                       : g_confirm == 2 ? T("Your seat is let go. Leave the online mode in the game's menu too.", "Seu lugar é liberado. Saia também do modo online no menu do jogo.")
                                         : T("They leave your lobby now and cannot join it again while it is open.", "Ele sai do seu lobby agora e não pode voltar enquanto ele estiver aberto.");
     y = Panel(dl, x, y, title);
     if (g_confirm == 3) {
@@ -1194,7 +1195,7 @@ bool WorldsNavigate(Nav nav) {
             switch (nav) {
             case Nav::Up: if (g_mine_focus > 0) --g_mine_focus; if (g_mine_focus < FirstPlayerItem()) g_mine_col = 0; return true;
             case Nav::Down: if (g_mine_focus + 1 < g_mine_count) ++g_mine_focus; return true;
-            // OD-147: Right reaches the player's microphone square, Left comes back; on the host's switch both flip it
+            // OD-154: Right reaches the player's microphone square, Left comes back; on the host's switch both flip it
             case Nav::Right:
                 if (on_player) { g_mine_col = 1; return true; }
                 if (on_switch) { ToggleLobbyVoice(CurrentVoice()); return true; }
@@ -1306,7 +1307,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         g_seen_join = sh.join_serial;
         if (g_screen == Screen::Busy) {
             if (sh.join_status == 0 && world_access) {
-                Admitted(false); // the seat's prompt
+                Admitted(false, sh.join_message); // the seat's prompt: where the host is
             } else if (sh.join_status == 3) {
                 // a wrong code: back on the code screen, with the reason
                 g_screen = Screen::List;

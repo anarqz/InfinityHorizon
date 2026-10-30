@@ -55,8 +55,11 @@ public static class ConflictReasons
     /// <summary>CR-S57 §5b: past a relay cap (seats per world, the account's hourly bucket, one relay-born world).</summary>
     public const string RelayBusy = "relay_busy";
 
+    /// <summary>OD-150 (§2.5): a join asking for an activity the world does not run now (the free-roam step tries the next world).</summary>
+    public const string Activity = "activity";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

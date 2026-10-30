@@ -130,6 +130,18 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
             || !Live(proof.Lease,EffectiveNow()))return null;
         return proof.Authority;
     }
+    /// <summary>
+    /// Whether <paramref name="xuid"/> holds a live grant of this world that its endpoint can prove (FIUP): an OpenConnection
+    /// from an endpoint not proven yet waits for that proof (RelayEngine.AwaitsProof) instead of a final refusal. Never admits.
+    /// </summary>
+    internal bool ProofExpected(ulong xuid)
+    {
+        if (xuid == ownXuid) return false;
+        var snapshot = Volatile.Read(ref _snapshot);
+        if (snapshot is null) return false;
+        var now = EffectiveNow();
+        return HostLive(snapshot, now) && snapshot.ProofGrants.Values.Any(p => p.Peer == xuid && Live(p.Lease, now));
+    }
     internal byte[]? ReceiveProof(ReadOnlySpan<byte> data,IPEndPoint endpoint)
     { lock(_gate) return Proof.Receive(data,endpoint); }
     internal IReadOnlyList<(Guid Grant,uint Revision,IPEndPoint[] Endpoints)> NetworkHints()

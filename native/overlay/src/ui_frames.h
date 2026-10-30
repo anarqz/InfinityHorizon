@@ -29,8 +29,8 @@
 //   0x0E MyWorld{u8 role, str worldId, str name, str host, str code, u8 audience, u8 players, u8 max, u8 named,
 //        u8 count <= 16 x {str xuid, str gamertag, u8 tier, u8 role, u8 friend}, u8 anyMode}; an older launcher's
 //        frame ends after the members (anyMode 0), and as before trailing bytes are ignored
-//   0x0B CreateWorld also carries u8 voice after anyMode (OD-147: the lobby's voice chat, 1 on; absent: on)
-// Protocol 3 (OD-147, docs/launcher/VOICE_CHAT.md §11): voice chat
+//   0x0B CreateWorld also carries u8 voice after anyMode (OD-154: the lobby's voice chat, 1 on; absent: on)
+// Protocol 3 (OD-154, docs/launcher/VOICE_CHAT.md §11): voice chat
 //   0x1B VoiceState, launcher -> overlay {u8 flags, u8 micMode (0 open, 1 muted, 2 push-to-talk),
 //        u8 count <= 16 x {str xuid (decimal), str gamertag (<= 64 B), u8 state}}, the other players of the lobby
 //        (never this one: its own voice is micMode and flag 3): flags bit 0 the lobby's voice chat is on, 1 it is known
@@ -233,7 +233,7 @@ inline std::vector<uint8_t> EncodePaneActionClick(const std::string &pane, const
     wire::Str(b, action);
     return b;
 }
-// 0x0B (protocol 1; anyMode CR-L43; voice OD-147)
+// 0x0B (protocol 1; anyMode CR-L43; voice OD-154)
 inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode,
                                               bool voice = true) {
     std::vector<uint8_t> b;
@@ -246,7 +246,7 @@ inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t a
     return b;
 }
 
-// ---------------------------------------------------------------- voice chat (protocol 3, OD-147)
+// ---------------------------------------------------------------- voice chat (protocol 3, OD-154)
 enum class MicMode : uint8_t { Open, Muted, PushToTalk };
 constexpr uint8_t kMicModeMax = static_cast<uint8_t>(MicMode::PushToTalk);
 constexpr size_t kMaxVoiceMembers = 16, kMaxXuid = 20;

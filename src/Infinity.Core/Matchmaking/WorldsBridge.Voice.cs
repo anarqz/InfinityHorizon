@@ -3,7 +3,7 @@ using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
 
-// OD-147: the overlay's voice chat (protocol 3) against the world this profile is in. The lobby's switch rides on the
+// OD-154: the overlay's voice chat (protocol 3) against the world this profile is in. The lobby's switch rides on the
 // world the host opened (and changes while it is open); the mutes are this profile's (Voice/VoiceRoom.cs).
 public sealed partial class WorldsBridge
 {

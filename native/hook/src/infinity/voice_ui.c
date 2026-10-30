@@ -1,6 +1,6 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE).
 
-   Voice chat in the game's own UI (OD-147, VC-2b; docs/launcher/VOICE_CHAT.md in the monorepo,
+   Voice chat in the game's own UI (OD-154, VC-2b; docs/launcher/VOICE_CHAT.md in the monorepo,
    RE: deprecated/beta/notes/local-docs/re/voice-chat.md). FH2's player list (A_OnlinePlayerList,
    the car meet list) and its HUD mini leaderboard (HUDStatusMiniLeaderboard, top right) draw a
    microphone per player from three queries the game polls every frame. GameChat never runs on

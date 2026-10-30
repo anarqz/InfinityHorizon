@@ -568,6 +568,18 @@ public sealed class PlaySupervisor
                 try {await pipe.WriteAsync(bytes,ct).ConfigureAwait(false);}
                 finally {System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);}
             };
+            // OD-151 follow-up: a seated guest's game follows its host's activity through the game's own matchmaking
+            worlds.SendFollowHost=async (follow,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                await pipe.WriteAsync(follow.Encode(),ct).ConfigureAwait(false);
+            };
+            // a lobby ask's seat that never played within WorldsBridge.SeatGiveUp: the game's FINDING SESSION is cancelled
+            worlds.SendCancelMatchmaking=async ct=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                await pipe.WriteAsync(new Frame.CancelMatchmaking().Encode(),ct).ConfigureAwait(false);
+            };
             worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
@@ -633,6 +645,8 @@ public sealed class PlaySupervisor
                 if (done == exit)
                 {
                     crashContext.Freeze(child.ExitTimeUtc);
+                    // the hook's last frames can arrive together with its exit: the display-only ones still count
+                    if (nextFrame is not null && endpoint.Greeted) await DrainPresenceAsync(frames.Reader).ConfigureAwait(false);
                     return (await exit.ConfigureAwait(false), state);
                 }
                 if (done == accept)
@@ -702,8 +716,9 @@ public sealed class PlaySupervisor
                         // CR-L40: FREE ROAM ONLINE waits in the hook until a lobby is ready; answered off this loop
                         if (frame is Frame.FreeRoamNeed need && endpoint.Greeted)
                         {
-                            var ensure = !suspended && tokensOpen && !_online.IsPaused && worlds is not null
-                                ? worlds.EnsureFreeRoamWorldAsync : (Func<CancellationToken, Task<byte>>?)null;
+                            var bridge = worlds;
+                            var ensure = !suspended && tokensOpen && !_online.IsPaused && bridge is not null
+                                ? token => bridge.EnsureFreeRoamWorldAsync(need.Kind, token) : (Func<CancellationToken, Task<byte>>?)null;
                             // off the reader loop from the first line: the access check may do synchronous work
                             var (freeRoamOnline, freeRoamStop) = (onlineStop.Token, stop.Token);
                             _ = Task.Run(() => AnswerFreeRoamAsync(ensure, need.Nonce, pipe.WriteAsync, FreeRoamBudget, _clock,
@@ -726,10 +741,20 @@ public sealed class PlaySupervisor
                         {
                             await overlay.ToastAsync(idleToast, stop.Token).ConfigureAwait(false);
                         }
-                        // OD-57: the world closes when its host leaves free roam (the hook''s Event 4)
+                        // OD-148 (refines OD-57): the game left free roam (the hook's Event 4). A car meet or an online
+                        // Road Trip leaves it before asking for its lobby, so the world (or seat) is kept for
+                        // WorldsBridge.FreeRoamLeftGrace; a FreeRoamNeed meanwhile keeps it, else it closes (host) or is
+                        // left (joiner) as before. Announces and seat renewals go on meanwhile; the session's end still acts at once.
                         if (frame is Frame.Event { Kind: HookEvents.FreeRoamLeft } && worlds is not null)
                         {
-                            _ = worlds.HostedWorldId is not null ? worlds.CloseHostAsync(stop.Token) : worlds.LeaveAsync(stop.Token);
+                            _ = worlds.FreeRoamLeftAsync(stop.Token);
+                        }
+                        // live (test.9): back from a Road Trip the game opens its free roam connection (Event 3) around
+                        // closing the Road Trip one (Event 4); joining again calls off the pending close or leave
+                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } entered && worlds is not null)
+                        {
+                            // join:<ip:port> is a guest's game in its seat's world: the seat plays (no 15 s give-up)
+                            worlds.GameJoined(join: entered.Detail.StartsWith("join", StringComparison.Ordinal));
                         }
                         if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {
@@ -872,7 +897,7 @@ public sealed class PlaySupervisor
                                 await overlay.SendFrameAsync(worlds is null
                                     ? new Overlay.UiFrame.WorldAccess(false, _config.Text?["worlds.integrity_inconclusive"] ?? "Online installation verification is unavailable. Return to the launcher for help.")
                                     : await worlds.AccessFrameAsync(stop.Token).ConfigureAwait(false), stop.Token).ConfigureAwait(false);
-                                // OD-147: the voice settings at once, so the guide's Settings are right before any lobby
+                                // OD-154: the voice settings at once, so the guide's Settings are right before any lobby
                                 if (worlds?.VoiceFrame() is { } helloVoice) await overlay.SendFrameAsync(helloVoice, stop.Token).ConfigureAwait(false);
                                 if (_config.OverlayStatus is { } overlayStatus)
                                     _ = overlayStatus.AttachAsync(overlay.SendFrameAsync, stop.Token);
@@ -919,7 +944,7 @@ public sealed class PlaySupervisor
                                 _ = ReplyAsync(overlay, async () => await worlds.CreateAsync(c.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
                             case Overlay.UiIncoming.Mine when worlds is not null && !suspended:
-                                // the world, then its voice chat (OD-147; a protocol 3 overlay only: the channel drops it for older ones)
+                                // the world, then its voice chat (OD-154; a protocol 3 overlay only: the channel drops it for older ones)
                                 _ = ReplyAsync(overlay, async () => await worlds.MyWorldAsync(stop.Token).ConfigureAwait(false), stop.Token)
                                     .ContinueWith(_ => worlds.VoiceFrame() is { } voice ? overlay.SendFrameAsync(voice, stop.Token) : Task.CompletedTask,
                                         CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
@@ -1039,6 +1064,7 @@ public sealed class PlaySupervisor
                 var mine = await worlds.PollMyWorldAsync(cancellation).ConfigureAwait(false);
                 await overlay.SendFrameAsync(mine, cancellation).ConfigureAwait(false);
                 foreach (var toast in worlds.LobbyToasts()) await overlay.ToastAsync(toast, cancellation).ConfigureAwait(false);
+                await worlds.FollowHostAsync(cancellation).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -1232,6 +1258,20 @@ public sealed class PlaySupervisor
     {
         if (received.Frame is Frame.Event { Kind: HookEvents.GameReadiness } sample)
             readiness.Observe(sample.Detail, received.Timestamp);
+    }
+
+    /// <summary>
+    /// After the game's exit, the frames its hook sent last (the pipe drains within a moment, ≤ 1 s): only CR-L41.3's progress and
+    /// car are emitted, since nothing waits on them; a frame that needs an answer or changes the session means nothing any more.
+    /// </summary>
+    private async Task DrainPresenceAsync(ChannelReader<ReceivedFrame> frames)
+    {
+        await Task.WhenAny(frames.Completion, Task.Delay(TimeSpan.FromSeconds(1), TimeProvider.System)).ConfigureAwait(false);
+        while (frames.TryRead(out var received))
+        {
+            if (received.Frame is Frame.Progress progress) _emit(new SupervisorEvent.GameProgress(progress.Level, progress.Credits));
+            else if (received.Frame is Frame.Car car) _emit(new SupervisorEvent.GameCar(car.CarKey));
+        }
     }
 
     internal static void StartReader(Stream stream, ChannelWriter<ReceivedFrame> writer, TimeProvider clock) =>

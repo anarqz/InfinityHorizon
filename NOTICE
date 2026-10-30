@@ -61,7 +61,7 @@ Existing third-party copyright and permission notices remain applicable:
 - Selawik 1.01 (SIL OFL 1.1) and Fluent UI System Icons (MIT): native/overlay/third_party/fonts/.
 - libopus 1.5.2 (BSD-3-Clause, Xiph.Org and contributors; with its DNN weights for OSCE/LACE/NoLACE and deep PLC)
   and RNNoise 0.2 (BSD-3-Clause, Jean-Marc Valin, Amazon, Mozilla, Xiph.Org and others; with its model), compiled into
-  infinity-overlay.dll for voice chat (OD-147). native/overlay/fetch.ps1 fetches the release tarballs pinned by
+  infinity-overlay.dll for voice chat (OD-154). native/overlay/fetch.ps1 fetches the release tarballs pinned by
   SHA-256; their full licences are below.
 - TweetNaCl verification code in the hook is public domain.
 - The synthesized notification chime is original project material, GPL-3.0-or-later;
@@ -71,7 +71,7 @@ Existing third-party copyright and permission notices remain applicable:
 LIBOPUS LICENCE
 
 libopus 1.5.2 (https://opus-codec.org, https://github.com/xiph/opus), compiled into infinity-overlay.dll for voice
-chat (OD-147): OSCE and deep PLC enabled, DRED not built.
+chat (OD-154): OSCE and deep PLC enabled, DRED not built.
 
 Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
                     Jean-Marc Valin, Timothy B. Terriberry,
@@ -122,7 +122,7 @@ https://datatracker.ietf.org/ipr/1526/
 RNNOISE LICENCE
 
 RNNoise 0.2 (https://github.com/xiph/rnnoise), compiled into infinity-overlay.dll for voice chat's noise suppression
-and voice activity (OD-147).
+and voice activity (OD-154).
 
 Copyright (c) 2007-2017, 2024 Jean-Marc Valin
 Copyright (c) 2023 Amazon

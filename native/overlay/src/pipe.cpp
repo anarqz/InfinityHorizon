@@ -38,7 +38,7 @@
 // PaneActionClick go to the launcher. 0x19 ServerStatus and 0x1A Avatar (CR-L40 §1.3) fill the
 // guide's bottom block and its header avatar.
 //
-// Protocol 3 (OD-147; layouts in ui_frames.h): 0x1B VoiceState from the launcher (the lobby's voice chat, the mic
+// Protocol 3 (OD-154; layouts in ui_frames.h): 0x1B VoiceState from the launcher (the lobby's voice chat, the mic
 // mode, each player's mute and talking state); 0x1C VoiceCommand to it (the host's lobby switch, mutes, the mic
 // mode, voice on/off). 0x0B CreateWorld ends with u8 voice.
 //

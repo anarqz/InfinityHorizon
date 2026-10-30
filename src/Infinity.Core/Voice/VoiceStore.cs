@@ -10,7 +10,7 @@ public sealed record VoiceMute(string GamertagAtMute, DateTime MutedAtUtc, bool 
 public sealed record VoiceSettings(bool? Enabled, byte Mic);
 
 /// <summary>
-/// <c>voice.json</c> in the launcher's state folder (OD-147): per profile XUID its <see cref="VoiceSettings"/> and its
+/// <c>voice.json</c> in the launcher's state folder (OD-154): per profile XUID its <see cref="VoiceSettings"/> and its
 /// mute history (target XUID → <see cref="VoiceMute"/>). Local only, never sent anywhere but as mute events (VC-5).
 /// Written whole through a temporary file; a damaged file reads as empty (nobody muted, the mode's defaults).
 /// </summary>

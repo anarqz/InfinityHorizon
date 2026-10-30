@@ -17,12 +17,13 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly RelaySettings _settings;
     private readonly RelayEngine _engine; // free roam (every lobby type but a car meet)
     private readonly Dictionary<uint, RelayEngine> _carMeets = []; // actor thread only, at most the two car meet lobby types
-    private readonly string? _gameDatabase;
+    private readonly RoadTripCatalog? _roadTripCatalog;
     private RelayEngine? _roadTrip; // actor thread only: the Road Trip world (lobby type 1), made on its first connection
     private bool _roadTripUnavailable;
     private readonly Dictionary<IPEndPoint, RelayEngine> _routes = []; // actor thread only: endpoints seated in a car meet
     private Func<ulong, IPEndPoint, long, bool> _authorize = static (_, _, _) => false;
     private Func<ulong, IPEndPoint, long, bool>? _authorizeHook;
+    private Func<ulong, bool>? _awaitsProof;
     private readonly RelayNetworkNat _nat;
     private readonly RelayLegs _legs; // CR-S57: the joiners met at a relay (actor thread only)
     private readonly CancellationTokenSource _stop = new();
@@ -33,6 +34,8 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly Task _discovery;
     private readonly Task _upnp;
     private IReadOnlyList<string> _peers = Array.Empty<string>();
+    private int _lobbyPlayers; // the synced players of the car meet and Road Trip engines, as the actor's last tick counted them
+    private string? _activity; // OD-150: the engine the host's own game (loopback) is synced in, as the actor's last tick saw it
     private RelayNetworkStatus _network;
     private int _disposed, _running = 1;
     private uint _sendErrors; // actor thread only
@@ -46,7 +49,9 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options)
     {
-        _gameDatabase = options.GameDatabase;
+        // read once: the world announces a Road Trip only when its engine can run one
+        var catalog = options.GameDatabase is null ? null : RoadTripCatalog.Load(options.GameDatabase);
+        _roadTripCatalog = catalog is { Events.Count: > 0 } ? catalog : null;
         _socket = socket;
         Port = checked((ushort)((IPEndPoint)socket.LocalEndPoint!).Port);
         var dual = socket.AddressFamily == AddressFamily.InterNetworkV6;
@@ -102,7 +107,8 @@ public sealed class IntegratedHostRelay : IHostRelay
         return engine = new(_settings with { CarMeetLobby = carMeet, RoadTrip = roadTrip }, Send)
         {
             CreateGameSession = request => StartGameSession(engine!, request),
-            Authorize = _authorize, AuthorizeHook = _authorizeHook,
+            Authorize = _authorize, AuthorizeHook = _authorizeHook, AwaitsProof = _awaitsProof,
+            AdmittedLate = endpoint => Moved(engine!, endpoint, _clock.ElapsedMilliseconds),
             ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
             ConnectionOpened = (index, a, b, refusal) =>
             {
@@ -140,6 +146,13 @@ public sealed class IntegratedHostRelay : IHostRelay
         if (RelayEngine.LobbyTypeOf(datagram.Span) is not { } lobby) { current.Receive(datagram.Span, peer, now); return; }
         var target = RelayEngine.IsCarMeetLobby(lobby) ? CarMeet(lobby) : lobby == RelayEngine.RoadTripLobby && RoadTrip() is { } trip ? trip : _engine;
         target.Receive(datagram.Span, peer, now);
+        Moved(target, peer, now);
+    }
+
+    // the endpoint is seated in target (a datagram, or a held OpenConnection taken in after its proof): it follows it there
+    private void Moved(RelayEngine target, IPEndPoint peer, long now)
+    {
+        var current = _routes.GetValueOrDefault(peer) ?? _engine;
         if (target == current || !target.HasPeer(peer)) return;
         current.Forget(peer, now);
         if (target == _engine) _routes.Remove(peer); else _routes[peer] = target;
@@ -149,8 +162,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private RelayEngine? RoadTrip()
     {
         if (_roadTrip is not null || _roadTripUnavailable) return _roadTrip;
-        var catalog = _gameDatabase is null ? null : RoadTripCatalog.Load(_gameDatabase);
-        if (catalog is null || catalog.Events.Count == 0)
+        if (_roadTripCatalog is not { } catalog)
         {
             _roadTripUnavailable = true;
             if (Volatile.Read(ref _diagnosticLog) is { } sink) Diagnostics.UdpDiagnostics.Enqueue(sink, "world: no Road Trip: the game database cannot be read");
@@ -166,6 +178,9 @@ public sealed class IntegratedHostRelay : IHostRelay
     }
 
     public ushort Port { get; }
+
+    /// <summary>The lobbies this world serves besides free roam (MATCHMAKING_API WorldSettings.lobbies): car meets always, a Road Trip with the game database.</summary>
+    public IReadOnlyList<string> Lobbies => _roadTripCatalog is null ? [LobbyKinds.CarMeet] : [LobbyKinds.CarMeet, LobbyKinds.RoadTrip];
     public bool Running => Volatile.Read(ref _running) != 0 && Volatile.Read(ref _disposed) == 0;
     public RelayNetworkStatus NetworkStatus => Volatile.Read(ref _network);
 
@@ -187,13 +202,24 @@ public sealed class IntegratedHostRelay : IHostRelay
         return Task.FromResult(Running ? Volatile.Read(ref _peers) : (IReadOnlyList<string>)Array.Empty<string>());
     }
 
+    /// <summary>The players synced in the Road Trip and car meet engines (<see cref="IHostRelay.LobbyPlayers"/>), as of the actor's last tick.</summary>
+    public int LobbyPlayers => Running ? Volatile.Read(ref _lobbyPlayers) : 0;
+
+    /// <summary>
+    /// OD-150 (<see cref="IHostRelay.Activity"/>): what the host's own game runs here, as of the actor's last tick. The host's game
+    /// reaches its relay over loopback: synced in the Road Trip engine it is <see cref="WorldActivities.RoadTrip"/>, in the free-roam
+    /// engine <see cref="WorldActivities.FreeRoam"/> (in both: the one it synced in last); in a car meet, or between two sessions,
+    /// the last value stays (a car meet does not change the activity). Null until the host's game first syncs.
+    /// </summary>
+    public string? Activity => Running ? Volatile.Read(ref _activity) : null;
+
     public void Kick(string xuid)
     {
         if (ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var value))
             Enqueue(() => { foreach (var engine in Engines) engine.Kick(value, _clock.ElapsedMilliseconds); });
     }
 
-    /// <summary>OD-147: the lobby's voice chat switch and the players the host muted for everyone, for every world of this relay.</summary>
+    /// <summary>OD-154: the lobby's voice chat switch and the players the host muted for everyone, for every world of this relay.</summary>
     public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby)
     {
         var copy = mutedForLobby.ToArray();
@@ -210,10 +236,11 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     /// <summary>Completes only after the actor installs the admission policy. Null is never allow-all.</summary>
     public Task SetAdmissionValidatorAsync(Func<ulong,IPEndPoint,long,bool>? validator,CancellationToken cancellation=default)
-        => SetAdmissionPolicyAsync(validator,null,null,cancellation);
+        => SetAdmissionPolicyAsync(validator,null,null,null,cancellation);
 
     internal async Task SetAdmissionPolicyAsync(Func<ulong, IPEndPoint, long, bool>? validator,
-        Func<ulong,IPEndPoint,long,bool>? hookValidator,Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? proofReceiver,CancellationToken cancellation=default)
+        Func<ulong,IPEndPoint,long,bool>? hookValidator,Func<ReadOnlyMemory<byte>,IPEndPoint,byte[]?>? proofReceiver,
+        Func<ulong,bool>? awaitsProof,CancellationToken cancellation=default)
     {
         ObjectDisposedException.ThrowIf(!Running, this);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -227,7 +254,8 @@ public sealed class IntegratedHostRelay : IHostRelay
             if (!_commands.Writer.TryWrite(new(() =>
                 {
                     _authorize = validator ?? (static (_, _, _) => false); _authorizeHook = hookValidator; _proofReceiver = proofReceiver;
-                    foreach (var engine in Engines) { engine.Authorize = _authorize; engine.AuthorizeHook = _authorizeHook; }
+                    _awaitsProof = validator is null ? null : awaitsProof;
+                    foreach (var engine in Engines) { engine.Authorize = _authorize; engine.AuthorizeHook = _authorizeHook; engine.AwaitsProof = _awaitsProof; }
                 }, completion, token)))
                 throw new IOException("The relay control queue is full or closed");
             await completion.Task.WaitAsync(token).ConfigureAwait(false);
@@ -325,6 +353,11 @@ public sealed class IntegratedHostRelay : IHostRelay
                     Volatile.Write(ref _network, _nat.Snapshot() with { SendErrors = _sendErrors });
                     Volatile.Write(ref _peers, Array.AsReadOnly(Engines.SelectMany(e => e.PeerXuids).Distinct()
                         .Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
+                    Volatile.Write(ref _lobbyPlayers, _carMeets.Values.Sum(e => e.SyncedCount) + (_roadTrip?.SyncedCount ?? 0));
+                    // the host's game in both (a session it left that has not timed out yet): the one it synced in last
+                    var (trip, freeRoam) = (_roadTrip?.LoopbackSyncedAt, _engine.LoopbackSyncedAt);
+                    if (trip is { } tripAt && (freeRoam is not { } freeAt || tripAt > freeAt)) Volatile.Write(ref _activity, WorldActivities.RoadTrip);
+                    else if (freeRoam is not null) Volatile.Write(ref _activity, WorldActivities.FreeRoam);
                 }
                 if (!activity) cancellation.WaitHandle.WaitOne(2);
             }
@@ -339,6 +372,7 @@ public sealed class IntegratedHostRelay : IHostRelay
             foreach (var engine in Engines) engine.Clear();
             _routes.Clear();
             Volatile.Write(ref _peers, Array.Empty<string>());
+            Volatile.Write(ref _lobbyPlayers, 0);
             _socket.Dispose();
         }
     }

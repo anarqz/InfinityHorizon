@@ -1,6 +1,6 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE).
 
-   Voice chat's transport (OD-147, VC-2; docs/launcher/VOICE_CHAT.md 3.1, 12.3 and 13 in the
+   Voice chat's transport (OD-154, VC-2; docs/launcher/VOICE_CHAT.md 3.1, 12.3 and 13 in the
    monorepo; the relay's side is Infinity.Core/WorldServer/VoiceCodec.cs). The overlay builds
    whole voice side-channel datagrams, STUN indications (big-endian, magic 0x2112A442, at most 548
    bytes) of kind 0x3E93 (voice, attribute 0xC0F3 up / 0xC0F4 down) or 0x3E94 (control up 0xC0F5 /

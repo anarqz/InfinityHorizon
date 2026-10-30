@@ -19,6 +19,16 @@ public sealed partial class WorldsBridge
     /// </summary>
     private async Task<LobbyRead> ReadLobbiesAsync(string filter, bool notFull, CancellationToken cancellation)
     {
+        var read = await ReadLobbiesCoreAsync(filter, notFull, cancellation).ConfigureAwait(false);
+        // what each listed world runs now: a join from this list tells the player where its host is
+        foreach (var (world, _) in read.Worlds) _listedActivity[world.Id] = world.Activity;
+        return read;
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _listedActivity = new(StringComparer.Ordinal);
+
+    private async Task<LobbyRead> ReadLobbiesCoreAsync(string filter, bool notFull, CancellationToken cancellation)
+    {
         static LobbyRead Failed() => new("worlds.list_failed", []); // CR-S69: no refusal is about the tier any more
         static IEnumerable<(WorldView, bool)> Of(WorldList list) =>
             list.Items.Select(w => (w, false)).Concat(list.Locked.Select(w => (w, true)));

@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: the world relay's voice side channel (OD-147, D1; docs/launcher/VOICE_CHAT.md §3.1, §12.3). The
+// Infinity overlay: the world relay's voice side channel (OD-154, D1; docs/launcher/VOICE_CHAT.md §3.1, §12.3). The
 // launcher's Infinity.Core/WorldServer/VoiceCodec.cs is the reference: the same golden vectors in both test suites.
 // Header only, no Windows, so it is tested on its own.
 //

@@ -15,7 +15,7 @@ typedef struct {
     void (*log)(const char *line);
     unsigned flags;
     int (*livery_sync)(unsigned timeout_ms); /* livery.c: retired by CR-S59, always unavailable */
-    /* OD-147 VC-2: voice_net.c fi_voice_send; this player's XUID (the handoff's), 0 unknown */
+    /* OD-154 VC-2: voice_net.c fi_voice_send; this player's XUID (the handoff's), 0 unknown */
     int32_t (*voice_send)(const uint8_t *datagram, uint32_t size);
     uint64_t xuid;
 } LaunchOverlayHost;

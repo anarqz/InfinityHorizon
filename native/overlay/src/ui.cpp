@@ -231,7 +231,7 @@ std::vector<Tile> TilesFor(int tab, const Model &m) {
         break;
     }
     default: {
-        // OD-147: voice chat (VOICE_CHAT.md §5); A changes each one, the launcher keeps them per profile
+        // OD-154: voice chat (VOICE_CHAT.md §5); A changes each one, the launcher keeps them per profile
         const VoiceState v = CurrentVoice();
         const bool enabled = v.flags & VoiceState::Enabled;
         tiles.push_back({kIconMessage, enabled ? T("Voice chat: On", "Chat de voz: Ligado") : T("Voice chat: Off", "Chat de voz: Desligado"),
@@ -501,7 +501,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         TextAt(dl, f.small, ImVec2(hx2 + 28 * s, hy + 1 * s), kTextDim, T("Refresh", "Atualizar"));
     }
     const bool mute_hint = g_tab == kTabWorlds && WorldsMuteHint();
-    if (mute_hint) { // OD-147; the brand gives it its place
+    if (mute_hint) { // OD-154; the brand gives it its place
         hx2 += 112 * s;
         FaceButton(dl, ImVec2(hx2 + 11 * s, hy + 10 * s), 11 * s, kBlue, "X");
         TextAt(dl, f.small, ImVec2(hx2 + 28 * s, hy + 1 * s), kTextDim, T("Mute", "Silenciar"));

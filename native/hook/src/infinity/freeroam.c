@@ -965,6 +965,7 @@ static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **ou
     (void)self;
     fr_log("association DestroyAsync -> completed.");
     azimuth_proxy_stop();
+    fi_follow_left(); /* no lobby type until the game's next OpenConnection */
     azimuth_world_left();
     azimuth_world_lan_left();
     if (fi_launch_protocol()) {
@@ -1431,18 +1432,21 @@ int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out) {
     void *const *vtable = 0;
     const GUID *guid = 0;
     const char *what = 0;
+    /* the game activates some of these every frame: each activation is wrapped, only the first few are logged */
+    static volatile LONG wrapped_logs[4];
+    int kind = 0;
     if (fr_guid_is(iid, &fr_iid_qos_statics) &&
         fr_wide_equal(name, L"Windows.Xbox.Networking.QualityOfService")) {
         vtable = fr_qos_statics_vtable, guid = &fr_iid_qos_statics, what = "QualityOfService";
     } else if (fr_guid_is(iid, &fr_iid_address_statics) &&
                fr_wide_equal(name, L"Windows.Xbox.Networking.SecureDeviceAddress")) {
-        vtable = fr_address_statics_vtable, guid = &fr_iid_address_statics, what = "SecureDeviceAddress";
+        vtable = fr_address_statics_vtable, guid = &fr_iid_address_statics, what = "SecureDeviceAddress", kind = 1;
     } else if (fr_guid_is(iid, &fr_iid_template_statics) &&
                fr_wide_equal(name, L"Windows.Xbox.Networking.SecureDeviceAssociationTemplate")) {
-        vtable = fr_template_statics_vtable, guid = &fr_iid_template_statics, what = "SecureDeviceAssociationTemplate";
+        vtable = fr_template_statics_vtable, guid = &fr_iid_template_statics, what = "SecureDeviceAssociationTemplate", kind = 2;
     } else if (fr_guid_is(iid, &fr_iid_party_statics) &&
                fr_wide_equal(name, L"Windows.Xbox.Multiplayer.Party")) {
-        vtable = fr_party_statics_vtable, guid = &fr_iid_party_statics, what = "Party";
+        vtable = fr_party_statics_vtable, guid = &fr_iid_party_statics, what = "Party", kind = 3;
     }
     if (!vtable) {
         return 0;
@@ -1452,11 +1456,13 @@ int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out) {
         return 0;
     }
     *out = wrap;
-    FR_LINE(line);
-    fr_text(&line, "FREEROAM: ");
-    fr_text(&line, what);
-    fr_text(&line, " statics wrapped.");
-    fr_end(&line);
+    if (InterlockedIncrement(&wrapped_logs[kind]) <= 4) {
+        FR_LINE(line);
+        fr_text(&line, "FREEROAM: ");
+        fr_text(&line, what);
+        fr_text(&line, " statics wrapped.");
+        fr_end(&line);
+    }
     return 1;
 }
 
@@ -1538,6 +1544,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
     fr_build_vtables();
     fr_apply_patches();
     fi_carmeet_apply(game_image);
+    fi_follow_apply(game_image);
     /* The Winsock imports are redirected on the first WinRT activation, on a game thread:
        loading ws2_32 here would happen under the loader lock. */
     log_append(fr_world_override[0] ? "FREEROAM: on; the world is [hook] FreeRoamWorld.\r\n"

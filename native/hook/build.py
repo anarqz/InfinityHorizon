@@ -56,6 +56,7 @@ SOURCES = [
     "src/infinity/carstate.c",
     "src/infinity/carstate_hook.c",
     "src/infinity/carmeet.c",
+    "src/infinity/follow.c",
     "src/infinity/events.c",
     "src/infinity/progress.c",
     "src/infinity/account.c",

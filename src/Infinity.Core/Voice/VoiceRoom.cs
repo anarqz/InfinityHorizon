@@ -5,7 +5,7 @@ using Infinity.Core.Overlay;
 namespace Infinity.Core.Voice;
 
 /// <summary>
-/// The launcher's voice chat for the profile in play (OD-147, VOICE_CHAT.md §4, §11): the lobby's switch, this
+/// The launcher's voice chat for the profile in play (OD-154, VOICE_CHAT.md §4, §11): the lobby's switch, this
 /// player's settings and mutes, and who talks, turned into the overlay's <see cref="UiFrame.VoiceState"/>.
 /// <list type="bullet">
 /// <item>The lobby carries its voice chat switch: the host sets it when creating the lobby (on by default) and may
@@ -59,7 +59,7 @@ public sealed class VoiceRoom
         lock (_lock) return _mutes.ContainsKey(xuid) || _sessionMutes.Contains(xuid) || _lobbyMutes.Contains(xuid);
     }
 
-    /// <summary>What the host's relay enforces (OD-147): null when this profile does not host the current world.</summary>
+    /// <summary>What the host's relay enforces (OD-154): null when this profile does not host the current world.</summary>
     public (bool LobbyOn, IReadOnlyCollection<ulong> MutedForLobby)? RelayRules()
     {
         lock (_lock)

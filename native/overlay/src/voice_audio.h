@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: voice chat's audio engine (OD-147, VC-3, docs/launcher/VOICE_CHAT.md §3.2, §12.4, §13). Capture,
+// Infinity overlay: voice chat's audio engine (OD-154, VC-3, docs/launcher/VOICE_CHAT.md §3.2, §12.4, §13). Capture,
 // processing, Opus, jitter buffers, decoding, mixing and playback, on the engine's own threads: never on the game's
 // Present thread, never touching D3D12. Any failure turns voice off for the session and logs; the overlay and the
 // game go on. No network here: voice.cpp frames what Send gives it and hands back what arrives.

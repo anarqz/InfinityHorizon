@@ -65,8 +65,10 @@ internal sealed partial class RelayEngine
             || _settings.CarMeetLobby is { } lobby && !IsCarMeetLobby(lobby))
             throw new ArgumentOutOfRangeException(nameof(settings));
         _send = send ?? throw new ArgumentNullException(nameof(send));
-        // SessionHostSynced var 0 LobbyType (3 bits); its constructor default is 2, free roam
+        // SessionHostSynced var 0 LobbyType (3 bits); its constructor default is 2, free roam. The game loads the session's
+        // entities for this value, so a Road Trip world must say 1, or the client never runs its Road Trip states
         if (_settings.CarMeetLobby is { } carMeet) _hostVariables[0] = (carMeet, 3);
+        else if (_settings.RoadTrip is not null) _hostVariables[0] = (RoadTripLobby, 3);
         if (_settings.TimeSyncMs < 1 || _settings.InviteCloseMs < 0) throw new ArgumentOutOfRangeException(nameof(settings));
         _weather = new(_settings.WeatherSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue), _now, NowWire);
         StartRoadTrip();
@@ -95,6 +97,14 @@ internal sealed partial class RelayEngine
         return NerdCodec.TryRead(ref reader, out var first, out _) && first is NerdMessage.OpenConnection open ? open.A : null;
     }
 
+    /// <summary>
+    /// When the newest synced player reaching this world over loopback synced (the host's own game; OD-150, its activity),
+    /// on the caller's clock; null: none.
+    /// </summary>
+    internal long? LoopbackSyncedAt => _peers.Where(p => p.Synced && IsLoopback(p.Endpoint.Address)).Select(p => (long?)p.JoinedAt).Max();
+
+    private static bool IsLoopback(IPAddress address) => IPAddress.IsLoopback(address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address);
+
     internal bool HasPeer(IPEndPoint endpoint)
     {
         endpoint = StunCodec.Canonical(endpoint);
@@ -106,7 +116,8 @@ internal sealed partial class RelayEngine
     {
         _now = Math.Max(_now, nowMilliseconds);
         endpoint = StunCodec.Canonical(endpoint);
-        foreach (var peer in _peers.Where(p => p.Endpoint.Equals(endpoint)).ToArray()) Drop(peer);
+        _heldOpens.Remove(endpoint);
+        foreach (var peer in _peers.Where(p => p.Endpoint.Equals(endpoint)).ToArray()) Drop(peer, "moved to another world on this host");
     }
 
     internal void Receive(ReadOnlySpan<byte> data, IPEndPoint endpoint, long nowMilliseconds)
@@ -123,14 +134,14 @@ internal sealed partial class RelayEngine
     internal void Kick(ulong xuid, long nowMilliseconds)
     {
         _now = Math.Max(_now, nowMilliseconds);
-        foreach (var peer in _peers.Where(p => p.Xuid == xuid).ToArray()) Drop(peer);
+        foreach (var peer in _peers.Where(p => p.Xuid == xuid).ToArray()) Drop(peer, "kicked");
     }
 
     internal void Clear()
     {
         _closed = true;
         _peers.Clear(); _handshakes.Clear(); _bans.Clear(); _hostVariables.Clear();
-        _retiredAttempts.Clear(); _retiredOrder.Clear();
+        _retiredAttempts.Clear(); _retiredOrder.Clear(); _heldOpens.Clear();
         ClearGameOptions();
         ClearSideChannels();
         _eventSide.Clear(); _phasing = false;
@@ -173,9 +184,12 @@ internal sealed partial class RelayEngine
         return _settings.HandshakesPerSecond >= 1;
     }
 
-    private RelayPeer? Admit(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, int bytes)
+    private RelayPeer? Admit(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, ReadOnlySpan<byte> data)
     {
+        var bytes = data.Length;
         if (!HandshakeAllowed(endpoint, open.User)) return null;
+        // a seat whose endpoint proof may still come (a game moving to a new socket): no final refusal, the open waits for it
+        if (!Allowed(open.User, endpoint) && Hold(endpoint, header, open, data)) return null;
         byte? reason = !Allowed(open.User, endpoint) ? (byte)4
             : _bans.GetValueOrDefault(endpoint.Address) > _now ? (byte)3
             : !open.Version.AsSpan().SequenceEqual(NerdCodec.Version) ? (byte)1
@@ -185,10 +199,7 @@ internal sealed partial class RelayEngine
                 || (SyncedCount >= _settings.MaxPlayers && (SharedXuid(open.User) || !_peers.Any(p => p.Synced && p.Xuid == open.User))) ? (byte)4 : null;
         if (reason is { } refusal)
         {
-            ConnectionOpened?.Invoke(0, open.A, open.B, refusal);
-            var response = NerdCodec.Packet([NerdCodec.Write(new NerdMessage.OpenResponse(open.Flags, refusal, open.Attempt, 0))],
-                NerdCodec.NoSequence, header.Id == NerdCodec.NoSequence ? NerdCodec.NoAck : header.Id, 0);
-            if (response.Length <= bytes) Emit(endpoint, response);
+            Refuse(endpoint, header, open, bytes, refusal);
             return null;
         }
         byte index = 0;
@@ -206,6 +217,68 @@ internal sealed partial class RelayEngine
         return peer;
     }
 
+    private void Refuse(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, int bytes, byte refusal)
+    {
+        ConnectionOpened?.Invoke(0, open.A, open.B, refusal);
+        var response = NerdCodec.Packet([NerdCodec.Write(new NerdMessage.OpenResponse(open.Flags, refusal, open.Attempt, 0))],
+            NerdCodec.NoSequence, header.Id == NerdCodec.NoSequence ? NerdCodec.NoAck : header.Id, 0);
+        if (response.Length <= bytes) Emit(endpoint, response);
+    }
+
+    // An OpenConnection from an endpoint not proven yet, for an identity whose proof may still come (AwaitsProof): kept
+    // unanswered, the game's own retries included, and taken in again once that endpoint is allowed (TickHeldOpens). The
+    // game takes reason 4 as final (live, test.9: a joiner moving from its Road Trip to free roam on a new socket was
+    // refused before its proof completed and never connected again). Admission still needs Allowed: nothing is let in early.
+    private sealed record HeldOpen(byte[] Data, NerdHeader Header, NerdMessage.OpenConnection Open, long At);
+    private readonly Dictionary<IPEndPoint, HeldOpen> _heldOpens = [];
+    internal const long HeldOpenMs = 20000;
+    private const int MaxHeldOpens = 32;
+
+    /// <summary>Whether this identity holds a seat whose endpoint proof may still arrive; its unproven OpenConnection waits for it (null: none waits).</summary>
+    internal Func<ulong, bool>? AwaitsProof { get; set; }
+
+    /// <summary>A held OpenConnection was admitted after its endpoint proof (not from a datagram): its world now holds the endpoint.</summary>
+    internal Action<IPEndPoint>? AdmittedLate { get; set; }
+
+    private bool Hold(IPEndPoint endpoint, NerdHeader header, NerdMessage.OpenConnection open, ReadOnlySpan<byte> data)
+    {
+        if (SharedXuid(open.User) || AwaitsProof?.Invoke(open.User) != true) return false;
+        if (_heldOpens.TryGetValue(endpoint, out var held))
+        {
+            if (held.Open.User != open.User) return false;
+            _heldOpens[endpoint] = new(data.ToArray(), header, open, held.At); // the latest attempt; the wait is not extended
+            return true;
+        }
+        if (_heldOpens.Count >= MaxHeldOpens) return false;
+        _heldOpens[endpoint] = new(data.ToArray(), header, open, _now);
+        Note(string.Create(CultureInfo.InvariantCulture, $"OpenConnection lobby type {open.A} waits for its endpoint proof"));
+        return true;
+    }
+
+    private void TickHeldOpens()
+    {
+        if (_heldOpens.Count == 0) return;
+        foreach (var (endpoint, held) in _heldOpens.ToArray())
+        {
+            if (_peers.Any(p => p.Endpoint.Equals(endpoint))) { _heldOpens.Remove(endpoint); continue; } // a retry got in
+            if (Allowed(held.Open.User, endpoint))
+            {
+                _heldOpens.Remove(endpoint);
+                try { ReceivePacket(held.Data, endpoint); }
+                catch (WireFormatException) { continue; }
+                if (_peers.Any(p => p.Endpoint.Equals(endpoint)))
+                {
+                    Note(string.Create(CultureInfo.InvariantCulture, $"OpenConnection lobby type {held.Open.A} admitted after {_now - held.At} ms waiting for its proof"));
+                    AdmittedLate?.Invoke(endpoint);
+                }
+                continue;
+            }
+            if (_now - held.At < HeldOpenMs && AwaitsProof?.Invoke(held.Open.User) == true) continue;
+            _heldOpens.Remove(endpoint); // no proof came: the refusal it was spared
+            Refuse(endpoint, held.Header, held.Open, held.Data.Length, 4);
+        }
+    }
+
     private bool TakeRate(RelayPeer peer, NerdHeader header, int length)
     {
         var elapsed = Math.Max(0, _now - peer.BucketAt) / 1000.0;
@@ -219,7 +292,7 @@ internal sealed partial class RelayEngine
         peer.OverLast = _now;
         if (_now - peer.OverSince >= _settings.AbuseMs)
         {
-            peer.Doomed = true;
+            Doom(peer, "over the rate limit");
             foreach (var key in _bans.Where(p => p.Value <= _now).Select(p => p.Key).ToArray()) _bans.Remove(key);
             if (_bans.Count >= 256) _bans.Remove(_bans.Keys.First());
             _bans[peer.Endpoint.Address] = _now + _settings.AbuseBanMs;
@@ -229,14 +302,14 @@ internal sealed partial class RelayEngine
 
     private void CompleteHandshake(RelayPeer peer)
     {
-        if (!Allowed(peer.Xuid, peer.Endpoint)) { Drop(peer); return; }
+        if (!Allowed(peer.Xuid, peer.Endpoint)) { Drop(peer, "not allowed at sync"); return; }
         var old = !SharedXuid(peer.Xuid) ? _peers.FirstOrDefault(p => p != peer && p.Synced && p.Xuid == peer.Xuid) : null;
         if (old is not null)
         {
-            if (_now - old.LastSeen < _settings.TakeoverQuietMs) { Drop(peer); return; }
-            Drop(old);
+            if (_now - old.LastSeen < _settings.TakeoverQuietMs) { Drop(peer, $"its player is still active as peer {old.Index}"); return; }
+            Drop(old, $"taken over by peer {peer.Index}");
         }
-        if (SyncedCount >= _settings.MaxPlayers) { Drop(peer); return; }
+        if (SyncedCount >= _settings.MaxPlayers) { Drop(peer, "world full at sync"); return; }
         peer.Synced = true; peer.JoinedAt = _now;
         SendCompletion(peer);
         var payload = NerdPayload.SessionHost(_hostVariables.Select(p => (p.Key, p.Value.Value, p.Value.Width)).ToArray());
@@ -270,9 +343,11 @@ internal sealed partial class RelayEngine
         Send(peer, [NerdCodec.Write(new NerdMessage.TimeSync(peer.SyncIndex++, NowWire)), NerdCodec.Write(new NerdMessage.SyncDone(peer.Attempt))], false);
     }
 
-    private void Drop(RelayPeer peer)
+    /// <summary>The peer leaves this world; <paramref name="reason"/> goes to the world log with its index (never an identity or address).</summary>
+    private void Drop(RelayPeer peer, string reason)
     {
         if (!_peers.Remove(peer)) return;
+        Note(string.Create(CultureInfo.InvariantCulture, $"peer {peer.Index} dropped: {reason}{(peer.Synced ? string.Empty : " (not synced)")}"));
         var deletes = peer.Objects.Select(p => NerdCodec.Write(new NerdMessage.Delete(p.Key.Router,
             new(HandleKind.Relay, p.Key.Id, peer.Index), AckWindow.SequenceAdd(AckWindow.SequenceNext(p.Value.Last), p.Value.Injected)))).ToArray();
         foreach (var other in _peers.Where(p => p.Synced)) SendSequenced(other, deletes);
@@ -293,15 +368,22 @@ internal sealed partial class RelayEngine
                 var ack = peer.Acks.Header;
                 Emit(peer.Endpoint, NerdCodec.Packet([NerdCodec.Write(new NerdMessage.Close())], NerdCodec.NoSequence, ack.Ack, ack.Bits));
             }
-            Drop(peer);
+            Drop(peer, peer.DoomedBy ?? "doomed");
         }
+    }
+
+    /// <summary>The peer is dropped at the end of this receive or tick; the first reason is kept for the log.</summary>
+    private static void Doom(RelayPeer peer, string reason)
+    {
+        peer.DoomedBy ??= reason;
+        peer.Doomed = true;
     }
     private void Emit(IPEndPoint endpoint, byte[] data) => _send(new(endpoint, data));
 
     private bool MaySend(RelayPeer peer)
     {
         if (!peer.Doomed && Allowed(peer.Xuid, peer.Endpoint)) return true;
-        peer.Doomed = true;
+        Doom(peer, "not allowed any more");
         return false;
     }
 
@@ -364,7 +446,7 @@ internal sealed partial class RelayEngine
     private bool QueueReliable(RelayPeer peer, BitBuffer message)
     {
         if (peer.Queue.Count >= _settings.QueueMaxMessages || peer.QueueBits + message.Length > _settings.QueueMaxBits)
-        { peer.Doomed = true; return false; }
+        { Doom(peer, "reliable queue full"); return false; }
         peer.Queue.Enqueue(message); peer.QueueBits += message.Length;
         return true;
     }

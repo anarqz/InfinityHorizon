@@ -15,7 +15,7 @@ $mh = "$here\third_party\minhook"
 $mz = "$here\third_party\miniz"
 $mzdefs = "/DMINIZ_NO_STDIO /DMINIZ_NO_TIME /DMINIZ_NO_ARCHIVE_APIS /DMINIZ_NO_ZLIB_COMPATIBLE_NAMES"
 $common = "/nologo /std:c++20 /utf-8 /EHsc /MT /W4 /permissive- $opt /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX"
-# Voice chat codecs (OD-147, VC-3): libopus 1.5.2 (OSCE + deep PLC, no DRED) and RNNoise 0.2. fetch.ps1 downloads the
+# Voice chat codecs (OD-154, VC-3): libopus 1.5.2 (OSCE + deep PLC, no DRED) and RNNoise 0.2. fetch.ps1 downloads the
 # release tarballs pinned by SHA-256 (not in git); nothing from them is run, their C sources are compiled here.
 $opus = "$here\third_party\opus-1.5.2"
 $rnn = "$here\third_party\rnnoise-0.2"

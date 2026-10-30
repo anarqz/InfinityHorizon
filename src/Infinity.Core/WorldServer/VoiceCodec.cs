@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 
 namespace Infinity.Core.WorldServer;
 
-/// <summary>A voice datagram's header, carried in the STUN transaction id (VOICE_CHAT.md §3.1, OD-147).</summary>
+/// <summary>A voice datagram's header, carried in the STUN transaction id (VOICE_CHAT.md §3.1, OD-154).</summary>
 internal readonly record struct VoiceHeader(byte Flags, ushort Sequence, uint Timestamp)
 {
     /// <summary><c>Flags</c> bit 0: the last packet of a talk spurt.</summary>
@@ -37,7 +37,7 @@ internal sealed record VoiceStateDown(byte Lobby, byte Bundle, IReadOnlyList<Voi
 }
 
 /// <summary>
-/// The world relay's voice side channel (OD-147, D1: kinds 0x3E93 and 0x3E94; 0x3E92/0xC0F2, the retired livery
+/// The world relay's voice side channel (OD-154, D1: kinds 0x3E93 and 0x3E94; 0x3E92/0xC0F2, the retired livery
 /// channel, stays reserved). STUN indications like car state, big-endian. Voice: the 12-byte transaction id is
 /// {ver = 1, flags, seq u16, ts u32 (20 ms units), up: 4 random | down: seat u8, 3 random} and the attribute is one
 /// Opus packet (1-400 bytes). Control up {ver, op, xuid u64, self u8, count u8 &lt;= 12, count x xuid u64}; state down

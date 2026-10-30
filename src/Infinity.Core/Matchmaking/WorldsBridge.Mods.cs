@@ -72,7 +72,7 @@ public sealed partial class WorldsBridge
                 if (read.FailureKey is { } key) return Failed(_text(key));
                 rows = read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))).ToList();
             }
-            var ordered = OrderLobbies(rows).Select(r => r.Row).ToList();
+            var ordered = OrderLobbies(rows).Select(r => r.Row with { World = WithActivity(r.Row.World, r.World) }).ToList();
             return new UiFrame.WorldsListV2(query.Filter, query.Modded, 0, string.Empty, FitLobbyRows(ordered, string.Empty));
         }
         catch (Exception e) when (HostFailure(e))
@@ -80,6 +80,13 @@ public sealed partial class WorldsBridge
             return Failed(_text("worlds.list_failed"));
         }
     }
+
+    /// <summary>
+    /// OD-150: the overlay's row shows what its world runs now after the host's name ("Host · Online Road Trip"): the row
+    /// frame has no field of its own for it, and the host text is the row's and the lobby pane's subtitle.
+    /// </summary>
+    private WorldRow WithActivity(WorldRow row, WorldView world) =>
+        row with { Host = Clip(row.Host + " · " + ActivityName(world.Activity), 128) };
 
     /// <summary>One matchmaking world as a protocol 2 row: <c>ModsMatch</c> only when this session's set is ready and equal.</summary>
     public static LobbyRow LobbyRow(WorldView world, bool lockedSection, ModSetState local)
