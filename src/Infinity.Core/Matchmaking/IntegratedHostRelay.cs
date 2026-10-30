@@ -75,7 +75,11 @@ public sealed class IntegratedHostRelay : IHostRelay
                     ? string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection refused reason {reason} lobby type {a} at {world} (A={a} B={b})")
                     : string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection admitted peer {index} lobby type {a} -> {world} (A={a} B={b})");
                 Diagnostics.UdpDiagnostics.Enqueue(sink, line);
-            }
+            },
+            WorldLog = line =>
+            {
+                if (Volatile.Read(ref _diagnosticLog) is { } sink) Diagnostics.UdpDiagnostics.Enqueue(sink, $"world: {world}: {line}");
+            },
         };
     }
 
