@@ -140,6 +140,7 @@ internal sealed partial class RelayEngine
             { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
             obj = obj with { Payload = payload! };
             if (obj.Router == 1 && !obj.Create && obj.Payload.Length >= RoadTripCarChoiceBits) RoadTripCarPicked(peer);
+            if (obj.Router == 1) ObserveCarChoice(peer, obj.Payload);
         }
         else RoadTripPlayerUpdate(peer, obj.Payload);
         var key = (obj.Router, obj.Handle.Id);
