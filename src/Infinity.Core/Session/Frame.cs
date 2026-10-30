@@ -326,6 +326,17 @@ public abstract record Frame
         }
     }
 
+    /// <summary>
+    /// launcher → hook (0x24): <c>{}</c>, empty. A lobby ask's seat did not start playing within
+    /// <see cref="Matchmaking.WorldsBridge.SeatGiveUp"/> and was given up: the hook sends the game's own
+    /// <c>NetworkMatchmakingRequestDisconnect</c> on its matchmaking module's next update (and drops a queued start), so the
+    /// game leaves FINDING SESSION instead of waiting forever. Any payload byte is a protocol error on both sides.
+    /// </summary>
+    public sealed record CancelMatchmaking : Frame
+    {
+        public override byte Type => 0x24;
+    }
+
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
     {
@@ -487,6 +498,8 @@ public abstract record Frame
             case FollowHost follow:
                 FollowHost.Validate(follow.LobbyType);
                 w.U8(follow.LobbyType); w.Flag(follow.Public); break;
+            case CancelMatchmaking:
+                break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -586,6 +599,7 @@ public abstract record Frame
             0x21 => new Progress(r.U32(), r.U64()),
             0x22 => new Car(unchecked((int)r.U32())),
             0x23 => new FollowHost(r.U8(), r.Flag("follow-host public")),
+            0x24 => new CancelMatchmaking(),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();

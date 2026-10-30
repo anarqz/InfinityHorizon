@@ -63,6 +63,7 @@ enum {
     FRAME_PROGRESS = 0x21,        /* hook -> launcher, CR-L41.3: {u32 level, u64 credits} */
     FRAME_CAR = 0x22,             /* hook -> launcher, CR-L41.3: {i32 carKey} */
     FRAME_FOLLOW_HOST = 0x23,     /* launcher -> hook, OD-151: {u8 lobby type 1-2, u8 public 0-1} (follow.c) */
+    FRAME_CANCEL_MATCHMAKING = 0x24, /* launcher -> hook: {} (the launcher gave up on its seat; follow.c) */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -1818,6 +1819,16 @@ static int launch_session_frame(void) {
         fi_follow_host(lobby, is_public);
         return 1;
     }
+    case FRAME_CANCEL_MATCHMAKING:
+        /* the launcher gave up on a lobby ask's seat after 15 s: the game's matchmaking is cancelled */
+        if (r.left) {
+            launch_log("REFUSED: a CancelMatchmaking frame that does not parse.", 0, 0, "");
+            return 0;
+        }
+        if (fi_launch_suspended()) return 1;
+        launch_log("CancelMatchmaking: the launcher gave up on its seat; the game's matchmaking is cancelled.", 0, 0, "");
+        fi_follow_cancel();
+        return 1;
     default:
         launch_log("REFUSED: a frame the launcher does not send during a session (type ", 1, type, ").");
         return 0;

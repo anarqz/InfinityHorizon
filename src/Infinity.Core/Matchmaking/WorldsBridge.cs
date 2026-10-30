@@ -458,14 +458,15 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation) => JoinAsync(request, null, cancellation);
 
     /// <summary>As <see cref="JoinAsync(UiFrame.JoinWorld, CancellationToken)"/>, asking for <paramref name="activity"/> (OD-150; null: any).</summary>
-    private async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, string? activity, CancellationToken cancellation)
+    /// <paramref name="kind"/>: the lobby ask the seat is taken for (<see cref="FreeRoamKind"/>; the overlay's join is free roam).
+    private async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, string? activity, CancellationToken cancellation, byte kind = FreeRoamKind.FreeRoam)
     {
         if(Interlocked.CompareExchange(ref _joinAttempt,1,0)!=0)return new(UiJoin.SlowDown,_text("worlds.slow_down"));
         CancelFreeRoamLeave(); // the new seat is never let go by an older leave of free roam
-        try {return await JoinCoreAsync(request,activity,cancellation).ConfigureAwait(false);}
+        try {return await JoinCoreAsync(request,activity,kind,cancellation).ConfigureAwait(false);}
         finally {Volatile.Write(ref _joinAttempt,0);}
     }
-    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, string? activity, CancellationToken cancellation)
+    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, string? activity, byte kind, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
         Volatile.Write(ref _lastJoinRefusal, null);
@@ -569,6 +570,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             {
                                 _seat.Granted(grant, Now);
             Volatile.Write(ref _seatWorld, grant.WorldId);
+                                SeatTakenFor(grant.Id, kind);
                                 InvalidateMine(reset: true);
                                 accepted = OnlineOpen && !cancellation.IsCancellationRequested;
                                 if (!accepted) _seat.Left();

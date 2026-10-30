@@ -170,6 +170,7 @@ internal sealed partial class RelayEngine
                     .Select(p => new ObjectHandle(p!.Index == receiver ? HandleKind.Own : HandleKind.Relay, p.ConsoleId!.Value, p.Index == receiver ? (byte)0 : p.Index)).ToArray();
                 if (_peers.FirstOrDefault(p => p.Index == receiver) is { } target) SendSequenced(target, [NerdPayload.StartingGrid(grid)]);
             }
+            BeginTag();
         }
         else if (race.Stage == RaceStage.Grid && All(0))
         {
@@ -179,6 +180,7 @@ internal sealed partial class RelayEngine
                 if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SendSequenced(peer, [NerdPayload.StartRace(start)]);
             SetHostVariables((6, 1, 1), (9, start, 32));
             Note($"event: race started with {race.Participants.Count}");
+            TagStarted(_now + 5000);
         }
     }
 
@@ -195,7 +197,8 @@ internal sealed partial class RelayEngine
 
     private void Finished(RelayPeer peer)
     {
-        if (_race is not { Stage: RaceStage.Started } race || !race.Participants.Contains(peer.Index) || !race.Finished.Add(peer.Index)) return;
+        if (_race is not { Stage: RaceStage.Started } race || !race.Participants.Contains(peer.Index) || TagTooEarlyToFinish()
+            || !race.Finished.Add(peer.Index)) return;
         race.FirstFinishAt ??= _now;
         ReevaluateRaceCompletion();
     }
@@ -216,6 +219,7 @@ internal sealed partial class RelayEngine
     private void EndRace(string why)
     {
         if (_race is not { } race) return;
+        TagEnded();
         _race = null; ClearGameOptions();
         // The owner's game still holds the event options after its event and asks for them again only when it lost them, so it
         // keeps them for its next race request; another player's ownership request takes them over between events.
@@ -234,6 +238,7 @@ internal sealed partial class RelayEngine
         race.Finished.Remove(peer.Index); race.InProgress.Remove(peer.Index);
         SetConsoleVariables(peer, (2, false), (4, false));
         LeaveEventSide(peer);
+        if (race.Participants.Count != 0) TagLeft(peer);
         if (race.Participants.Count == 0) EndRace("every participant left");
         else if (ReferenceEquals(peer, race.OwnerPeer) && race.Stage != RaceStage.Started) EndRace("its owner left before the start");
         else ReevaluateRaceCompletion();
@@ -257,6 +262,7 @@ internal sealed partial class RelayEngine
         if (race.Stage == RaceStage.Inviting && _now >= race.InviteUntil) SelectParticipants();
         else if (race.Stage is RaceStage.Gathering or RaceStage.Grid && _now >= race.StageUntil) StageTimedOut(race);
         else ReevaluateRaceCompletion();
+        TickTag();
     }
 
     /// <summary>

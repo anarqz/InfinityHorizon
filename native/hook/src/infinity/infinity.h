@@ -257,10 +257,20 @@ int azimuth_proxy_send_world(const void *data, int size);
 void fi_carstate_apply(unsigned char *game_image);
 /* carmeet.c: car meet invitation joins and the online car meet entries (free roam on). */
 void fi_carmeet_apply(unsigned char *game_image);
+/* carmeet.c: the CarMeet_qos POST's ticketAttributes (identifying keys left out) in one log line. */
+void fi_carmeet_ticket_log(const unsigned char *body, size_t size);
 /* follow.c (OD-151): a seated guest's game starts its own matchmaking for the host's new activity
    (the launcher's FollowHost; the player confirms with (X)). Applied with car meets (free roam on). */
 void fi_follow_apply(unsigned char *game_image);
 void fi_follow_host(unsigned lobby, unsigned is_public);
+/* The launcher's CancelMatchmaking (0x24): it gave up on its seat; the game's own matchmaking
+   disconnect is sent on the module's next update (follow.c). */
+void fi_follow_cancel(void);
+/* The joiner's proxy: each datagram the game sends its world (an OpenConnection's lobby type is
+   what the game is in; follow.c skips a start of it). fi_follow_left: an association destroyed; the
+   game left its session unless it sent an OpenConnection in the last 3 s (the new connection's). */
+void fi_follow_datagram(const unsigned char *data, size_t size);
+void fi_follow_left(void);
 void azimuth_carstate_local(int lights, int roof);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);

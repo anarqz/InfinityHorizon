@@ -16,6 +16,8 @@ internal sealed record RelaySettings
     internal bool EnforceCarRule { get; init; }
     /// <summary>The world's weather sequence; null picks a random seed.</summary>
     public int? WeatherSeed { get; init; }
+    /// <summary>The draw of a tag event's first It cars; null picks a random seed.</summary>
+    public int? TagSeed { get; init; }
     /// <summary>A TimeSync re-bases the game's network clock (remote cars are timed against it), so it is refreshed only rarely.</summary>
     public long TimeSyncMs { get; init; } = 30000;
     /// <summary>When everybody invited has accepted, the invitation closes this soon instead of waiting out its window.</summary>
@@ -234,6 +236,8 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal string? DoomedBy { get; set; }
     internal CarState? CarState { get; set; }
     internal System.Numerics.Vector3? CarPosition { get; set; }
+    /// <summary>The id of this player's own car object (its last car prediction's key): the key of its car in a tag event.</summary>
+    internal uint? CarId { get; set; }
     /// <summary>The last car prediction, sent again with a newer time when the event boundary moves.</summary>
     internal NerdMessage.Car? LastCar { get; set; }
     /// <summary>This player's private universe while an event exists (0 outside, the shared default).</summary>

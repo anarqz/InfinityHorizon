@@ -138,8 +138,9 @@ public sealed partial class WorldsBridge
     /// after free roam is called off, the game is in the world (live, test.9: a joiner's Road Trip connection ended just
     /// before its free roam one opened).
     /// </summary>
-    public void GameJoined()
+    public void GameJoined(bool join = false)
     {
+        if (join) SeatPlays("the game joined"); // a guest's join (detail join:…) is the seat's proof: no give-up
         if (Interlocked.Exchange(ref _freeRoamLeave, null) is not { } pending) return;
         CancelFreeRoamLeave(pending);
         if ((HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } world) _log($"worlds: the game joined again; {world} stays");
@@ -170,7 +171,11 @@ public sealed partial class WorldsBridge
     private byte Decided(byte kind, byte result, string what)
     {
         _log($"worlds: {KindName(kind)}: {what}");
-        if (result == FreeRoamResult.Ready) Interlocked.Exchange(ref _lobbyReadyTicks, Now.UtcTicks); // the next leave of free roam is this lobby's
+        if (result == FreeRoamResult.Ready)
+        {
+            Interlocked.Exchange(ref _lobbyReadyTicks, Now.UtcTicks); // the next leave of free roam is this lobby's
+            ArmGiveUp(kind); // a seat that never played gets SeatGiveUp to start playing; hosting never
+        }
         return result;
     }
 
@@ -192,7 +197,8 @@ public sealed partial class WorldsBridge
     {
         CancelFreeRoamLeave(); // the game left free roam for this ask: its world stays and is weighed here
         if (!OnlineOpen) return Task.FromResult(Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)"));
-        if (HasFreeRoamWorld && (kind == FreeRoamKind.FreeRoam || HostsOrOpensWorld)) return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
+        if (HasFreeRoamWorld && (kind == FreeRoamKind.FreeRoam || HostsOrOpensWorld) && UnprovenOtherSeat(kind) is null)
+            return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
         lock (_freeRoamState)
         {
             if (_freeRoamRun is { IsCompleted: false } running)
@@ -227,12 +233,21 @@ public sealed partial class WorldsBridge
     {
         var lobby = LobbyOf(kind);
         var activity = ActivityOf(kind);
-        if (HasFreeRoamWorld && (lobby is null || HostsOrOpensWorld)) return Decided(kind, FreeRoamResult.Ready, Staying());
+        if (HasFreeRoamWorld && (lobby is null || HostsOrOpensWorld) && UnprovenOtherSeat(kind) is null) return Decided(kind, FreeRoamResult.Ready, Staying());
         try
         {
             if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no world (online lobbies are not allowed now)");
             if (WireMods().Refusal is { } refusal) return Decided(kind, FreeRoamResult.None, $"no world (mods: {refusal})");
+            // test.11: a seat taken for another kind that never played is not this ask's world ("stay" left the game on FINDING
+            // SESSION): it is let go (not on purpose) and this kind joins or opens as usual. No CancelMatchmaking: this ask is
+            // the game's live matchmaking now.
+            if (UnprovenOtherSeat(kind) is { } stale)
+            {
+                var staleWorld = Volatile.Read(ref _seatWorld) ?? "its seat";
+                if (await ReleaseUnprovenSeatAsync(stale.Grant).ConfigureAwait(false))
+                    _log($"worlds: {KindName(kind)}: dropped the unproven {KindName(stale.Kind)} seat in {staleWorld}; joining again");
+            }
             if (lobby is not null && _seat.GrantId is not null)
             {
                 // seated in a world whose server does not run this lobby: its ticket would land nowhere, so the seat is let go
@@ -271,7 +286,7 @@ public sealed partial class WorldsBridge
                 && (lobby is null || candidates.Any(c => c.World.Id == recent.WorldId)))
             {
                 cancellation.ThrowIfCancellationRequested();
-                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, cancellation).ConfigureAwait(false);
+                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, cancellation, kind).ConfigureAwait(false);
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
                 _log($"worlds: {KindName(kind)}: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
@@ -284,7 +299,7 @@ public sealed partial class WorldsBridge
             {
                 if (HasFreeRoamWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
                 cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join or open past it
-                var joined = await JoinAsync(new UiFrame.JoinWorld(world.Id, string.Empty), activity, cancellation).ConfigureAwait(false);
+                var joined = await JoinAsync(new UiFrame.JoinWorld(world.Id, string.Empty), activity, cancellation, kind).ConfigureAwait(false);
                 if (joined.Result == UiJoin.Reserved)
                 {
                     FreeRoamToast("worlds.free_roam_joined", world.Name);

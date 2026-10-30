@@ -574,6 +574,12 @@ public sealed class PlaySupervisor
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
                 await pipe.WriteAsync(follow.Encode(),ct).ConfigureAwait(false);
             };
+            // a lobby ask's seat that never played within WorldsBridge.SeatGiveUp: the game's FINDING SESSION is cancelled
+            worlds.SendCancelMatchmaking=async ct=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                await pipe.WriteAsync(new Frame.CancelMatchmaking().Encode(),ct).ConfigureAwait(false);
+            };
             worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
@@ -745,9 +751,10 @@ public sealed class PlaySupervisor
                         }
                         // live (test.9): back from a Road Trip the game opens its free roam connection (Event 3) around
                         // closing the Road Trip one (Event 4); joining again calls off the pending close or leave
-                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } && worlds is not null)
+                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } entered && worlds is not null)
                         {
-                            worlds.GameJoined();
+                            // join:<ip:port> is a guest's game in its seat's world: the seat plays (no 15 s give-up)
+                            worlds.GameJoined(join: entered.Detail.StartsWith("join", StringComparison.Ordinal));
                         }
                         if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {
