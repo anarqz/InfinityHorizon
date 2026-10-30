@@ -704,8 +704,9 @@ public sealed class PlaySupervisor
                         // CR-L40: FREE ROAM ONLINE waits in the hook until a lobby is ready; answered off this loop
                         if (frame is Frame.FreeRoamNeed need && endpoint.Greeted)
                         {
-                            var ensure = !suspended && tokensOpen && !_online.IsPaused && worlds is not null
-                                ? worlds.EnsureFreeRoamWorldAsync : (Func<CancellationToken, Task<byte>>?)null;
+                            var bridge = worlds;
+                            var ensure = !suspended && tokensOpen && !_online.IsPaused && bridge is not null
+                                ? token => bridge.EnsureFreeRoamWorldAsync(need.Kind, token) : (Func<CancellationToken, Task<byte>>?)null;
                             // off the reader loop from the first line: the access check may do synchronous work
                             var (freeRoamOnline, freeRoamStop) = (onlineStop.Token, stop.Token);
                             _ = Task.Run(() => AnswerFreeRoamAsync(ensure, need.Nonce, pipe.WriteAsync, FreeRoamBudget, _clock,

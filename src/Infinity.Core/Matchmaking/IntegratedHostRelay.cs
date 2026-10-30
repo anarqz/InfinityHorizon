@@ -17,7 +17,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly RelaySettings _settings;
     private readonly RelayEngine _engine; // free roam (every lobby type but a car meet)
     private readonly Dictionary<uint, RelayEngine> _carMeets = []; // actor thread only, at most the two car meet lobby types
-    private readonly string? _gameDatabase;
+    private readonly RoadTripCatalog? _roadTripCatalog;
     private RelayEngine? _roadTrip; // actor thread only: the Road Trip world (lobby type 1), made on its first connection
     private bool _roadTripUnavailable;
     private readonly Dictionary<IPEndPoint, RelayEngine> _routes = []; // actor thread only: endpoints seated in a car meet
@@ -46,7 +46,9 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options)
     {
-        _gameDatabase = options.GameDatabase;
+        // read once: the world announces a Road Trip only when its engine can run one
+        var catalog = options.GameDatabase is null ? null : RoadTripCatalog.Load(options.GameDatabase);
+        _roadTripCatalog = catalog is { Events.Count: > 0 } ? catalog : null;
         _socket = socket;
         Port = checked((ushort)((IPEndPoint)socket.LocalEndPoint!).Port);
         var dual = socket.AddressFamily == AddressFamily.InterNetworkV6;
@@ -149,8 +151,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private RelayEngine? RoadTrip()
     {
         if (_roadTrip is not null || _roadTripUnavailable) return _roadTrip;
-        var catalog = _gameDatabase is null ? null : RoadTripCatalog.Load(_gameDatabase);
-        if (catalog is null || catalog.Events.Count == 0)
+        if (_roadTripCatalog is not { } catalog)
         {
             _roadTripUnavailable = true;
             if (Volatile.Read(ref _diagnosticLog) is { } sink) Diagnostics.UdpDiagnostics.Enqueue(sink, "world: no Road Trip: the game database cannot be read");
@@ -166,6 +167,9 @@ public sealed class IntegratedHostRelay : IHostRelay
     }
 
     public ushort Port { get; }
+
+    /// <summary>The lobbies this world serves besides free roam (MATCHMAKING_API WorldSettings.lobbies): car meets always, a Road Trip with the game database.</summary>
+    public IReadOnlyList<string> Lobbies => _roadTripCatalog is null ? [LobbyKinds.CarMeet] : [LobbyKinds.CarMeet, LobbyKinds.RoadTrip];
     public bool Running => Volatile.Read(ref _running) != 0 && Volatile.Read(ref _disposed) == 0;
     public RelayNetworkStatus NetworkStatus => Volatile.Read(ref _network);
 

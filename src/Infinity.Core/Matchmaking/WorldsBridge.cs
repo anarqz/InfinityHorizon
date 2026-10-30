@@ -1026,6 +1026,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Nat = relayReport?.Nat,
                 Relays = relayReport?.Relays,
                 Transport = RelayTransport,
+                Lobbies = relay is IntegratedWorldRelay lobbies ? lobbies.Lobbies : null,
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {

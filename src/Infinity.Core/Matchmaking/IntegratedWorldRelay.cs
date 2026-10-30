@@ -33,6 +33,8 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     { _transport = transport; _admission = admission; }
 
     public ushort Port => _transport.Port;
+    /// <summary>The lobbies its world server runs besides free roam (<see cref="IntegratedHostRelay.Lobbies"/>).</summary>
+    public IReadOnlyList<string> Lobbies => _transport.Lobbies;
     public bool Running => Volatile.Read(ref _disposed) == 0 && _transport.Running;
     public RelayNetworkStatus NetworkStatus => _transport.NetworkStatus;
     public Diagnostics.CrashContext? CrashContext { get => _transport.CrashContext; set => _transport.CrashContext = value; }

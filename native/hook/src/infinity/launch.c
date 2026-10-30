@@ -58,7 +58,7 @@ enum {
     FRAME_CUSTOM_TRUST = 0x1c,
     FRAME_RELAY_LEG = 0x1d,      /* launcher -> hook, CR-S57: the joiner's relay leg (proxy.c) */
     FRAME_RELAY_FALLBACK = 0x1e, /* hook -> launcher, CR-S57: {grant[16], u8 state 1-4} */
-    FRAME_FREE_ROAM_NEED = 0x1f,  /* hook -> launcher, CR-L40: {u32 nonce} */
+    FRAME_FREE_ROAM_NEED = 0x1f,  /* hook -> launcher, CR-L40: {u32 nonce, u8 kind} */
     FRAME_FREE_ROAM_READY = 0x20, /* launcher -> hook, CR-L40: {u32 nonce, u8 result 0-2} */
     FRAME_PROGRESS = 0x21,        /* hook -> launcher, CR-L41.3: {u32 level, u64 credits} */
     FRAME_CAR = 0x22,             /* hook -> launcher, CR-L41.3: {i32 carKey} */
@@ -757,13 +757,16 @@ void fi_launch_capture(unsigned what, int ok) {
 /* ------------------------------------------------------- free roam online */
 /* CR-L40 (LOBBIES_AND_SERVER_STATUS.md 3.1): FREE ROAM ONLINE's matchmaking request
    (POST momatch.xboxlive.com/serviceconfigs/{scid}/hoppers/FreeRoam_qos) waits, on its own net
-   worker thread, until the launcher has a world for the player: FreeRoamNeed{u32 nonce} goes out,
+   worker thread, until the launcher has a world for the player: FreeRoamNeed{u32 nonce, u8 kind}
+   goes out (kind 0 free roam, 1 car meet, 2 Road Trip: the world must run that lobby), and
    FreeRoamReady{u32 nonce, u8 result} comes back to the reader loop. One handshake at a time: a
-   request that comes while one is in flight waits for the same answer, until the same deadline. A
+   request of the same kind that comes while one is in flight waits for the same answer, until the
+   same deadline; one of another kind waits for that handshake to end, then asks for its own. A
    timeout, a closed pipe or a suspension lets the request go on as before (the server's usual
-   answer). launch_fr_lock guards the four values. */
+   answer). launch_fr_lock guards the five values. */
 static SRWLOCK launch_fr_lock = SRWLOCK_INIT;
 static unsigned launch_fr_nonce;          /* the handshake in flight, 0 none */
+static unsigned launch_fr_kind;           /* its kind */
 static unsigned launch_fr_counter;        /* the last nonce sent */
 static unsigned launch_fr_done, launch_fr_result; /* the last answered nonce and its result */
 static unsigned long long launch_fr_deadline;
@@ -780,9 +783,9 @@ static int launch_wide_starts(const wchar_t *text, const wchar_t *prefix) {
     return 1;
 }
 
-/* 1 for the game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos, .../hoppers/CarMeet_qos or
-   .../hoppers/RoadTrip_qos (case-insensitive; their /tickets sub-paths and every other hopper are not
-   it). A car meet or an online Road Trip entered outside a lobby needs a world first, like FREE ROAM
+/* The game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos (1), .../hoppers/CarMeet_qos (2) or
+   .../hoppers/RoadTrip_qos (3), case-insensitive; 0 for their /tickets sub-paths and every other
+   hopper. A car meet or an online Road Trip entered outside a lobby needs a world first, like FREE ROAM
    ONLINE: its ticket goes to the world the player is seated in or hosts, whose car meet or Road Trip
    the world server keeps. */
 static int launch_hopper_at(const wchar_t *at, const wchar_t *hopper, size_t length) {
@@ -807,11 +810,9 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
     }
     if (*at != L'/') return 0;
     for (; *at && *at != L'?' && *at != L'#'; ++at) {
-        if (launch_hopper_at(at, free_roam, sizeof(free_roam) / sizeof(free_roam[0]) - 1) ||
-            launch_hopper_at(at, car_meet, sizeof(car_meet) / sizeof(car_meet[0]) - 1) ||
-            launch_hopper_at(at, road_trip, sizeof(road_trip) / sizeof(road_trip[0]) - 1)) {
-            return 1;
-        }
+        if (launch_hopper_at(at, free_roam, sizeof(free_roam) / sizeof(free_roam[0]) - 1)) return 1;
+        if (launch_hopper_at(at, car_meet, sizeof(car_meet) / sizeof(car_meet[0]) - 1)) return 2;
+        if (launch_hopper_at(at, road_trip, sizeof(road_trip) / sizeof(road_trip[0]) - 1)) return 3;
     }
     return 0;
 }
@@ -820,7 +821,9 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
    launcher session, the FreeRoamNeed handshake. The result (0 a world is ready, 1 none, 2 not
    online), -1 when nothing was asked or nothing came (the request goes on either way). */
 int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG *aborted) {
-    if (!fi_launch_protocol() || !fi_launch_free_roam_request(method, url)) return -1;
+    int hopper = fi_launch_protocol() ? fi_launch_free_roam_request(method, url) : 0;
+    if (!hopper) return -1;
+    unsigned kind = (unsigned)hopper - 1;
     if (!fi_launch_live() || !launch_connected) {
         static volatile LONG logged;
         if (!InterlockedExchange(&logged, 1)) {
@@ -830,19 +833,33 @@ int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG
     }
     unsigned nonce;
     int first = 0;
-    AcquireSRWLockExclusive(&launch_fr_lock);
-    if (!launch_fr_nonce) {
-        if (!++launch_fr_counter) ++launch_fr_counter; /* 0 means none */
-        unsigned char payload[4] = {(unsigned char)launch_fr_counter, (unsigned char)(launch_fr_counter >> 8),
-                                    (unsigned char)(launch_fr_counter >> 16), (unsigned char)(launch_fr_counter >> 24)};
-        if (launch_queue_frame(FRAME_FREE_ROAM_NEED, payload, sizeof(payload))) {
-            launch_fr_nonce = launch_fr_counter;
-            launch_fr_deadline = GetTickCount64() + LAUNCH_FREE_ROAM_WAIT_MS;
-            first = 1;
+    for (;;) {
+        AcquireSRWLockExclusive(&launch_fr_lock);
+        if (launch_fr_nonce && launch_fr_kind != kind) {
+            /* another kind's handshake: its world may not run this lobby, so wait for it to end */
+            int over = GetTickCount64() >= launch_fr_deadline;
+            if (over) launch_fr_nonce = 0;
+            ReleaseSRWLockExclusive(&launch_fr_lock);
+            if (!launch_connected || fi_launch_suspended() || (aborted && *aborted)) return -1;
+            if (!over) Sleep(LAUNCH_POLL_MS);
+            continue;
         }
+        if (!launch_fr_nonce) {
+            if (!++launch_fr_counter) ++launch_fr_counter; /* 0 means none */
+            unsigned char payload[5] = {(unsigned char)launch_fr_counter, (unsigned char)(launch_fr_counter >> 8),
+                                        (unsigned char)(launch_fr_counter >> 16), (unsigned char)(launch_fr_counter >> 24),
+                                        (unsigned char)kind};
+            if (launch_queue_frame(FRAME_FREE_ROAM_NEED, payload, sizeof(payload))) {
+                launch_fr_nonce = launch_fr_counter;
+                launch_fr_kind = kind;
+                launch_fr_deadline = GetTickCount64() + LAUNCH_FREE_ROAM_WAIT_MS;
+                first = 1;
+            }
+        }
+        nonce = launch_fr_nonce;
+        ReleaseSRWLockExclusive(&launch_fr_lock);
+        break;
     }
-    nonce = launch_fr_nonce;
-    ReleaseSRWLockExclusive(&launch_fr_lock);
     if (!nonce) {
         log_append("LAUNCH: FreeRoamNeed could not be queued: the matchmaking request goes on.\r\n");
         return -1;
