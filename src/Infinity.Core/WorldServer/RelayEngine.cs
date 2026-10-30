@@ -65,8 +65,10 @@ internal sealed partial class RelayEngine
             || _settings.CarMeetLobby is { } lobby && !IsCarMeetLobby(lobby))
             throw new ArgumentOutOfRangeException(nameof(settings));
         _send = send ?? throw new ArgumentNullException(nameof(send));
-        // SessionHostSynced var 0 LobbyType (3 bits); its constructor default is 2, free roam
+        // SessionHostSynced var 0 LobbyType (3 bits); its constructor default is 2, free roam. The game loads the session's
+        // entities for this value, so a Road Trip world must say 1, or the client never runs its Road Trip states
         if (_settings.CarMeetLobby is { } carMeet) _hostVariables[0] = (carMeet, 3);
+        else if (_settings.RoadTrip is not null) _hostVariables[0] = (RoadTripLobby, 3);
         if (_settings.TimeSyncMs < 1 || _settings.InviteCloseMs < 0) throw new ArgumentOutOfRangeException(nameof(settings));
         _weather = new(_settings.WeatherSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue), _now, NowWire);
         StartRoadTrip();
