@@ -35,6 +35,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly Task _upnp;
     private IReadOnlyList<string> _peers = Array.Empty<string>();
     private int _lobbyPlayers; // the synced players of the car meet and Road Trip engines, as the actor's last tick counted them
+    private string? _activity; // OD-150: the engine the host's own game (loopback) is synced in, as the actor's last tick saw it
     private RelayNetworkStatus _network;
     private int _disposed, _running = 1;
     private uint _sendErrors; // actor thread only
@@ -204,6 +205,14 @@ public sealed class IntegratedHostRelay : IHostRelay
     /// <summary>The players synced in the Road Trip and car meet engines (<see cref="IHostRelay.LobbyPlayers"/>), as of the actor's last tick.</summary>
     public int LobbyPlayers => Running ? Volatile.Read(ref _lobbyPlayers) : 0;
 
+    /// <summary>
+    /// OD-150 (<see cref="IHostRelay.Activity"/>): what the host's own game runs here, as of the actor's last tick. The host's game
+    /// reaches its relay over loopback: synced in the Road Trip engine it is <see cref="WorldActivities.RoadTrip"/>, in the free-roam
+    /// engine <see cref="WorldActivities.FreeRoam"/> (in both: the one it synced in last); in a car meet, or between two sessions,
+    /// the last value stays (a car meet does not change the activity). Null until the host's game first syncs.
+    /// </summary>
+    public string? Activity => Running ? Volatile.Read(ref _activity) : null;
+
     public void Kick(string xuid)
     {
         if (ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var value))
@@ -338,6 +347,10 @@ public sealed class IntegratedHostRelay : IHostRelay
                     Volatile.Write(ref _peers, Array.AsReadOnly(Engines.SelectMany(e => e.PeerXuids).Distinct()
                         .Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
                     Volatile.Write(ref _lobbyPlayers, _carMeets.Values.Sum(e => e.SyncedCount) + (_roadTrip?.SyncedCount ?? 0));
+                    // the host's game in both (a session it left that has not timed out yet): the one it synced in last
+                    var (trip, freeRoam) = (_roadTrip?.LoopbackSyncedAt, _engine.LoopbackSyncedAt);
+                    if (trip is { } tripAt && (freeRoam is not { } freeAt || tripAt > freeAt)) Volatile.Write(ref _activity, WorldActivities.RoadTrip);
+                    else if (freeRoam is not null) Volatile.Write(ref _activity, WorldActivities.FreeRoam);
                 }
                 if (!activity) cancellation.WaitHandle.WaitOne(2);
             }

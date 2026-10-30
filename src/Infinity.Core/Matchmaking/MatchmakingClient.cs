@@ -81,6 +81,11 @@ public interface IMatchmakingApi
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
         IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation) => JoinAsync(worldId, code, mods, nat, relays, cancellation);
 
+    /// <summary>OD-150: as above, with the <paramref name="activity"/> asked for (null: any; another is 409 <c>{reason: "activity"}</c>).</summary>
+    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation) =>
+        JoinAsync(worldId, code, mods, nat, relays, transport, cancellation);
+
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
 
     Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) => SeatAsync(cancellation);
@@ -251,9 +256,17 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
         JoinAsync(worldId, code, mods, nat, relays, null, cancellation);
 
+    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation) =>
+        JoinAsync(worldId, code, mods, nat, relays, transport, null, cancellation);
+
     public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation)
+        IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation)
     {
+        if (activity is not null && !WorldActivities.All.Contains(activity))
+        {
+            throw new ArgumentException("freeroam or roadtrip", nameof(activity));
+        }
         if (worldId is null && code is null)
         {
             throw new ArgumentException("a world id, a code, or both");
@@ -266,6 +279,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
             Nat = nat,
             Relays = relays,
             Transport = transport,
+            Activity = activity,
         };
         var result = await SendAsync<JoinAnswer>(HttpMethod.Post, "/mm/v1/join", body, cancellation).ConfigureAwait(false);
         if (result.Error is { Kind: MmErrorKind.RateLimited } limited)
