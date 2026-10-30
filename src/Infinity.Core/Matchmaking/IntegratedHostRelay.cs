@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Threading.Channels;
 using Infinity.Core.WorldServer;
 
@@ -16,6 +17,9 @@ public sealed class IntegratedHostRelay : IHostRelay
     private readonly RelaySettings _settings;
     private readonly RelayEngine _engine; // free roam (every lobby type but a car meet)
     private readonly Dictionary<uint, RelayEngine> _carMeets = []; // actor thread only, at most the two car meet lobby types
+    private readonly string? _gameDatabase;
+    private RelayEngine? _roadTrip; // actor thread only: the Road Trip world (lobby type 1), made on its first connection
+    private bool _roadTripUnavailable;
     private readonly Dictionary<IPEndPoint, RelayEngine> _routes = []; // actor thread only: endpoints seated in a car meet
     private Func<ulong, IPEndPoint, long, bool> _authorize = static (_, _, _) => false;
     private Func<ulong, IPEndPoint, long, bool>? _authorizeHook;
@@ -42,6 +46,7 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     private IntegratedHostRelay(Socket socket, uint maxPlayers, bool races, IntegratedRelayOptions options)
     {
+        _gameDatabase = options.GameDatabase;
         _socket = socket;
         Port = checked((ushort)((IPEndPoint)socket.LocalEndPoint!).Port);
         var dual = socket.AddressFamily == AddressFamily.InterNetworkV6;
@@ -89,12 +94,12 @@ public sealed class IntegratedHostRelay : IHostRelay
         });
     }
 
-    private RelayEngine NewEngine(uint? carMeet)
+    private RelayEngine NewEngine(uint? carMeet, RoadTripSettings? roadTrip = null)
     {
-        var world = carMeet is null ? "free-roam engine" : "car meet engine";
+        var world = roadTrip is not null ? "road trip engine" : carMeet is null ? "free-roam engine" : "car meet engine";
         RelayEngine? engine = null;
         // World admission must be installed before any game datagram can establish a seat.
-        return engine = new(_settings with { CarMeetLobby = carMeet }, Send)
+        return engine = new(_settings with { CarMeetLobby = carMeet, RoadTrip = roadTrip }, Send)
         {
             CreateGameSession = request => StartGameSession(engine!, request),
             Authorize = _authorize, AuthorizeHook = _authorizeHook,
@@ -115,7 +120,7 @@ public sealed class IntegratedHostRelay : IHostRelay
         };
     }
 
-    private IEnumerable<RelayEngine> Engines => _carMeets.Values.Prepend(_engine);
+    private IEnumerable<RelayEngine> Engines => _roadTrip is null ? _carMeets.Values.Prepend(_engine) : _carMeets.Values.Prepend(_engine).Append(_roadTrip);
 
     /// <summary>
     /// One host socket serves one world per lobby kind: free roam (and every other A) in <see cref="_engine"/>, each car meet
@@ -133,11 +138,25 @@ public sealed class IntegratedHostRelay : IHostRelay
         }
         var current = _routes.GetValueOrDefault(peer) ?? _engine;
         if (RelayEngine.LobbyTypeOf(datagram.Span) is not { } lobby) { current.Receive(datagram.Span, peer, now); return; }
-        var target = RelayEngine.IsCarMeetLobby(lobby) ? CarMeet(lobby) : _engine;
+        var target = RelayEngine.IsCarMeetLobby(lobby) ? CarMeet(lobby) : lobby == RelayEngine.RoadTripLobby && RoadTrip() is { } trip ? trip : _engine;
         target.Receive(datagram.Span, peer, now);
         if (target == current || !target.HasPeer(peer)) return;
         current.Forget(peer, now);
         if (target == _engine) _routes.Remove(peer); else _routes[peer] = target;
+    }
+
+    /// <summary>The Road Trip world, made once from the host's game database; null (free roam takes the connection) without one.</summary>
+    private RelayEngine? RoadTrip()
+    {
+        if (_roadTrip is not null || _roadTripUnavailable) return _roadTrip;
+        var catalog = _gameDatabase is null ? null : RoadTripCatalog.Load(_gameDatabase);
+        if (catalog is null || catalog.Events.Count == 0)
+        {
+            _roadTripUnavailable = true;
+            if (Volatile.Read(ref _diagnosticLog) is { } sink) Diagnostics.UdpDiagnostics.Enqueue(sink, "world: no Road Trip: the game database cannot be read");
+            return null;
+        }
+        return _roadTrip = NewEngine(null, new RoadTripSettings(catalog, StormIsland: false, RandomNumberGenerator.GetInt32(int.MaxValue)));
     }
 
     private RelayEngine CarMeet(uint lobby)

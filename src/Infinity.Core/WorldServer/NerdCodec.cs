@@ -209,6 +209,9 @@ internal static class NerdCodec
             case 29: // MsgCarMeetNotifyPending, server to client: a 2-bit pending action
                 reader.Skip(2);
                 return;
+            case 50: // ConfigureGameOptionsForRoadTripEvent, server to the leader: the event, then u32
+                reader.Skip(64);
+                return;
             case 39:
                 ObjectHandle.Read(ref reader, 2);
                 var count = (int)reader.Read(4);

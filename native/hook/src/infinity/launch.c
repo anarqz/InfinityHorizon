@@ -780,10 +780,11 @@ static int launch_wide_starts(const wchar_t *text, const wchar_t *prefix) {
     return 1;
 }
 
-/* 1 for the game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos or .../hoppers/CarMeet_qos
-   (case-insensitive; their /tickets sub-paths and every other hopper are not it). A car meet
-   entered outside a lobby needs a world first, like FREE ROAM ONLINE: its ticket goes to the world
-   the player is seated in or hosts, whose car meet the world server keeps. */
+/* 1 for the game's POST to momatch.xboxlive.com .../hoppers/FreeRoam_qos, .../hoppers/CarMeet_qos or
+   .../hoppers/RoadTrip_qos (case-insensitive; their /tickets sub-paths and every other hopper are not
+   it). A car meet or an online Road Trip entered outside a lobby needs a world first, like FREE ROAM
+   ONLINE: its ticket goes to the world the player is seated in or hosts, whose car meet or Road Trip
+   the world server keeps. */
 static int launch_hopper_at(const wchar_t *at, const wchar_t *hopper, size_t length) {
     if (!launch_wide_starts(at, hopper)) return 0;
     const wchar_t *end = at + length;
@@ -793,7 +794,7 @@ static int launch_hopper_at(const wchar_t *at, const wchar_t *hopper, size_t len
 
 int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
     static const wchar_t host[] = L"momatch.xboxlive.com", free_roam[] = L"/hoppers/freeroam_qos",
-                         car_meet[] = L"/hoppers/carmeet_qos";
+                         car_meet[] = L"/hoppers/carmeet_qos", road_trip[] = L"/hoppers/roadtrip_qos";
     if (!method || !url || !launch_wide_starts(method, L"post") || method[4]) return 0;
     const wchar_t *at = url;
     if (launch_wide_starts(at, L"https://")) at += 8;
@@ -807,7 +808,8 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
     if (*at != L'/') return 0;
     for (; *at && *at != L'?' && *at != L'#'; ++at) {
         if (launch_hopper_at(at, free_roam, sizeof(free_roam) / sizeof(free_roam[0]) - 1) ||
-            launch_hopper_at(at, car_meet, sizeof(car_meet) / sizeof(car_meet[0]) - 1)) {
+            launch_hopper_at(at, car_meet, sizeof(car_meet) / sizeof(car_meet[0]) - 1) ||
+            launch_hopper_at(at, road_trip, sizeof(road_trip) / sizeof(road_trip[0]) - 1)) {
             return 1;
         }
     }

@@ -100,6 +100,8 @@ internal sealed partial class RelayEngine
                     peer.CompletionConfirmed = true; SetGroupNode(nav.Node); break;
                 case NerdMessage.Other { Kind: 26 } invite: InviteRequest(peer, invite.Body); break;
                 case NerdMessage.Other { Kind: 27 } answer: JoinOrCancel(peer, answer.Body); break;
+                case NerdMessage.Other { Kind: 47 } vote when IsRoadTrip: RoadTripVote(peer, vote.Body); break;
+                case NerdMessage.Other { Kind: 51 } when IsRoadTrip: RoadTripConfigured(peer); break;
                 case NerdMessage.Other other when _settings.Races:
                     switch (other.Kind)
                     {
@@ -129,10 +131,17 @@ internal sealed partial class RelayEngine
     {
         if (_settings.Races && obj.Router == 6 && obj.Handle.Kind == HandleKind.Transfer)
         { OnGameOptions(peer, obj); return null; }
-        if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0) return null;
-        if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
-        { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
-        obj = obj with { Payload = payload! };
+        var roadTripPlayer = IsRoadTrip && obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
+            && (obj.Create ? obj.Type == 2 : peer.Objects.ContainsKey((9, obj.Handle.Id)));
+        if (!roadTripPlayer)
+        {
+            if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0) return null;
+            if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
+            { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
+            obj = obj with { Payload = payload! };
+            if (obj.Router == 1 && !obj.Create && obj.Payload.Length >= RoadTripCarChoiceBits) RoadTripCarPicked(peer);
+        }
+        else RoadTripPlayerUpdate(peer, obj.Payload);
         var key = (obj.Router, obj.Handle.Id);
         var previous = peer.Objects.GetValueOrDefault(key);
         if (obj.Create)
@@ -199,7 +208,7 @@ internal sealed partial class RelayEngine
     {
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
-        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet();
+        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip();
         if (_now - _lastResend >= 50)
         {
             _lastResend = _now;
