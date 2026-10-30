@@ -497,7 +497,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, token), cancellation,
+                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, RelayTransport, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -1023,6 +1023,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Mods = mods,
                 Nat = relayReport?.Nat,
                 Relays = relayReport?.Relays,
+                Transport = RelayTransport,
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {
@@ -1217,7 +1218,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (wallRemaining < remaining) remaining = wallRemaining;
             var endpoint = Announcement(relay);
             var sentExternalPort = endpoint.External?.Port ?? 0;
-            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers,Endpoint=endpoint }, token), stop.Token,
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint }, token), stop.Token,
                 remaining: remaining).ConfigureAwait(false);
             if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();

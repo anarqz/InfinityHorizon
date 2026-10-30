@@ -39,6 +39,7 @@ public sealed partial class ShellViewModel
     private ServerPickItem? _serverPick;
     private RelayPickItem? _relayPick;
     private bool _relayOfficialOnly;
+    private bool _relayAlways;
     private BeholderLists? _beholder;
     private readonly Dictionary<string, Reachability> _reach = new(StringComparer.OrdinalIgnoreCase);
     private bool _beholderLoading;
@@ -77,6 +78,13 @@ public sealed partial class ShellViewModel
         set { if (value is null || ReferenceEquals(value, _relayPick)) return; _relayPick = value; Changed(nameof(RelayPick)); }
     }
 
+    /// <summary>OD-146: "Always connect through the relay", saved with the relay choice.</summary>
+    public bool RelayAlways
+    {
+        get => _relayAlways;
+        set { if (_relayAlways == value) return; _relayAlways = value; Changed(nameof(RelayAlways)); }
+    }
+
     public bool RelayOfficialOnly
     {
         get => _relayOfficialOnly;
@@ -97,6 +105,7 @@ public sealed partial class ShellViewModel
     private void OpenPickers()
     {
         _relayOfficialOnly = RelayChoice.Read(StateRoot).OfficialOnly;
+        _relayAlways = RelayChoice.Read(StateRoot).AlwaysRelay;
         _beholder ??= BeholderClient.Load(StateRoot);
         FillServerItems();
         FillRelayItems();
@@ -220,7 +229,7 @@ public sealed partial class ShellViewModel
     /// <summary>The relay part of Save: automatic or the picked relay, and "official relays only".</summary>
     private void SaveRelayChoice()
     {
-        try { RelayChoice.Write(StateRoot, new(_relayPick?.Endpoint, _relayOfficialOnly)); }
+        try { RelayChoice.Write(StateRoot, new(_relayPick?.Endpoint, _relayOfficialOnly, _relayAlways)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("picker: the relay choice could not be saved (" + e.GetType().Name + ")"); }
     }
 }
