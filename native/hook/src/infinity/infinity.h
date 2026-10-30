@@ -255,6 +255,8 @@ int azimuth_proxy_send_world(const void *data, int size);
    player's ExtraOptions 0.2.98 is active (fi_eo_sync_enabled). carstate_hook.c: the car update
    and animation event detours that read and show them. */
 void fi_carstate_apply(unsigned char *game_image);
+/* carmeet.c: car meet invitation joins and the online car meet entries (free roam on). */
+void fi_carmeet_apply(unsigned char *game_image);
 void azimuth_carstate_local(int lights, int roof);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);
