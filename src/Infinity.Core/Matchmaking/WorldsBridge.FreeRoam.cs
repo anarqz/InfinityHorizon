@@ -31,6 +31,12 @@ public sealed partial class WorldsBridge
     public string? Gamertag { get; init; }
 
     private readonly ConcurrentQueue<UiFrame.Toast> _freeRoamToasts = new();
+
+    /// <summary>How long a world the game just left stays its first choice for the next world it asks for.</summary>
+    public static readonly TimeSpan RejoinWindow = TimeSpan.FromSeconds(60);
+    private sealed record RecentWorld(string WorldId, DateTimeOffset LeftAt);
+    private string? _seatWorld;
+    private RecentWorld? _recentlyLeft;
     private readonly object _freeRoamState = new();
     private Task<byte>? _freeRoamRun;
 
@@ -88,6 +94,19 @@ public sealed partial class WorldsBridge
             {
                 _log($"worlds: free roam: the lobby list failed ({error.GetType().Name})");
                 return FreeRoamResult.None;
+            }
+            // the world the game left moments ago comes first (whatever its audience), so a retry never splits the players into a new lobby
+            if (Interlocked.Exchange(ref _recentlyLeft, null) is { } recent && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), cancellation).ConfigureAwait(false);
+                if (back.Result == UiJoin.Reserved)
+                {
+                    _log($"worlds: free roam: back in {recent.WorldId}, the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago");
+                    return FreeRoamResult.Ready;
+                }
+                _log($"worlds: free roam: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
+                candidates = [.. candidates.Where(c => c.World.Id != recent.WorldId)];
             }
             foreach (var (world, _) in candidates)
             {

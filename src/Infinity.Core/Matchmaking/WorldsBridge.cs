@@ -553,6 +553,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             if (OnlineOpen && !cancellation.IsCancellationRequested && GameReadiness.Matches(generation) && joinEpoch==Volatile.Read(ref _mineEpoch))
                             {
                                 _seat.Granted(grant, Now);
+            Volatile.Write(ref _seatWorld, grant.WorldId);
                                 InvalidateMine(reset: true);
                                 accepted = OnlineOpen && !cancellation.IsCancellationRequested;
                                 if (!accepted) _seat.Left();
@@ -1446,6 +1447,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         {
             return;
         }
+        // the game may come straight back (a failed car meet step retries at once): it rejoins this world first
+        if (Volatile.Read(ref _seatWorld) is { } leftWorld) Volatile.Write(ref _recentlyLeft, new RecentWorld(leftWorld, Now));
         _seat.Left();
         try
         {
