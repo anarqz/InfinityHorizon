@@ -729,10 +729,13 @@ public sealed class PlaySupervisor
                         {
                             await overlay.ToastAsync(idleToast, stop.Token).ConfigureAwait(false);
                         }
-                        // OD-57: the world closes when its host leaves free roam (the hook''s Event 4)
+                        // OD-148 (refines OD-57): the game left free roam (the hook's Event 4). A car meet or an online
+                        // Road Trip leaves it before asking for its lobby, so the world (or seat) is kept for
+                        // WorldsBridge.FreeRoamLeftGrace; a FreeRoamNeed meanwhile keeps it, else it closes (host) or is
+                        // left (joiner) as before. Announces and seat renewals go on meanwhile; the session's end still acts at once.
                         if (frame is Frame.Event { Kind: HookEvents.FreeRoamLeft } && worlds is not null)
                         {
-                            _ = worlds.HostedWorldId is not null ? worlds.CloseHostAsync(stop.Token) : worlds.LeaveAsync(stop.Token);
+                            _ = worlds.FreeRoamLeftAsync(stop.Token);
                         }
                         if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {
