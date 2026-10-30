@@ -114,9 +114,9 @@ internal static class NerdPayload
     /// CarMeetSynced variables (5-bit ids): 1 InviteCountDownTime (u32, its default 10000), and when given 16 GameModeSessionName /
     /// 17 GameModeSessionTemplateName (a 7-bit count, at most 64, then that many UTF-16 units). JoinTypes and the invite stay at 0.
     /// </summary>
-    internal static BitBuffer CarMeet(string? sessionName = null, string? templateName = null)
+    internal static BitBuffer CarMeet(string? sessionName = null, string? templateName = null, long countdownMs = 10000)
     {
-        var output = new BitBuffer().Push(1, 5).Push(10000, 32);
+        var output = new BitBuffer().Push(1, 5).Push((ulong)countdownMs, 32);
         foreach (var (variable, text) in new[] { (16, sessionName), (17, templateName) })
         {
             if (text is null) continue;
@@ -201,6 +201,13 @@ internal static class NerdPayload
         foreach (var handle in handles.Take(12)) handle.Write(output, 7);
         return output;
     }
+
+    /// <summary>MsgCarMeetNotifyPending (29): the 2-bit pending action (1: wait for the session the server makes, then join it).</summary>
+    internal static BitBuffer CarMeetNotifyPending(byte action) => new BitBuffer().Push(29, 7).Push(action, 2);
+
+    /// <summary>MsgCarMeetSessionReady (32): the session's name and template, each a compact-length Latin-1 string.</summary>
+    internal static BitBuffer CarMeetSessionReady(string name, string template) =>
+        new BitBuffer().Push(32, 7).ByteString(System.Text.Encoding.Latin1.GetBytes(name)).ByteString(System.Text.Encoding.Latin1.GetBytes(template));
 
     /// <summary>MsgReadyRequestResponse (42): the lobby's event key, then the 2-bit answer (0 accepted).</summary>
     internal static BitBuffer ReadyResponse(byte code)

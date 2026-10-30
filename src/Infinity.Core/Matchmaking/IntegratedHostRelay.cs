@@ -59,12 +59,44 @@ public sealed class IntegratedHostRelay : IHostRelay
             ? Task.Run(() => RelayNetworkUpnp.RunAsync(Port, mapping => Enqueue(() => _nat.SetUpnp(mapping.State, mapping.Address)), cancellation), cancellation) : Task.CompletedTask;
     }
 
+    private Func<string, IReadOnlyList<string>, CancellationToken, Task<(string Name, string Template)?>>? _gameSessions;
+    /// <summary>
+    /// Creates the shared game-mode session a car meet invitation leads to: kind ("freeroam"), the decimal XUIDs of the starter and
+    /// the joiners; null when the platform refused it. Without it, invitations are cancelled at the end of their countdown.
+    /// </summary>
+    public Func<string, IReadOnlyList<string>, CancellationToken, Task<(string Name, string Template)?>>? GameSessions
+    { get => Volatile.Read(ref _gameSessions); set => Volatile.Write(ref _gameSessions, value); }
+
+    // The engine only asks; the platform call runs off the actor thread and its answer is queued back to it.
+    private void StartGameSession(RelayEngine engine, CarMeetSessionRequest request)
+    {
+        var sessions = GameSessions;
+        var xuids = request.Xuids.Select(x => x.ToString(CultureInfo.InvariantCulture)).ToArray();
+        _ = Task.Run(async () =>
+        {
+            (string Name, string Template)? session = null;
+            try
+            {
+                if (sessions is not null && request.Kind == RelayEngine.InviteFreeRoam)
+                {
+                    using var bounded = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+                    bounded.CancelAfter(TimeSpan.FromMilliseconds(RelayEngine.CarMeetCreateMs - 1000));
+                    session = await sessions("freeroam", xuids, bounded.Token).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException) { session = null; }
+            Enqueue(() => engine.GameSessionCreated(request.Id, session?.Name, session?.Template, _clock.ElapsedMilliseconds));
+        });
+    }
+
     private RelayEngine NewEngine(uint? carMeet)
     {
         var world = carMeet is null ? "free-roam engine" : "car meet engine";
+        RelayEngine? engine = null;
         // World admission must be installed before any game datagram can establish a seat.
-        return new(_settings with { CarMeetLobby = carMeet }, Send)
+        return engine = new(_settings with { CarMeetLobby = carMeet }, Send)
         {
+            CreateGameSession = request => StartGameSession(engine!, request),
             Authorize = _authorize, AuthorizeHook = _authorizeHook,
             ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
             ConnectionOpened = (index, a, b, refusal) =>
