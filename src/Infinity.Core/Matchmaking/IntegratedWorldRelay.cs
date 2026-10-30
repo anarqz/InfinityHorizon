@@ -33,6 +33,8 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     { _transport = transport; _admission = admission; }
 
     public ushort Port => _transport.Port;
+    /// <summary>The lobbies its world server runs besides free roam (<see cref="IntegratedHostRelay.Lobbies"/>).</summary>
+    public IReadOnlyList<string> Lobbies => _transport.Lobbies;
     public bool Running => Volatile.Read(ref _disposed) == 0 && _transport.Running;
     public RelayNetworkStatus NetworkStatus => _transport.NetworkStatus;
     public Diagnostics.CrashContext? CrashContext { get => _transport.CrashContext; set => _transport.CrashContext = value; }
@@ -55,7 +57,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         {
             _admission.Update(world);
             await _transport.SetAdmissionPolicyAsync(_admission.Allowed,_admission.AllowedHook,
-                (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),cancellation).ConfigureAwait(false);
+                (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),_admission.ProofExpected,cancellation).ConfigureAwait(false);
             _transport.PunchNetworkHints(_admission);
             _transport.SetRelayLegs(_admission.RelayLegs());
         }
@@ -66,6 +68,12 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     private void EndAdmission() { _admission.Clear(); _transport.SetRelayLegs([]); }
 
     public Task<IReadOnlyList<string>> PeersAsync(CancellationToken cancellation) => _transport.PeersAsync(cancellation);
+
+    /// <summary>The players in the world's Road Trip and car meets (<see cref="IntegratedHostRelay.LobbyPlayers"/>).</summary>
+    public int LobbyPlayers => Running ? _transport.LobbyPlayers : 0;
+
+    /// <summary>What the host's own game runs here now (<see cref="IntegratedHostRelay.Activity"/>, OD-150).</summary>
+    public string? Activity => Running ? _transport.Activity : null;
 
     /// <summary>Fresh grants/revocations every three seconds; this read never renews the world's host lease.</summary>
     public async Task RefreshAdmissionsAsync(IMatchmakingApi matchmaking, CancellationToken cancellation = default)
@@ -91,7 +99,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
             answer.Error?.Details, answer.RetryAfter ?? answer.Error?.RetryAfter);
     }
 
-    /// <summary>OD-147: the host's voice chat switch and lobby mutes, enforced by the relay.</summary>
+    /// <summary>OD-154: the host's voice chat switch and lobby mutes, enforced by the relay.</summary>
     public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby) => _transport.SetVoice(lobbyOn, mutedForLobby);
 
     public void Kick(string xuid)

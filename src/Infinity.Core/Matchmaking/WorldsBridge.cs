@@ -46,6 +46,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private readonly string _mode = mode;
     private string? _hostedCode;
     private uint _hostedPlayers;
+    // OD-150: the hosted world's activity as this launcher last told the server (the PUT, then a heartbeat that carried a change)
+    private string? _hostedActivity;
 
     /// <summary>The hosted world's join code (friends/private audiences only), as the last PUT answered.</summary>
     public string? HostedCode => HostedWorldId is null ? null : Volatile.Read(ref _hostedCode);
@@ -167,6 +169,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 _roster.Reset();
                 _publicWarning.Reset();
+                _seatActivity = null; // a new seat's first read is never a change
+                Volatile.Write(ref _followHost, null); // nor does a change of a seat that is gone move the game
                 CrashContext?.ObserveWorld(null);
                 Volatile.Write(ref _mineSnapshot, NoWorld);
                 (_mineId, _mineRole) = (null, UiWorldRole.None);
@@ -439,7 +443,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 return new UiFrame.WorldsList(query.Filter, 2, _text("worlds.list_failed"), []);
             }
-            var rows = list.Items.Select(w => Row(w, false)).Concat(list.Locked.Select(w => Row(w, true))).ToList();
+            foreach (var world in list.Items.Concat(list.Locked)) _listedActivity[world.Id] = world.Activity;
+            var rows = list.Items.Select(w => WithActivity(Row(w, false), w)).Concat(list.Locked.Select(w => WithActivity(Row(w, true), w))).ToList();
             return new UiFrame.WorldsList(query.Filter, 0, string.Empty, rows);
         }
         catch (Exception e) when (HostFailure(e))
@@ -450,13 +455,18 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>A join by id or code. One live seat per profile: a seat elsewhere is left first (the player chose this world).</summary>
     private int _joinAttempt;
-    public async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation)
+    public Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation) => JoinAsync(request, null, cancellation);
+
+    /// <summary>As <see cref="JoinAsync(UiFrame.JoinWorld, CancellationToken)"/>, asking for <paramref name="activity"/> (OD-150; null: any).</summary>
+    /// <paramref name="kind"/>: the lobby ask the seat is taken for (<see cref="FreeRoamKind"/>; the overlay's join is free roam).
+    private async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, string? activity, CancellationToken cancellation, byte kind = FreeRoamKind.FreeRoam)
     {
         if(Interlocked.CompareExchange(ref _joinAttempt,1,0)!=0)return new(UiJoin.SlowDown,_text("worlds.slow_down"));
-        try {return await JoinCoreAsync(request,cancellation).ConfigureAwait(false);}
+        CancelFreeRoamLeave(); // the new seat is never let go by an older leave of free roam
+        try {return await JoinCoreAsync(request,activity,kind,cancellation).ConfigureAwait(false);}
         finally {Volatile.Write(ref _joinAttempt,0);}
     }
-    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, CancellationToken cancellation)
+    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, string? activity, byte kind, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
         Volatile.Write(ref _lastJoinRefusal, null);
@@ -497,7 +507,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, RelayTransport, token), cancellation,
+                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, RelayTransport, activity, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -519,6 +529,12 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 if (answer.Value is not { } join)
                 {
+                    if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.Activity })
+                    {
+                        // OD-150: the world runs another activity now; like a closed world, the free-roam step tries the next one
+                        _log($"worlds: join refused: {worldId ?? "the code's world"} does not run {activity ?? "the asked activity"} now");
+                        return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.closed"));
+                    }
                     if (ConflictReasons.RelayKey(answer.Error) is { } relayKey)
                     {
                         _log($"worlds: join refused: {answer.Error?.Reason}");
@@ -554,6 +570,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             {
                                 _seat.Granted(grant, Now);
             Volatile.Write(ref _seatWorld, grant.WorldId);
+                                SeatTakenFor(grant.Id, kind);
                                 InvalidateMine(reset: true);
                                 accepted = OnlineOpen && !cancellation.IsCancellationRequested;
                                 if (!accepted) _seat.Left();
@@ -565,7 +582,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         }
                         await ForceRelayAsync(grant.Id, cancellation).ConfigureAwait(false); // FI_RELAY_FORCE only
-                        return new UiFrame.JoinResult(UiJoin.Reserved, _text("worlds.reserved"));
+                        // where the host is now, so the player picks that mode in the game (never "go to free roam" blindly)
+                        return new UiFrame.JoinResult(UiJoin.Reserved, ListedActivity(grant.WorldId) is { } hostActivity
+                            ? _text("worlds.reserved_mode").Replace("{mode}", ActivityName(hostActivity), StringComparison.Ordinal)
+                            : _text("worlds.reserved"));
                     case JoinStatuses.Locked when attempt == 0:
                         // A used seat in this lobby is also Locked. An invite code does not
                         // reveal its target here, so never destroy a live seat on that ambiguity.
@@ -665,6 +685,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return null;
                 }
                 var after = _seat.Observe(seat, Now);
+                if (seat.Seat is { } renewedSeat) ObserveActivity(renewedSeat);
                 // A successful renew is authoritative too: an older in-flight GET cannot undo it.
                 Interlocked.Increment(ref _mineEpoch);
                 if (seatAt is not null) _lastSeatAt = seatAt;
@@ -777,6 +798,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     _lastRosterAt = null;
                     _roster.Reset();
                     _publicWarning.Reset();
+                    _seatActivity = null;
                     CrashContext?.ObserveWorld(null);
                     return _mineSnapshot = NoWorld;
                 }
@@ -837,6 +859,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
                 }
                 if (role is UiWorldRole.Hosting or UiWorldRole.Seated) _publicWarning.Observe(seat.WorldId, world.Audience);
+                ObserveActivity(seat);
                 CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
                         m.Role switch { 0 => "host", 1 => "seated", _ => "reserved" })).ToArray()) : null);
@@ -903,7 +926,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     _log("worlds: closed from the overlay");
                     return Done("worlds.closed_done");
                 case UiWorldAction.Leave:
+                    CancelFreeRoamLeave();
                     InvalidateMine(reset: true);
+                    // left on purpose: never the world the game's next "find me a lobby" goes back to
+                    LeftOnPurpose();
                     _seat.Left();
                     await ClearSeatEndAsync().ConfigureAwait(false); // no relay leg outlives the seat
                     var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
@@ -958,15 +984,19 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// the relay's port and this PC's LAN addresses), then announced every 15 s by <see cref="HostTickAsync"/>.
     /// The host then picks FREE ROAM ONLINE and the server lands the game on its own relay (§4a).
     /// </summary>
-    public async Task<UiFrame.Hosted> CreateAsync(UiFrame.CreateWorld request, CancellationToken cancellation)
+    public Task<UiFrame.Hosted> CreateAsync(UiFrame.CreateWorld request, CancellationToken cancellation) => CreateAsync(request, null, cancellation);
+
+    /// <summary>As <see cref="CreateAsync(UiFrame.CreateWorld, CancellationToken)"/>, opening the world with <paramref name="activity"/> (OD-150; null: free roam).</summary>
+    private async Task<UiFrame.Hosted> CreateAsync(UiFrame.CreateWorld request, string? activity, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
+        CancelFreeRoamLeave(); // the new world is never closed by an older leave of free roam
         Interlocked.Increment(ref _creating);
-        try { return await CreateCoreAsync(request, cancellation).ConfigureAwait(false); }
+        try { return await CreateCoreAsync(request, activity, cancellation).ConfigureAwait(false); }
         finally { Interlocked.Decrement(ref _creating); }
     }
 
-    private async Task<UiFrame.Hosted> CreateCoreAsync(UiFrame.CreateWorld request, CancellationToken cancellation)
+    private async Task<UiFrame.Hosted> CreateCoreAsync(UiFrame.CreateWorld request, string? activity, CancellationToken cancellation)
     {
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
@@ -1009,6 +1039,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var relay = _relay;
             // CR-S57: the host's NAT test and relay round trips, read when the world opens (the host's relay legs already exist)
             var relayReport = await RelayReportAsync(stop.Token).ConfigureAwait(false);
+            // OD-150: a world opened for a Road Trip ask says so from its PUT, when its server runs one; every other world is free roam
+            var opening = activity == WorldActivities.RoadTrip && RunsRoadTrip(relay) ? WorldActivities.RoadTrip : WorldActivities.FreeRoam;
             var settings = new WorldSettings
             {
                 Name = string.IsNullOrWhiteSpace(request.Name) ? "Infinity" : request.Name.Trim()[..Math.Min(48, request.Name.Trim().Length)],
@@ -1024,6 +1056,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Nat = relayReport?.Nat,
                 Relays = relayReport?.Relays,
                 Transport = RelayTransport,
+                Lobbies = relay.Lobbies,
+                Activity = opening,
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {
@@ -1067,12 +1101,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         Volatile.Write(ref _hostedPlayers, world.Players);
                         Volatile.Write(ref _hostedTransport, world.Transport);
                         Volatile.Write(ref _hostedRelayName, world.Relay?.Name);
+                        Volatile.Write(ref _hostedActivity, opening);
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
                     hosted = true;
-                    Voice?.Creating(request.Voice); // OD-147: the lobby's voice chat switch, the host's to change later
-                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players, voice {(request.Voice ? "on" : "off")})");
+                    Voice?.Creating(request.Voice); // OD-154: the lobby's voice chat switch, the host's to change later
+                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players{(opening == WorldActivities.RoadTrip ? ", road trip" : string.Empty)}, voice {(request.Voice ? "on" : "off")})");
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id
@@ -1166,7 +1201,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 return _text("worlds.host_ended");
             }
             var step = _host.Next(now).Step;
-            if (step != HostStep.Announce && !(step == HostStep.Wait && ExternalPortMoved(relay, now)))
+            // OD-150: the host's game changed activity: said on this heartbeat, sent now instead of at the next one
+            var activity = ActivityChange(relay);
+            if (step != HostStep.Announce && !(step == HostStep.Wait && (activity is not null || ExternalPortMoved(relay, now))))
             {
                 if (refreshRelayAdmissions is null || now < _nextAdmissionsRefresh) return null;
                 _nextAdmissionsRefresh = now + AdmissionsEvery;
@@ -1219,7 +1256,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (wallRemaining < remaining) remaining = wallRemaining;
             var endpoint = Announcement(relay);
             var sentExternalPort = endpoint.External?.Port ?? 0;
-            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint }, token), stop.Token,
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint, Activity = activity }, token), stop.Token,
                 remaining: remaining).ConfigureAwait(false);
             if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();
@@ -1264,6 +1301,12 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 _host.Announced(Now);
                 _announcedExternalPort = sentExternalPort;
+                if (activity is not null)
+                {
+                    // said once: a heartbeat the server answered carries a change only until it is taken
+                    _log($"worlds: activity {Interlocked.Exchange(ref _hostedActivity, activity) ?? "unknown"} -> {activity}"
+                        + (world.Activity == activity ? string.Empty : $" (the server keeps {world.Activity})"));
+                }
                 _hostLastSuccess = Now;
                 _hostLastStamp = _clock.GetTimestamp();
                 foreach (var punch in world.Punches.Where(p => p.Kicked))
@@ -1336,6 +1379,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// <summary>The host left free roam, closed the world, or the session ended: <c>DELETE</c> and the relay stopped.</summary>
     public async Task CloseHostAsync(CancellationToken cancellation)
     {
+        CancelFreeRoamLeave();
         InvalidateMine(reset: true);
         var operation = QueueHostOperation(replace: true, create: false);
         await operation.Previous.ConfigureAwait(false);
@@ -1395,6 +1439,22 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private bool ExternalPortMoved(IHostRelay relay, DateTimeOffset now) => _announcedExternalPort is { } announced
         && now - _hostLastSuccess >= TimeSpan.FromSeconds(12) && Announcement(relay).External is { Port: var port } && port != announced;
 
+    // OD-150: the world's server runs a Road Trip (its lobbies), so the world may say it runs one
+    private static bool RunsRoadTrip(IHostRelay relay) => relay.Lobbies?.Contains(LobbyKinds.RoadTrip) == true;
+
+    /// <summary>
+    /// OD-150: the activity the host's own game runs now (<see cref="IHostRelay.Activity"/>) when it differs from what the
+    /// world last said; null when unknown or unchanged. A Road Trip is never said by a world whose server does not run one
+    /// (the server would refuse it).
+    /// </summary>
+    private string? ActivityChange(IHostRelay relay)
+    {
+        var current = relay.Activity;
+        if (current is not (WorldActivities.FreeRoam or WorldActivities.RoadTrip)) return null;
+        if (current == WorldActivities.RoadTrip && !RunsRoadTrip(relay)) return null;
+        return current == Volatile.Read(ref _hostedActivity) ? null : current;
+    }
+
     private AnnouncePort Announcement(IHostRelay relay)=>RelayAnnouncement.Build(relay.Port,_lan(),relay switch
     { IntegratedWorldRelay integrated=>integrated.NetworkStatus,IntegratedHostRelay host=>host.NetworkStatus,_=>null });
 
@@ -1443,6 +1503,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// <summary>The play session is ending: the seat is let go (idempotent on the server).</summary>
     public async Task LeaveAsync(CancellationToken cancellation)
     {
+        CancelFreeRoamLeave();
         InvalidateMine(reset: true);
         await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);
         if (_seat.GrantId is null)

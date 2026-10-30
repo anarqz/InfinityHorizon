@@ -46,7 +46,7 @@ typedef struct FiOverlayHost {
     /* size >= 48 (hook 0.3.0+fh2online.65 and later): retired (CR-S59), never called by this
        overlay; it returned a FI_LIVERY_* code within timeout_ms, on an overlay thread. */
     int32_t (*livery_sync)(uint32_t timeout_ms);
-    /* size >= 64 (OD-147, VC-2, docs/launcher/VOICE_CHAT.md §13): voice chat's transport. The overlay builds whole
+    /* size >= 64 (OD-154, VC-2, docs/launcher/VOICE_CHAT.md §13): voice chat's transport. The overlay builds whole
        voice side-channel datagrams (STUN indications of kind 0x3E93 voice up / 0x3E94 control up, at most 548
        bytes); the hook checks the kind and attribute and sends them from the socket the world relay knows it by (the
        joiner's proxy socket, or the host's loopback socket to its own relay), through a fallback relay unchanged.
@@ -116,7 +116,7 @@ __declspec(dllexport) int32_t fi_overlay_fit_png(const void *in, size_t in_size,
 /* The highest FiPngFit.version fi_overlay_fit_png reads. */
 __declspec(dllexport) uint32_t fi_overlay_png_fit_version(void);
 
-/* Optional exports (OD-147, docs/launcher/VOICE_CHAT.md §11.4, §12; resolve with GetProcAddress, absent before):
+/* Optional exports (OD-154, docs/launcher/VOICE_CHAT.md §11.4, §12; resolve with GetProcAddress, absent before):
  * voice chat for the game's own UI. The hook answers the game's talking/muted/voice-ability queries from these,
  * so the game's player list and HUD show our voice chat. Any thread, lock-free, returns at once (the game calls
  * its queries every frame from its UI thread); never blocks on the pipe.

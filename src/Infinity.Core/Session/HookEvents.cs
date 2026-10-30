@@ -16,7 +16,7 @@ public static class HookEvents
     /// <summary>The game joined a free roam world (detail <c>host:&lt;port&gt;</c> or <c>join:&lt;ip:port&gt;</c>).</summary>
     public const byte FreeRoamEntered = 3;
 
-    /// <summary>The game left free roam (HORIZON SOLO, the association destroyed): a hosted world closes (OD-57).</summary>
+    /// <summary>The game left free roam (HORIZON SOLO, the association destroyed): a hosted world closes, or the seat is left, unless the game asks for a lobby within a grace (OD-57, OD-148).</summary>
     public const byte FreeRoamLeft = 4;
 
     /// <summary>Loaded local player/car: detail generation:0/1, repeated every 500 ms.</summary>

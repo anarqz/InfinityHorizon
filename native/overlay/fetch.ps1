@@ -1,4 +1,4 @@
-# Fetches the voice chat codec sources (OD-147, VC-3) into third_party\ and refuses any other bytes: libopus 1.5.2 and
+# Fetches the voice chat codec sources (OD-154, VC-3) into third_party\ and refuses any other bytes: libopus 1.5.2 and
 # RNNoise 0.2, the release tarballs pinned by SHA-256. They are not in git (about 19 MB, mostly DNN weights as C
 # sources). Nothing from the archives is run: build.ps1 compiles their C files with cl.
 #   powershell -File native\overlay\fetch.ps1

@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: the voice decoder's adaptive complexity (OD-147, VC-3, Windows/Deck parity). One rule on every
+// Infinity overlay: the voice decoder's adaptive complexity (OD-154, VC-3, Windows/Deck parity). One rule on every
 // platform, with no platform input at all: every decoder starts at 7 (NoLACE). The playback thread reports, for each
 // 20 ms mix frame with decoding in it, the decode cost per 20 ms of audio times the talkers (PLC included; a packet
 // decodes 3 or 6 frames at once, so the raw time per mix frame is bursty); only while the p95 of the last ~3 s of such frames is

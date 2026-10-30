@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
 using System.Net;
 
 namespace Infinity.Core.WorldServer;
@@ -18,17 +19,17 @@ internal sealed partial class RelayEngine
         {
             if (restart.User != peer.Xuid || !restart.Version.AsSpan().SequenceEqual(NerdCodec.Version)
                 || !restart.Game.AsSpan().SequenceEqual(NerdCodec.Game)) return;
-            if (restart.Attempt != peer.ClientAttempt) { RetireAttempt(peer); Drop(peer); peer = null; }
+            if (restart.Attempt != peer.ClientAttempt) { RetireAttempt(peer); Drop(peer, "the game reconnected (new attempt)"); peer = null; }
         }
         var admitted = false;
         if (peer is null)
         {
             if (!hasFirst || first is not NerdMessage.OpenConnection open) return;
-            peer = Admit(endpoint, header, open, data.Length);
+            peer = Admit(endpoint, header, open, data);
             if (peer is null) return;
             admitted = true;
         }
-        if (!Allowed(peer.Xuid, endpoint)) { Drop(peer); return; }
+        if (!Allowed(peer.Xuid, endpoint)) { Drop(peer, "not allowed"); return; }
         if (!TakeRate(peer, header, data.Length)) return;
         peer.LastSeen = _now;
         if (!peer.Synced) peer.ReceivedBytes += data.Length;
@@ -67,7 +68,7 @@ internal sealed partial class RelayEngine
                     else if (synced && !peer.CompletionConfirmed && response.Reason == 6 && response.Attempt == peer.Attempt
                         && _now - peer.LastCompletion >= _settings.ResendAfterMs) SendCompletion(peer);
                     break;
-                case NerdMessage.Close: Drop(peer); return;
+                case NerdMessage.Close: Drop(peer, "the game closed its connection"); return;
                 case NerdMessage.Ping ping: answers.Add(NerdCodec.Write(new NerdMessage.Pong(ping.Time, NowWire))); break;
                 case NerdMessage.Pong pong:
                     if (pong.Echo == 0 && pong.Time <= NowWire && NowWire - pong.Time < 60000) peer.Rtt = NowWire - pong.Time;
@@ -86,6 +87,7 @@ internal sealed partial class RelayEngine
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own && NerdPayload.CarPosition(car.Body) is { } position:
                     peer.CompletionConfirmed = true;
                     peer.CarPosition = position;
+                    peer.CarId = car.Handle.Id;
                     carNow = car with { Handle = new(HandleKind.Relay, car.Handle.Id, peer.Index) };
                     break;
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own:
@@ -113,11 +115,12 @@ internal sealed partial class RelayEngine
                             break;
                     }
                     break;
+                case NerdMessage.TagCollision hit when _settings.Races: TagCollision(peer, hit); break;
                 case NerdMessage.FinaliseSessionEntry: peer.CompletionConfirmed = true; peer.FinaliseAsked = true; break;
                 // Server-only, traffic, collidable, chat and other layouts are parsed but never relayed.
             }
         }
-        if (peer.HistoryBits > _settings.HistoryMaxBits) { peer.Doomed = true; return; }
+        if (peer.HistoryBits > _settings.HistoryMaxBits) { Doom(peer, "object history over its limit"); return; }
         Forward(peer, forward, true); ForwardCars(peer, carNow, cars);
         if (peer.UniverseDue) { peer.UniverseDue = false; PlayerObjectCreated(peer); }
         if (Finalise(peer) is { } finalised) reliable.Add(finalised);
@@ -131,18 +134,27 @@ internal sealed partial class RelayEngine
     {
         if (_settings.Races && obj.Router == 6 && obj.Handle.Kind == HandleKind.Transfer)
         { OnGameOptions(peer, obj); return null; }
-        var roadTripPlayer = IsRoadTrip && obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
+        // the game makes its RoadTripPlayerSynced in every session type (free roam and car meets too): relayed in every world
+        var roadTripPlayer = obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
             && (obj.Create ? obj.Type == 2 : peer.Objects.ContainsKey((9, obj.Handle.Id)));
         if (!roadTripPlayer)
         {
-            if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0) return null;
+            if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0)
+            {
+                if (obj.Router == 9) Note($"road trip: peer {peer.Index} router-9 object refused (create {obj.Create}, type {obj.Type}, {obj.Handle.Kind} id {obj.Handle.Id}, {obj.Payload.Length} bits)");
+                return null;
+            }
             if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
             { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
             obj = obj with { Payload = payload! };
             if (obj.Router == 1 && !obj.Create && obj.Payload.Length >= RoadTripCarChoiceBits) RoadTripCarPicked(peer);
             if (obj.Router == 1) ObserveCarChoice(peer, obj.Payload);
         }
-        else RoadTripPlayerUpdate(peer, obj.Payload);
+        else
+        {
+            if (obj.Create && IsRoadTrip) Note($"road trip: peer {peer.Index} created its RoadTripPlayerSynced (router 9, type 2, id {obj.Handle.Id}): accepted");
+            RoadTripPlayerUpdate(peer, obj.Payload);
+        }
         var key = (obj.Router, obj.Handle.Id);
         var previous = peer.Objects.GetValueOrDefault(key);
         if (obj.Create)
@@ -151,7 +163,9 @@ internal sealed partial class RelayEngine
             peer.Objects.Remove(key);
             if (peer.Objects.Count < 256)
             {
-                var history = new RelayObject(obj.Type, obj.Sequence, obj.Payload);
+                var (router, id, index) = (obj.Router, obj.Handle.Id, peer.Index);
+                var history = new RelayObject(obj.Type, obj.Sequence, obj.Payload, router,
+                    line => Note(string.Create(CultureInfo.InvariantCulture, $"peer {index} router {router} object {id}: {line}")));
                 var orphans = peer.Orphans.ToArray(); peer.Orphans.Clear();
                 foreach (var orphan in orphans)
                     if ((orphan.Router, orphan.Handle.Id) == key) history.Update(orphan.Sequence, orphan.Payload);
@@ -209,6 +223,7 @@ internal sealed partial class RelayEngine
     {
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
+        TickHeldOpens();
         TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip();
         if (_now - _lastResend >= 50)
         {
@@ -217,14 +232,14 @@ internal sealed partial class RelayEngine
             {
                 if (peer.Synced && !peer.CompletionConfirmed)
                 {
-                    if (_now - peer.JoinedAt >= _settings.SyncCompleteMs) { peer.Doomed = true; continue; }
+                    if (_now - peer.JoinedAt >= _settings.SyncCompleteMs) { Doom(peer, "sync never confirmed"); continue; }
                     if (_now - peer.LastCompletion >= _settings.ResendAfterMs) SendCompletion(peer);
                 }
                 var wait = Math.Max(_settings.ResendAfterMs, 2L * (peer.Rtt ?? 0));
                 var due = peer.InFlight.Where(p => _now - p.SentAt >= wait).ToArray();
                 peer.InFlight.RemoveAll(p => _now - p.SentAt >= wait);
                 foreach (var packet in due)
-                    if (packet.Tries >= 20) peer.Doomed = true;
+                    if (packet.Tries >= 20) Doom(peer, "reliable packet unacknowledged after 20 tries");
                     else Send(peer, packet.Messages, true, packet.Tries + 1);
             }
         }
@@ -233,8 +248,9 @@ internal sealed partial class RelayEngine
         {
             _lastKeepalive = _now;
             foreach (var peer in _peers.ToArray())
-                if (!Allowed(peer.Xuid, peer.Endpoint) || _now - peer.LastSeen > _settings.QuietDropMs
-                    || (!peer.Synced && _now - peer.JoinedAt > _settings.UnsyncedTimeoutMs)) Drop(peer);
+                if (!Allowed(peer.Xuid, peer.Endpoint)) Drop(peer, "not allowed any more");
+                else if (_now - peer.LastSeen > _settings.QuietDropMs) Drop(peer, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"quiet for {_now - peer.LastSeen} ms"));
+                else if (!peer.Synced && _now - peer.JoinedAt > _settings.UnsyncedTimeoutMs) Drop(peer, "never synced");
                 else if (peer.Synced)
                 {
                     if (_now - peer.LastTimeSync >= _settings.TimeSyncMs)

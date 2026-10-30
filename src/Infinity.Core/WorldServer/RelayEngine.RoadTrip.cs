@@ -20,6 +20,11 @@ internal sealed partial class RelayEngine
     }
 
     internal const long RoadTripInitialisingMs = 10000, RoadTripVoteMs = 60000, RoadTripAllVotedMs = 10000;
+    /// <summary>
+    /// Each player's RoadTripSynced is created in Initialising and changes state this long after: the game leaves its "wait for the
+    /// server" step on a state CHANGE, which a late joiner created straight into the current state would never see.
+    /// </summary>
+    internal const long RoadTripPlayerStartMs = 3000;
     internal const long RoadTripCarSelectMs = 30000, RoadTripAllPickedMs = 3000, RoadTripConfigureMs = 12000;
     internal const long RoadTripDriveCapMs = 300000, RoadTripFirstArrivalMs = 30000, RoadTripDriveHoldMs = 180000;
     internal const long RoadTripPrepareMs = 120000;
@@ -100,11 +105,42 @@ internal sealed partial class RelayEngine
 
     private static uint WireAt(long engineMs) => unchecked((uint)engineMs + 1);
 
+    private long? _roadTripStateSent; // the last RoadTripSynced State an update carried, for its one log line per change
+
     private void RoadTripUpdate(params (byte Variable, long Value)[] variables)
     {
+        foreach (var (variable, value) in variables)
+        {
+            if (variable != 8 || _roadTripStateSent == value) continue;
+            _roadTripStateSent = value;
+            Note(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"road trip: state {(RoadTripState)(byte)value} ({value}) sent"));
+        }
+        RoadTripBroadcast(RoadTripVariables(variables));
+    }
+
+    // one sequence for the world's RoadTripSynced: every update goes to everybody (a repeat changes nothing for those already there)
+    private void RoadTripBroadcast(BitBuffer variables)
+    {
         _roadTripSequence = AckWindow.SequenceNext(_roadTripSequence);
-        var update = NerdCodec.Write(new NerdMessage.Object(false, 9, new(HandleKind.Own, 0), 0, _roadTripSequence, RoadTripVariables(variables)));
+        var update = NerdCodec.Write(new NerdMessage.Object(false, 9, new(HandleKind.Own, 0), 0, _roadTripSequence, variables));
         foreach (var peer in _peers.Where(p => p.Synced)) SendSequenced(peer, [update]);
+    }
+
+    /// <summary>The players whose own Initialising is over: they are shown the vote.</summary>
+    private IEnumerable<RelayPeer> RoadTripShown => RoadTripPlayers.Where(p => p.RoadTripStartAt is null);
+
+    /// <summary>A player's own Initialising ends: the trip's current state reaches it as a change, with the vote when one is drawn.</summary>
+    private void StartRoadTripPlayers()
+    {
+        var trip = _roadTrip!;
+        foreach (var peer in RoadTripPlayers.Where(p => p.RoadTripStartAt is { } at && _now >= at).ToArray())
+        {
+            peer.RoadTripStartAt = null;
+            if (trip.State == RoadTripState.Initialising) { Note($"road trip: peer {peer.Index} waits for the vote (still initialising)"); continue; }
+            if (trip.Plan is not null) SendSequenced(peer, [EventSelection(peer, false)]);
+            RoadTripBroadcast(RoadTripSnapshotPayload());
+            Note($"road trip: peer {peer.Index} starts: RoadTripSynced State {WireState(trip.State)}");
+        }
     }
 
     /// <summary>The vote's transfer object for one player (7-bit var ids: the locations, then per destination its events and class).</summary>
@@ -154,8 +190,11 @@ internal sealed partial class RelayEngine
     {
         if (_roadTrip is not { } trip) return;
         if (trip.FirstSeenAt < 0) { trip.FirstSeenAt = _now; trip.Until = _now + RoadTripInitialisingMs; }
-        snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 9, new(HandleKind.Own, 0), 0, _roadTripSequence, RoadTripSnapshotPayload())));
-        if (trip.Plan is not null) snapshot.Add(EventSelection(peer, false));
+        // created in Initialising for every player; its own change follows (StartRoadTripPlayers)
+        snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 9, new(HandleKind.Own, 0), 0, _roadTripSequence,
+            RoadTripVariables((8, WireState(RoadTripState.Initialising)), (9, 0)))));
+        peer.RoadTripStartAt = _now + RoadTripPlayerStartMs;
+        Note($"road trip: create RoadTripSynced (router 9, type 0, id 0) State 0 for peer {peer.Index}; the trip is in {trip.State}");
     }
 
     private void RoadTripJoined(RelayPeer peer)
@@ -191,7 +230,7 @@ internal sealed partial class RelayEngine
         trip.Votes.Clear(); trip.Winner = null; trip.EventIndex = 0;
         trip.State = RoadTripState.DestinationVote;
         trip.Until = _now + RoadTripVoteMs;
-        foreach (var peer in RoadTripPlayers) SendSequenced(peer, [EventSelection(peer, false)]);
+        foreach (var peer in RoadTripShown) SendSequenced(peer, [EventSelection(peer, false)]);
         RoadTripUpdate((1, 0), (8, WireState(trip.State)), (9, WireAt(trip.Until)));
         Note($"road trip: vote of locations {string.Join(",", trip.Plan.Select(d => d.Location))} for {players} player(s)");
     }
@@ -204,7 +243,7 @@ internal sealed partial class RelayEngine
         var choice = (int)reader.Read(32);
         if (choice is < 0 or >= RoadTripCatalog.Destinations) return;
         trip.Votes[peer.Index] = choice;
-        foreach (var other in RoadTripPlayers) SendSequenced(other, [EventSelection(other, true)]);
+        foreach (var other in RoadTripShown) SendSequenced(other, [EventSelection(other, true)]);
         if (RoadTripPlayers.All(p => trip.Votes.ContainsKey(p.Index)) && trip.Until > _now + RoadTripAllVotedMs)
         {
             trip.Until = _now + RoadTripAllVotedMs;
@@ -374,6 +413,7 @@ internal sealed partial class RelayEngine
     private void TickRoadTrip()
     {
         if (_roadTrip is not { } trip) return;
+        StartRoadTripPlayers();
         if (trip.State == RoadTripState.DriveToEvent && trip.HoldDrive && _now >= trip.HoldUntil) { BeginCountdown(); return; }
         if (_now < trip.Until) return;
         switch (trip.State)

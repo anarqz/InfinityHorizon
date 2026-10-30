@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: voice chat's controller gestures while driving (OD-147, VOICE_CHAT.md §5). Header only, no
+// Infinity overlay: voice chat's controller gestures while driving (OD-154, VOICE_CHAT.md §5). Header only, no
 // Windows, so it is tested on its own; input.cpp feeds it once per frame with the guide closed.
 //
 // - R3 held = push-to-talk, only in push-to-talk mode. R3 still reaches the game (the owner chose it knowing that).

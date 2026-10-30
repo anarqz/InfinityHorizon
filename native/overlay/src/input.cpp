@@ -19,7 +19,7 @@
 // - The Xbox (Guide) button also toggles, through XInputGetStateEx (xinput1_4 ordinal 100), for
 //   players without Steam or the Game Bar on it; WGI never reports it. XInput navigates only
 //   until the WGI hook is in.
-// - Voice chat (OD-147, voice_gestures.h), with the guide closed: R3 held is push-to-talk, RB then R3 the next mic
+// - Voice chat (OD-154, voice_gestures.h), with the guide closed: R3 held is push-to-talk, RB then R3 the next mic
 //   mode with a notice on screen. Both still reach the game: they only read the pad.
 #include "overlay.h"
 #include "style.h"
@@ -104,7 +104,7 @@ constexpr WORD kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008, kS
                kGuide = 0x0400, kA = 0x1000, kB = 0x2000, kX = 0x4000, kY = 0x8000;
 VoiceGestures g_voice_gestures; // the render thread's
 
-// OD-147: R3 and RB + R3 while driving (the guide closed).
+// OD-154: R3 and RB + R3 while driving (the guide closed).
 void VoiceGesture(WORD buttons) {
     const VoiceState v = CurrentVoice();
     const auto result = g_voice_gestures.Update(buttons & kRB, buttons & kRThumb, v.mic == MicMode::PushToTalk);

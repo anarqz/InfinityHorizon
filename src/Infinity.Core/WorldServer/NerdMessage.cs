@@ -37,7 +37,16 @@ internal abstract record NerdMessage
     internal sealed record Delete(byte Router, ObjectHandle Handle, byte Sequence) : NerdMessage { internal override byte Id => 9; }
     internal sealed record Car(ObjectHandle Handle, BitBuffer Body) : NerdMessage { internal override byte Id => 15; }
     internal sealed record CarEvent(byte Kind, ObjectHandle Handle, BitBuffer Body) : NerdMessage { internal override byte Id => Kind; }
+    /// <summary>MsgTagCollision, client to server: two car keys (7-bit ids), then 3-bit buckets: A before, A after, B before, B after.</summary>
     internal sealed record TagCollision(ObjectHandle A, ObjectHandle B, byte[] Values) : NerdMessage { internal override byte Id => 36; }
+    /// <summary>MsgTagBuckets, server to client: <see cref="Slots"/> car keys (7-bit ids), then one 8-bit bucket per key.</summary>
+    internal sealed record TagBuckets(ObjectHandle[] Cars, byte[] Buckets) : NerdMessage
+    {
+        internal const int Slots = 12;
+        /// <summary>An unused slot: a relay key no car has (id 127, owner 0).</summary>
+        internal static ObjectHandle Unused => new(HandleKind.Relay, 127, 0);
+        internal override byte Id => 37;
+    }
     internal sealed record Traffic(byte Kind, BitBuffer Body) : NerdMessage { internal override byte Id => Kind; }
     internal sealed record DetachPart(byte Kind, byte[] Data) : NerdMessage { internal override byte Id => 24; }
     internal sealed record Chat(ulong Xuid, byte[] Data) : NerdMessage { internal override byte Id => 33; }

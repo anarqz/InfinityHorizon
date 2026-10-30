@@ -97,13 +97,13 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 2.</summary>
     public const byte FirstProtocol2Type = 0x14;
 
-    /// <summary>The lowest type that needs protocol 3 (voice chat, OD-147).</summary>
+    /// <summary>The lowest type that needs protocol 3 (voice chat, OD-154).</summary>
     public const byte FirstProtocol3Type = 0x1B;
 
     /// <summary>The last type of the UI pipe.</summary>
     public const byte LastType = 0x1C;
 
-    /// <summary>OD-147: the other players a <see cref="VoiceState"/> lists.</summary>
+    /// <summary>OD-154: the other players a <see cref="VoiceState"/> lists.</summary>
     public const int MaxVoiceMembers = 16;
 
     private UiFrame()
@@ -217,7 +217,7 @@ public abstract record UiFrame
     /// <summary>
     /// 0x0B, overlay → launcher: open a world (audience 0 everyone, 1 supporters, 2 friends, 3 private; latency 0 any,
     /// 1 &lt; 150, 2 &lt; 100, 3 &lt; 60 ms; <c>AnyMode</c> u8 0 the host's own mode, 1 open to Hardcore and Noob, OD-141).
-    /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode. <c>Voice</c> (OD-147, after
+    /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode. <c>Voice</c> (OD-154, after
     /// <c>AnyMode</c>): the lobby's voice chat; an overlay before it sends none: on.
     /// </summary>
     public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false, bool Voice = true) : UiFrame
@@ -415,7 +415,7 @@ public abstract record UiFrame
     }
 
     /// <summary>
-    /// 0x1B, launcher → overlay (protocol 3, OD-147): the voice chat the overlay shows. <c>Flags</c>
+    /// 0x1B, launcher → overlay (protocol 3, OD-154): the voice chat the overlay shows. <c>Flags</c>
     /// <see cref="UiVoice"/>; <c>Mic</c> <see cref="UiMicMode"/>; <c>Members</c> the other players of the lobby (at most
     /// 16; never this player, whose voice is <c>Mic</c>), each with its <see cref="UiVoiceMember"/> state.
     /// </summary>
@@ -439,7 +439,7 @@ public abstract record UiFrame
     }
 
     /// <summary>
-    /// 0x1C, overlay → launcher (protocol 3, OD-147): <see cref="UiVoiceOp"/> with its <c>Value</c>; <c>Xuid</c> names
+    /// 0x1C, overlay → launcher (protocol 3, OD-154): <see cref="UiVoiceOp"/> with its <c>Value</c>; <c>Xuid</c> names
     /// the player of ops 2 and 6 and is empty for the others.
     /// </summary>
     public sealed record VoiceCommand(byte Op, string Xuid, byte Value) : UiFrame
@@ -839,7 +839,7 @@ public abstract record UiFrame
     }
 
     /// <summary>
-    /// 0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode); one before OD-147 after
+    /// 0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode); one before OD-154 after
     /// <c>anyMode</c> (voice chat on).
     /// </summary>
     private static CreateWorld DecodeCreate(ref WireReader r)
@@ -959,14 +959,14 @@ public abstract record UiIncoming
 
     public sealed record PaneClick(UiFrame.PaneActionClick Request) : UiIncoming;
 
-    /// <summary>Protocol 3 (OD-147): a voice chat change; answer with the new <see cref="UiFrame.VoiceState"/>.</summary>
+    /// <summary>Protocol 3 (OD-154): a voice chat change; answer with the new <see cref="UiFrame.VoiceState"/>.</summary>
     public sealed record Voice(UiFrame.VoiceCommand Request) : UiIncoming;
 }
 
 /// <summary>One other player of <see cref="UiFrame.VoiceState"/>: <c>State</c> <see cref="UiVoiceMember"/>.</summary>
 public sealed record VoiceMember(string Xuid, string Gamertag, byte State);
 
-/// <summary><c>VoiceState.flags</c> (OD-147).</summary>
+/// <summary><c>VoiceState.flags</c> (OD-154).</summary>
 public static class UiVoice
 {
     /// <summary>The lobby's voice chat is on (meaningful with <see cref="LobbyKnown"/>).</summary>
@@ -999,7 +999,7 @@ public static class UiVoiceMember
 /// <summary><c>VoiceCommand.op</c>.</summary>
 public static class UiVoiceOp
 {
-    /// <summary>The host turns the lobby's voice chat on (1) or off (0), at any time (OD-147).</summary>
+    /// <summary>The host turns the lobby's voice chat on (1) or off (0), at any time (OD-154).</summary>
     public const byte LobbyVoice = 1;
 
     public const byte Mute = 2;

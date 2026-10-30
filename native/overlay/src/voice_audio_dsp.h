@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: voice chat's small signal pieces (OD-147, VC-3): the capture format converter (any channel count,
+// Infinity overlay: voice chat's small signal pieces (OD-154, VC-3): the capture format converter (any channel count,
 // rate and sample type to 48 kHz mono float), the 80 Hz high-pass and the automatic gain (VOICE_CHAT.md §3.2). No
 // allocation after construction except the converter's history, no Windows calls: unit-tested on their own.
 #pragma once

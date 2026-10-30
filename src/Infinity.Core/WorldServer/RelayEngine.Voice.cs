@@ -3,7 +3,7 @@ using System.Net;
 
 namespace Infinity.Core.WorldServer;
 
-// OD-147 (VOICE_CHAT.md §3, §4, §9.1 as corrected by §10): the world relay is the voice authority. It never trusts a
+// OD-154 (VOICE_CHAT.md §3, §4, §9.1 as corrected by §10): the world relay is the voice authority. It never trusts a
 // client for who speaks: a hook subscribes with its XUID (checked like car state), and its voice is then taken only
 // from that endpoint and stamped with the sender's seat. Every mute layer is enforced here, before fan-out, so a
 // client bug cannot leak a muted voice. Nothing is recorded: Opus packets pass through, only counters remain.
@@ -40,7 +40,7 @@ internal sealed partial class RelayEngine
 
     internal long VoiceForwarded { get; private set; }
 
-    /// <summary>The lobby's voice chat switch (the host's, OD-147).</summary>
+    /// <summary>The lobby's voice chat switch (the host's, OD-154).</summary>
     internal bool LobbyVoice => _lobbyVoice;
 
     /// <summary>The host's launcher: the lobby's switch and the players it muted for everyone. Takes effect at once.</summary>

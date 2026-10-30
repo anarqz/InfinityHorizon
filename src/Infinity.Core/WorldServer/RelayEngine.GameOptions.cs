@@ -54,7 +54,7 @@ internal sealed partial class RelayEngine
             Rejected(peer, "game_options_overflow", obj.Id, obj.Router);
             // Dropping only the overflowing fragment would leave a live, incomplete object
             // that no late join or new owner could recover. End this writer's session instead.
-            peer.Doomed = true;
+            Doom(peer, "game options overflow");
             return;
         }
         if (result != GameOptionsUpdateResult.Stored) return;
@@ -101,6 +101,6 @@ internal sealed partial class RelayEngine
 
     private void TickGameOptions()
     {
-        if (_gameOptions.ExpiredSource(_now, _settings.GameOptionsGapMs) is { } owner) owner.Doomed = true;
+        if (_gameOptions.ExpiredSource(_now, _settings.GameOptionsGapMs) is { } owner) Doom(owner, "game options write stalled");
     }
 }

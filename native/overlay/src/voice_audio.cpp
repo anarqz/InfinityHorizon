@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: voice chat's audio engine (OD-147, VC-3; VOICE_CHAT.md §3.2, §12.4). Two engine threads, never
+// Infinity overlay: voice chat's audio engine (OD-154, VC-3; VOICE_CHAT.md §3.2, §12.4). Two engine threads, never
 // the game's: capture (WASAPI shared, event-driven, the default communications microphone) → 48 kHz mono → 80 Hz
 // high-pass → AGC → RNNoise (noise suppression; its voice probability gates sending, 300 ms hangover) → Opus 20 ms
 // frames (SILK wideband 6 kbit/s, CVBR, complexity 10, no FEC/DTX) → repacketized 3 (or 6) per packet → SendFn; and

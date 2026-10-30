@@ -116,7 +116,7 @@ extern "C" __declspec(dllexport) int32_t fi_overlay_start(const FiOverlayHost *h
     fi::g_dev = (host->flags & FI_OVERLAY_DEV) != 0;
     fi::g_offline = (host->flags & FI_OVERLAY_OFFLINE) != 0;
     wcsncpy_s(fi::g_ui_pipe, host->ui_pipe, _TRUNCATE); // the hook's string is not ours to keep
-    // OD-147 (VC-2): a hook with voice's transport (size >= 64); an older one leaves voice chat off
+    // OD-154 (VC-2): a hook with voice's transport (size >= 64); an older one leaves voice chat off
     if (host->size >= sizeof(FiOverlayHost) && host->voice_send && !fi::g_dev) fi::SetVoiceHost(host->voice_send, host->xuid);
     if (!fi::g_host_log) {
         GetModuleFileNameW(self, fi::g_log_path, MAX_PATH);

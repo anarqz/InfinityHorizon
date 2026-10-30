@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: voice chat's state and its looks (OD-147, docs/launcher/VOICE_CHAT.md §5, §11, §12). The launcher
+// Infinity overlay: voice chat's state and its looks (OD-154, docs/launcher/VOICE_CHAT.md §5, §11, §12). The launcher
 // holds the truth (the lobby's switch, the mute history, the settings) and sends it as 0x1B VoiceState; the overlay
 // shows it and asks for changes with 0x1C VoiceCommand. A change is applied here at once (the button follows the
 // press) and the launcher's next VoiceState settles it.
@@ -12,7 +12,7 @@
 //   mic mode says (open, muted, or R3 held) and silences the seats this player must not hear.
 //
 // - The microphone is drawn with lines: the embedded icon font has none.
-// - Who talks is shown by the game itself (OD-147: the top-right mini leaderboard and the session player list): the
+// - Who talks is shown by the game itself (OD-154: the top-right mini leaderboard and the session player list): the
 //   hook answers the game's queries from fi_overlay_voice_state, read lock-free from a snapshot of the state.
 #include "overlay.h"
 
@@ -329,7 +329,7 @@ void DrawMic(ImDrawList *dl, ImVec2 c, float size, uint32_t color, bool muted, u
 
 } // namespace fi
 
-// ---------------------------------------------------------------- the hook's view (fi_overlay.h, OD-147)
+// ---------------------------------------------------------------- the hook's view (fi_overlay.h, OD-154)
 extern "C" __declspec(dllexport) uint32_t fi_overlay_voice_state(uint64_t xuid) {
     if (xuid == 0) return fi::g_self_bits.load(std::memory_order_acquire);
     for (const auto &slot : fi::g_slots) {

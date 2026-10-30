@@ -98,10 +98,10 @@ void SetActionResult(uint8_t action, uint8_t status, const std::string &message)
 void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
-bool WorldsMuteHint();        // X mutes the focused player (OD-147; the footer's hint)
+bool WorldsMuteHint();        // X mutes the focused player (OD-154; the footer's hint)
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
 
-// --- voice chat (voice.cpp, OD-147, VOICE_CHAT.md §11): the launcher holds the state, the overlay shows it and asks
+// --- voice chat (voice.cpp, OD-154, VOICE_CHAT.md §11): the launcher holds the state, the overlay shows it and asks
 // VoiceState and VoiceMember are in ui_frames.h (0x1B).
 void SetVoiceState(VoiceState state); // any thread
 VoiceState CurrentVoice();            // a copy, any thread
@@ -155,7 +155,7 @@ void SendWorldsQuery(WorldFilter filter, bool not_full); // 0x14 WorldsQueryV2 (
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag);
 void SendPaneAction(const std::string &pane, const std::string &action);
 void SendJoinWorld(const std::string &world, const std::string &code);
-// any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode. voice (OD-147): the lobby's voice chat
+// any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode. voice (OD-154): the lobby's voice chat
 void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, bool voice);
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value); // 0x1C
 void SendMyWorldQuery();
