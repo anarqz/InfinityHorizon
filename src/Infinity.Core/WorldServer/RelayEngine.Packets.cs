@@ -49,6 +49,7 @@ internal sealed partial class RelayEngine
         }
         var answers = new List<BitBuffer>(); var reliable = new List<BitBuffer>();
         var forward = new List<BitBuffer>(); var cars = new List<BitBuffer>(); var syncedNow = false;
+        NerdMessage.Car? carNow = null;
         var synced = peer.Synced;
         for (var i = 0; i < header.Count && reader.Left >= 7; i++)
         {
@@ -85,7 +86,7 @@ internal sealed partial class RelayEngine
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own && NerdPayload.CarPosition(car.Body) is { } position:
                     peer.CompletionConfirmed = true;
                     peer.CarPosition = position;
-                    cars.Add(NerdCodec.Write(car with { Handle = new(HandleKind.Relay, car.Handle.Id, peer.Index) }));
+                    carNow = car with { Handle = new(HandleKind.Relay, car.Handle.Id, peer.Index) };
                     break;
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own:
                     Rejected(peer, "invalid_car", 15); break;
@@ -113,7 +114,8 @@ internal sealed partial class RelayEngine
             }
         }
         if (peer.HistoryBits > _settings.HistoryMaxBits) { peer.Doomed = true; return; }
-        Forward(peer, forward, true); Forward(peer, cars, false);
+        Forward(peer, forward, true); ForwardCars(peer, carNow, cars);
+        if (peer.UniverseDue) { peer.UniverseDue = false; PlayerObjectCreated(peer); }
         if (Finalise(peer) is { } finalised) reliable.Add(finalised);
         if (reliable.Count != 0) SendSequenced(peer, reliable);
         RaceStep();
@@ -144,6 +146,8 @@ internal sealed partial class RelayEngine
                     else peer.Orphans.Enqueue(orphan);
                 peer.Objects[key] = history;
             }
+            // the server's PrivateUniverseId follows the create, once it has reached the others
+            if (obj.Router == 1) peer.UniverseDue = true;
             if (obj.Router == 3 && peer.ConsoleId != obj.Handle.Id) { peer.ConsoleId = obj.Handle.Id; peer.ConsoleSequence = null; }
             if (obj.Router == 3) { peer.ConsoleVariableSequences.Clear(); peer.ConsoleLatestSequence = obj.Sequence; }
         }
@@ -193,7 +197,7 @@ internal sealed partial class RelayEngine
     {
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
-        TickSideChannels(); TickRace(); TickGameOptions();
+        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing();
         if (_now - _lastResend >= 50)
         {
             _lastResend = _now;
