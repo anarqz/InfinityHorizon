@@ -13,7 +13,12 @@ public sealed class IntegratedHostRelay : IHostRelay
 {
     private sealed record Command(Action Work, TaskCompletionSource? Completion = null, CancellationToken Cancellation = default);
     private readonly Socket _socket;
-    private readonly RelayEngine _engine;
+    private readonly RelaySettings _settings;
+    private readonly RelayEngine _engine; // free roam (every lobby type but a car meet)
+    private readonly Dictionary<uint, RelayEngine> _carMeets = []; // actor thread only, at most the two car meet lobby types
+    private readonly Dictionary<IPEndPoint, RelayEngine> _routes = []; // actor thread only: endpoints seated in a car meet
+    private Func<ulong, IPEndPoint, long, bool> _authorize = static (_, _, _) => false;
+    private Func<ulong, IPEndPoint, long, bool>? _authorizeHook;
     private readonly RelayNetworkNat _nat;
     private readonly RelayLegs _legs; // CR-S57: the joiners met at a relay (actor thread only)
     private readonly CancellationTokenSource _stop = new();
@@ -44,27 +49,65 @@ public sealed class IntegratedHostRelay : IHostRelay
         _legs = new(SendRaw);
         if (options.EnableDiscovery && options.EnableUpnp) _nat.SetUpnp(RelayUpnpState.Pending);
         _network = _nat.Snapshot();
-        // World admission must be installed before any game datagram can establish a seat.
-        _engine = new(new RelaySettings { MaxPlayers = checked((int)Math.Clamp(maxPlayers, 1u, 12u)), Races = races }, Send)
-        {
-            Authorize = static (_, _, _) => false,
-            ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
-            ConnectionOpened = (index, a, b, refusal) =>
-            {
-                // A is the lobby type the game asks for (1 Road Trip, 2 free roam, 3 car meet); no identity or address is logged
-                if (Volatile.Read(ref _diagnosticLog) is not { } sink) return;
-                var line = refusal is { } reason
-                    ? string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection refused reason {reason} lobby type {a} (A={a} B={b})")
-                    : string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection admitted peer {index} lobby type {a} -> free-roam engine (A={a} B={b})");
-                Diagnostics.UdpDiagnostics.Enqueue(sink, line);
-            }
-        };
+        _settings = new RelaySettings { MaxPlayers = checked((int)Math.Clamp(maxPlayers, 1u, 12u)), Races = races };
+        _engine = NewEngine(null);
         var cancellation = _stop.Token;
         _actor = Task.Factory.StartNew(() => Run(cancellation), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         var serverNames = options.StunServers.Take(8).ToArray();
         _discovery = options.EnableDiscovery ? Task.Run(() => DiscoverAsync(serverNames, cancellation), cancellation) : Task.CompletedTask;
         _upnp = options.EnableDiscovery && options.EnableUpnp
             ? Task.Run(() => RelayNetworkUpnp.RunAsync(Port, mapping => Enqueue(() => _nat.SetUpnp(mapping.State, mapping.Address)), cancellation), cancellation) : Task.CompletedTask;
+    }
+
+    private RelayEngine NewEngine(uint? carMeet)
+    {
+        var world = carMeet is null ? "free-roam engine" : "car meet engine";
+        // World admission must be installed before any game datagram can establish a seat.
+        return new(_settings with { CarMeetLobby = carMeet }, Send)
+        {
+            Authorize = _authorize, AuthorizeHook = _authorizeHook,
+            ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
+            ConnectionOpened = (index, a, b, refusal) =>
+            {
+                // A is the lobby type the game asks for (1 Road Trip, 2 free roam, 3 car meet); no identity or address is logged
+                if (Volatile.Read(ref _diagnosticLog) is not { } sink) return;
+                var line = refusal is { } reason
+                    ? string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection refused reason {reason} lobby type {a} at {world} (A={a} B={b})")
+                    : string.Create(CultureInfo.InvariantCulture, $"world: OpenConnection admitted peer {index} lobby type {a} -> {world} (A={a} B={b})");
+                Diagnostics.UdpDiagnostics.Enqueue(sink, line);
+            }
+        };
+    }
+
+    private IEnumerable<RelayEngine> Engines => _carMeets.Values.Prepend(_engine);
+
+    /// <summary>
+    /// One host socket serves one world per lobby kind: free roam (and every other A) in <see cref="_engine"/>, each car meet
+    /// lobby type in its own. An OpenConnection goes to its lobby's world; once admitted there, its endpoint's later datagrams
+    /// follow it and its seat in the world it left is dropped (the game left that session). Guests who stayed keep theirs.
+    /// </summary>
+    private void Route(ReadOnlyMemory<byte> datagram, IPEndPoint peer, long now)
+    {
+        if (StunCodec.IsStun(datagram.Span))
+        {
+            // hook side channels name their player: the world holding the endpoint, else every world (only the one seating it acts)
+            if (_routes.TryGetValue(peer, out var holder)) holder.Receive(datagram.Span, peer, now);
+            else foreach (var engine in Engines.ToArray()) engine.Receive(datagram.Span, peer, now);
+            return;
+        }
+        var current = _routes.GetValueOrDefault(peer) ?? _engine;
+        if (RelayEngine.LobbyTypeOf(datagram.Span) is not { } lobby) { current.Receive(datagram.Span, peer, now); return; }
+        var target = RelayEngine.IsCarMeetLobby(lobby) ? CarMeet(lobby) : _engine;
+        target.Receive(datagram.Span, peer, now);
+        if (target == current || !target.HasPeer(peer)) return;
+        current.Forget(peer, now);
+        if (target == _engine) _routes.Remove(peer); else _routes[peer] = target;
+    }
+
+    private RelayEngine CarMeet(uint lobby)
+    {
+        if (!_carMeets.TryGetValue(lobby, out var engine)) _carMeets[lobby] = engine = NewEngine(lobby);
+        return engine;
     }
 
     public ushort Port { get; }
@@ -92,7 +135,7 @@ public sealed class IntegratedHostRelay : IHostRelay
     public void Kick(string xuid)
     {
         if (ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var value))
-            Enqueue(() => _engine.Kick(value, _clock.ElapsedMilliseconds));
+            Enqueue(() => { foreach (var engine in Engines) engine.Kick(value, _clock.ElapsedMilliseconds); });
     }
 
     /// <summary>Queues a bounded STUN punch; neither caller nor WPF dispatcher performs socket I/O.</summary>
@@ -119,8 +162,11 @@ public sealed class IntegratedHostRelay : IHostRelay
         {
             token.ThrowIfCancellationRequested();
             // Do not accumulate an unbounded queue of channel writers behind a busy actor.
-            if (!_commands.Writer.TryWrite(new(() => { _engine.Authorize = validator ?? (static (_, _, _) => false);
-                _engine.AuthorizeHook=hookValidator; _proofReceiver=proofReceiver; }, completion, token)))
+            if (!_commands.Writer.TryWrite(new(() =>
+                {
+                    _authorize = validator ?? (static (_, _, _) => false); _authorizeHook = hookValidator; _proofReceiver = proofReceiver;
+                    foreach (var engine in Engines) { engine.Authorize = _authorize; engine.AuthorizeHook = _authorizeHook; }
+                }, completion, token)))
                 throw new IOException("The relay control queue is full or closed");
             await completion.Task.WaitAsync(token).ConfigureAwait(false);
         }
@@ -204,15 +250,19 @@ public sealed class IntegratedHostRelay : IHostRelay
                     }
                     if (!RelayLegs.IsVirtual(peer)) _nat.Receive(datagram.Span, peer, now);
                     // The engine ignores Binding messages and owns the STUN-framed hook side channels.
-                    _engine.Receive(datagram.Span, peer, now);
+                    Route(datagram, peer, now);
                     activity = true;
                 }
                 var at = _clock.ElapsedMilliseconds;
                 if (at >= nextTick)
                 {
-                    _engine.Tick(at); _nat.Tick(at); _legs.Tick(at); nextTick = at + 20;
+                    foreach (var engine in Engines) engine.Tick(at);
+                    _nat.Tick(at); _legs.Tick(at); nextTick = at + 20;
+                    // an endpoint whose car meet seat ended (dropped, timed out) is free roam's again
+                    foreach (var gone in _routes.Where(p => !p.Value.HasPeer(p.Key)).Select(p => p.Key).ToArray()) _routes.Remove(gone);
                     Volatile.Write(ref _network, _nat.Snapshot() with { SendErrors = _sendErrors });
-                    Volatile.Write(ref _peers, Array.AsReadOnly(_engine.PeerXuids.Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
+                    Volatile.Write(ref _peers, Array.AsReadOnly(Engines.SelectMany(e => e.PeerXuids).Distinct()
+                        .Select(xuid => xuid.ToString(CultureInfo.InvariantCulture)).ToArray()));
                 }
                 if (!activity) cancellation.WaitHandle.WaitOne(2);
             }
@@ -224,7 +274,8 @@ public sealed class IntegratedHostRelay : IHostRelay
             _stop.Cancel();
             _commands.Writer.TryComplete();
             while (_commands.Reader.TryRead(out var command)) command.Completion?.TrySetCanceled(cancellation);
-            _engine.Clear();
+            foreach (var engine in Engines) engine.Clear();
+            _routes.Clear();
             Volatile.Write(ref _peers, Array.Empty<string>());
             _socket.Dispose();
         }

@@ -108,6 +108,25 @@ internal static class NerdPayload
 
     internal static BitBuffer GroupSatNav(int node) => SessionHost((12, unchecked((uint)node), 32));
 
+    internal const int CarMeetNameMax = 64;
+
+    /// <summary>
+    /// CarMeetSynced variables (5-bit ids): 1 InviteCountDownTime (u32, its default 10000), and when given 16 GameModeSessionName /
+    /// 17 GameModeSessionTemplateName (a 7-bit count, at most 64, then that many UTF-16 units). JoinTypes and the invite stay at 0.
+    /// </summary>
+    internal static BitBuffer CarMeet(string? sessionName = null, string? templateName = null)
+    {
+        var output = new BitBuffer().Push(1, 5).Push(10000, 32);
+        foreach (var (variable, text) in new[] { (16, sessionName), (17, templateName) })
+        {
+            if (text is null) continue;
+            var count = Math.Min(text.Length, CarMeetNameMax);
+            output.Push((ulong)variable, 5).Push((ulong)count, 7);
+            for (var i = 0; i < count; i++) output.Push(text[i], 16);
+        }
+        return output;
+    }
+
     internal static IReadOnlyList<(byte Variable, ulong Value)>? ConsoleVariablesOf(BitBuffer payload)
     {
         var result = new List<(byte, ulong)>();

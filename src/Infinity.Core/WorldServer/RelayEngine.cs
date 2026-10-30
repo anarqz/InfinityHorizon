@@ -41,9 +41,37 @@ internal sealed partial class RelayEngine
             || _settings.RatePackets < 1 || _settings.RateMessages < 1 || _settings.RateBytes < 1
             || _settings.HistoryMaxBits < 1 || _settings.QueueMaxBits < 1 || _settings.QueueMaxMessages < 1
             || _settings.ReliableWindow is < 1 or > 256 || _settings.RacePrepareMs < 1 || _settings.RaceGridMs < 1
-            || _settings.RaceFinishMs < 1 || _settings.GameOptionsGapMs < 1 || _settings.SyncCompleteMs < 1 || _settings.ResendAfterMs < 1)
+            || _settings.RaceFinishMs < 1 || _settings.GameOptionsGapMs < 1 || _settings.SyncCompleteMs < 1 || _settings.ResendAfterMs < 1
+            || _settings.CarMeetLobby is { } lobby && !IsCarMeetLobby(lobby))
             throw new ArgumentOutOfRangeException(nameof(settings));
         _send = send ?? throw new ArgumentNullException(nameof(send));
+        // SessionHostSynced var 0 LobbyType (3 bits); its constructor default is 2, free roam
+        if (_settings.CarMeetLobby is { } carMeet) _hostVariables[0] = (carMeet, 3);
+    }
+
+    /// <summary>OpenConnection's A: 3 is a car meet, 6 the island's car meet (the same world kind).</summary>
+    internal static bool IsCarMeetLobby(uint lobby) => lobby is 3 or 6;
+
+    /// <summary>The lobby type (A) a datagram's first message asks for, when it is an OpenConnection.</summary>
+    internal static uint? LobbyTypeOf(ReadOnlySpan<byte> data)
+    {
+        if (StunCodec.IsStun(data) || NerdHeader.Parse(data) is not { Count: > 0 }) return null;
+        var reader = new BitReader(data[NerdHeader.Length..]);
+        return NerdCodec.TryRead(ref reader, out var first, out _) && first is NerdMessage.OpenConnection open ? open.A : null;
+    }
+
+    internal bool HasPeer(IPEndPoint endpoint)
+    {
+        endpoint = StunCodec.Canonical(endpoint);
+        return _peers.Any(p => p.Endpoint.Equals(endpoint));
+    }
+
+    /// <summary>The endpoint's game moved to another world on this host: its seat here goes, without a Close to the game.</summary>
+    internal void Forget(IPEndPoint endpoint, long nowMilliseconds)
+    {
+        _now = Math.Max(_now, nowMilliseconds);
+        endpoint = StunCodec.Canonical(endpoint);
+        foreach (var peer in _peers.Where(p => p.Endpoint.Equals(endpoint)).ToArray()) Drop(peer);
     }
 
     internal void Receive(ReadOnlySpan<byte> data, IPEndPoint endpoint, long nowMilliseconds)
@@ -178,6 +206,9 @@ internal sealed partial class RelayEngine
         var payload = NerdPayload.SessionHost(_hostVariables.Select(p => (p.Key, p.Value.Value, p.Value.Width)).ToArray());
         if (_groupNode != 0) payload.Append(NerdPayload.GroupSatNav(_groupNode));
         var snapshot = new List<BitBuffer> { NerdCodec.Write(new NerdMessage.Object(true, 6, new(HandleKind.Own, 0), 0, _hostSequence, payload)) };
+        // The car meet's one server-owned CarMeetSynced (router 11, id 0); the variables it omits keep their constructor defaults
+        if (_settings.CarMeetLobby is not null)
+            snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, 0, NerdPayload.CarMeet())));
         AppendGameOptionsSnapshot(peer, snapshot);
         foreach (var owner in _peers.Where(p => p != peer && p.Synced))
             foreach (var (key, obj) in owner.Objects) snapshot.AddRange(obj.Snapshot(key.Router, new(HandleKind.Relay, key.Id, owner.Index)));
