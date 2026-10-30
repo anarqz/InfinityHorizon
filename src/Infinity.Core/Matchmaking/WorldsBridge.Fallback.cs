@@ -15,11 +15,20 @@ namespace Infinity.Core.Matchmaking;
 public sealed partial class WorldsBridge
 {
     /// <summary>The hook reported <see cref="CaptureWhat.RelayJoiner"/> ok in this session: joins send <c>nat</c>/<c>relays</c>, legs are pushed.</summary>
-    public bool RelayJoinerCapable { get => Volatile.Read(ref _relayJoinerCapable); set => Volatile.Write(ref _relayJoinerCapable, value); }
+    public bool RelayJoinerCapable
+    {
+        get => Volatile.Read(ref _relayJoinerCapable);
+        set { Volatile.Write(ref _legSent, null); Volatile.Write(ref _relayJoinerCapable, value); } // a (new) hook: its next leg is pushed
+    }
     private bool _relayJoinerCapable;
 
-    /// <summary>Writes a leg to the hook (the supervisor's control pipe).</summary>
-    public Func<Frame.RelayLeg, CancellationToken, Task>? SendRelayLeg { get; set; }
+    /// <summary>Writes a leg to the hook (the supervisor's control pipe). Setting it (a new pipe) pushes the next leg even if unchanged.</summary>
+    public Func<Frame.RelayLeg, CancellationToken, Task>? SendRelayLeg
+    {
+        get => Volatile.Read(ref _sendRelayLeg);
+        set { Volatile.Write(ref _legSent, null); Volatile.Write(ref _sendRelayLeg, value); }
+    }
+    private Func<Frame.RelayLeg, CancellationToken, Task>? _sendRelayLeg;
 
     /// <summary>The relay report (<see cref="RelayReporter"/>); null: none is measured (the host sends neither field).</summary>
     public Func<CancellationToken, Task<RelayReport>>? RelayReports { get; init; }
@@ -64,6 +73,10 @@ public sealed partial class WorldsBridge
     private Guid? _legGrant;
     private string? _legRelayKey;
     private bool _legViaRelay;
+    // SHA-256 of the last leg frame the hook took (null: none, or a new hook/pipe since): a seat renewal whose leg is byte for byte
+    // the same is not pushed again (a reserved seat's grant keeps its times; a used one is re-signed each renewal and is pushed,
+    // because the hook's relay hello carries those claims and the relay checks their expiry)
+    private byte[]? _legSent;
     private string? _hostedTransport;
     // a seat whose grant names no usable relay: if its direct path fails there is nothing to fall back to
     private string? _noRelayGrant;
@@ -92,7 +105,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     private async Task PushLegAsync(RelayGrant relay, RelayGrantClaims verified, string? transport, CancellationToken cancellation)
     {
-        if (!RelayJoinerCapable || SendRelayLeg is null) return;
+        if (!RelayJoinerCapable || SendRelayLeg is not { } send) return;
         var grant = Guid.Parse(verified.Grant);
         // a seat given up after SeatGiveUp (or dropped unproven): a late renewal never pushes its leg again
         if (Volatile.Read(ref _givenUpGrant) == verified.Grant) { await ClearLegAsync(cancellation).ConfigureAwait(false); return; }
@@ -118,9 +131,14 @@ public sealed partial class WorldsBridge
             claims = Convert.FromBase64String(relay.Claims);
             signature = Convert.FromBase64String(relay.Signature);
             leg = Frame.RelayLeg.Build(grant, viaRelay, address, named.Port, claims, signature);
-            await SendRelayLeg(leg, cancellation).ConfigureAwait(false);
+            var digest = SHA256.HashData(leg.Payload);
+            if (_legGrant == grant && _legViaRelay == viaRelay && Volatile.Read(ref _legSent) is { } sent && CryptographicOperations.FixedTimeEquals(sent, digest))
+                return; // unchanged since the hook took it
+            Volatile.Write(ref _legSent, null);
+            await send(leg, cancellation).ConfigureAwait(false);
             if (_legGrant != grant || _legViaRelay != viaRelay) _log($"worlds: relay leg pushed ({(viaRelay ? "relay" : "direct")})");
             (_legGrant, _legRelayKey, _legViaRelay) = (grant, named.Key, viaRelay);
+            if (ReferenceEquals(SendRelayLeg, send)) Volatile.Write(ref _legSent, digest); // a pipe set meanwhile gets the leg again
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or ProtocolException or FormatException or ObjectDisposedException)
         { _log("worlds: relay leg unavailable (" + error.GetType().Name + ")"); }
@@ -137,8 +155,9 @@ public sealed partial class WorldsBridge
     {
         if (_legGrant is null) return;
         (_legGrant, _legRelayKey, _legViaRelay) = (null, null, false);
-        if (SendRelayLeg is null) return;
-        try { await SendRelayLeg(Frame.RelayLeg.Clear(), cancellation).ConfigureAwait(false); }
+        Volatile.Write(ref _legSent, null);
+        if (SendRelayLeg is not { } send) return;
+        try { await send(Frame.RelayLeg.Clear(), cancellation).ConfigureAwait(false); }
         catch (Exception error) when (error is IOException or InvalidOperationException or ObjectDisposedException) { }
     }
 

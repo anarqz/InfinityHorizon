@@ -39,6 +39,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
 # the package keeps its name, the launcher installs it as <Azimuth>\winmm.dll
 $hookArgs = @("$root/native/extraoptions-infinity/build.py", $zigPath, '--output', "$out/hook/infinity.dll")
 if (!$Production) { $hookArgs += '--dev' }
+# OD-154 VC-T1: a test build (a prerelease version, e.g. 1.2.9-test.13) shows voice chat in the game's own UI by default
+if ($Version -match '^\d+\.\d+\.\d+-') { $hookArgs += '--test-build' }
 & $Python @hookArgs
 if ($LASTEXITCODE -ne 0) { throw 'Hook build failed' }
 & "$root/native/overlay/build.ps1" -Release
