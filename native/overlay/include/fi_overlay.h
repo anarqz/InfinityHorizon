@@ -37,7 +37,7 @@ extern "C" {
 
 typedef struct FiOverlayHost {
     uint32_t abi;                    /* FI_OVERLAY_ABI */
-    uint32_t size;                   /* sizeof(FiOverlayHost): 48 on x64 (40 without livery_sync) */
+    uint32_t size;                   /* sizeof(FiOverlayHost): 64 on x64 (48 before voice_send, 40 without livery_sync) */
     const wchar_t *ui_pipe;          /* L"\\\\.\\pipe\\ForzaInfinity-<32 hex>-ui", NUL-terminated; copied */
     void *(*capture)(uint32_t what); /* hook export fi_hook_capture, or NULL */
     void (*log)(const char *line);   /* hook's log_append (UTF-8, no newline), or NULL: then
@@ -46,7 +46,21 @@ typedef struct FiOverlayHost {
     /* size >= 48 (hook 0.3.0+fh2online.65 and later): retired (CR-S59), never called by this
        overlay; it returned a FI_LIVERY_* code within timeout_ms, on an overlay thread. */
     int32_t (*livery_sync)(uint32_t timeout_ms);
+    /* size >= 64 (OD-147, VC-2, docs/launcher/VOICE_CHAT.md §13): voice chat's transport. The overlay builds whole
+       voice side-channel datagrams (STUN indications of kind 0x3E93 voice up / 0x3E94 control up, at most 548
+       bytes); the hook checks the kind and attribute and sends them from the socket the world relay knows it by (the
+       joiner's proxy socket, or the host's loopback socket to its own relay), through a fallback relay unchanged.
+       Returns FI_VOICE_SENT, or < 0 and drops it (no world yet, offline, passthrough, refused shape). Any thread,
+       never blocks. Arrivals of kinds 0x3E93/0x3E94 go to the overlay export fi_overlay_voice. */
+    int32_t (*voice_send)(const uint8_t *datagram, uint32_t size);
+    uint64_t xuid; /* this player's XUID (the handoff's), for the voice control the relay checks; 0 unknown */
 } FiOverlayHost;
+
+#define FI_VOICE_SENT 0
+#define FI_VOICE_E_NO_WORLD (-1) /* no relay to send to yet */
+#define FI_VOICE_E_SHAPE (-2)    /* not a voice up / control up datagram, or too long */
+#define FI_VOICE_E_OFF (-3)      /* offline, passthrough or no network allowed */
+#define FI_VOICE_E_RATE (-4)     /* over the hook's cap (about 60 datagrams per second): dropped */
 
 /* Return values. */
 #define FI_OVERLAY_OK 0
@@ -118,6 +132,11 @@ __declspec(dllexport) uint32_t fi_overlay_voice_state(uint64_t xuid);
 
 /* The game's own Mute/Unmute action on a player (muted 1/0): becomes the overlay's mute (0x1C VoiceCommand). */
 __declspec(dllexport) void fi_overlay_voice_mute(uint64_t xuid, int32_t muted);
+
+/* A voice side-channel datagram that arrived at the hook's socket from the world relay (kind 0x3E93 voice down or
+ * 0x3E94 state down; the hook passes nothing else). Copied before it returns; called on the hook's socket thread,
+ * never blocks. Absent export (an older overlay): the hook drops them. */
+__declspec(dllexport) void fi_overlay_voice(const uint8_t *datagram, uint32_t size);
 
 #ifdef __cplusplus
 }

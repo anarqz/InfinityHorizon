@@ -1027,6 +1027,11 @@ static DWORD WINAPI px_thread(void *argument) {
                 }
             } else if (kind == 0x3E92) {
                 /* the retired livery channel (OD-66, CR-S59): an older relay's message, dropped unread */
+            } else if (kind == 0x3E93 || kind == 0x3E94) {
+                /* voice chat (voice_net.c), with car state's source checks: from the world, the hook proved */
+                if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
+                    fi_voice_received(packet, n);
+                }
             } else if (kind == 0x0101) {
                 for (unsigned i = 0; i < px_stun_count; ++i) {
                     if (!px_stun_accepted[i] && memory_equal(txid, px_txid[i], 12) && px_same(&from, &px_stun[i]) && has_mapped) {
@@ -1106,6 +1111,10 @@ int azimuth_proxy_send_world(const void *data, int size) {
     return px_send_on(s, data, size, &world); /* FIR1 data in relay mode */
 }
 int azimuth_proxy_proof_mode(void) {return px_proof_required() && px_socket!=PX_INVALID;}
+/* voice_net.c: a world this proxy forwards to (sends may still wait for the hook's proof). */
+int azimuth_proxy_world_ready(void) {return px_socket!=PX_INVALID && px_have_world;}
+/* voice_net.c: [hook] FreeRoamDirect outside FIUP, the game on its own socket (no hook socket for the relay). */
+int azimuth_proxy_passthrough(void) {return px_direct && !px_proof_required();}
 
 /* --------------------------------------------------------------------- setup */
 

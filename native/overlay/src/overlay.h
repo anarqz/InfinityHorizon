@@ -111,6 +111,9 @@ void VoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value);
 // cut in `behind` (the surface's colour). Colours are ImU32.
 void DrawMic(ImDrawList *dl, ImVec2 c, float size, uint32_t color, bool muted, uint32_t behind = 0xFF2A2626);
 const char *MicModeName(MicMode mode);
+// The hook's voice transport (FiOverlayHost.voice_send, size >= 64) and this player's XUID: starts voice chat's
+// thread (subscription to the world relay, the audio engine). Called once from fi_overlay_start.
+void SetVoiceHost(int32_t (*send)(const uint8_t *datagram, uint32_t size), uint64_t xuid);
 // R3 push-to-talk is held now (input.cpp sets it; the audio engine, VC-3, reads it).
 void SetPushToTalk(bool held);
 bool PushToTalkHeld();

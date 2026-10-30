@@ -116,16 +116,32 @@ static void cs_relay_address(CsAddr4 *a, unsigned port) {
     a->address[3] = 1;
 }
 
-/* The relay's answers to the host's hook (the others' states), while this PC hosts. */
+static unsigned cs_get16_early(const unsigned char *p) {
+    return (unsigned)(p[0] << 8 | p[1]);
+}
+
+/* 1: `from` (a sockaddr of recvfrom) is the host's relay, 127.0.0.1 at `port`. */
+static int cs_from_relay(const unsigned char *from, int size, unsigned port) {
+    CsAddr4 relay;
+    cs_relay_address(&relay, port);
+    return port && size >= (int)sizeof(CsAddr4) && memory_equal(from, &relay, 8);
+}
+
+/* The relay's answers to the host's hook (the others' states, and voice for the overlay), while
+   this PC hosts. */
 static DWORD WINAPI cs_host_listen(void *argument) {
     UINT_PTR s = (UINT_PTR)argument;
-    static unsigned char packet[256];
+    static unsigned char packet[1024]; /* voice is up to 548 bytes (voice_net.c) */
     unsigned char from[64];
     while (cs_host_socket == s) {
         int from_size = (int)sizeof(from);
         int n = cs.recvfrom(s, (char *)packet, sizeof(packet), 0, from, &from_size);
         if (n > 0) {
-            azimuth_carstate_received(packet, n);
+            if (n < 2 || (cs_get16_early(packet) != 0x3E93u && cs_get16_early(packet) != 0x3E94u)) {
+                azimuth_carstate_received(packet, n);
+            } else if (cs_from_relay(from, from_size, cs_host_port)) {
+                fi_voice_received(packet, n); /* voice down / state down from this PC's relay */
+            }
         }
         if (!azimuth_world_hosting()) {
             break;
@@ -138,8 +154,12 @@ static DWORD WINAPI cs_host_listen(void *argument) {
     return 0;
 }
 
+/* Car state (the game's threads) and voice (voice_net.c, an overlay thread) share the socket:
+   only one makes it. */
+static SRWLOCK cs_host_lock = SRWLOCK_INIT;
+
 /* Sends to the relay from the host's loopback socket (made the first time). */
-static int cs_host_send(const unsigned char *data, int size) {
+static int cs_host_send_locked(const unsigned char *data, int size) {
     unsigned port = azimuth_world_port();
     if (!port || !cs_load()) {
         return 0;
@@ -170,6 +190,19 @@ static int cs_host_send(const unsigned char *data, int size) {
     CsAddr4 relay;
     cs_relay_address(&relay, port);
     return cs.sendto(cs_host_socket, (const char *)data, size, 0, &relay, (int)sizeof(relay)) == size;
+}
+
+static int cs_host_send(const unsigned char *data, int size) {
+    AcquireSRWLockExclusive(&cs_host_lock);
+    int sent = cs_host_send_locked(data, size);
+    ReleaseSRWLockExclusive(&cs_host_lock);
+    return sent;
+}
+
+/* voice_net.c: a voice datagram to this PC's relay, from the socket car state uses (the address
+   the relay knows the host's hook by). 1 sent. */
+int azimuth_carstate_host_send(const void *data, int size) {
+    return azimuth_world_hosting() && cs_host_send((const unsigned char *)data, size);
 }
 
 /* ------------------------------------------------------------------- local state */
