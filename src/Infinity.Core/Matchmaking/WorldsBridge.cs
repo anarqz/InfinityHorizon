@@ -453,6 +453,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation)
     {
         if(Interlocked.CompareExchange(ref _joinAttempt,1,0)!=0)return new(UiJoin.SlowDown,_text("worlds.slow_down"));
+        CancelFreeRoamLeave(); // the new seat is never let go by an older leave of free roam
         try {return await JoinCoreAsync(request,cancellation).ConfigureAwait(false);}
         finally {Volatile.Write(ref _joinAttempt,0);}
     }
@@ -903,6 +904,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     _log("worlds: closed from the overlay");
                     return Done("worlds.closed_done");
                 case UiWorldAction.Leave:
+                    CancelFreeRoamLeave();
                     InvalidateMine(reset: true);
                     // left on purpose: never the world the game's next "find me a lobby" goes back to
                     LeftOnPurpose();
@@ -963,6 +965,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public async Task<UiFrame.Hosted> CreateAsync(UiFrame.CreateWorld request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
+        CancelFreeRoamLeave(); // the new world is never closed by an older leave of free roam
         Interlocked.Increment(ref _creating);
         try { return await CreateCoreAsync(request, cancellation).ConfigureAwait(false); }
         finally { Interlocked.Decrement(ref _creating); }
@@ -1338,6 +1341,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// <summary>The host left free roam, closed the world, or the session ended: <c>DELETE</c> and the relay stopped.</summary>
     public async Task CloseHostAsync(CancellationToken cancellation)
     {
+        CancelFreeRoamLeave();
         InvalidateMine(reset: true);
         var operation = QueueHostOperation(replace: true, create: false);
         await operation.Previous.ConfigureAwait(false);
@@ -1445,6 +1449,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// <summary>The play session is ending: the seat is let go (idempotent on the server).</summary>
     public async Task LeaveAsync(CancellationToken cancellation)
     {
+        CancelFreeRoamLeave();
         InvalidateMine(reset: true);
         await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);
         if (_seat.GrantId is null)
