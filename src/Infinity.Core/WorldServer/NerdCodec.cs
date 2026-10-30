@@ -38,6 +38,8 @@ internal static class NerdCodec
         >= 1 and <= 3 => (7, 0),
         6 => (2, 2),
         9 or 12 => (4, 2),
+        // weather (10) and car meet (11): one server-owned object each, so 1 id bit and no type bits
+        10 or 11 => (1, 0),
         _ => throw new WireFormatException(WireError.UnknownRouter, router),
     };
 

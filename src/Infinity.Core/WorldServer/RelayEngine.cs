@@ -25,6 +25,8 @@ internal sealed partial class RelayEngine
     internal Func<ulong, IPEndPoint, long, bool>? Authorize { get; set; }
     internal Func<ulong, IPEndPoint, long, bool>? AuthorizeHook { get; set; }
     internal Action<ulong, string, int?, int?, int?>? ValidationRejected { get; set; }
+    /// <summary>An OpenConnection past the handshake rate: peer index (0 when refused), A (the lobby type), B, refusal reason or null.</summary>
+    internal Action<byte, uint, uint, byte?>? ConnectionOpened { get; set; }
 
     private void Rejected(RelayPeer peer, string kind, int? message = null, int? router = null, int? value = null)
         => ValidationRejected?.Invoke(peer.Xuid, kind, message, router, value);
@@ -119,6 +121,7 @@ internal sealed partial class RelayEngine
                 || (SyncedCount >= _settings.MaxPlayers && (SharedXuid(open.User) || !_peers.Any(p => p.Synced && p.Xuid == open.User))) ? (byte)4 : null;
         if (reason is { } refusal)
         {
+            ConnectionOpened?.Invoke(0, open.A, open.B, refusal);
             var response = NerdCodec.Packet([NerdCodec.Write(new NerdMessage.OpenResponse(open.Flags, refusal, open.Attempt, 0))],
                 NerdCodec.NoSequence, header.Id == NerdCodec.NoSequence ? NerdCodec.NoAck : header.Id, 0);
             if (response.Length <= bytes) Emit(endpoint, response);
@@ -135,6 +138,7 @@ internal sealed partial class RelayEngine
         var peer = new RelayPeer(endpoint, index, open.User, attempt, _now)
         { ClientAttempt = open.Attempt, PacketTokens = _settings.RatePackets * 2.0, MessageTokens = _settings.RateMessages * 2.0, ByteTokens = _settings.RateBytes * 2.0 };
         _peers.Add(peer);
+        ConnectionOpened?.Invoke(index, open.A, open.B, null);
         return peer;
     }
 
