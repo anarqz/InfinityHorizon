@@ -24,6 +24,9 @@ Everything lives in `~/.local/share/InfinityHorizon`, including the launcher's P
 On Windows, install PowerShell 7, .NET SDK 10.0.401 (or a newer patch in that feature band),
 Visual Studio C++ build tools with a Windows SDK, Python 3.10+ and Zig 0.15.2.
 NuGet restores the pinned BouncyCastle package; ImGui, MinHook, SQLite and the embedded fonts are vendored.
+The overlay's voice chat codecs (libopus 1.5.2 and RNNoise 0.2) are not in git: the first overlay build runs
+`native/overlay/fetch.ps1`, which downloads their release tarballs and refuses any whose SHA-256 is not the pinned
+one (run it beforehand for an offline build).
 
 ```powershell
 git clone --recursive https://github.com/anarqz/InfinityHorizon.git

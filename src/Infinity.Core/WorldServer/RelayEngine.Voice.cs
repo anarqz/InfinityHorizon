@@ -27,6 +27,10 @@ internal sealed partial class RelayEngine
     }
 
     private readonly Dictionary<RelayPeer, VoicePeer> _voice = [];
+    // MATCHMAKING_API.md §5c: the seat byte of voice down and state down is a stable voice seat 0..11, one per synced player
+    // (the lowest free when first needed, kept until the player leaves the world, then reused), never the peer index, which
+    // grows to 254 as players come and go and would leave late joiners beyond the overlay's seats
+    private readonly Dictionary<RelayPeer, byte> _voiceSeats = [];
     private readonly HashSet<ulong> _mutedForLobby = [];
     private bool _lobbyVoice = true;
     private long _lastVoiceState;
@@ -60,6 +64,15 @@ internal sealed partial class RelayEngine
     private bool IsTalking(VoicePeer v) => v.LastVoiceAt is { } at && _now - at < TalkingMs && !v.SpurtEnded;
 
     private void DropVoice(string reason) => VoiceDrops[reason] = VoiceDrops.GetValueOrDefault(reason) + 1;
+
+    /// <summary>The synced <paramref name="peer"/>'s voice seat (0..11); null only if all twelve are taken.</summary>
+    private byte? VoiceSeatOf(RelayPeer peer)
+    {
+        if (_voiceSeats.TryGetValue(peer, out var seat)) return seat;
+        for (byte s = 0; s < VoiceCodec.MaxSeats; s++)
+            if (!_voiceSeats.ContainsValue(s)) { _voiceSeats[peer] = s; return s; }
+        return null;
+    }
 
     private void ReceiveVoiceControl(ReadOnlySpan<byte> data, IPEndPoint endpoint)
     {
@@ -100,11 +113,12 @@ internal sealed partial class RelayEngine
         if (_mutedForLobby.Contains(peer.Xuid)) { DropVoice("muted for lobby"); return; }
         if ((voice.Self & VoiceControlUp.MicMuted) != 0) { DropVoice("mic muted"); return; }
         if (!IsTalking(voice) && _voice.Values.Count(IsTalking) >= MaxTalkers) { DropVoice("talker cap"); return; }
+        if (VoiceSeatOf(peer) is not { } seat) { DropVoice("no seat"); return; }
         var started = !IsTalking(voice);
         voice.LastVoiceAt = _now;
         voice.SpurtEnded = (up.Header.Flags & VoiceHeader.EndOfSpurt) != 0;
         if (started || voice.SpurtEnded) _voiceChanged = true;
-        var packet = VoiceCodec.WriteDown(new VoiceDown(up.Header, peer.Index, up.Opus));
+        var packet = VoiceCodec.WriteDown(new VoiceDown(up.Header, seat, up.Opus));
         foreach (var (listener, heard) in _voice)
         {
             if (listener == peer || !listener.Synced || !Allowed(listener.Xuid, listener.Endpoint) || !AllowedHook(listener.Xuid, heard.Hook)) continue;
@@ -126,14 +140,16 @@ internal sealed partial class RelayEngine
 
     private VoiceStateDown VoiceStateFor()
     {
-        var seats = _peers.Where(p => p.Synced).Take(VoiceCodec.MaxSeats).Select(p =>
+        var seats = new List<VoiceSeat>();
+        foreach (var p in _peers.Where(p => p.Synced))
         {
+            if (VoiceSeatOf(p) is not { } seat) continue;
             byte state = 0;
             if (_voice.TryGetValue(p, out var v) && IsTalking(v)) state |= VoiceSeat.Talking;
             if (_mutedForLobby.Contains(p.Xuid)) state |= VoiceSeat.MutedForLobby;
             if (VoiceBlocked?.Invoke(p.Xuid) == true) state |= VoiceSeat.Blocked;
-            return new VoiceSeat(p.Index, p.Xuid, state);
-        }).ToList();
+            seats.Add(new VoiceSeat(seat, p.Xuid, state));
+        }
         return new(_lobbyVoice ? VoiceStateDown.On : (byte)0, 3, seats);
     }
 
@@ -153,11 +169,16 @@ internal sealed partial class RelayEngine
         foreach (var (peer, voice) in _voice) SendVoiceState(peer, voice);
     }
 
-    private void OnVoicePeerLeft(RelayPeer peer) => _voiceChanged |= _voice.Remove(peer);
+    private void OnVoicePeerLeft(RelayPeer peer)
+    {
+        _voiceChanged |= _voice.Remove(peer);
+        _voiceChanged |= _voiceSeats.Remove(peer); // the seat is free for the next player
+    }
 
     private void ClearVoice()
     {
         _voice.Clear();
+        _voiceSeats.Clear();
         _mutedForLobby.Clear();
         _lobbyVoice = true;
         VoiceDrops.Clear();

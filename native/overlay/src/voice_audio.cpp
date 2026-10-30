@@ -282,7 +282,11 @@ public:
         return ok;
     }
     void Receive(uint8_t seat, uint16_t seq, uint32_t ts, uint8_t flags, const uint8_t *opus, size_t size) {
-        if (seat >= kSeats || !opus || size < 1 || size > 400 || silenced_[seat].load()) return;
+        if (seat >= kSeats) { // the relay's voice seats are 0-11 (MATCHMAKING_API.md §5c): said once, never silently
+            if (!seat_logged_.exchange(true)) Log("voice: a packet for seat %u (beyond %d) is not played", seat, kSeats - 1);
+            return;
+        }
+        if (!opus || size < 1 || size > 400 || silenced_[seat].load()) return;
         const int samples = opus_packet_get_nb_samples(opus, static_cast<opus_int32>(size), kRate);
         if (samples < kFrame || samples > kMaxBundle * kFrame || samples % kFrame) return; // only whole 20 ms frames
         Packet p;
@@ -437,6 +441,7 @@ private:
     std::array<Seat, kSeats> seats_;
     std::array<std::atomic<bool>, kSeats> silenced_{};
     std::array<std::atomic<int64_t>, kSeats> last_rx_{};
+    std::atomic<bool> seat_logged_{false};
     std::atomic<float> volume_{1.0f};
     std::mutex inbox_mutex_;
     std::vector<Packet> inbox_;

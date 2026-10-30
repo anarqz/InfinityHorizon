@@ -22,7 +22,8 @@
      PlayerChatStates (FUN_140e1e920, actions 2 and 4): the original runs, then the overlay.
 
    The local player is XUID 0 for the overlay (it does not know it). Off unless Infinity.cfg
-   [hook] VoiceUi=1: nobody has seen this in the running game yet. Installed once, after the game
+   [hook] VoiceUi=1, or on by default in a test build (FI_VOICE_UI_DEFAULT, infinity.h; VoiceUi=0
+   turns it off): nobody has seen this in the running game yet. Installed once, after the game
    build (TimeDateStamp, SizeOfImage) and every byte it replaces or relies on were checked; any
    mismatch leaves the whole game untouched. */
 #include "infinity.h"

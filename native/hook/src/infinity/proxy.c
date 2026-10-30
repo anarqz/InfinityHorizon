@@ -228,10 +228,14 @@ int azimuth_proxy_relay_leg(const unsigned char *p,size_t n) {
     /* Without a context yet it is kept; the proxy uses it only once the context names its grant. */
     if(!px_leg_grant_current(p+1)) {log_append("RELAY: a RelayLeg for another grant; ignored.\r\n");return 0;}
     AcquireSRWLockExclusive(&px_leg_lock);
+    /* the same grant, transport and relay re-signed (a renewed seat's fresh claims): stored without a log line */
+    int renewed=px_leg.present && memory_equal(px_leg.grant,p+1,16) && px_leg.transport==p[17]
+        && memory_equal(px_leg.relay,p+18,4) && px_leg.port==(unsigned short)((p[22]<<8)|p[23]);
     memory_copy(px_leg.grant,p+1,16);px_leg.transport=p[17];memory_copy(px_leg.relay,p+18,4);
     px_leg.port=(unsigned short)((p[22]<<8)|p[23]);px_leg.claims_size=claims;memory_copy(px_leg.claims,p+26,claims);
     memory_copy(px_leg.signature,p+26+claims,64);px_leg.present=1;InterlockedIncrement(&px_leg_revision);
     ReleaseSRWLockExclusive(&px_leg_lock);
+    if(renewed)return 1;
     log_append(p[17] ? "RELAY: leg stored (relay-born world).\r\n" : "RELAY: leg stored (direct first, relay fallback).\r\n");
     return 1;
 }
