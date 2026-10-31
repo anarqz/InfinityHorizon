@@ -57,10 +57,21 @@ internal readonly record struct VoiceSeat(byte Seat, ulong Xuid, byte State)
 internal readonly record struct VoiceModeInfo(VoiceMode Mode, ushort Range);
 
 /// <summary>
-/// The relay's voice state for the lobby: <c>Lobby</c> bit 0 voice on; <c>Bundle</c> 3 or 6 frames per packet. Never who muted whom.
-/// <c>Mode</c>: the <c>0xC0F9</c> attribute (a new relay always writes it; null when absent or ignored on receipt).
+/// State down's <c>0xC0FA</c> (§5c "Team event", OD-165): written only to a running team event's participants, after <c>0xC0F9</c>:
+/// {ver 1, flags (bit 0 a team event runs for this listener), team (0 red, 1 blue: the relay's assignment), reserved 0}. Its
+/// absence means "no team event for you" (spectators and everyone outside one never receive it).
 /// </summary>
-internal sealed record VoiceStateDown(byte Lobby, byte Bundle, IReadOnlyList<VoiceSeat> Seats, VoiceModeInfo? Mode = null)
+internal readonly record struct VoiceTeamInfo(byte Team)
+{
+    internal const byte Running = 1;
+}
+
+/// <summary>
+/// The relay's voice state for the lobby: <c>Lobby</c> bit 0 voice on; <c>Bundle</c> 3 or 6 frames per packet. Never who muted whom.
+/// <c>Mode</c>: the <c>0xC0F9</c> attribute (a new relay always writes it; null when absent or ignored on receipt). <c>Team</c>: the
+/// <c>0xC0FA</c> attribute (OD-165; a team event's participant only; null when absent or ignored on receipt).
+/// </summary>
+internal sealed record VoiceStateDown(byte Lobby, byte Bundle, IReadOnlyList<VoiceSeat> Seats, VoiceModeInfo? Mode = null, VoiceTeamInfo? Team = null)
 {
     internal const byte On = 1;
 
@@ -81,9 +92,9 @@ internal static class VoiceCodec
 {
     internal const ushort VoiceKind = 0x3e93, ControlKind = 0x3e94;
     internal const ushort VoiceUpAttribute = 0xc0f3, VoiceDownAttribute = 0xc0f4, ControlUpAttribute = 0xc0f5, StateDownAttribute = 0xc0f6;
-    internal const ushort PoseAttribute = 0xc0f8, ModeAttribute = 0xc0f9;
+    internal const ushort PoseAttribute = 0xc0f8, ModeAttribute = 0xc0f9, TeamAttribute = 0xc0fa;
     internal const byte Version = 1;
-    internal const int MaxOpus = 400, MaxSeats = 12, PoseLength = 48, ModeLength = 4;
+    internal const int MaxOpus = 400, MaxSeats = 12, PoseLength = 48, ModeLength = 4, TeamLength = 4;
     /// <summary>The smallest range a receiver takes in <c>0xC0F9</c> (below: the attribute is ignored).</summary>
     internal const ushort MinRange = 20;
 
@@ -141,7 +152,8 @@ internal static class VoiceCodec
             seats[i] = new(v[at], BinaryPrimitives.ReadUInt64BigEndian(v[(at + 1)..]), v[at + 9]);
         }
         var mode = StunCodec.TryAttribute(data, ControlKind, ModeAttribute, out var m) ? ParseMode(m, v[1]) : null;
-        return new(v[1], v[2], seats, mode);
+        var team = StunCodec.TryAttribute(data, ControlKind, TeamAttribute, out var t) ? ParseTeam(t) : null;
+        return new(v[1], v[2], seats, mode, team);
     }
 
     internal static byte[] WriteState(VoiceStateDown message, ReadOnlySpan<byte> transaction = default)
@@ -159,12 +171,24 @@ internal static class VoiceCodec
             BinaryPrimitives.WriteUInt64BigEndian(v.AsSpan(at + 1), seat.Xuid);
             v[at + 9] = seat.State;
         }
-        if (message.Mode is not { } info) return StunCodec.Indication(ControlKind, StateDownAttribute, v, transaction);
-        var modeValue = new byte[ModeLength];
-        modeValue[0] = Version; modeValue[1] = (byte)info.Mode;
-        BinaryPrimitives.WriteUInt16BigEndian(modeValue.AsSpan(2), info.Range);
-        return StunCodec.Indications(ControlKind, transaction, (StateDownAttribute, v), (ModeAttribute, modeValue));
+        if (message.Team is { Team: > 1 }) throw new WireFormatException(WireError.InvalidValue);
+        if (message.Mode is null && message.Team is null) return StunCodec.Indication(ControlKind, StateDownAttribute, v, transaction);
+        var attributes = new List<(ushort, byte[])> { (StateDownAttribute, v) };
+        if (message.Mode is { } info)
+        {
+            var modeValue = new byte[ModeLength];
+            modeValue[0] = Version; modeValue[1] = (byte)info.Mode;
+            BinaryPrimitives.WriteUInt16BigEndian(modeValue.AsSpan(2), info.Range);
+            attributes.Add((ModeAttribute, modeValue));
+        }
+        if (message.Team is { } team) attributes.Add((TeamAttribute, [Version, VoiceTeamInfo.Running, team.Team, 0]));
+        return StunCodec.Indications(ControlKind, transaction, [.. attributes]);
     }
+
+    // receiver rules (§5c "Team event"): ver 1, exactly 4 bytes, the running bit set and team 0 or 1, else ignored (no team event
+    // for this listener); the state down itself is still taken. The other flag bits and the reserved byte are not read.
+    private static VoiceTeamInfo? ParseTeam(ReadOnlySpan<byte> t) =>
+        t.Length == TeamLength && t[0] == Version && (t[1] & VoiceTeamInfo.Running) != 0 && t[2] <= 1 ? new VoiceTeamInfo(t[2]) : null;
 
     // receiver rules (§5c "The mode"): any inconsistency ignores the attribute; the state down itself is still taken
     private static VoiceModeInfo? ParseMode(ReadOnlySpan<byte> m, byte lobby)

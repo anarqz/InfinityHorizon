@@ -853,6 +853,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     role == UiWorldRole.Hosting ? UiFriend.Self : UiFriend.None));
             }
             var row = Row(world, false);
+            // CR-S67/S68: the world's voice mode for a joiner, the roster's voice blocks for the host's relay, this player's own block
+            if (role is UiWorldRole.Hosting or UiWorldRole.Seated && epoch == Volatile.Read(ref _mineEpoch))
+                ObserveVoice(seat.WorldId, role, world, named ? boundedRoster : null);
             lock (_mineState)
             {
                 if (!OnlineOpen || epoch != Volatile.Read(ref _mineEpoch)) return _mineSnapshot;
@@ -1070,6 +1073,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Relays = relayReport?.Relays,
                 Lobbies = relay.Lobbies,
                 Activity = opening,
+                // CR-S67: the lobby's voice mode, the host's to change later
+                Voice = request.Voice switch { UiLobbyVoice.Off => VoiceModes.Off, UiLobbyVoice.Proximity => VoiceModes.Proximity, _ => VoiceModes.Open },
             };
             for (var attempt = 0; attempt < 2; ++attempt)
             {
@@ -1115,13 +1120,14 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         ObserveNoticeWorld(world.Modes is null ? world with { Modes = settings.Modes } : world); // OD-160's notice
                         Volatile.Write(ref _hostedRelayName, world.Relay?.Name);
                         Volatile.Write(ref _hostedActivity, opening);
+                        Volatile.Write(ref _hostedVoice, settings.Voice);
                         _hostedPool = world.Pool;
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
                     hosted = true;
-                    Voice?.Creating(request.Voice); // OD-154: the lobby's voice chat switch, the host's to change later
-                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players{(opening == WorldActivities.RoadTrip ? ", road trip" : string.Empty)}, voice {(request.Voice ? "on" : "off")})");
+                    Voice?.Creating(settings.Voice); // OD-154, CR-S67: the lobby's voice mode, the host's to change later
+                    _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players{(opening == WorldActivities.RoadTrip ? ", road trip" : string.Empty)}, voice {settings.Voice})");
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id
@@ -1217,7 +1223,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var step = _host.Next(now).Step;
             // OD-150: the host's game changed activity: said on this heartbeat, sent now instead of at the next one
             var activity = ActivityChange(relay);
-            if (step != HostStep.Announce && !(step == HostStep.Wait && (activity is not null || ExternalPortMoved(relay, now))))
+            // CR-S67: the host changed the lobby's voice mode: written to the world row on this heartbeat, sent now
+            var voice = VoiceChange();
+            if (step != HostStep.Announce && !(step == HostStep.Wait && (activity is not null || voice is not null || ExternalPortMoved(relay, now))))
             {
                 if (refreshRelayAdmissions is null || now < _nextAdmissionsRefresh) return null;
                 _nextAdmissionsRefresh = now + AdmissionsEvery;
@@ -1270,7 +1278,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (wallRemaining < remaining) remaining = wallRemaining;
             var endpoint = Announcement(relay);
             var sentExternalPort = endpoint.External?.Port ?? 0;
-            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint, Activity = activity }, token), stop.Token,
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint, Activity = activity, Voice = voice }, token), stop.Token,
                 remaining: remaining).ConfigureAwait(false);
             if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();
@@ -1320,6 +1328,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // said once: a heartbeat the server answered carries a change only until it is taken
                     _log($"worlds: activity {Interlocked.Exchange(ref _hostedActivity, activity) ?? "unknown"} -> {activity}"
                         + (world.Activity == activity ? string.Empty : $" (the server keeps {world.Activity})"));
+                }
+                if (voice is not null)
+                {
+                    _log($"worlds: voice {Interlocked.Exchange(ref _hostedVoice, voice) ?? "unknown"} -> {voice}"
+                        + (world.Voice == voice ? string.Empty : $" (the server keeps {world.Voice})"));
                 }
                 _hostLastSuccess = Now;
                 _hostLastStamp = _clock.GetTimestamp();

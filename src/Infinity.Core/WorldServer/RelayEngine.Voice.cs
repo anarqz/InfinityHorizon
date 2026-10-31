@@ -66,7 +66,11 @@ internal sealed partial class RelayEngine
     private long _lastVoiceState;
     private bool _voiceChanged;
 
-    /// <summary>Voice blocked for this XUID (a moderator ban or a community mute in its grant, CR-S67/S68); none before the server says.</summary>
+    /// <summary>
+    /// Voice blocked for this XUID now (CR-S67/S68: a moderator ban or a community mute, from the joiner's grant claim
+    /// <c>voiceBlockedUntil</c> or the roster's <c>WorldMember.voiceBlockedUntil</c>, whichever the host saw last); none before the
+    /// server says. <see cref="VoiceBlocksChanged"/> after a change.
+    /// </summary>
     internal Func<ulong, bool>? VoiceBlocked { get; init; }
 
     /// <summary>Why voice was dropped, by reason (counters only: never audio). Proximity counts per (talker, listener).</summary>
@@ -345,7 +349,22 @@ internal sealed partial class RelayEngine
             seats.Add(new VoiceSeat(seat, p.Xuid, state));
         }
         var mode = new VoiceModeInfo(_voiceMode, _voiceMode == VoiceMode.Proximity ? ProximityRange : (ushort)0);
-        return new(LobbyVoice ? VoiceStateDown.On : (byte)0, 3, seats, mode);
+        return new(LobbyVoice ? VoiceStateDown.On : (byte)0, 3, seats, mode, listener is null ? null : TeamOf(listener));
+    }
+
+    /// <summary>§5c "Team event" (OD-165): <c>0xC0FA</c> for a running team event's participant whose team the relay assigned; null for
+    /// everyone else (spectators, outside an event).</summary>
+    private VoiceTeamInfo? TeamOf(RelayPeer listener) =>
+        _teamEvent && _race is { } race && race.Participants.Contains(listener.Index) && listener.Team is { } team ? new VoiceTeamInfo(team) : null;
+
+    /// <summary>
+    /// CR-S67: the server's voice blocks changed (a grant's <c>voiceBlockedUntil</c> or the roster's): a talker blocked now leaves every
+    /// heard set, and every subscriber learns the blocked bits at once (state down's bit 2).
+    /// </summary>
+    internal void VoiceBlocksChanged()
+    {
+        foreach (var peer in _voice.Keys.Where(p => VoiceBlocked?.Invoke(p.Xuid) == true).ToArray()) ForgetHeard(peer);
+        SendVoiceStates();
     }
 
     private void SendVoiceState(RelayPeer peer, VoicePeer voice)

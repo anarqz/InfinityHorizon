@@ -105,6 +105,8 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
 // VoiceState and VoiceMember are in ui_frames.h (0x1B).
 void SetVoiceState(VoiceState state); // any thread
 VoiceState CurrentVoice();            // a copy, any thread
+// OD-165: a team event runs for this player (the relay's 0xC0FA, fresh): its team (0 red, 1 blue); false otherwise
+bool VoiceTeamChat(uint8_t *team);
 // Asks the launcher (0x1C) and applies the change at once, so the screen follows the button before the answer.
 void VoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value);
 // §15: the player picked a microphone or an output (empty id: the system default). Applied at once, kept by the
@@ -166,7 +168,7 @@ void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag
 void SendPaneAction(const std::string &pane, const std::string &action);
 void SendJoinWorld(const std::string &world, const std::string &code);
 // any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode. voice (OD-154): the lobby's voice chat
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, bool voice);
+void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, uint8_t voice);
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value); // 0x1C
 void SendVoiceDevice(VoiceFlow flow, const std::string &id, const std::string &name); // 0x1D (§15)
 void SendMyWorldQuery();

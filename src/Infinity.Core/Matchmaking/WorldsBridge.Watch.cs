@@ -36,6 +36,14 @@ public sealed partial class WorldsBridge
     /// <summary>NR-6: the hook reported <see cref="Session.CaptureWhat.Parts"/> ok: it sends the other players' part rows.</summary>
     public bool PartsCapable { get => Volatile.Read(ref _partsCapable) != 0; set => Volatile.Write(ref _partsCapable, value ? 1 : 0); }
 
+    private int _watchPerCarCapable;
+    /// <summary>
+    /// NR-5: the hook reported <see cref="Session.CaptureWhat.WatchPerCar"/> ok: it measures speed against the per-car floor and
+    /// reports the held speed and the car (Observed layout 2). Without it (an older hook) the flat limit is sent and its speed
+    /// observations carry neither.
+    /// </summary>
+    public bool WatchPerCarCapable { get => Volatile.Read(ref _watchPerCarCapable) != 0; set => Volatile.Write(ref _watchPerCarCapable, value ? 1 : 0); }
+
     /// <summary>NR-6: this PC's own game database (gamedbRC.slt, read-only) the parts rule judges against; null: no parts rule.</summary>
     public string? GameDatabase { get; set; }
 
@@ -118,7 +126,7 @@ public sealed partial class WorldsBridge
             {
                 _watchRules = rules;
                 _log(string.Create(CultureInfo.InvariantCulture,
-                    $"worlds: watch: rules version {rules.Version}: speed over {rules.Speed.MaxKmh} km/h for {rules.Speed.SustainMs} ms, climb over {rules.Climb.MaxKmh} km/h for {rules.Climb.SustainMs} ms, jump {rules.Jump.MaxMeters} m (log only)"));
+                    $"worlds: watch: rules version {rules.Version}: speed over {rules.Speed.MaxKmh} km/h for {rules.Speed.SustainMs} ms{(rules.Speed.PerCarFloorKmh is { } floor ? $" (measured over the per-car floor {floor.ToString(CultureInfo.InvariantCulture)} km/h)" : string.Empty)}, climb over {rules.Climb.MaxKmh} km/h for {rules.Climb.SustainMs} ms, jump {rules.Jump.MaxMeters} m (log only)"));
                 return;
             }
             _log($"worlds: watch: no usable rules ({answer.Error?.Code ?? "invalid"}); retried in {WatchRulesRetry.TotalSeconds:0} s");
@@ -156,9 +164,10 @@ public sealed partial class WorldsBridge
             var parts = PartsCapable ? Parts() : null;
             var seated = key.WorldId;
             if (parts is not null) lock (_hookPartsGate) _hookParts = new PartsWatch(parts, rules.Version, report => Observed(seated, report), _log);
-            await SendWatch(Session.Frame.Watch.From(rules, force, sendParts: parts is not null), cancellation).ConfigureAwait(false);
+            var perCar = WatchPerCarCapable && rules.PerCar;
+            await SendWatch(Session.Frame.Watch.From(rules, force, sendParts: parts is not null, perCar: perCar), cancellation).ConfigureAwait(false);
             (_hookWatching, _watchApplied) = (true, true);
-            _log($"worlds: watch: the hook measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)}{(parts is not null ? ", their parts too" : PartsCapable ? ", no parts rule (no readable game database)" : ", no parts rule (an older hook)")})");
+            _log($"worlds: watch: the hook measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)}{(perCar ? ", speed over the per-car floor" : rules.PerCar ? ", speed over the flat limit (an older hook)" : string.Empty)}{(parts is not null ? ", their parts too" : PartsCapable ? ", no parts rule (no readable game database)" : ", no parts rule (an older hook)")})");
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException or ProtocolException
             || error is OperationCanceledException && !cancellation.IsCancellationRequested)
@@ -199,7 +208,11 @@ public sealed partial class WorldsBridge
         }
         if (ObservedKind.Name(frame.Kind) is not { } kind) return;
         var counted = frame.Kind is ObservedKind.Speed or ObservedKind.Climb;
-        Observed(world,new PeerWatchReport(frame.Xuid, kind, frame.Value / 1000.0, counted ? frame.SustainMs : null, frame.RulesVersion, frame.PeerIndex));
+        // NR-5 (layout 2, speed): the held speed and the car's ordinal, as the hook read them from that player's own player object
+        var perCar = frame.WireLayout == Session.Frame.Observed.LayoutPerCar && frame.Kind == ObservedKind.Speed;
+        uint? car = perCar && frame.CarId != Session.Frame.Observed.NoCar ? frame.CarId : null;
+        double? held = perCar && frame.HeldMilliKmh != 0 ? frame.HeldMilliKmh / 1000.0 : null;
+        Observed(world, new PeerWatchReport(frame.Xuid, kind, frame.Value / 1000.0, counted ? frame.SustainMs : null, frame.RulesVersion, frame.PeerIndex, car, held));
     }
 
     /// <summary>
@@ -228,6 +241,9 @@ public sealed partial class WorldsBridge
             Kind = report.Kind,
             Value = report.Value,
             SustainMs = report.Kind is ObservationKinds.Speed or ObservationKinds.Climb ? report.SustainMs ?? 0 : null,
+            // NR-5, speed only: a whole ordinal in [0, 1e6] (an unsigned integer: never 247.0) and a held speed in (0, value]
+            CarId = report.Kind == ObservationKinds.Speed && report.CarId is { } car && car <= PeerWatch.MaxCarId ? car : null,
+            HeldKmh = report.Kind == ObservationKinds.Speed && report.HeldKmh is { } held && held > 0 && held <= report.Value ? held : null,
             RulesVersion = report.RulesVersion,
         }, report.PeerIndex));
     }

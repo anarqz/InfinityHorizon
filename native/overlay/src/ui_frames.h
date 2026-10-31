@@ -29,17 +29,19 @@
 //   0x0E MyWorld{u8 role, str worldId, str name, str host, str code, u8 audience, u8 players, u8 max, u8 named,
 //        u8 count <= 16 x {str xuid, str gamertag, u8 tier, u8 role, u8 friend}, u8 anyMode}; an older launcher's
 //        frame ends after the members (anyMode 0), and as before trailing bytes are ignored
-//   0x0B CreateWorld also carries u8 voice after anyMode (OD-154: the lobby's voice chat, 1 on; absent: on)
+//   0x0B CreateWorld also carries u8 voice after anyMode (OD-154, CR-L46: the lobby's voice mode, 0 off, 1 open, 2
+//        proximity; absent: open)
 // Protocol 3 (OD-154, docs/launcher/VOICE_CHAT.md §11): voice chat
 //   0x1B VoiceState, launcher -> overlay {u8 flags, u8 micMode (0 open, 1 muted, 2 push-to-talk),
 //        u8 count <= 16 x {str xuid (decimal), str gamertag (<= 64 B), u8 state, u8 volume (1..100)}, u8 voiceVolume
 //        (1..100), u8 micVolume (1..100), str microphoneId, str microphoneName, str outputId, str outputName (each
 //        <= 256 B; an empty id is the system default, and its name is empty too)}, the other players of the lobby
 //        (never this one: its own voice is micMode and flag 3): flags bit 0 the lobby's voice chat is on, 1 it is known
-//        (else "set by the host"), 2 this player may change it (the host), 3 voice is on in this player's settings;
+//        (else "set by the host"), 2 this player may change it (the host), 3 voice is on in this player's settings,
+//        4 the lobby's mode is proximity (with bit 0; CR-L46), 5 this player's own voice is blocked (CR-S67/S68);
 //        state bit 0 muted by this player, 1 talking now, 2 muted for the lobby by the host, 3 voice blocked
 //   0x1C VoiceCommand, overlay -> launcher {u8 op, str xuid (decimal, empty for ops 1, 3, 4, 5, 7, 8), u8 value}:
-//        op 1 the lobby's voice chat (the host; value 0/1), 2 mute a player (1) or unmute (0), 3 mute (1) or unmute
+//        op 1 the lobby's voice mode (the host; value 0 off, 1 open, 2 proximity), 2 mute a player (1) or unmute (0), 3 mute (1) or unmute
 //        (0) everyone, 4 the mic mode (value as micMode), 5 voice on/off in the settings, 6 mute a player for the
 //        whole lobby (the host), 7 the voice chat volume, 8 this player's microphone volume, 9 a player's volume
 //        (ops 7-9: value 1..100, VOICE_CHAT.md §15)
@@ -243,16 +245,19 @@ inline std::vector<uint8_t> EncodePaneActionClick(const std::string &pane, const
     wire::Str(b, action);
     return b;
 }
-// 0x0B (protocol 1; anyMode CR-L43; voice OD-154)
+// The lobby's voice mode on the pipe (CR-L46): 0x0B's voice and VoiceOp::LobbyVoice's value.
+enum : uint8_t { kLobbyVoiceOff = 0, kLobbyVoiceOpen = 1, kLobbyVoiceProximity = 2, kLobbyVoiceMax = kLobbyVoiceProximity };
+
+// 0x0B (protocol 1; anyMode CR-L43; voice OD-154, its mode CR-L46)
 inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode,
-                                              bool voice = true) {
+                                              uint8_t voice = kLobbyVoiceOpen) {
     std::vector<uint8_t> b;
     wire::Str(b, name);
     wire::U8(b, audience);
     wire::U8(b, max_players);
     wire::U8(b, latency);
     wire::Flag(b, any_mode);
-    wire::Flag(b, voice);
+    wire::U8(b, voice > kLobbyVoiceMax ? kLobbyVoiceOpen : voice);
     return b;
 }
 
@@ -272,7 +277,7 @@ struct VoiceMember {
     uint8_t volume = kVolumeMax; // this player's volume for that player (§15), kept by the launcher per XUID
 };
 struct VoiceState {
-    enum : uint8_t { LobbyOn = 1, LobbyKnown = 2, MayChange = 4, Enabled = 8, AllFlags = 15 };
+    enum : uint8_t { LobbyOn = 1, LobbyKnown = 2, MayChange = 4, Enabled = 8, Proximity = 16, SelfBlocked = 32, AllFlags = 63 };
     uint8_t flags = 0;
     MicMode mic = MicMode::Open;
     std::vector<VoiceMember> members;
@@ -282,6 +287,8 @@ struct VoiceState {
     std::string mic_id, mic_name;      // the chosen microphone; empty id: the system default
     std::string output_id, output_name;
     bool lobby_on() const { return (flags & LobbyKnown) && (flags & LobbyOn); }
+    // the lobby's mode as the pipe says it (CR-L46): kLobbyVoiceOff, Open or Proximity (off while unknown)
+    uint8_t lobby_mode() const { return !lobby_on() ? kLobbyVoiceOff : (flags & Proximity) ? kLobbyVoiceProximity : kLobbyVoiceOpen; }
     uint8_t StateOf(const std::string &xuid) const {
         for (const auto &m : members)
             if (m.xuid == xuid) return m.state;

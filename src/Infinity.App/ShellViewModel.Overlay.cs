@@ -80,6 +80,12 @@ public sealed partial class ShellViewModel
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
                 MatchmakingHttp(mm), mm, ClientHeader, ticket);
             // OD-109: kept so the dedicated lobby is not created while this session hosts a world.
+            // CR-S68: this profile's mutes reach the server (POST /launcher/v1/voice/mutes); a 202 marks the history entry sent
+            Infinity.Core.Voice.VoiceRoom? voiceRoom = null;
+            var voiceMutes = new Infinity.Core.Voice.VoiceMuteSender(
+                async (mute, ct) => await session.Api.VoiceMuteAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), mute, ct).ConfigureAwait(false), Log)
+            { Accepted = target => voiceRoom?.MuteSent(target) };
+            voiceRoom = new Infinity.Core.Voice.VoiceRoom(new Infinity.Core.Voice.VoiceStore(_stateDirectory), mode, xuid) { MuteReported = voiceMutes.Report };
             return _playWorlds = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], ProofClock(session), mode,
                 players => StartRelay(players, xuid, relayKeys, devLan, ProofClock(session)), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
@@ -100,7 +106,9 @@ public sealed partial class ShellViewModel
                 RelayReports=relayReports.ReportAsync,
                 ForceRelay=Infinity.Core.Matchmaking.RelayForce.Enabled(Log), // FI_RELAY_FORCE=1 (test switch): joins straight to the relay
                 // OD-154: voice chat's settings and this profile's mute history (voice.json), shown by the overlay
-                Voice = new Infinity.Core.Voice.VoiceRoom(new Infinity.Core.Voice.VoiceStore(_stateDirectory), mode, xuid),
+                Voice = voiceRoom,
+                // CR-S68: the voice_blocked notice's end (GET /core/v1/me/notices), told once per block in the player's language
+                AccountNotices = async ct => (await session.Api.AccountNoticesAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), ct).ConfigureAwait(false)).Items,
                 // NR-6: the parts rule judges the other players' cars against this PC's own game database (read-only)
                 GameDatabase = ContentLocation?.Mount is { } gameMount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(gameMount) : null,
             };

@@ -22,6 +22,11 @@ public sealed record RelayGrantClaims
     [JsonPropertyName("exp")] public required long Exp { get; init; }
     /// <summary>CR-S57: the signed relay both sides meet at (the last claim, absent when none). The only relay ever contacted.</summary>
     [JsonPropertyName("relay"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public RelayGrantRelay? Relay { get; init; }
+    /// <summary>
+    /// CR-S67: the joiner account's voice block in force when the grant was signed, in Unix seconds (the last claim, after
+    /// <see cref="Relay"/>; absent when no block is in force, so an unblocked grant's bytes are unchanged).
+    /// </summary>
+    [JsonPropertyName("voiceBlockedUntil"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? VoiceBlockedUntil { get; init; }
 }
 
 /// <summary>Exact fi_protocol::matchmaking::RelayGrantHost mirror.</summary>
@@ -166,7 +171,7 @@ public static class RelayGrantVerifier
             || (Int128)verified.Iat - nowUnix > FutureSkewSeconds
             || !Uuid(verified.Grant) || !Uuid(verified.World) || !Uuid(verified.Sub)
             || !Xuid(verified.Xuid) || !Xuid(verified.Host.Xuid)
-            || verified.Relay is { } relay && !ValidRelay(relay)) throw Invalid();
+            || verified.Relay is { } relay && !ValidRelay(relay) || verified.VoiceBlockedUntil is < 0) throw Invalid();
         if (verified.Exp <= nowUnix) throw new RelayGrantException(RelayGrantFailure.Expired);
         if (!string.Equals(verified.World, context.WorldId, StringComparison.Ordinal)
             || !string.Equals(verified.Host.Xuid, context.HostXuid, StringComparison.Ordinal)

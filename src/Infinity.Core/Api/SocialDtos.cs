@@ -171,3 +171,67 @@ public sealed record GameReportResult
 {
     public required string Id { get; init; }
 }
+
+/// <summary>CR-S68 (CORE_API.md §4.4): a voice mute's action.</summary>
+public static class VoiceMuteActions
+{
+    public const string Muted = "muted", Unmuted = "unmuted";
+}
+
+/// <summary>
+/// <c>POST /launcher/v1/voice/mutes</c> body (CR-S68): a mute from the overlay, idempotent by state (no <c>Idempotency-Key</c>).
+/// The XUID never reaches a log.
+/// </summary>
+public sealed record VoiceMuteReport
+{
+    public required string Xuid { get; init; }
+
+    /// <summary><see cref="VoiceMuteActions"/>.</summary>
+    public required string Action { get; init; }
+
+    public required string WorldId { get; init; }
+
+    public override string ToString() => $"VoiceMuteReport {{ {Action} }}";
+}
+
+/// <summary><c>POST /launcher/v1/voice/mutes</c> → 202.</summary>
+public sealed record VoiceMuteAccepted
+{
+    public required string Xuid { get; init; }
+
+    public required string Action { get; init; }
+}
+
+/// <summary>
+/// <c>GET /core/v1/me/notices</c> item (CORE_API.md §2.3). <c>Text</c> is the server's English line; the launcher localizes by
+/// <c>Kind</c> where it knows it (<c>voice_blocked</c>). <c>Until</c> (CR-S68): the end of what the notice is about.
+/// </summary>
+public sealed record AccountNotice
+{
+    public required string Kind { get; init; }
+
+    public required string Level { get; init; }
+
+    public required string Text { get; init; }
+
+    public required string Since { get; init; }
+
+    public string? Game { get; init; }
+
+    public int? Position { get; init; }
+
+    public string? Until { get; init; }
+}
+
+/// <summary><c>GET /core/v1/me/notices</c> → 200.</summary>
+public sealed record AccountNoticeList
+{
+    public required IReadOnlyList<AccountNotice> Items { get; init; }
+}
+
+/// <summary>The account notice kinds the launcher acts on (CORE_API.md §2.3).</summary>
+public static class AccountNoticeKinds
+{
+    /// <summary>CR-S68: a moderator voice ban or a community mute is in force until <see cref="AccountNotice.Until"/>.</summary>
+    public const string VoiceBlocked = "voice_blocked";
+}

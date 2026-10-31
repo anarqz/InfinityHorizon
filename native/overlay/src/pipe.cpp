@@ -367,7 +367,7 @@ void SendJoinWorld(const std::string &world, const std::string &code) {
     Queue(0x09, body);
 }
 
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, bool voice) {
+void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, uint8_t voice) {
     Queue(0x0B, EncodeCreateWorld(name, audience, max_players, latency, any_mode, voice));
 }
 

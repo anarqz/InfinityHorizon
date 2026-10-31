@@ -38,6 +38,7 @@ namespace {
 std::mutex g_lock;
 VoiceState g_voice; // the launcher's (0x1B), with this overlay's commands applied
 bool g_dev_seeded = false;
+std::atomic<uint64_t> g_self_xuid{0}; // the hook's XUID for this player (SetVoiceHost)
 // §15: a slider moved or a device picked here in the last second wins over the launcher's answer to an earlier step,
 // so a held Left/Right never snaps back; the launcher's state settles it after that.
 constexpr ULONGLONG kLocalHoldMs = 1000;
@@ -53,6 +54,9 @@ struct RelayView {
     // CR-L46: what to play follows this (0xC0F9, else the lobby byte); WorldView.voice is display only
     uint8_t mode = voice_wire::kModeOff;
     uint16_t range = 0;
+    // OD-165: 0xC0FA, a team event runs for this player (voice is its team's only), and its team
+    bool team_present = false;
+    uint8_t team = voice_wire::kTeamRed;
 } g_relay;
 constexpr ULONGLONG kRelayStaleMs = 5000;
 
@@ -77,8 +81,13 @@ uint64_t XuidNumber(const std::string &xuid) {
 VoiceState Merged(const VoiceState &launcher) {
     VoiceState v = launcher;
     if (!RelayFresh(g_relay)) return v;
-    if (!(v.flags & VoiceState::LobbyKnown)) // a joiner: the host's relay says the lobby's switch
-        v.flags = static_cast<uint8_t>(v.flags | VoiceState::LobbyKnown | (g_relay.lobby_on ? VoiceState::LobbyOn : 0));
+    if (!(v.flags & VoiceState::LobbyKnown)) // a joiner: the host's relay says the lobby's mode
+        v.flags = static_cast<uint8_t>(v.flags | VoiceState::LobbyKnown | (g_relay.lobby_on ? VoiceState::LobbyOn : 0)
+                                       | (g_relay.mode == voice_wire::kModeProximity ? VoiceState::Proximity : 0));
+    // CR-S67/S68: the relay marks this player's own seat blocked while the server's block is in force
+    const uint64_t self = g_self_xuid.load();
+    for (const auto &seat : g_relay.seats)
+        if (self != 0 && seat.xuid == self && (seat.state & voice_wire::kSeatBlocked)) v.flags |= VoiceState::SelfBlocked;
     for (auto &m : v.members) {
         const uint64_t xuid = XuidNumber(m.xuid);
         for (const auto &seat : g_relay.seats) {
@@ -121,9 +130,10 @@ void DevSeed(VoiceState &v) {
 void Apply(VoiceState &v, VoiceOp op, const std::string &xuid, uint8_t value) {
     const auto set = [](uint8_t &bits, uint8_t bit, bool on) { bits = static_cast<uint8_t>(on ? bits | bit : bits & ~bit); };
     switch (op) {
-    case VoiceOp::LobbyVoice:
-        if (v.flags & VoiceState::MayChange) {
-            set(v.flags, VoiceState::LobbyOn, value != 0);
+    case VoiceOp::LobbyVoice: // CR-L46: 0 off, 1 open, 2 proximity
+        if ((v.flags & VoiceState::MayChange) && value <= kLobbyVoiceMax) {
+            set(v.flags, VoiceState::LobbyOn, value != kLobbyVoiceOff);
+            set(v.flags, VoiceState::Proximity, value == kLobbyVoiceProximity);
             set(v.flags, VoiceState::LobbyKnown, true);
         }
         break;
@@ -181,6 +191,13 @@ void SetVoiceState(VoiceState state) {
     }
     g_voice = std::move(state);
     Publish(g_voice);
+}
+
+bool VoiceTeamChat(uint8_t *team) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    if (!RelayFresh(g_relay) || !g_relay.team_present) return false;
+    if (team) *team = g_relay.team;
+    return true;
 }
 
 VoiceState CurrentVoice() {
@@ -282,7 +299,6 @@ bool PushToTalkHeld() { return g_push_to_talk.load(); }
 // ---------------------------------------------------------------- the relay link and the engine (VC-1/2/3)
 namespace {
 std::atomic<int32_t (*)(const uint8_t *, uint32_t)> g_send{nullptr};
-std::atomic<uint64_t> g_self_xuid{0};
 std::atomic<uint32_t> g_noise{0x9E3779B9u}; // the transaction ids' random tails (not secret: STUN-shaped framing only)
 
 void Noise(uint8_t *out, size_t n) {
@@ -487,9 +503,19 @@ void VoiceArrived(const uint8_t *data, size_t size) {
     voice_wire::StateDown state;
     if (voice_wire::DecodeStateDown(data, size, state)) {
         ApplyMode(state.mode, state.range);
-        std::lock_guard<std::mutex> lock(g_lock);
-        g_relay = {true, state.mode != voice_wire::kModeOff, state.bundle, std::move(state.seats), GetTickCount64(), state.mode, state.range};
-        Publish(g_voice);
+        bool team_began = false;
+        {
+            std::lock_guard<std::mutex> lock(g_lock);
+            team_began = state.team_present && !(RelayFresh(g_relay) && g_relay.team_present);
+            g_relay = {true, state.mode != voice_wire::kModeOff, state.bundle, std::move(state.seats), GetTickCount64(), state.mode, state.range,
+                       state.team_present, state.team};
+            Publish(g_voice);
+        }
+        if (team_began) { // OD-165: said once as the team event starts for this player (the guide shows the chip meanwhile)
+            Log("voice: team chat (%s)", state.team == voice_wire::kTeamBlue ? "blue" : "red");
+            PushToast(ToastKind::Info, T("Team chat", "Chat da equipe"),
+                      T("Only your team hears you in this event.", "Só a sua equipe ouve você neste evento."));
+        }
     }
 }
 

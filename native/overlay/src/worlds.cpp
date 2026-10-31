@@ -154,11 +154,11 @@ struct Create {
     int players = 8;
     int latency = 0;  // 0 any, 1 high (< 150 ms), 2 medium (< 100 ms), 3 low (< 60 ms)
     bool any_mode = false; // OD-141: open to Hardcore and Noob; false: the host's own mode
-    bool voice = true;     // OD-154: the lobby's voice chat, on by default; the host changes it any time
+    uint8_t voice = kLobbyVoiceOpen; // OD-154, CR-L46: the lobby's voice mode, open by default; the host changes it any time
     int field = 0;    // 0 name, 1 audience, 2 players, 3 latency, 4 modes, 5 voice chat, 6 create
 } g_create;
 constexpr int kCreateModes = 4, kCreateVoice = 5, kCreateButton = 6;
-bool g_last_voice = true; // the host's last choice is the next lobby's default (this game session)
+uint8_t g_last_voice = kLobbyVoiceOpen; // the host's last choice is the next lobby's default (this game session)
 
 // the dev host answers by itself, as a launcher would
 float g_dev_wait = -1;
@@ -191,9 +191,16 @@ const char *LatencyName(int latency) {
     }
 }
 
-// OD-154: the lobby's voice chat switch
-const char *VoiceName(bool on) { return on ? T("On", "Ligado") : T("Off", "Desligado"); }
-const char *VoiceLabel(bool on) { return on ? T("Voice chat on", "Chat de voz ligado") : T("Voice chat off", "Chat de voz desligado"); }
+// OD-154, CR-L46: the lobby's voice mode (off, open, proximity)
+const char *VoiceName(uint8_t mode) {
+    return mode == kLobbyVoiceProximity ? T("Proximity", "Proximidade") : mode == kLobbyVoiceOpen ? T("Open", "Aberto") : T("Off", "Desligado");
+}
+const char *VoiceLabel(uint8_t mode) {
+    return mode == kLobbyVoiceProximity ? T("Voice chat: proximity", "Chat de voz: proximidade")
+           : mode == kLobbyVoiceOpen    ? T("Voice chat: open", "Chat de voz: aberto")
+                                        : T("Voice chat off", "Chat de voz desligado");
+}
+uint8_t NextVoice(uint8_t mode, int d) { return static_cast<uint8_t>((mode + d + 3) % 3); }
 
 const char *ModesName(bool any_mode) {
     return any_mode ? T("Open to Hardcore and Noob", "Aberto a Hardcore e Noob") : T("My mode only", "Só o meu modo");
@@ -976,7 +983,7 @@ int FirstPlayerItem() { return g_mine_voice_row ? 2 : 1; }
 const char *VoiceUnavailable(const VoiceState &v) {
     if (!(v.flags & VoiceState::LobbyKnown)) return T("The host's voice chat setting has not arrived yet.", "A configuração de voz do anfitrião ainda não chegou.");
     if (!(v.flags & VoiceState::LobbyOn))
-        return v.flags & VoiceState::MayChange ? T("Voice chat is off in your lobby. Turn it on above.", "O chat de voz está desligado no seu lobby. Ligue acima.")
+        return v.flags & VoiceState::MayChange ? T("Voice chat is off in your lobby. Choose Open or Proximity above.", "O chat de voz está desligado no seu lobby. Escolha Aberto ou Proximidade acima.")
                                                : T("The host turned voice chat off in this lobby.", "O anfitrião desligou o chat de voz neste lobby.");
     if (!(v.flags & VoiceState::Enabled)) return T("Voice chat is off in your settings (Settings > Voice chat).", "O chat de voz está desligado nos seus ajustes (Ajustes > Chat de voz).");
     return nullptr;
@@ -999,11 +1006,14 @@ void ToggleVoice(const MemberRow &m, const VoiceState &v) {
     PushToast(ToastKind::Info, muted ? T("Unmuted", "Som liberado") : T("Muted", "Silenciado"), m.gamertag);
 }
 
-void ToggleLobbyVoice(const VoiceState &v) {
-    const bool on = !v.lobby_on();
-    VoiceCommand(VoiceOp::LobbyVoice, std::string(), on ? 1 : 0);
-    PushToast(ToastKind::Info, VoiceLabel(on), on ? T("Everyone in your lobby can talk.", "Todos no seu lobby podem falar.")
-                                                  : T("Nobody's voice is carried in your lobby.", "Nenhuma voz é transmitida no seu lobby."));
+// The host's choice, Left/Right (or A, forward): off, open, proximity (CR-L46).
+void StepLobbyVoice(const VoiceState &v, int d) {
+    const uint8_t next = NextVoice(v.lobby_mode(), d);
+    VoiceCommand(VoiceOp::LobbyVoice, std::string(), next);
+    PushToast(ToastKind::Info, VoiceLabel(next),
+              next == kLobbyVoiceProximity ? T("Everyone hears the players whose cars are near.", "Todos ouvem os jogadores com carros por perto.")
+              : next == kLobbyVoiceOpen    ? T("Everyone in your lobby can talk.", "Todos no seu lobby podem falar.")
+                                           : T("Nobody's voice is carried in your lobby.", "Nenhuma voz é transmitida no seu lobby."));
 }
 
 // Heard talking now (the green border around the name, §15): another player's talking state, or this player's own voice
@@ -1035,6 +1045,9 @@ void MicSquare(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &
     if (!usable) {
         slash = true;
         color = Rgba(255, 255, 255, 0.28f);
+    } else if (self && (v.flags & VoiceState::SelfBlocked)) { // CR-S67/S68: the server blocks this player's voice
+        slash = true;
+        color = kAmber;
     } else if (self) {
         slash = v.mic == MicMode::Muted;
         color = slash ? kRed : v.mic == MicMode::PushToTalk ? kTextDim : kText;
@@ -1075,19 +1088,18 @@ void VoiceBar(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m
     TextAt(dl, f.small, ImVec2(b.x - 12 * s - vs.x, a.y + h / 2 - vs.y / 2), focus ? kText : kTextDim, value.c_str());
 }
 
-// The host's switch, under the close button: on or off for everyone, at any time while the lobby is open.
+// The host's choice, under the close button: off, open or proximity for everyone, at any time while the lobby is open (CR-L46).
 void VoiceSwitch(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const VoiceState &v) {
     dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
     if (focus) FocusRing(dl, a, b, 6 * s);
     const float h = b.y - a.y;
     DrawMic(dl, ImVec2(a.x + 30 * s, a.y + h / 2), 26 * s, v.lobby_on() ? kText : kTextDim, !v.lobby_on(), focus ? kTileFocus : kTile);
     TextAt(dl, f.small, ImVec2(a.x + 58 * s, a.y + 7 * s), kTextDim, T("Voice chat · for everyone in your lobby", "Chat de voz · para todos no seu lobby"));
-    TextAt(dl, f.body, ImVec2(a.x + 58 * s, a.y + 27 * s), kText, VoiceName(v.lobby_on()));
-    // the switch itself, on the right
-    const ImVec2 sa(b.x - 64 * s, a.y + h / 2 - 12 * s), sb(b.x - 18 * s, a.y + h / 2 + 12 * s);
-    dl->AddRectFilled(sa, sb, v.lobby_on() ? kPinkU : Rgba(255, 255, 255, 0.18f), 12 * s);
-    const float knob = v.lobby_on() ? sb.x - 12 * s : sa.x + 12 * s;
-    dl->AddCircleFilled(ImVec2(knob, a.y + h / 2), 9 * s, kText, 24);
+    TextAt(dl, f.body, ImVec2(a.x + 58 * s, a.y + 27 * s), kText, VoiceName(v.lobby_mode()));
+    // ‹ › arrows on the right: Left and Right choose
+    const ImU32 arrow = focus ? kText : kTextDim;
+    dl->AddTriangleFilled(ImVec2(b.x - 34 * s, a.y + h / 2), ImVec2(b.x - 26 * s, a.y + h / 2 - 7 * s), ImVec2(b.x - 26 * s, a.y + h / 2 + 7 * s), arrow);
+    dl->AddTriangleFilled(ImVec2(b.x - 10 * s, a.y + h / 2), ImVec2(b.x - 18 * s, a.y + h / 2 - 7 * s), ImVec2(b.x - 18 * s, a.y + h / 2 + 7 * s), arrow);
 }
 
 void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyWorld &m) {
@@ -1111,10 +1123,24 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         TextAt(dl, f.small, ImVec2(x, y), m.transport == kTransportRelay ? kTalkGreen : kAmber, m.notice.c_str());
         dl->PopClipRect();
     }
-    if (m.role != 1) { // the host changes it below; everyone else reads it here (OD-154)
+    if (m.role != 1) { // the host changes it below; everyone else reads it here (OD-154, CR-S67: the world's mode)
         y += 20 * s;
-        const char *said = voice.flags & VoiceState::LobbyKnown ? VoiceLabel(voice.lobby_on()) : T("Voice chat: set by the host", "Chat de voz: definido pelo anfitrião");
+        const char *said = voice.flags & VoiceState::LobbyKnown ? VoiceLabel(voice.lobby_mode()) : T("Voice chat: set by the host", "Chat de voz: definido pelo anfitrião");
         TextAt(dl, f.small, ImVec2(x, y), voice.lobby_on() ? kText : kTextDim, said);
+    }
+    uint8_t team = 0;
+    if (VoiceTeamChat(&team)) { // OD-165: the relay says a team event runs for this player: its voice is its team's only
+        y += 22 * s;
+        const char *chip = T("Team chat", "Chat da equipe");
+        const ImVec2 cs = Measure(f.tag, chip);
+        const ImU32 tint = team == 1 ? Rgba(70, 130, 230) : Rgba(220, 70, 70);
+        dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cs.x + 16 * s, y + cs.y + 6 * s), tint, 4 * s);
+        TextAt(dl, f.tag, ImVec2(x + 8 * s, y + 3 * s), kText, chip);
+        y += 6 * s;
+    }
+    if (voice.flags & VoiceState::SelfBlocked) { // CR-S67/S68: kept small; the launcher's toast says until when
+        y += 20 * s;
+        TextAt(dl, f.small, ImVec2(x, y), kAmber, T("Your voice chat is blocked for now", "Seu chat de voz está bloqueado por enquanto"));
     }
     if (voice.lobby_on() && (voice.flags & VoiceState::Enabled) && audio::ListenOnly()) { // only monitors, or no input
         y += 20 * s;
@@ -1370,15 +1396,15 @@ bool WorldsNavigate(Nav nav) {
                 if (on_player && g_mine_col == 0) { g_mine_col = 1; return true; }
                 if (g_mine_focus + 1 < g_mine_count) { ++g_mine_focus; g_mine_col = 0; }
                 return true;
-            // OD-154: on the host's switch Left/Right flip it
+            // OD-154, CR-L46: on the host's choice Left/Right step off, open, proximity
             case Nav::Right:
                 if (on_player && g_mine_col == 0) { g_mine_col = 1; return true; }
                 if (on_player) { step_volume(1); return true; }
-                if (on_switch) { ToggleLobbyVoice(CurrentVoice()); return true; }
+                if (on_switch) { StepLobbyVoice(CurrentVoice(), 1); return true; }
                 return false; // the tabs
             case Nav::Left:
                 if (on_player && g_mine_col == 1) { step_volume(-1); return true; }
-                if (on_switch) { ToggleLobbyVoice(CurrentVoice()); return true; }
+                if (on_switch) { StepLobbyVoice(CurrentVoice(), -1); return true; }
                 return false;
             case Nav::X: if (on_player) { g_mine_x = true; return true; } return false;
             case Nav::Accept: g_accept = true; return true;
@@ -1424,7 +1450,7 @@ bool WorldsNavigate(Nav nav) {
             } else if (g_create.field == kCreateModes) {
                 g_create.any_mode = !g_create.any_mode; // two choices: either arrow switches
             } else if (g_create.field == kCreateVoice) {
-                g_create.voice = !g_create.voice;
+                g_create.voice = NextVoice(g_create.voice, d); // off, open, proximity
             }
             return true;
         }
@@ -1570,7 +1596,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
                     g_button = 0;
                     g_screen = Screen::Confirm;
                 } else if (g_mine_voice_row && g_mine_focus == 1) {
-                    ToggleLobbyVoice(CurrentVoice());
+                    StepLobbyVoice(CurrentVoice(), 1);
                 } else if (player >= 0 && player < static_cast<int>(sh.mine.members.size()) && g_mine_col == 1) {
                     ToggleVoice(sh.mine.members[player], CurrentVoice());
                 } else if (player >= 0 && player < static_cast<int>(sh.mine.members.size())) {
@@ -1665,7 +1691,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
             } else if (g_create.field == kCreateModes) {
                 g_create.any_mode = !g_create.any_mode; // A (or a click) switches it too
             } else if (g_create.field == kCreateVoice) {
-                g_create.voice = !g_create.voice;
+                g_create.voice = NextVoice(g_create.voice, 1);
             } else if (g_create.field == kCreateButton) {
                 SubmitCreate();
             }

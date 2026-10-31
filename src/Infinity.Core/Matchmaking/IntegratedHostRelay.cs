@@ -131,6 +131,7 @@ public sealed class IntegratedHostRelay : IHostRelay
         return engine = new(_settings with { CarMeetLobby = carMeet, RoadTrip = roadTrip }, Send)
         {
             CreateGameSession = request => StartGameSession(engine!, request),
+            VoiceBlocked = VoiceBlockedNow,
             Authorize = _authorize, AuthorizeHook = _authorizeHook, AwaitsProof = _awaitsProof,
             AdmittedLate = endpoint => Moved(engine!, endpoint, _clock.ElapsedMilliseconds),
             ValidationRejected = (sender, kind, message, router, value) => Volatile.Read(ref _crashContext)?.Rejected(sender, kind, message, router, value),
@@ -243,11 +244,45 @@ public sealed class IntegratedHostRelay : IHostRelay
             Enqueue(() => { foreach (var engine in Engines) engine.Kick(value, _clock.ElapsedMilliseconds); });
     }
 
-    /// <summary>OD-154: the lobby's voice chat switch and the players the host muted for everyone, for every world of this relay.</summary>
-    public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby)
+    /// <summary>
+    /// OD-154, CR-L46: the lobby's voice mode (<see cref="VoiceModes"/>: off, open or proximity; anything else is open) and the
+    /// players the host muted for everyone, for every world of this relay.
+    /// </summary>
+    public void SetVoice(string mode, IReadOnlyCollection<ulong> mutedForLobby)
     {
+        ArgumentNullException.ThrowIfNull(mutedForLobby);
+        var voice = ToVoiceMode(mode);
         var copy = mutedForLobby.ToArray();
-        Enqueue(() => { foreach (var engine in Engines) engine.SetVoice(lobbyOn, copy); });
+        Enqueue(() => { foreach (var engine in Engines) engine.SetVoice(voice, copy); });
+    }
+
+    internal static VoiceMode ToVoiceMode(string? mode) => mode switch
+    {
+        VoiceModes.Off => VoiceMode.Off,
+        VoiceModes.Proximity => VoiceMode.Proximity,
+        _ => VoiceMode.Open,
+    };
+
+    // CR-S67 (actor thread only): the server's voice blocks, whichever source changed last
+    private readonly VoiceBlockTable _voiceBlocks = new();
+
+    /// <summary>The wall clock the blocks are compared with (Unix seconds); tests replace it.</summary>
+    internal Func<long> UnixNow { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+    private bool VoiceBlockedNow(ulong xuid) => _voiceBlocks.Blocked(xuid, UnixNow());
+
+    /// <summary>
+    /// CR-S67: what <paramref name="source"/> says now of each XUID's voice block (Unix seconds; 0: none). A value that changed since
+    /// that source last said it becomes the relay's (§5c rule 3: "whichever the relay saw last"); every world then applies it at once.
+    /// </summary>
+    internal void SetVoiceBlocks(VoiceBlockSource source, IReadOnlyDictionary<ulong, long> blocks)
+    {
+        ArgumentNullException.ThrowIfNull(blocks);
+        var copy = blocks.ToArray();
+        Enqueue(() =>
+        {
+            if (_voiceBlocks.Apply(source, copy)) foreach (var engine in Engines) engine.VoiceBlocksChanged();
+        });
     }
 
     /// <summary>Queues a bounded STUN punch; neither caller nor WPF dispatcher performs socket I/O.</summary>
@@ -418,4 +453,40 @@ public sealed class IntegratedHostRelay : IHostRelay
             ((CancellationTokenSource)state!).Dispose();
         }, _stop, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
+}
+
+/// <summary>Where a voice block reached the host's relay from (CR-S67).</summary>
+internal enum VoiceBlockSource { Grant, Roster }
+
+/// <summary>
+/// CR-S67 (MATCHMAKING_API.md §5c rule 3): the server's voice blocks by XUID, Unix seconds (0: none), from two sources, the joiners'
+/// grants and the host's roster poll, "whichever the relay saw last": a value a source CHANGED becomes the block; a source repeating
+/// what it said before never overrides the other's newer word. Not thread-safe (the relay's actor owns it).
+/// </summary>
+internal sealed class VoiceBlockTable
+{
+    private readonly Dictionary<ulong, long> _blocks = [];
+    private readonly Dictionary<(VoiceBlockSource Source, ulong Xuid), long> _seen = [];
+
+    /// <summary>What <paramref name="source"/> says now for each XUID; true when a block changed. XUIDs the source no longer lists
+    /// keep their block (the other source, or the instant passing, ends it) but the source's next word about them counts as new.</summary>
+    internal bool Apply(VoiceBlockSource source, IReadOnlyCollection<KeyValuePair<ulong, long>> blocks)
+    {
+        var changed = false;
+        foreach (var (xuid, until) in blocks)
+        {
+            var value = Math.Max(0, until);
+            if (_seen.TryGetValue((source, xuid), out var seen) && seen == value) continue;
+            _seen[(source, xuid)] = value;
+            if (_blocks.GetValueOrDefault(xuid) == value) continue;
+            if (value == 0) _blocks.Remove(xuid); else _blocks[xuid] = value;
+            changed = true;
+        }
+        var listed = blocks.Select(b => b.Key).ToHashSet();
+        foreach (var gone in _seen.Keys.Where(k => k.Source == source && !listed.Contains(k.Xuid)).ToArray()) _seen.Remove(gone);
+        return changed;
+    }
+
+    /// <summary>Whether <paramref name="xuid"/>'s voice is blocked at <paramref name="nowUnix"/> (the block's instant still ahead).</summary>
+    internal bool Blocked(ulong xuid, long nowUnix) => _blocks.TryGetValue(xuid, out var until) && until > nowUnix;
 }

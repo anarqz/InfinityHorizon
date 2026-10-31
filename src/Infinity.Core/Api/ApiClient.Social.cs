@@ -46,6 +46,20 @@ public sealed partial class ApiClient
         return SendAsync<GameReportResult>(HttpMethod.Post, Core, "/launcher/v1/reports", report, access, idempotent: true, cancellation);
     }
 
+    /// <summary>
+    /// <c>POST /launcher/v1/voice/mutes {xuid, action, worldId}</c> → 202 (CR-S68, CORE_API.md §4.4): idempotent by state, so no
+    /// <c>Idempotency-Key</c>; the caller retries until 202 (404 <c>VOICE.NOT_SHARED</c> stops, 429 waits its <c>Retry-After</c>).
+    /// </summary>
+    public Task<VoiceMuteAccepted> VoiceMuteAsync(string access, VoiceMuteReport mute, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(mute);
+        return SendAsync<VoiceMuteAccepted>(HttpMethod.Post, Core, "/launcher/v1/voice/mutes", mute, access, idempotent: false, cancellation);
+    }
+
+    /// <summary><c>GET /core/v1/me/notices</c> (the launcher's access token, CORE_API.md §2.3): the account's notices, never cached.</summary>
+    public Task<AccountNoticeList> AccountNoticesAsync(string access, CancellationToken cancellation = default) =>
+        SendAsync<AccountNoticeList>(HttpMethod.Get, Core, "/core/v1/me/notices", null, access, idempotent: false, cancellation);
+
     private static string AsXuid(string? asXuid) =>
         string.IsNullOrEmpty(asXuid) ? string.Empty : "?asXuid=" + Uri.EscapeDataString(asXuid);
 }

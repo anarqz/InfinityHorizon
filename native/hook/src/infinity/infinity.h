@@ -287,7 +287,8 @@ void fi_follow_datagram(const unsigned char *data, size_t size);
 void fi_follow_left(void);
 /* watch.c (AC-2): in a Hardcore world the joiner measures the other players' cars against the
    launcher's rules (Watch, 0x25: fi_watch_rules, 0 when it does not parse; version 0 clears) and
-   reports each ended episode (Observed, 0x26: fi_launch_peer_observation, 1 queued). The proxy
+   reports each ended episode (Observed, 0x26: fi_launch_peer_observation, 1 queued; `per_car`, NR-5:
+   layout 2 with the held speed and the car ordinal, 0xFFFFFFFF unknown). The proxy
    passes each datagram the world sends the game (fi_watch_datagram) and the world's watch roster
    (fi_watch_roster, STUN kind 0x3E95 attribute 0xC0F7: peer index -> XUID). fi_watch_stop: the session ended. */
 int fi_watch_rules(const unsigned char *payload, size_t size);
@@ -295,7 +296,7 @@ void fi_watch_datagram(const unsigned char *data, size_t size);
 void fi_watch_roster(const unsigned char *data, int size);
 void fi_watch_stop(void);
 int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned value, unsigned sustain_ms, unsigned rules_version,
-                               unsigned peer_index);
+                               unsigned peer_index, int per_car, unsigned held, unsigned car);
 /* NR-6: another player's model and 43 part rows read from its relayed player object (PlayerParts, 0x27;
    flags bit 0 the model, bit 1 the parts, bit 2 a new object); 1 queued. */
 int fi_launch_player_parts(unsigned long long xuid, unsigned peer_index, unsigned flags, unsigned model, const unsigned *parts);

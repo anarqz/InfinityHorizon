@@ -224,9 +224,10 @@ public abstract record UiFrame
     /// 0x0B, overlay → launcher: open a world (audience 0 everyone, 1 supporters, 2 friends, 3 private; latency 0 any,
     /// 1 &lt; 150, 2 &lt; 100, 3 &lt; 60 ms; <c>AnyMode</c> u8 0 the host's own mode, 1 open to Hardcore and Noob, OD-141).
     /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode. <c>Voice</c> (OD-154, after
-    /// <c>AnyMode</c>): the lobby's voice chat; an overlay before it sends none: on.
+    /// <c>AnyMode</c>; CR-L46): the lobby's voice mode, <see cref="UiLobbyVoice"/> (0 off, 1 open, 2 proximity; an overlay before
+    /// CR-L46 sends 0 or 1); an overlay before OD-154 sends none: open.
     /// </summary>
-    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false, bool Voice = true) : UiFrame
+    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false, byte Voice = UiLobbyVoice.Open) : UiFrame
     {
         public override byte Type => 0x0B;
 
@@ -472,7 +473,8 @@ public abstract record UiFrame
             if (Op is UiVoiceOp.Mute or UiVoiceOp.MuteForLobby or UiVoiceOp.PlayerVolume) CheckXuid(Xuid, "voice command xuid");
             else if (Xuid.Length != 0) throw new ProtocolException("this voice op names no player");
             if (Op is UiVoiceOp.VoiceVolume or UiVoiceOp.MicVolume or UiVoiceOp.PlayerVolume) CheckVolume(Value);
-            else if (Op == UiVoiceOp.Mic ? Value > UiMicMode.Max : Value > 1) throw new ProtocolException("invalid voice value");
+            else if (Op switch { UiVoiceOp.Mic => Value > UiMicMode.Max, UiVoiceOp.LobbyVoice => Value > UiLobbyVoice.Max, _ => Value > 1 })
+                throw new ProtocolException("invalid voice value");
         }
     }
 
@@ -600,7 +602,8 @@ public abstract record UiFrame
                 w.U8(c.MaxPlayers);
                 w.U8(c.Latency);
                 w.Flag(c.AnyMode);
-                w.Flag(c.Voice);
+                if (c.Voice > UiLobbyVoice.Max) throw new ProtocolException("invalid CreateWorld.voice");
+                w.U8(c.Voice);
                 break;
             case Hosted h:
                 w.U8(h.Result);
@@ -914,7 +917,7 @@ public abstract record UiFrame
 
     /// <summary>
     /// 0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode); one before OD-154 after
-    /// <c>anyMode</c> (voice chat on).
+    /// <c>anyMode</c> (voice chat open).
     /// </summary>
     private static CreateWorld DecodeCreate(ref WireReader r)
     {
@@ -923,7 +926,9 @@ public abstract record UiFrame
         var players = r.U8();
         var latency = r.U8();
         var anyMode = !r.IsEmpty && r.Flag("CreateWorld.anyMode");
-        return new CreateWorld(name, audience, players, latency, anyMode, r.IsEmpty || r.Flag("CreateWorld.voice"));
+        var voice = r.IsEmpty ? UiLobbyVoice.Open : r.U8();
+        if (voice > UiLobbyVoice.Max) throw new ProtocolException("invalid CreateWorld.voice");
+        return new CreateWorld(name, audience, players, latency, anyMode, voice);
     }
 
     private static WorldsListV2 DecodeListV2(ref WireReader r)
@@ -1067,7 +1072,19 @@ public static class UiVoice
     /// <summary>Voice chat is on in this player's settings.</summary>
     public const byte Enabled = 8;
 
-    public const byte All = 15;
+    /// <summary>CR-L46: the lobby's voice mode is proximity (with <see cref="LobbyOn"/>; without it, on is open).</summary>
+    public const byte Proximity = 16;
+
+    /// <summary>CR-S67/S68: this player's own voice is blocked (a moderator voice ban or a community mute in force).</summary>
+    public const byte Blocked = 32;
+
+    public const byte All = 63;
+}
+
+/// <summary>The lobby's voice mode on the UI pipe: <see cref="UiVoiceOp.LobbyVoice"/>'s value and <c>CreateWorld.voice</c> (CR-L46).</summary>
+public static class UiLobbyVoice
+{
+    public const byte Off = 0, Open = 1, Proximity = 2, Max = Proximity;
 }
 
 /// <summary><c>VoiceState.mic</c> and the value of <see cref="UiVoiceOp.Mic"/>.</summary>
@@ -1085,7 +1102,7 @@ public static class UiVoiceMember
 /// <summary><c>VoiceCommand.op</c>.</summary>
 public static class UiVoiceOp
 {
-    /// <summary>The host turns the lobby's voice chat on (1) or off (0), at any time (OD-154).</summary>
+    /// <summary>The host sets the lobby's voice mode, <see cref="UiLobbyVoice"/> (0 off, 1 open, 2 proximity), at any time (OD-154, CR-L46).</summary>
     public const byte LobbyVoice = 1;
 
     public const byte Mute = 2;

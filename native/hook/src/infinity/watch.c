@@ -41,7 +41,14 @@
    {u8 index, value} while every index has a known width (wt_player_width, the same table as
    Infinity.Core PlayerParts.Width; the first unknown index stops it and is logged once): var 103 the
    model (u32), var 107 the 43 part rows (u32 each; SAURON V9). What changed goes to the launcher
-   (PlayerParts, 0x27), which judges it against the player's own game database; nothing is judged here. */
+   (PlayerParts, 0x27), which judges it against the player's own game database; nothing is judged here.
+
+   Per car (NR-5), only when the launcher's Watch says so (flags bit 2, with the speed floor appended):
+   speed is measured against the floor instead of the flat limit, and a speed report also carries the
+   held speed (the maximum, over every window of the speed sustain inside one run, of that window's
+   lowest measured value; WT_HELD windows at most, a full buffer merging its two oldest, which can only
+   lower it) and the car's ordinal, var 103 of that player's own relayed player object (read whether or
+   not the parts are). Infinity.Core PeerWatch does the same. */
 #include "infinity.h"
 #include "../core/logging.h"
 #include "../core/support.h"
@@ -65,13 +72,21 @@
 #define WT_ROSTER_KIND 0x3E95u
 #define WT_ROSTER_ATTR 0xC0F7u /* 0xC0F5/0xC0F6 are the voice control */
 #define WT_LINE 320u
+#define WT_HELD 64u            /* Infinity.Core PeerWatch.HeldSegments */
+#define WT_NO_CAR 0xffffffffu  /* Observed layout 2: the car is unknown */
+#define WT_MAX_CAR 1000000u    /* the platform's carId range, [0, 1e6] */
 
 typedef struct {
     int active;
-    double peak, peak_velocity, peak_sent, peak_received;
+    double peak, peak_velocity, peak_sent, peak_received, held;
     long long run, max_run, sent_ms, received_ms;
     unsigned long long last_over;
     unsigned disagreed;
+    /* NR-5: the current run's windows, oldest first (value, receive ms) */
+    double win_value[WT_HELD];
+    long long win_ms[WT_HELD];
+    unsigned win_count;
+    long long win_total;
 } WtEpisode;
 
 typedef struct {
@@ -97,6 +112,8 @@ static volatile LONG wt_on;
 static int wt_force;
 static unsigned wt_version, wt_speed_sustain, wt_climb_sustain;
 static double wt_speed_max, wt_climb_max, wt_jump_max;
+static double wt_speed_floor; /* what speed is measured against: the floor per car (NR-5), else the flat limit */
+static int wt_per_car;
 static WtCar wt_cars[WT_CARS];
 static const WtCar wt_empty;
 static unsigned char wt_roster_index[WT_ROSTER];
@@ -122,6 +139,16 @@ static int wt_parts_on;
 static WtSeen wt_seen[WT_ROSTER];
 static const WtSeen wt_seen_empty;
 static unsigned char wt_unknown_logged[32]; /* a player-object variable of unknown width, logged once per rules */
+#define WT_PER_CAR_FLAG 4u
+/* NR-5: each rostered peer's car ordinal (var 103), from its own relayed player object */
+typedef struct {
+    unsigned index;
+    unsigned long long xuid;
+    int has;
+    unsigned model;
+} WtModel;
+static WtModel wt_models[WT_ROSTER];
+static const WtModel wt_model_empty;
 
 /* ------------------------------------------------------------------ log lines */
 
@@ -188,14 +215,32 @@ static unsigned long long wt_xuid_of(unsigned index) {
     return 0;
 }
 
-static void wt_report(const WtCar *car, unsigned kind, unsigned value, unsigned sustain) {
+/* value x 1000, rounded down (a held speed never reads above what was measured), at most `cap` */
+static unsigned wt_milli_down(double value, unsigned cap) {
+    double scaled = value * 1000.0;
+    if (!(scaled > 0.0)) return 0;
+    if (scaled >= (double)cap) return cap;
+    return (unsigned)(long long)scaled;
+}
+
+/* NR-5: the car ordinal of peer `index` (its roster XUID `xuid`), WT_NO_CAR when not read or out of range */
+static unsigned wt_car_of(unsigned index, unsigned long long xuid) {
+    for (unsigned i = 0; i < WT_ROSTER; ++i) {
+        const WtModel *m = &wt_models[i];
+        if (m->index == index && m->xuid == xuid && m->has) return m->model <= WT_MAX_CAR ? m->model : WT_NO_CAR;
+    }
+    return WT_NO_CAR;
+}
+
+/* held and car only for a speed report under per-car rules (Observed layout 2); else 0 and WT_NO_CAR */
+static void wt_report(const WtCar *car, unsigned kind, unsigned value, unsigned sustain, unsigned held, unsigned car_id) {
     char line[WT_LINE];
     size_t n;
     unsigned long long xuid = wt_xuid_of(car->index);
     wt_begin(line, &n, car);
     if (!xuid) {
         wt_put(line, &n, "no XUID in the world's roster yet; the observation is not reported");
-    } else if (fi_launch_peer_observation(xuid, kind, value, sustain, wt_version, car->index)) {
+    } else if (fi_launch_peer_observation(xuid, kind, value, sustain, wt_version, car->index, wt_per_car, held, car_id)) {
         wt_put(line, &n, "observation queued for the launcher");
     } else {
         wt_put(line, &n, "the observation could not be queued (no live launcher session)");
@@ -207,6 +252,8 @@ static void wt_end_episode(WtCar *car, WtEpisode *e, unsigned kind, unsigned sus
     if (!e->active || (!force && now - e->last_over < WT_QUIET_MS)) return;
     e->active = 0;
     int counted = e->max_run >= (long long)sustain;
+    int per_car = kind == WT_KIND_SPEED && wt_per_car;
+    unsigned car_id = per_car ? wt_car_of(car->index, wt_xuid_of(car->index)) : WT_NO_CAR;
     char line[WT_LINE];
     size_t n;
     wt_begin(line, &n, car);
@@ -219,7 +266,14 @@ static void wt_end_episode(WtCar *car, WtEpisode *e, unsigned kind, unsigned sus
     wt_whole(line, &n, e->peak_sent);
     wt_put(line, &n, ", receiver ");
     wt_whole(line, &n, e->peak_received);
-    wt_put(line, &n, "), longest run ");
+    if (per_car) {
+        wt_put(line, &n, "), held ");
+        wt_whole(line, &n, e->held);
+        wt_put(line, &n, " km/h, car ");
+        if (car_id == WT_NO_CAR) wt_put(line, &n, "unknown");
+        else wt_num(line, &n, car_id);
+    }
+    wt_put(line, &n, per_car ? ", longest run " : "), longest run ");
     wt_num(line, &n, (unsigned long long)e->max_run);
     wt_put(line, &n, " ms of ");
     wt_num(line, &n, sustain);
@@ -242,7 +296,9 @@ static void wt_end_episode(WtCar *car, WtEpisode *e, unsigned kind, unsigned sus
     wt_put(line, &n, counted ? ": reported" : ": under the rule, not reported");
     wt_end(line, &n);
     if (counted) {
-        wt_report(car, kind, wt_milli(e->peak, 5000000u), e->max_run > 3600000 ? 3600000u : (unsigned)e->max_run);
+        unsigned value = wt_milli(e->peak, 5000000u);
+        unsigned held = per_car ? wt_milli_down(e->held, value) : 0u;
+        wt_report(car, kind, value, e->max_run > 3600000 ? 3600000u : (unsigned)e->max_run, held, car_id);
     }
 }
 
@@ -258,7 +314,7 @@ static void wt_end_jump(WtCar *car) {
     wt_whole(line, &n, car->jump_peak);
     wt_put(line, &n, " m; reported (log only)");
     wt_end(line, &n);
-    wt_report(car, WT_KIND_JUMP, wt_milli(car->jump_peak, 1000000000u), 0);
+    wt_report(car, WT_KIND_JUMP, wt_milli(car->jump_peak, 1000000000u), 0, 0, WT_NO_CAR);
 }
 
 static void wt_end_quiet(WtCar *car, unsigned long long now) {
@@ -294,6 +350,39 @@ static void wt_anchor(WtCar *car) {
     car->velocity_samples = 0;
 }
 
+/* The run breaks: its length and its held-speed windows start over. */
+static void wt_reset_run(WtEpisode *e) {
+    e->run = 0;
+    e->win_count = 0;
+    e->win_total = 0;
+}
+
+/* NR-5: one window over the limit in the current run (Infinity.Core PeerWatch Episode.Hold): the held
+   speed becomes the larger of itself and the lowest value of the shortest suffix of the run lasting at
+   least `sustain` ms. */
+static void wt_hold(WtEpisode *e, double value, long long ms, unsigned sustain) {
+    if (e->win_count >= WT_HELD) {
+        e->win_value[1] = wt_min(e->win_value[0], e->win_value[1]);
+        e->win_ms[1] += e->win_ms[0];
+        for (unsigned i = 1; i < e->win_count; ++i) e->win_value[i - 1] = e->win_value[i], e->win_ms[i - 1] = e->win_ms[i];
+        --e->win_count;
+    }
+    e->win_value[e->win_count] = value;
+    e->win_ms[e->win_count] = ms;
+    ++e->win_count;
+    e->win_total += ms;
+    unsigned drop = 0;
+    while (e->win_count - drop > 1 && e->win_total - e->win_ms[drop] >= (long long)sustain) e->win_total -= e->win_ms[drop++];
+    if (drop) {
+        for (unsigned i = drop; i < e->win_count; ++i) e->win_value[i - drop] = e->win_value[i], e->win_ms[i - drop] = e->win_ms[i];
+        e->win_count -= drop;
+    }
+    if (e->win_total < (long long)sustain) return;
+    double lowest = e->win_value[0];
+    for (unsigned i = 1; i < e->win_count; ++i) lowest = wt_min(lowest, e->win_value[i]);
+    e->held = wt_max(e->held, lowest);
+}
+
 static void wt_restart(WtCar *car, double x, double y, double z, unsigned stamp, unsigned universe, unsigned long long now) {
     car->has = 1;
     car->x = x;
@@ -302,8 +391,8 @@ static void wt_restart(WtCar *car, double x, double y, double z, unsigned stamp,
     car->stamp = stamp;
     car->universe = universe;
     car->at = now;
-    car->speed.run = 0;
-    car->climb.run = 0;
+    wt_reset_run(&car->speed);
+    wt_reset_run(&car->climb);
     wt_anchor(car);
 }
 
@@ -313,8 +402,9 @@ static void wt_step(WtCar *car, WtEpisode *e, unsigned kind, double velocity, do
     if (over_velocity && over_sent && over_received) {
         if (!e->active) {
             e->active = 1;
-            e->peak = e->peak_velocity = e->peak_sent = e->peak_received = 0.0;
-            e->run = e->max_run = e->sent_ms = e->received_ms = 0;
+            e->peak = e->peak_velocity = e->peak_sent = e->peak_received = e->held = 0.0;
+            e->max_run = e->sent_ms = e->received_ms = 0;
+            wt_reset_run(e);
             e->disagreed = 0;
             char line[WT_LINE];
             size_t n;
@@ -332,7 +422,9 @@ static void wt_step(WtCar *car, WtEpisode *e, unsigned kind, double velocity, do
         }
         e->run += window_received;
         if (e->run > e->max_run) e->max_run = e->run;
-        e->peak = wt_max(e->peak, wt_min(velocity, wt_min(sent, received)));
+        double measured = wt_min(velocity, wt_min(sent, received));
+        e->peak = wt_max(e->peak, measured);
+        if (kind == WT_KIND_SPEED && wt_per_car) wt_hold(e, measured, window_received, wt_speed_sustain);
         e->peak_velocity = wt_max(e->peak_velocity, velocity);
         e->peak_sent = wt_max(e->peak_sent, sent);
         e->peak_received = wt_max(e->peak_received, received);
@@ -341,7 +433,7 @@ static void wt_step(WtCar *car, WtEpisode *e, unsigned kind, double velocity, do
         e->last_over = now;
         return;
     }
-    e->run = 0;
+    wt_reset_run(e);
     if ((over_velocity || over_sent || over_received) && e->active) ++e->disagreed;
 }
 
@@ -383,7 +475,7 @@ static void wt_clock(WtCar *car) {
     wt_put(line, &n, " ms)");
     wt_end(line, &n);
     unsigned milli = wt_milli(ratio, 1000000u);
-    if (milli) wt_report(car, WT_KIND_CLOCK, milli, 0);
+    if (milli) wt_report(car, WT_KIND_CLOCK, milli, 0, 0, WT_NO_CAR);
 }
 
 static void wt_note(WtCar *car, const char *text, unsigned long long a, const char *middle, unsigned long long b, const char *tail) {
@@ -427,7 +519,9 @@ static void wt_sample(unsigned index, double x, double y, double z, double vx, d
         /* AC-5, test builds only (the launcher's FI_TEST_FORCE_OBSERVATION): one synthetic speed episode */
         wt_force = 0;
         wt_note(car, "TEST: forced speed episode (rules version ", wt_version, 0, 0, "; never in a production launcher)");
-        wt_report(car, WT_KIND_SPEED, wt_milli(wt_speed_max + 50.0, 5000000u), wt_speed_sustain + 1000u);
+        /* over the flat limit with no car named, so the server counts it whatever the car (NR-5: held throughout) */
+        unsigned forced = wt_milli(wt_speed_max + 50.0, 5000000u);
+        wt_report(car, WT_KIND_SPEED, forced, wt_speed_sustain + 1000u, wt_per_car ? forced : 0u, WT_NO_CAR);
     }
     if (!car->has || now - car->at > WT_GAP_MS) {
         if (car->has) wt_note(car, "first sample after ", now - car->at, 0, 0, " ms without one; excluded");
@@ -451,8 +545,6 @@ static void wt_sample(unsigned index, double x, double y, double z, double vx, d
     if (moved > wt_jump_max) {
         wt_jump(car, moved, sent, now - car->at, now);
         wt_restart(car, x, y, z, stamp, universe, now);
-        car->speed.run = 0;
-        car->climb.run = 0;
         return;
     }
     car->x = x;
@@ -505,7 +597,7 @@ static void wt_sample(unsigned index, double x, double y, double z, double vx, d
     }
     car->clock_sent += window_sent;
     car->clock_received += window_received;
-    wt_step(car, &car->speed, WT_KIND_SPEED, speed_velocity, speed_sent, speed_received, wt_speed_max, window_sent, window_received, now);
+    wt_step(car, &car->speed, WT_KIND_SPEED, speed_velocity, speed_sent, speed_received, wt_speed_floor, window_sent, window_received, now);
     wt_step(car, &car->climb, WT_KIND_CLIMB, climb_velocity, climb_sent, climb_received, wt_climb_max, window_sent, window_received, now);
     wt_anchor(car);
     wt_clock(car);
@@ -603,12 +695,45 @@ static int wt_player_read(const unsigned char *body, size_t at, size_t end, unsi
     }
 }
 
+/* NR-5: what a write of peer `owner`'s own player object (rostered, `xuid`) set of its car ordinal; a
+   create forgets the earlier one. Under wt_lock. */
+static void wt_model(unsigned owner, unsigned long long xuid, int create, int has_model, unsigned model) {
+    WtModel *m = 0, *free_slot = 0;
+    for (unsigned i = 0; i < WT_ROSTER; ++i) {
+        if (wt_models[i].index == owner) m = &wt_models[i];
+        else if (!wt_models[i].index && !free_slot) free_slot = &wt_models[i];
+    }
+    if (!m) {
+        if (!free_slot) return;
+        m = free_slot;
+    }
+    if (create || m->index != owner || m->xuid != xuid) {
+        memory_copy(m, &wt_model_empty, sizeof(wt_model_empty));
+        m->index = owner;
+        m->xuid = xuid;
+    }
+    if (!has_model || (m->has && m->model == model)) return;
+    m->has = 1;
+    m->model = model;
+    char line[WT_LINE];
+    size_t n = 0;
+    line[0] = 0;
+    wt_put(line, &n, "WATCH: peer ");
+    wt_num(line, &n, owner);
+    wt_put(line, &n, ": car ordinal ");
+    wt_num(line, &n, model);
+    wt_put(line, &n, " (var 103)");
+    wt_end(line, &n);
+}
+
 /* One write of the relayed player object of peer `owner` (rostered, `xuid`), bits [at, end); under wt_lock. */
 static void wt_player(unsigned owner, unsigned long long xuid, int create, const unsigned char *body, size_t at, size_t end,
                       unsigned long long now) {
     unsigned model, parts[WT_PARTS];
     int has_model, has_parts;
     wt_player_read(body, at, end, &model, &has_model, parts, &has_parts);
+    if (wt_per_car) wt_model(owner, xuid, create, has_model, model);
+    if (!wt_parts_on) return;
     WtSeen *seen = 0, *free_slot = 0;
     for (unsigned i = 0; i < WT_ROSTER; ++i) {
         if (wt_seen[i].index == owner) seen = &wt_seen[i];
@@ -707,7 +832,7 @@ static void wt_objects(const unsigned char *body, size_t end, size_t at, unsigne
             AcquireSRWLockExclusive(&wt_lock);
             unsigned long long xuid = wt_xuid_of(owner);
             /* a peer missing from the roster is not read (5e): no identity to report it under */
-            if (wt_on && wt_parts_on && xuid) wt_player(owner, xuid, id == 7u, body, at, at + length, GetTickCount64());
+            if (wt_on && (wt_parts_on || wt_per_car) && xuid) wt_player(owner, xuid, id == 7u, body, at, at + length, GetTickCount64());
             ReleaseSRWLockExclusive(&wt_lock);
         }
         at += length;
@@ -729,8 +854,8 @@ void fi_watch_datagram(const unsigned char *data, size_t size) {
         for (unsigned i = 0; i < WT_CARS; ++i) {
             if (!wt_cars[i].used) continue;
             wt_cars[i].has = 0;
-            wt_cars[i].speed.run = 0;
-            wt_cars[i].climb.run = 0;
+            wt_reset_run(&wt_cars[i].speed);
+            wt_reset_run(&wt_cars[i].climb);
             ++wt_cars[i].events;
             any = 1;
         }
@@ -740,7 +865,8 @@ void fi_watch_datagram(const unsigned char *data, size_t size) {
         return;
     }
     if (id == 7u || id == 8u) {
-        if (wt_parts_on) wt_objects(body, end, at, id); /* NR-6: the relayed player objects' parts */
+        /* NR-6: the relayed player objects' parts; NR-5: their car ordinal */
+        if (wt_parts_on || wt_per_car) wt_objects(body, end, at, id);
         return;
     }
     if (id != 15u) return;
@@ -824,16 +950,19 @@ static unsigned wt_u32(const unsigned char *p) {
 }
 
 /* Watch (0x25) from the launcher: {u8 1, u8 flags, u32 version, u32 speed milli-km/h, u32 speed sustain
-   ms, u32 climb milli-km/h, u32 climb sustain ms, u32 jump mm}, all LE. Version 0 with every value 0
-   clears. 0 when it does not parse (a protocol error: launch.c refuses the frame), else 1. */
+   ms, u32 climb milli-km/h, u32 climb sustain ms, u32 jump mm}, all LE; flags bit 2 (NR-5) appends
+   {u32 speed floor milli-km/h}, in (0, speed]. Version 0 with every value 0 clears. 0 when it does not
+   parse (a protocol error: launch.c refuses the frame), else 1. */
 int fi_watch_rules(const unsigned char *p, size_t n) {
-    if (!p || n != 26u || p[0] != 1 || (p[1] & ~(1u | WT_PARTS_FLAG))) return 0;
+    if (!p || n < 2u || p[0] != 1 || (p[1] & ~(1u | WT_PARTS_FLAG | WT_PER_CAR_FLAG))) return 0;
+    int per_car = (p[1] & WT_PER_CAR_FLAG) != 0;
+    if (n != (per_car ? 30u : 26u)) return 0;
     unsigned version = wt_u32(p + 2), speed = wt_u32(p + 6), speed_sustain = wt_u32(p + 10), climb = wt_u32(p + 14),
-             climb_sustain = wt_u32(p + 18), jump = wt_u32(p + 22);
+             climb_sustain = wt_u32(p + 18), jump = wt_u32(p + 22), speed_floor = per_car ? wt_u32(p + 26) : speed;
     if (!version) {
         if (p[1] || speed || speed_sustain || climb || climb_sustain || jump) return 0;
     } else if (!speed || speed > 5000000u || !climb || climb > 5000000u || !speed_sustain || speed_sustain > 3600000u ||
-               !climb_sustain || climb_sustain > 3600000u || !jump || jump > 1000000000u) {
+               !climb_sustain || climb_sustain > 3600000u || !jump || jump > 1000000000u || !speed_floor || speed_floor > speed) {
         return 0;
     }
     unsigned long long now = GetTickCount64();
@@ -841,6 +970,8 @@ int fi_watch_rules(const unsigned char *p, size_t n) {
     wt_flush(now);
     wt_version = version;
     wt_speed_max = (double)speed / 1000.0;
+    wt_speed_floor = (double)speed_floor / 1000.0;
+    wt_per_car = version && per_car;
     wt_speed_sustain = speed_sustain;
     wt_climb_max = (double)climb / 1000.0;
     wt_climb_sustain = climb_sustain;
@@ -849,6 +980,7 @@ int fi_watch_rules(const unsigned char *p, size_t n) {
     wt_units_logged = 0;
     wt_parts_on = version && (p[1] & WT_PARTS_FLAG);
     for (unsigned i = 0; i < WT_ROSTER; ++i) memory_copy(&wt_seen[i], &wt_seen_empty, sizeof(wt_seen_empty));
+    for (unsigned i = 0; i < WT_ROSTER; ++i) memory_copy(&wt_models[i], &wt_model_empty, sizeof(wt_model_empty));
     for (unsigned i = 0; i < sizeof(wt_unknown_logged); ++i) wt_unknown_logged[i] = 0;
     InterlockedExchange(&wt_on, version ? 1 : 0);
     ReleaseSRWLockExclusive(&wt_lock);
@@ -864,7 +996,15 @@ int fi_watch_rules(const unsigned char *p, size_t n) {
         wt_num(line, &k, speed / 1000u);
         wt_put(line, &k, " km/h for ");
         wt_num(line, &k, speed_sustain);
-        wt_put(line, &k, " ms, climb over ");
+        if (per_car) {
+            wt_put(line, &k, " ms (measured over the per-car floor ");
+            wt_num(line, &k, speed_floor / 1000u);
+            wt_put(line, &k, ".");
+            wt_num(line, &k, (speed_floor % 1000u) / 100u);
+            wt_put(line, &k, " km/h, with the held speed and the car), climb over ");
+        } else {
+            wt_put(line, &k, " ms, climb over ");
+        }
         wt_num(line, &k, climb / 1000u);
         wt_put(line, &k, " km/h for ");
         wt_num(line, &k, climb_sustain);
@@ -887,6 +1027,7 @@ void fi_watch_stop(void) {
     InterlockedExchange(&wt_on, 0);
     wt_force = 0;
     wt_parts_on = 0;
+    wt_per_car = 0;
     ReleaseSRWLockExclusive(&wt_lock);
     log_append("WATCH: off (the launcher session ended).\r\n");
 }

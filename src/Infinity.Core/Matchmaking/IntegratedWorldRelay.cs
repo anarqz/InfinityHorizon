@@ -60,6 +60,7 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
                 (packet,endpoint)=>_admission.ReceiveProof(packet.Span,endpoint),_admission.ProofExpected,cancellation).ConfigureAwait(false);
             _transport.PunchNetworkHints(_admission);
             _transport.SetRelayLegs(_admission.RelayLegs());
+            _transport.SetVoiceBlocks(VoiceBlockSource.Grant, _admission.VoiceBlocks());
         }
         catch { EndAdmission(); throw; }
     }
@@ -88,7 +89,8 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
         }
         cancellation.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(!Running, this);
-        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission);_transport.SetRelayLegs(_admission.RelayLegs());Diagnostics(); return; }
+        if (answer is { Ok: true, Value: { } punches }) { _admission.Refresh(punches);_transport.PunchNetworkHints(_admission);_transport.SetRelayLegs(_admission.RelayLegs());
+            _transport.SetVoiceBlocks(VoiceBlockSource.Grant, _admission.VoiceBlocks());Diagnostics(); return; }
         if (answer.Error?.Kind is MmErrorKind.Unauthorized or MmErrorKind.WorldNotFound or MmErrorKind.NotHost or MmErrorKind.WrongPool)
         {
             EndAdmission();
@@ -99,8 +101,33 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
             answer.Error?.Details, answer.RetryAfter ?? answer.Error?.RetryAfter);
     }
 
-    /// <summary>OD-154: the host's voice chat switch and lobby mutes, enforced by the relay.</summary>
-    public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby) => _transport.SetVoice(lobbyOn, mutedForLobby);
+    /// <summary>OD-154, CR-L46: the host's voice mode (<see cref="VoiceModes"/>) and lobby mutes, enforced by the relay.</summary>
+    public void SetVoice(string mode, IReadOnlyCollection<ulong> mutedForLobby) => _transport.SetVoice(mode, mutedForLobby);
+
+    /// <summary>
+    /// CR-S67 (§3.7): every member's <c>voiceBlockedUntil</c> from the host's roster poll, the host's own included (a host holds no
+    /// grant, so its block reaches its relay only this way). A row whose instant cannot be read is left out.
+    /// </summary>
+    public void SetRosterVoiceBlocks(IEnumerable<WorldMember> members)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+        var blocks = new Dictionary<ulong, long>();
+        foreach (var member in members)
+        {
+            if (member is null || !ulong.TryParse(member.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) || xuid == 0) continue;
+            if (VoiceBlockSeconds(member.VoiceBlockedUntil) is { } until) blocks[xuid] = until;
+        }
+        _transport.SetVoiceBlocks(VoiceBlockSource.Roster, blocks);
+    }
+
+    /// <summary>A wire instant as Unix seconds, rounded up (a block never ends early); null → 0 (none); unreadable → null.</summary>
+    internal static long? VoiceBlockSeconds(string? instant)
+    {
+        if (instant is null) return 0;
+        if (!DateTimeOffset.TryParse(instant, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)) return null;
+        var seconds = at.ToUnixTimeSeconds();
+        return at.ToUnixTimeMilliseconds() % 1000 > 0 ? seconds + 1 : Math.Max(0, seconds);
+    }
 
     /// <summary>AC-2: the world server measures the other players' cars (<see cref="IntegratedHostRelay.SetWatch"/>).</summary>
     public void Watch(PeerWatchRules? rules, ulong self, Action<PeerWatchReport>? report) => _transport.SetWatch(rules, self, report);
