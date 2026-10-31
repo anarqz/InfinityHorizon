@@ -39,4 +39,15 @@ public sealed partial class WorldsBridge
         PushVoiceRules(voice);
         return voice.Frame(mine.Members);
     }
+
+    /// <summary>VOICE_CHAT.md §15: the microphone or output the player picked, then the state to show.</summary>
+    public UiFrame.VoiceState? VoiceDevice(UiFrame.VoiceDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        if (Voice is not { } voice) return null;
+        voice.SetDevice(device);
+        var mine = Volatile.Read(ref _mineSnapshot);
+        voice.Observe(mine.WorldId, mine.Role);
+        return voice.Frame(mine.Members);
+    }
 }

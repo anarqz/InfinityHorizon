@@ -32,14 +32,19 @@
 //   0x0B CreateWorld also carries u8 voice after anyMode (OD-154: the lobby's voice chat, 1 on; absent: on)
 // Protocol 3 (OD-154, docs/launcher/VOICE_CHAT.md §11): voice chat
 //   0x1B VoiceState, launcher -> overlay {u8 flags, u8 micMode (0 open, 1 muted, 2 push-to-talk),
-//        u8 count <= 16 x {str xuid (decimal), str gamertag (<= 64 B), u8 state}}, the other players of the lobby
+//        u8 count <= 16 x {str xuid (decimal), str gamertag (<= 64 B), u8 state, u8 volume (1..100)}, u8 voiceVolume
+//        (1..100), u8 micVolume (1..100), str microphoneId, str microphoneName, str outputId, str outputName (each
+//        <= 256 B; an empty id is the system default, and its name is empty too)}, the other players of the lobby
 //        (never this one: its own voice is micMode and flag 3): flags bit 0 the lobby's voice chat is on, 1 it is known
 //        (else "set by the host"), 2 this player may change it (the host), 3 voice is on in this player's settings;
 //        state bit 0 muted by this player, 1 talking now, 2 muted for the lobby by the host, 3 voice blocked
-//   0x1C VoiceCommand, overlay -> launcher {u8 op, str xuid (decimal, empty for ops 1, 3, 4, 5), u8 value}:
+//   0x1C VoiceCommand, overlay -> launcher {u8 op, str xuid (decimal, empty for ops 1, 3, 4, 5, 7, 8), u8 value}:
 //        op 1 the lobby's voice chat (the host; value 0/1), 2 mute a player (1) or unmute (0), 3 mute (1) or unmute
 //        (0) everyone, 4 the mic mode (value as micMode), 5 voice on/off in the settings, 6 mute a player for the
-//        whole lobby (the host)
+//        whole lobby (the host), 7 the voice chat volume, 8 this player's microphone volume, 9 a player's volume
+//        (ops 7-9: value 1..100, VOICE_CHAT.md §15)
+//   0x1D VoiceDevice, overlay -> launcher {u8 flow (0 microphone, 1 output), str id, str name} (each <= 256 B; an empty
+//        id is the system default and comes with an empty name): the device the player picked (§15)
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -250,24 +255,43 @@ inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t a
 enum class MicMode : uint8_t { Open, Muted, PushToTalk };
 constexpr uint8_t kMicModeMax = static_cast<uint8_t>(MicMode::PushToTalk);
 constexpr size_t kMaxVoiceMembers = 16, kMaxXuid = 20;
+// VOICE_CHAT.md §15: the sliders (1..100, 100 the default) and a device's id and name (UTF-8 bytes)
+constexpr uint8_t kVolumeMin = 1, kVolumeMax = 100;
+constexpr size_t kMaxDeviceText = 256;
+inline bool VolumeValue(uint8_t v) { return v >= kVolumeMin && v <= kVolumeMax; }
 
 struct VoiceMember {
     enum : uint8_t { MutedByMe = 1, Talking = 2, MutedForLobby = 4, Blocked = 8, All = 15 };
     std::string xuid, gamertag; // the gamertag names a talker over the game (the HUD needs no roster)
     uint8_t state = 0;
+    uint8_t volume = kVolumeMax; // this player's volume for that player (§15), kept by the launcher per XUID
 };
 struct VoiceState {
     enum : uint8_t { LobbyOn = 1, LobbyKnown = 2, MayChange = 4, Enabled = 8, AllFlags = 15 };
     uint8_t flags = 0;
     MicMode mic = MicMode::Open;
     std::vector<VoiceMember> members;
+    // §15: the player's own preferences, kept by the launcher per profile
+    uint8_t voice_volume = kVolumeMax; // the mix of every other player
+    uint8_t mic_volume = kVolumeMax;   // this player's captured voice
+    std::string mic_id, mic_name;      // the chosen microphone; empty id: the system default
+    std::string output_id, output_name;
     bool lobby_on() const { return (flags & LobbyKnown) && (flags & LobbyOn); }
     uint8_t StateOf(const std::string &xuid) const {
         for (const auto &m : members)
             if (m.xuid == xuid) return m.state;
         return 0;
     }
+    uint8_t VolumeOf(const std::string &xuid) const {
+        for (const auto &m : members)
+            if (m.xuid == xuid) return m.volume;
+        return kVolumeMax;
+    }
 };
+
+// 0x1D's flow
+enum class VoiceFlow : uint8_t { Microphone, Output };
+constexpr uint8_t kVoiceFlowMax = static_cast<uint8_t>(VoiceFlow::Output);
 
 // fi_overlay_voice_state's answer (fi_overlay.h FI_VOICE_*) for the game's own UI: `xuid` empty is this player.
 constexpr uint32_t kGameVoiceAble = 1, kGameVoiceTalking = 2, kGameVoiceMuted = 4;
@@ -282,8 +306,10 @@ inline uint32_t GameVoiceBits(const VoiceState &v, const std::string &xuid) {
     return 0;
 }
 
-enum class VoiceOp : uint8_t { LobbyVoice = 1, Mute = 2, MuteEveryone = 3, Mic = 4, Enabled = 5, MuteForLobby = 6 };
-constexpr uint8_t kVoiceOpMax = static_cast<uint8_t>(VoiceOp::MuteForLobby);
+enum class VoiceOp : uint8_t {
+    LobbyVoice = 1, Mute = 2, MuteEveryone = 3, Mic = 4, Enabled = 5, MuteForLobby = 6, VoiceVolume = 7, MicVolume = 8, PlayerVolume = 9
+};
+constexpr uint8_t kVoiceOpMax = static_cast<uint8_t>(VoiceOp::PlayerVolume);
 
 // A decimal XUID, 1 to 20 ASCII digits (the launcher's rule).
 inline bool XuidText(const std::string &xuid) {
@@ -293,8 +319,8 @@ inline bool XuidText(const std::string &xuid) {
     return true;
 }
 
-// Ops 2 and 6 name a player; the others never do.
-inline bool VoiceOpNamesPlayer(VoiceOp op) { return op == VoiceOp::Mute || op == VoiceOp::MuteForLobby; }
+// Ops 2, 6 and 9 name a player; the others never do.
+inline bool VoiceOpNamesPlayer(VoiceOp op) { return op == VoiceOp::Mute || op == VoiceOp::MuteForLobby || op == VoiceOp::PlayerVolume; }
 
 inline std::vector<uint8_t> EncodeVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value) {
     std::vector<uint8_t> b;
@@ -317,9 +343,19 @@ inline bool DecodeVoiceState(const uint8_t *body, size_t size, VoiceState &out) 
         m.xuid = r.Text(kMaxXuid);
         m.gamertag = r.Text(kMaxGamertag);
         m.state = r.U8();
-        if (!XuidText(m.xuid) || m.state > VoiceMember::All) r.ok = false;
+        m.volume = r.U8();
+        if (!XuidText(m.xuid) || m.state > VoiceMember::All || !VolumeValue(m.volume)) r.ok = false;
         v.members.push_back(std::move(m));
     }
+    v.voice_volume = r.U8();
+    v.mic_volume = r.U8();
+    v.mic_id = r.Text(kMaxDeviceText);
+    v.mic_name = r.Text(kMaxDeviceText);
+    v.output_id = r.Text(kMaxDeviceText);
+    v.output_name = r.Text(kMaxDeviceText);
+    if (!VolumeValue(v.voice_volume) || !VolumeValue(v.mic_volume) || (v.mic_id.empty() && !v.mic_name.empty())
+        || (v.output_id.empty() && !v.output_name.empty()))
+        r.ok = false;
     if (!r.Done()) return false;
     out = std::move(v);
     return true;
@@ -334,9 +370,27 @@ inline std::vector<uint8_t> EncodeVoiceState(const VoiceState &v) {
         wire::Str(b, m.xuid);
         wire::Str(b, m.gamertag);
         wire::U8(b, m.state);
+        wire::U8(b, m.volume);
     }
+    wire::U8(b, v.voice_volume);
+    wire::U8(b, v.mic_volume);
+    wire::Str(b, v.mic_id);
+    wire::Str(b, v.mic_name);
+    wire::Str(b, v.output_id);
+    wire::Str(b, v.output_name);
     return b;
 }
+
+// 0x1D (§15): the device the player picked. The name is cut to 256 bytes on a code point; an id past 256 bytes (or not
+// UTF-8) cannot be kept, so the caller never offers it. An empty id (the system default) sends no name.
+inline std::vector<uint8_t> EncodeVoiceDevice(VoiceFlow flow, const std::string &id, const std::string &name) {
+    std::vector<uint8_t> b;
+    wire::U8(b, static_cast<uint8_t>(flow));
+    wire::Str(b, id);
+    wire::Str(b, id.empty() ? std::string() : Utf8Cut(name, kMaxDeviceText));
+    return b;
+}
+inline bool DeviceIdSendable(const std::string &id) { return id.size() <= kMaxDeviceText && Utf8(id); }
 
 // 0x0E (protocol 1, read as leniently as before: trailing bytes ignored; anyMode CR-L43, absent from an older launcher)
 inline bool DecodeMyWorld(const uint8_t *body, size_t size, MyWorld &out) {

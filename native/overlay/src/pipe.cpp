@@ -40,7 +40,8 @@
 //
 // Protocol 3 (OD-154; layouts in ui_frames.h): 0x1B VoiceState from the launcher (the lobby's voice chat, the mic
 // mode, each player's mute and talking state); 0x1C VoiceCommand to it (the host's lobby switch, mutes, the mic
-// mode, voice on/off). 0x0B CreateWorld ends with u8 voice.
+// mode, voice on/off, the volumes) and 0x1D VoiceDevice (the chosen microphone or output, VOICE_CHAT.md §15). 0x0B
+// CreateWorld ends with u8 voice.
 //
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
@@ -371,6 +372,8 @@ void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_play
 }
 
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value) { Queue(0x1C, EncodeVoiceCommand(op, xuid, value)); }
+
+void SendVoiceDevice(VoiceFlow flow, const std::string &id, const std::string &name) { Queue(0x1D, EncodeVoiceDevice(flow, id, name)); }
 
 void SendMyWorldQuery() { Queue(0x0D, {}); }
 

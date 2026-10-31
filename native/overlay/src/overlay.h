@@ -107,6 +107,16 @@ void SetVoiceState(VoiceState state); // any thread
 VoiceState CurrentVoice();            // a copy, any thread
 // Asks the launcher (0x1C) and applies the change at once, so the screen follows the button before the answer.
 void VoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value);
+// §15: the player picked a microphone or an output (empty id: the system default). Applied at once, kept by the
+// launcher (0x1D). Any thread.
+void VoiceDeviceCommand(VoiceFlow flow, const std::string &id, const std::string &name);
+// §15: what the settings list, refreshed by the voice thread every few seconds (and soon after a request): "System
+// default" (empty id) first; only ids that fit the pipe. Any thread.
+struct VoiceDeviceEntry {
+    std::string id, name;
+};
+std::vector<VoiceDeviceEntry> VoiceDevices(VoiceFlow flow);
+void RequestVoiceDevices(); // the settings are showing: refresh the lists soon
 // A microphone drawn with lines (the icon font has none), centred on `c`, `size` tall; `muted` adds the slash,
 // cut in `behind` (the surface's colour). Colours are ImU32.
 void DrawMic(ImDrawList *dl, ImVec2 c, float size, uint32_t color, bool muted, uint32_t behind = 0xFF2A2626);
@@ -158,6 +168,7 @@ void SendJoinWorld(const std::string &world, const std::string &code);
 // any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode. voice (OD-154): the lobby's voice chat
 void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, bool voice);
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value); // 0x1C
+void SendVoiceDevice(VoiceFlow flow, const std::string &id, const std::string &name); // 0x1D (§15)
 void SendMyWorldQuery();
 // action: 1 close, 2 leave, 3 kick, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other)
 void SendWorldAction(uint8_t action, const std::string &xuid, const std::string &gamertag, uint8_t reason);

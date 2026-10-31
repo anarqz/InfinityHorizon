@@ -3,7 +3,8 @@
 // with no microphone, PulseAudio/PipeWire's only source is the output's monitor ("Monitor of ...", "*.monitor"), and
 // Wine lists it as an ordinary input; capturing it would send the game's own sound to the lobby. The same goes for
 // Windows' "Stereo Mix"-style inputs and a render endpoint used for capture (WASAPI loopback). No acceptable input:
-// voice runs listen-only. Pure (no COM), so the private tests check it with a fake device list.
+// voice runs listen-only. The player may choose the microphone and the output (§15): the lists and the fallback to the
+// system default are here too. Pure (no COM), so the private tests check it with a fake device list.
 #pragma once
 
 #include <cwctype>
@@ -43,6 +44,44 @@ inline int PickCapture(const std::vector<Candidate> &list, int default_index) {
     for (size_t i = 0; i < list.size(); i++)
         if (!IsMonitorOrLoopback(list[i])) return static_cast<int>(i);
     return -1;
+}
+
+// ---------------------------------------------------------------- the player's choice (VOICE_CHAT.md §15)
+// The settings list a microphone and an output by endpoint id; empty is "System default". The overlay lists the choices,
+// the launcher keeps the pick (and its name, to say which one went missing), the engine opens it.
+
+// One entry of the overlay's device lists. An empty id is "System default".
+struct Choice {
+    std::wstring id, name;
+};
+
+// What the player may pick: "System default" first, then every active endpoint in the system's order; for capture never
+// a monitor or loopback (they are not listed at all, so they cannot be chosen). A nameless endpoint shows its id.
+inline std::vector<Choice> Choices(const std::vector<Candidate> &list, bool capture) {
+    std::vector<Choice> out{Choice{}};
+    for (const Candidate &c : list)
+        if (!capture || !IsMonitorOrLoopback(c)) out.push_back({c.id, c.name.empty() ? c.id : c.name});
+    return out;
+}
+
+// The index of the chosen endpoint in `list`, or -1: none chosen (the default), or it is gone (unplugged, disabled), or
+// for capture it is not a microphone.
+inline int FindChosen(const std::vector<Candidate> &list, const std::wstring &chosen, bool capture) {
+    if (chosen.empty()) return -1;
+    for (size_t i = 0; i < list.size(); i++)
+        if (list[i].id == chosen) return capture && IsMonitorOrLoopback(list[i]) ? -1 : static_cast<int>(i);
+    return -1;
+}
+
+// A chosen endpoint that cannot be used now: the system default stands in (and the overlay says so once).
+inline bool ChosenMissing(const std::vector<Candidate> &list, const std::wstring &chosen, bool capture) {
+    return !chosen.empty() && FindChosen(list, chosen, capture) < 0;
+}
+
+// The capture endpoint with the player's choice: the chosen microphone while it is there, else PickCapture's.
+inline int PickCapture(const std::vector<Candidate> &list, int default_index, const std::wstring &chosen) {
+    const int i = FindChosen(list, chosen, true);
+    return i >= 0 ? i : PickCapture(list, default_index);
 }
 
 } // namespace fi::audio::devices

@@ -952,6 +952,9 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Voice v when worlds is not null && !suspended:
                                 if (worlds.VoiceAct(v.Request) is { } voiceState) _ = overlay.SendFrameAsync(voiceState, stop.Token);
                                 break;
+                            case Overlay.UiIncoming.VoiceDevice d when worlds is not null && !suspended: // §15
+                                if (worlds.VoiceDevice(d.Request) is { } deviceState) _ = overlay.SendFrameAsync(deviceState, stop.Token);
+                                break;
                             case Overlay.UiIncoming.Act a when worlds is not null && !suspended:
                                 // the result, then the world as it is now
                                 _ = ReplyAsync(overlay, async () => await worlds.ActAsync(a.Request, stop.Token).ConfigureAwait(false), stop.Token)

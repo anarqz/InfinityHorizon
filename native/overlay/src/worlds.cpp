@@ -49,6 +49,7 @@
 #include "fi_overlay.h"
 #include "style.h"
 #include "voice_audio.h"
+#include "voice_volume.h"
 #include "world_access.h"
 
 namespace fi {
@@ -115,7 +116,8 @@ bool g_mine_refresh = true; // one explicit reconcile on open/action/manual refr
 bool g_showing_mine = false; // the List screen shows my world this frame
 int g_mine_focus = 0;       // 0 the close or leave button, [1 the host's voice switch], then the players
 int g_mine_count = 0;       // what the focus walks: 1 [+ 1] + the players
-int g_mine_col = 0;         // on a player: 0 the row, 1 its microphone square (OD-154)
+int g_mine_col = 0;         // on a player: 0 the name, 1 its voice bar below it (OD-154; §15: the mic button + volume)
+int g_mine_scroll = 0;      // §15: the first player row drawn (the rows follow the focus)
 bool g_mine_voice_row = false; // the host's "Voice chat" switch is item 1
 bool g_mine_x = false;      // X on a player: mute or unmute them, applied at draw time
 MemberRow g_member;         // the player the card is about
@@ -927,15 +929,30 @@ void ToggleLobbyVoice(const VoiceState &v) {
                                                   : T("Nobody's voice is carried in your lobby.", "Nenhuma voz é transmitida no seu lobby."));
 }
 
-// The square to the right of a player's row: their voice at a glance, and A to mute them.
+// Heard talking now (the green border around the name, §15): another player's talking state, or this player's own voice
+// leaving the PC; never while voice is unusable or the player is silenced.
+bool RowTalking(const MemberRow &m, const VoiceState &v) {
+    if (VoiceUnavailable(v)) return false;
+    if (m.friend_state == 4) return v.mic != MicMode::Muted && audio::Sending();
+    const uint8_t st = v.StateOf(m.xuid);
+    return (st & VoiceMember::Talking) && !(st & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked));
+}
+
+// §15: the row's volume: another player's (this player's level for them) or, on this player's own row, the microphone's.
+uint8_t RowVolume(const MemberRow &m, const VoiceState &v) { return m.friend_state == 4 ? v.mic_volume : v.VolumeOf(m.xuid); }
+void SetRowVolume(const MemberRow &m, uint8_t to) {
+    const VoiceState v = CurrentVoice();
+    if (!VolumeValue(to) || to == RowVolume(m, v)) return;
+    if (m.friend_state == 4) VoiceCommand(VoiceOp::MicVolume, std::string(), to);
+    else VoiceCommand(VoiceOp::PlayerVolume, m.xuid, to);
+}
+
+// The microphone button inside a player's voice bar: their voice at a glance, and A to mute them.
 void MicSquare(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m, const VoiceState &v) {
     const bool self = m.friend_state == 4, usable = VoiceUnavailable(v) == nullptr;
     const uint8_t st = v.StateOf(m.xuid);
-    const bool silenced = st & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked);
-    const bool talking = usable && (st & VoiceMember::Talking) && !silenced;
-    dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
-    if (talking) dl->AddRect(a, b, kPinkU, 6 * s, 0, 2.5f * s);
-    if (focus) FocusRing(dl, a, b, 6 * s);
+    const bool talking = RowTalking(m, v);
+    dl->AddRectFilled(a, b, focus ? Rgba(70, 70, 78) : Rgba(52, 52, 58), 5 * s);
     bool slash = false;
     ImU32 color = kText;
     if (!usable) {
@@ -951,14 +968,34 @@ void MicSquare(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &
         slash = true;
         color = kRed;
     } else if (talking) {
-        color = kPinkU;
+        color = kTalkGreen;
     }
     const ImVec2 c((a.x + b.x) / 2, (a.y + b.y) / 2);
-    DrawMic(dl, c, 30 * s, color, slash, focus ? kTileFocus : kTile);
+    DrawMic(dl, c, (b.y - a.y) * 0.62f, color, slash, focus ? Rgba(70, 70, 78) : Rgba(52, 52, 58));
     if (usable && self && v.mic == MicMode::PushToTalk) {
         const ImVec2 ts = Measure(f.tag, "R3");
-        TextAt(dl, f.tag, ImVec2(b.x - ts.x - 6 * s, b.y - ts.y - 4 * s), kTextDim, "R3");
+        TextAt(dl, f.tag, ImVec2(b.x - ts.x - 3 * s, b.y - ts.y - 1 * s), kTextDim, "R3");
     }
+}
+
+// §15: the shorter rectangle under a player's name: the microphone button (A mutes them; on this player's own row it
+// opens or mutes the microphone) and beside it that player's volume (Left/Right; on the own row, "My microphone
+// volume"), its value at the right. One focus stop. `mic_clicked`/`volume_clicked` report the mouse.
+void VoiceBar(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m, const VoiceState &v, bool *mic_clicked, uint8_t *volume_clicked) {
+    dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
+    if (focus) FocusRing(dl, a, b, 6 * s);
+    const float h = b.y - a.y, pad = 4 * s;
+    const ImVec2 ma(a.x + pad, a.y + pad), mb(a.x + h - pad, b.y - pad);
+    MicSquare(dl, ma, mb, focus, m, v);
+    if (Clicked(ma, mb)) *mic_clicked = true;
+    const uint8_t volume = RowVolume(m, v);
+    const std::string value = std::to_string(volume);
+    const ImVec2 vs = Measure(f.small, value.c_str());
+    const ImVec2 sa(mb.x + 14 * s, a.y + h / 2 - 8 * s), sb(b.x - 22 * s - Measure(f.small, "100").x, a.y + h / 2 + 8 * s);
+    const uint8_t st = v.StateOf(m.xuid);
+    const bool heard = !VoiceUnavailable(v) && (m.friend_state == 4 ? v.mic != MicMode::Muted : !(st & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked)));
+    VolumeSlider(dl, sa, sb, volume, focus && heard, volume_clicked);
+    TextAt(dl, f.small, ImVec2(b.x - 12 * s - vs.x, a.y + h / 2 - vs.y / 2), focus ? kText : kTextDim, value.c_str());
 }
 
 // The host's switch, under the close button: on or off for everyone, at any time while the lobby is open.
@@ -1031,21 +1068,43 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("Player names arrive with the next server update.", "Os nomes dos jogadores chegam na próxima atualização do servidor."));
         y += 30 * s;
     }
-    // OD-154: each row is the name's rectangle and, to its right, a square with the player's microphone
-    const float th = 62 * s, gap = 8 * s;
+    // OD-154, §15: each player is the name's rectangle (a green border while they talk) and, below it, a shorter one
+    // with their microphone button and their volume. The rows scroll with the focus.
+    const float nh = 56 * s, vh = 40 * s, inner = 4 * s, gap = 12 * s, indent = 60 * s;
+    const float row = nh + inner + vh + gap;
     const int first = FirstPlayerItem();
-    int shown = 0;
-    for (size_t i = 0; i < m.members.size() && y + th < bottom; ++i, ++shown) {
-        const int item = static_cast<int>(i) + first;
-        const bool focus = g_mine_focus == item;
-        const ImVec2 ta(x, y), tb(x + w - th - gap, y + th), ma(tb.x + gap, y), mb(x + w, y + th);
-        MemberTile(dl, ta, tb, focus && g_mine_col == 0, m.members[i]);
-        MicSquare(dl, ma, mb, focus && g_mine_col == 1, m.members[i], voice);
-        if (Clicked(ta, tb)) { g_mine_focus = item; g_mine_col = 0; g_accept = true; }
-        if (Clicked(ma, mb)) { g_mine_focus = item; g_mine_col = 1; g_accept = true; }
-        y += th + gap;
+    const int count = static_cast<int>(m.members.size());
+    const int fit = std::max(1, static_cast<int>((bottom - y + gap) / row));
+    const int focused = g_mine_focus - first;
+    if (focused >= 0) g_mine_scroll = std::clamp(g_mine_scroll, focused - fit + 1, focused);
+    g_mine_scroll = std::clamp(g_mine_scroll, 0, std::max(0, count - fit));
+    if (g_mine_scroll > 0) { // more above
+        const ImVec2 ts = Measure(f.tag, "...");
+        TextAt(dl, f.tag, ImVec2(x + w - ts.x, y - 22 * s), kTextDim, "...");
     }
-    g_mine_count = first + shown;
+    for (int i = g_mine_scroll; i < count && i < g_mine_scroll + fit; ++i) {
+        const MemberRow &member = m.members[static_cast<size_t>(i)];
+        const int item = i + first;
+        const bool focus = g_mine_focus == item;
+        const ImVec2 ta(x, y), tb(x + w, y + nh), ba(x + indent, tb.y + inner), bb(x + w, tb.y + inner + vh);
+        MemberTile(dl, ta, tb, focus && g_mine_col == 0, member);
+        if (RowTalking(member, voice)) { // the whole name area, inside the focus ring when it has one
+            const float in = focus && g_mine_col == 0 ? 3.5f * s : 0.0f;
+            dl->AddRect(ImVec2(ta.x + in, ta.y + in), ImVec2(tb.x - in, tb.y - in), kTalkGreen, 6 * s, 0, 2.5f * s);
+        }
+        bool mic_clicked = false;
+        uint8_t volume_clicked = 0;
+        VoiceBar(dl, ba, bb, focus && g_mine_col == 1, member, voice, &mic_clicked, &volume_clicked);
+        if (Clicked(ta, tb)) { g_mine_focus = item; g_mine_col = 0; g_accept = true; }
+        if (mic_clicked) { g_mine_focus = item; g_mine_col = 1; g_accept = true; }
+        if (volume_clicked) { g_mine_focus = item; g_mine_col = 1; SetRowVolume(member, volume_clicked); }
+        y += row;
+    }
+    if (g_mine_scroll + fit < count) { // more below
+        const ImVec2 ts = Measure(f.tag, "...");
+        TextAt(dl, f.tag, ImVec2(x + w - ts.x, y - gap + 1 * s), kTextDim, "...");
+    }
+    g_mine_count = first + count;
 }
 
 // The card's choices: an action number (3 kick, 4 friend, 5 report, 0 back) and its label.
@@ -1197,16 +1256,34 @@ bool WorldsNavigate(Nav nav) {
     case Screen::List:
         if (g_showing_mine) {
             const bool on_player = g_mine_focus >= FirstPlayerItem(), on_switch = g_mine_voice_row && g_mine_focus == 1;
+            // §15: a player is two stops, the name and below it the voice bar (A the microphone button, Left/Right the
+            // volume); Up/Down walk name, bar, next name. Right on a name goes down to its bar.
+            const auto step_volume = [](int direction) {
+                Shared sh;
+                { std::lock_guard<std::mutex> lock(g_lock); sh = g_shared; }
+                const int player = g_mine_focus - FirstPlayerItem();
+                if (player < 0 || player >= static_cast<int>(sh.mine.members.size())) return;
+                const MemberRow &m = sh.mine.members[static_cast<size_t>(player)];
+                SetRowVolume(m, audio::StepVolume(RowVolume(m, CurrentVoice()), direction));
+            };
             switch (nav) {
-            case Nav::Up: if (g_mine_focus > 0) --g_mine_focus; if (g_mine_focus < FirstPlayerItem()) g_mine_col = 0; return true;
-            case Nav::Down: if (g_mine_focus + 1 < g_mine_count) ++g_mine_focus; return true;
-            // OD-154: Right reaches the player's microphone square, Left comes back; on the host's switch both flip it
+            case Nav::Up:
+                if (on_player && g_mine_col == 1) { g_mine_col = 0; return true; }
+                if (g_mine_focus > 0) --g_mine_focus;
+                g_mine_col = g_mine_focus >= FirstPlayerItem() ? 1 : 0;
+                return true;
+            case Nav::Down:
+                if (on_player && g_mine_col == 0) { g_mine_col = 1; return true; }
+                if (g_mine_focus + 1 < g_mine_count) { ++g_mine_focus; g_mine_col = 0; }
+                return true;
+            // OD-154: on the host's switch Left/Right flip it
             case Nav::Right:
-                if (on_player) { g_mine_col = 1; return true; }
+                if (on_player && g_mine_col == 0) { g_mine_col = 1; return true; }
+                if (on_player) { step_volume(1); return true; }
                 if (on_switch) { ToggleLobbyVoice(CurrentVoice()); return true; }
                 return false; // the tabs
             case Nav::Left:
-                if (on_player && g_mine_col == 1) { g_mine_col = 0; return true; }
+                if (on_player && g_mine_col == 1) { step_volume(-1); return true; }
                 if (on_switch) { ToggleLobbyVoice(CurrentVoice()); return true; }
                 return false;
             case Nav::X: if (on_player) { g_mine_x = true; return true; } return false;

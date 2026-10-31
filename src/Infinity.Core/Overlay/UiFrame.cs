@@ -101,10 +101,16 @@ public abstract record UiFrame
     public const byte FirstProtocol3Type = 0x1B;
 
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x1C;
+    public const byte LastType = 0x1D;
 
     /// <summary>OD-154: the other players a <see cref="VoiceState"/> lists.</summary>
     public const int MaxVoiceMembers = 16;
+
+    /// <summary>VOICE_CHAT.md §15: a device id or name, in UTF-8 bytes.</summary>
+    public const int MaxDeviceText = 256;
+
+    /// <summary>VOICE_CHAT.md §15: every volume slider is 1..100, 100 by default.</summary>
+    public const byte MinVolume = 1, MaxVolume = 100;
 
     private UiFrame()
     {
@@ -417,9 +423,13 @@ public abstract record UiFrame
     /// <summary>
     /// 0x1B, launcher → overlay (protocol 3, OD-154): the voice chat the overlay shows. <c>Flags</c>
     /// <see cref="UiVoice"/>; <c>Mic</c> <see cref="UiMicMode"/>; <c>Members</c> the other players of the lobby (at most
-    /// 16; never this player, whose voice is <c>Mic</c>), each with its <see cref="UiVoiceMember"/> state.
+    /// 16; never this player, whose voice is <c>Mic</c>), each with its <see cref="UiVoiceMember"/> state and the volume
+    /// this player hears them at. VOICE_CHAT.md §15: the player's own preferences follow: the voice chat volume, the
+    /// microphone volume (1..100) and the chosen microphone and output (an empty id is the system default, with an
+    /// empty name; ids and names at most 256 UTF-8 bytes).
     /// </summary>
-    public sealed record VoiceState(byte Flags, byte Mic, IReadOnlyList<VoiceMember> Members) : UiFrame
+    public sealed record VoiceState(byte Flags, byte Mic, IReadOnlyList<VoiceMember> Members, byte VoiceVolume = MaxVolume, byte MicVolume = MaxVolume,
+        string MicId = "", string MicName = "", string OutputId = "", string OutputName = "") : UiFrame
     {
         public override byte Type => 0x1B;
 
@@ -434,13 +444,18 @@ public abstract record UiFrame
                 CheckXuid(member.Xuid, "voice member xuid");
                 Limit(member.Gamertag, 64, "voice member gamertag");
                 if (member.State > UiVoiceMember.All) throw new ProtocolException("invalid voice member state");
+                CheckVolume(member.Volume);
             }
+            CheckVolume(VoiceVolume);
+            CheckVolume(MicVolume);
+            CheckDevice(MicId, MicName);
+            CheckDevice(OutputId, OutputName);
         }
     }
 
     /// <summary>
     /// 0x1C, overlay → launcher (protocol 3, OD-154): <see cref="UiVoiceOp"/> with its <c>Value</c>; <c>Xuid</c> names
-    /// the player of ops 2 and 6 and is empty for the others.
+    /// the player of ops 2, 6 and 9 and is empty for the others. Ops 7-9 (§15) carry a volume, 1..100.
     /// </summary>
     public sealed record VoiceCommand(byte Op, string Xuid, byte Value) : UiFrame
     {
@@ -450,11 +465,42 @@ public abstract record UiFrame
 
         internal void Validate()
         {
-            if (Op is < UiVoiceOp.LobbyVoice or > UiVoiceOp.MuteForLobby) throw new ProtocolException("invalid voice op");
-            if (Op is UiVoiceOp.Mute or UiVoiceOp.MuteForLobby) CheckXuid(Xuid, "voice command xuid");
+            if (Op is < UiVoiceOp.LobbyVoice or > UiVoiceOp.PlayerVolume) throw new ProtocolException("invalid voice op");
+            if (Op is UiVoiceOp.Mute or UiVoiceOp.MuteForLobby or UiVoiceOp.PlayerVolume) CheckXuid(Xuid, "voice command xuid");
             else if (Xuid.Length != 0) throw new ProtocolException("this voice op names no player");
-            if (Op == UiVoiceOp.Mic ? Value > UiMicMode.Max : Value > 1) throw new ProtocolException("invalid voice value");
+            if (Op is UiVoiceOp.VoiceVolume or UiVoiceOp.MicVolume or UiVoiceOp.PlayerVolume) CheckVolume(Value);
+            else if (Op == UiVoiceOp.Mic ? Value > UiMicMode.Max : Value > 1) throw new ProtocolException("invalid voice value");
         }
+    }
+
+    /// <summary>
+    /// 0x1D, overlay → launcher (protocol 3, VOICE_CHAT.md §15): the microphone (<see cref="UiVoiceFlow.Microphone"/>)
+    /// or output the player picked. An empty <c>Id</c> is the system default and has an empty <c>Name</c>; both at most
+    /// 256 UTF-8 bytes. The name is kept only to say which device went missing.
+    /// </summary>
+    public sealed record VoiceDevice(byte Flow, string Id, string Name) : UiFrame
+    {
+        public override byte Type => 0x1D;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate()
+        {
+            if (Flow > UiVoiceFlow.Max) throw new ProtocolException("invalid voice device flow");
+            CheckDevice(Id, Name);
+        }
+    }
+
+    internal static void CheckVolume(byte volume)
+    {
+        if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
+    }
+
+    internal static void CheckDevice(string id, string name)
+    {
+        Limit(id, MaxDeviceText, "device id");
+        Limit(name, MaxDeviceText, "device name");
+        if (id.Length == 0 && name.Length != 0) throw new ProtocolException("the system default has no name");
     }
 
     /// <summary>A decimal XUID: 1-20 ASCII digits.</summary>
@@ -705,13 +751,26 @@ public abstract record UiFrame
                     w.Str(member.Xuid);
                     w.Str(member.Gamertag);
                     w.U8(member.State);
+                    w.U8(member.Volume);
                 }
+                w.U8(v.VoiceVolume);
+                w.U8(v.MicVolume);
+                w.Str(v.MicId);
+                w.Str(v.MicName);
+                w.Str(v.OutputId);
+                w.Str(v.OutputName);
                 break;
             case VoiceCommand c:
                 c.Validate();
                 w.U8(c.Op);
                 w.Str(c.Xuid);
                 w.U8(c.Value);
+                break;
+            case VoiceDevice d:
+                d.Validate();
+                w.U8(d.Flow);
+                w.Str(d.Id);
+                w.Str(d.Name);
                 break;
         }
         return w.Finish("ui frame");
@@ -784,12 +843,13 @@ public abstract record UiFrame
             0x19 => new ServerStatus(r.Str(), r.U8(), r.U16(), r.U16(), r.U16(), r.U16(), r.U16(), r.U32(), r.U32()),
             0x1A => DecodeAvatar(ref r),
             0x1B => DecodeVoiceState(ref r),
-            _ => new VoiceCommand(r.U8(), r.Str(), r.U8()),
+            0x1C => new VoiceCommand(r.U8(), r.Str(), r.U8()),
+            _ => new VoiceDevice(r.U8(), r.Str(), r.Str()),
         };
         r.End();
         switch (frame)
         {
-            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand:
+            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -806,8 +866,8 @@ public abstract record UiFrame
         var count = r.U8();
         Bound(count, MaxVoiceMembers, "voice members");
         var members = new List<VoiceMember>(count);
-        for (var i = 0; i < count; ++i) members.Add(new VoiceMember(r.Str(), r.Str(), r.U8()));
-        return new VoiceState(flags, mic, members);
+        for (var i = 0; i < count; ++i) members.Add(new VoiceMember(r.Str(), r.Str(), r.U8(), r.U8()));
+        return new VoiceState(flags, mic, members, r.U8(), r.U8(), r.Str(), r.Str(), r.Str(), r.Str());
     }
 
     private static Avatar DecodeAvatar(ref WireReader r)
@@ -961,10 +1021,22 @@ public abstract record UiIncoming
 
     /// <summary>Protocol 3 (OD-154): a voice chat change; answer with the new <see cref="UiFrame.VoiceState"/>.</summary>
     public sealed record Voice(UiFrame.VoiceCommand Request) : UiIncoming;
+
+    /// <summary>VOICE_CHAT.md §15: the player picked a microphone or an output; answer with the new <see cref="UiFrame.VoiceState"/>.</summary>
+    public sealed record VoiceDevice(UiFrame.VoiceDevice Request) : UiIncoming;
 }
 
-/// <summary>One other player of <see cref="UiFrame.VoiceState"/>: <c>State</c> <see cref="UiVoiceMember"/>.</summary>
-public sealed record VoiceMember(string Xuid, string Gamertag, byte State);
+/// <summary>
+/// One other player of <see cref="UiFrame.VoiceState"/>: <c>State</c> <see cref="UiVoiceMember"/>; <c>Volume</c> (§15)
+/// the level this player hears them at, 1..100.
+/// </summary>
+public sealed record VoiceMember(string Xuid, string Gamertag, byte State, byte Volume = UiFrame.MaxVolume);
+
+/// <summary><see cref="UiFrame.VoiceDevice"/>'s flow (§15).</summary>
+public static class UiVoiceFlow
+{
+    public const byte Microphone = 0, Output = 1, Max = Output;
+}
 
 /// <summary><c>VoiceState.flags</c> (OD-154).</summary>
 public static class UiVoice
@@ -1009,6 +1081,15 @@ public static class UiVoiceOp
 
     /// <summary>The host mutes a player for everyone in the lobby (1) or lifts it (0).</summary>
     public const byte MuteForLobby = 6;
+
+    /// <summary>§15: the voice chat volume (the mix of every other player), 1..100.</summary>
+    public const byte VoiceVolume = 7;
+
+    /// <summary>§15: this player's microphone volume, 1..100.</summary>
+    public const byte MicVolume = 8;
+
+    /// <summary>§15: the volume this player hears the named player at, 1..100 (kept per XUID).</summary>
+    public const byte PlayerVolume = 9;
 }
 
 /// <summary>
@@ -1241,6 +1322,7 @@ public sealed class UiSession
         {
             UiFrame.UiHello => throw new ProtocolException("second UiHello"),
             UiFrame.VoiceCommand v => new UiIncoming.Voice(v),
+            UiFrame.VoiceDevice d => new UiIncoming.VoiceDevice(d),
             UiFrame.WorldsQueryV2 q => new UiIncoming.WorldsV2(q),
             UiFrame.PlayerDetailsQuery p => new UiIncoming.PlayerDetails(p),
             UiFrame.PaneActionClick c => new UiIncoming.PaneClick(c),
