@@ -274,7 +274,9 @@ public sealed partial class WorldsBridge
                         && r.World.Audience is WorldAudiences.Everyone or WorldAudiences.Supporters
                         && (lobby is null || r.World.Lobbies.Contains(lobby))
                         // OD-150: a free roam or Road Trip ask joins a world running that now; a car meet ask any world that runs one
-                        && (activity is null || r.World.Activity == activity))
+                        && (activity is null || r.World.Activity == activity)
+                        // OD-149: a player the anti-cheat system isolated plays only in pineapple worlds (the server refuses the rest)
+                        && (!Isolated || r.World.Pool))
                     .Take(FreeRoamJoinAttempts).ToList();
             }
             catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested)
@@ -283,7 +285,7 @@ public sealed partial class WorldsBridge
             }
             // the world the game left moments ago comes first (whatever its audience), so a retry never splits the players into a new lobby
             if (Interlocked.Exchange(ref _recentlyLeft, null) is { } recent && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld
-                && (lobby is null || candidates.Any(c => c.World.Id == recent.WorldId)))
+                && (lobby is null && !Isolated || candidates.Any(c => c.World.Id == recent.WorldId)))
             {
                 cancellation.ThrowIfCancellationRequested();
                 var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, cancellation, kind).ConfigureAwait(false);

@@ -580,6 +580,15 @@ public sealed class PlaySupervisor
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
                 await pipe.WriteAsync(new Frame.CancelMatchmaking().Encode(),ct).ConfigureAwait(false);
             };
+            // AC-2: a seated Hardcore player's hook measures the other players' cars against these rules (only once it reported
+            // CaptureWhat.Watch); the forced test episode exists only in a prerelease build (WatchTestSwitch)
+            worlds.SendWatch=async (watch,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                await pipe.WriteAsync(watch.Encode(),ct).ConfigureAwait(false);
+            };
+            worlds.WatchForceSpeed = Matchmaking.WatchTestSwitch.ForceSpeedFromEnvironment();
+            if (worlds.WatchForceSpeed) _emit(new SupervisorEvent.Note("watch: TEST build: FI_TEST_FORCE_OBSERVATION=speed forces one speed episode"));
             worlds.CrashContext = crashContext;
             _ = SeatLoopAsync(worlds, overlay!, onlineStop.Token);
         }
@@ -710,6 +719,14 @@ public sealed class PlaySupervisor
                         }
                         if(frame is Frame.Capture{What:CaptureWhat.RelayJoiner} relayCapability && endpoint.Greeted && worlds is not null)
                             worlds.RelayJoinerCapable=relayCapability.Ok;
+                        // AC-2: the hook's measurement of another player's car (only after a Watch frame); posted off this loop
+                        if(frame is Frame.Observed observed)
+                        {
+                            if(endpoint.Greeted && !suspended && tokensOpen)worlds?.HookObserved(observed);
+                            continue;
+                        }
+                        if(frame is Frame.Capture{What:CaptureWhat.Watch} watchCapability && endpoint.Greeted && worlds is not null)
+                            worlds.WatchCapable=watchCapability.Ok;
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
@@ -1068,6 +1085,7 @@ public sealed class PlaySupervisor
                 await overlay.SendFrameAsync(mine, cancellation).ConfigureAwait(false);
                 foreach (var toast in worlds.LobbyToasts()) await overlay.ToastAsync(toast, cancellation).ConfigureAwait(false);
                 await worlds.FollowHostAsync(cancellation).ConfigureAwait(false);
+                await worlds.WatchTickAsync(cancellation).ConfigureAwait(false); // AC-2: rules to the hook or world server, observations posted
             }
             catch (OperationCanceledException)
             {

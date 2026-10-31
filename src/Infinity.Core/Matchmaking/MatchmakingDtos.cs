@@ -139,6 +139,21 @@ public record WorldView : World
 
     /// <summary>The world's relay, only when <see cref="Transport"/> is <c>relay</c> (shown "via &lt;name&gt;").</summary>
     public WorldRelay? Relay { get; init; }
+
+    /// <summary>
+    /// OD-149 (§3.9): a pineapple world, hosted by a profile the anti-cheat system isolated, for the world's whole life; only
+    /// isolated profiles join it (a clean caller reads <c>canJoin: false, why: "pool"</c>). Absent on older servers (false).
+    /// </summary>
+    public bool Pool { get; init; }
+}
+
+/// <summary>
+/// OD-149 (§3.9): <c>pool: {until}</c> on <c>GET /mm/v1/worlds</c> and <c>GET /mm/v1/seat</c> for a caller the anti-cheat system
+/// isolated (absent otherwise): until <see cref="Until"/> (a server instant) it plays only in pineapple worlds.
+/// </summary>
+public sealed record CallerPool
+{
+    public required string Until { get; init; }
 }
 
 /// <summary>CR-S57: how a pair's datagrams travel.</summary>
@@ -229,6 +244,9 @@ public sealed record WorldList
     public required string GeneratedAt { get; init; }
 
     public required ListViewer Viewer { get; init; }
+
+    /// <summary>OD-149 (§3.9): the caller is isolated by the anti-cheat system until then; absent otherwise (and from older servers).</summary>
+    public CallerPool? Pool { get; init; }
 }
 
 /// <summary>The host's relay UDP port and up to 4 private LAN addresses (TypeScript <c>AnnouncePort</c>).</summary>
@@ -569,6 +587,9 @@ public sealed record SeatAnswer
     public WorldMembers? Members { get; init; }
 
     public required string GeneratedAt { get; init; }
+
+    /// <summary>OD-149 (§3.9): the caller is isolated by the anti-cheat system until then; absent otherwise (and from older servers).</summary>
+    public CallerPool? Pool { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/seat/renew</c> body.</summary>

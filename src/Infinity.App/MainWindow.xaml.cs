@@ -378,6 +378,9 @@ public partial class MainWindow : Window
 
     private void OnDiscord(object sender, RoutedEventArgs e) => OpenCommunityLink("https://discord.gg/BqMVftFvXH");
 
+    // OD-149: the anti-cheat isolation's dispute link (the community Discord)
+    private void OnPoolDispute(object sender, RoutedEventArgs e) => OpenCommunityLink(Infinity.Core.Matchmaking.AntiCheatPool.DisputeLink);
+
     private static void OpenCommunityLink(string url) =>
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
 

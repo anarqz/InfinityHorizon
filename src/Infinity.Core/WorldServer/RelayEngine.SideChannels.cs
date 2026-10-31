@@ -104,7 +104,8 @@ internal sealed partial class RelayEngine
     {
         _sideChannelRates.Remove(peer);
         OnVoicePeerLeft(peer);
+        WatchPeerLeft(peer);
     }
 
-    private void ClearSideChannels() { _sideChannelRates.Clear(); SideChannelRateDrops = 0; ClearVoice(); }
+    private void ClearSideChannels() { _sideChannelRates.Clear(); SideChannelRateDrops = 0; ClearVoice(); _watch = null; }
 }

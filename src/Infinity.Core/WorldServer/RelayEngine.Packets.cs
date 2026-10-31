@@ -121,6 +121,7 @@ internal sealed partial class RelayEngine
             }
         }
         if (peer.HistoryBits > _settings.HistoryMaxBits) { Doom(peer, "object history over its limit"); return; }
+        if (carNow is not null) WatchCar(peer, carNow); // AC-2: a Hardcore host measures the other players' cars
         Forward(peer, forward, true); ForwardCars(peer, carNow, cars);
         if (peer.UniverseDue) { peer.UniverseDue = false; PlayerObjectCreated(peer); }
         if (Finalise(peer) is { } finalised) reliable.Add(finalised);
@@ -224,7 +225,7 @@ internal sealed partial class RelayEngine
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
         TickHeldOpens();
-        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip();
+        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip(); TickWatch();
         if (_now - _lastResend >= 50)
         {
             _lastResend = _now;

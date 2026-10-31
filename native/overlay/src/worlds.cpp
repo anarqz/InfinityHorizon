@@ -36,6 +36,10 @@
 //   filter, CR-L40). A world whose mods differ from the player's carries a warning icon and is never
 //   joined from here: the player is told which mods it uses. The focused or hovered world fills the
 //   right pane (pane.cpp) with its players and mods, from the list's own rows.
+// - Pineapple lobbies (OD-149, 2.0.1): a world hosted by a Hardcore player the anti-cheat system isolated carries the
+//   pineapple mark and its name in the list; focused, the right pane opens with the notice that explains it. A clean player
+//   sees it dimmed and cannot join it (lock 9). An isolated player gets the red notice with the time left counting down above
+//   the list (and above its own lobby), with the Discord link to dispute it. Neutral words only (ui_frames.h, OD-149).
 #include "overlay.h"
 
 #include <algorithm>
@@ -78,6 +82,9 @@ struct Shared {
     uint8_t action = 0, action_status = 0;
     std::string action_message;
     uint64_t action_serial = 0;
+    // OD-149: this player is isolated by the anti-cheat system until this tick (GetTickCount64; 0 not isolated), from the list
+    uint64_t pool_deadline = 0;
+    std::string pool_link;
 };
 std::mutex g_lock;
 Shared g_shared;
@@ -205,16 +212,26 @@ const char *LockName(uint8_t lock) {
     case 5: return T("Too far", "Longe demais");
     case 7: return T("Hardcore lobby", "Lobby Hardcore");
     case 8: return T("Noob lobby", "Lobby Noob");
+    case kLockPool: return T("Isolated players only", "Só jogadores isolados");
     default: return "";
     }
 }
 
+// OD-149: a pineapple world (hosted by a player the anti-cheat system isolated); the owner's "abacaxi" lobbies
+bool Pineapple(const WorldRow &w) { return (w.kind & kKindPineapple) != 0; }
+const char *PineappleName() { return T("Pineapple lobby", "Lobby abacaxi"); }
+const char *PineappleExplained() {
+    return T("Isolated by the anti-cheat system. Players it isolates play only in pineapple lobbies until their time ends; only they can join them.",
+             "Isolado pelo sistema anti-trapaça. Os jogadores que ele isola jogam só em lobbies abacaxi até o tempo acabar; só eles podem entrar.");
+}
+
 // Why a row is not "matching" (CR-L40 §2.2), the first that applies; None: the player joins it as they are.
-enum class Why { None, Mode, Mods, Friends, Code, Full, Far, Other };
+enum class Why { None, Mode, Mods, Friends, Code, Full, Far, Pool, Other };
 
 Why WhyOf(const WorldRow &w) {
     if ((w.lock == 7 || w.lock == 8) && !w.any_mode) return Why::Mode; // a lobby open to both modes is never another mode's
     if (w.lock == 7 || w.lock == 8) return Why::Other;
+    if (w.lock == kLockPool) return Why::Pool; // OD-149: a pineapple world and a clean player
     if (!w.mods_match) return Why::Mods;
     switch (w.lock) {
     case 0: return Why::None;
@@ -385,6 +402,7 @@ void DevAnswer() {
         mixed.any_mode = true; // OD-141: open to Hardcore and Noob, matching for either mode
         g_shared.rows.insert(g_shared.rows.begin() + 2, mixed);
         g_shared.rows.push_back({"h1", "Hardcore endurance", "Synthetic#00303", 6, 12, 0, 0, 7, 1, false});
+        g_shared.rows.push_back({"p1", "Night cruise", "Synthetic#00512", 3, 8, kKindPineapple, 0, kLockPool, 1, false}); // OD-149
         g_shared.rows.push_back({"s1", "Supporters night race", "Synthetic#00301", 9, 12, 1, 1, 0, 0, false});
         g_shared.rows.push_back({"c1", "Friday crew", "Synthetic#00230", 3, 8, 0, 3, 3, 1, false});
         if (!g_hide_full) {
@@ -498,6 +516,45 @@ void Tile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const char *icon, cons
     dl->PopClipRect();
 }
 
+// OD-149: the pineapple mark, drawn (the icon font has no pineapple): a golden fruit with three leaves, centred on `c`.
+void PineappleMark(ImDrawList *dl, ImVec2 c, float size) {
+    const ImU32 fruit = IM_COL32(255, 196, 0, 255), leaf = IM_COL32(72, 180, 72, 255), seed = IM_COL32(176, 112, 0, 255);
+    const float rx = size * 0.30f, ry = size * 0.36f;
+    const ImVec2 body(c.x, c.y + size * 0.14f);
+    const float top = body.y - ry * 0.85f;
+    dl->AddTriangleFilled(ImVec2(c.x, c.y - size * 0.50f), ImVec2(c.x - size * 0.12f, top), ImVec2(c.x + size * 0.12f, top), leaf);
+    dl->AddTriangleFilled(ImVec2(c.x - size * 0.30f, c.y - size * 0.36f), ImVec2(c.x - size * 0.14f, top + size * 0.04f), ImVec2(c.x + size * 0.02f, top), leaf);
+    dl->AddTriangleFilled(ImVec2(c.x + size * 0.30f, c.y - size * 0.36f), ImVec2(c.x - size * 0.02f, top), ImVec2(c.x + size * 0.14f, top + size * 0.04f), leaf);
+    dl->AddEllipseFilled(body, ImVec2(rx, ry), fruit);
+    for (int row = -1; row <= 1; ++row) {     // the fruit's eyes, a small diamond grid inside the ellipse
+        for (int col = -1; col <= 1; ++col) {
+            if ((row + col) % 2 != 0) continue;
+            dl->AddCircleFilled(ImVec2(body.x + col * rx * 0.5f, body.y + row * ry * 0.5f), size * 0.045f, seed);
+        }
+    }
+}
+
+// The red notice of a player the anti-cheat system isolated (OD-149), with the time left counting down every frame and the
+// dispute link (the overlay opens nothing: the link is shown to type or click in the launcher). Returns the y below it.
+float PoolBanner(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
+    const uint64_t now = GetTickCount64();
+    if (sh.pool_deadline <= now) return y;
+    const uint64_t left = (sh.pool_deadline - now + 999) / 1000;
+    const std::string title = std::string(T("Isolated by the anti-cheat system for ", "Isolado pelo sistema anti-trapaça por ")) + PoolTimeLeft(left);
+    std::string body = T("Until then you play only in pineapple lobbies.", "Até lá, você só joga em lobbies abacaxi.");
+    if (!sh.pool_link.empty())
+        body += std::string(T(" Think this is a mistake? Dispute it on Discord: ", " Acha que é um engano? Conteste no Discord: ")) + sh.pool_link;
+    const float pad = 12 * s, icon = 30 * s, tw = w - 2 * pad - icon;
+    const float th = WrappedHeight(f.body, tw, title.c_str()), bh = WrappedHeight(f.small, tw, body.c_str());
+    const ImVec2 a(x, y), b(x + w, y + pad + th + 6 * s + bh + pad);
+    dl->AddRectFilled(a, b, Rgba(232, 17, 35, 0.22f), 6 * s);
+    dl->AddRect(a, b, kRed, 6 * s, 0, 2 * s);
+    dl->AddText(f.icon, f.icon->FontSize * 0.8f, ImVec2(x + pad, y + pad), kRed, kIconWarning);
+    Wrapped(dl, f.body, ImVec2(x + pad + icon, y + pad), tw, kText, title.c_str());
+    Wrapped(dl, f.small, ImVec2(x + pad + icon, y + pad + th + 6 * s), tw, kText, body.c_str());
+    return b.y + 14 * s;
+}
+
 // One lobby row. A matching row is drawn as is; any other at about 45% with its reason after the
 // host (CR-L40 §2.2). The focus ring stays at full strength on either.
 void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w, int local_vanilla) {
@@ -507,10 +564,14 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     const int first = dl->VtxBuffer.Size;
     dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
     const float lx = a.x + 18 * s;
+    // OD-149: a pineapple world carries the pineapple mark before its name
+    const float nx = Pineapple(w) ? lx + 24 * s : lx;
+    if (Pineapple(w)) PineappleMark(dl, ImVec2(lx + 9 * s, a.y + 22 * s), 22 * s);
     dl->PushClipRect(ImVec2(lx, a.y), ImVec2(b.x - 92 * s, b.y), true);
-    TextAt(dl, f.body, ImVec2(lx, a.y + 10 * s), ready ? kText : kTextDim, w.name.c_str());
+    TextAt(dl, f.body, ImVec2(nx, a.y + 10 * s), ready ? kText : kTextDim, w.name.c_str());
     std::string sub = w.host;
-    if (w.kind == 1) sub += " · Supporter"; // CR-S69: the host's badge, nothing more
+    if (w.kind & kKindSupporter) sub += " · Supporter"; // CR-S69: the host's badge, nothing more
+    if (Pineapple(w)) sub += std::string(" · ") + PineappleName();
     if (w.any_mode) sub += std::string(" · ") + kAnyModeBadge; // OD-141
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
     if (other) sub += " · " + WhyText(w, local_vanilla);
@@ -560,6 +621,17 @@ const DetailPane &LobbyPane(const WorldRow &w) {
     p.subtitle = w.host + " · " + AudienceName(w.audience) + (w.any_mode ? std::string(" · ") + kAnyModeBadge : std::string()) + " · " +
                  std::to_string(w.players) + "/" + std::to_string(w.max) + T(" players", " jogadores");
     p.avatar = "icon:world";
+    if (Pineapple(w)) {
+        // OD-149: the large notice of a focused pineapple world, first in the pane
+        p.subtitle = std::string(PineappleName()) + " · " + p.subtitle;
+        p.sections.push_back({1, T("PINEAPPLE LOBBY", "LOBBY ABACAXI"), {{T("Isolated by the anti-cheat system", "Isolado pelo sistema anti-trapaça"),
+                                                                          PineappleExplained(), PaneIcon::Warning}}});
+        if (WhyOf(w) == Why::Pool)
+            p.sections.back().entries.push_back({T("You cannot join it", "Você não pode entrar"),
+                                                 T("Only players isolated by the anti-cheat system can join this lobby.",
+                                                   "Só jogadores isolados pelo sistema anti-trapaça podem entrar neste lobby."),
+                                                 PaneIcon::None});
+    }
     if (!w.mods_match) {
         p.sections.push_back({1, "", {{T("Your mods don't match this lobby", "Seus mods não batem com os deste lobby"),
                                        w.modded ? T("Use the same mods in the launcher to join", "Use os mesmos mods no launcher para entrar")
@@ -593,6 +665,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, const Sha
     }
     const bool ready = GameReady();
     const char *load_hint = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
+    y = PoolBanner(dl, x, y, w, sh); // OD-149: the list's header while this player is isolated
     // filter chips
     // none selected: every lobby (CR-L40); Friends, Close to me and Global narrow it
     const char *chips[kLastChip + 1] = {FilterName(WorldFilter::Friends), FilterName(WorldFilter::Near), FilterName(WorldFilter::Global),
@@ -738,6 +811,10 @@ void AcceptList(const Shared &sh) {
                                                            : T("This lobby is for Noob profiles.", "Este lobby é para perfis Noob."));
             break;
         case Why::Full: PushToast(ToastKind::Info, r.name, T("This lobby is full. Try another one.", "Esse lobby está cheio. Tente outro.")); break;
+        case Why::Pool: // OD-149: a clean player and a pineapple world
+            PushToast(ToastKind::Info, PineappleName(), T("Only players isolated by the anti-cheat system can join this lobby.",
+                                                          "Só jogadores isolados pelo sistema anti-trapaça podem entrar neste lobby."));
+            break;
         default: PushToast(ToastKind::Info, r.name, LockName(r.lock)); break;
         }
         break;
@@ -1205,8 +1282,19 @@ void SetWorlds(WorldFilter filter, bool modded, uint8_t status, const std::strin
     if (filter != g_shared.filter || modded != g_shared.modded) {
         return; // an answer to a filter the player already left
     }
+    // OD-149: status 3 is a good list for an isolated player (its message the countdown and the dispute link); a failed list keeps
+    // the last notice, any other good one clears it
+    const PoolNotice pool = ParsePoolNotice(status, message);
+    if (pool.isolated) {
+        g_shared.pool_deadline = GetTickCount64() + static_cast<uint64_t>(pool.seconds) * 1000;
+        g_shared.pool_link = pool.link;
+        status = 0;
+    } else if (status != 1 && status != 2) {
+        g_shared.pool_deadline = 0;
+        g_shared.pool_link.clear();
+    }
     g_shared.list_status = status;
-    g_shared.list_message = message;
+    g_shared.list_message = pool.isolated ? std::string() : message;
     g_shared.rows = std::move(rows);
     ++g_shared.list_serial;
 }
@@ -1462,7 +1550,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
     case Screen::List:
         g_showing_mine = sh.mine.role != 0;
         if (g_showing_mine) {
-            DrawMine(dl, x, y, w, bottom, sh.mine);
+            DrawMine(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh.mine); // OD-149: the notice stays above its own lobby
             g_mine_focus = std::clamp(g_mine_focus, 0, std::max(0, g_mine_count - 1));
             const int player = g_mine_focus - FirstPlayerItem();
             const bool x_press = g_mine_x;

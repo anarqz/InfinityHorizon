@@ -34,6 +34,14 @@ public interface IMatchmakingApi
     Task<MmResult<GameModeSession>> GameModeSessionAsync(string worldId, GameModeSessionRequest request, CancellationToken cancellation = default) =>
         Task.FromResult(new MmResult<GameModeSession>(HttpStatusCode.NotFound, null,
             new MmError(HttpStatusCode.NotFound, "MM.WORLD_NOT_FOUND", "unavailable", MmErrorKind.WorldNotFound, null, null), null));
+    /// <summary><c>GET /mm/v1/watch</c> → 200 (§3.9): the peer-observation rules. The default (a 404) serves only the test fakes.</summary>
+    Task<MmResult<WatchRules>> WatchAsync(CancellationToken cancellation = default) =>
+        Task.FromResult(new MmResult<WatchRules>(HttpStatusCode.NotFound, null,
+            new MmError(HttpStatusCode.NotFound, "HTTP.404", "no watch rules", MmErrorKind.Other, null, null), null));
+    /// <summary><c>POST /mm/v1/worlds/{worldId}/observations</c> → 204 (§3.9); a repeated id answers 204 too.</summary>
+    Task<MmResult<MmNone>> ObserveAsync(string worldId, PeerObservation observation, CancellationToken cancellation = default) =>
+        Task.FromResult(new MmResult<MmNone>(HttpStatusCode.NotFound, default,
+            new MmError(HttpStatusCode.NotFound, "MM.WORLD_NOT_FOUND", "unavailable", MmErrorKind.WorldNotFound, null, null), null));
     /// <summary>Retain only a short-lived credential for authenticated own-seat/host cleanup after suspension.</summary>
     void BeginCleanup() { }
     void EndCleanup() { }
@@ -215,6 +223,15 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
 
     public Task<MmResult<WorldMembers>> MembersAsync(string worldId, CancellationToken cancellation = default) =>
         SendAsync<WorldMembers>(HttpMethod.Get, World(worldId) + "/members", null, cancellation);
+
+    public Task<MmResult<WatchRules>> WatchAsync(CancellationToken cancellation = default) =>
+        SendAsync<WatchRules>(HttpMethod.Get, "/mm/v1/watch", null, cancellation);
+
+    public Task<MmResult<MmNone>> ObserveAsync(string worldId, PeerObservation observation, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        return SendAsync<MmNone>(HttpMethod.Post, World(worldId) + "/observations", observation, cancellation);
+    }
 
     public Task<MmResult<ModerationResult>> ModerationAsync(string worldId, Moderation moderation, CancellationToken cancellation = default)
     {

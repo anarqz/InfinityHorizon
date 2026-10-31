@@ -35,13 +35,14 @@ public sealed partial class WorldsBridge
         if (filter == WorldFilters.Every)
         {
             var all = await OperationAsync(_listRetry, token => _mm.ListAsync(WorldFilters.Every, notFull, false, token), cancellation).ConfigureAwait(false);
-            if (all is { Ok: true, Value: { } every }) return new(null, Of(every).ToList());
+            if (all is { Ok: true, Value: { } every }) { ObservePool(every.Pool); return new(null, Of(every).ToList()); }
             if (all?.Error is not { Kind: MmErrorKind.Invalid, Field: "filter" }) return Failed();
             _log("worlds: the server has no all filter; two global reads instead");
             filter = WorldFilters.Global;
         }
         var vanilla = await OperationAsync(_listRetry, token => _mm.ListAsync(filter, notFull, false, token), cancellation).ConfigureAwait(false);
         if (vanilla is not { Ok: true, Value: { } first }) return Failed();
+        ObservePool(first.Pool);
         var worlds = Of(first).ToList();
         var modded = await OperationAsync(_listRetry, token => _mm.ListAsync(filter, notFull, true, token), cancellation).ConfigureAwait(false);
         if (modded is { Ok: true, Value: { } second })

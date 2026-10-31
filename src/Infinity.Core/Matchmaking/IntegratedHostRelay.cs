@@ -101,6 +101,30 @@ public sealed class IntegratedHostRelay : IHostRelay
 
     private RelayEngine NewEngine(uint? carMeet, RoadTripSettings? roadTrip = null)
     {
+        var engine = CreateEngine(carMeet, roadTrip);
+        // AC-2: a car meet or Road Trip engine made while the host watches measures too
+        if (_watchRules is not null) engine.SetWatch(_watchRules, _watchSelf, _watchReport, _clock.ElapsedMilliseconds);
+        return engine;
+    }
+
+    // AC-2 (actor thread only): the rules every engine measures the other players' cars against; null: none
+    private PeerWatchRules? _watchRules;
+    private ulong _watchSelf;
+    private Action<PeerWatchReport>? _watchReport;
+
+    /// <summary>
+    /// AC-2 (MATCHMAKING_API §3.9): every engine of this world measures the other players' cars against <paramref name="rules"/>
+    /// (null: stop; episodes in flight end now). <paramref name="self"/> is the host's own XUID, never measured;
+    /// <paramref name="report"/> runs on the actor thread and must only queue.
+    /// </summary>
+    public void SetWatch(PeerWatchRules? rules, ulong self, Action<PeerWatchReport>? report) => Enqueue(() =>
+    {
+        (_watchRules, _watchSelf, _watchReport) = (report is null ? null : rules, self, report);
+        foreach (var engine in Engines) engine.SetWatch(_watchRules, self, report, _clock.ElapsedMilliseconds);
+    });
+
+    private RelayEngine CreateEngine(uint? carMeet, RoadTripSettings? roadTrip)
+    {
         var world = roadTrip is not null ? "road trip engine" : carMeet is null ? "free-roam engine" : "car meet engine";
         RelayEngine? engine = null;
         // World admission must be installed before any game datagram can establish a seat.

@@ -58,8 +58,11 @@ public static class ConflictReasons
     /// <summary>OD-150 (§2.5): a join asking for an activity the world does not run now (the free-roam step tries the next world).</summary>
     public const string Activity = "activity";
 
+    /// <summary>OD-149 (§3.9): a clean profile's join of a pineapple world (only profiles isolated by the anti-cheat system join it).</summary>
+    public const string Pool = "pool";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

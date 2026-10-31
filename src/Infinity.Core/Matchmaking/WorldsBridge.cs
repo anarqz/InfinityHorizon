@@ -443,6 +443,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 return new UiFrame.WorldsList(query.Filter, 2, _text("worlds.list_failed"), []);
             }
+            ObservePool(list.Pool);
             foreach (var world in list.Items.Concat(list.Locked)) _listedActivity[world.Id] = world.Activity;
             var rows = list.Items.Select(w => WithActivity(Row(w, false), w)).Concat(list.Locked.Select(w => WithActivity(Row(w, true), w))).ToList();
             return new UiFrame.WorldsList(query.Filter, 0, string.Empty, rows);
@@ -529,6 +530,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 if (answer.Value is not { } join)
                 {
+                    if (PoolRefusal(answer.Error) is { } poolRefusal) return poolRefusal;
                     if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.Activity })
                     {
                         // OD-150: the world runs another activity now; like a closed world, the free-roam step tries the next one
@@ -686,10 +688,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 var after = _seat.Observe(seat, Now);
                 if (seat.Seat is { } renewedSeat) ObserveActivity(renewedSeat);
+                ObservePool(seat.Pool);
                 // A successful renew is authoritative too: an older in-flight GET cannot undo it.
                 Interlocked.Increment(ref _mineEpoch);
                 if (seatAt is not null) _lastSeatAt = seatAt;
                 if (after.Step == SeatStep.Stop) InvalidateMine(reset: true);
+                // OD-149: isolated by the anti-cheat system: the seat in a clean world ended, the launcher moves the player
+                if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text("worlds.pool_moved");
                 return after.Step == SeatStep.Stop && after.Why != SeatDecision.LeftSeat ? _text("worlds.seat_ended") : null;
             }
         }
@@ -785,6 +790,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (seatAt is { } observed && _lastSeatAt is { } previous && observed < previous) return _mineSnapshot;
             if(!ClaimSeatProof(value,ref epoch) || !await SendSeatProofAsync(value.Seat,epoch,cancellation).ConfigureAwait(false))
             { _mineUncertain=true;return _mineSnapshot; }
+            ObservePool(value.Pool);
             if (value.Seat is not { } seat)
             {
                 lock (_mineState)
@@ -793,7 +799,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     ObserveRequest(value.Request);
                     _mineReconciled = true; _mineUncertain = false;
                     if (seatAt is not null) _lastSeatAt = seatAt;
+                    var heldGrant = _seat.GrantId;
                     _seat.Observe(value, Now);
+                    // OD-149: the seat this launcher held ended because the anti-cheat system isolated the player: it is moved
+                    if (SeatEndedForPool(value.Ended, heldGrant)) _freeRoamToasts.Enqueue(PoolToast());
                     (_mineId, _mineRole) = (null, UiWorldRole.None);
                     _lastRosterAt = null;
                     _roster.Reset();
@@ -1102,6 +1111,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         Volatile.Write(ref _hostedTransport, world.Transport);
                         Volatile.Write(ref _hostedRelayName, world.Relay?.Name);
                         Volatile.Write(ref _hostedActivity, opening);
+                        _hostedPool = world.Pool;
                         Volatile.Write(ref _hostedWorldId, openingId);
                         _publicWarning.Observe(openingId, world.Audience);
                     }
@@ -1340,8 +1350,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 // The server closes a lonely world from its own open time, usually just before ours (OD-107).
                 var idle = _closeWhenAlone && _hostAloneWarned && _hostAloneSince is { } since && _clock.GetElapsedTime(since) >= AloneWarnAfter;
+                var pool = HostedWorldClosedForPool(error);
                 await CloseCurrentHostAsync(id, CancellationToken.None).ConfigureAwait(false);
-                _log($"worlds: world {id} ended by the server: {error.Kind}");
+                _log($"worlds: world {id} ended by the server: {error.Kind}{(pool ? " (anti-cheat isolation)" : string.Empty)}");
+                // OD-149: a clean world whose host the anti-cheat system isolated closes; the launcher opens a pineapple one
+                if (pool) { StartPoolMove($"world {id} closed"); return _text("worlds.pool_moved"); }
                 return _text(idle && error.Kind == MmErrorKind.WorldNotFound ? "worlds.host_idle_closed" : "worlds.host_ended");
             }
         }
@@ -1540,6 +1553,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             // CR-L40: the all list carries other modes' worlds; CR-L43: never a world open to both modes (an
             // inconsistent answer is "not available", never dimmed as another mode's)
             "mode" => WorldModes.OpenToBoth(world) ? (byte)6 : ModeLock(world.Mode),
+            WorldWhy.Pool => UiLobby.LockPool, // OD-149: a pineapple world, only for players the anti-cheat system isolated
             _ => 6,
         };
         byte ping = world.PingClass switch
@@ -1557,6 +1571,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             _ => 0,
         };
         return new WorldRow(world.Id, world.Name, world.Host.Gamertag, (byte)Math.Min(world.Players, 255u), (byte)Math.Min(world.MaxPlayers, 255u),
-            world.Kind == WorldKinds.Supporter ? (byte)1 : (byte)0, audience, lockReason, ping, world.FriendHost);
+            (byte)((world.Kind == WorldKinds.Supporter ? UiLobby.KindSupporter : 0) | (world.Pool ? UiLobby.KindPineapple : 0)),
+            audience, lockReason, ping, world.FriendHost);
     }
 }

@@ -60,6 +60,7 @@ public sealed partial class WorldsBridge
                     return Failed(DeniedMessage(changed, "list"));
                 if (answer is not { Ok: true, Value: { } list })
                     return Failed(_text("worlds.list_failed"));
+                ObservePool(list.Pool);
                 rows = list.Items.Select(w => (w, SessionRow(w, false, local))).Concat(list.Locked.Select(w => (w, SessionRow(w, true, local))))
                     // an older server ignores the filter: never show a world of the other kind
                     .Where(r => r.Item2.Modded).ToList();
@@ -73,7 +74,9 @@ public sealed partial class WorldsBridge
                 rows = read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))).ToList();
             }
             var ordered = OrderLobbies(rows).Select(r => r.Row with { World = WithActivity(r.Row.World, r.World) }).ToList();
-            return new UiFrame.WorldsListV2(query.Filter, query.Modded, 0, string.Empty, FitLobbyRows(ordered, string.Empty));
+            // OD-149: a player the anti-cheat system isolated gets the red notice's countdown with the list
+            var (status, message) = PoolListStatus();
+            return new UiFrame.WorldsListV2(query.Filter, query.Modded, status, message, FitLobbyRows(ordered, message));
         }
         catch (Exception e) when (HostFailure(e))
         {
