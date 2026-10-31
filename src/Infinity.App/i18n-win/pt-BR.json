@@ -513,7 +513,7 @@
   "eomods.title": "Instalados manualmente",
   "eomods.hint": "Mods copiados à mão para a pasta mods do ExtraOptions, fora do catálogo do Infinity. O ExtraOptions carrega esses mods; o Infinity não os verifica. As mudanças valem na próxima vez que o jogo abrir.",
   "eomods.manual_online": "Pode não funcionar online: os outros jogadores precisam do mesmo mod, e o Hardcore desliga ele.",
-  "eomods.hint_hardcore": "O Hardcore joga online só com mods do catálogo que não mudam nada para os outros jogadores: o Infinity desliga os demais antes de abrir o jogo e os religa na sua próxima partida Noob ou offline.",
+  "eomods.hint_hardcore": "O Hardcore joga online só com mods do catálogo que não mudam nada para os outros jogadores e os mods que o Infinity lista como isentos (rádio, sons da garagem): o Infinity desliga os demais antes de abrir o jogo e os religa na sua próxima partida Noob ou offline.",
   "eomods.folder": "Pasta: {path}",
   "eomods.part_media": "mídia",
   "eomods.part_database": "banco de carros",

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "mods": [
+    {
+      "id": "spotify-radio",
+      "name": "Spotify Radio",
+      "description": "Plays Spotify Connect or the player's own music on an in-game radio station. Audio heard only by the player; nothing other players see, hear or race against."
+    },
+    {
+      "id": "extraoptions-garagerevving",
+      "name": "Extra Options - Garage Revving",
+      "description": "Garage engine revving (garage-engine-rev): hold RT in the garage to hear the engine. Garage only; nothing other players see, hear or race against."
+    }
+  ]
+}

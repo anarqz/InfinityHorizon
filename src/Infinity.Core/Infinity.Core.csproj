@@ -25,4 +25,9 @@
     <EmbeddedResource Include="Process\ExtraOptionsInfinity.manifest.json" LogicalName="Infinity.Core.ExtraOptionsInfinity.manifest.json" />
   </ItemGroup>
 
+  <!-- OD-166: the built-in copy of InfinityMods' parity-non-required.json, for a start without network or cache. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Mods\parity-non-required.json" LogicalName="Infinity.Core.parity-non-required.json" />
+  </ItemGroup>
+
 </Project>

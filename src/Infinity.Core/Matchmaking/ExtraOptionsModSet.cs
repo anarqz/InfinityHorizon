@@ -14,7 +14,8 @@ public sealed record ExtraOptionsPlannedMod(string Folder, string ModId, ModEntr
 /// mods the player is using". The session's lobby set comes from ExtraOptions' own loader (OD-126), whoever installed the mod:
 /// <list type="bullet">
 /// <item><see cref="Planned"/>, before the launch: every enabled <c>mods\</c> folder with something to load, less the folders the
-/// caller names cosmetic (catalog mods whose manifest changes nothing for other players). It sets the gate's <c>modded</c> flag.</item>
+/// caller names cosmetic (catalog mods whose manifest changes nothing for other players), less the parity-exempt mods (OD-166,
+/// <see cref="ParityExemptions"/>). It sets the gate's <c>modded</c> flag.</item>
 /// <item><see cref="State"/>: not ready (no hosting, no join, never vanilla) until this run's <c>FH2_ExtraOptions.log</c> answers for
 /// every planned mod (<see cref="Refresh"/>); then ready with the mods ExtraOptions reports loaded, a failed one left out. Nothing
 /// loaded fails the set. <see cref="Expire"/> settles the rest at the supervisor's deadline.</item>
@@ -110,20 +111,27 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
         return true;
     }
 
+    /// <summary>The plan without parity exemptions (<see cref="PlanFor(string, IReadOnlySet{string}, ParityExemptions)"/>).</summary>
+    public static IReadOnlyList<ExtraOptionsPlannedMod> PlanFor(string azimuthRoot, IReadOnlySet<string> cosmeticFolders) =>
+        PlanFor(azimuthRoot, cosmeticFolders, ParityExemptions.Empty);
+
     /// <summary>
     /// The plan before a launch (game closed, after the load order was prepared): every enabled folder with loadable content and a
-    /// manifest ExtraOptions accepts, less <paramref name="cosmeticFolders"/>. Reads and hashes the files: call it off the UI thread.
+    /// manifest ExtraOptions accepts, less <paramref name="cosmeticFolders"/> and less the mods <paramref name="exemptions"/> exempts
+    /// (OD-166: the id ExtraOptions gives the mod equals an entry's, whatever its files). Reads and hashes the files: call it off the
+    /// UI thread.
     /// </summary>
-    public static IReadOnlyList<ExtraOptionsPlannedMod> PlanFor(string azimuthRoot, IReadOnlySet<string> cosmeticFolders)
+    public static IReadOnlyList<ExtraOptionsPlannedMod> PlanFor(string azimuthRoot, IReadOnlySet<string> cosmeticFolders, ParityExemptions exemptions)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(cosmeticFolders);
+        ArgumentNullException.ThrowIfNull(exemptions);
         var plan = new List<ExtraOptionsPlannedMod>();
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var mod in ExtraOptionsMods.Scan(azimuthRoot))
         {
-            if (!mod.Enabled || mod.ManifestError is not null || !(mod.HasMedia || mod.HasDatabase || mod.HasStrings || mod.Plugins > 0)) continue;
-            if (cosmeticFolders.Contains(mod.Folder)) continue;
+            if (!Loadable(mod)) continue;
+            if (cosmeticFolders.Contains(mod.Folder) || exemptions.Exempts(mod.Id)) continue;
             // two folders whose ids read the same in the contract's form: the later one gets -2, -3, ...
             var baseId = LobbyId(mod.Id); var id = baseId;
             for (var n = 2; !ids.Add(id); n++)
@@ -136,6 +144,24 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
         }
         return plan;
     }
+
+    /// <summary>
+    /// OD-166: the enabled folders <paramref name="exemptions"/> exempts (the id ExtraOptions gives the mod equals an entry's), with
+    /// their ids. They stay out of the lobby set and play in every mode, Hardcore included. Reads no mod file but the manifests.
+    /// </summary>
+    public static IReadOnlyList<(string Folder, string ModId)> ExemptFolders(string azimuthRoot, ParityExemptions exemptions)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(exemptions);
+        if (exemptions.Mods.Count == 0) return [];
+        return [.. ExtraOptionsMods.Scan(azimuthRoot)
+            .Where(m => Loadable(m) && exemptions.Exempts(m.Id))
+            .Select(m => (m.Folder, m.Id))];
+    }
+
+    /// <summary>Enabled, a manifest ExtraOptions accepts, and something to load.</summary>
+    private static bool Loadable(ExtraOptionsMod mod) =>
+        mod.Enabled && mod.ManifestError is null && (mod.HasMedia || mod.HasDatabase || mod.HasStrings || mod.Plugins > 0);
 
     /// <summary>A dedicated host runs no game: its set is the plan itself, ready at once.</summary>
     public static IModSetSource ReadyWithPlan(IReadOnlyList<ExtraOptionsPlannedMod> plan)

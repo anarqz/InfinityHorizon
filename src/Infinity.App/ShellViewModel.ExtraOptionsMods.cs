@@ -123,6 +123,30 @@ public sealed partial class ShellViewModel
         await RefreshExtraOptionsModsAsync();
     }
 
+    private ParityExemptions? _parityExemptions;
+    private bool _parityFetching;
+    private string ParityCache => Path.Combine(_stateDirectory, "mod-parity");
+
+    /// <summary>OD-166: InfinityMods' parity exemptions as last read (network, else cache, else the built-in copy).</summary>
+    private ParityExemptions ParityExemptionsNow => _parityExemptions ??= ParityExemptions.CachedOrBuiltIn(ParityCache);
+
+    /// <summary>OD-166: fetches the parity exemptions (with the catalog); a failure keeps the cached or built-in copy and logs it.</summary>
+    private async Task RefreshParityExemptionsAsync()
+    {
+        if (_parityFetching || CatalogFetchForTests is not null) return; // tests with a fake catalog never reach the network
+        _parityFetching = true;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var list = await ParityExemptions.LoadAsync(ModDownloads, ParityCache, timeout.Token, log: Log);
+            _parityExemptions = list;
+            Log("mods: parity exemptions (" + list.Source + "): " + (list.Mods.Count == 0 ? "none" : string.Join(", ", list.Mods.Select(m => m.Id))));
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        { Log("mods: parity exemptions kept (" + e.GetType().Name + ")"); }
+        finally { _parityFetching = false; }
+    }
+
     /// <summary>The <c>mods\</c> folders of the mods the launcher installed (any catalog or custom mod, on or off).</summary>
     private HashSet<string> ManagedExtraOptionsFolders() =>
         _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>()
@@ -144,10 +168,10 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<IModSetSource?> ExtraOptionsModSetAsync(AzimuthInstall install, DateTime launchUtc)
     {
-        var cosmetic = HardcoreSafeFolders();
+        var cosmetic = HardcoreSafeFolders(); var exempt = ParityExemptionsNow;
         try
         {
-            var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic));
+            var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, exempt));
             Log("mods: lobby set planned from ExtraOptions: " + (plan.Count == 0 ? "none" : string.Join(", ", plan.Select(p => p.Entry.Id + " " + p.Entry.Version))));
             return new ExtraOptionsModSetSource(install.Root, plan, launchUtc);
         }
@@ -169,7 +193,12 @@ public sealed partial class ShellViewModel
     {
         try
         {
-            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, HardcoreSafeFolders(),
+            // OD-166: parity-exempt mods play in every mode, Hardcore included
+            var allowed = HardcoreSafeFolders();
+            var exempt = ExtraOptionsModSetSource.ExemptFolders(install.Root, ParityExemptionsNow);
+            if (exempt.Count > 0) Log("mods: parity-exempt (" + ParityExemptionsNow.Source + "): " + string.Join(", ", exempt.Select(e => e.ModId)));
+            allowed.UnionWith(exempt.Select(e => e.Folder));
+            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, allowed,
                          Path.Combine(_stateDirectory, HardcoreHeldFile)))
                 Log(note);
         }
