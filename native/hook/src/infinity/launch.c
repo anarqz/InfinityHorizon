@@ -67,6 +67,7 @@ enum {
     FRAME_CANCEL_MATCHMAKING = 0x24, /* launcher -> hook: {} (the launcher gave up on its seat; follow.c) */
     FRAME_WATCH = 0x25,           /* launcher -> hook, AC-2: the Hardcore world's watch rules, version 0 clears (watch.c) */
     FRAME_OBSERVED = 0x26,        /* hook -> launcher, AC-2: one ended episode of another player's car (watch.c) */
+    FRAME_PLAYER_PARTS = 0x27,    /* hook -> launcher, NR-6: another player's model and part rows (watch.c) */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -84,6 +85,8 @@ enum {
 #define LAUNCH_CAPTURE_FREE_ROAM 8u
 /* AC-2: this hook takes Watch (0x25) and sends Observed (0x26); the launcher sends Watch only after it */
 #define LAUNCH_CAPTURE_WATCH 9u
+/* NR-6: this hook sends PlayerParts (0x27) after a Watch with flags bit 1; the launcher sets it only after this */
+#define LAUNCH_CAPTURE_PARTS 10u
 /* How long the game's matchmaking request waits for FreeRoamReady before it goes on anyway. */
 #ifndef LAUNCH_FREE_ROAM_WAIT_MS
 #define LAUNCH_FREE_ROAM_WAIT_MS 20000u
@@ -718,6 +721,20 @@ int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned 
     launch_le_bytes(payload + 18, rules_version, 4);
     payload[22] = (unsigned char)peer_index;
     return launch_queue_frame(FRAME_OBSERVED, payload, sizeof(payload));
+}
+/* PlayerParts (0x27, NR-6): {u8 1, u64 LE xuid, u8 peer index, u8 flags (bit 0 model, bit 1 parts, bit 2 a
+   new object), u32 LE model, 43 x u32 LE part rows}; an absent value is 0. Only in a live session (watch.c
+   reads parts only after a Watch asking for them). 1 queued. */
+int fi_launch_player_parts(unsigned long long xuid, unsigned peer_index, unsigned flags, unsigned model, const unsigned *parts) {
+    if (!fi_launch_live() || fi_launch_suspended() || !xuid || !peer_index || peer_index > 254 || !flags || (flags & ~7u) || !parts) return 0;
+    unsigned char payload[15 + 4 * 43];
+    payload[0] = 1;
+    launch_le_bytes(payload + 1, xuid, 8);
+    payload[9] = (unsigned char)peer_index;
+    payload[10] = (unsigned char)flags;
+    launch_le_bytes(payload + 11, (flags & 1u) ? model : 0u, 4);
+    for (unsigned i = 0; i < 43u; ++i) launch_le_bytes(payload + 15 + 4 * i, (flags & 2u) ? parts[i] : 0u, 4);
+    return launch_queue_frame(FRAME_PLAYER_PARTS, payload, sizeof(payload));
 }
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size) {
     if(!fi_launch_live() || size!=32 || payload[0]!=1 || payload[1]<1 || payload[1]>28 || payload[2]>2 || payload[3]>4)return 0;
@@ -1596,6 +1613,7 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
     fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
     fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
+    fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
     return 1;
 }
 

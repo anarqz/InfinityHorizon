@@ -33,7 +33,15 @@
    when it ends (WT_QUIET_MS without being over): speed and climb only when one run over the limit
    lasted the rule's sustain; jumps always (stored, never counted); the clock ratio (sender ms per
    receiver ms) once per car per rules after WT_CLOCK_MIN_MS of windows (stored, never counted).
-   Logs name the observed peer index only: never an identity, a gamertag or an address. */
+   Logs name the observed peer index only: never an identity, a gamertag or an address.
+
+   Parts (NR-6), only when the launcher's Watch asks for them (flags bit 1): a datagram whose messages
+   are object creates/updates (7/8) is walked message by message (each carries its length; anything
+   else stops the walk). A relayed player object (router 1) of a rostered peer is read as a run of
+   {u8 index, value} while every index has a known width (wt_player_width, the same table as
+   Infinity.Core PlayerParts.Width; the first unknown index stops it and is logged once): var 103 the
+   model (u32), var 107 the 43 part rows (u32 each; SAURON V9). What changed goes to the launcher
+   (PlayerParts, 0x27), which judges it against the player's own game database; nothing is judged here. */
 #include "infinity.h"
 #include "../core/logging.h"
 #include "../core/support.h"
@@ -95,6 +103,25 @@ static unsigned char wt_roster_index[WT_ROSTER];
 static unsigned long long wt_roster_xuid[WT_ROSTER];
 static unsigned wt_roster_count;
 static int wt_units_logged;
+
+/* NR-6: the other players' model and part rows, as last sent to the launcher (per roster peer index) */
+#define WT_PARTS 43u
+#define WT_MODEL_VAR 103u
+#define WT_PARTS_VAR 107u
+#define WT_PARTS_FLAG 2u
+typedef struct {
+    unsigned index;
+    unsigned long long xuid;
+    int has_model, has_parts;
+    unsigned model;
+    unsigned parts[WT_PARTS];
+    unsigned long long sent_at;
+} WtSeen;
+#define WT_PARTS_MIN_MS 1000u /* a peer's PlayerParts at most once a second (a new object always): the pipe stays free */
+static int wt_parts_on;
+static WtSeen wt_seen[WT_ROSTER];
+static const WtSeen wt_seen_empty;
+static unsigned char wt_unknown_logged[32]; /* a player-object variable of unknown width, logged once per rules */
 
 /* ------------------------------------------------------------------ log lines */
 
@@ -506,6 +533,187 @@ static double wt_float(unsigned bits, int *ok) {
     return (double)f;
 }
 
+/* ------------------------------------------------------------------ parts (NR-6) */
+
+/* The widths of player-object variables in bits, SAURON's map (-2 the name: a 5-bit count of UTF-16
+   units; 0 not mapped, a write reaching it stops): 0-11 PlayerData; 12-80 LobbyPlayer, not mapped;
+   81-161 PlayerChoices and its setup (103 ModelId, 107 the 43 part rows, 121 GearRatios 9 x f32).
+   Infinity.Core PlayerParts.Width is the same table. */
+static int wt_player_width(unsigned index) {
+    if (index == 0 || index == 4) return 64;
+    if (index == 1 || index == 2 || index == 5 || index == 7) return 1;
+    if (index == 3) return -2;
+    if (index == 6 || (index >= 8 && index <= 11)) return 32;
+    if (index < 81 || index > 161) return 0;
+    switch (index) {
+    case 89: case 90: case 98: case 99: case 101: case 144: return 1; /* AIIsFriend, TeamId, assists, UseStockSetup */
+    case 91: case 102: return 3;                                     /* PlayerBucketId, AIDifficulty */
+    case 93: case 94: return 64;                                     /* LiveryId, TuneId */
+    case 95: case 96: case 97: case 100: return 2;                   /* assists */
+    case WT_PARTS_VAR: return (int)(32u * WT_PARTS);
+    case 121: return 9 * 32;                                         /* GearRatios */
+    default: break;
+    }
+    if (index >= 149 && index <= 153) return 1;
+    if (index >= 154 && index <= 157) return 2;
+    return 32; /* 81-88, 92, 103-106, 108-120, 122-143, 145-148, 158-161 */
+}
+
+/* Reads one player-object write, bits [at, end): the model and the part rows when present. 1 when the
+   whole write was read (no unmapped variable, no truncation). An unmapped variable is logged once. */
+static int wt_player_read(const unsigned char *body, size_t at, size_t end, unsigned *model, int *has_model, unsigned *parts,
+                          int *has_parts) {
+    int ok = 1;
+    *model = 0, *has_model = 0, *has_parts = 0;
+    for (unsigned i = 0; i < WT_PARTS; ++i) parts[i] = 0;
+    for (;;) {
+        if (at == end) return 1;
+        if (at + 8u > end) return 0;
+        unsigned index = wt_bits(body, end, &at, 8, &ok);
+        int width = wt_player_width(index);
+        if (!width) {
+            if (!(wt_unknown_logged[index >> 3] & (1u << (index & 7u)))) {
+                wt_unknown_logged[index >> 3] |= (unsigned char)(1u << (index & 7u));
+                char line[WT_LINE];
+                size_t n = 0;
+                line[0] = 0;
+                wt_put(line, &n, "WATCH: parts: a player object write reaches variable ");
+                wt_num(line, &n, index);
+                wt_put(line, &n, ", whose width is not mapped; nothing past it is read (logged once)");
+                wt_end(line, &n);
+            }
+            return 0;
+        }
+        if (index == WT_MODEL_VAR) {
+            *model = wt_bits(body, end, &at, 32, &ok);
+            if (!ok) return 0;
+            *has_model = 1;
+        } else if (index == WT_PARTS_VAR) {
+            for (unsigned i = 0; i < WT_PARTS; ++i) parts[i] = wt_bits(body, end, &at, 32, &ok);
+            if (!ok) {
+                for (unsigned i = 0; i < WT_PARTS; ++i) parts[i] = 0;
+                return 0;
+            }
+            *has_parts = 1;
+        } else {
+            size_t skip = width == -2 ? 16u * wt_bits(body, end, &at, 5, &ok) : (size_t)width;
+            if (!ok || at + skip > end) return 0;
+            at += skip;
+        }
+    }
+}
+
+/* One write of the relayed player object of peer `owner` (rostered, `xuid`), bits [at, end); under wt_lock. */
+static void wt_player(unsigned owner, unsigned long long xuid, int create, const unsigned char *body, size_t at, size_t end,
+                      unsigned long long now) {
+    unsigned model, parts[WT_PARTS];
+    int has_model, has_parts;
+    wt_player_read(body, at, end, &model, &has_model, parts, &has_parts);
+    WtSeen *seen = 0, *free_slot = 0;
+    for (unsigned i = 0; i < WT_ROSTER; ++i) {
+        if (wt_seen[i].index == owner) seen = &wt_seen[i];
+        else if (!wt_seen[i].index && !free_slot) free_slot = &wt_seen[i];
+    }
+    if (!seen) {
+        if (!free_slot) return;
+        seen = free_slot;
+    }
+    if (create || seen->index != owner || seen->xuid != xuid) {
+        memory_copy(seen, &wt_seen_empty, sizeof(wt_seen_empty));
+        seen->index = owner;
+        seen->xuid = xuid;
+    }
+    int changed = create;
+    if (has_model && (!seen->has_model || seen->model != model)) changed = 1;
+    if (has_parts) {
+        if (!seen->has_parts) changed = 1;
+        for (unsigned i = 0; i < WT_PARTS && !changed; ++i) changed = seen->parts[i] != parts[i];
+    }
+    /* too soon after the last one: not recorded either, so the next write sends the difference */
+    if (!changed || (!create && seen->sent_at && now - seen->sent_at < WT_PARTS_MIN_MS)) return;
+    seen->sent_at = now ? now : 1;
+    if (has_model) seen->has_model = 1, seen->model = model;
+    if (has_parts) {
+        seen->has_parts = 1;
+        for (unsigned i = 0; i < WT_PARTS; ++i) seen->parts[i] = parts[i];
+    }
+    unsigned flags = (has_model ? 1u : 0u) | (has_parts ? 2u : 0u) | (create ? 4u : 0u);
+    int queued = fi_launch_player_parts(xuid, owner, flags, has_model ? model : 0u, parts);
+    char line[WT_LINE];
+    size_t n = 0;
+    line[0] = 0;
+    wt_put(line, &n, "WATCH: peer ");
+    wt_num(line, &n, owner);
+    wt_put(line, &n, ": parts: ");
+    if (create) wt_put(line, &n, "a new player object; ");
+    /* SAURON's live check: var 103, and var 107's summary (empty rows and the first six with their slot) */
+    if (has_model) {
+        wt_put(line, &n, "var 103 = ");
+        wt_num(line, &n, model);
+        wt_put(line, &n, "; ");
+    }
+    if (has_parts) {
+        unsigned none = 0, zero = 0, shown = 0;
+        for (unsigned i = 0; i < WT_PARTS; ++i) none += parts[i] == 0xffffffffu, zero += parts[i] == 0;
+        wt_put(line, &n, "var 107: ");
+        wt_num(line, &n, none);
+        wt_put(line, &n, " x 0xFFFFFFFF, ");
+        wt_num(line, &n, zero);
+        wt_put(line, &n, " x 0, first rows (slot:row)");
+        for (unsigned i = 0; i < WT_PARTS && shown < 6; ++i) {
+            if (!parts[i] || parts[i] == 0xffffffffu) continue;
+            ++shown;
+            wt_put(line, &n, " ");
+            wt_num(line, &n, i);
+            wt_put(line, &n, ":");
+            wt_num(line, &n, parts[i]);
+        }
+        wt_put(line, &n, "; ");
+    }
+    wt_put(line, &n, queued ? "sent to the launcher" : "not sent (no live launcher session)");
+    wt_end(line, &n);
+}
+
+/* Router id and type widths (Infinity.Core NerdCodec.RouterWidths); 0 for a router this walk does not know. */
+static int wt_router(unsigned router, unsigned *id_bits, unsigned *type_bits) {
+    if (router >= 1u && router <= 3u) *id_bits = 7, *type_bits = 0;
+    else if (router == 6u) *id_bits = 2, *type_bits = 2;
+    else if (router == 9u || router == 12u) *id_bits = 4, *type_bits = 2;
+    else if (router == 10u || router == 11u) *id_bits = 1, *type_bits = 0;
+    else return 0;
+    return 1;
+}
+
+/* The datagram's object messages from bit `at` (the first one's id already read): each carries its
+   payload's length, so the next boundary is known; any other message stops the walk. */
+static void wt_objects(const unsigned char *body, size_t end, size_t at, unsigned id) {
+    int ok = 1;
+    for (unsigned count = 0; count < 255u && ok; ++count) {
+        if (count) {
+            if (at + 7u > end) return;
+            id = wt_bits(body, end, &at, 7, &ok);
+        }
+        if (!ok || (id != 7u && id != 8u)) return;
+        unsigned router = wt_bits(body, end, &at, 4, &ok), id_bits, type_bits;
+        if (!ok || !wt_router(router, &id_bits, &type_bits)) return;
+        unsigned a = wt_bits(body, end, &at, 1, &ok), b = wt_bits(body, end, &at, 1, &ok);
+        wt_bits(body, end, &at, id_bits, &ok);
+        unsigned owner = !a && b ? wt_bits(body, end, &at, 8, &ok) : 0u;
+        if (id == 7u && type_bits) wt_bits(body, end, &at, type_bits, &ok);
+        wt_bits(body, end, &at, 8, &ok); /* the sequence */
+        size_t length = wt_bits(body, end, &at, 14, &ok);
+        if (!ok || at + length > end) return;
+        if (router == 1u && owner && owner != 255u) {
+            AcquireSRWLockExclusive(&wt_lock);
+            unsigned long long xuid = wt_xuid_of(owner);
+            /* a peer missing from the roster is not read (5e): no identity to report it under */
+            if (wt_on && wt_parts_on && xuid) wt_player(owner, xuid, id == 7u, body, at, at + length, GetTickCount64());
+            ReleaseSRWLockExclusive(&wt_lock);
+        }
+        at += length;
+    }
+}
+
 void fi_watch_datagram(const unsigned char *data, size_t size) {
     if (!wt_on || !data || size < 12u || size > 0xffffu || !data[8] || (((size_t)data[10] << 8) | data[9]) != size) return;
     const unsigned char *body = data + 11;
@@ -529,6 +737,10 @@ void fi_watch_datagram(const unsigned char *data, size_t size) {
         ReleaseSRWLockExclusive(&wt_lock);
         if (any) log_append(id == 39u ? "WATCH: a starting grid: every car's measurement restarts; excluded.\r\n"
                                       : "WATCH: a race start: every car's measurement restarts; excluded.\r\n");
+        return;
+    }
+    if (id == 7u || id == 8u) {
+        if (wt_parts_on) wt_objects(body, end, at, id); /* NR-6: the relayed player objects' parts */
         return;
     }
     if (id != 15u) return;
@@ -615,7 +827,7 @@ static unsigned wt_u32(const unsigned char *p) {
    ms, u32 climb milli-km/h, u32 climb sustain ms, u32 jump mm}, all LE. Version 0 with every value 0
    clears. 0 when it does not parse (a protocol error: launch.c refuses the frame), else 1. */
 int fi_watch_rules(const unsigned char *p, size_t n) {
-    if (!p || n != 26u || p[0] != 1 || (p[1] & ~1u)) return 0;
+    if (!p || n != 26u || p[0] != 1 || (p[1] & ~(1u | WT_PARTS_FLAG))) return 0;
     unsigned version = wt_u32(p + 2), speed = wt_u32(p + 6), speed_sustain = wt_u32(p + 10), climb = wt_u32(p + 14),
              climb_sustain = wt_u32(p + 18), jump = wt_u32(p + 22);
     if (!version) {
@@ -635,6 +847,9 @@ int fi_watch_rules(const unsigned char *p, size_t n) {
     wt_jump_max = (double)jump / 1000.0;
     wt_force = version && (p[1] & 1u);
     wt_units_logged = 0;
+    wt_parts_on = version && (p[1] & WT_PARTS_FLAG);
+    for (unsigned i = 0; i < WT_ROSTER; ++i) memory_copy(&wt_seen[i], &wt_seen_empty, sizeof(wt_seen_empty));
+    for (unsigned i = 0; i < sizeof(wt_unknown_logged); ++i) wt_unknown_logged[i] = 0;
     InterlockedExchange(&wt_on, version ? 1 : 0);
     ReleaseSRWLockExclusive(&wt_lock);
     char line[WT_LINE];
@@ -657,6 +872,7 @@ int fi_watch_rules(const unsigned char *p, size_t n) {
         wt_num(line, &k, jump / 1000u);
         wt_put(line, &k, " m (log only)");
         if (p[1] & 1u) wt_put(line, &k, "; TEST: one forced speed episode");
+        if (p[1] & WT_PARTS_FLAG) wt_put(line, &k, "; the other players' parts are read for the launcher");
         wt_put(line, &k, ".");
     }
     wt_end(line, &k);
@@ -670,6 +886,7 @@ void fi_watch_stop(void) {
     wt_flush(GetTickCount64());
     InterlockedExchange(&wt_on, 0);
     wt_force = 0;
+    wt_parts_on = 0;
     ReleaseSRWLockExclusive(&wt_lock);
     log_append("WATCH: off (the launcher session ended).\r\n");
 }

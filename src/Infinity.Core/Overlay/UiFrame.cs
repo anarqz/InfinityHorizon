@@ -253,10 +253,13 @@ public abstract record UiFrame
     /// 0x0E, launcher → overlay: the world this profile hosts or holds a seat in (<see cref="UiWorldRole"/>;
     /// <c>None</c>: no world, the other fields empty), its code (host only) and its players. <c>Named</c>
     /// false: the server gave no roster (only the host is known). <c>AnyMode</c> (OD-141, after the members): the world is
-    /// open to Hardcore and Noob (the header's "Hardcore + Noob" badge).
+    /// open to Hardcore and Noob (the header's "Hardcore + Noob" badge). <c>Transport</c> and <c>Notice</c> (OD-160, after
+    /// <c>AnyMode</c>, written only when <c>Transport</c> is not <see cref="UiTransport.Unknown"/>): the connection in use (u8
+    /// <see cref="UiTransport"/>) and the lobby notice the overlay shows as given (the launcher's own localized text; an older overlay
+    /// ignores trailing bytes of this frame).
     /// </summary>
     public sealed record MyWorld(byte Role, string WorldId, string Name, string Host, string Code, byte Audience, byte Players, byte Max,
-        bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false) : UiFrame
+        bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false, byte Transport = UiTransport.Unknown, string Notice = "") : UiFrame
     {
         public override byte Type => 0x0E;
 
@@ -628,6 +631,12 @@ public abstract record UiFrame
                     w.U8(member.Friend);
                 }
                 w.Flag(m.AnyMode);
+                if (m.Transport != UiTransport.Unknown)
+                {
+                    if (m.Transport > UiTransport.Direct) throw new ProtocolException("invalid MyWorld.transport");
+                    w.U8(m.Transport);
+                    w.Str(m.Notice);
+                }
                 break;
             case WorldAction a:
                 w.U8(a.Action);
@@ -895,7 +904,12 @@ public abstract record UiFrame
         {
             members.Add(new MemberRow(r.Str(), r.Str(), r.U8(), r.U8(), r.U8()));
         }
-        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, r.Flag("MyWorld.anyMode"));
+        var anyMode = r.Flag("MyWorld.anyMode");
+        if (r.IsEmpty) return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode);
+        // OD-160: the connection in use and its notice (a launcher before it ends after anyMode)
+        var transport = r.U8();
+        if (transport is UiTransport.Unknown or > UiTransport.Direct) throw new ProtocolException("invalid MyWorld.transport");
+        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, r.Str());
     }
 
     /// <summary>
@@ -1180,6 +1194,17 @@ public static class UiWorldRole
     public const byte Hosting = 1;
     public const byte Reserved = 2;
     public const byte Seated = 3;
+}
+
+/// <summary>
+/// <c>MyWorld.transport</c> (OD-160): how this player's datagrams travel now, from the server's transport and the hook's reports
+/// (<see cref="Unknown"/>: not said, and nothing more is written on the wire).
+/// </summary>
+public static class UiTransport
+{
+    public const byte Unknown = 0;
+    public const byte Relay = 1;
+    public const byte Direct = 2;
 }
 
 /// <summary><c>MemberRow.friend</c> (to the caller's account, OD-55).</summary>

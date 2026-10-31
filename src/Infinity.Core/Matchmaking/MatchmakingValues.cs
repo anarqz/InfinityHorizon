@@ -89,6 +89,9 @@ public static class WorldModes
     /// own <c>mode</c> (CR-L43 (4)), so it is not.
     /// </summary>
     public static bool OpenToBoth(WorldView? world) => string.Equals(world?.Modes, Any, StringComparison.Ordinal);
+
+    /// <summary>OD-160 (§5b "Relay by mode"): a Hardcore world admits Hardcore profiles: its modes are <c>hardcore</c> or <c>any</c>.</summary>
+    public static bool HardcoreWorld(string? modes) => modes is Hardcore or Any;
 }
 
 /// <summary>The list's filter, required (OD-58); every ticket may use each of them (OD-129).</summary>

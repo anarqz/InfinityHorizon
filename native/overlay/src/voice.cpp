@@ -50,6 +50,9 @@ struct RelayView {
     uint8_t bundle = 3;
     std::vector<voice_wire::Seat> seats;
     ULONGLONG at = 0;
+    // CR-L46: what to play follows this (0xC0F9, else the lobby byte); WorldView.voice is display only
+    uint8_t mode = voice_wire::kModeOff;
+    uint16_t range = 0;
 } g_relay;
 constexpr ULONGLONG kRelayStaleMs = 5000;
 
@@ -80,7 +83,9 @@ VoiceState Merged(const VoiceState &launcher) {
         const uint64_t xuid = XuidNumber(m.xuid);
         for (const auto &seat : g_relay.seats) {
             if (seat.xuid != xuid) continue;
-            if ((seat.state & voice_wire::kSeatTalking) || audio::SeatTalking(seat.seat)) m.state |= VoiceMember::Talking;
+            // in proximity a talker beyond the audible range is talking but not heard (the relay's bits are per listener there)
+            const bool engine = g_relay.mode == voice_wire::kModeProximity ? audio::SeatHeard(seat.seat) : audio::SeatTalking(seat.seat);
+            if ((seat.state & voice_wire::kSeatTalking) || engine) m.state |= VoiceMember::Talking;
             if (seat.state & voice_wire::kSeatMutedForLobby) m.state |= VoiceMember::MutedForLobby;
             if (seat.state & voice_wire::kSeatBlocked) m.state |= VoiceMember::Blocked;
         }
@@ -403,17 +408,87 @@ void SetVoiceHost(int32_t (*send)(const uint8_t *, uint32_t), uint64_t xuid) {
     Log("voice: transport ready");
 }
 
+// ---------------------------------------------------------------- proximity (CR-L46, MATCHMAKING_API.md §5c)
+namespace {
+// Velocity on the wire is raw: ±32767 = ±200 m/s per axis (provisional until SAURON's live check; only this changes then).
+constexpr float kVelocityScale = 200.0f / 32767.0f;
+// The jump counters last seen (2 bits each; a change is a jump): per voice seat for talkers, and this player's own.
+// Only fi_overlay_voice's thread touches them.
+int g_talker_jumps[256];
+int g_self_jumps = -1;
+bool g_jumps_init = false;
+
+audio::spatial::Pose SpatialPose(const voice_wire::PoseSide &side, bool jumped, const int16_t *orientation) {
+    audio::spatial::Pose p;
+    p.has_car = side.car;
+    p.jumped = jumped;
+    if (!side.car) return p;
+    p.position = {side.pos[0], side.pos[1], side.pos[2]};
+    p.velocity = {side.vel[0] * kVelocityScale, side.vel[1] * kVelocityScale, side.vel[2] * kVelocityScale};
+    p.age_ms = side.age;
+    if (orientation) {
+        audio::spatial::OrientationFromWire(orientation[0], orientation[1], orientation[2], p.orientation);
+        p.has_orientation = true;
+    }
+    return p;
+}
+
+// The engine's side of a proximity voice down (the adapter between the wire and voice_audio.h): the two poses, before
+// Receive of the same packet. Without a usable pose both sides are carless, which the engine plays as open.
+void ApplyPose(const voice_wire::VoiceDown &down) {
+    if (!g_jumps_init) {
+        for (int &j : g_talker_jumps) j = -1;
+        g_jumps_init = true;
+    }
+    const voice_wire::Pose &pose = down.pose;
+    if (!pose.present) {
+        audio::SetPose(down.seat, audio::spatial::Pose{}, audio::spatial::Pose{});
+        return;
+    }
+    const bool talker_jumped = g_talker_jumps[down.seat] >= 0 && g_talker_jumps[down.seat] != pose.talker.jumps;
+    const bool self_jumped = g_self_jumps >= 0 && g_self_jumps != pose.listener.jumps;
+    g_talker_jumps[down.seat] = pose.talker.jumps;
+    g_self_jumps = pose.listener.jumps;
+    audio::SetPose(down.seat, SpatialPose(pose.talker, talker_jumped, nullptr), SpatialPose(pose.listener, self_jumped, pose.orient));
+}
+
+// The engine follows state down's mode (and, in proximity, its R: clients never hard-code it).
+void ApplyMode(uint8_t mode, uint16_t range) {
+    static uint8_t last_mode = 0xFF;
+    static uint16_t last_range = 0;
+    if (mode != last_mode) {
+        last_mode = mode;
+        audio::SetVoiceMode(static_cast<audio::VoiceMode>(mode));
+        Log("voice: the relay's mode is %s", mode == voice_wire::kModeProximity ? "proximity" : mode == voice_wire::kModeOpen ? "open" : "off");
+    }
+    if (mode == voice_wire::kModeProximity && range != last_range) {
+        last_range = range;
+        audio::spatial::Params params; // the defaults (OD-164), with the relay's R
+        params.range_m = static_cast<float>(range);
+        audio::SetSpatialParams(params);
+    }
+}
+} // namespace
+
 // A datagram from the relay (fi_overlay_voice): voice to the engine, state to the view.
 void VoiceArrived(const uint8_t *data, size_t size) {
     voice_wire::VoiceDown down;
     if (voice_wire::DecodeVoiceDown(data, size, down)) {
-        if (audio::Running()) audio::Receive(down.seat, down.seq, down.ts, down.flags, down.opus, down.size);
+        if (!audio::Running()) return;
+        uint8_t mode;
+        {
+            std::lock_guard<std::mutex> lock(g_lock);
+            mode = g_relay.mode;
+        }
+        if (mode == voice_wire::kModeProximity) ApplyPose(down); // open: any pose ignored
+        audio::Receive(down.seat, down.seq, down.ts, down.flags, down.opus, down.size);
         return;
     }
     voice_wire::StateDown state;
     if (voice_wire::DecodeStateDown(data, size, state)) {
+        ApplyMode(state.mode, state.range);
         std::lock_guard<std::mutex> lock(g_lock);
-        g_relay = {true, state.lobby == 1, state.bundle, std::move(state.seats), GetTickCount64()};
+        g_relay = {true, state.mode != voice_wire::kModeOff, state.bundle, std::move(state.seats), GetTickCount64(), state.mode, state.range};
         Publish(g_voice);
     }
 }

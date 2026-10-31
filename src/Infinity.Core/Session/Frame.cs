@@ -36,6 +36,12 @@ public static class CaptureWhat
     /// <see cref="Frame.Observed"/>). Only when ok in this session does the launcher send <see cref="Frame.Watch"/>.
     /// </summary>
     public const byte Watch = 9;
+
+    /// <summary>
+    /// NR-6: the hook reads the other players' model and part rows from their relayed player objects and sends
+    /// <see cref="Frame.PlayerParts"/>, after a <see cref="Frame.Watch"/> with <see cref="Frame.Watch.SendParts"/> (only then).
+    /// </summary>
+    public const byte Parts = 10;
 }
 
 /// <summary><see cref="Frame.Observed"/> kinds; the platform's names are <see cref="Matchmaking.ObservationKinds"/>.</summary>
@@ -375,6 +381,8 @@ public abstract record Frame
     {
         public const byte Layout = 1;
         public const byte ForceSpeed = 1;
+        /// <summary>Flags bit 1 (NR-6): send <see cref="PlayerParts"/>; only to a hook that reported <see cref="CaptureWhat.Parts"/>.</summary>
+        public const byte SendParts = 2;
 
         public override byte Type => 0x25;
 
@@ -383,11 +391,11 @@ public abstract record Frame
         public static Watch Clear() => new(0, 0, 0, 0, 0, 0, 0);
 
         /// <summary>The frame of <paramref name="rules"/> (validated), rounded to the wire's milli units.</summary>
-        public static Watch From(Matchmaking.WatchRules rules, bool forceSpeed = false)
+        public static Watch From(Matchmaking.WatchRules rules, bool forceSpeed = false, bool sendParts = false)
         {
             ArgumentNullException.ThrowIfNull(rules);
             if (!rules.Valid) throw new ProtocolException("Invalid watch rules");
-            var frame = new Watch(forceSpeed ? ForceSpeed : (byte)0, rules.Version, Milli(rules.Speed.MaxKmh), rules.Speed.SustainMs,
+            var frame = new Watch((byte)((forceSpeed ? ForceSpeed : 0) | (sendParts ? SendParts : 0)), rules.Version, Milli(rules.Speed.MaxKmh), rules.Speed.SustainMs,
                 Milli(rules.Climb.MaxKmh), rules.Climb.SustainMs, Milli(rules.Jump.MaxMeters));
             frame.Validate();
             return frame;
@@ -397,7 +405,7 @@ public abstract record Frame
 
         internal void Validate()
         {
-            if ((Flags & ~ForceSpeed) != 0) throw new ProtocolException("Invalid watch flags");
+            if ((Flags & ~(ForceSpeed | SendParts)) != 0) throw new ProtocolException("Invalid watch flags");
             if (Version == 0)
             {
                 if (Flags != 0 || SpeedMilliKmh != 0 || SpeedSustainMs != 0 || ClimbMilliKmh != 0 || ClimbSustainMs != 0 || JumpMillimetres != 0)
@@ -430,6 +438,28 @@ public abstract record Frame
                 || (counted ? Value is 0 or > 5_000_000 || SustainMs > 3_600_000 : SustainMs != 0)
                 || Kind == ObservedKind.Jump && Value > 1_000_000_000 || Kind == ObservedKind.Clock && Value is 0 or > 1_000_000)
                 throw new ProtocolException("Invalid observation");
+        }
+    }
+
+    /// <summary>
+    /// hook → launcher (0x27, NR-6, docs/launcher/ANTICHEAT.md "parts"): what a relayed player object of another player wrote of its
+    /// car. <c>{u8 1, u64 LE xuid (the world's watch roster), u8 peer index, u8 flags (bit 0 the model, bit 1 the part rows, bit 2 a
+    /// new object), u32 LE model, 43 x u32 LE part rows}</c>; an absent value is 0. Sent only after a <see cref="Watch"/> with
+    /// <see cref="Watch.SendParts"/>, and only when a value changed. The launcher judges it against its own game database.
+    /// </summary>
+    public sealed record PlayerParts(ulong Xuid, byte PeerIndex, byte Flags, uint Model, IReadOnlyList<uint> Parts) : Frame
+    {
+        public const byte Layout = 1;
+        public const byte HasModel = 1, HasParts = 2, Fresh = 4;
+        public const int Slots = 43;
+
+        public override byte Type => 0x27;
+
+        internal void Validate()
+        {
+            if (Xuid == 0 || PeerIndex is 0 or 255 || (Flags & ~(HasModel | HasParts | Fresh)) != 0 || Flags == 0 || Parts is null
+                || Parts.Count != Slots || (Flags & HasModel) == 0 && Model != 0 || (Flags & HasParts) == 0 && Parts.Any(p => p != 0))
+                throw new ProtocolException("Invalid player parts");
         }
     }
 
@@ -606,6 +636,11 @@ public abstract record Frame
                 w.U8(Observed.Layout); w.U64(observed.Xuid); w.U8(observed.Kind); w.U32(observed.Value); w.U32(observed.SustainMs);
                 w.U32(observed.RulesVersion); w.U8(observed.PeerIndex);
                 break;
+            case PlayerParts parts:
+                parts.Validate();
+                w.U8(PlayerParts.Layout); w.U64(parts.Xuid); w.U8(parts.PeerIndex); w.U8(parts.Flags); w.U32(parts.Model);
+                foreach (var part in parts.Parts) w.U32(part);
+                break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -710,11 +745,13 @@ public abstract record Frame
                 : throw new ProtocolException("Unknown watch layout"),
             0x26 => r.U8() == Observed.Layout ? new Observed(r.U64(), r.U8(), r.U32(), r.U32(), r.U32(), r.U8())
                 : throw new ProtocolException("Unknown observation layout"),
+            0x27 => r.U8() == PlayerParts.Layout ? DecodePlayerParts(ref r) : throw new ProtocolException("Unknown player parts layout"),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
         if (frame is Watch watch) watch.Validate();
         if (frame is Observed observed) observed.Validate();
+        if (frame is PlayerParts playerParts) playerParts.Validate();
         if (frame is ModsReport mods) mods.Validate();
         if (frame is CustomTrust trust) trust.Validate();
         if(frame is RelayContext context)RelayContext.Validate(context.Payload);
@@ -741,6 +778,14 @@ public abstract record Frame
         var keys = new List<(string Kid, byte[] Key)>(count);
         for (var i = 0; i < count; i++) keys.Add((r.Str(), r.Take(32).ToArray()));
         return new CustomTrust(keys);
+    }
+
+    private static PlayerParts DecodePlayerParts(ref WireReader r)
+    {
+        var (xuid, index, flags, model) = (r.U64(), r.U8(), r.U8(), r.U32());
+        var parts = new uint[PlayerParts.Slots];
+        for (var i = 0; i < parts.Length; i++) parts[i] = r.U32();
+        return new(xuid, index, flags, model, parts);
     }
 
     private static ModsReport DecodeModsReport(ref WireReader r)

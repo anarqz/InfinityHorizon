@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using Infinity.Core.Announce;
+using Infinity.Core.Overlay;
 using Infinity.Core.Session;
 
 namespace Infinity.Core.Matchmaking;
@@ -41,14 +42,6 @@ public sealed partial class WorldsBridge
     /// </summary>
     public bool ForceRelay { get; init; }
 
-    /// <summary>
-    /// OD-146, the player's "Always connect through the relay": joins ask for a relay-born seat (the hook skips the direct try) and a
-    /// hosted world is relay-born for every guest. Only with a hook that can play through a relay; read at every join and open.
-    /// </summary>
-    public Func<bool>? AlwaysRelay { get; init; }
-
-    private string? RelayTransport => RelayJoinerCapable && AlwaysRelay?.Invoke() == true ? Transports.Relay : null;
-
     /// <summary>After a granted join under <see cref="ForceRelay"/>: the immediate relay renew, or a log line and direct play.</summary>
     private async Task ForceRelayAsync(string grantId, CancellationToken cancellation)
     {
@@ -81,6 +74,11 @@ public sealed partial class WorldsBridge
     // a seat whose grant names no usable relay: if its direct path fails there is nothing to fall back to
     private string? _noRelayGrant;
     private string? _hostedRelayName;
+    // OD-160 relay first, direct after (MATCHMAKING_API §5b "Relay by mode"): the grant whose first leg went to the relay because the
+    // server said so, and the grant the server recorded as direct (renew transport "direct" accepted) after its relay failed
+    private string? _relayBornGrant;
+    private string? _directFallbackGrant;
+    private int _directFallbackRunning;
 
     private async Task<RelayReport?> RelayReportAsync(CancellationToken cancellation)
     {
@@ -137,6 +135,8 @@ public sealed partial class WorldsBridge
             Volatile.Write(ref _legSent, null);
             await send(leg, cancellation).ConfigureAwait(false);
             if (_legGrant != grant || _legViaRelay != viaRelay) _log($"worlds: relay leg pushed ({(viaRelay ? "relay" : "direct")})");
+            // OD-160: a seat born on the relay (not one the hook moved there after a direct failure): relay first, direct after
+            if (viaRelay && _legGrant != grant && Volatile.Read(ref _fallbackGrant) != verified.Grant) Volatile.Write(ref _relayBornGrant, verified.Grant);
             (_legGrant, _legRelayKey, _legViaRelay) = (grant, named.Key, viaRelay);
             if (ReferenceEquals(SendRelayLeg, send)) Volatile.Write(ref _legSent, digest); // a pipe set meanwhile gets the leg again
         }
@@ -177,6 +177,8 @@ public sealed partial class WorldsBridge
             case RelayFallbackState.RelayOk:
             case RelayFallbackState.DirectOk:
                 var direct = frame.State == RelayFallbackState.DirectOk;
+                // OD-160: a relay-born seat proved directly after its relay failed: the server is told only now (punch first, renew after)
+                var directAfterRelay = direct && RelayBornSeat(grantId);
                 await _proofWrites.WaitAsync(cancellation).ConfigureAwait(false);
                 try
                 {
@@ -192,8 +194,10 @@ public sealed partial class WorldsBridge
                 finally { _proofWrites.Release(); }
                 _log(direct ? "worlds: the seat plays direct" : "worlds: the seat plays through its relay");
                 SeatPlays(direct ? "it plays direct" : "it plays through its relay");
-                return null;
+                return directAfterRelay ? await DirectAfterRelayAsync(grantId, cancellation).ConfigureAwait(false) : null;
             case RelayFallbackState.RelayUnavailable:
+                // (OD-160: for a relay-born seat this comes after the hook's direct punch failed too: the same message)
+                if (Volatile.Read(ref _directFallbackGrant) == grantId) return null; // a late report about the relay it already left
                 Volatile.Write(ref _unreachableGrant, grantId); // the give-up's reason: no route
                 // a refused fallback already said why (no_relay, relay_busy): one message per grant
                 if (refused) return null;
@@ -201,6 +205,7 @@ public sealed partial class WorldsBridge
                 return _text("worlds.host_unreachable");
         }
         if (refused) return null; // the server refused this grant's relay; the hook's leg was cleared
+        if (Volatile.Read(ref _directFallbackGrant) == grantId) return null; // OD-160: it left an unreachable relay; never back to it
         Forget(ref _directGrant, grantId); // a new direct failure re-arms the relay
         Volatile.Write(ref _fallbackGrant, grantId);
         if (Interlocked.CompareExchange(ref _fallbackRunning, 1, 0) != 0) return null;
@@ -240,11 +245,107 @@ public sealed partial class WorldsBridge
         finally { Volatile.Write(ref _fallbackRunning, 0); }
     }
 
+    /// <summary>OD-160: <paramref name="grantId"/> is this bridge's relay-born seat and the server has not recorded it direct yet.</summary>
+    private bool RelayBornSeat(string grantId) => Volatile.Read(ref _relayBornGrant) == grantId && Volatile.Read(ref _directFallbackGrant) != grantId
+        && _seat.GrantId == grantId && Volatile.Read(ref _givenUpGrant) != grantId;
+
+    /// <summary>
+    /// OD-160 (MATCHMAKING_API §5b "Relay by mode"), relay first, direct after: the hook tried the relay (10 s), then punched the host
+    /// directly (3 s) and the game proved there (state 4). Only now is the seat renewed with <c>transport: "direct"</c> (idempotent; one
+    /// at a time); the seat, the grant and the host's punch then read "direct" and the lobby notice turns to the direct one. A refusal
+    /// (<c>no_direct</c> outside a Hardcore world, or an older server's 400) is "The host could not be reached". Returns a toast, or null.
+    /// </summary>
+    private async Task<string?> DirectAfterRelayAsync(string grantId, CancellationToken cancellation)
+    {
+        if (Interlocked.CompareExchange(ref _directFallbackRunning, 1, 0) != 0) return null;
+        try
+        {
+            using var online = OnlineCancellation(cancellation);
+            var token = online.Token;
+            var epoch = Volatile.Read(ref _mineEpoch);
+            var renewed = await OperationAsync(_fallbackRetry, t => _mm.RenewSeatAsync(grantId, Transports.Direct, t), token).ConfigureAwait(false);
+            if (renewed is null || _seat.GrantId != grantId) return null;
+            if (!renewed.Ok || renewed.Value is not { } answer)
+            {
+                _log($"worlds: the direct renew was refused: {renewed.Error?.Kind} {renewed.Error?.Reason}");
+                Volatile.Write(ref _unreachableGrant, grantId);
+                return _text("worlds.host_unreachable");
+            }
+            if (answer.Seat?.GrantId is { } returned && returned != grantId) { RequestReconcile(); return null; }
+            Volatile.Write(ref _directFallbackGrant, grantId);
+            Forget(ref _fallbackGrant, grantId);
+            if (ClaimSeatProof(answer, ref epoch, grantId) && await SendSeatProofAsync(answer.Seat, epoch, token).ConfigureAwait(false))
+            {
+                lock (_mineState)
+                {
+                    if (OnlineOpen && epoch == Volatile.Read(ref _mineEpoch) && _seat.GrantId == grantId)
+                    {
+                        _seat.Observe(answer, Now);
+                        Interlocked.Increment(ref _mineEpoch);
+                    }
+                }
+            }
+            _log("worlds: the relay was unreachable; playing direct with the host");
+            return null;
+        }
+        catch (Exception error) when (HostFailure(error)) { return null; }
+        finally { Volatile.Write(ref _directFallbackRunning, 0); }
+    }
+
+    private sealed record NoticeWorld(string Id, string? Modes, string Transport);
+    private sealed record SeatWire(string Grant, string? Transport);
+    private NoticeWorld? _noticeWorld;
+    private SeatWire? _seatWire;
+
+    /// <summary>OD-160's notice inputs: a world as the server shows it (<c>modes</c>, absent from older servers: its <c>mode</c>).</summary>
+    private void ObserveNoticeWorld(WorldView world) => Volatile.Write(ref _noticeWorld, new(world.Id, world.Modes ?? world.Mode, world.Transport));
+
+    /// <summary>OD-160's notice inputs: the seat's transport as the server last gave it (join answer, seat read, renew).</summary>
+    private void ObserveSeatTransport(string grant, string? transport) => Volatile.Write(ref _seatWire, new(grant, transport));
+
+    /// <summary>
+    /// OD-160's lobby notice (MATCHMAKING_API §5b "The lobby notice"): true the relay notice, false the direct one, null none. A Noob-only
+    /// world (or no seat or world, or a world not read yet) shows none; a Hardcore world (modes hardcore/any) shows the relay notice when
+    /// it is on the relay and this player hosts it or its seat is on the relay, else the direct notice (for this player only).
+    /// </summary>
+    private bool? RelayNotice()
+    {
+        var hosted = HostedWorldId;
+        var worldId = hosted ?? (_seat.GrantId is not null ? Volatile.Read(ref _seatWorld) : null);
+        if (worldId is null || Volatile.Read(ref _noticeWorld) is not { } world || world.Id != worldId || !WorldModes.HardcoreWorld(world.Modes)) return null;
+        if (world.Transport != Transports.Relay) return false;
+        if (hosted is not null) return true;
+        return !SeatDirect(_seat.GrantId!);
+    }
+
+    /// <summary>The seat went direct: the server recorded it, the server's seat reads "direct", or the hook reported it plays direct.</summary>
+    private bool SeatDirect(string seat) => Volatile.Read(ref _directFallbackGrant) == seat || Volatile.Read(ref _directGrant) == seat
+        || Volatile.Read(ref _seatWire) is { } wire && wire.Grant == seat && wire.Transport == Transports.Direct;
+
+    /// <summary>OD-160's lobby notice keys: the direct one is said in one place per language (en.json, pt-BR.json).</summary>
+    internal const string NoticeRelayKey = "worlds.notice_relay", NoticeDirectKey = "worlds.notice_direct";
+
+    /// <summary>OD-160: the lobby notice text, or null (none).</summary>
+    private string? ConnectionNotice() => RelayNotice() switch
+    {
+        true => _text(NoticeRelayKey),
+        false => _text(NoticeDirectKey),
+        null => null,
+    };
+
+    /// <summary>"My world" with OD-160's notice (computed when sent: the hook's reports change it between reads); none: unchanged.</summary>
+    private UiFrame.MyWorld WithConnection(UiFrame.MyWorld mine)
+    {
+        if (mine.Role == UiWorldRole.None || RelayNotice() is not { } relay) return mine;
+        return mine with { Transport = relay ? UiTransport.Relay : UiTransport.Direct, Notice = _text(relay ? NoticeRelayKey : NoticeDirectKey) };
+    }
+
     /// <summary>"Direct" / "via &lt;relay name&gt;" for the connection details; null when this session has no seat or world.</summary>
     private string? TransportText()
     {
         if (HostedWorldId is not null)
             return Volatile.Read(ref _hostedTransport) == Transports.Relay ? Via(Volatile.Read(ref _hostedRelayName)) : _text("connection.direct");
+        if (_seat.GrantId is { } direct && Volatile.Read(ref _directFallbackGrant) == direct) return _text("connection.direct"); // OD-160
         if (_seat.GrantId is { } seat && _legGrant is null && Volatile.Read(ref _noRelayGrant) == seat) return _text("connection.direct_only");
         if (_seat.GrantId is null || _legGrant is null) return null;
         return _legViaRelay ? Via(_legRelayKey is { } key && _relayNames.TryGetValue(key, out var name) ? name : null) : _text("connection.direct");

@@ -12,8 +12,10 @@ namespace fi::audio::testing {
 bool StartHeadless(SendFn send);
 // One capture buffer as a device would give it: interleaved float32, any rate and channel count.
 void ProcessCapture(const float *interleaved, size_t frames, uint32_t rate, uint16_t channels);
-// The next `samples` of the 48 kHz mono mix (what the source voice would play).
+// The next `samples` of the 48 kHz mix as mono, (L + R) / 2: in open mode exactly the old mono mix.
 size_t PullMix(float *out, size_t samples);
+// The next `frames` of the 48 kHz stereo mix, interleaved L, R (what the source voice would play).
+size_t PullMixStereo(float *interleaved, size_t frames);
 // A fake millisecond clock for SeatTalking/Sending (< 0: the real clock).
 void SetClockMs(int64_t ms);
 // The decoders' complexity now: 7 (NoLACE) at the start everywhere; 6/5 only under measured decode load.

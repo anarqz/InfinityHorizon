@@ -12,6 +12,9 @@ namespace Infinity.Core.WorldServer;
 public sealed record PeerWatchRules(uint Version, double SpeedMaxKmh, uint SpeedSustainMs, double ClimbMaxKmh, uint ClimbSustainMs,
     double JumpMaxMeters, bool ForceSpeed = false)
 {
+    /// <summary>NR-6: this player's own game database's upgrade tables (the <c>parts</c> rule); null: that rule measures nothing.</summary>
+    internal PartsCatalog? Parts { get; init; }
+
     public static PeerWatchRules From(WatchRules rules, bool forceSpeed = false)
     {
         ArgumentNullException.ThrowIfNull(rules);

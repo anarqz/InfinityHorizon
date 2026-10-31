@@ -5,6 +5,8 @@
 // game go on. No network here: voice.cpp frames what Send gives it and hands back what arrives.
 #pragma once
 
+#include "voice_spatial.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -68,6 +70,22 @@ std::vector<Device> ListDevices(bool capture);
 
 // Heard talking now (a packet within the last 300 ms, not silenced). For the UI and the game's icons.
 bool SeatTalking(uint8_t seat);
+// SeatTalking and audible to this player now: in proximity a talker beyond range (gain under -60 dB) is talking but not
+// heard. In open mode the same as SeatTalking. For the talk indicator in proximity (PROXIMITY_VOICE.md §5).
+bool SeatHeard(uint8_t seat);
+
+// Proximity voice (NR-7, PROXIMITY_VOICE.md; voice_spatial.h). The lobby's voice mode as the relay's state says it; Off
+// and Open play every talker centred as before (the default), Proximity places each by its car. Any thread; it
+// outlives Stop/Start. A change crossfades each playing talker over 200 ms.
+using VoiceMode = spatial::Mode;
+void SetVoiceMode(VoiceMode mode);
+// The poses that came with a talker's voice down (the relay's pose attribute): the talker's car and this player's own,
+// both sampled at the same relay instant. Call before Receive of the same packet. Any thread; copies; never blocks
+// for long. Without poses (an older relay) proximity plays everyone open.
+void SetPose(uint8_t seat, const spatial::Pose &talker, const spatial::Pose &self);
+// The owner's listening-test knobs (range, r0, fade, Doppler scale s, pan limit, rear low-pass); out-of-range values
+// are clamped (spatial::Sanitized). Any thread; it outlives Stop/Start.
+void SetSpatialParams(const spatial::Params &params);
 // This player's voice is leaving the PC now.
 bool Sending();
 

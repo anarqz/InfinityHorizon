@@ -727,6 +727,14 @@ public sealed class PlaySupervisor
                         }
                         if(frame is Frame.Capture{What:CaptureWhat.Watch} watchCapability && endpoint.Greeted && worlds is not null)
                             worlds.WatchCapable=watchCapability.Ok;
+                        // NR-6: another player's part rows, read by the hook (only after a Watch asking for them); judged by the bridge
+                        if(frame is Frame.PlayerParts playerParts)
+                        {
+                            if(endpoint.Greeted && !suspended && tokensOpen)worlds?.HookPlayerParts(playerParts);
+                            continue;
+                        }
+                        if(frame is Frame.Capture{What:CaptureWhat.Parts} partsCapability && endpoint.Greeted && worlds is not null)
+                            worlds.PartsCapable=partsCapability.Ok;
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }

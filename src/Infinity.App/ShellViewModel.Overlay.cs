@@ -93,7 +93,6 @@ public sealed partial class ShellViewModel
                 onlineActivity: onlineActivity, idleWhenNoWorld: false)
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
-                AlwaysRelay = () => Infinity.Core.Announce.RelayChoice.Read(StateRoot).AlwaysRelay,
                 ModSet = mods,
                 Gamertag = gamertag,
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
@@ -102,6 +101,8 @@ public sealed partial class ShellViewModel
                 ForceRelay=Infinity.Core.Matchmaking.RelayForce.Enabled(Log), // FI_RELAY_FORCE=1 (test switch): joins straight to the relay
                 // OD-154: voice chat's settings and this profile's mute history (voice.json), shown by the overlay
                 Voice = new Infinity.Core.Voice.VoiceRoom(new Infinity.Core.Voice.VoiceStore(_stateDirectory), mode, xuid),
+                // NR-6: the parts rule judges the other players' cars against this PC's own game database (read-only)
+                GameDatabase = ContentLocation?.Mount is { } gameMount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(gameMount) : null,
             };
         };
     }

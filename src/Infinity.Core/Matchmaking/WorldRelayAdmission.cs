@@ -100,10 +100,13 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
                 if(proofKey is not null)
                     proofGrants[Guid.Parse(grant.Grant)] = new(xuid,entry,new(UdpProofCodec.Header(Guid.Parse(grant.Grant),id,ownXuid,xuid),proofKey,grant.Exp));
                 if (observed) entries[(xuid, StunCodec.Canonical(new(address!, punch.Endpoint!.Port)))] = entry;
-                // CR-S57: the verified grant names the relay both sides meet at; only that signed relay is ever contacted
+                // CR-S57: the verified grant names the relay both sides meet at; only that signed relay is ever contacted. The punch's
+                // transport says whether it carries the pair now (every punch of a relay-born world reads "relay" until, OD-160, a Hardcore
+                // joiner that fell back to the host renews "direct": its relay leg stops forwarding and its direct datagrams are admitted
+                // by the observed endpoint above, as for any grant)
                 if (grant.Relay is { } relay && IPAddress.TryParse(relay.Addr, out var relayAddress) && relayAddress.AddressFamily == AddressFamily.InterNetwork)
                     legs.Add(new(Guid.Parse(grant.Grant), Convert.FromBase64String(punch.Relay.Claims), Convert.FromBase64String(punch.Relay.Signature),
-                        StunCodec.Canonical(new IPEndPoint(relayAddress, relay.Port)), punch.Transport == Transports.Relay || world.Transport == Transports.Relay));
+                        StunCodec.Canonical(new IPEndPoint(relayAddress, relay.Port)), punch.Transport == Transports.Relay));
                 if (devLanPeers) lanEntries[xuid] = entry;
             }
             _world = world;

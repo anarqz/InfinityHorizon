@@ -165,7 +165,12 @@ struct MyWorld {
     bool named = false; // false: the server gave no roster (only the host is known)
     std::vector<MemberRow> members;
     bool any_mode = false; // OD-141: open to Hardcore and Noob (the header's badge)
+    // OD-160 (after any_mode, only when known): the connection in use (0 unknown, 1 the official relay, 2 direct to the host) and
+    // the lobby notice, the launcher's own localized text shown as given. An older launcher ends after any_mode.
+    uint8_t transport = 0;
+    std::string notice;
 };
+constexpr uint8_t kTransportUnknown = 0, kTransportRelay = 1, kTransportDirect = 2;
 constexpr size_t kMaxMineMembers = 16;
 
 namespace wire {
@@ -416,6 +421,11 @@ inline bool DecodeMyWorld(const uint8_t *body, size_t size, MyWorld &out) {
         if (m.members.size() < kMaxMineMembers) m.members.push_back(std::move(p));
     }
     if (r.ok && r.left > 0) m.any_mode = r.Flag();
+    if (r.ok && r.left > 0) { // OD-160
+        m.transport = r.U8();
+        m.notice = r.Text(kMaxPaneText);
+        if (m.transport == kTransportUnknown || m.transport > kTransportDirect) r.ok = false;
+    }
     if (!r.ok) return false;
     out = std::move(m);
     return true;
@@ -441,6 +451,10 @@ inline std::vector<uint8_t> EncodeMyWorld(const MyWorld &m) {
         wire::U8(b, p.friend_state);
     }
     wire::Flag(b, m.any_mode);
+    if (m.transport != kTransportUnknown) { // OD-160: only when known (the 2.0.0 layout otherwise)
+        wire::U8(b, m.transport);
+        wire::Str(b, m.notice);
+    }
     return b;
 }
 
