@@ -206,7 +206,6 @@ public sealed partial class ShellViewModel
     private CareerRestoreRow Describe(FreshStartArchive archive)
     {
         var parts = new List<string>();
-        if (archive.Level is { } level) parts.Add(S.Format("saves.level", ("level", level.ToString(CultureInfo.CurrentCulture))));
         if (archive.Credits is { } credits) parts.Add(S.Format("saves.credits", ("credits", credits.ToString("N0", CultureInfo.CurrentCulture))));
         return new CareerRestoreRow(archive, S.Format("restore.row_title", ("when", When(archive))), string.Join(" · ", parts));
     }

@@ -90,10 +90,6 @@ public sealed partial class ShellViewModel
     {
         var title = save.IsOffline ? S["saves.offline_profile"] : S.Format("saves.profile_folder", ("folder", save.Folder));
         var parts = new List<string>();
-        if (save.Level is { } level)
-        {
-            parts.Add(S.Format("saves.level", ("level", level.ToString(CultureInfo.CurrentCulture))));
-        }
         if (save.Credits is { } credits)
         {
             parts.Add(S.Format("saves.credits", ("credits", credits.ToString("N0", CultureInfo.CurrentCulture))));
