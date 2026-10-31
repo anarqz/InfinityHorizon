@@ -151,7 +151,8 @@ public abstract record SupervisorEvent
     /// <summary>The overlay said hello on the UI pipe (its version).</summary>
     public sealed record OverlayConnected(string Version) : SupervisorEvent;
 
-    /// <summary>CR-L41.3: the hook's reading of an <c>UpdateAll</c> it sent (the game's XP level and credits), for the Discord presence.</summary>
+    /// <summary>CR-L41.3: the hook's reading of an <c>UpdateAll</c> it sent (the game's reported level and credits), for the Discord presence.
+    /// <see cref="Level"/> is the step inside the current colour band, not the driver level (CR-S81): the presence never shows it.</summary>
     public sealed record GameProgress(uint Level, ulong Credits) : SupervisorEvent;
 
     /// <summary>

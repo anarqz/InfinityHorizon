@@ -13,8 +13,8 @@ namespace Infinity.App;
 
 /// <summary>
 /// OD-136 (CR-L41.1): the player's Discord card, built into the launcher and on by default. Composed every few seconds from the
-/// launcher's state (the active profile, the play session, the overlay bridge's "my world", the hook's readiness, level, credits and
-/// car), sent through <see cref="DiscordPresenceService"/> (one send per 15 s at most, unchanged cards never re-sent). Settings →
+/// launcher's state (the active profile, the play session, the overlay bridge's "my world", the server's driver level, the hook's
+/// readiness, credits and car), sent through <see cref="DiscordPresenceService"/> (one send per 15 s at most, unchanged cards never re-sent). Settings →
 /// Discord keeps a master switch and a toggle per field in the state folder (per install).
 /// </summary>
 public sealed partial class ShellViewModel
@@ -30,8 +30,7 @@ public sealed partial class ShellViewModel
     private DispatcherTimer? _presenceTimer;
     private readonly DateTimeOffset _launcherStarted = DateTimeOffset.UtcNow;
     private DateTimeOffset? _gameStarted;
-    private uint? _hookLevel;
-    private ulong? _hookCredits;
+    private readonly PresenceProgress _presenceProgress = new(); // CR-S81: the server's driver level only; the hook's credits
     private string? _hookCarName;
     private readonly Dictionary<int, string?> _carNames = []; // per session: an ordinal is read from the install once
 
@@ -156,8 +155,8 @@ public sealed partial class ShellViewModel
             Mode = profile.Mode,
             Tier = IsSupporter ? "vip" : "free",
             ClubTag = server?.Club?.Tag,
-            Level = game ? _hookLevel ?? server?.Level : server?.Level,
-            Credits = game ? _hookCredits ?? server?.Credits : server?.Credits,
+            DriverLevel = PresenceProgress.DriverLevel(server), // CR-S81: never the hook's in-band step; none until the server has one
+            Credits = _presenceProgress.Credits(game, server),
             CarName = game ? _hookCarName : null, // T10: "<Year> <Make> <Model>" from the player's own install; empty until resolved
             LiveryImage = game ? _presenceReads.Image(PresenceToggles.ShowLivery) : null, // CR-L44: only the current car's answer
             Activity = activity,
@@ -198,7 +197,7 @@ public sealed partial class ShellViewModel
         {
             case SupervisorEvent.Spawned:
                 _gameStarted = DateTimeOffset.UtcNow;
-                _hookLevel = null; _hookCredits = null; _hookCarName = null; _carNames.Clear();
+                _presenceProgress.Reset(); _hookCarName = null; _carNames.Clear();
                 _presenceReads.CarChanged(null);
                 StartServerPresence();
                 break;
@@ -206,8 +205,7 @@ public sealed partial class ShellViewModel
                 _presenceOverlay = true;
                 break;
             case SupervisorEvent.GameProgress progress:
-                _hookLevel = progress.Level;
-                _hookCredits = progress.Credits;
+                _presenceProgress.Hook(progress.Level, progress.Credits);
                 break;
             case SupervisorEvent.GameCar car:
                 _hookCarName = CarName(car.CarKey); // T10: the key is Data_Car.Id × 1000; CarNames maps it
@@ -216,7 +214,7 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Exited or SupervisorEvent.Ended:
                 if (_gameStarted is null && e is SupervisorEvent.Ended && _presence is null) break;
                 _gameStarted = null;
-                _hookLevel = null; _hookCredits = null; _hookCarName = null; _carNames.Clear();
+                _presenceProgress.Reset(); _hookCarName = null; _carNames.Clear();
                 _presenceReads.CarChanged(null);
                 _presenceOverlay = false;
                 _serverPresencePoll?.Cancel();
