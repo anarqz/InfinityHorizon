@@ -21,11 +21,10 @@
    - the user actions' Mute (game+0xa2d820) and Unmute (game+0xa32180) of the local player's
      PlayerChatStates (FUN_140e1e920, actions 2 and 4): the original runs, then the overlay.
 
-   The local player is XUID 0 for the overlay (it does not know it). Off unless Infinity.cfg
-   [hook] VoiceUi=1, or on by default in a test build (FI_VOICE_UI_DEFAULT, infinity.h; VoiceUi=0
-   turns it off): nobody has seen this in the running game yet. Installed once, after the game
-   build (TimeDateStamp, SizeOfImage) and every byte it replaces or relies on were checked; any
-   mismatch leaves the whole game untouched. */
+   The local player is XUID 0 for the overlay (it does not know it). Always on (OD-144 VC-T9,
+   after the two-device test; the retired Infinity.cfg [hook] VoiceUi key is ignored). Installed
+   once, after the game build (TimeDateStamp, SizeOfImage) and every byte it replaces or relies on
+   were checked; any mismatch leaves the whole game untouched. */
 #include "infinity.h"
 #include "../core/logging.h"
 #include "../core/support.h"
@@ -319,16 +318,12 @@ static int vu_install(unsigned char *image) {
 
 void fi_voice_ui_apply(unsigned char *game_image) {
     static long installed;
-    if (!fi_cfg()->voice_ui) {
-        log_append("VOICE UI: off (Infinity.cfg [hook] VoiceUi=0): the game's player list and HUD show no voice chat.\r\n");
-        return;
-    }
     if (InterlockedCompareExchange(&installed, 1, 0) != 0) return;
     if (!vu_image_ok(game_image)) {
         log_append("VOICE UI: the game's voice queries are not the supported build: left as they are.\r\n");
         return;
     }
     log_append(vu_install(game_image)
-                   ? "VOICE UI: the game's player list and HUD show the overlay's voice chat (VoiceUi=1).\r\n"
+                   ? "VOICE UI: the game's player list and HUD show the overlay's voice chat.\r\n"
                    : "VOICE UI: installing failed part way (VirtualAlloc or VirtualProtect); each part left falls back to the game.\r\n");
 }

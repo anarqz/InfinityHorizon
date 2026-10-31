@@ -4,7 +4,7 @@
 (patches/*.patch, applied to a copy) and the ForzaInfinity hook (native/hook, built with
 FI_EO_BUILD and src/core/fi_rename.h).
 
-Usage: python build.py /path/to/zig [--dev] [--test-build] [--build-dir DIR] [--output PATH]
+Usage: python build.py /path/to/zig [--dev] [--build-dir DIR] [--output PATH]
 
 The output goes beside azimuth.exe (Proton needs WINEDLLOVERRIDES=winmm=n,b). The submodule is
 never modified; the stock tree builds byte-identical to the upstream release, so the patches
@@ -81,8 +81,6 @@ def build_hook(hook, zig, directory, options):
         "-include",
         str(HOOK / "src/core/fi_rename.h"),
     ]
-    if options.test_build:
-        arguments.append("-DFI_VOICE_UI_DEFAULT=1")
     objects = []
     for filename in hook.SOURCES:
         if filename in HOOK_EXCLUDED:
@@ -126,11 +124,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("zig", type=Path)
     parser.add_argument("--dev", action="store_true", help="the hook's development build (FI_DEV)")
-    parser.add_argument(
-        "--test-build",
-        action="store_true",
-        help="a test build (prerelease version): the hook's VoiceUi defaults to 1 (OD-154 VC-T1, until VC-T9)",
-    )
     parser.add_argument("--build-dir", type=Path)
     parser.add_argument("--output", type=Path)
     options = parser.parse_args()
