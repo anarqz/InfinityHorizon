@@ -32,6 +32,7 @@
 #include "style.h"
 #include "toast_schedule.h"
 #include "voice_audio.h"
+#include "voice_volume.h"
 
 namespace fi {
 
@@ -78,7 +79,7 @@ ToastSchedule<Toast> g_toasts;
 bool g_open = false;
 float g_open_anim = 0; // 0 closed .. 1 open
 int g_tab = 0; // 0 Home, 1 Lobbies, 2 Friends, 3 Settings
-constexpr int kTabs = 4, kTabWorlds = 1, kTabFriends = 2;
+constexpr int kTabs = 4, kTabWorlds = 1, kTabFriends = 2, kTabSettings = 3;
 int g_focus = 0;
 bool g_confirm_quit = false; // "Quit the game" asks for a second A
 bool g_connection_open = false;
@@ -144,6 +145,18 @@ void FaceButton(ImDrawList *dl, ImVec2 centre, float radius, ImU32 color, const 
 void FocusRing(ImDrawList *dl, ImVec2 a, ImVec2 b, float rounding) {
     dl->AddRect(ImVec2(a.x - 3 * s, a.y - 3 * s), ImVec2(b.x + 3 * s, b.y + 3 * s), Rgba(255, 255, 255, 0.25f), rounding + 3 * s, 0, 4 * s);
     dl->AddRect(a, b, kText, rounding, 0, 2.5f * s);
+}
+
+void VolumeSlider(ImDrawList *dl, ImVec2 a, ImVec2 b, int volume, bool active, uint8_t *clicked) {
+    const float h = b.y - a.y, cy = (a.y + b.y) / 2, r = h / 2, track = std::max(3.0f * s, h * 0.3f);
+    const float x0 = a.x + r, x1 = std::max(x0 + 1.0f, b.x - r);
+    const float t = (std::clamp(volume, audio::kMinVolume, audio::kMaxVolume) - audio::kMinVolume) / static_cast<float>(audio::kMaxVolume - audio::kMinVolume);
+    const float kx = x0 + (x1 - x0) * t;
+    dl->AddRectFilled(ImVec2(x0, cy - track / 2), ImVec2(x1, cy + track / 2), Rgba(255, 255, 255, 0.18f), track / 2);
+    dl->AddRectFilled(ImVec2(x0, cy - track / 2), ImVec2(kx, cy + track / 2), active ? kPinkU : kTextDim, track / 2);
+    dl->AddCircleFilled(ImVec2(kx, cy), r * 0.8f, active ? kText : kTextDim, 20);
+    if (clicked && !PaneModal() && ImGui::IsMouseHoveringRect(ImVec2(a.x, a.y - 4 * s), ImVec2(b.x, b.y + 4 * s)) && ImGui::IsMouseClicked(0))
+        *clicked = audio::VolumeAtFraction((ImGui::GetIO().MousePos.x - x0) / (x1 - x0));
 }
 
 } // namespace ui
@@ -214,8 +227,30 @@ struct Tile {
     const char *icon;
     std::string title, subtitle;
     bool locked;
-    int action; // 0 none, 1 close, 2 coming soon, 4 connection details, 5 quit
+    int action;      // 0 none, 1 close, 2 coming soon, 4 connection details, 5 quit, 6-8 voice, 9/10 device lists, 11/12 volumes
+    int slider = 0;  // §15: 1..100 draws a volume slider instead of the subtitle; Left/Right move it
+    bool warn = false; // the subtitle in amber (a chosen device that is not connected)
 };
+constexpr int kActionMicDevice = 9, kActionOutputDevice = 10, kActionVoiceVolume = 11, kActionMicVolume = 12;
+
+// §15: the name of the chosen device ("System default" for none), and whether it is connected now.
+std::string DeviceLabel(VoiceFlow flow, const VoiceState &v, bool *missing) {
+    const std::string &id = flow == VoiceFlow::Microphone ? v.mic_id : v.output_id;
+    const std::string &name = flow == VoiceFlow::Microphone ? v.mic_name : v.output_name;
+    *missing = false;
+    if (id.empty()) return T("System default", "Padrão do sistema");
+    const auto list = VoiceDevices(flow);
+    *missing = std::none_of(list.begin(), list.end(), [&](const VoiceDeviceEntry &e) { return e.id == id; });
+    return name.empty() ? id : name;
+}
+
+// §15: the device list (A on a device tile): "System default" first, the current choice checked.
+struct Picker {
+    bool open = false;
+    VoiceFlow flow = VoiceFlow::Microphone;
+    int focus = 0;
+    float scroll = 0;
+} g_picker;
 
 std::vector<Tile> TilesFor(int tab, const Model &m) {
     std::vector<Tile> tiles;
@@ -242,6 +277,18 @@ std::vector<Tile> TilesFor(int tab, const Model &m) {
                          false, 6});
         tiles.push_back({kIconMessage, std::string(T("Microphone: ", "Microfone: ")) + MicModeName(v.mic),
                          T("RB + R3 also changes it while you drive", "RB + R3 também muda enquanto você dirige"), !enabled, 7});
+        // §15: the devices and the volumes, the player's own preferences (the launcher keeps them per profile)
+        bool mic_missing = false, out_missing = false;
+        tiles.push_back({kIconSettings, std::string(T("Microphone device: ", "Dispositivo do microfone: ")) + DeviceLabel(VoiceFlow::Microphone, v, &mic_missing),
+                         mic_missing ? T("Not connected: voice chat uses the system default", "Não conectado: o chat de voz usa o padrão do sistema")
+                                     : T("A to choose from the microphones of this PC", "A para escolher entre os microfones deste PC"),
+                         false, kActionMicDevice, 0, mic_missing});
+        tiles.push_back({kIconSettings, std::string(T("Output device: ", "Dispositivo de saída: ")) + DeviceLabel(VoiceFlow::Output, v, &out_missing),
+                         out_missing ? T("Not connected: voice chat uses the system default", "Não conectado: o chat de voz usa o padrão do sistema")
+                                     : T("A to choose where you hear your lobby", "A para escolher onde você ouve seu lobby"),
+                         false, kActionOutputDevice, 0, out_missing});
+        tiles.push_back({kIconPeople, T("Voice chat volume", "Volume do voice chat"), "", false, kActionVoiceVolume, v.voice_volume});
+        tiles.push_back({kIconMessage, T("My microphone volume", "Volume do meu microfone"), "", false, kActionMicVolume, v.mic_volume});
         const bool all_muted = !v.members.empty() && std::all_of(v.members.begin(), v.members.end(), [](const VoiceMember &m) { return m.state & VoiceMember::MutedByMe; });
         tiles.push_back({kIconPeople, all_muted ? T("Unmute everyone", "Liberar todos") : T("Mute everyone", "Silenciar todos"),
                          T("The players in your lobby now", "Os jogadores do seu lobby agora"), !enabled || v.members.empty(), 8});
@@ -255,9 +302,82 @@ std::vector<Tile> TilesFor(int tab, const Model &m) {
 struct Pending {
     int action = -1;
 } g_pending;
+int g_focused_action = 0; // the focused tile's action, as last drawn: Left/Right move a slider instead of the tab
+
+// §15: a volume tile's value, by a step (Left/Right) or the mouse (`to` 1..100)
+void SetVolumeTile(int action, uint8_t to) {
+    const VoiceState v = CurrentVoice();
+    const uint8_t now = action == kActionVoiceVolume ? v.voice_volume : v.mic_volume;
+    if (to == now || !VolumeValue(to)) return;
+    VoiceCommand(action == kActionVoiceVolume ? VoiceOp::VoiceVolume : VoiceOp::MicVolume, std::string(), to);
+}
+void StepVolumeTile(int action, int direction) {
+    const VoiceState v = CurrentVoice();
+    SetVolumeTile(action, audio::StepVolume(action == kActionVoiceVolume ? v.voice_volume : v.mic_volume, direction));
+}
+
+void OpenPicker(VoiceFlow flow) {
+    RequestVoiceDevices();
+    g_picker = {true, flow, 0, 0};
+    const VoiceState v = CurrentVoice();
+    const std::string &id = flow == VoiceFlow::Microphone ? v.mic_id : v.output_id;
+    const auto list = VoiceDevices(flow);
+    for (size_t i = 0; i < list.size(); ++i)
+        if (list[i].id == id) g_picker.focus = static_cast<int>(i);
+}
+
+void PickDevice(const VoiceDeviceEntry &entry) {
+    g_picker.open = false;
+    const VoiceState v = CurrentVoice();
+    const bool mic = g_picker.flow == VoiceFlow::Microphone;
+    if ((mic ? v.mic_id : v.output_id) == entry.id) return;
+    VoiceDeviceCommand(g_picker.flow, entry.id, entry.name);
+    PushToast(ToastKind::Info, mic ? T("Microphone", "Microfone") : T("Audio output", "Saída de áudio"),
+              entry.id.empty() ? T("System default", "Padrão do sistema") : entry.name);
+}
+
+// The list over the tab's content while open: "System default" first, then each device; A picks, B goes back.
+void DrawPicker(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom) {
+    const auto list = VoiceDevices(g_picker.flow);
+    const VoiceState v = CurrentVoice();
+    const std::string &current = g_picker.flow == VoiceFlow::Microphone ? v.mic_id : v.output_id;
+    g_picker.focus = std::clamp(g_picker.focus, 0, static_cast<int>(list.size()) - 1);
+    TextAt(dl, f.tag, ImVec2(x0 + pad, y), kPinkU,
+           g_picker.flow == VoiceFlow::Microphone ? T("CHOOSE A MICROPHONE", "ESCOLHA UM MICROFONE") : T("CHOOSE AN AUDIO OUTPUT", "ESCOLHA UMA SAÍDA DE ÁUDIO"));
+    y += 26 * s;
+    const float th = 58 * s, gap = 8 * s;
+    const float view = std::max(th, bottom - y);
+    const float focus_top = g_picker.focus * (th + gap);
+    g_picker.scroll = std::clamp(g_picker.scroll, focus_top + th - view, focus_top);
+    g_picker.scroll = std::max(0.0f, g_picker.scroll);
+    dl->PushClipRect(ImVec2(x0, y - 4 * s), ImVec2(x0 + pw, bottom), true);
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        const ImVec2 a(x0 + pad, y + i * (th + gap) - g_picker.scroll), b(x0 + pw - pad, a.y + th);
+        if (b.y < y - 4 * s || a.y > bottom) continue;
+        const bool focus = i == g_picker.focus, chosen = list[i].id == current;
+        if (!PaneModal() && ImGui::IsMouseHoveringRect(a, b) && b.y <= bottom) {
+            g_picker.focus = i;
+            if (ImGui::IsMouseClicked(0)) { PickDevice(list[i]); break; }
+        }
+        dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
+        if (focus) FocusRing(dl, a, b, 6 * s);
+        const std::string name = list[i].id.empty() ? T("System default", "Padrão do sistema") : list[i].name;
+        dl->PushClipRect(ImVec2(a.x, a.y), ImVec2(b.x - 48 * s, b.y), true);
+        TextAt(dl, f.body, ImVec2(a.x + 18 * s, a.y + th / 2 - 12 * s), chosen ? kText : kTextDim, name.c_str());
+        dl->PopClipRect();
+        if (chosen) dl->AddText(f.icon, f.icon->FontSize, ImVec2(b.x - 40 * s, a.y + th / 2 - f.icon->FontSize / 2), kPinkU, kIconCheck);
+    }
+    dl->PopClipRect();
+    if (g_pending.action >= 0) {
+        g_pending.action = -1;
+        if (g_picker.open && g_picker.focus < static_cast<int>(list.size())) PickDevice(list[g_picker.focus]);
+    }
+}
 
 void Activate(const Tile &tile) {
     switch (tile.action) {
+    case kActionMicDevice: OpenPicker(VoiceFlow::Microphone); break;
+    case kActionOutputDevice: OpenPicker(VoiceFlow::Output); break;
     case 1: CloseSidebar(); break;
     case 2: PushToast(ToastKind::Info, T("Coming soon", "Em breve"), tile.title); break;
     case 4: g_connection_open = true; SendEvent(8, ""); break;
@@ -290,16 +410,35 @@ void Activate(const Tile &tile) {
     }
 }
 
-void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, const Model &m) {
+float g_tiles_scroll = 0; // the Settings list is taller than the guide at 1080p (§15): it follows the focus
+
+void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom, const Model &m) {
+    if (g_picker.open) { // §15: the device list stands in for the tiles until A or B
+        g_focused_action = 0;
+        DrawPicker(dl, x0, y, pw, pad, bottom);
+        return;
+    }
     const std::vector<Tile> tiles = TilesFor(g_tab, m);
     g_focus = std::clamp(g_focus, 0, std::max(0, static_cast<int>(tiles.size()) - 1));
-    const float th = 78 * s;
-    for (int i = 0; i < static_cast<int>(tiles.size()); ++i) {
+    const float th = 78 * s, step = th + 10 * s;
+    const float view = std::max(th, bottom - y);
+    const float focus_top = g_focus * step;
+    g_tiles_scroll = std::max(0.0f, std::clamp(g_tiles_scroll, focus_top + th - view, focus_top));
+    if (tiles.size() * step - 10 * s <= view) g_tiles_scroll = 0;
+    g_focused_action = tiles.empty() || tiles[g_focus].locked ? 0 : tiles[g_focus].action;
+    const float top = y;
+    y -= g_tiles_scroll;
+    dl->PushClipRect(ImVec2(x0, top - 6 * s), ImVec2(x0 + pw, bottom + 6 * s), true);
+    for (int i = 0; i < static_cast<int>(tiles.size()); ++i, y += step) {
         const Tile &tile = tiles[i];
         const ImVec2 ta(x0 + pad, y), tb(x0 + pw - pad, y + th);
-        if (!PaneModal() && ImGui::IsMouseHoveringRect(ta, tb)) { // a modal pane holds the input
+        if (tb.y < top - 6 * s || ta.y > bottom + 6 * s) continue;
+        const bool inside = ta.y >= top - 1 && tb.y <= bottom + 1; // a clipped tile takes no clicks
+        const float lx = ta.x + 62 * s;
+        const ImVec2 sa(lx, ta.y + 46 * s), sb(tb.x - 92 * s, ta.y + 64 * s); // §15: the slider's track
+        if (inside && !PaneModal() && ImGui::IsMouseHoveringRect(ta, tb)) { // a modal pane holds the input
             g_focus = i;
-            if (ImGui::IsMouseClicked(0)) {
+            if (ImGui::IsMouseClicked(0) && !(tile.slider && ImGui::IsMouseHoveringRect(ImVec2(sa.x, sa.y - 4 * s), ImVec2(sb.x, sb.y + 4 * s)))) {
                 Activate(tile);
             }
         }
@@ -312,19 +451,28 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, const Mod
         }
         const ImU32 icon_color = tile.locked ? kTextDim : focus ? kPinkU : kText;
         dl->AddText(f.icon, f.icon->FontSize, ImVec2(ta.x + 20 * s, ta.y + th / 2 - f.icon->FontSize / 2), icon_color, tile.icon);
-        const float lx = ta.x + 62 * s;
         dl->PushClipRect(ImVec2(lx, ta.y), ImVec2(tb.x - 44 * s, tb.y), true);
-        TextAt(dl, f.body, ImVec2(lx, ta.y + (tile.subtitle.empty() ? th / 2 - 12 * s : 13 * s)), tile.locked ? kTextDim : kText, tile.title.c_str());
+        const bool two_lines = !tile.subtitle.empty() || tile.slider;
+        TextAt(dl, f.body, ImVec2(lx, ta.y + (two_lines ? 13 * s : th / 2 - 12 * s)), tile.locked ? kTextDim : kText, tile.title.c_str());
         if (!tile.subtitle.empty()) {
-            TextAt(dl, f.small, ImVec2(lx, ta.y + 43 * s), kTextDim, tile.subtitle.c_str());
+            TextAt(dl, f.small, ImVec2(lx, ta.y + 43 * s), tile.warn ? kAmber : kTextDim, tile.subtitle.c_str());
         }
         dl->PopClipRect();
+        if (tile.slider) { // §15: the value at the right, the slider under the title; Left/Right or the mouse move it
+            uint8_t clicked = 0;
+            VolumeSlider(dl, sa, sb, tile.slider, focus, inside ? &clicked : nullptr);
+            if (clicked) SetVolumeTile(tile.action, clicked);
+            const std::string value = std::to_string(tile.slider);
+            const ImVec2 vs = Measure(f.title, value.c_str());
+            TextAt(dl, f.title, ImVec2(tb.x - 24 * s - vs.x, ta.y + th / 2 - vs.y / 2), focus ? kText : kTextDim, value.c_str());
+            continue;
+        }
         const char *right = tile.locked ? kIconLock : tile.action ? kIconChevron : "";
         if (*right) {
             dl->AddText(f.icon, f.icon->FontSize * 0.8f, ImVec2(tb.x - 36 * s, ta.y + th / 2 - f.icon->FontSize * 0.4f), kTextDim, right);
         }
-        y += th + 10 * s;
     }
+    dl->PopClipRect();
     if (g_pending.action >= 0) {
         if (g_focus < static_cast<int>(tiles.size())) {
             Activate(tiles[g_focus]);
@@ -457,6 +605,7 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         if (!PaneModal() && ImGui::IsMouseHoveringRect(ImVec2(tx, y - 6 * s), ImVec2(tx + tw, y + 40 * s)) && ImGui::IsMouseClicked(0)) {
             g_tab = i;
             g_focus = 0;
+            g_picker.open = false;
         }
     }
     y += 48 * s;
@@ -485,7 +634,8 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         const ImVec2 text = Measure(f.title, soon);
         TextAt(dl, f.title, ImVec2(center_x - text.x / 2, center_y + 34 * s), kTextDim, soon);
     } else {
-        DrawTiles(dl, x0, y, pw, pad, m);
+        if (g_tab == kTabSettings) RequestVoiceDevices(); // §15: the device names stay current while it shows
+        DrawTiles(dl, x0, y, pw, pad, content_bottom, m);
     }
 
     // the status block, then the hints
@@ -566,6 +716,7 @@ void ToggleSidebar() {
     }
     g_confirm_quit = false;
     g_connection_open = false;
+    g_picker.open = false;
     if (!g_open) ClosePane();
     SendPanel(g_open);
 }
@@ -574,6 +725,7 @@ void CloseSidebar() {
         g_open = false;
         g_confirm_quit = false;
         g_connection_open = false;
+        g_picker.open = false;
         ClosePane();
         SendPanel(false);
     }
@@ -601,6 +753,22 @@ void Navigate(Nav nav) {
         return; // an open player or launcher pane holds the controller
     }
     if (g_tab == kTabWorlds && nav != Nav::TabLeft && nav != Nav::TabRight && WorldsNavigate(nav)) {
+        return;
+    }
+    if (g_picker.open) { // §15: the device list holds the controller; LB/RB still change the tab (and close it)
+        switch (nav) {
+        case Nav::Up: if (g_picker.focus > 0) --g_picker.focus; return;
+        case Nav::Down: ++g_picker.focus; return; // clamped when drawn
+        case Nav::Accept: g_pending.action = 1; return;
+        case Nav::Back: g_picker.open = false; return;
+        case Nav::TabLeft:
+        case Nav::TabRight: g_picker.open = false; break;
+        default: return;
+        }
+    }
+    // §15: on a volume tile Left/Right move the slider (LB/RB still change the tab)
+    if ((nav == Nav::Left || nav == Nav::Right) && g_tab == kTabSettings && (g_focused_action == kActionVoiceVolume || g_focused_action == kActionMicVolume)) {
+        StepVolumeTile(g_focused_action, nav == Nav::Right ? 1 : -1);
         return;
     }
     switch (nav) {

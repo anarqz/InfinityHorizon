@@ -27,6 +27,7 @@
 #include "fi_overlay.h"
 #include "style.h"
 #include "voice_audio.h"
+#include "voice_volume.h"
 #include "voice_wire.h"
 
 namespace fi {
@@ -37,6 +38,10 @@ namespace {
 std::mutex g_lock;
 VoiceState g_voice; // the launcher's (0x1B), with this overlay's commands applied
 bool g_dev_seeded = false;
+// §15: a slider moved or a device picked here in the last second wins over the launcher's answer to an earlier step,
+// so a held Left/Right never snaps back; the launcher's state settles it after that.
+constexpr ULONGLONG kLocalHoldMs = 1000;
+ULONGLONG g_levels_at = 0, g_devices_at = 0;
 
 // The world relay's last state (0x3E94 down), under g_lock; stale after 5 s without one.
 struct RelayView {
@@ -135,6 +140,19 @@ void Apply(VoiceState &v, VoiceOp op, const std::string &xuid, uint8_t value) {
             for (auto &m : v.members)
                 if (m.xuid == xuid) set(m.state, VoiceMember::MutedForLobby, value != 0);
         break;
+    case VoiceOp::VoiceVolume: // §15
+        if (VolumeValue(value)) { v.voice_volume = value; g_levels_at = GetTickCount64(); }
+        break;
+    case VoiceOp::MicVolume:
+        if (VolumeValue(value)) { v.mic_volume = value; g_levels_at = GetTickCount64(); }
+        break;
+    case VoiceOp::PlayerVolume:
+        if (VolumeValue(value)) {
+            for (auto &m : v.members)
+                if (m.xuid == xuid) m.volume = value;
+            g_levels_at = GetTickCount64();
+        }
+        break;
     }
     Publish(v);
 }
@@ -142,6 +160,20 @@ void Apply(VoiceState &v, VoiceOp op, const std::string &xuid, uint8_t value) {
 
 void SetVoiceState(VoiceState state) {
     std::lock_guard<std::mutex> lock(g_lock);
+    const ULONGLONG now = GetTickCount64();
+    if (now - g_levels_at < kLocalHoldMs) { // §15: the sliders being moved keep their place
+        state.voice_volume = g_voice.voice_volume;
+        state.mic_volume = g_voice.mic_volume;
+        for (auto &m : state.members)
+            for (const auto &old : g_voice.members)
+                if (old.xuid == m.xuid) m.volume = old.volume;
+    }
+    if (now - g_devices_at < kLocalHoldMs) {
+        state.mic_id = g_voice.mic_id;
+        state.mic_name = g_voice.mic_name;
+        state.output_id = g_voice.output_id;
+        state.output_name = g_voice.output_name;
+    }
     g_voice = std::move(state);
     Publish(g_voice);
 }
@@ -160,6 +192,77 @@ void VoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value) {
     }
     if (!DevHost()) SendVoiceCommand(op, xuid, value);
 }
+
+void VoiceDeviceCommand(VoiceFlow flow, const std::string &id, const std::string &name) {
+    if (!DeviceIdSendable(id)) return; // never listed (VoiceDevices drops them)
+    const std::string shown = id.empty() ? std::string() : Utf8Cut(name, kMaxDeviceText);
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        if (DevHost()) DevSeed(g_voice);
+        (flow == VoiceFlow::Microphone ? g_voice.mic_id : g_voice.output_id) = id;
+        (flow == VoiceFlow::Microphone ? g_voice.mic_name : g_voice.output_name) = shown;
+        g_devices_at = GetTickCount64();
+    }
+    if (!DevHost()) SendVoiceDevice(flow, id, shown);
+}
+
+// ---------------------------------------------------------------- the settings' device lists (§15)
+namespace {
+std::mutex g_devices_lock;
+std::vector<VoiceDeviceEntry> g_device_lists[2]; // [VoiceFlow]: "System default" first
+bool g_devices_known = false;                     // a refresh listed at least one endpoint
+std::atomic<bool> g_devices_wanted{true};
+
+// The voice thread: both lists again (COM on this thread, never the game's).
+void RefreshDevices() {
+    std::vector<VoiceDeviceEntry> lists[2];
+    bool known = false;
+    for (int flow = 0; flow < 2; flow++) {
+        for (const audio::Device &d : audio::ListDevices(flow == 0)) {
+            if (!DeviceIdSendable(d.id) || !Utf8(d.name)) continue; // the launcher could not keep it
+            lists[flow].push_back({d.id, d.name});
+            if (!d.id.empty()) known = true;
+        }
+        if (lists[flow].empty() || !lists[flow][0].id.empty()) lists[flow].insert(lists[flow].begin(), VoiceDeviceEntry{});
+    }
+    std::lock_guard<std::mutex> lock(g_devices_lock);
+    g_device_lists[0] = std::move(lists[0]);
+    g_device_lists[1] = std::move(lists[1]);
+    g_devices_known = known;
+}
+
+// A chosen device that is not in the list now: said once per device for the game session; the engine already uses the
+// system default meanwhile (voice_audio_devices.h).
+void TellMissing(const VoiceState &v) {
+    static std::string told[2]; // voice thread only
+    std::lock_guard<std::mutex> lock(g_devices_lock);
+    if (!g_devices_known) return; // no list (COM failed, or nothing at all): nothing reliable to say
+    for (int flow = 0; flow < 2; flow++) {
+        const std::string &id = flow == 0 ? v.mic_id : v.output_id;
+        const std::string &name = flow == 0 ? v.mic_name : v.output_name;
+        if (id.empty() || told[flow] == id) continue;
+        const auto &list = g_device_lists[flow];
+        if (std::any_of(list.begin(), list.end(), [&](const VoiceDeviceEntry &e) { return e.id == id; })) continue;
+        told[flow] = id;
+        Log("voice: the chosen %s is not connected; using the system default", flow == 0 ? "microphone" : "output");
+        PushToast(ToastKind::Warning, flow == 0 ? T("Microphone not found", "Microfone não encontrado") : T("Audio output not found", "Saída de áudio não encontrada"),
+                  (name.empty() ? std::string(flow == 0 ? T("Your microphone", "Seu microfone") : T("Your audio output", "Sua saída de áudio")) : name)
+                      + T(" is not connected. Voice chat uses the system default.", " não está conectado. O chat de voz usa o padrão do sistema."));
+    }
+}
+} // namespace
+
+std::vector<VoiceDeviceEntry> VoiceDevices(VoiceFlow flow) {
+    if (DevHost()) { // the development host: a fake list, so every look can be seen
+        if (flow == VoiceFlow::Microphone) return {{}, {"dev-mic-1", "Microphone (Synthetic USB Audio)"}, {"dev-mic-2", "Headset Microphone (Synthetic)"}};
+        return {{}, {"dev-out-1", "Speakers (Synthetic Audio)"}, {"dev-out-2", "Headphones (Synthetic USB Audio)"}};
+    }
+    std::lock_guard<std::mutex> lock(g_devices_lock);
+    const auto &list = g_device_lists[flow == VoiceFlow::Microphone ? 0 : 1];
+    return list.empty() ? std::vector<VoiceDeviceEntry>{VoiceDeviceEntry{}} : list;
+}
+
+void RequestVoiceDevices() { g_devices_wanted.store(true, std::memory_order_relaxed); }
 
 namespace {
 std::atomic<bool> g_push_to_talk{false};
@@ -219,7 +322,7 @@ void SendControl(uint8_t op, uint8_t self, const std::vector<uint64_t> &mutes) {
 DWORD WINAPI VoiceThread(void *) {
     constexpr ULONGLONG kResubscribeMs = 5000, kStartRetryMs = 10000;
     Subscription sub;
-    ULONGLONG next_start = 0;
+    ULONGLONG next_start = 0, devices_at = 0;
     while (!InPassthrough()) {
         Sleep(50);
         const ULONGLONG now = GetTickCount64();
@@ -246,6 +349,17 @@ DWORD WINAPI VoiceThread(void *) {
             SendControl(voice_wire::kLeave, 0, {});
             sub = {};
         }
+        // §15: the settings' device lists (soon after the settings ask, else every 10 s) and the player's choices,
+        // which the engine follows even between sessions
+        const bool wanted = g_devices_wanted.load(std::memory_order_relaxed);
+        if ((wanted && now - devices_at >= 1000) || now - devices_at >= 10000) {
+            g_devices_wanted = false;
+            devices_at = now;
+            RefreshDevices();
+            if (enabled) TellMissing(v);
+        }
+        audio::SetDevices(v.mic_id, v.output_id);
+        audio::SetMicGain(audio::VolumeGain(v.mic_volume));
         // the engine runs while the lobby has voice and this player wants it
         const bool lobby = RelayFresh(relay) && relay.lobby_on;
         if (enabled && lobby) {
@@ -258,6 +372,7 @@ DWORD WINAPI VoiceThread(void *) {
         }
         if (audio::Running()) {
             audio::SetBundle(relay.bundle);
+            audio::SetVolume(audio::VolumeGain(v.voice_volume)); // §15: the mix of every other player
             const bool ptt = v.mic == MicMode::PushToTalk;
             const bool allowed = v.mic != MicMode::Muted && lobby;
             audio::SetTransmit(ptt ? allowed && PushToTalkHeld() : allowed, ptt);
@@ -267,6 +382,7 @@ DWORD WINAPI VoiceThread(void *) {
                 const bool silenced = seat.xuid == g_self_xuid.load() || (st & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked))
                                       || (seat.state & (voice_wire::kSeatMutedForLobby | voice_wire::kSeatBlocked));
                 audio::SetSilenced(seat.seat, silenced);
+                audio::SetSeatGain(seat.seat, audio::VolumeGain(v.VolumeOf(xuid))); // §15: this player's volume for them
             }
         }
         {

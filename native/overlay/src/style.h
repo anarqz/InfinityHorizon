@@ -3,6 +3,7 @@
 // Horizon pink, Segoe fonts, icons, easing and the drawing helpers. Render thread only.
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "imgui.h"
@@ -23,6 +24,7 @@ inline constexpr ImU32 kBlue = IM_COL32(0, 120, 215, 255);
 inline constexpr ImU32 kYellow = IM_COL32(255, 185, 0, 255);
 inline constexpr ImU32 kAmber = IM_COL32(255, 185, 0, 255);
 inline constexpr ImU32 kRed = IM_COL32(232, 17, 35, 255);
+inline constexpr ImU32 kTalkGreen = IM_COL32(92, 214, 92, 255); // the "Online" dot's green: a player talking now (§15)
 
 // Fluent UI System Icons (regular, 24) code points, the font embedded in the DLL (fonts.rc)
 inline constexpr const char *kIconInfo = "\xEF\x92\xA4";       // F4A4 Fluent
@@ -78,5 +80,9 @@ ImVec2 Measure(ImFont *font, const char *text);
 void FaceButton(ImDrawList *dl, ImVec2 centre, float radius, ImU32 color, const char *letter);
 // The Xbox focus: a white ring with a soft outer glow.
 void FocusRing(ImDrawList *dl, ImVec2 a, ImVec2 b, float rounding);
+// A volume slider (VOICE_CHAT.md §15) on the track a..b (its height is the knob's): the filled part in pink while
+// `active` (else dim), the knob at `volume` (1..100). A mouse click on the track (a little taller than drawn) sets
+// `clicked` to the value under the mouse; it stays untouched otherwise.
+void VolumeSlider(ImDrawList *dl, ImVec2 a, ImVec2 b, int volume, bool active, uint8_t *clicked = nullptr);
 
 } // namespace fi::ui

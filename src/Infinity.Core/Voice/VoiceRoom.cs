@@ -28,6 +28,7 @@ public sealed class VoiceRoom
     private readonly bool _defaultEnabled;
     private VoiceSettings _settings;
     private Dictionary<string, VoiceMute> _mutes;
+    private readonly Dictionary<string, PlayerVolume> _volumes; // §15: per player XUID, kept with the settings
     private readonly HashSet<string> _sessionMutes = [];
     private readonly HashSet<string> _lobbyMutes = [];
     private readonly HashSet<string> _talking = [];
@@ -45,6 +46,7 @@ public sealed class VoiceRoom
         var known = store is not null && _profile.Length != 0;
         _settings = known ? store!.Settings(_profile) : new(null, UiMicMode.Open);
         _mutes = known ? new(store!.Mutes(_profile)) : [];
+        _volumes = known ? new(store!.Volumes(_profile)) : [];
     }
 
     /// <summary>Voice is on in this profile's settings (the mode's default until the player changes it).</summary>
@@ -152,10 +154,31 @@ public sealed class VoiceRoom
                 case UiVoiceOp.Enabled:
                     Save(_settings with { Enabled = command.Value == 1 });
                     return true;
+                case UiVoiceOp.VoiceVolume: // §15: the frame already checked 1..100
+                    Save(_settings with { VoiceVolume = command.Value });
+                    return true;
+                case UiVoiceOp.MicVolume:
+                    Save(_settings with { MicVolume = command.Value });
+                    return true;
+                case UiVoiceOp.PlayerVolume:
+                    if (command.Xuid == _profile) return false;
+                    var volume = command.Value >= UiFrame.MaxVolume ? null : new PlayerVolume(command.Value, _clock.GetUtcNow().UtcDateTime);
+                    if (volume is null) _volumes.Remove(command.Xuid); else _volumes[command.Xuid] = volume;
+                    if (_store is not null && _profile.Length != 0) _store.SetVolume(_profile, command.Xuid, volume);
+                    return true;
                 default:
                     return false;
             }
         }
+    }
+
+    /// <summary>§15: the microphone or output the player picked (an empty id: the system default), kept per profile.</summary>
+    public void SetDevice(UiFrame.VoiceDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        string? id = device.Id.Length == 0 ? null : device.Id, name = id is null || device.Name.Length == 0 ? null : device.Name;
+        lock (_lock)
+            Save(device.Flow == UiVoiceFlow.Microphone ? _settings with { MicId = id, MicName = name } : _settings with { OutputId = id, OutputName = name });
     }
 
     /// <summary>What the overlay shows for <paramref name="roster"/> (this player left out, at most 16).</summary>
@@ -178,9 +201,11 @@ public sealed class VoiceRoom
                 if (_mutes.ContainsKey(m.Xuid) || _sessionMutes.Contains(m.Xuid)) state |= UiVoiceMember.MutedByMe;
                 if (_talking.Contains(m.Xuid)) state |= UiVoiceMember.Talking;
                 if (_lobbyMutes.Contains(m.Xuid)) state |= UiVoiceMember.MutedForLobby;
-                return new VoiceMember(m.Xuid, m.Gamertag, state);
+                return new VoiceMember(m.Xuid, m.Gamertag, state, _volumes.TryGetValue(m.Xuid, out var v) ? v.Volume : UiFrame.MaxVolume);
             }).ToList();
-            return new UiFrame.VoiceState(flags, _settings.Mic, members);
+            var s = _settings;
+            return new UiFrame.VoiceState(flags, s.Mic, members, s.VoiceVolume, s.MicVolume, s.MicId ?? "", s.MicId is null ? "" : s.MicName ?? "",
+                s.OutputId ?? "", s.OutputId is null ? "" : s.OutputName ?? "");
         }
     }
 

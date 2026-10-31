@@ -19,7 +19,11 @@ $common = "/nologo /std:c++20 /utf-8 /EHsc /MT /W4 /permissive- $opt /DUNICODE /
 # release tarballs pinned by SHA-256 (not in git); nothing from them is run, their C sources are compiled here.
 $opus = "$here\third_party\opus-1.5.2"
 $rnn = "$here\third_party\rnnoise-0.2"
-if (-not (Test-Path "$opus\COPYING") -or -not (Test-Path "$rnn\COPYING")) { & "$here\fetch.ps1" }
+# The echo canceller (release 2.0.0): WebRTC AudioProcessing 2.1 (freedesktop's standalone module) and the Abseil
+# headers it needs (no Abseil source is compiled), fetched the same way.
+$wap = "$here\third_party\webrtc-audio-processing-2.1"
+$absl = "$here\third_party\abseil-cpp-20240722.0"
+if (-not (Test-Path "$opus\COPYING") -or -not (Test-Path "$rnn\COPYING") -or -not (Test-Path "$wap\COPYING") -or -not (Test-Path "$absl\LICENSE")) { & "$here\fetch.ps1" }
 $includes = "/I`"$here\include`" /I`"$imgui`" /I`"$mh\include`" /I`"$mz`" /I`"$opus\include`" /I`"$rnn\include`""
 function Read-Mk([string[]]$files) { # libopus' own source lists, parsed as data
     $vars = @{}
@@ -52,10 +56,30 @@ $odefs = "/FI`"$cfgh`" /DOPUS_BUILD /DUSE_ALLOCA /DENABLE_DEEP_PLC /DENABLE_OSCE
 # RNNoise 0.2's tarball lacks the headers of its generic and SSE4.1 paths: its SSE2 path (vec_avx.h) is used.
 $rdefs = "/DDISABLE_DEBUG_FLOAT /DOPUS_X86_MAY_HAVE_SSE2 /I`"$rnn\include`" /I`"$rnn\src`""
 $rsrc = @('denoise.c', 'rnn.c', 'pitch.c', 'kiss_fft.c', 'celt_lpc.c', 'nnet.c', 'nnet_default.c', 'parse_lpcnet_weights.c', 'rnnoise_data.c', 'rnnoise_tables.c') | ForEach-Object { "src\$_" }
+# AEC3 and the 100 Hz high-pass only: every aec3/ source the module's meson.build lists, and the few classes around it
+# (AudioBuffer with its band splitting, the high-pass, field trials and checks). No noise suppressor, AGC, AECM or VAD,
+# no logging (RTC_DISABLE_LOGGING), no debug dumps. AVX2 files are chosen at run time by cpuid, as in libopus.
+$wapSrc = "$wap\webrtc"
+$wapAec3 = [regex]::Matches((Get-Content -Raw "$wapSrc\modules\audio_processing\meson.build"), "'(aec3/[a-z0-9_]+\.cc)'") |
+    ForEach-Object { "modules\audio_processing\$($_.Groups[1].Value)" }
+$wapPlain = @($wapAec3 | Where-Object { $_ -notmatch '_avx2\.cc$' }) + @(
+    'modules\audio_processing\audio_buffer.cc', 'modules\audio_processing\high_pass_filter.cc', 'modules\audio_processing\splitting_filter.cc',
+    'modules\audio_processing\three_band_filter_bank.cc', 'modules\audio_processing\utility\cascaded_biquad_filter.cc',
+    'modules\audio_processing\logging\apm_data_dumper.cc', 'api\audio\echo_canceller3_config.cc',
+    'rtc_base\checks.cc', 'rtc_base\memory\aligned_malloc.cc', 'rtc_base\experiments\field_trial_parser.cc', 'rtc_base\platform_thread_types.cc',
+    'rtc_base\race_checker.cc', 'rtc_base\string_encode.cc', 'system_wrappers\source\field_trial.cc', 'system_wrappers\source\metrics.cc',
+    'system_wrappers\source\cpu_features.cc', 'common_audio\audio_util.cc', 'common_audio\resampler\push_sinc_resampler.cc',
+    'common_audio\resampler\sinc_resampler.cc', 'common_audio\resampler\sinc_resampler_sse.cc', 'common_audio\third_party\ooura\fft_size_128\ooura_fft.cc',
+    'common_audio\third_party\ooura\fft_size_128\ooura_fft_sse2.cc', 'common_audio\signal_processing\splitting_filter.c')
+$wapAvx2 = @($wapAec3 | Where-Object { $_ -match '_avx2\.cc$' }) + @('common_audio\resampler\sinc_resampler_avx2.cc')
+if ($wapPlain.Count -lt 70 -or $wapAvx2.Count -ne 6) { throw "unexpected WebRTC AEC3 source list ($($wapPlain.Count) + $($wapAvx2.Count))" }
+$wdefs = "/std:c++20 /EHsc /utf-8 /wd4146 /wd4018 /DWEBRTC_WIN /DNOMINMAX /D_USE_MATH_DEFINES /DWIN32_LEAN_AND_MEAN /DNDEBUG " +
+    "/DWEBRTC_ENABLE_AVX2 /DWEBRTC_APM_DEBUG_DUMP=0 /DRTC_DISABLE_LOGGING /DRTC_DISABLE_CHECK_MSG /I`"$wapSrc`" /I`"$absl`""
 $codecLines = @()
 $codecObjs = @()
 # Response files: the source lists exceed cmd's line limit. "/Fo dir/": a trailing backslash breaks /MP's quoting.
-foreach ($set in @(@('opus', $opus, $opusPlain, "$odefs"), @('opus_avx2', $opus, $opusAvx2, "$odefs /arch:AVX2"), @('rnnoise', $rnn, $rsrc, $rdefs))) {
+foreach ($set in @(@('opus', $opus, $opusPlain, "$odefs"), @('opus_avx2', $opus, $opusAvx2, "$odefs /arch:AVX2"), @('rnnoise', $rnn, $rsrc, $rdefs),
+        @('webrtc', $wapSrc, $wapPlain, $wdefs), @('webrtc_avx2', $wapSrc, $wapAvx2, "$wdefs /arch:AVX2"), @('webrtc_echo', "$here\src", @('voice_echo.cpp'), $wdefs))) {
     foreach ($g in ($set[2] | Group-Object { Split-Path $_ -Parent })) {
         $od = "$vobj\$($set[0])_" + ($g.Name -replace '[\\/]', '_')
         New-Item -ItemType Directory -Force $od | Out-Null

@@ -24,5 +24,12 @@ void SetDecodeCostOverrideUs(double us);
 double DecodeCostP95Us();
 // Concealed 20 ms frames so far, over every seat.
 uint64_t ConcealedFrames();
+// Each 10 ms capture block (48 kHz mono, [-1, 1]) before and after the echo canceller, on the capture path's thread;
+// null stops it. For the echo bench (ERLE).
+using EchoTap = void (*)(const float *microphone, const float *cancelled, int samples);
+void SetEchoTap(EchoTap tap);
+// Whether the mix is the echo canceller's far end (true, as in a game). The loopback bench plays a talker's own voice
+// straight back, which no game does: to AEC3 that is endless double talk, so it turns this off.
+void SetMixReference(bool on);
 
 } // namespace fi::audio::testing
