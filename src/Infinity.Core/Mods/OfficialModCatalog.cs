@@ -13,7 +13,7 @@ public sealed record CatalogDownload(Uri Url, string Sha256, long Bytes);
 public sealed record ModRuntimeEntry(string Id, string Version, CatalogDownload Download);
 
 /// <summary>
-/// OD-116: the mod catalog is one unsigned JSON file, the official one committed on <c>main</c> of the launcher repository and
+/// OD-116: the mod catalog is one unsigned JSON file, the official one committed on <c>main</c> of InfinityMods (OD-166) and
 /// read from raw.githubusercontent.com. Its only integrity check is the SHA-256 (and size) pinned for every download: a download
 /// that differs is refused. No signature, sequence, expiry, download-host list, <c>required</c> or <c>availability</c>.
 /// <para>
@@ -31,10 +31,16 @@ public static class OfficialModCatalog
     public const int MaxCatalogBytes = 1024 * 1024;
     public const string RuntimeId = "infinity-mod-runtime";
     public const long MaxDownloadBytes = 64L * 1024 * 1024;
-    public static Uri OfficialUrl { get; } = new($"https://raw.githubusercontent.com/{Update.GitHubReleases.Repository}/main/mods/catalog.json");
+    /// <summary>OD-166: the official catalog is <c>catalog.json</c> on InfinityMods' <c>main</c>.</summary>
+    public static Uri OfficialUrl { get; } = new("https://raw.githubusercontent.com/anarqz/InfinityMods/main/catalog.json");
 
-    /// <summary>The official address (any other is a player-chosen, unofficial catalog).</summary>
-    public static bool IsOfficial(Uri url) => Uri.Compare(url, OfficialUrl, UriComponents.AbsoluteUri, UriFormat.UriEscaped, StringComparison.Ordinal) == 0;
+    /// <summary>OD-166: the former official address (the launcher repository's <c>mods/catalog.json</c>), read when the official one fails, for one release.</summary>
+    public static Uri LegacyOfficialUrl { get; } = new($"https://raw.githubusercontent.com/{Update.GitHubReleases.Repository}/main/mods/catalog.json");
+
+    /// <summary>The official address, or the former one (any other is a player-chosen, unofficial catalog).</summary>
+    public static bool IsOfficial(Uri url) => Same(url, OfficialUrl) || Same(url, LegacyOfficialUrl);
+
+    private static bool Same(Uri a, Uri b) => Uri.Compare(a, b, UriComponents.AbsoluteUri, UriFormat.UriEscaped, StringComparison.Ordinal) == 0;
 
     private static readonly string[] EntryFields = ["id", "version", "name", "description", "author"];
     private static readonly string[] DroppedFields = ["required", "availability"];
@@ -164,25 +170,41 @@ public static class OfficialModCatalog
         return new(url, hash, bytes);
     }
 
-    /// <summary>Fetches the catalog (any HTTPS host: the pinned hashes are the check), parses it and caches it for offline listing.</summary>
+    /// <summary>
+    /// Fetches the catalog (any HTTPS host: the pinned hashes are the check), parses it and caches it for offline listing. For the
+    /// official address, a failed fetch or a refused catalog tries <see cref="LegacyOfficialUrl"/> before failing (OD-166, one release);
+    /// either way the result is cached as the official catalog.
+    /// </summary>
     public static async Task<ModCatalog> LoadAsync(HttpClient http, Uri url, string cacheDirectory, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(http); ArgumentNullException.ThrowIfNull(url);
-        byte[] raw;
-        using (var response = await ModDownloads.DownloadAsync(http, url, _ => true, cancellation).ConfigureAwait(false))
+        byte[] raw; ModCatalog catalog;
+        try
         {
-            if (response.StatusCode != System.Net.HttpStatusCode.OK) throw new ModException("catalog unavailable: " + (int)response.StatusCode, ModErrors.Catalog);
-            await using var body = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
-            try { raw = await DevelopmentModCatalog.ReadBoundedAsync(body, MaxCatalogBytes, cancellation).ConfigureAwait(false); }
-            catch (ModException error) when (error.Code == ModErrors.Download) { throw new ModException("catalog too large", ModErrors.Catalog); }
+            raw = await FetchAsync(http, url, cancellation).ConfigureAwait(false);
+            catalog = Build(url, raw, cached: false);
         }
-        var catalog = Build(url, raw, cached: false);
+        catch (Exception error) when (Same(url, OfficialUrl) && !cancellation.IsCancellationRequested
+            && error is ModException or HttpRequestException or IOException or OperationCanceledException)
+        {
+            raw = await FetchAsync(http, LegacyOfficialUrl, cancellation).ConfigureAwait(false);
+            catalog = Build(url, raw, cached: false);
+        }
         var path = CachePath(cacheDirectory, url);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var staging = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         await File.WriteAllBytesAsync(staging, raw, cancellation).ConfigureAwait(false);
         File.Move(staging, path, overwrite: true);
         return catalog;
+    }
+
+    private static async Task<byte[]> FetchAsync(HttpClient http, Uri url, CancellationToken cancellation)
+    {
+        using var response = await ModDownloads.DownloadAsync(http, url, _ => true, cancellation).ConfigureAwait(false);
+        if (response.StatusCode != System.Net.HttpStatusCode.OK) throw new ModException("catalog unavailable: " + (int)response.StatusCode, ModErrors.Catalog);
+        await using var body = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
+        try { return await DevelopmentModCatalog.ReadBoundedAsync(body, MaxCatalogBytes, cancellation).ConfigureAwait(false); }
+        catch (ModException error) when (error.Code == ModErrors.Download) { throw new ModException("catalog too large", ModErrors.Catalog); }
     }
 
     /// <summary>The last catalog fetched from <paramref name="url"/>, or null (none, or no longer readable).</summary>

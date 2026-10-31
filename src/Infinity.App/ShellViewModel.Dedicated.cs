@@ -260,8 +260,8 @@ public sealed partial class ShellViewModel
             IModSetSource mods = VanillaModSet.Instance;
             if (_install is { } install)
             {
-                var cosmetic = HardcoreSafeFolders();
-                try { mods = ExtraOptionsModSetSource.ReadyWithPlan(await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic))); }
+                var cosmetic = HardcoreSafeFolders(); var exempt = ParityExemptionsNow;
+                try { mods = ExtraOptionsModSetSource.ReadyWithPlan(await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, exempt))); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModSetException)
                 { mods = LaunchPlanModSetSource.Failed(e.GetType().Name); }
             }

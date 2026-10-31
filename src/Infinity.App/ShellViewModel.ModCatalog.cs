@@ -256,6 +256,7 @@ public sealed partial class ShellViewModel
     {
         if (_catalogLoading) return;
         _catalogLoading = true;
+        _ = RefreshParityExemptionsAsync(); // OD-166: InfinityMods' parity exemptions, beside its catalog
         try
         {
             var address = CatalogUri;
@@ -313,7 +314,7 @@ public sealed partial class ShellViewModel
     }
 
 
-    /// <summary>OD-116: the player's catalog ("Use a different catalog"), else the official file on the launcher repository's main.</summary>
+    /// <summary>OD-116: the player's catalog ("Use a different catalog"), else the official file on InfinityMods' main (OD-166).</summary>
     private Uri CatalogUri => CustomCatalog ?? OfficialModCatalog.OfficialUrl;
     private string CatalogCache => Path.Combine(_stateDirectory, "mod-catalog-v2");
 
