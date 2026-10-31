@@ -6,9 +6,10 @@ namespace Infinity.Core.Saves;
 
 /// <summary>
 /// One career a fresh start moved aside (<c>fi-launcher-archive\User_x\fresh-start-&lt;stamp&gt;</c>, the profile folder's own layout):
-/// when (from the folder's name), its newest sealed revision, and the level and credits its ProfileData holds (null when not read).
+/// when (from the folder's name), its newest sealed revision, and the credits its ProfileData holds (null when not read; no level,
+/// <see cref="AzimuthSaves.Credits"/>).
 /// </summary>
-public sealed record FreshStartArchive(string Name, string Path, DateTime ArchivedUtc, LocalRevision Revision, int? Level, int? Credits);
+public sealed record FreshStartArchive(string Name, string Path, DateTime ArchivedUtc, LocalRevision Revision, int? Credits);
 
 /// <summary>A <c>fresh-start-*</c> folder the restore does not offer, and why.</summary>
 public sealed record SkippedArchive(string Name, string Reason);
@@ -95,8 +96,7 @@ public static class FreshStartArchives
                     continue;
                 }
                 CloudSaveFiles.Pack(revision); // the same checks the upload makes: known files only, sealed, within the bundle limit
-                var (level, credits) = AzimuthSaves.Numbers(revision);
-                archives.Add(new FreshStartArchive(name, path, at, revision, level, credits));
+                archives.Add(new FreshStartArchive(name, path, at, revision, AzimuthSaves.Credits(revision)));
             }
             catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
             {

@@ -260,7 +260,7 @@ public sealed partial class ShellViewModel
         {
             if (_seedOffer?.Result.Check is not { } check) return string.Empty;
             var parts = new List<string>();
-            if (check.Summary.Level is { } level) parts.Add(S.Format("saves.level", ("level", level.ToString(CultureInfo.CurrentCulture))));
+            if (SaveSummary.LevelText(S, check.Summary) is { } level) parts.Add(level); // CR-S81: counted from 0, shown plus one
             if (check.Summary.Credits is { } credits) parts.Add(S.Format("saves.credits", ("credits", credits.ToString("N0", CultureInfo.CurrentCulture))));
             parts.Add(S.Format("seed.hours", ("hours", check.Hours.ToString("0.#", CultureInfo.CurrentCulture))));
             return string.Join(" · ", parts);

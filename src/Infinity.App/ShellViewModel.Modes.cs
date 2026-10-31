@@ -276,15 +276,16 @@ public sealed partial class ShellViewModel
     public bool CanKeepCloudSave => _saveConflict?.CanKeepCloud == true;
 
     public string SaveConflictCloudText => _saveConflict is not { } c ? string.Empty : SaveSideText(
-        c.Cloud.Summary?.Level is { } level ? (int?)level : null, c.Cloud.Summary?.Credits is { } credits ? (int?)credits : null,
+        SaveSummary.LevelText(S, c.Cloud.Summary), c.Cloud.Summary?.Credits is { } credits ? (int?)credits : null,
         DateTime.TryParse(c.Cloud.CommittedAt, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var when) ? when : null);
 
-    public string SaveConflictLocalText => _saveConflict is not { } c ? string.Empty : SaveSideText(c.LocalLevel, c.LocalCredits, c.LocalSavedUtc);
+    // This PC's side has no level: ProfileData's Level is not the driver level (CR-S81); only the server derives it.
+    public string SaveConflictLocalText => _saveConflict is not { } c ? string.Empty : SaveSideText(null, c.LocalCredits, c.LocalSavedUtc);
 
-    private string SaveSideText(int? level, int? credits, DateTime? when)
+    private string SaveSideText(string? level, int? credits, DateTime? when)
     {
         var parts = new List<string>();
-        if (level is { } l) parts.Add(S.Format("saves.level", ("level", l.ToString(CultureInfo.CurrentCulture))));
+        if (level is { } l) parts.Add(l);
         if (credits is { } cr) parts.Add(S.Format("saves.credits", ("credits", cr.ToString("N0", CultureInfo.CurrentCulture))));
         if (when is { } w) parts.Add(S.Format("saves.last_played", ("when", w.ToLocalTime().ToString("g", CultureInfo.CurrentCulture))));
         return parts.Count == 0 ? S["saves.conflict_unknown"] : string.Join(" · ", parts);

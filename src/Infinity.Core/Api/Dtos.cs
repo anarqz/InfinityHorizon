@@ -291,8 +291,22 @@ public sealed record GateLeave(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ulong? EndRevision,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ulong? FenceToken);
 
-/// <summary>Progress numbers the server reads from a bundle (SAVES_API.md §2), each nullable.</summary>
-public sealed record SaveSummary(long? Credits, long? Xp, long? Level, long? Cars);
+/// <summary>
+/// Progress numbers the server reads from a bundle (SAVES_API.md §2), each nullable. <see cref="Level"/> is the driver level the
+/// save's XP reaches, counted from 0 (CR-S81): compare and send it raw, show <see cref="ShownLevel"/>.
+/// </summary>
+public sealed record SaveSummary(long? Credits, long? Xp, long? Level, long? Cars)
+{
+    /// <summary>The driver level as the game shows it: <see cref="Level"/> plus one (a stored 14 is shown as 15); null when unknown.</summary>
+    public long? ShownLevel() => Level + 1;
+
+    /// <summary>The player-facing "Level {level}" of <paramref name="summary"/>, or null when it has no level.</summary>
+    public static string? LevelText(Strings text, SaveSummary? summary)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return summary?.ShownLevel() is { } level ? text.Format("saves.level", ("level", level.ToString(System.Globalization.CultureInfo.CurrentCulture))) : null;
+    }
+}
 
 /// <summary>Who holds the profile's lease, as the head reports it.</summary>
 public sealed record LeaseView(string DeviceLabel, string ExpiresAt, bool Live);

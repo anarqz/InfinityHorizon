@@ -23,10 +23,10 @@ public sealed record LocalRevision(ulong Number, string Path, IReadOnlyList<Comm
 
 /// <summary>
 /// What the picker shows for one Azimuth profile folder (<c>User_&lt;hex&gt;</c>): its newest sealed
-/// revision and the numbers ProfileData holds (null when a number is not found exactly once);
-/// <see cref="Level"/> is the level the game shows (stored + 1).
+/// revision and the credits ProfileData holds (null when not found exactly once). No level: ProfileData's
+/// <c>Level</c> is not the driver level (CR-S81), which only the server derives, from the XP.
 /// </summary>
-public sealed record SaveProfile(string Folder, ulong? Xuid, LocalRevision Revision, DateTime LastPlayedUtc, int? Level, int? Credits)
+public sealed record SaveProfile(string Folder, ulong? Xuid, LocalRevision Revision, DateTime LastPlayedUtc, int? Credits)
 {
     /// <summary>Azimuth's own offline profile (<c>User_9000000000000</c>), the one a player without an account has.</summary>
     public bool IsOffline => Xuid == AzimuthSaves.OfflineXuid;
@@ -274,22 +274,22 @@ public static class AzimuthSaves
             }
             ulong? xuid = ulong.TryParse(folder.AsSpan(5), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var x) ? x : null;
             var played = File.GetLastWriteTimeUtc(Path.Combine(revision.Path, "commit"));
-            var (level, credits) = Numbers(revision);
-            found.Add(new SaveProfile(folder, xuid, revision, played, level, credits));
+            found.Add(new SaveProfile(folder, xuid, revision, played, Credits(revision)));
         }
         return [.. found.OrderByDescending(p => p.LastPlayedUtc)];
     }
 
     /// <summary>
-    /// The level the game shows and the credits of a revision's ProfileData (each null when not found exactly once, or the file does not
-    /// read): what the picker and the OD-133 career restore list show.
+    /// The credits of a revision's ProfileData (null when not found exactly once, or the file does not read): what the picker and
+    /// the OD-133 career restore list show. Not its <c>Level</c>: that counts the level-ups inside the current colour band, not the
+    /// driver level the game shows (CR-S81; the server derives that from the XP and returns it in a save summary).
     /// </summary>
-    public static (int? Level, int? Credits) Numbers(LocalRevision revision)
+    public static int? Credits(LocalRevision revision)
     {
         ArgumentNullException.ThrowIfNull(revision);
         if (!revision.Entries.Any(e => e.Name == "ProfileData"))
         {
-            return (null, null);
+            return null;
         }
         byte[] profile;
         try
@@ -298,10 +298,9 @@ public static class AzimuthSaves
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return (null, null); // listed without its numbers
+            return null; // listed without its credits
         }
-        // ProfileData's Level counts from 0: the game shows 7 for a stored 6 (seen 2026-10-19).
-        return (ProfileInt(profile, "Level") + 1, ProfileInt(profile, "Credits"));
+        return ProfileInt(profile, "Credits");
     }
 
     /// <summary>

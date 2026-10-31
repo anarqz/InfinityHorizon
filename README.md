@@ -85,7 +85,7 @@ writes them:
   counts only when it is sealed (every file matches its line). Azimuth loads the highest folder
   and keeps the two newest.
 - **Starting from a local save.** A new profile can start from any `User_*` folder with a sealed
-  revision (listed most recently played first, with level and credits). The source is only read:
+  revision (listed most recently played first, with credits). The source is only read:
   the picked revision and the target's existing revisions are copied to the archive, a copy is
   staged in `fi-launcher-incoming`, verified against its commit, then renamed into the target's
   `revisions` as the newest one. It runs only while the game is closed, and a crash leaves the

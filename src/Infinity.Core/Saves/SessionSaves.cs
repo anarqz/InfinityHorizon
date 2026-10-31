@@ -95,8 +95,11 @@ public enum FreshStartChoice
 /// <summary>OD-133: what the player is told of a refused first save: the gate's rule (null when unknown) and when (UTC, ISO 8601).</summary>
 public sealed record FreshStartRefusal(string? Rule, string? RefusedAtUtc);
 
-/// <summary>What the player sees of a conflict: the cloud's head and this PC's newest sealed revision (each number null when unknown).</summary>
-public sealed record SaveConflict(SaveHead Cloud, int? LocalLevel, int? LocalCredits, DateTime? LocalSavedUtc)
+/// <summary>
+/// What the player sees of a conflict: the cloud's head and this PC's newest sealed revision (each number null when unknown; this PC's
+/// side has no level, <see cref="AzimuthSaves.Credits"/>).
+/// </summary>
+public sealed record SaveConflict(SaveHead Cloud, int? LocalCredits, DateTime? LocalSavedUtc)
 {
     /// <summary>An empty line (revision 0) has nothing to install: only this PC's save, or not now, can be offered.</summary>
     public bool CanKeepCloud => Cloud.Revision > 0;
@@ -391,14 +394,14 @@ public sealed class SessionSaves
         _report(SaveStep.Uploaded, outcome.Committed?.Revision.ToString(CultureInfo.InvariantCulture));
     }
 
-    /// <summary>The conflict as the player sees it: the cloud's head and this PC's newest sealed revision (level, credits, when).</summary>
+    /// <summary>The conflict as the player sees it: the cloud's head and this PC's newest sealed revision (credits, when).</summary>
     private SaveConflict LocalConflict(SaveHead head)
     {
         var folder = AzimuthSaves.FolderFor(_xuid);
         SaveProfile? local = null;
         try { local = AzimuthSaves.List(_savesRoot).FirstOrDefault(s => string.Equals(s.Folder, folder, StringComparison.OrdinalIgnoreCase)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-        return new SaveConflict(head, local?.Level, local?.Credits, local?.LastPlayedUtc);
+        return new SaveConflict(head, local?.Credits, local?.LastPlayedUtc);
     }
 
     private bool _freshStart;
