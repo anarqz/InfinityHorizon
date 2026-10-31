@@ -12,7 +12,8 @@ public sealed record PresenceClub(string Tag, string Name);
 
 /// <summary>
 /// <c>GET /launcher/v1/profiles/{xuid}/presence</c> → 200: the profile's Car Club of its current mode, and its level and credits from the
-/// last accepted <c>UpdateAll</c> of that mode (<see cref="SyncedAt"/> its time, RFC 3339). Each field is absent when unknown
+/// last accepted <c>UpdateAll</c> of that mode (<see cref="SyncedAt"/> its time, RFC 3339); <see cref="Level"/> is the driver level its XP
+/// reaches, counted from 0 (CR-S81; shown plus one), never the game's in-band step. Each field is absent when unknown
 /// (<c>{}</c> before any club or accepted sync). <see cref="LiveryImage"/> (CR-S77): with <c>?car=</c>, the absolute https URL of the
 /// caller's own newest servable Storefront livery preview of that car (§5a); <see cref="ApiClient.ProfilePresenceAsync"/> keeps it only
 /// when it is https, without userinfo and on the core's host.
@@ -30,7 +31,7 @@ public sealed partial class ApiClient
     /// rate-limited by <see cref="Presence.PresenceReads"/>): past 60 reads per account per hour it is 429 <c>REQUEST.RATE_LIMITED</c>
     /// with <c>Retry-After</c> (thrown; the caller honours it). <paramref name="carId"/> (<c>Data_Car.Id</c>, 1 to 2147483647) is sent as
     /// <c>?car=</c> only when known. Null on 404 (<c>ACCOUNTS.NOT_FOUND</c>: not this account's profile, or a server without the route)
-    /// and 405: no club, and level and credits only from the hook.
+    /// and 405: no club, no level, and credits only from the hook.
     /// </summary>
     public async Task<ProfilePresence?> ProfilePresenceAsync(string access, string xuid, int? carId = null, CancellationToken cancellation = default)
     {

@@ -34,7 +34,9 @@ public sealed record PresenceInputs
     public required string Mode { get; init; }
     public string? Tier { get; init; }
     public string? ClubTag { get; init; }
-    public uint? Level { get; init; }
+    /// <summary>CR-S81: the server's driver level counted from 0 (<see cref="PresenceProgress.DriverLevel"/>), shown plus one as the game
+    /// shows it (14 is <c>Lv 15</c>); null shows no level. Never the game's in-band step.</summary>
+    public uint? DriverLevel { get; init; }
     public ulong? Credits { get; init; }
     public string? CarName { get; init; }
 
@@ -129,8 +131,8 @@ public static class PresenceComposer
         if (toggles.Mode) details.Add(hardcore ? "HC" : "NB");
         var nameAt = -1;
         if (toggles.Name && Clean(inputs.ProfileName) is { } name) { nameAt = details.Count; details.Add(name); }
-        if (toggles.Level && inputs.Level is { } level and > 0)
-            details.Add(text("presence.level").Replace("{level}", level.ToString(culture), StringComparison.Ordinal));
+        if (toggles.Level && inputs.DriverLevel is { } driver and < uint.MaxValue)
+            details.Add(text("presence.level").Replace("{level}", (driver + 1).ToString(culture), StringComparison.Ordinal));
 
         // state: activity · credits CR · car (the car is cut first)
         var state = new List<string> { text(ActivityKey(inputs.Activity)) };
