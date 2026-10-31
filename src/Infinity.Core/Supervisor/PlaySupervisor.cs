@@ -1261,8 +1261,9 @@ public sealed class PlaySupervisor
     }
 
     /// <summary>
-    /// After the game's exit, the frames its hook sent last (the pipe drains within a moment, ≤ 1 s): only CR-L41.3's progress and
-    /// car are emitted, since nothing waits on them; a frame that needs an answer or changes the session means nothing any more.
+    /// After the game's exit, the frames its hook sent last (the pipe drains within a moment, ≤ 1 s): only the display ones are
+    /// emitted (CR-L41.3's progress and car, a capture report), since nothing waits on them; a frame that needs an answer or
+    /// changes the session means nothing any more.
     /// </summary>
     private async Task DrainPresenceAsync(ChannelReader<ReceivedFrame> frames)
     {
@@ -1271,6 +1272,7 @@ public sealed class PlaySupervisor
         {
             if (received.Frame is Frame.Progress progress) _emit(new SupervisorEvent.GameProgress(progress.Level, progress.Credits));
             else if (received.Frame is Frame.Car car) _emit(new SupervisorEvent.GameCar(car.CarKey));
+            else if (received.Frame is Frame.Capture capture) _emit(new SupervisorEvent.Capture(capture.What, capture.Ok) { ReceivedTimestamp = received.Timestamp });
         }
     }
 

@@ -31,12 +31,6 @@ enum { FI_NET_OFF, FI_NET_CAPTURE, FI_NET_PROXY };
 enum { FI_CARSTATE_AUTO, FI_CARSTATE_OFF };
 enum { FI_LANG_AUTO, FI_LANG_EN, FI_LANG_PT_BR };
 enum { FI_CFG_NONE, FI_CFG_UTF16LE, FI_CFG_UTF8, FI_CFG_UTF8_BOM, FI_CFG_ANSI };
-/* VoiceUi's default (OD-154 VC-T1): 1 in test builds (build.ps1 -Version with a prerelease such as
-   1.2.9-test.13 passes --test-build), so the two-device test sees the game's own voice icons; 0 in
-   releases until VC-T9 makes it unconditional. Infinity.cfg [hook] VoiceUi=0/1 still overrides it. */
-#ifndef FI_VOICE_UI_DEFAULT
-#define FI_VOICE_UI_DEFAULT 0
-#endif
 typedef struct {
     int net_mode;             /* NetMode: FI_NET_* (default Proxy) */
     wchar_t server[256];      /* Server (default https://api.infinity-horizon.com) */
@@ -48,7 +42,6 @@ typedef struct {
     int language;             /* Language: FI_LANG_* (auto) */
     int log;                  /* Log 0/1 (1) */
     int relay_legacy;         /* RelayCommand: 0 auto, 1 legacy */
-    int voice_ui;             /* VoiceUi 0/1 (FI_VOICE_UI_DEFAULT): voice chat in the game's own UI (voice_ui.c) */
     int encoding;             /* FI_CFG_*: how Infinity.cfg is written (FI_CFG_NONE: no file) */
     int has_hook_section;     /* the file has [hook] now */
     int launch;               /* FI_LAUNCH_*: started by the launcher (FI_LAUNCH set) */
@@ -203,7 +196,7 @@ void *fi_launch_overlay_export(const char *name);
    profile card (gamer_card.c; one vtable slot, guarded by the game build and its bytes). */
 void fi_gamer_card_apply(unsigned char *game_image);
 /* OD-154 VC-2b: the game's own player list and HUD show the overlay's voice chat (voice_ui.c;
-   only with Infinity.cfg [hook] VoiceUi=1, guarded by the game build and its bytes). */
+   always on since OD-144 VC-T9, guarded by the game build and its bytes). */
 void fi_voice_ui_apply(unsigned char *game_image);
 /* voice_net.c (OD-154 VC-2): FiOverlayHost.voice_send, and the voice kinds (0x3E93, 0x3E94) the
    world's relay sends to this hook's sockets (proxy.c, carstate.c, livery_world.c): 1 when d is

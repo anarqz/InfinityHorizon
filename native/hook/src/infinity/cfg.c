@@ -308,7 +308,6 @@ static void cfg_defaults(FiConfig *c) {
     c->carstate = FI_CARSTATE_AUTO;
     c->language = FI_LANG_AUTO;
     c->log = 1;
-    c->voice_ui = FI_VOICE_UI_DEFAULT;
 }
 
 static void cfg_invalid(const wchar_t *key, const wchar_t *value, const char *fallback) {
@@ -437,7 +436,10 @@ static void cfg_read_hook(FiConfig *c) {
         }
     }
     if (cfg_lookup(L"hook", L"VoiceUi", v, ARRAY_COUNT(v), 0)) {
-        c->voice_ui = cfg_bool(L"VoiceUi", v, FI_VOICE_UI_DEFAULT);
+        /* retired with hook 0.3.0+fh2online.114: the voice chat in the game's UI is always on
+           (voice_ui.c, still only on the verified game bytes); the line is left as it is */
+        cfg_note("CFG: [hook] VoiceUi is retired and ignored: the game's player list and HUD always show the "
+                 "voice chat.\r\n");
     }
 }
 
@@ -594,9 +596,6 @@ static size_t cfg_block(const FiConfig *c, int from_legacy, wchar_t *out, size_t
     }
     if (c->relay_legacy != d.relay_legacy) {
         CFG_KEY_LINE(L"RelayCommand=legacy");
-    }
-    if (c->voice_ui != d.voice_ui) {
-        CFG_KEY_LINE(c->voice_ui ? L"VoiceUi=1" : L"VoiceUi=0");
     }
     keys[k] = 0;
     for (size_t i = 0; i < ARRAY_COUNT(header); ++i) {
@@ -802,7 +801,6 @@ static void cfg_take_installer(int encoding, size_t size) {
     d.language = cfg_values.language;
     d.log = cfg_values.log;
     d.relay_legacy = cfg_values.relay_legacy;
-    d.voice_ui = cfg_values.voice_ui;
     d.encoding = cfg_values.encoding;
     d.has_hook_section = 1;
     if (d.net_mode == cfg_values.net_mode && wequal(d.server, cfg_values.server) &&
@@ -865,9 +863,6 @@ static void cfg_note_values(const FiConfig *c) {
                                                                                       : " Language=auto");
     cfg_note(c->log ? " Log=1" : " Log=0");
     cfg_note(c->relay_legacy ? " RelayCommand=legacy" : " RelayCommand=auto");
-    if (c->voice_ui) {
-        cfg_note(" VoiceUi=1");
-    }
 }
 
 static void cfg_load_files(const wchar_t *root, const wchar_t *bin) {

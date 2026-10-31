@@ -48,6 +48,7 @@
 
 #include "fi_overlay.h"
 #include "style.h"
+#include "voice_audio.h"
 #include "world_access.h"
 
 namespace fi {
@@ -994,6 +995,10 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         y += 20 * s;
         const char *said = voice.flags & VoiceState::LobbyKnown ? VoiceLabel(voice.lobby_on()) : T("Voice chat: set by the host", "Chat de voz: definido pelo anfitrião");
         TextAt(dl, f.small, ImVec2(x, y), voice.lobby_on() ? kText : kTextDim, said);
+    }
+    if (voice.lobby_on() && (voice.flags & VoiceState::Enabled) && audio::ListenOnly()) { // only monitors, or no input
+        y += 20 * s;
+        TextAt(dl, f.small, ImVec2(x, y), kAmber, T("No microphone: you can listen", "Sem microfone: você pode ouvir"));
     }
     y += 28 * s;
     if (m.role == 1 && !m.code.empty()) {

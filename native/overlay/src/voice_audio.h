@@ -21,6 +21,9 @@ using SendFn = std::function<void(const uint8_t *opus, size_t size, uint8_t flag
 bool Start(SendFn send);
 void Stop();
 bool Running();
+// Running with no microphone to use (none, or only monitor/loopback inputs): voice is received and played, nothing is
+// captured. Rechecked every 2 s, so a microphone plugged in ends it. Any thread.
+bool ListenOnly();
 
 // What may leave the PC now: false sends nothing (muted mic, voice off, no lobby voice, not subscribed). While true
 // the engine still gates on voice activity (RNNoise, 300 ms hangover) unless push_to_talk is set: then the gate is

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 // Infinity overlay: voice chat's audio engine (OD-154, VC-3; VOICE_CHAT.md §3.2, §12.4). Two engine threads, never
-// the game's: capture (WASAPI shared, event-driven, the default communications microphone) → 48 kHz mono → 80 Hz
+// the game's: capture (WASAPI shared, event-driven; the default communications microphone, never a monitor or loopback
+// input: voice_audio_devices.h; none: listen-only) → 48 kHz mono → 80 Hz
 // high-pass → AGC → RNNoise (noise suppression; its voice probability gates sending, 300 ms hangover) → Opus 20 ms
 // frames (SILK wideband 6 kbit/s, CVBR, complexity 10, no FEC/DTX) → repacketized 3 (or 6) per packet → SendFn; and
 // playback: per seat an adaptive 1-2 packet jitter buffer → Opus decoder with deep PLC for gaps → mix → one XAudio2
@@ -19,6 +20,7 @@
 // | CoInitializeEx(MTA), CoCreateInstance(MMDeviceEnumerator) | yes | known (mmdevapi)                     | used as is                                             |
 // | GetDefaultAudioEndpoint(eCapture, eCommunications) | yes | known: accepted; every role maps to the one default (inference) | used; same device as eConsole there   |
 // | IMMDevice::GetId, Activate(IAudioClient)       | yes     | known                                         | used                                                   |
+// | EnumAudioEndpoints(ACTIVE), GetDevice, OpenPropertyStore(FriendlyName), IMMEndpoint::GetDataFlow | yes | known: winepulse lists the output's monitor as a capture endpoint named "Monitor of ..." | monitors/loopbacks rejected by name, id and data flow; none left: listen-only |
 // | GetMixFormat → WAVEFORMATEXTENSIBLE float32    | usual   | known: winepulse reports extensible float32 at the PulseAudio/PipeWire rate (44.1 or 48 kHz), N channels | any PCM16/24/32 or float32, any rate/channels, converted by voice_audio_dsp.h |
 // | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM / SRC_DEFAULT_QUALITY | Win10+ | newer Wine only; quality differs (inference) | **not used**: our own downmix + windowed-sinc resampler on both |
 // | Shared mode + AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 20 ms buffer | yes | known; Wine rounds the period to its own (~10 ms) | packet sizes are not assumed: every wake drains all packets; 500 ms wait timeout as a fallback |
@@ -36,6 +38,7 @@
 // | libopus RTCD (cpuid: SSE4.1/AVX2)              | yes     | known: cpuid is the real CPU (Deck: Zen 2, AVX2) | same code paths on both CPUs with AVX2              |
 #include "voice_audio.h"
 #include "voice_audio_complexity.h"
+#include "voice_audio_devices.h"
 #include "voice_audio_dsp.h"
 #include "voice_audio_testing.h"
 
@@ -457,8 +460,87 @@ std::unique_ptr<Mixer> g_mixer;
 HANDLE g_threads[2] = {};
 HANDLE g_first_try[2] = {};          // set after each thread's first device attempt
 std::atomic<int> g_device_ok[2] = {}; // 1 opened, 2 failed
+std::atomic<bool> g_mic_ok{false};    // the last capture attempt opened a microphone (false: listen-only)
 
 template <typename T> void SafeRelease(T *&p) { if (p) { p->Release(); p = nullptr; } }
+
+std::string Utf8(const std::wstring &w) {
+    if (w.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string s(n > 0 ? n : 0, '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+// PKEY_Device_FriendlyName ({a45c254e-df1c-4efd-8020-67d146a850e0}, 14), spelled out: no INITGUID and no extra lib.
+constexpr PROPERTYKEY kFriendlyName = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+
+std::wstring FriendlyName(IMMDevice *device) {
+    std::wstring name;
+    IPropertyStore *store = nullptr;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store))) {
+        PROPVARIANT value;
+        PropVariantInit(&value);
+        if (SUCCEEDED(store->GetValue(kFriendlyName, &value)) && value.vt == VT_LPWSTR && value.pwszVal) name = value.pwszVal;
+        PropVariantClear(&value);
+    }
+    SafeRelease(store);
+    return name;
+}
+
+std::vector<std::wstring> EndpointIds(IMMDeviceEnumerator *enumerator, EDataFlow flow, std::vector<IMMDevice *> *devices) {
+    std::vector<std::wstring> ids;
+    IMMDeviceCollection *all = nullptr;
+    UINT count = 0;
+    if (SUCCEEDED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &all)) && SUCCEEDED(all->GetCount(&count)))
+        for (UINT i = 0; i < count; i++) {
+            IMMDevice *device = nullptr;
+            LPWSTR id = nullptr;
+            if (SUCCEEDED(all->Item(i, &device)) && SUCCEEDED(device->GetId(&id))) {
+                ids.push_back(id);
+                if (devices) { devices->push_back(device); device = nullptr; }
+            }
+            if (id) CoTaskMemFree(id);
+            SafeRelease(device);
+        }
+    SafeRelease(all);
+    return ids;
+}
+
+// The capture endpoint voice may use (voice_audio_devices.h), or empty: only monitors/loopbacks, or no input at all.
+// Each rejected endpoint is logged once (its name is not personal data; no audio is ever logged).
+std::wstring SelectCapture(IMMDeviceEnumerator *enumerator) {
+    static std::vector<std::wstring> logged; // capture thread only; one capture thread at a time
+    std::vector<IMMDevice *> devices;
+    const std::vector<std::wstring> ids = EndpointIds(enumerator, eCapture, &devices);
+    const std::vector<std::wstring> render = EndpointIds(enumerator, eRender, nullptr);
+    std::wstring default_id;
+    IMMDevice *def = nullptr;
+    LPWSTR def_id = nullptr;
+    if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &def)) && SUCCEEDED(def->GetId(&def_id))) default_id = def_id;
+    if (def_id) CoTaskMemFree(def_id);
+    SafeRelease(def);
+    std::vector<devices::Candidate> list;
+    int default_index = -1;
+    for (size_t i = 0; i < ids.size(); i++) {
+        devices::Candidate c{ids[i], FriendlyName(devices[i]), std::find(render.begin(), render.end(), ids[i]) != render.end()};
+        IMMEndpoint *endpoint = nullptr;
+        EDataFlow flow = eCapture;
+        if (SUCCEEDED(devices[i]->QueryInterface(__uuidof(IMMEndpoint), reinterpret_cast<void **>(&endpoint))) &&
+            SUCCEEDED(endpoint->GetDataFlow(&flow)) && flow != eCapture)
+            c.render = true;
+        SafeRelease(endpoint);
+        SafeRelease(devices[i]);
+        if (ids[i] == default_id) default_index = static_cast<int>(i);
+        if (devices::IsMonitorOrLoopback(c) && std::find(logged.begin(), logged.end(), c.id) == logged.end()) {
+            logged.push_back(c.id);
+            Log("voice: capture device '%s' is a monitor/loopback; not used", Utf8(c.name.empty() ? c.id : c.name).c_str());
+        }
+        list.push_back(std::move(c));
+    }
+    const int pick = devices::PickCapture(list, default_index);
+    return pick < 0 ? std::wstring() : list[pick].id;
+}
 
 bool StopRequested(DWORD wait_ms) { return WaitForSingleObject(g_stop, wait_ms) == WAIT_OBJECT_0; }
 
@@ -497,7 +579,9 @@ void CaptureSession(HANDLE ready) {
     LPWSTR id = nullptr;
     dsp::DeviceFormat format;
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
-    if (SUCCEEDED(hr)) hr = enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &device);
+    std::wstring chosen;
+    if (SUCCEEDED(hr)) { chosen = SelectCapture(enumerator); if (chosen.empty()) hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND); }
+    if (SUCCEEDED(hr)) hr = enumerator->GetDevice(chosen.c_str(), &device);
     if (SUCCEEDED(hr)) hr = device->GetId(&id);
     if (SUCCEEDED(hr)) hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&client));
     if (SUCCEEDED(hr)) hr = client->GetMixFormat(&mix);
@@ -508,11 +592,16 @@ void CaptureSession(HANDLE ready) {
     if (SUCCEEDED(hr)) hr = client->Start();
     static HRESULT last_error = S_OK;
     if (FAILED(hr)) {
-        if (hr != last_error) Log("voice: no microphone (0x%08lx); retrying every 2 s", static_cast<unsigned long>(hr));
+        if (hr != last_error) {
+            if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) Log("voice: no microphone (no input, or only monitor/loopback inputs); listening only, checking every 2 s");
+            else Log("voice: no microphone (0x%08lx); retrying every 2 s", static_cast<unsigned long>(hr));
+        }
         last_error = hr;
+        g_mic_ok = false;
         FirstTry(0, false);
     } else {
         last_error = S_OK;
+        g_mic_ok = true;
         Log("voice: microphone open");
         FirstTry(0, true);
         g_capture->Restart();
@@ -537,15 +626,10 @@ void CaptureSession(HANDLE ready) {
             // a live shared-mode stream always delivers (silence too); none for 2 s is a lost device that did not say
             // so (Wine/PulseAudio may not report AUDCLNT_E_DEVICE_INVALIDATED)
             if (GetTickCount64() - last_data > 2000) { Log("voice: microphone stalled; reopening"); break; }
-            if (GetTickCount64() - last_check > 3000) { // the default communications microphone changed
+            if (GetTickCount64() - last_check > 3000) { // the microphone to use changed (the default, or one plugged in)
                 last_check = GetTickCount64();
-                IMMDevice *now = nullptr;
-                LPWSTR now_id = nullptr;
-                const bool changed = SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &now)) &&
-                    SUCCEEDED(now->GetId(&now_id)) && wcscmp(now_id, id) != 0;
-                if (now_id) CoTaskMemFree(now_id);
-                SafeRelease(now);
-                if (changed) { Log("voice: default microphone changed"); break; }
+                const std::wstring now = SelectCapture(enumerator);
+                if (now != id) { Log("voice: microphone changed"); break; }
             }
         }
         client->Stop();
@@ -744,6 +828,7 @@ bool Start(SendFn send) {
         if (!CreateEngineLocked(std::move(send))) return false;
         for (int i = 0; i < 2; i++) {
             g_device_ok[i] = 0;
+            g_mic_ok = false;
             g_first_try[i] = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         }
         g_threads[0] = CreateThread(nullptr, 0, CaptureThread, nullptr, 0, nullptr);
@@ -780,6 +865,8 @@ void Stop() {
 }
 
 bool Running() { return g_running.load(); }
+
+bool ListenOnly() { return g_running.load() && !g_mic_ok.load(); }
 
 void SetTransmit(bool allowed, bool push_to_talk) {
     g_ptt = push_to_talk;
@@ -821,6 +908,7 @@ bool StartHeadless(SendFn send) {
     std::unique_lock lock(g_life);
     StopLocked();
     g_failed = false; // a test session starts clean
+    g_mic_ok = true;  // the test feeds capture itself
     return CreateEngineLocked(std::move(send));
 }
 

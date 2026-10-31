@@ -31,6 +31,7 @@
 #include "fonts.h"
 #include "style.h"
 #include "toast_schedule.h"
+#include "voice_audio.h"
 
 namespace fi {
 
@@ -235,7 +236,9 @@ std::vector<Tile> TilesFor(int tab, const Model &m) {
         const VoiceState v = CurrentVoice();
         const bool enabled = v.flags & VoiceState::Enabled;
         tiles.push_back({kIconMessage, enabled ? T("Voice chat: On", "Chat de voz: Ligado") : T("Voice chat: Off", "Chat de voz: Desligado"),
-                         enabled ? T("You hear and can talk to your lobby", "Você ouve e pode falar com seu lobby") : T("You hear nobody and nobody hears you", "Você não ouve ninguém e ninguém te ouve"),
+                         !enabled              ? T("You hear nobody and nobody hears you", "Você não ouve ninguém e ninguém te ouve")
+                         : audio::ListenOnly() ? T("No microphone: you can listen", "Sem microfone: você pode ouvir")
+                                               : T("You hear and can talk to your lobby", "Você ouve e pode falar com seu lobby"),
                          false, 6});
         tiles.push_back({kIconMessage, std::string(T("Microphone: ", "Microfone: ")) + MicModeName(v.mic),
                          T("RB + R3 also changes it while you drive", "RB + R3 também muda enquanto você dirige"), !enabled, 7});
