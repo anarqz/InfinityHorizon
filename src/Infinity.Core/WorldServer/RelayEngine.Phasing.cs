@@ -107,6 +107,7 @@ internal sealed partial class RelayEngine
     {
         peer.PlayerSequence = null;
         if (peer.Universe != 0) SetUniverse(peer, peer.Universe);
+        TeamObjectCreated(peer); // NR-10 (RelayEngine.Teams.cs)
     }
 
     /// <summary>A car prediction for one receiver: across the event boundary it is in its owner's private universe.</summary>

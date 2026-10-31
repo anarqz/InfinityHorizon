@@ -59,10 +59,24 @@ internal sealed partial class RelayEngine
     {
         _now = Math.Max(_now, nowMilliseconds);
         _watch?.Flush(_now);
+        _parts?.Flush();
         _watch = rules is not null && report is not null ? new PeerWatch(rules, report, Note) : null;
+        _parts = _watch is not null && rules!.Parts is { } catalog ? new PartsWatch(catalog, rules.Version, report!, Note) : null;
         _watchSelf = self;
         _watchRosterAt = long.MinValue; _watchRosterSent = string.Empty;
-        if (_watch is not null) Note($"watch: on (rules version {rules!.Version}); the other players' cars are measured");
+        if (_watch is not null) Note($"watch: on (rules version {rules!.Version}); the other players' cars are measured{(_parts is null ? "; no parts rule (no readable game database)" : ", their parts too")}");
+    }
+
+    /// <summary>NR-6: the parts rule, while watching with a readable game database.</summary>
+    private PartsWatch? _parts;
+
+    /// <summary>NR-6: a peer's own player object (router 1, sanitised) as it arrived: its model and part rows, when readable.</summary>
+    private void WatchPlayerObject(RelayPeer peer, bool create, BitBuffer payload)
+    {
+        if (_parts is not { } parts || !Watched(peer)) return;
+        var (model, rows) = PlayerParts.Read(payload);
+        if (model is null && rows is null && !create) return;
+        parts.Observe(peer.Index, peer.Xuid, model, rows, fresh: create);
     }
 
     internal bool Watching => _watch is not null;
@@ -88,6 +102,7 @@ internal sealed partial class RelayEngine
     private void WatchPeerLeft(RelayPeer peer)
     {
         _watch?.Forget(peer.Index, _now);
+        _parts?.Forget(peer.Index);
         _watchRosterAt = long.MinValue;
     }
 

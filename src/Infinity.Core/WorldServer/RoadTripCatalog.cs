@@ -21,6 +21,12 @@ internal sealed class RoadTripCatalog
     /// <summary>CarClasses 0..5 (D, C, B, A, S1, S2); 6 X and 7 R are rental or event-specific.</summary>
     internal const int Classes = 6;
     internal const int EventsPerDestination = 4, Destinations = 3;
+    /// <summary>NR-10: every online event but King and Infected has a team twin at its id + 10000 (RelayEngine.TeamVariantOffset).</summary>
+    internal const int TeamVariantOffset = RelayEngine.TeamVariantOffset;
+    /// <summary>A destination offers one event as its team twin from this many players.</summary>
+    internal const int TeamPlayers = 4;
+    /// <summary>The race modes that rank the whole field (RaceModeId), the only ones offered as a team twin.</summary>
+    internal static readonly IReadOnlySet<int> TeamModes = new HashSet<int> { 0, 1, 2, 4, 5, 31 };
 
     internal IReadOnlyList<RoadTripEvent> Events { get; }
 
@@ -71,12 +77,15 @@ internal sealed class RoadTripCatalog
     /// <summary>
     /// Three destinations for <paramref name="players"/> players: only events their mode can run with them, each destination four
     /// distinct events that share one allowed class (their modes mixed), the three locations and, where possible, the three classes
-    /// different. Storm Island only when the host has it. Null when the catalog cannot fill three destinations.
+    /// different. Storm Island only when the host has it. Null when the catalog cannot fill three destinations. With 4 players or
+    /// more, each destination offers one of its events that ranks the field as its team twin (id + 10000), never both versions.
     /// </summary>
     internal IReadOnlyList<RoadTripDestination>? Draw(int players, bool stormIsland, Random random)
     {
         ArgumentNullException.ThrowIfNull(random);
-        var eligible = Events.Where(e => e.MinPlayers <= Math.Max(1, players) && (stormIsland || e.Location != StormIsland)).ToList();
+        // the twins themselves are never drawn as such: a destination offers an event's twin in its place
+        var eligible = Events.Where(e => e.Id < TeamVariantOffset && e.MinPlayers <= Math.Max(1, players)
+            && (stormIsland || e.Location != StormIsland)).ToList();
         var locations = eligible.Select(e => e.Location).Distinct().OrderBy(_ => random.Next()).ToList();
         var chosen = new List<RoadTripDestination>();
         var usedClasses = new HashSet<int>();
@@ -91,7 +100,16 @@ internal sealed class RoadTripCatalog
                 var fits = here.Where(e => e.Classes.Contains(carClass)).ToList();
                 if (fits.Count < EventsPerDestination) continue;
                 var picked = Mix(fits, random);
-                chosen.Add(new(location, [.. picked.Select(e => e.Id)], [.. picked.Select(e => e.MinPlayers)], carClass));
+                var ids = picked.Select(e => e.Id).ToList();
+                var minimum = picked.Select(e => e.MinPlayers).ToList();
+                var teamable = Enumerable.Range(0, picked.Count).Where(k => TeamModes.Contains(picked[k].Mode)).ToList();
+                if (players >= TeamPlayers && teamable.Count != 0)
+                {
+                    var k = teamable[random.Next(teamable.Count)];
+                    ids[k] += TeamVariantOffset;
+                    minimum[k] = Math.Max(TeamPlayers, minimum[k]);
+                }
+                chosen.Add(new(location, ids, minimum, carClass));
                 usedClasses.Add(carClass);
                 break;
             }

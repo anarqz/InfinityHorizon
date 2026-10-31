@@ -4,8 +4,9 @@
 // one, never a monitor or loopback input: voice_audio_devices.h; none: listen-only; §15 levels: voice_volume.h) → 48 kHz mono → echo
 // cancellation (WebRTC AEC3 + its 100 Hz high-pass, against the mix about to play: voice_echo.h) → AGC → RNNoise (noise suppression; its voice probability gates sending, 300 ms hangover) → Opus 20 ms
 // frames (SILK wideband 6 kbit/s, CVBR, complexity 10, no FEC/DTX) → repacketized 3 (or 6) per packet → SendFn; and
-// playback: per seat an adaptive 1-2 packet jitter buffer → Opus decoder with deep PLC for gaps → mix → one XAudio2
-// source voice (3 × 20 ms queued, ~60 ms). The decoder starts at complexity 7 (NoLACE) on every platform and steps
+// playback: per seat an adaptive 1-2 packet jitter buffer → Opus decoder with deep PLC for gaps → stereo mix (open:
+// every talker centred, both channels the old mono mix; proximity: voice_spatial.h places each by its car) → one
+// 2-channel XAudio2 source voice (3 × 20 ms queued, ~60 ms). The decoder starts at complexity 7 (NoLACE) on every platform and steps
 // down only on measured decode cost (voice_audio_complexity.h): no platform-based quality choice, so a Deck player
 // gets what a Windows player gets. Releasing transmit (push-to-talk, mute) ends the spurt with a short packet that
 // carries the end flag. Every failure logs and turns voice off; a missing, unplugged or changed device is retried or
@@ -30,7 +31,8 @@
 // | FTZ/DAZ via _mm_setcsr on each engine thread   | yes     | known: MXCSR is per thread CPU state, Wine keeps it | set on capture, playback and test-seam entry       |
 // | xaudio2_9.dll via LoadLibraryExW(SYSTEM32)     | yes     | known: Wine/Proton builtin, FAudio-backed     | loaded at run time (no import), as toast_audio.cpp     |
 // | XAudio2Create(0, XAUDIO2_DEFAULT_PROCESSOR)    | yes     | known (FAudio)                                | flags 0 only                                           |
-// | Mastering voice on the default device; float32 mono 48 kHz source voice; OnBufferEnd | yes | known (FAudio) | used; also a 100 ms wait timeout so a missed callback never starves the queue |
+// | Mastering voice on the default device; float32 stereo 48 kHz source voice; OnBufferEnd | yes | known (FAudio) | used; also a 100 ms wait timeout so a missed callback never starves the queue |
+// | Default output matrix of that source voice     | yes     | inference: FAudio's defaults match            | stereo goes L→FL, R→FR at 1.0, as the old mono voice went to both at 1.0 (read back with GetOutputMatrix on Windows, 2026-10-31): open mode's level is unchanged |
 // | CreateMasteringVoice(szDeviceId = an IMMDevice id), the player's output (§15) | yes | inference: Wine maps the id to its device list | refused: the default mastering voice, logged once, no reopen loop |
 // | GetState(XAUDIO2_VOICE_NOSAMPLESPLAYED)        | yes     | known (FAudio)                                | used                                                   |
 // | OnCriticalError on device loss                 | yes     | may not fire (inference)                      | plus the render default-device poll                    |
@@ -45,6 +47,7 @@
 #include "voice_audio_dsp.h"
 #include "voice_audio_testing.h"
 #include "voice_echo.h"
+#include "voice_spatial.h"
 
 #include "overlay.h"
 
@@ -121,6 +124,13 @@ struct SeatGains {
 std::mutex g_choice_lock;
 std::wstring g_mic_choice, g_output_choice;           // IMMDevice ids; empty: the system default
 std::atomic<uint32_t> g_mic_serial{0}, g_output_serial{0}; // bumped on a change: the open stream reopens
+
+// NR-7: the lobby's voice mode and the spatial tuning; they outlive an engine session like the levels above.
+std::atomic<uint8_t> g_voice_mode{static_cast<uint8_t>(spatial::Mode::Open)};
+std::mutex g_params_lock;
+spatial::Params g_params;           // Sanitized
+std::atomic<uint32_t> g_params_serial{0};
+spatial::Params SpatialParams() { std::lock_guard lock(g_params_lock); return g_params; }
 
 std::wstring MicChoice() { std::lock_guard lock(g_choice_lock); return g_mic_choice; }
 std::wstring OutputChoice() { std::lock_guard lock(g_choice_lock); return g_output_choice; }
@@ -359,13 +369,23 @@ public:
     bool Talking(uint8_t seat) const {
         return seat < kSeats && !silenced_[seat].load() && NowMs() - last_rx_[seat].load() <= kTalkingMs;
     }
+    // Talking and audible now: in proximity a talker beyond range is talking but not heard (gain under -60 dB).
+    bool Heard(uint8_t seat) const { return Talking(seat) && audible_[seat].load(std::memory_order_relaxed) > 1e-3f; }
     void SetVolume(float v) { volume_ = std::clamp(std::isfinite(v) ? v : 0.0f, 0.0f, 1.0f); }
-    size_t Pull(float *out, size_t n) {
+    // NR-7: the poses of a voice down, stamped with the audio clock (samples mixed so far): applied at the next frame.
+    void SetPose(uint8_t seat, const spatial::Pose &talker, const spatial::Pose &self) {
+        if (seat >= kSeats) return;
+        const double arrived = static_cast<double>(mixed_.load()) / kRate;
+        std::lock_guard lock(pose_mutex_);
+        if (poses_.size() < kMaxInbox) poses_.push_back({seat, talker, self, arrived});
+    }
+    // `frames` stereo frames, interleaved L, R.
+    size_t Pull(float *out, size_t frames) {
         size_t done = 0;
-        while (done < n) {
+        while (done < frames) {
             if (mix_pos_ == kFrame) { MixFrame(mix_); mix_pos_ = 0; }
-            const size_t take = std::min(n - done, static_cast<size_t>(kFrame - mix_pos_));
-            std::memcpy(out + done, mix_ + mix_pos_, take * sizeof(float));
+            const size_t take = std::min(frames - done, static_cast<size_t>(kFrame - mix_pos_));
+            std::memcpy(out + 2 * done, mix_ + 2 * mix_pos_, 2 * take * sizeof(float));
             mix_pos_ += static_cast<int>(take);
             done += take;
         }
@@ -448,33 +468,68 @@ private:
         }
         return false;
     }
+    // NR-7: the poses that arrived since the last frame, the mode and the tuning, for this frame's seats.
+    void ApplyPoses() {
+        std::vector<PoseUpdate> in;
+        { std::lock_guard lock(pose_mutex_); in.swap(poses_); }
+        for (const PoseUpdate &u : in) {
+            talkers_[u.seat].Update(u.talker, u.arrived);
+            scene_.SetListener(u.self, u.arrived);
+        }
+        if (const uint32_t serial = g_params_serial.load(); serial != params_serial_) { params_serial_ = serial; scene_.params = SpatialParams(); }
+        scene_.proximity = static_cast<spatial::Mode>(g_voice_mode.load(std::memory_order_relaxed)) == spatial::Mode::Proximity;
+    }
+    // One 20 ms stereo frame (interleaved). Each seat's decoded voice (its volume applied) goes through its
+    // SeatProcessor: in open mode (and in proximity while this player has no car) that adds exactly the old mono
+    // signal to both channels, so open mode is the old mix sample for sample.
     void MixFrame(float *out) {
         DrainInbox();
-        std::fill(out, out + kFrame, 0.0f);
+        ApplyPoses();
+        std::fill(out, out + 2 * kFrame, 0.0f);
         const float volume = volume_.load();
         decodes_ = 0;
         int talkers = 0;
         const double started = QpcUs();
         for (int i = 0; i < kSeats; i++) {
             Seat &s = seats_[i];
-            if (silenced_[i].load()) { if (s.playing || !s.buffer.empty() || s.pcm_len) s.Clear(); continue; }
+            filled_[i] = 0;
+            if (silenced_[i].load()) {
+                if (s.playing || !s.buffer.empty() || s.pcm_len) s.Clear();
+                if (spatial_[i].Busy()) spatial_[i].Reset(); // silent at once, not after the delay line's tail
+                continue;
+            }
             int filled = 0;
             const int decodes_before = decodes_;
             const float gain = volume * g_seat_gains.gain[i].load(std::memory_order_relaxed); // §15: this talker's volume
+            float *in = voice_[i].data();
             while (filled < kFrame) {
                 if (s.pcm_pos >= s.pcm_len && !Refill(s)) break;
                 const int take = std::min(kFrame - filled, s.pcm_len - s.pcm_pos);
-                for (int k = 0; k < take; k++) out[filled + k] += s.pcm[s.pcm_pos + k] * gain;
+                for (int k = 0; k < take; k++) in[filled + k] = s.pcm[s.pcm_pos + k] * gain;
                 s.pcm_pos += take;
                 filled += take;
             }
+            filled_[i] = filled;
             if (filled || decodes_ != decodes_before) talkers++;
         }
-        const double cost = QpcUs() - started;
-        for (int k = 0; k < kFrame; k++) out[k] = std::clamp(out[k], -1.0f, 1.0f);
+        const double cost = QpcUs() - started; // decoding only: the complexity rule's input, as before
+        const double t0 = static_cast<double>(mixed_.load()) / kRate;
+        for (int i = 0; i < kSeats; i++) {
+            if (silenced_[i].load()) continue;
+            spatial_[i].Process(voice_[i].data(), filled_[i], kFrame, out, t0, scene_, talkers_[i]);
+            audible_[i].store(spatial_[i].AudibleGain(), std::memory_order_relaxed);
+        }
+        mixed_ += kFrame;
+        for (int k = 0; k < 2 * kFrame; k++) out[k] = std::clamp(out[k], -1.0f, 1.0f);
         // Release 2.0.0: what will be played is the echo canceller's far end (silence too: AEC3 wants every block),
-        // unless the output's loopback (game + this mix) is feeding it.
-        if (g_echo && g_mix_reference.load(std::memory_order_relaxed) && !LoopbackLive()) { g_echo->Render(out); g_echo->Render(out + kSub); }
+        // unless the output's loopback (game + this mix) is feeding it. NR-7: the final stereo mix as (L + R) / 2, as the
+        // loopback path's ToMono does; in open mode that is the old mono mix exactly.
+        if (g_echo && g_mix_reference.load(std::memory_order_relaxed) && !LoopbackLive()) {
+            float mono[kFrame];
+            for (int k = 0; k < kFrame; k++) mono[k] = (out[2 * k] + out[2 * k + 1]) * 0.5f;
+            g_echo->Render(mono);
+            g_echo->Render(mono + kSub);
+        }
         // A packet decodes 3 (or 6) frames at once, so the raw time per mix frame is bursty. The load is the cost per
         // 20 ms of audio times the talkers, reported once per 20 ms of audio decoded: the controller's frames are
         // then 20 ms of talking time whatever the bundle.
@@ -508,8 +563,25 @@ private:
     std::atomic<float> volume_{1.0f};
     std::mutex inbox_mutex_;
     std::vector<Packet> inbox_;
-    float mix_[kFrame] = {};
+    float mix_[2 * kFrame] = {}; // stereo, interleaved
     int mix_pos_ = kFrame;
+    // NR-7: per seat its decoded voice of this frame, its spatial processing (a 128 KB delay line each, made at Start)
+    // and its car; the listener; the audio clock.
+    struct PoseUpdate {
+        uint8_t seat;
+        spatial::Pose talker, self;
+        double arrived;
+    };
+    std::array<std::array<float, kFrame>, kSeats> voice_{};
+    std::array<int, kSeats> filled_{};
+    std::array<spatial::SeatProcessor, kSeats> spatial_;
+    std::array<spatial::Track, kSeats> talkers_;
+    std::array<std::atomic<float>, kSeats> audible_{};
+    spatial::Scene scene_;
+    uint32_t params_serial_ = ~0u;
+    std::atomic<uint64_t> mixed_{0}; // samples mixed
+    std::mutex pose_mutex_;
+    std::vector<PoseUpdate> poses_;
 };
 
 // ---------------------------------------------------------------- engine lifetime
@@ -824,11 +896,11 @@ bool PlaybackSession(HMODULE library, HANDLE event) {
     engine_cb.event = event;
     WAVEFORMATEX format{};
     format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
-    format.nChannels = 1;
+    format.nChannels = 2; // NR-7: stereo (open mode: both channels the old mono mix, which reached the output the same way)
     format.nSamplesPerSec = kRate;
     format.wBitsPerSample = 32;
-    format.nBlockAlign = 4;
-    format.nAvgBytesPerSec = kRate * 4;
+    format.nBlockAlign = 8;
+    format.nAvgBytesPerSec = kRate * 8;
     HRESULT hr = create ? create(&engine, 0, XAUDIO2_DEFAULT_PROCESSOR) : E_NOINTERFACE;
     if (SUCCEEDED(hr)) hr = engine->RegisterForCallbacks(&engine_cb);
     if (SUCCEEDED(hr) && !chosen.empty()) { // XAudio2 2.9 takes the IMMDevice id; refused: the default instead
@@ -852,7 +924,7 @@ bool PlaybackSession(HMODULE library, HANDLE event) {
         FirstTry(1, true);
         SetOutputInUse(chosen.empty() ? output : chosen); // §15: the device the mix (and so the echo reference) goes to
         Log("voice: playback open");
-        static float buffers[kQueuedBuffers + 1][kFrame];
+        static float buffers[kQueuedBuffers + 1][2 * kFrame]; // stereo, interleaved
         int next = 0;
         bool started = false;
         while (!engine_cb.lost.load() && g_running.load()) {
@@ -862,7 +934,7 @@ bool PlaybackSession(HMODULE library, HANDLE event) {
             for (UINT32 queued = state.BuffersQueued; queued < static_cast<UINT32>(kQueuedBuffers); queued++) {
                 g_mixer->Pull(buffers[next], kFrame);
                 XAUDIO2_BUFFER buffer{};
-                buffer.AudioBytes = kFrame * sizeof(float);
+                buffer.AudioBytes = 2 * kFrame * sizeof(float);
                 buffer.pAudioData = reinterpret_cast<const BYTE *>(buffers[next]);
                 if (FAILED(voice->SubmitSourceBuffer(&buffer))) { failed = true; break; }
                 next = (next + 1) % (kQueuedBuffers + 1); // one spare: a buffer is never rewritten while queued
@@ -1183,6 +1255,33 @@ bool SeatTalking(uint8_t seat) {
     return g_running.load() && g_mixer && g_mixer->Talking(seat);
 }
 
+bool SeatHeard(uint8_t seat) {
+    std::shared_lock lock(g_life);
+    return g_running.load() && g_mixer && seat < kSeats && g_mixer->Heard(seat);
+}
+
+void SetVoiceMode(VoiceMode mode) {
+    const auto m = static_cast<uint8_t>(mode);
+    g_voice_mode.store(m <= static_cast<uint8_t>(spatial::Mode::Proximity) ? m : static_cast<uint8_t>(spatial::Mode::Open));
+}
+
+void SetPose(uint8_t seat, const spatial::Pose &talker, const spatial::Pose &self) {
+    try {
+        std::shared_lock lock(g_life);
+        if (g_running.load() && g_mixer) g_mixer->SetPose(seat, talker, self);
+    } catch (...) {
+        Fail("SetPose failed");
+    }
+}
+
+void SetSpatialParams(const spatial::Params &params) {
+    {
+        std::lock_guard lock(g_params_lock);
+        g_params = spatial::Sanitized(params);
+    }
+    g_params_serial++;
+}
+
 bool Sending() { return g_running.load() && g_allowed.load() && NowMs() < g_sending_until.load(); }
 
 namespace testing {
@@ -1207,16 +1306,23 @@ void ProcessCapture(const float *interleaved, size_t frames, uint32_t rate, uint
     }
 }
 
-size_t PullMix(float *out, size_t samples) {
+size_t PullMixStereo(float *interleaved, size_t frames) {
     std::shared_lock lock(g_life);
-    if (!g_running.load() || !g_mixer) { std::fill(out, out + samples, 0.0f); return 0; }
+    if (!g_running.load() || !g_mixer) { std::fill(interleaved, interleaved + 2 * frames, 0.0f); return 0; }
     FlushDenormals();
     try {
-        return g_mixer->Pull(out, samples);
+        return g_mixer->Pull(interleaved, frames);
     } catch (...) {
         Fail("mixing failed");
         return 0;
     }
+}
+
+size_t PullMix(float *out, size_t samples) {
+    std::vector<float> stereo(2 * samples);
+    const size_t got = PullMixStereo(stereo.data(), samples);
+    for (size_t i = 0; i < samples; i++) out[i] = (stereo[2 * i] + stereo[2 * i + 1]) * 0.5f; // open mode: exactly the mono mix
+    return got;
 }
 
 void SetClockMs(int64_t ms) { g_fake_now = ms; }

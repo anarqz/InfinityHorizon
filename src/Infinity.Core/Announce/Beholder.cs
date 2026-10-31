@@ -324,8 +324,11 @@ public static class RelayChoice
 {
     public const string FileName = "relay-choice.json";
 
-    /// <param name="AlwaysRelay">OD-146: every join and hosted world goes through a relay (off by default).</param>
-    public sealed record Saved(string? Endpoint, bool OfficialOnly, bool AlwaysRelay = false);
+    /// <summary>
+    /// The saved choice. OD-160 removed OD-146's "always relay" switch: a file that still carries <c>alwaysRelay</c> reads as before
+    /// (the unknown property is ignored) and the next write drops it.
+    /// </summary>
+    public sealed record Saved(string? Endpoint, bool OfficialOnly);
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 

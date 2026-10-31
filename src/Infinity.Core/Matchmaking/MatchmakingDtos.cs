@@ -222,6 +222,13 @@ public sealed record RequestToJoin
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ModEntry>? Mods { get; init; }
+
+    /// <summary>
+    /// OD-160 (§3.4, §5b "Relay by mode"): the asker's measured relay round trips, same rules as <see cref="JoinRequest.Relays"/>, so an
+    /// acceptance into a relay-born world seats it on the world's relay (without it: 409 <c>launcher_update_required</c> there).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, int>? Relays { get; init; }
 }
 
 public sealed record ListViewer
@@ -271,7 +278,7 @@ public sealed record WorldSettings
 {
     public required string Name { get; init; }
 
-    /// <summary>OD-146 (§5b): <c>relay</c> makes the world relay-born for every guest, for its whole life; null: as before.</summary>
+    /// <summary>OD-146 (§5b): <c>relay</c> makes a Noob world relay-born. OD-160 removed the launcher's switch: this client never sets it.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Transport { get; init; }
 
@@ -443,7 +450,7 @@ public sealed record JoinRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, int>? Relays { get; init; }
 
-    /// <summary>OD-146 (§5b): <c>relay</c> asks for a relay-born seat (or <c>no_relay</c>), never a direct one; null: as before.</summary>
+    /// <summary>OD-146 (§5b): <c>relay</c> asks for a relay-born seat. OD-160 removed the launcher's switch: this client never sets it.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Transport { get; init; }
 
@@ -597,7 +604,10 @@ public sealed record SeatRenew
 {
     public required string GrantId { get; init; }
 
-    /// <summary>CR-S57: <c>relay</c> once the joiner's punch failed and it moved to the grant's relay.</summary>
+    /// <summary>
+    /// CR-S57: <c>relay</c> once the joiner's punch failed and it moved to the grant's relay. OD-160: <c>direct</c> once a relay-born
+    /// seat could not reach its relay and plays direct with the host instead.
+    /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Transport { get; init; }
 }

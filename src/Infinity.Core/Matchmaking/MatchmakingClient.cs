@@ -73,6 +73,10 @@ public interface IMatchmakingApi
     Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
         RequestAsync(worldId, cancellation);
 
+    /// <summary>OD-160 (§3.4): as above, with the asker's relay round trips (2.0.1 always sends them; <c>{}</c> when none is measured).</summary>
+    Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
+        RequestAsync(worldId, mods, cancellation);
+
     Task<MmResult<Invite>> AcceptRequestAsync(string worldId, string requestId, CancellationToken cancellation = default);
 
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default);
@@ -100,7 +104,10 @@ public interface IMatchmakingApi
 
     Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default);
 
-    /// <summary>CR-S57: <c>{grantId, transport}</c> (<c>"relay"</c>: the joiner fell back; null: the plain renew).</summary>
+    /// <summary>
+    /// CR-S57: <c>{grantId, transport}</c> (<c>"relay"</c>: the joiner fell back; OD-160 <c>"direct"</c>: a relay-born seat's relay was
+    /// unreachable; null: the plain renew).
+    /// </summary>
     Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, string? transport, CancellationToken cancellation) => RenewSeatAsync(grantId, cancellation);
 
     Task<MmResult<MmNone>> LeaveSeatAsync(CancellationToken cancellation = default);
@@ -250,7 +257,12 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
 
     /// <summary>OD-112: the asker's set as <c>{mods}</c>; a vanilla request keeps the empty body.</summary>
     public Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
-        SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests", mods is { Count: > 0 } ? new RequestToJoin { Mods = mods } : null, cancellation);
+        RequestAsync(worldId, mods, null, cancellation);
+
+    /// <summary>OD-160: with the asker's relay round trips (<c>{}</c> is sent as such); a vanilla request without either keeps the empty body.</summary>
+    public Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
+        SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests",
+            mods is { Count: > 0 } || relays is not null ? new RequestToJoin { Mods = mods is { Count: > 0 } ? mods : null, Relays = relays } : null, cancellation);
 
     public Task<MmResult<Invite>> AcceptRequestAsync(string worldId, string requestId, CancellationToken cancellation = default) =>
         SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests/" + Id(requestId, nameof(requestId)) + "/accept", null, cancellation);

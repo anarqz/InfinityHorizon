@@ -1105,6 +1105,12 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
                             (m.any_mode ? std::string(" · ") + kAnyModeBadge : std::string()) + " · " + std::to_string(m.players) + "/" +
                             std::to_string(m.max) + T(" players", " jogadores");
     TextAt(dl, f.small, ImVec2(x, y), kTextDim, sub.c_str());
+    if (m.transport != kTransportUnknown && !m.notice.empty()) { // OD-160: the official relay or a direct connection, as the launcher says
+        y += 20 * s;
+        dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + 20 * s), true);
+        TextAt(dl, f.small, ImVec2(x, y), m.transport == kTransportRelay ? kTalkGreen : kAmber, m.notice.c_str());
+        dl->PopClipRect();
+    }
     if (m.role != 1) { // the host changes it below; everyone else reads it here (OD-154)
         y += 20 * s;
         const char *said = voice.flags & VoiceState::LobbyKnown ? VoiceLabel(voice.lobby_on()) : T("Voice chat: set by the host", "Chat de voz: definido pelo anfitrião");

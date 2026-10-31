@@ -38,6 +38,7 @@ internal static class NerdPayload
         [32] = 1,                                            // HasInitialCarBeenChosen
         [RelayEngine.PrivateUniverseVariable] = RelayEngine.PrivateUniverseBits, // 40 PrivateUniverseId (this server writes it)
         [41] = 64,                                           // an id
+        [RelayEngine.TeamVariable] = RelayEngine.TeamBits,   // 90 TeamId (this server writes it, NR-10)
     };
 
     /// <summary>

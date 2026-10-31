@@ -176,7 +176,9 @@ int azimuth_proxy_relay_candidates(const unsigned char *p,size_t n) {
    the relay says `relay ok` every datagram for the world travels as FIR1 `data` (the FIUP proof
    runs again, unchanged, over the relay); a relay-born world (transport 1) goes there at once.
    RelayFallback (0x1e) tells the launcher: 1 direct failed (renew the seat with transport
-   "relay"), 2 relay ok, 3 relay unavailable for good, 4 direct ok. */
+   "relay"), 2 relay ok, 3 relay unavailable for good, 4 direct ok. OD-160: a relay-born world
+   whose relay fails (10 s, or no proof through it) punches the host directly for 3 s before
+   state 3; the game proving there is state 4 (the launcher then renews transport "direct"). */
 #define PX_LEG_CLAIMS 2048u
 #define PX_RELAY_PAYLOAD 1200
 #define PX_DIRECT_FALLBACK_MS 3000u
@@ -195,8 +197,8 @@ enum {PXR_IDLE,PXR_TRYING,PXR_OK,PXR_GAVE_UP,PXR_DIRECT};
 static struct {
     unsigned char grant[16],claims[PX_LEG_CLAIMS],signature[64],cookie[16];
     size_t claims_size;PxAddr relay;LONG revision;
-    int have_leg,skip_direct,have_cookie,answered,want_relay,direct_told,unavailable;
-    unsigned long long deadline,last_hello,last_relay,ok_at;
+    int have_leg,skip_direct,have_cookie,answered,want_relay,direct_told,unavailable,direct_after;
+    unsigned long long deadline,last_hello,last_relay,ok_at,direct_until;
 } px_relay={.revision=-1};
 static volatile LONG px_relay_phase,px_relay_dropped;
 /* Exclusive around every change into or out of PXR_OK (and of the relay and grant it uses). */
@@ -845,16 +847,20 @@ static void px_relay_start(unsigned long long now) {
     InterlockedExchange(&px_relay_phase,PXR_TRYING);
     px_relay_hello(now);
 }
-static void px_relay_give_up(const char *line) {
+static void px_relay_give_up(const char *line,unsigned long long now) {
     log_append(line);
-    fi_launch_relay_fallback(px_relay.grant,3);
+    /* OD-160: a relay-born (Hardcore) world's joiner punches the host directly next (state 4 or 3 later) */
+    int direct_next=px_relay.skip_direct && !px_relay.direct_after;
+    if(!direct_next)fi_launch_relay_fallback(px_relay.grant,3);
     unsigned char grant[16];memory_copy(grant,px_relay.grant,16);
     LONG revision=px_relay.revision;PxAddr relay=px_relay.relay;int skip=px_relay.skip_direct;
     px_relay_reset();
     /* the leg stays known (no second try for this grant) */
-    memory_copy(px_relay.grant,grant,16);px_relay.relay=relay;px_relay.skip_direct=skip;px_relay.have_leg=1;
-    px_relay.revision=revision;px_relay.direct_told=1;
+    memory_copy(px_relay.grant,grant,16);px_relay.relay=relay;px_relay.have_leg=1;px_relay.revision=revision;
+    px_relay.skip_direct=direct_next ? 0 : skip;px_relay.direct_told=!direct_next;
+    px_relay.direct_after=direct_next;px_relay.direct_until=direct_next ? now+PX_DIRECT_FALLBACK_MS : 0;
     InterlockedExchange(&px_relay_phase,PXR_GAVE_UP);
+    if(direct_next)log_append("RELAY: relay-born world; punching the host directly for 3 s.\r\n");
 }
 /* 0x04 relay ok: the relay becomes the world's only candidate and the FIUP proof runs over it. */
 static void px_relay_ok(unsigned long long now) {
@@ -876,8 +882,16 @@ static void px_relay_tick(const unsigned char *context,unsigned long long now) {
             if(phase==PXR_TRYING) {
                 log_append("RELAY: the direct path answered first; the relay leg stops.\r\n");
                 InterlockedExchange(&px_relay_phase,PXR_DIRECT);
+            } else if(px_relay.direct_after) {
+                log_append("RELAY: the host answered directly; playing direct.\r\n");
+                InterlockedExchange(&px_relay_phase,PXR_DIRECT);
             }
         }
+        return;
+    }
+    if(phase==PXR_GAVE_UP && px_relay.direct_after && !px_relay.direct_told && now>=px_relay.direct_until) {
+        px_relay.direct_told=1;fi_launch_relay_fallback(px_relay.grant,3);
+        log_append("RELAY: the host did not answer directly either; giving up.\r\n");
         return;
     }
     if(phase==PXR_IDLE) {
@@ -889,13 +903,13 @@ static void px_relay_tick(const unsigned char *context,unsigned long long now) {
         px_relay_start(now);return;
     }
     if(phase==PXR_TRYING) {
-        if(now>=px_relay.deadline) {px_relay_give_up("RELAY: relay unavailable, giving up.\r\n");return;}
+        if(now>=px_relay.deadline) {px_relay_give_up("RELAY: relay unavailable, giving up.\r\n",now);return;}
         if(now-px_relay.last_hello>=(px_relay.answered ? PX_RELAY_HELLO_MS : PX_RELAY_RETRY_MS))px_relay_hello(now);
         if(px_relay.want_relay && now-px_relay.last_relay>=PX_RELAY_RETRY_MS)px_relay_send_relay(now);
     } else if(phase==PXR_OK) {
         if(now-px_relay.last_hello>=PX_RELAY_HELLO_MS)px_relay_hello(now);
         if(!px_have_world && now-px_relay.ok_at>=PX_RELAY_PROOF_MS)
-            px_relay_give_up("RELAY: the world did not answer through the relay; giving up.\r\n");
+            px_relay_give_up("RELAY: the world did not answer through the relay; giving up.\r\n",now);
     }
 }
 enum {PXR_RX_NOT_OURS,PXR_RX_HANDLED,PXR_RX_DATA};

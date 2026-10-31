@@ -89,6 +89,37 @@ internal static class StunCodec
         return output;
     }
 
+    /// <summary>An indication with several attributes, in this order, each padded to 4 bytes (§5c: the message's attribute first).</summary>
+    internal static byte[] Indications(ushort kind, ReadOnlySpan<byte> transaction, params (ushort Attribute, byte[] Value)[] attributes)
+    {
+        var length = 20 + attributes.Sum(a => 4 + ((a.Value.Length + 3) / 4) * 4);
+        if (length > MaxLength || attributes.Any(a => a.Value.Length > ushort.MaxValue)) throw new WireFormatException(WireError.LengthLimit);
+        var output = new byte[length];
+        Header(output, kind, transaction);
+        var at = 20;
+        foreach (var (attribute, value) in attributes)
+        {
+            BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(at), attribute);
+            BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(at + 2), (ushort)value.Length);
+            value.CopyTo(output.AsSpan(at + 4));
+            at += 4 + ((value.Length + 3) / 4) * 4;
+        }
+        return output;
+    }
+
+    /// <summary>A well-formed STUN datagram whose every attribute lies within it (an attribute past its end fails the shape).</summary>
+    internal static bool Walks(ReadOnlySpan<byte> data)
+    {
+        if (!IsStun(data)) return false;
+        for (var at = 20; at + 4 <= data.Length;)
+        {
+            var count = BinaryPrimitives.ReadUInt16BigEndian(data[(at + 2)..]);
+            if (count > data.Length - at - 4) return false;
+            at += 4 + ((count + 3) / 4) * 4;
+        }
+        return true;
+    }
+
     private static void Header(Span<byte> output, ushort kind, ReadOnlySpan<byte> transaction)
     {
         BinaryPrimitives.WriteUInt16BigEndian(output, kind);

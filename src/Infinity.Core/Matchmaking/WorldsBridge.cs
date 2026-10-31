@@ -210,7 +210,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         var text = endpoints + "\n\n" + _text("connection.matchmaking") + ": " + result + "\n" + _text("connection.response") + ": " + started.ElapsedMilliseconds + " ms"
             + "\n\n" + _text("connection.public_address") + ": " + publicAddress + "\nIPv6: " + ipv6 + "\nNAT: " + nat
             + "\nUPnP: " + (network is null ? unknown : _text("connection.upnp." + network.Upnp.ToString().ToLowerInvariant()))
-            + (TransportText() is { } transport ? "\n" + _text("connection.transport") + ": " + transport : "") + "\n\n" + _text("connection.snapshot");
+            + (TransportText() is { } transport ? "\n" + _text("connection.transport") + ": " + transport : "")
+            + (ConnectionNotice() is { } notice ? "\n" + notice : "") + "\n\n" + _text("connection.snapshot"); // OD-160's notice
         return new(state, text);
     }
 
@@ -508,7 +509,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, RelayTransport, activity, token), cancellation,
+                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, null, activity, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -723,7 +724,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// (<c>GET /mm/v1/seat?includeMembers=true</c>), its code for the host, and its players.
     /// An omitted roster uses the bounded legacy members route; a failed read retains valid state.
     /// </summary>
-    public Task<UiFrame.MyWorld> MyWorldAsync(CancellationToken cancellation) => MineAsync(background: false, cancellation);
+    public async Task<UiFrame.MyWorld> MyWorldAsync(CancellationToken cancellation) =>
+        WithConnection(await MineAsync(background: false, cancellation).ConfigureAwait(false));
 
     /// <summary>The players of the world as last read (no request): the launcher's moderation panel lists them (CR-S62).</summary>
     public IReadOnlyList<MemberRow> LastMembers => Volatile.Read(ref _mineSnapshot).Members;
@@ -736,7 +738,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private string? _lastJoinRefusal;
 
     /// <summary>Periodic reconciliation sleeps after an idle free session has a confirmed empty seat.</summary>
-    public Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) => MineAsync(background: true, cancellation);
+    public async Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) =>
+        WithConnection(await MineAsync(background: true, cancellation).ConfigureAwait(false));
 
     /// <summary>An explicit UI/action/reconnect asks for one fresh reconciliation without erasing a good roster.</summary>
     public void RequestReconcile()
@@ -868,6 +871,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
                 }
                 if (role is UiWorldRole.Hosting or UiWorldRole.Seated) _publicWarning.Observe(seat.WorldId, world.Audience);
+                ObserveNoticeWorld(world); // OD-160's notice: the world's modes and transport
                 ObserveActivity(seat);
                 CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
@@ -1064,7 +1068,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Mods = mods,
                 Nat = relayReport?.Nat,
                 Relays = relayReport?.Relays,
-                Transport = RelayTransport,
                 Lobbies = relay.Lobbies,
                 Activity = opening,
             };
@@ -1109,6 +1112,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         Volatile.Write(ref _hostedMods, mods ?? []);
                         Volatile.Write(ref _hostedPlayers, world.Players);
                         Volatile.Write(ref _hostedTransport, world.Transport);
+                        ObserveNoticeWorld(world.Modes is null ? world with { Modes = settings.Modes } : world); // OD-160's notice
                         Volatile.Write(ref _hostedRelayName, world.Relay?.Name);
                         Volatile.Write(ref _hostedActivity, opening);
                         _hostedPool = world.Pool;

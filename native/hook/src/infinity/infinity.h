@@ -295,7 +295,11 @@ void fi_watch_datagram(const unsigned char *data, size_t size);
 void fi_watch_roster(const unsigned char *data, int size);
 void fi_watch_stop(void);
 int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned value, unsigned sustain_ms, unsigned rules_version,
-                               unsigned peer_index);void azimuth_carstate_local(int lights, int roof);
+                               unsigned peer_index);
+/* NR-6: another player's model and 43 part rows read from its relayed player object (PlayerParts, 0x27;
+   flags bit 0 the model, bit 1 the parts, bit 2 a new object); 1 queued. */
+int fi_launch_player_parts(unsigned long long xuid, unsigned peer_index, unsigned flags, unsigned model, const unsigned *parts);
+void azimuth_carstate_local(int lights, int roof);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);
 /* Whether azimuth_carstate_wanted needs `car`'s position now (else it is passed NULL). */

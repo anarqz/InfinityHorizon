@@ -59,6 +59,7 @@ public sealed partial class WorldsBridge
     }
     private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation,string? transport=null)
     {
+        ObserveSeatTransport(grant,transport); // OD-160's notice: the seat's transport as the server gave it
         if(!ProofFor(relay))return true;
         Frame.RelayContext frame;
         RelayGrantClaims verified;

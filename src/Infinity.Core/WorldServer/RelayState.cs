@@ -18,6 +18,8 @@ internal sealed record RelaySettings
     public int? WeatherSeed { get; init; }
     /// <summary>The draw of a tag event's first It cars; null picks a random seed.</summary>
     public int? TagSeed { get; init; }
+    /// <summary>The shuffle of a team event's participants into red and blue (NR-10); null picks a random seed.</summary>
+    public int? TeamSeed { get; init; }
     /// <summary>A TimeSync re-bases the game's network clock (remote cars are timed against it), so it is refreshed only rarely.</summary>
     public long TimeSyncMs { get; init; } = 30000;
     /// <summary>When everybody invited has accepted, the invitation closes this soon instead of waiting out its window.</summary>
@@ -83,6 +85,8 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
     internal Dictionary<byte, bool> ServerVariables { get; } = [];
     /// <summary>A player object's server-set PrivateUniverseId (router 1, var 40), replayed to late joiners; null when 0.</summary>
     internal byte? Universe { get; set; }
+    /// <summary>A player object's server-set TeamId (router 1, PlayerChoices var 90, NR-10), replayed to late joiners; null: never written.</summary>
+    internal byte? Team { get; set; }
     /// <summary>The kept updates after Base, oldest first, with their original sequences (not contiguous once compacted).</summary>
     internal List<(byte Sequence, BitBuffer Payload)> Tail { get; } = [];
     internal List<(byte Sequence, BitBuffer Payload)> Pending { get; } = [];
@@ -181,6 +185,8 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
         foreach (var (index, value) in ServerVariables) payload.Push(index, 4).Boolean(value);
         if (router == 1 && Universe is { } universe)
             payload.Push(RelayEngine.PrivateUniverseVariable, 8).Push(universe, RelayEngine.PrivateUniverseBits);
+        if (router == 1 && Team is { } team)
+            payload.Push(RelayEngine.TeamVariable, 8).Push(team, RelayEngine.TeamBits);
         // a contiguous run ending at Last (see the class remarks); Pending sits past a gap, at its own sequences, as it did live
         var sequence = AckWindow.SequenceAdd(CreateSequence, Injected);
         yield return NerdCodec.Write(new NerdMessage.Object(true, router, handle, Type, sequence, payload));
@@ -255,6 +261,17 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal bool UniverseDue { get; set; }
     internal IPEndPoint? CarHook { get; set; }
     internal long? CarStateAt { get; set; }
+    /// <summary>When the relay accepted this player's last own car prediction (§5c proximity: the pose's age). RefreshCars does
+    /// not move it.</summary>
+    internal long? LastCarAt { get; set; }
+    /// <summary>The body of that prediction (CarPredictionFull), the pose's source.</summary>
+    internal BitBuffer? LastCarBody { get; set; }
+    /// <summary>The jump counter (§5c, wrapping): a car move its last velocity does not explain, a new car handle, a car known again.</summary>
+    internal byte CarJumps { get; set; }
+    /// <summary>The team the relay assigned this player for the running team event (NR-10: 0 red, 1 blue); null outside one.</summary>
+    internal byte? Team { get; set; }
+    /// <summary>The TeamId last written to this player's player object (null: never; it starts at the game's 0).</summary>
+    internal byte? TeamWritten { get; set; }
     internal int HistoryBits => Objects.Values.Sum(p => p.HistoryBits) + Orphans.Sum(p => p.Payload.Length);
 
     internal ushort TakePacketId()

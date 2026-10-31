@@ -86,6 +86,7 @@ internal sealed partial class RelayEngine
                     break;
                 case NerdMessage.Car car when car.Handle.Kind == HandleKind.Own && NerdPayload.CarPosition(car.Body) is { } position:
                     peer.CompletionConfirmed = true;
+                    CarAccepted(peer, car, position); // §5c proximity: LastCarAt and the jump counter (RelayEngine.Voice.cs)
                     peer.CarPosition = position;
                     peer.CarId = car.Handle.Id;
                     carNow = car with { Handle = new(HandleKind.Relay, car.Handle.Id, peer.Index) };
@@ -150,6 +151,7 @@ internal sealed partial class RelayEngine
             obj = obj with { Payload = payload! };
             if (obj.Router == 1 && !obj.Create && obj.Payload.Length >= RoadTripCarChoiceBits) RoadTripCarPicked(peer);
             if (obj.Router == 1) ObserveCarChoice(peer, obj.Payload);
+            if (obj.Router == 1) WatchPlayerObject(peer, obj.Create, obj.Payload); // NR-6: a Hardcore host checks the others' parts
         }
         else
         {

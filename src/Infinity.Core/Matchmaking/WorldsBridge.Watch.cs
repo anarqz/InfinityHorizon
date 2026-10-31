@@ -32,6 +32,27 @@ public sealed partial class WorldsBridge
     /// </summary>
     public bool WatchForceSpeed { get; set; }
 
+    private int _partsCapable;
+    /// <summary>NR-6: the hook reported <see cref="Session.CaptureWhat.Parts"/> ok: it sends the other players' part rows.</summary>
+    public bool PartsCapable { get => Volatile.Read(ref _partsCapable) != 0; set => Volatile.Write(ref _partsCapable, value ? 1 : 0); }
+
+    /// <summary>NR-6: this PC's own game database (gamedbRC.slt, read-only) the parts rule judges against; null: no parts rule.</summary>
+    public string? GameDatabase { get; set; }
+
+    private PartsCatalog? _partsCatalog;
+    private bool _partsCatalogRead;
+    private readonly Lock _hookPartsGate = new();
+    private PartsWatch? _hookParts; // a seated player's: fed by the hook's PlayerParts frames (supervisor loop), set by the seat loop
+
+    // read once per bridge, on the first Hardcore world (seat loop only); a missing table or database is logged once
+    private PartsCatalog? Parts()
+    {
+        if (_partsCatalogRead) return _partsCatalog;
+        _partsCatalogRead = true;
+        _partsCatalog = PartsCatalog.Load(GameDatabase, line => _log("worlds: watch: " + line));
+        return _partsCatalog;
+    }
+
     private sealed record PendingObservation(string WorldId, PeerObservation Observation, byte PeerIndex);
 
     // reports land here from the world server's actor and the supervisor's frame loop; the seat loop alone drains and posts
@@ -118,7 +139,7 @@ public sealed partial class WorldsBridge
             if (relay is null || HostedWorldId != key.WorldId) return; // the world server is not this world's yet
             var self = ulong.TryParse(_ownXuid, NumberStyles.None, CultureInfo.InvariantCulture, out var own) ? own : 0;
             var world = key.WorldId;
-            relay.Watch(PeerWatchRules.From(rules, force), self, report => Observed(world, report));
+            relay.Watch(PeerWatchRules.From(rules, force) with { Parts = Parts() }, self, report => Observed(world, report));
             _watchRelay = relay;
             _watchApplied = true;
             _log($"worlds: watch: the world server measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)})");
@@ -132,9 +153,12 @@ public sealed partial class WorldsBridge
         }
         try
         {
-            await SendWatch(Session.Frame.Watch.From(rules, force), cancellation).ConfigureAwait(false);
+            var parts = PartsCapable ? Parts() : null;
+            var seated = key.WorldId;
+            if (parts is not null) lock (_hookPartsGate) _hookParts = new PartsWatch(parts, rules.Version, report => Observed(seated, report), _log);
+            await SendWatch(Session.Frame.Watch.From(rules, force, sendParts: parts is not null), cancellation).ConfigureAwait(false);
             (_hookWatching, _watchApplied) = (true, true);
-            _log($"worlds: watch: the hook measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)})");
+            _log($"worlds: watch: the hook measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)}{(parts is not null ? ", their parts too" : PartsCapable ? ", no parts rule (no readable game database)" : ", no parts rule (an older hook)")})");
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException or ProtocolException
             || error is OperationCanceledException && !cancellation.IsCancellationRequested)
@@ -143,6 +167,7 @@ public sealed partial class WorldsBridge
 
     private async Task StopWatchAsync(CancellationToken cancellation)
     {
+        lock (_hookPartsGate) { _hookParts?.Flush(); _hookParts = null; }
         if (_watchRelay is { } relay)
         {
             _watchRelay = null;
@@ -175,6 +200,21 @@ public sealed partial class WorldsBridge
         if (ObservedKind.Name(frame.Kind) is not { } kind) return;
         var counted = frame.Kind is ObservedKind.Speed or ObservedKind.Climb;
         Observed(world,new PeerWatchReport(frame.Xuid, kind, frame.Value / 1000.0, counted ? frame.SustainMs : null, frame.RulesVersion, frame.PeerIndex));
+    }
+
+    /// <summary>
+    /// NR-6: the hook's <see cref="Session.Frame.PlayerParts"/>: another player's model and part rows in the Hardcore world this player
+    /// is seated in, judged here against this PC's own game database. Dropped when this player watches no seat with the parts rule.
+    /// </summary>
+    public void HookPlayerParts(Session.Frame.PlayerParts frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        lock (_hookPartsGate)
+        {
+            if (_hookParts is not { } parts || !_hookWatching) return;
+            parts.Observe(frame.PeerIndex, frame.Xuid, (frame.Flags & Session.Frame.PlayerParts.HasModel) != 0 ? frame.Model : null,
+                (frame.Flags & Session.Frame.PlayerParts.HasParts) != 0 ? [.. frame.Parts] : null, (frame.Flags & Session.Frame.PlayerParts.Fresh) != 0);
+        }
     }
 
     // any thread: an ended episode, queued for the seat loop (never the reporter itself)

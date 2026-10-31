@@ -15,6 +15,8 @@ internal sealed partial class RelayEngine
         internal long InviteUntil { get; set; } = inviteUntil;
         internal long StageUntil { get; set; }
         internal long? FirstFinishAt { get; set; }
+        /// <summary>A team event's grid order (red, blue, red, ...; RelayEngine.Teams.cs); null: the participants' order.</summary>
+        internal List<byte>? Grid { get; set; }
     }
     private byte? _eventOwner;
     private Race? _race;
@@ -85,6 +87,7 @@ internal sealed partial class RelayEngine
         race.StageUntil = _now + _settings.RacePrepareMs;
         Note($"event: {race.Participants.Count} participant(s) selected, loading cars");
         BeginPhase(race.Participants);
+        AssignTeams(race); // NR-10
         foreach (var peer in _peers.Where(p => race.Participants.Contains(p.Index)))
         { ResetConsoleObservation(peer, 5); ResetConsoleObservation(peer, 0); }
         SetHostVariables((5, 1, 1), (2, 0, 2));
@@ -166,7 +169,7 @@ internal sealed partial class RelayEngine
             WatchEventStart("event: starting grid");
             foreach (var receiver in race.Participants)
             {
-                var grid = race.Participants.Select(index => _peers.FirstOrDefault(p => p.Index == index))
+                var grid = (race.Grid?.Where(race.Participants.Contains) ?? race.Participants).Select(index => _peers.FirstOrDefault(p => p.Index == index))
                     .Where(p => p?.ConsoleId is not null)
                     .Select(p => new ObjectHandle(p!.Index == receiver ? HandleKind.Own : HandleKind.Relay, p.ConsoleId!.Value, p.Index == receiver ? (byte)0 : p.Index)).ToArray();
                 if (_peers.FirstOrDefault(p => p.Index == receiver) is { } target) SendSequenced(target, [NerdPayload.StartingGrid(grid)]);
@@ -223,6 +226,7 @@ internal sealed partial class RelayEngine
         if (_race is not { } race) return;
         TagEnded();
         _race = null; ClearGameOptions();
+        TeamEventEnded();
         // The owner's game still holds the event options after its event and asks for them again only when it lost them, so it
         // keeps them for its next race request; another player's ownership request takes them over between events.
         if (_eventOwner == race.Owner && !_peers.Contains(race.OwnerPeer)) _eventOwner = null;
@@ -238,6 +242,7 @@ internal sealed partial class RelayEngine
     {
         if (_race is not { } race || !race.Participants.Remove(peer.Index)) return;
         race.Finished.Remove(peer.Index); race.InProgress.Remove(peer.Index);
+        TeamPlayerLeft(peer);
         SetConsoleVariables(peer, (2, false), (4, false));
         LeaveEventSide(peer);
         if (race.Participants.Count != 0) TagLeft(peer);
