@@ -83,8 +83,9 @@ internal static class NerdPayload
                 if (index >= variables.Length)
                 {
                     if (index >= room) { failure = new(PayloadFault.Index, index); return false; }
-                    // Unmapped PlayerData tail is retained within its existing size limit.
-                    result.Append(start.Take(start.Left));
+                    // Unmapped PlayerData tail is retained within its existing size limit, but for TeamId (var 90), which only this
+                    // server writes (NR-10, OD-165): walked while its variables' widths are known, var 90 dropped
+                    PlayerTail(start, result);
                     clean = result;
                     return true;
                 }
@@ -112,6 +113,52 @@ internal static class NerdPayload
             return true;
         }
         catch (WireFormatException) { failure = new(PayloadFault.Truncated); return false; }
+    }
+
+    /// <summary>
+    /// The player object's unmapped tail (ids from 12): copied, but for every TeamId (var 90) entry, while each variable's width is
+    /// known (<see cref="PlayerSingleWidths"/>); from the first variable of unknown width (or a cut entry) the rest is copied as it
+    /// came, unread. True when the whole tail was read (a TeamId further on, if any, could not be seen).
+    /// </summary>
+    internal static bool PlayerTail(BitReader tail, BitBuffer result)
+    {
+        while (tail.Left > 0)
+        {
+            var start = tail;
+            if (tail.Left < 8) { result.Append(start.Take(start.Left)); return false; }
+            var index = (int)tail.Read(8);
+            if (index < PlayerVariables.Length || PlayerSingleWidths.GetValueOrDefault(index) is not (> 0 and var width) || tail.Left < width)
+            {
+                result.Append(start.Take(start.Left));
+                return false;
+            }
+            var value = tail.Read(width);
+            if (index == RelayEngine.TeamVariable) continue; // a client never writes its team
+            result.Push((ulong)index, 8).Push(value, width);
+        }
+        return true;
+    }
+
+    /// <summary>Whether a sanitized player payload may still carry a client TeamId: its unmapped tail was not fully read.</summary>
+    internal static bool PlayerTailUnread(BitBuffer payload)
+    {
+        var reader = new BitReader(payload.Bytes, payload.Length);
+        try
+        {
+            while (reader.Left > 0)
+            {
+                var start = reader;
+                var index = (int)reader.Read(8);
+                if (index >= PlayerVariables.Length) return !PlayerTail(start, new BitBuffer());
+                switch (PlayerVariables[index])
+                {
+                    case -2: var count = (int)reader.Read(5); reader.Skip(16 * count); break;
+                    default: reader.Skip(PlayerVariables[index]); break;
+                }
+            }
+            return false;
+        }
+        catch (WireFormatException) { return true; }
     }
 
     internal static bool FloatOk(uint bits, float maximum)

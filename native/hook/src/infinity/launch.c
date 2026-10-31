@@ -87,6 +87,9 @@ enum {
 #define LAUNCH_CAPTURE_WATCH 9u
 /* NR-6: this hook sends PlayerParts (0x27) after a Watch with flags bit 1; the launcher sets it only after this */
 #define LAUNCH_CAPTURE_PARTS 10u
+/* NR-5: this hook takes a Watch with flags bit 2 (the per-car speed floor) and then sends Observed layout 2
+   (the held speed and the car); the launcher sets that flag only after this */
+#define LAUNCH_CAPTURE_WATCH_PER_CAR 11u
 /* How long the game's matchmaking request waits for FreeRoamReady before it goes on anyway. */
 #ifndef LAUNCH_FREE_ROAM_WAIT_MS
 #define LAUNCH_FREE_ROAM_WAIT_MS 20000u
@@ -704,23 +707,29 @@ int fi_launch_car(int key, unsigned long long now_ms) {
     if (send) launch_log("presence: Car queued (", 1, count, " this session).");
     return send;
 }
-/* Observed (0x26, AC-2): {u8 1, u64 LE xuid, u8 kind 1 speed | 2 climb | 3 jump | 4 clock, u32 LE value
+/* Observed (0x26, AC-2): {u8 layout, u64 LE xuid, u8 kind 1 speed | 2 climb | 3 jump | 4 clock, u32 LE value
    (milli-km/h, mm or the clock ratio x 1000), u32 LE sustain ms (speed and climb only), u32 LE rules
-   version, u8 peer index}. Only in a live session (watch.c measures only after the launcher's Watch);
-   the identity never reaches the log. 1 queued. */
+   version, u8 peer index}; layout 1, or (NR-5, `per_car`: after a Watch with flags bit 2) layout 2 with
+   {u32 LE held milli-km/h (speed only, at most the value; else 0), u32 LE car ordinal (speed only, at
+   most 1e6; 0xFFFFFFFF unknown)} appended. Only in a live session (watch.c measures only after the
+   launcher's Watch); the identity never reaches the log. 1 queued. */
 int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned value, unsigned sustain_ms, unsigned rules_version,
-                               unsigned peer_index) {
+                               unsigned peer_index, int per_car, unsigned held, unsigned car) {
     if (!fi_launch_live() || fi_launch_suspended() || !xuid || kind < 1 || kind > 4 || !rules_version || !peer_index || peer_index > 254) return 0;
     if (kind > 2) sustain_ms = 0;
-    unsigned char payload[23];
-    payload[0] = 1;
+    if (kind != 1 || held > value) held = 0;
+    if (kind != 1 || car > 1000000u) car = 0xffffffffu;
+    unsigned char payload[31];
+    payload[0] = per_car ? 2 : 1;
     launch_le_bytes(payload + 1, xuid, 8);
     payload[9] = (unsigned char)kind;
     launch_le_bytes(payload + 10, value, 4);
     launch_le_bytes(payload + 14, sustain_ms, 4);
     launch_le_bytes(payload + 18, rules_version, 4);
     payload[22] = (unsigned char)peer_index;
-    return launch_queue_frame(FRAME_OBSERVED, payload, sizeof(payload));
+    launch_le_bytes(payload + 23, held, 4);
+    launch_le_bytes(payload + 27, car, 4);
+    return launch_queue_frame(FRAME_OBSERVED, payload, per_car ? 31u : 23u);
 }
 /* PlayerParts (0x27, NR-6): {u8 1, u64 LE xuid, u8 peer index, u8 flags (bit 0 model, bit 1 parts, bit 2 a
    new object), u32 LE model, 43 x u32 LE part rows}; an absent value is 0. Only in a live session (watch.c
@@ -1614,6 +1623,7 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
     fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
     fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
+    fi_launch_capture(LAUNCH_CAPTURE_WATCH_PER_CAR, 1); /* NR-5: the per-car speed floor, Observed layout 2 */
     return 1;
 }
 

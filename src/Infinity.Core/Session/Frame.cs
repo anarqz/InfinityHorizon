@@ -42,6 +42,13 @@ public static class CaptureWhat
     /// <see cref="Frame.PlayerParts"/>, after a <see cref="Frame.Watch"/> with <see cref="Frame.Watch.SendParts"/> (only then).
     /// </summary>
     public const byte Parts = 10;
+
+    /// <summary>
+    /// NR-5: the hook measures speed against the per-car floor a <see cref="Frame.Watch"/> with <see cref="Frame.Watch.PerCar"/>
+    /// carries and sends <see cref="Frame.Observed"/> layout 2 (the held speed and the car's ordinal). Only when ok in this session
+    /// does the launcher set that flag.
+    /// </summary>
+    public const byte WatchPerCar = 11;
 }
 
 /// <summary><see cref="Frame.Observed"/> kinds; the platform's names are <see cref="Matchmaking.ObservationKinds"/>.</summary>
@@ -375,14 +382,18 @@ public abstract record Frame
     /// u32 LE jump max (mm)}</c>. Version 0 with every value 0 is the clear: the hook stops measuring (no Hardcore world).
     /// Flags bit 0 (<see cref="ForceSpeed"/>) is test-only: a non-production launcher with <c>FI_TEST_FORCE_OBSERVATION=speed</c>
     /// asks for one synthetic speed episode (AC-5). Sent only to a hook that reported <see cref="CaptureWhat.Watch"/>.
+    /// Flags bit 2 (<see cref="PerCar"/>, NR-5) appends <c>u32 LE speed floor (milli-km/h)</c>, in (0, speed max]: the hook measures
+    /// speed against it and reports <see cref="Observed"/> layout 2; only to a hook that reported <see cref="CaptureWhat.WatchPerCar"/>.
     /// </summary>
     public sealed record Watch(byte Flags, uint Version, uint SpeedMilliKmh, uint SpeedSustainMs, uint ClimbMilliKmh, uint ClimbSustainMs,
-        uint JumpMillimetres) : Frame
+        uint JumpMillimetres, uint SpeedFloorMilliKmh = 0) : Frame
     {
         public const byte Layout = 1;
         public const byte ForceSpeed = 1;
         /// <summary>Flags bit 1 (NR-6): send <see cref="PlayerParts"/>; only to a hook that reported <see cref="CaptureWhat.Parts"/>.</summary>
         public const byte SendParts = 2;
+        /// <summary>Flags bit 2 (NR-5): the speed floor follows; only to a hook that reported <see cref="CaptureWhat.WatchPerCar"/>.</summary>
+        public const byte PerCar = 4;
 
         public override byte Type => 0x25;
 
@@ -391,12 +402,17 @@ public abstract record Frame
         public static Watch Clear() => new(0, 0, 0, 0, 0, 0, 0);
 
         /// <summary>The frame of <paramref name="rules"/> (validated), rounded to the wire's milli units.</summary>
-        public static Watch From(Matchmaking.WatchRules rules, bool forceSpeed = false, bool sendParts = false)
+        /// <summary>
+        /// The frame of <paramref name="rules"/> (validated), rounded to the wire's milli units. <paramref name="perCar"/> (a hook that
+        /// reported <see cref="CaptureWhat.WatchPerCar"/>) adds the per-car floor when the server sent one (NR-5).
+        /// </summary>
+        public static Watch From(Matchmaking.WatchRules rules, bool forceSpeed = false, bool sendParts = false, bool perCar = false)
         {
             ArgumentNullException.ThrowIfNull(rules);
             if (!rules.Valid) throw new ProtocolException("Invalid watch rules");
-            var frame = new Watch((byte)((forceSpeed ? ForceSpeed : 0) | (sendParts ? SendParts : 0)), rules.Version, Milli(rules.Speed.MaxKmh), rules.Speed.SustainMs,
-                Milli(rules.Climb.MaxKmh), rules.Climb.SustainMs, Milli(rules.Jump.MaxMeters));
+            var floor = perCar && rules.Speed.PerCarFloorKmh is { } kmh ? Math.Min(Milli(kmh), Milli(rules.Speed.MaxKmh)) : 0;
+            var frame = new Watch((byte)((forceSpeed ? ForceSpeed : 0) | (sendParts ? SendParts : 0) | (floor != 0 ? PerCar : 0)), rules.Version,
+                Milli(rules.Speed.MaxKmh), rules.Speed.SustainMs, Milli(rules.Climb.MaxKmh), rules.Climb.SustainMs, Milli(rules.Jump.MaxMeters), floor);
             frame.Validate();
             return frame;
         }
@@ -405,7 +421,9 @@ public abstract record Frame
 
         internal void Validate()
         {
-            if ((Flags & ~(ForceSpeed | SendParts)) != 0) throw new ProtocolException("Invalid watch flags");
+            if ((Flags & ~(ForceSpeed | SendParts | PerCar)) != 0) throw new ProtocolException("Invalid watch flags");
+            if ((Flags & PerCar) != 0 ? SpeedFloorMilliKmh is 0 || SpeedFloorMilliKmh > SpeedMilliKmh : SpeedFloorMilliKmh != 0)
+                throw new ProtocolException("Invalid watch speed floor");
             if (Version == 0)
             {
                 if (Flags != 0 || SpeedMilliKmh != 0 || SpeedSustainMs != 0 || ClimbMilliKmh != 0 || ClimbSustainMs != 0 || JumpMillimetres != 0)
@@ -424,12 +442,26 @@ public abstract record Frame
     /// milli-km/h, jump: mm, clock: the sender/receiver clock ratio x 1000), u32 LE sustain ms (speed/climb only, else 0),
     /// u32 LE rules version, u8 peer index (the world server's, for the log only)}</c>. Sent only after a <see cref="Watch"/>.
     /// The launcher posts it as a <see cref="Matchmaking.PeerObservation"/> with an id it mints.
+    /// Layout 2 (NR-5, only after a <see cref="Watch"/> with <see cref="Watch.PerCar"/>) appends <c>u32 LE held (milli-km/h, speed
+    /// only, in (0, value]; else 0), u32 LE car (the ordinal, speed only, at most 1e6; <see cref="NoCar"/> when unknown)</c>.
     /// </summary>
     public sealed record Observed(ulong Xuid, byte Kind, uint Value, uint SustainMs, uint RulesVersion, byte PeerIndex) : Frame
     {
         public const byte Layout = 1;
+        public const byte LayoutPerCar = 2;
+        public const uint NoCar = uint.MaxValue;
+        public const uint MaxCar = 1_000_000;
 
         public override byte Type => 0x26;
+
+        /// <summary><see cref="Layout"/> or <see cref="LayoutPerCar"/>.</summary>
+        public byte WireLayout { get; init; } = Layout;
+
+        /// <summary>Layout 2, speed: the held speed, milli-km/h (0: none).</summary>
+        public uint HeldMilliKmh { get; init; }
+
+        /// <summary>Layout 2, speed: the car's ordinal (<see cref="NoCar"/>: unknown).</summary>
+        public uint CarId { get; init; } = NoCar;
 
         internal void Validate()
         {
@@ -437,6 +469,10 @@ public abstract record Frame
             if (Xuid == 0 || RulesVersion == 0 || PeerIndex is 0 or 255 || ObservedKind.Name(Kind) is null
                 || (counted ? Value is 0 or > 5_000_000 || SustainMs > 3_600_000 : SustainMs != 0)
                 || Kind == ObservedKind.Jump && Value > 1_000_000_000 || Kind == ObservedKind.Clock && Value is 0 or > 1_000_000)
+                throw new ProtocolException("Invalid observation");
+            if (WireLayout is not (Layout or LayoutPerCar)) throw new ProtocolException("Unknown observation layout");
+            if (WireLayout == Layout ? HeldMilliKmh != 0 || CarId != NoCar
+                : Kind == ObservedKind.Speed ? HeldMilliKmh > Value || CarId != NoCar && CarId > MaxCar : HeldMilliKmh != 0 || CarId != NoCar)
                 throw new ProtocolException("Invalid observation");
         }
     }
@@ -630,11 +666,13 @@ public abstract record Frame
                 watch.Validate();
                 w.U8(Watch.Layout); w.U8(watch.Flags); w.U32(watch.Version); w.U32(watch.SpeedMilliKmh); w.U32(watch.SpeedSustainMs);
                 w.U32(watch.ClimbMilliKmh); w.U32(watch.ClimbSustainMs); w.U32(watch.JumpMillimetres);
+                if ((watch.Flags & Watch.PerCar) != 0) w.U32(watch.SpeedFloorMilliKmh);
                 break;
             case Observed observed:
                 observed.Validate();
-                w.U8(Observed.Layout); w.U64(observed.Xuid); w.U8(observed.Kind); w.U32(observed.Value); w.U32(observed.SustainMs);
+                w.U8(observed.WireLayout); w.U64(observed.Xuid); w.U8(observed.Kind); w.U32(observed.Value); w.U32(observed.SustainMs);
                 w.U32(observed.RulesVersion); w.U8(observed.PeerIndex);
+                if (observed.WireLayout == Observed.LayoutPerCar) { w.U32(observed.HeldMilliKmh); w.U32(observed.CarId); }
                 break;
             case PlayerParts parts:
                 parts.Validate();
@@ -741,10 +779,8 @@ public abstract record Frame
             0x22 => new Car(unchecked((int)r.U32())),
             0x23 => new FollowHost(r.U8(), r.Flag("follow-host public")),
             0x24 => new CancelMatchmaking(),
-            0x25 => r.U8() == Watch.Layout ? new Watch(r.U8(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32())
-                : throw new ProtocolException("Unknown watch layout"),
-            0x26 => r.U8() == Observed.Layout ? new Observed(r.U64(), r.U8(), r.U32(), r.U32(), r.U32(), r.U8())
-                : throw new ProtocolException("Unknown observation layout"),
+            0x25 => r.U8() == Watch.Layout ? DecodeWatch(ref r) : throw new ProtocolException("Unknown watch layout"),
+            0x26 => DecodeObserved(ref r),
             0x27 => r.U8() == PlayerParts.Layout ? DecodePlayerParts(ref r) : throw new ProtocolException("Unknown player parts layout"),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
@@ -778,6 +814,20 @@ public abstract record Frame
         var keys = new List<(string Kid, byte[] Key)>(count);
         for (var i = 0; i < count; i++) keys.Add((r.Str(), r.Take(32).ToArray()));
         return new CustomTrust(keys);
+    }
+
+    private static Watch DecodeWatch(ref WireReader r)
+    {
+        var watch = new Watch(r.U8(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32());
+        return (watch.Flags & Watch.PerCar) != 0 ? watch with { SpeedFloorMilliKmh = r.U32() } : watch;
+    }
+
+    private static Observed DecodeObserved(ref WireReader r)
+    {
+        var layout = r.U8();
+        if (layout is not (Observed.Layout or Observed.LayoutPerCar)) throw new ProtocolException("Unknown observation layout");
+        var observed = new Observed(r.U64(), r.U8(), r.U32(), r.U32(), r.U32(), r.U8()) { WireLayout = layout };
+        return layout == Observed.LayoutPerCar ? observed with { HeldMilliKmh = r.U32(), CarId = r.U32() } : observed;
     }
 
     private static PlayerParts DecodePlayerParts(ref WireReader r)

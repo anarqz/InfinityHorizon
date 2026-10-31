@@ -102,6 +102,9 @@ internal sealed class PartsWatch(PartsCatalog catalog, uint rulesVersion, Action
 {
     internal const int MaxCars = 32;
 
+    /// <summary>§3.9 (NR-6): a <c>parts</c> value is a whole part row id with |value| &lt; 1e9.</summary>
+    internal const uint MaxValue = 1_000_000_000;
+
     private sealed class Car(ulong xuid)
     {
         internal ulong Xuid { get; } = xuid;
@@ -163,18 +166,23 @@ internal sealed class PartsWatch(PartsCatalog catalog, uint rulesVersion, Action
             return;
         }
         var outside = 0; uint? offending = null;
-        var misplaced = 0;
+        var misplaced = 0; var unsendable = 0;
         for (var slot = 0; slot < installed.Length; slot++)
         {
             var part = installed[slot];
             if (part is PlayerParts.NoPart or 0) continue;
-            if (!rows.All.Contains(part)) { outside++; offending ??= part; }
+            if (!rows.All.Contains(part))
+            {
+                outside++;
+                // §3.9: value is the offending row id with |value| < 1e9; a larger row cannot be sent, the next one in slot order is
+                if (part < MaxValue) offending ??= part; else unsendable++;
+            }
             else if (!rows.BySlot[slot].Contains(part)) misplaced++;
         }
-        Log($"peer {index}: model {model}: {present.Length} part rows, {known} of this car, {outside} not; {misplaced} outside their slot's table (log only)");
+        Log($"peer {index}: model {model}: {present.Length} part rows, {known} of this car, {outside} not{(unsendable == 0 ? string.Empty : $" ({unsendable} of them 1e9 or over)")}; {misplaced} outside their slot's table (log only)");
         if (offending is not { } first)
         {
-            End(index, car, "every part row belongs to the car");
+            End(index, car, outside == 0 ? "every part row belongs to the car" : "its only impossible rows are 1e9 or over (not sendable)");
             return;
         }
         if (car.Episode == (model, first)) return;

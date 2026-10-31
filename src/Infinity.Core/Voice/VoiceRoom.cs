@@ -8,9 +8,11 @@ namespace Infinity.Core.Voice;
 /// The launcher's voice chat for the profile in play (OD-154, VOICE_CHAT.md §4, §11): the lobby's switch, this
 /// player's settings and mutes, and who talks, turned into the overlay's <see cref="UiFrame.VoiceState"/>.
 /// <list type="bullet">
-/// <item>The lobby carries its voice chat switch: the host sets it when creating the lobby (on by default) and may
-/// change it at any time while the lobby is open. Until the server's world row carries it (CR-S67) a joiner learns it
-/// from the host's relay (VC-1); before that it reads "set by the host".</item>
+/// <item>The lobby carries its voice mode (CR-S67, CR-L46: off, open or proximity): the host sets it when creating the lobby
+/// (open by default) and may change it at any time while the lobby is open. A joiner reads it from the world row
+/// (<see cref="WorldSaid"/>, display only) and from the host's relay; before either it reads "set by the host".</item>
+/// <item>A mute or unmute of a player is reported to the server (CR-S68, <see cref="MuteReported"/>); "mute everyone" is not
+/// a judgement of anybody and is never reported.</item>
 /// <item>A mute is this profile's: kept in <see cref="VoiceStore"/> and applied again when that player is in a later
 /// lobby. "Mute everyone" lasts for the session only; "unmute everyone" also lifts the current players' kept mutes.</item>
 /// <item>The host may mute a player for the whole lobby, for the lobby's life.</item>
@@ -34,8 +36,9 @@ public sealed class VoiceRoom
     private readonly HashSet<string> _talking = [];
     private string? _world;
     private bool _host;
-    private bool? _lobbyVoice;
-    private bool? _created; // the switch of the lobby being created, applied once its world id is known
+    private string? _lobbyMode; // VoiceModes; null while unknown
+    private string? _created; // the mode of the lobby being created, applied once its world id is known
+    private DateTimeOffset? _blockedUntil; // CR-S67/S68: this player's own voice block, from the roster or the voice_blocked notice
 
     public VoiceRoom(VoiceStore? store, string mode, string? profileXuid, TimeProvider? clock = null)
     {
@@ -52,8 +55,37 @@ public sealed class VoiceRoom
     /// <summary>Voice is on in this profile's settings (the mode's default until the player changes it).</summary>
     public bool Enabled { get { lock (_lock) return _settings.Enabled ?? _defaultEnabled; } }
 
-    /// <summary>The lobby's switch: null while unknown (a joiner before the host's relay says it).</summary>
-    public bool? LobbyVoice { get { lock (_lock) return _lobbyVoice; } }
+    /// <summary>The lobby's voice is on (its mode is not off): null while unknown (a joiner before the world or the relay says it).</summary>
+    public bool? LobbyVoice { get { lock (_lock) return _lobbyMode is null ? null : _lobbyMode != Matchmaking.VoiceModes.Off; } }
+
+    /// <summary>The lobby's voice mode (<see cref="Matchmaking.VoiceModes"/>): null while unknown.</summary>
+    public string? LobbyMode { get { lock (_lock) return _lobbyMode; } }
+
+    /// <summary>
+    /// CR-S68: this player muted (true) or unmuted (false) <c>xuid</c> in the world <c>worldId</c>; the launcher reports it to the
+    /// server (<c>POST /launcher/v1/voice/mutes</c>). Called under this room's lock: it must only queue.
+    /// </summary>
+    public Action<string, bool, string>? MuteReported { get; init; }
+
+    /// <summary>The server took this profile's mute of <paramref name="xuid"/>: its history entry is marked sent.</summary>
+    public void MuteSent(string xuid)
+    {
+        lock (_lock)
+        {
+            if (!_mutes.TryGetValue(xuid, out var mute) || mute.Sent) return;
+            _mutes[xuid] = mute with { Sent = true };
+            if (_store is not null && _profile.Length != 0) _store.SetMute(_profile, xuid, _mutes[xuid]);
+        }
+    }
+
+    /// <summary>CR-S67/S68: this player's own voice block (null: none), from the roster's own row or the <c>voice_blocked</c> notice.</summary>
+    public void SetBlockedUntil(DateTimeOffset? until)
+    {
+        lock (_lock) _blockedUntil = until;
+    }
+
+    /// <summary>This player's voice is blocked now (CR-S67/S68).</summary>
+    public bool Blocked { get { lock (_lock) return _blockedUntil is { } until && until > _clock.GetUtcNow(); } }
 
     /// <summary>Whether this profile hears <paramref name="xuid"/> (the relay's per-listener filter, VC-1).</summary>
     public bool MutedBy(string xuid)
@@ -61,27 +93,33 @@ public sealed class VoiceRoom
         lock (_lock) return _mutes.ContainsKey(xuid) || _sessionMutes.Contains(xuid) || _lobbyMutes.Contains(xuid);
     }
 
-    /// <summary>What the host's relay enforces (OD-154): null when this profile does not host the current world.</summary>
-    public (bool LobbyOn, IReadOnlyCollection<ulong> MutedForLobby)? RelayRules()
+    /// <summary>What the host's relay enforces (OD-154, CR-L46): null when this profile does not host the current world.</summary>
+    public (string Mode, IReadOnlyCollection<ulong> MutedForLobby)? RelayRules()
     {
         lock (_lock)
         {
             if (!_host || _world is null) return null;
             var muted = _lobbyMutes.Select(x => ulong.TryParse(x, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0)
                 .Where(n => n != 0).ToArray();
-            return (_lobbyVoice ?? true, muted);
+            return (_lobbyMode ?? Matchmaking.VoiceModes.Open, muted);
         }
     }
 
-    /// <summary>The overlay asked to create a lobby with this switch.</summary>
-    public void Creating(bool voice)
+    /// <summary>The voice mode the host's world row should carry (CR-S67): null when this profile does not host the current world.</summary>
+    public string? HostMode()
     {
-        lock (_lock) _created = voice;
+        lock (_lock) return _host && _world is not null ? _lobbyMode ?? Matchmaking.VoiceModes.Open : null;
+    }
+
+    /// <summary>The overlay asked to create a lobby with this voice mode (<see cref="Matchmaking.VoiceModes"/>).</summary>
+    public void Creating(string mode)
+    {
+        lock (_lock) _created = Matchmaking.VoiceModes.All.Contains(mode) ? mode : Matchmaking.VoiceModes.Open;
     }
 
     /// <summary>
     /// The world this profile is in, from each "My world" answer (<see cref="UiWorldRole"/>): a new world resets the
-    /// lobby's state; the host's own world takes the switch it was created with (on when unknown, e.g. after a restart).
+    /// lobby's state; the host's own world takes the mode it was created with (open when unknown, e.g. after a restart).
     /// </summary>
     public void Observe(string? worldId, byte role)
     {
@@ -97,17 +135,20 @@ public sealed class VoiceRoom
             Reset(worldId, host);
             if (host)
             {
-                _lobbyVoice = _created ?? true;
+                _lobbyMode = _created ?? Matchmaking.VoiceModes.Open;
                 _created = null;
             }
         }
     }
 
-    /// <summary>The host's relay told a joiner the lobby's switch (VC-1); ignored by the host, who owns it.</summary>
-    public void LobbySaid(bool on)
+    /// <summary>
+    /// The world row a joiner is seated in says the lobby's voice mode (CR-S67, <c>WorldView.voice</c>): shown only (playback follows
+    /// the host relay's state down); ignored by the host, who owns it, and for another world than this profile's.
+    /// </summary>
+    public void WorldSaid(string worldId, string mode)
     {
         lock (_lock)
-            if (!_host && _world is not null) _lobbyVoice = on;
+            if (!_host && _world == worldId && Matchmaking.VoiceModes.All.Contains(mode)) _lobbyMode = mode;
     }
 
     /// <summary>Who talks now (VC-1/VC-3 feed it); <paramref name="xuids"/> replaces the set.</summary>
@@ -131,7 +172,7 @@ public sealed class VoiceRoom
             {
                 case UiVoiceOp.LobbyVoice:
                     if (!_host || _world is null) return false;
-                    _lobbyVoice = command.Value == 1;
+                    _lobbyMode = command.Value switch { UiLobbyVoice.Off => Matchmaking.VoiceModes.Off, UiLobbyVoice.Proximity => Matchmaking.VoiceModes.Proximity, _ => Matchmaking.VoiceModes.Open };
                     return true;
                 case UiVoiceOp.MuteForLobby:
                     if (!_host || _world is null || command.Xuid == _profile) return false;
@@ -188,11 +229,13 @@ public sealed class VoiceRoom
         lock (_lock)
         {
             byte flags = 0;
-            if (_lobbyVoice is { } on)
+            if (_lobbyMode is { } mode)
             {
                 flags |= UiVoice.LobbyKnown;
-                if (on) flags |= UiVoice.LobbyOn;
+                if (mode != Matchmaking.VoiceModes.Off) flags |= UiVoice.LobbyOn;
+                if (mode == Matchmaking.VoiceModes.Proximity) flags |= UiVoice.Proximity;
             }
+            if (_blockedUntil is { } until && until > _clock.GetUtcNow()) flags |= UiVoice.Blocked;
             if (_host && _world is not null) flags |= UiVoice.MayChange;
             if (_settings.Enabled ?? _defaultEnabled) flags |= UiVoice.Enabled;
             var members = Others(roster).Take(UiFrame.MaxVoiceMembers).Select(m =>
@@ -215,6 +258,8 @@ public sealed class VoiceRoom
     private void Mute(string xuid, string gamertag, bool on)
     {
         _sessionMutes.Remove(xuid);
+        // CR-S68: a change of this profile's kept mute is reported in the world it happened in (none outside a world)
+        if (_mutes.ContainsKey(xuid) != on && _world is { } world) MuteReported?.Invoke(xuid, on, world);
         if (on) _mutes[xuid] = new VoiceMute(gamertag, _clock.GetUtcNow().UtcDateTime, Sent: false);
         else _mutes.Remove(xuid);
         if (_store is not null && _profile.Length != 0) _store.SetMute(_profile, xuid, on ? _mutes[xuid] : null);
@@ -230,7 +275,7 @@ public sealed class VoiceRoom
     {
         _world = world;
         _host = host;
-        _lobbyVoice = null;
+        _lobbyMode = null;
         _lobbyMutes.Clear();
         _sessionMutes.Clear();
         _talking.Clear();

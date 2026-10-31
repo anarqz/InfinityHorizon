@@ -727,6 +727,9 @@ public sealed class PlaySupervisor
                         }
                         if(frame is Frame.Capture{What:CaptureWhat.Watch} watchCapability && endpoint.Greeted && worlds is not null)
                             worlds.WatchCapable=watchCapability.Ok;
+                        // NR-5: the hook measures speed against the per-car floor and reports the held speed and the car
+                        if(frame is Frame.Capture{What:CaptureWhat.WatchPerCar} perCarCapability && endpoint.Greeted && worlds is not null)
+                            worlds.WatchPerCarCapable=perCarCapability.Ok;
                         // NR-6: another player's part rows, read by the hook (only after a Watch asking for them); judged by the bridge
                         if(frame is Frame.PlayerParts playerParts)
                         {

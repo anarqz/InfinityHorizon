@@ -58,6 +58,10 @@ public static class ErrorCodes
     public const string SessionsEnded = "SESSIONS.ENDED";
     /// <summary>403 <c>{until}</c> + <c>Retry-After</c> on admission: a moderator's kick cooldown is in force (CR-S62, GATE_API.md §2).</summary>
     public const string SessionsKicked = "SESSIONS.KICKED";
+    /// <summary>404 of <c>POST /launcher/v1/voice/mutes</c>: no shared world in the last 30 minutes, an unknown world or player (CR-S68).</summary>
+    public const string VoiceNotShared = "VOICE.NOT_SHARED";
+    /// <summary>429 + <c>Retry-After</c> of <c>POST /launcher/v1/voice/mutes</c>: 60 an hour per account (CR-S68).</summary>
+    public const string VoiceRateLimited = "VOICE.RATE_LIMITED";
     /// <summary>404 of the role routes: an unknown (or deleted) XUID or account (CORE_API.md §5).</summary>
     public const string PortalNotFound = "PORTAL.NOT_FOUND";
     public const string SharingTooManyRecentDevices = "SHARING.TOO_MANY_RECENT_DEVICES";

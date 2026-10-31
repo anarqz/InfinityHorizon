@@ -11,6 +11,26 @@ public sealed record WatchLimit
     public required uint SustainMs { get; init; }
 }
 
+/// <summary>
+/// <see cref="WatchRules.Speed"/> (§3.9 "The per-car speed limit", NR-5): <see cref="MaxKmh"/> is the flat limit for a car the server
+/// cannot name; the hook reports every episode held over <see cref="PerCarFloorKmh"/> for <see cref="SustainMs"/> and the server
+/// judges it against the car's own limit. A server older than NR-5 sends no floor: the flat limit is measured instead, and its
+/// observations carry neither <c>heldKmh</c> nor <c>carId</c> (that server refuses unknown fields).
+/// </summary>
+public sealed record WatchSpeed
+{
+    public required double MaxKmh { get; init; }
+
+    public required uint SustainMs { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? PerCarFloorKmh { get; init; }
+
+    /// <summary>What a car's speed is measured against: the floor when the server sent one, else the flat limit.</summary>
+    [JsonIgnore]
+    public double MeasuredKmh => PerCarFloorKmh ?? MaxKmh;
+}
+
 /// <summary><see cref="WatchRules.Jump"/>: one sample-to-sample move past <see cref="MaxMeters"/> (stored, never counted).</summary>
 public sealed record WatchJump
 {
@@ -25,17 +45,25 @@ public sealed record WatchRules
 {
     public required uint Version { get; init; }
 
-    public required WatchLimit Speed { get; init; }
+    public required WatchSpeed Speed { get; init; }
 
     public required WatchLimit Climb { get; init; }
 
     public required WatchJump Jump { get; init; }
 
-    /// <summary>Every value usable: a version, positive limits within the contract's ranges.</summary>
+    /// <summary>
+    /// Every value usable: a version, positive limits within the contract's ranges, and a per-car floor (when sent) in
+    /// (0, <c>speed.maxKmh</c>] (§3.9: "never above maxKmh").
+    /// </summary>
     [JsonIgnore]
     public bool Valid => Version > 0 && Speed is { MaxKmh: > 0 and <= 5000, SustainMs: > 0 and <= 3_600_000 }
         && Climb is { MaxKmh: > 0 and <= 5000, SustainMs: > 0 and <= 3_600_000 } && Jump is { MaxMeters: > 0 and <= 1_000_000 }
-        && double.IsFinite(Speed.MaxKmh) && double.IsFinite(Climb.MaxKmh) && double.IsFinite(Jump.MaxMeters);
+        && double.IsFinite(Speed.MaxKmh) && double.IsFinite(Climb.MaxKmh) && double.IsFinite(Jump.MaxMeters)
+        && Speed.PerCarFloorKmh is null or (> 0 and <= 5000) && (Speed.PerCarFloorKmh is not { } floor || double.IsFinite(floor) && floor <= Speed.MaxKmh);
+
+    /// <summary>NR-5: the server sent <c>speed.perCarFloorKmh</c>, so speed observations carry <c>heldKmh</c> (and <c>carId</c>).</summary>
+    [JsonIgnore]
+    public bool PerCar => Speed.PerCarFloorKmh is not null;
 }
 
 /// <summary><see cref="PeerObservation.Kind"/> (§3.9): <c>jump</c> and <c>clock</c> are stored and never count.</summary>
@@ -69,9 +97,20 @@ public sealed record PeerObservation
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Value { get; init; }
 
-    /// <summary>speed/climb only: how long it stayed over the limit, ms.</summary>
+    /// <summary>speed/climb only: how long it stayed over the limit, ms (speed with <see cref="HeldKmh"/>: over <c>perCarFloorKmh</c>).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public uint? SustainMs { get; init; }
+
+    /// <summary>
+    /// speed only (NR-5): the observed car's ordinal (router-1 PlayerData var 103 <c>ModelId</c>, read from that player's own player
+    /// object), in [0, 1e6]; a JSON integer (an unsigned type, so never <c>247.0</c>); omitted when unknown.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public uint? CarId { get; init; }
+
+    /// <summary>speed only (NR-5): the highest speed held without a break for <c>speed.sustainMs</c>, km/h, in (0, <see cref="Value"/>].</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? HeldKmh { get; init; }
 
     public required uint RulesVersion { get; init; }
 }

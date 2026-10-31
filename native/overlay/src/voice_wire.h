@@ -17,6 +17,8 @@
 //          x y z, vx vy vz}, listener orientation qx qy qz s16 (w dropped)}
 //   0xC0F9 mode, after 0xC0F6 (every state down from a new relay), 4 bytes: {ver, mode (0 off, 1 open, 2 proximity), range
 //          u16 (R in metres in proximity, else 0)}
+//   0xC0FA team, after 0xC0F9 (OD-165: only a running team event's participants), 4 bytes: {ver, flags (bit 0 a team event
+//          runs for this listener), team (0 red, 1 blue), reserved}; absent: no team event for this player
 #pragma once
 
 #include <cmath>
@@ -29,9 +31,10 @@ namespace fi::voice_wire {
 
 constexpr uint16_t kVoiceKind = 0x3E93, kControlKind = 0x3E94;
 constexpr uint16_t kVoiceUp = 0xC0F3, kVoiceDown = 0xC0F4, kControlUp = 0xC0F5, kStateDown = 0xC0F6;
-constexpr uint16_t kPose = 0xC0F8, kMode = 0xC0F9;
+constexpr uint16_t kPose = 0xC0F8, kMode = 0xC0F9, kTeam = 0xC0FA;
 constexpr uint8_t kVersion = 1;
-constexpr size_t kMaxDatagram = 548, kMaxOpus = 400, kMaxSeats = 12, kPoseSize = 48, kModeSize = 4;
+constexpr size_t kMaxDatagram = 548, kMaxOpus = 400, kMaxSeats = 12, kPoseSize = 48, kModeSize = 4, kTeamSize = 4;
+enum : uint8_t { kTeamRunning = 1, kTeamRed = 0, kTeamBlue = 1 };
 constexpr uint32_t kMagic = 0x2112A442;
 enum : uint8_t { kModeOff = 0, kModeOpen = 1, kModeProximity = 2 };
 enum : uint8_t { kPoseTalkerCar = 1, kPoseListenerCar = 2, kPoseSameSide = 4 };
@@ -251,6 +254,9 @@ struct StateDown {
     uint8_t mode = kModeOff;
     uint16_t range = 0;        // R in metres in proximity (from the relay; never hard-coded), else 0
     bool mode_present = false; // a usable 0xC0F9 came with it
+    // OD-165: a usable 0xC0FA came with it (a team event runs for this player: voice is its team's only), and its team
+    bool team_present = false;
+    uint8_t team = kTeamRed;
 };
 
 // 0xC0F9's receiver rules: ver 1, 4 bytes, mode <= 2, range >= 20 in proximity and 0 otherwise, (lobby = 0) == (mode = 0).
@@ -280,12 +286,20 @@ inline bool DecodeStateDown(const uint8_t *data, size_t size, StateDown &out) {
         s.range = Rd16(m + 2);
         s.mode_present = true;
     }
+    // 0xC0FA's receiver rules: ver 1, 4 bytes, the running bit set, team 0 or 1, else ignored (no team event); the other flag
+    // bits and the reserved byte are not read
+    const uint8_t *t = nullptr;
+    size_t t_size = 0;
+    if (Attribute(data, size, kControlKind, kTeam, &t, &t_size) && t_size == kTeamSize && t[0] == kVersion && (t[1] & kTeamRunning) && t[2] <= kTeamBlue) {
+        s.team_present = true;
+        s.team = t[2];
+    }
     out = std::move(s);
     return true;
 }
 
 // State down as a new relay writes it (tests; the golden vectors): 0xC0F9 after 0xC0F6 unless `with_mode` is false (a
-// pre-CR-L46 relay). Empty for values the decoder would refuse.
+// pre-CR-L46 relay), then 0xC0FA when `team_present` (a team event's participant). Empty for values the decoder would refuse.
 inline std::vector<uint8_t> EncodeStateDown(const StateDown &s, bool with_mode, const uint8_t transaction[12]) {
     if (s.lobby > 1 || (s.bundle != 3 && s.bundle != 6) || s.seats.size() > kMaxSeats || (with_mode && !ModeConsistent(s.lobby, s.mode, s.range))) return {};
     std::vector<uint8_t> v(4 + s.seats.size() * 10, 0);
@@ -300,10 +314,15 @@ inline std::vector<uint8_t> EncodeStateDown(const StateDown &s, bool with_mode, 
         Be64(at + 1, s.seats[i].xuid);
         at[9] = s.seats[i].state;
     }
+    if (s.team_present && s.team > kTeamBlue) return {};
     uint8_t mode[kModeSize] = {kVersion, s.mode};
     Be16(mode + 2, s.range);
-    const Attr attrs[2] = {{kStateDown, v.data(), v.size()}, {kMode, mode, kModeSize}};
-    return Indication(kControlKind, attrs, with_mode ? 2 : 1, transaction);
+    const uint8_t team[kTeamSize] = {kVersion, kTeamRunning, s.team, 0};
+    Attr attrs[3] = {{kStateDown, v.data(), v.size()}};
+    size_t n = 1;
+    if (with_mode) attrs[n++] = {kMode, mode, kModeSize};
+    if (s.team_present) attrs[n++] = {kTeam, team, kTeamSize};
+    return Indication(kControlKind, attrs, n, transaction);
 }
 
 } // namespace fi::voice_wire

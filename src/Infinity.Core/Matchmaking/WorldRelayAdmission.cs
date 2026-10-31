@@ -28,6 +28,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
     private readonly Dictionary<string, long> _revoked = new(StringComparer.Ordinal);
     private Snapshot? _snapshot;
     private IReadOnlyList<RelayLegSpec> _legs = [];
+    private IReadOnlyDictionary<ulong, long> _voiceBlocks = new Dictionary<ulong, long>();
     private string? _worldId;
     private WorldAnnounced? _world;
     private UdpProofHost? _proof;
@@ -77,6 +78,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
             var lanEntries = new Dictionary<ulong, Entry>();
             var proofGrants = new Dictionary<Guid,ProofGrant>();
             var legs = new List<RelayLegSpec>();
+            var voiceBlocks = new Dictionary<ulong, long>();
             var duplicateGrants = world.Punches.GroupBy(p => p.GrantId, StringComparer.Ordinal).Where(p => p.Count() > 1).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
             foreach (var punch in world.Punches)
             {
@@ -95,6 +97,8 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
                 catch (RelayGrantException) { if(proofKey is not null) CryptographicOperations.ZeroMemory(proofKey); continue; }
                 // The endpoint must come from the authenticated platform observation, never an
                 // OpenConnection XUID or a same-IP guess. Missing observations fail closed.
+                // CR-S67: the joiner's voice block as signed (0: none); a XUID holding several grants: the latest instant
+                if (!voiceBlocks.TryGetValue(xuid, out var block) || (grant.VoiceBlockedUntil ?? 0) > block) voiceBlocks[xuid] = grant.VoiceBlockedUntil ?? 0;
                 var lifetime = DateTimeOffset.FromUnixTimeSeconds(grant.Exp) - now;
                 var entry = new Entry(grant.Grant, grant.Exp, lifetime < HostLease ? lifetime : HostLease, started);
                 if(proofKey is not null)
@@ -111,6 +115,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
             }
             _world = world;
             _legs = legs.AsReadOnly();
+            _voiceBlocks = voiceBlocks;
             Volatile.Write(ref _snapshot, new(renewHostLease ? started : previousSnapshot?.StartedAt ?? started,
                 renewHostLease ? now + HostLease : previousSnapshot?.HostUntil ?? now, entries, lanEntries,proofGrants));
             _proof?.Reconcile();
@@ -120,6 +125,9 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
 
     /// <summary>CR-S57: the grants whose punch names a relay (IPv4 literals; a DNS name waits for a later build), from the last snapshot.</summary>
     internal IReadOnlyList<RelayLegSpec> RelayLegs() { lock (_gate) return _legs; }
+
+    /// <summary>CR-S67: each verified grant's <c>voiceBlockedUntil</c> by joiner XUID (Unix seconds, 0 when absent), from the last snapshot.</summary>
+    internal IReadOnlyDictionary<ulong, long> VoiceBlocks() { lock (_gate) return _voiceBlocks; }
 
     internal bool Allowed(ulong xuid, IPEndPoint endpoint, long unused)
         => AllowedKind(xuid,endpoint,0);
@@ -220,7 +228,7 @@ internal sealed class WorldRelayAdmission(ulong ownXuid, RelayGrantVerifyKeys ke
         }
     }
 
-    internal void Clear() { lock (_gate) { _world = null; _legs = []; if(_snapshot is { } s) foreach(var p in s.ProofGrants.Values)CryptographicOperations.ZeroMemory(p.Authority.Key); Volatile.Write(ref _snapshot, null); _proof?.Clear(); } }
+    internal void Clear() { lock (_gate) { _world = null; _legs = []; _voiceBlocks = new Dictionary<ulong, long>(); if(_snapshot is { } s) foreach(var p in s.ProofGrants.Values)CryptographicOperations.ZeroMemory(p.Authority.Key); Volatile.Write(ref _snapshot, null); _proof?.Clear(); } }
 
     private DateTimeOffset EffectiveNow()
     {

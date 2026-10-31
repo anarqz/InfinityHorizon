@@ -145,6 +145,20 @@ public record WorldView : World
     /// isolated profiles join it (a clean caller reads <c>canJoin: false, why: "pool"</c>). Absent on older servers (false).
     /// </summary>
     public bool Pool { get; init; }
+
+    /// <summary>
+    /// CR-S67 (§2.5): the lobby's voice setting, one of <see cref="VoiceModes"/> (display and the host's own settings only; playback
+    /// follows the host relay's state down). Absent on older servers: read as <see cref="VoiceModes.Open"/>.
+    /// </summary>
+    public string Voice { get; init; } = VoiceModes.Open;
+}
+
+/// <summary>CR-S67 (MATCHMAKING_API.md §2.5, TypeScript <c>VOICE_MODES</c>): a lobby's voice chat setting.</summary>
+public static class VoiceModes
+{
+    public const string Off = "off", Open = "open", Proximity = "proximity";
+
+    public static IReadOnlyList<string> All { get; } = [Off, Open, Proximity];
 }
 
 /// <summary>
@@ -329,6 +343,10 @@ public sealed record WorldSettings
     /// <summary>CR-S57: measured relay round trips (announce key → ms, ≤ 16, 0-5000).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, int>? Relays { get; init; }
+
+    /// <summary>CR-S67: the lobby's voice setting (<see cref="VoiceModes"/>); null: left out (unchanged; a new world is open).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Voice { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/worlds/{worldId}/announce</c> body, every 15 s: <c>peers</c> are who is in the world now (≤ 11).</summary>
@@ -342,6 +360,10 @@ public sealed record Heartbeat
     /// <summary>OD-150: the host's game changed activity (<see cref="WorldActivities"/>); null: left out (unchanged).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Activity { get; init; }
+
+    /// <summary>CR-S67: the host changed the lobby's voice setting (<see cref="VoiceModes"/>); null: left out (unchanged).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Voice { get; init; }
 }
 
 /// <summary>The host's answer to <c>PUT</c> and the announce: the world as its host sees it (<c>code</c> included) and the punches.</summary>
@@ -690,6 +712,12 @@ public sealed record WorldMember
     public string? Friend { get; init; }
 
     public string? Since { get; init; }
+
+    /// <summary>
+    /// CR-S67 (§3.7): the member's account's voice block in force at the read (a wire instant), else null; the host's row
+    /// included. Never why or who muted. Absent on older servers (null).
+    /// </summary>
+    public string? VoiceBlockedUntil { get; init; }
 }
 
 /// <summary>CR-L25 (OD-63) → 200.</summary>

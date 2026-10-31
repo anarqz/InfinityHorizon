@@ -15,15 +15,34 @@ public sealed record PeerWatchRules(uint Version, double SpeedMaxKmh, uint Speed
     /// <summary>NR-6: this player's own game database's upgrade tables (the <c>parts</c> rule); null: that rule measures nothing.</summary>
     internal PartsCatalog? Parts { get; init; }
 
+    /// <summary>
+    /// NR-5: <c>speed.perCarFloorKmh</c> (null: a server older than NR-5). With it, speed is measured against the floor and each
+    /// speed report carries <see cref="PeerWatchReport.HeldKmh"/> and, when known, <see cref="PeerWatchReport.CarId"/>.
+    /// </summary>
+    public double? SpeedFloorKmh { get; init; }
+
+    /// <summary>NR-5: speed episodes are measured against the per-car floor and carry heldKmh and carId.</summary>
+    public bool PerCar => SpeedFloorKmh is not null;
+
+    /// <summary>What speed is measured against: the floor (NR-5), else the flat limit.</summary>
+    public double SpeedMeasuredKmh => SpeedFloorKmh ?? SpeedMaxKmh;
+
     public static PeerWatchRules From(WatchRules rules, bool forceSpeed = false)
     {
         ArgumentNullException.ThrowIfNull(rules);
-        return new(rules.Version, rules.Speed.MaxKmh, rules.Speed.SustainMs, rules.Climb.MaxKmh, rules.Climb.SustainMs, rules.Jump.MaxMeters, forceSpeed);
+        return new(rules.Version, rules.Speed.MaxKmh, rules.Speed.SustainMs, rules.Climb.MaxKmh, rules.Climb.SustainMs, rules.Jump.MaxMeters, forceSpeed)
+        {
+            SpeedFloorKmh = rules.Speed.PerCarFloorKmh,
+        };
     }
 }
 
-/// <summary>One ended episode of another player's car: what the launcher posts (<see cref="PeerObservation"/>, an id it mints).</summary>
-public sealed record PeerWatchReport(ulong Xuid, string Kind, double Value, uint? SustainMs, uint RulesVersion, byte PeerIndex);
+/// <summary>
+/// One ended episode of another player's car: what the launcher posts (<see cref="PeerObservation"/>, an id it mints). Speed under
+/// NR-5 also carries <see cref="HeldKmh"/> (in (0, <see cref="Value"/>]) and <see cref="CarId"/> (the car's ordinal, when read).
+/// </summary>
+public sealed record PeerWatchReport(ulong Xuid, string Kind, double Value, uint? SustainMs, uint RulesVersion, byte PeerIndex,
+    uint? CarId = null, double? HeldKmh = null);
 
 /// <summary>
 /// AC-2 (OD-147, OD-158): measures other players' cars from their car predictions, never this player's own (the caller never
@@ -43,6 +62,9 @@ public sealed record PeerWatchReport(ulong Xuid, string Kind, double Value, uint
 /// <item>One report per car and kind per episode, sent when it ends: <see cref="QuietMs"/> without being over the limit. A
 /// speed or climb episode is reported only when one run over the limit lasted the rule's sustain; jumps always (log only
 /// server-side); the clock ratio once per car per rules after <see cref="ClockMinMs"/> of measured windows (log only).</item>
+/// <item>NR-5 (<see cref="PeerWatchRules.PerCar"/>): speed is measured against <c>perCarFloorKmh</c>; a speed report also carries
+/// the held speed (the maximum, over every window of the speed sustain inside one run, of that window's lowest measured value; see
+/// <see cref="HeldSegments"/>) and the car's ordinal (var 103 of the observed player's own player object, <see cref="Model"/>).</item>
 /// </list>
 /// Logs carry the observed peer index only: never an identity, a gamertag or an address.
 /// </summary>
@@ -64,12 +86,48 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
     internal static Vector3 Velocity(short x, short y, short z) =>
         new((float)(x * VelocityScale), (float)(y * VelocityScale), (float)(z * VelocityScale));
 
+    /// <summary>
+    /// NR-5: the held speed keeps at most this many windows of the current run (each at least <see cref="WindowMs"/>, so 16 s at
+    /// least); a full buffer merges its two oldest into one (their lowest value, their summed time), which can only lower the held
+    /// speed, never raise it. watch.c's <c>WT_HELD</c> is the same.
+    /// </summary>
+    internal const int HeldSegments = 64;
+
     private sealed class Episode
     {
         internal bool Active;
-        internal double Peak, PeakVelocity, PeakSender, PeakReceiver;
+        internal double Peak, PeakVelocity, PeakSender, PeakReceiver, Held;
         internal long Run, MaxRun, LastOverAt, StartAt, SenderMs, ReceiverMs;
         internal int Disagreed;
+        // NR-5: the current run's windows, oldest first: (the window's value, its receive time)
+        internal readonly List<(double Value, long Ms)> Windows = new(HeldSegments);
+        internal long WindowsMs;
+
+        internal void ResetRun()
+        {
+            Run = 0;
+            Windows.Clear(); WindowsMs = 0;
+        }
+
+        /// <summary>
+        /// One window over the limit in the current run: the held speed becomes the larger of itself and the lowest value of the
+        /// shortest suffix of the run lasting at least <paramref name="sustain"/>. That is every window of the sustain ending at a
+        /// window's end; one ending elsewhere covers at least the same windows, so it never holds more.
+        /// </summary>
+        internal void Hold(double value, long ms, uint sustain)
+        {
+            if (Windows.Count >= HeldSegments)
+            {
+                Windows[1] = (Math.Min(Windows[0].Value, Windows[1].Value), Windows[0].Ms + Windows[1].Ms);
+                Windows.RemoveAt(0);
+            }
+            Windows.Add((value, ms)); WindowsMs += ms;
+            while (Windows.Count > 1 && WindowsMs - Windows[0].Ms >= sustain) { WindowsMs -= Windows[0].Ms; Windows.RemoveAt(0); }
+            if (WindowsMs < sustain) return;
+            var lowest = double.MaxValue;
+            foreach (var (v, _) in Windows) lowest = Math.Min(lowest, v);
+            Held = Math.Max(Held, lowest);
+        }
     }
 
     private sealed class Car(byte index, ulong xuid)
@@ -94,12 +152,36 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
     }
 
     private readonly Dictionary<byte, Car> _cars = [];
+    // NR-5: each peer's car ordinal (var 103) from its own player object, by peer index; null: not read yet
+    private readonly Dictionary<byte, (ulong Xuid, uint? Model)> _models = [];
     private readonly Action<string> _log = log ?? (_ => { });
     private bool _forced, _unitsLogged;
+
+    /// <summary>The largest ordinal a <c>carId</c> may carry (§3.9: a whole ordinal in [0, 1e6]); a larger one is omitted.</summary>
+    internal const uint MaxCarId = 1_000_000;
 
     internal PeerWatchRules Rules => rules;
 
     private void Log(FormattableString line) => _log("watch: " + line.ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// NR-5: a write of the player object of the player at <paramref name="index"/> (<paramref name="xuid"/>) as it arrived on that
+    /// player's own leg (never a copy another player forwarded): its var 103 <c>ModelId</c> when the write set it (null: unchanged).
+    /// <paramref name="fresh"/>: a new object, whose earlier model is gone.
+    /// </summary>
+    internal void Model(byte index, ulong xuid, uint? model, bool fresh = false)
+    {
+        if (xuid == 0) return;
+        var known = _models.TryGetValue(index, out var had) && had.Xuid == xuid && !fresh;
+        if (!known && !_models.ContainsKey(index) && _models.Count >= MaxCars) return;
+        var next = model ?? (known ? had.Model : null);
+        if (known && next == had.Model) return;
+        _models[index] = (xuid, next);
+        if (next is { } car && (!known || had.Model != car)) Log($"peer {index}: car ordinal {car} (var 103)");
+    }
+
+    private uint? CarId(Car car) =>
+        _models.TryGetValue(car.Index, out var m) && m.Xuid == car.Xuid && m.Model is { } model && model <= MaxCarId ? model : null;
 
     /// <summary>A car prediction of the player at <paramref name="index"/> (<paramref name="xuid"/>), received at <paramref name="at"/> ms.</summary>
     internal void Sample(byte index, ulong xuid, Vector3 position, Vector3 velocity, uint stamp, byte universe, long at)
@@ -117,7 +199,9 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
             // AC-5, test builds only: the next eligible peer gets one synthetic speed episode the server counts
             _forced = true;
             Log($"TEST: forced speed episode for peer {index} (FI_TEST_FORCE_OBSERVATION; never in a production build)");
-            report(new(xuid, ObservationKinds.Speed, rules.SpeedMaxKmh + 50, rules.SpeedSustainMs + 1000, rules.Version, index));
+            // over the flat limit with no car named, so the server counts it whatever the car (NR-5: held for the whole sustain)
+            var value = rules.SpeedMaxKmh + 50;
+            report(new(xuid, ObservationKinds.Speed, value, rules.SpeedSustainMs + 1000, rules.Version, index, null, rules.PerCar ? value : null));
         }
         EndQuiet(car, at);
         if (!car.Has || at - car.At > GapMs)
@@ -166,7 +250,7 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
             Log($"peer {index}: units check: velocity {speedVelocity:0} km/h horizontal, {climbVelocity:0} km/h up; position delta {horizontal:0.0} m horizontal, {delta.Y:0.0} m vertical: {speedSent:0} km/h on {windowSent} stamp units (sender), {speedReceived:0} km/h on {windowReceived} ms (receiver)");
         }
         car.ClockSender += windowSent; car.ClockReceiver += windowReceived;
-        Step(car, car.Speed, ObservationKinds.Speed, speedVelocity, speedSent, speedReceived, rules.SpeedMaxKmh, windowSent, windowReceived, at);
+        Step(car, car.Speed, ObservationKinds.Speed, speedVelocity, speedSent, speedReceived, rules.SpeedMeasuredKmh, windowSent, windowReceived, at);
         Step(car, car.Climb, ObservationKinds.Climb, climbVelocity, climbSent, climbReceived, rules.ClimbMaxKmh, windowSent, windowReceived, at);
         Anchor(car);
         Clock(car);
@@ -178,7 +262,7 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
         foreach (var car in _cars.Values)
         {
             car.Has = false; car.Events++;
-            car.Speed.Run = 0; car.Climb.Run = 0;
+            car.Speed.ResetRun(); car.Climb.ResetRun();
         }
         if (_cars.Count != 0) Log($"{why}: every car's measurement restarts; excluded");
     }
@@ -186,6 +270,7 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
     /// <summary>The player at <paramref name="index"/> left: its episodes end now (a qualifying one is reported).</summary>
     internal void Forget(byte index, long at)
     {
+        _models.Remove(index);
         if (!_cars.Remove(index, out var car)) return;
         End(car, at, force: true);
     }
@@ -201,12 +286,13 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
     {
         foreach (var car in _cars.Values) End(car, at, force: true);
         _cars.Clear();
+        _models.Clear();
     }
 
     private static void Restart(Car car, Vector3 position, uint stamp, byte universe, long at)
     {
         (car.Has, car.Position, car.Stamp, car.At, car.Universe) = (true, position, stamp, at, universe);
-        car.Speed.Run = 0; car.Climb.Run = 0;
+        car.Speed.ResetRun(); car.Climb.ResetRun();
         Anchor(car);
     }
 
@@ -223,18 +309,21 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
         {
             if (!e.Active)
             {
-                (e.Active, e.StartAt, e.Peak, e.PeakVelocity, e.PeakSender, e.PeakReceiver, e.Run, e.MaxRun, e.SenderMs, e.ReceiverMs, e.Disagreed) =
-                    (true, at - windowReceived, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                (e.Active, e.StartAt, e.Peak, e.PeakVelocity, e.PeakSender, e.PeakReceiver, e.Held, e.Run, e.MaxRun, e.SenderMs, e.ReceiverMs, e.Disagreed) =
+                    (true, at - windowReceived, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                e.ResetRun();
                 Log($"peer {car.Index}: {kind} episode starts: {velocity:0} km/h (velocity), {sent:0} km/h (sender clock), {received:0} km/h (receiver clock), over {maximum:0}");
             }
             e.Run += windowReceived; e.MaxRun = Math.Max(e.MaxRun, e.Run);
-            e.Peak = Math.Max(e.Peak, Math.Min(velocity, Math.Min(sent, received)));
+            var measured = Math.Min(velocity, Math.Min(sent, received));
+            e.Peak = Math.Max(e.Peak, measured);
+            if (kind == ObservationKinds.Speed && rules.PerCar) e.Hold(measured, windowReceived, rules.SpeedSustainMs);
             e.PeakVelocity = Math.Max(e.PeakVelocity, velocity);
             e.PeakSender = Math.Max(e.PeakSender, sent); e.PeakReceiver = Math.Max(e.PeakReceiver, received);
             e.SenderMs += windowSent; e.ReceiverMs += windowReceived; e.LastOverAt = at;
             return;
         }
-        e.Run = 0;
+        e.ResetRun();
         if ((overVelocity || overSent || overReceived) && e.Active) e.Disagreed++;
     }
 
@@ -280,8 +369,19 @@ internal sealed class PeerWatch(PeerWatchRules rules, Action<PeerWatchReport> re
         if (!e.Active || !force && at - e.LastOverAt < QuietMs) return;
         e.Active = false;
         var counted = e.MaxRun >= sustain;
-        Log($"peer {car.Index}: {kind} episode ends: peak {e.Peak:0} km/h (velocity {e.PeakVelocity:0}, sender {e.PeakSender:0}, receiver {e.PeakReceiver:0}), longest run {e.MaxRun} ms of {sustain}, over for {e.SenderMs} ms sender / {e.ReceiverMs} ms receiver, measures disagreed {e.Disagreed}x, exclusions first {car.First} universe {car.Universes} stale {car.Stale} event {car.Events} jump {car.Jumps}: {(counted ? "reported" : "under the rule, not reported")}");
+        // NR-5: speed carries the held speed and the car's ordinal (when read)
+        var perCar = kind == ObservationKinds.Speed && rules.PerCar;
+        var held = perCar && counted ? HeldValue(e) : null;
+        var carId = perCar ? CarId(car) : null;
+        Log($"peer {car.Index}: {kind} episode ends: peak {e.Peak:0} km/h (velocity {e.PeakVelocity:0}, sender {e.PeakSender:0}, receiver {e.PeakReceiver:0}){(perCar ? $", held {e.Held.ToString("0", CultureInfo.InvariantCulture)} km/h, car {(carId is { } id ? id.ToString(CultureInfo.InvariantCulture) : "unknown")}" : string.Empty)}, longest run {e.MaxRun} ms of {sustain}, over for {e.SenderMs} ms sender / {e.ReceiverMs} ms receiver, measures disagreed {e.Disagreed}x, exclusions first {car.First} universe {car.Universes} stale {car.Stale} event {car.Events} jump {car.Jumps}: {(counted ? "reported" : "under the rule, not reported")}");
         // rounded up: a peak just over the limit never reads as the limit itself
-        if (counted) report(new(car.Xuid, kind, Math.Ceiling(e.Peak * 10) / 10,(uint)Math.Min(e.MaxRun, 3_600_000), rules.Version, car.Index));
+        if (counted) report(new(car.Xuid, kind, Math.Ceiling(e.Peak * 10) / 10, (uint)Math.Min(e.MaxRun, 3_600_000), rules.Version, car.Index, carId, held));
+    }
+
+    /// <summary>The held speed for the platform: rounded down to 0.1 km/h (never above what was measured, so never above the peak).</summary>
+    private static double? HeldValue(Episode e)
+    {
+        var held = Math.Floor(e.Held * 10) / 10;
+        return held > 0 ? held : null;
     }
 }

@@ -64,19 +64,24 @@ internal sealed partial class RelayEngine
         _parts = _watch is not null && rules!.Parts is { } catalog ? new PartsWatch(catalog, rules.Version, report!, Note) : null;
         _watchSelf = self;
         _watchRosterAt = long.MinValue; _watchRosterSent = string.Empty;
-        if (_watch is not null) Note($"watch: on (rules version {rules!.Version}); the other players' cars are measured{(_parts is null ? "; no parts rule (no readable game database)" : ", their parts too")}");
+        if (_watch is not null) Note(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"watch: on (rules version {rules!.Version}); the other players' cars are measured{(rules.PerCar ? $" (speed against the per-car floor {rules.SpeedMeasuredKmh.ToString(System.Globalization.CultureInfo.InvariantCulture)} km/h, with the held speed and the car)" : string.Empty)}{(_parts is null ? "; no parts rule (no readable game database)" : ", their parts too")}"));
     }
 
     /// <summary>NR-6: the parts rule, while watching with a readable game database.</summary>
     private PartsWatch? _parts;
 
-    /// <summary>NR-6: a peer's own player object (router 1, sanitised) as it arrived: its model and part rows, when readable.</summary>
+    /// <summary>
+    /// NR-6: a peer's own player object (router 1, sanitised) as it arrived on that peer's own leg: its model and part rows, when
+    /// readable. NR-5: the model (var 103) is also the <c>carId</c> of that peer's speed reports, with or without the parts rule.
+    /// </summary>
     private void WatchPlayerObject(RelayPeer peer, bool create, BitBuffer payload)
     {
-        if (_parts is not { } parts || !Watched(peer)) return;
+        if (_watch is not { } watch || !Watched(peer)) return;
+        if (_parts is null && !watch.Rules.PerCar) return;
         var (model, rows) = PlayerParts.Read(payload);
         if (model is null && rows is null && !create) return;
-        parts.Observe(peer.Index, peer.Xuid, model, rows, fresh: create);
+        if (watch.Rules.PerCar) watch.Model(peer.Index, peer.Xuid, model, fresh: create);
+        _parts?.Observe(peer.Index, peer.Xuid, model, rows, fresh: create);
     }
 
     internal bool Watching => _watch is not null;
