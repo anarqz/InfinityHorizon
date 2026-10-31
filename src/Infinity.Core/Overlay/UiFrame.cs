@@ -1160,10 +1160,10 @@ public static class UiPaneIcon
 }
 
 /// <summary>
-/// One row of the overlay's world list: <c>Kind</c> 0 everyone's / 1 Infinity Supporter host,
+/// One row of the overlay's world list: <c>Kind</c> bit 0 an Infinity Supporter host, bit 1 a pineapple world (OD-149),
 /// <c>Audience</c> 0-3, <c>Lock</c> 0 joinable / 1 tier / 2 friends / 3 code / 4 full / 5 latency /
-/// 6 other / 7 another mode, the world Hardcore / 8 another mode, the world Noob (CR-L40), <c>Ping</c>
-/// 0 unknown / 1 good / 2 fair / 3 poor.
+/// 6 other / 7 another mode, the world Hardcore / 8 another mode, the world Noob (CR-L40) / 9 a pineapple world
+/// (OD-149), <c>Ping</c> 0 unknown / 1 good / 2 fair / 3 poor.
 /// </summary>
 public sealed record WorldRow(string Id, string Name, string Host, byte Players, byte Max, byte Kind, byte Audience, byte Lock, byte Ping, bool FriendHost);
 
@@ -1240,6 +1240,25 @@ public static class UiLobby
 
     /// <summary>Another mode's world: the world is Hardcore / Noob.</summary>
     public const byte LockHardcore = 7, LockNoob = 8;
+
+    /// <summary>
+    /// OD-149 (§3.9, 2.0.1): a pineapple world a clean player cannot join (<c>why: "pool"</c>). Same byte as before: an overlay
+    /// before 2.0.1 reads it as an unknown lock (dimmed, not joinable).
+    /// </summary>
+    public const byte LockPool = 9;
+
+    /// <summary>
+    /// OD-149 (2.0.1): bit 1 of <see cref="WorldRow.Kind"/>, a pineapple world (the row's pineapple mark and the focus notice); bit 0
+    /// stays the Supporter host. An overlay before 2.0.1 compares <c>kind == 1</c>, so it only loses the Supporter badge on such a row.
+    /// </summary>
+    public const byte KindSupporter = 1, KindPineapple = 2;
+
+    /// <summary>
+    /// OD-149 (2.0.1): <see cref="UiFrame.WorldsListV2"/> status of a good list for a player the anti-cheat system isolated: its
+    /// message is <c>"&lt;seconds left&gt;\n&lt;dispute link&gt;"</c> and the overlay draws the red notice with a live countdown. An
+    /// overlay before 2.0.1 draws the rows of any status but 1 and 2 and ignores the message.
+    /// </summary>
+    public const byte ListIsolated = 3;
 }
 
 /// <summary><c>JoinResult.status</c> (the overlay's worlds.cpp reads 0 and 3; the rest is a refusal).</summary>

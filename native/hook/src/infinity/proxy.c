@@ -1029,6 +1029,11 @@ static DWORD WINAPI px_thread(void *argument) {
                 if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
                     azimuth_carstate_received(packet, n);
                 }
+            } else if (kind == 0x3E95) {
+                /* the world's watch roster (watch.c, AC-2), with car state's source checks */
+                if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
+                    fi_watch_roster(packet, n);
+                }
             } else if (kind == 0x3E92) {
                 /* the retired livery channel (OD-66, CR-S59): an older relay's message, dropped unread */
             } else if (kind == 0x3E93 || kind == 0x3E94) {
@@ -1078,6 +1083,7 @@ static DWORD WINAPI px_thread(void *argument) {
             px_pick(&from, "NerdCore", started);
         }
         if (px_have_world && (!px_proof_required() || (px_proof_current() && px_game_proved)) && px_same(&from, &px_world) && have_game) {
+            fi_watch_datagram(packet, (size_t)n); /* AC-2: the other players' cars, measured in a Hardcore world (watch.c) */
             px_send(packet, n, &game);
         }
     }

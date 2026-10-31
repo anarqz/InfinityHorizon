@@ -30,6 +30,7 @@ internal sealed partial class RelayEngine
     {
         _eventSide.Clear();
         foreach (var index in participants) _eventSide.Add(index);
+        WatchEventStart("event: participants selected");
         if (!_phasing)
         {
             _phasing = true;

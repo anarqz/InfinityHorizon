@@ -65,6 +65,8 @@ enum {
     FRAME_CAR = 0x22,             /* hook -> launcher, CR-L41.3: {i32 carKey} */
     FRAME_FOLLOW_HOST = 0x23,     /* launcher -> hook, OD-151: {u8 lobby type 1-2, u8 public 0-1} (follow.c) */
     FRAME_CANCEL_MATCHMAKING = 0x24, /* launcher -> hook: {} (the launcher gave up on its seat; follow.c) */
+    FRAME_WATCH = 0x25,           /* launcher -> hook, AC-2: the Hardcore world's watch rules, version 0 clears (watch.c) */
+    FRAME_OBSERVED = 0x26,        /* hook -> launcher, AC-2: one ended episode of another player's car (watch.c) */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -80,6 +82,8 @@ enum {
 /* Capture.what 8 (CR-L40): this hook asks the launcher for a lobby before FREE ROAM ONLINE's
    matchmaking request (FreeRoamNeed/FreeRoamReady); sent once with ok=1 at every handshake. */
 #define LAUNCH_CAPTURE_FREE_ROAM 8u
+/* AC-2: this hook takes Watch (0x25) and sends Observed (0x26); the launcher sends Watch only after it */
+#define LAUNCH_CAPTURE_WATCH 9u
 /* How long the game's matchmaking request waits for FreeRoamReady before it goes on anyway. */
 #ifndef LAUNCH_FREE_ROAM_WAIT_MS
 #define LAUNCH_FREE_ROAM_WAIT_MS 20000u
@@ -239,6 +243,7 @@ static void launch_suspend(unsigned reason) {
     azimuth_freeroam_suspend();
     fi_udp_context_clear();
     azimuth_proxy_relay_leg_clear();
+    fi_watch_stop();
     azimuth_proxy_stop();
     azimuth_world_lan_left();
     azimuth_world_launcher_host(0);
@@ -695,6 +700,24 @@ int fi_launch_car(int key, unsigned long long now_ms) {
     ReleaseSRWLockExclusive(&launch_presence_lock);
     if (send) launch_log("presence: Car queued (", 1, count, " this session).");
     return send;
+}
+/* Observed (0x26, AC-2): {u8 1, u64 LE xuid, u8 kind 1 speed | 2 climb | 3 jump | 4 clock, u32 LE value
+   (milli-km/h, mm or the clock ratio x 1000), u32 LE sustain ms (speed and climb only), u32 LE rules
+   version, u8 peer index}. Only in a live session (watch.c measures only after the launcher's Watch);
+   the identity never reaches the log. 1 queued. */
+int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned value, unsigned sustain_ms, unsigned rules_version,
+                               unsigned peer_index) {
+    if (!fi_launch_live() || fi_launch_suspended() || !xuid || kind < 1 || kind > 4 || !rules_version || !peer_index || peer_index > 254) return 0;
+    if (kind > 2) sustain_ms = 0;
+    unsigned char payload[23];
+    payload[0] = 1;
+    launch_le_bytes(payload + 1, xuid, 8);
+    payload[9] = (unsigned char)kind;
+    launch_le_bytes(payload + 10, value, 4);
+    launch_le_bytes(payload + 14, sustain_ms, 4);
+    launch_le_bytes(payload + 18, rules_version, 4);
+    payload[22] = (unsigned char)peer_index;
+    return launch_queue_frame(FRAME_OBSERVED, payload, sizeof(payload));
 }
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size) {
     if(!fi_launch_live() || size!=32 || payload[0]!=1 || payload[1]<1 || payload[1]>28 || payload[2]>2 || payload[3]>4)return 0;
@@ -1572,6 +1595,7 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
     fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
     fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
+    fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
     return 1;
 }
 
@@ -1829,6 +1853,14 @@ static int launch_session_frame(void) {
         if (fi_launch_suspended()) return 1;
         launch_log("CancelMatchmaking: the launcher gave up on its seat; the game's matchmaking is cancelled.", 0, 0, "");
         fi_follow_cancel();
+        return 1;
+    case FRAME_WATCH:
+        /* AC-2: the Hardcore world's rules (or the clear); a malformed one is a protocol error */
+        if (fi_launch_suspended()) return 1;
+        if (!fi_watch_rules(r.at, r.left)) {
+            launch_log("REFUSED: a Watch frame that does not parse.", 0, 0, "");
+            return 0;
+        }
         return 1;
     default:
         launch_log("REFUSED: a frame the launcher does not send during a session (type ", 1, type, ").");

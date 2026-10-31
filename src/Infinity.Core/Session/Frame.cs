@@ -30,6 +30,31 @@ public static class CaptureWhat
     /// request and waits for <see cref="Frame.FreeRoamReady"/>; sent with ok at every handshake.
     /// </summary>
     public const byte FreeRoam = 8;
+
+    /// <summary>
+    /// AC-2 (MATCHMAKING_API §3.9): the hook measures the other players' cars (it takes <see cref="Frame.Watch"/> and sends
+    /// <see cref="Frame.Observed"/>). Only when ok in this session does the launcher send <see cref="Frame.Watch"/>.
+    /// </summary>
+    public const byte Watch = 9;
+}
+
+/// <summary><see cref="Frame.Observed"/> kinds; the platform's names are <see cref="Matchmaking.ObservationKinds"/>.</summary>
+public static class ObservedKind
+{
+    public const byte Speed = 1;
+    public const byte Climb = 2;
+    public const byte Jump = 3;
+    public const byte Clock = 4;
+
+    /// <summary>The platform's kind for a frame's kind; null for an unknown one.</summary>
+    public static string? Name(byte kind) => kind switch
+    {
+        Speed => Matchmaking.ObservationKinds.Speed,
+        Climb => Matchmaking.ObservationKinds.Climb,
+        Jump => Matchmaking.ObservationKinds.Jump,
+        Clock => Matchmaking.ObservationKinds.Clock,
+        _ => null,
+    };
 }
 
 /// <summary><see cref="Frame.FollowHost"/> lobby types: the game's own <c>StartMatchmakingEventArgument</c> lobby type.</summary>
@@ -337,6 +362,77 @@ public abstract record Frame
         public override byte Type => 0x24;
     }
 
+    /// <summary>
+    /// launcher → hook (0x25, AC-2, docs/launcher/ANTICHEAT.md): the peer-observation rules of the Hardcore world this player is
+    /// seated in, from <c>GET /mm/v1/watch</c> (never compiled into either side). <c>{u8 1, u8 flags, u32 LE version,
+    /// u32 LE speed max (milli-km/h), u32 LE speed sustain ms, u32 LE climb max (milli-km/h), u32 LE climb sustain ms,
+    /// u32 LE jump max (mm)}</c>. Version 0 with every value 0 is the clear: the hook stops measuring (no Hardcore world).
+    /// Flags bit 0 (<see cref="ForceSpeed"/>) is test-only: a non-production launcher with <c>FI_TEST_FORCE_OBSERVATION=speed</c>
+    /// asks for one synthetic speed episode (AC-5). Sent only to a hook that reported <see cref="CaptureWhat.Watch"/>.
+    /// </summary>
+    public sealed record Watch(byte Flags, uint Version, uint SpeedMilliKmh, uint SpeedSustainMs, uint ClimbMilliKmh, uint ClimbSustainMs,
+        uint JumpMillimetres) : Frame
+    {
+        public const byte Layout = 1;
+        public const byte ForceSpeed = 1;
+
+        public override byte Type => 0x25;
+
+        public bool IsClear => Version == 0;
+
+        public static Watch Clear() => new(0, 0, 0, 0, 0, 0, 0);
+
+        /// <summary>The frame of <paramref name="rules"/> (validated), rounded to the wire's milli units.</summary>
+        public static Watch From(Matchmaking.WatchRules rules, bool forceSpeed = false)
+        {
+            ArgumentNullException.ThrowIfNull(rules);
+            if (!rules.Valid) throw new ProtocolException("Invalid watch rules");
+            var frame = new Watch(forceSpeed ? ForceSpeed : (byte)0, rules.Version, Milli(rules.Speed.MaxKmh), rules.Speed.SustainMs,
+                Milli(rules.Climb.MaxKmh), rules.Climb.SustainMs, Milli(rules.Jump.MaxMeters));
+            frame.Validate();
+            return frame;
+        }
+
+        private static uint Milli(double value) => (uint)Math.Clamp(Math.Round(value * 1000.0), 1.0, uint.MaxValue);
+
+        internal void Validate()
+        {
+            if ((Flags & ~ForceSpeed) != 0) throw new ProtocolException("Invalid watch flags");
+            if (Version == 0)
+            {
+                if (Flags != 0 || SpeedMilliKmh != 0 || SpeedSustainMs != 0 || ClimbMilliKmh != 0 || ClimbSustainMs != 0 || JumpMillimetres != 0)
+                    throw new ProtocolException("Invalid watch clear");
+                return;
+            }
+            if (SpeedMilliKmh is 0 or > 5_000_000 || ClimbMilliKmh is 0 or > 5_000_000 || SpeedSustainMs is 0 or > 3_600_000
+                || ClimbSustainMs is 0 or > 3_600_000 || JumpMillimetres is 0 or > 1_000_000_000)
+                throw new ProtocolException("Invalid watch rules");
+        }
+    }
+
+    /// <summary>
+    /// hook → launcher (0x26, AC-2): one ended episode of another player's car, measured by this player's hook against the rules
+    /// of the last <see cref="Watch"/>. <c>{u8 1, u64 LE xuid, u8 kind (<see cref="ObservedKind"/>), u32 LE value (speed/climb:
+    /// milli-km/h, jump: mm, clock: the sender/receiver clock ratio x 1000), u32 LE sustain ms (speed/climb only, else 0),
+    /// u32 LE rules version, u8 peer index (the world server's, for the log only)}</c>. Sent only after a <see cref="Watch"/>.
+    /// The launcher posts it as a <see cref="Matchmaking.PeerObservation"/> with an id it mints.
+    /// </summary>
+    public sealed record Observed(ulong Xuid, byte Kind, uint Value, uint SustainMs, uint RulesVersion, byte PeerIndex) : Frame
+    {
+        public const byte Layout = 1;
+
+        public override byte Type => 0x26;
+
+        internal void Validate()
+        {
+            var counted = Kind is ObservedKind.Speed or ObservedKind.Climb;
+            if (Xuid == 0 || RulesVersion == 0 || PeerIndex is 0 or 255 || ObservedKind.Name(Kind) is null
+                || (counted ? Value is 0 or > 5_000_000 || SustainMs > 3_600_000 : SustainMs != 0)
+                || Kind == ObservedKind.Jump && Value > 1_000_000_000 || Kind == ObservedKind.Clock && Value is 0 or > 1_000_000)
+                throw new ProtocolException("Invalid observation");
+        }
+    }
+
     /// <summary>Authenticated launcher → hook: permanently stop online activity for this process/session.</summary>
     public sealed record OnlineSuspend(OnlineSuspendReason Reason) : Frame
     {
@@ -500,6 +596,16 @@ public abstract record Frame
                 w.U8(follow.LobbyType); w.Flag(follow.Public); break;
             case CancelMatchmaking:
                 break;
+            case Watch watch:
+                watch.Validate();
+                w.U8(Watch.Layout); w.U8(watch.Flags); w.U32(watch.Version); w.U32(watch.SpeedMilliKmh); w.U32(watch.SpeedSustainMs);
+                w.U32(watch.ClimbMilliKmh); w.U32(watch.ClimbSustainMs); w.U32(watch.JumpMillimetres);
+                break;
+            case Observed observed:
+                observed.Validate();
+                w.U8(Observed.Layout); w.U64(observed.Xuid); w.U8(observed.Kind); w.U32(observed.Value); w.U32(observed.SustainMs);
+                w.U32(observed.RulesVersion); w.U8(observed.PeerIndex);
+                break;
             case OnlineSuspend suspend:
                 if (!Enum.IsDefined(suspend.Reason)) throw new ProtocolException("unknown online suspension reason");
                 w.U8((byte)suspend.Reason);
@@ -600,9 +706,15 @@ public abstract record Frame
             0x22 => new Car(unchecked((int)r.U32())),
             0x23 => new FollowHost(r.U8(), r.Flag("follow-host public")),
             0x24 => new CancelMatchmaking(),
+            0x25 => r.U8() == Watch.Layout ? new Watch(r.U8(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32())
+                : throw new ProtocolException("Unknown watch layout"),
+            0x26 => r.U8() == Observed.Layout ? new Observed(r.U64(), r.U8(), r.U32(), r.U32(), r.U32(), r.U8())
+                : throw new ProtocolException("Unknown observation layout"),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
+        if (frame is Watch watch) watch.Validate();
+        if (frame is Observed observed) observed.Validate();
         if (frame is ModsReport mods) mods.Validate();
         if (frame is CustomTrust trust) trust.Validate();
         if(frame is RelayContext context)RelayContext.Validate(context.Payload);

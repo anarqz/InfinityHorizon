@@ -183,5 +183,6 @@ public sealed partial class ShellViewModel
         Changed(nameof(ShellStatusSecondary));
         Changed(nameof(ShowShellStatus));
         Changed(nameof(ShowShellStatusSecondary));
+        RefreshPoolNotice(); // OD-149: the isolation's time left goes down with the same 30 s
     }
 }

@@ -33,6 +33,13 @@ public interface IHostRelay : IDisposable
     /// activity is then left as it is). A car meet does not change it.
     /// </summary>
     string? Activity => null;
+
+    /// <summary>
+    /// AC-2 (MATCHMAKING_API §3.9): measure the other players' cars against <paramref name="rules"/> (null: stop), never
+    /// <paramref name="self"/>'s; each ended episode goes to <paramref name="report"/> (which only queues). A relay without a
+    /// world server of its own ignores it.
+    /// </summary>
+    void Watch(WorldServer.PeerWatchRules? rules, ulong self, Action<WorldServer.PeerWatchReport>? report) { }
 }
 
 /// <summary>

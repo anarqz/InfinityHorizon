@@ -163,6 +163,7 @@ internal sealed partial class RelayEngine
             race.Stage = RaceStage.Grid;
             race.StageUntil = _now + _settings.RaceGridMs;
             Note($"event: every car loaded, starting grid sent to {race.Participants.Count}");
+            WatchEventStart("event: starting grid");
             foreach (var receiver in race.Participants)
             {
                 var grid = race.Participants.Select(index => _peers.FirstOrDefault(p => p.Index == index))
@@ -180,6 +181,7 @@ internal sealed partial class RelayEngine
                 if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SendSequenced(peer, [NerdPayload.StartRace(start)]);
             SetHostVariables((6, 1, 1), (9, start, 32));
             Note($"event: race started with {race.Participants.Count}");
+            WatchEventStart("event: race start");
             TagStarted(_now + 5000);
         }
     }

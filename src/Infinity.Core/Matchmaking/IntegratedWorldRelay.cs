@@ -102,6 +102,9 @@ public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
     /// <summary>OD-154: the host's voice chat switch and lobby mutes, enforced by the relay.</summary>
     public void SetVoice(bool lobbyOn, IReadOnlyCollection<ulong> mutedForLobby) => _transport.SetVoice(lobbyOn, mutedForLobby);
 
+    /// <summary>AC-2: the world server measures the other players' cars (<see cref="IntegratedHostRelay.SetWatch"/>).</summary>
+    public void Watch(PeerWatchRules? rules, ulong self, Action<PeerWatchReport>? report) => _transport.SetWatch(rules, self, report);
+
     public void Kick(string xuid)
     {
         if (ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var id)) _admission.Revoke(id);

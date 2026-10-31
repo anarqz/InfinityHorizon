@@ -44,7 +44,10 @@ public static class WorldWhy
     public const string Full = "full";
     public const string Latency = "latency";
 
-    public static IReadOnlyList<string> All { get; } = [Own, Mode, Tier, Host, Friends, Code, Full, Latency];
+    /// <summary>OD-149 (§3.9): a pineapple world and a clean caller (only isolated profiles join it).</summary>
+    public const string Pool = "pool";
+
+    public static IReadOnlyList<string> All { get; } = [Own, Mode, Pool, Tier, Host, Friends, Code, Full, Latency];
 }
 
 /// <summary><c>World.kind</c>: the host's tier.</summary>
@@ -158,7 +161,10 @@ public static class SeatEnds
     public const string Kicked = "kicked";
     public const string WorldClosed = "world_closed";
 
-    public static IReadOnlyList<string> All { get; } = [Expired, Released, Kicked, WorldClosed];
+    /// <summary>OD-149 (§3.9): the caller was isolated by the anti-cheat system while seated in a clean world.</summary>
+    public const string Pool = "pool";
+
+    public static IReadOnlyList<string> All { get; } = [Expired, Released, Kicked, WorldClosed, Pool];
 }
 
 public static class ModerationActions

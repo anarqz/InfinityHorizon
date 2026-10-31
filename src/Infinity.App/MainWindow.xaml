@@ -105,6 +105,15 @@
             <TextBlock Text="{Binding ShellStatusSecondary}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap"
                        Visibility="{Binding ShowShellStatusSecondary, Converter={StaticResource Visible}}" />
           </StackPanel>
+          <!-- OD-149: the play session's Hardcore profile is isolated by the anti-cheat system (neutral words, a dispute link) -->
+          <Border Margin="20,8,8,0" Padding="10,8" CornerRadius="6" Background="#33E41E28" BorderBrush="#E41E28" BorderThickness="1"
+                  Visibility="{Binding ShowPoolNotice, Converter={StaticResource Visible}}">
+            <StackPanel>
+              <TextBlock Text="{Binding PoolNotice}" FontSize="12" FontWeight="SemiBold" Foreground="#FF6B73" TextWrapping="Wrap"
+                         AutomationProperties.LiveSetting="Assertive" />
+              <Button Style="{StaticResource NavButton}" Click="OnPoolDispute" Margin="-20,4,0,0" AutomationProperties.Name="{Binding S[worlds.pool_dispute]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[worlds.pool_dispute]}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
+            </StackPanel>
+          </Border>
           <TextBlock Text="{Binding VersionLabel}" Margin="20,2,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
         </StackPanel>
         <StackPanel Margin="0,0,12,0">

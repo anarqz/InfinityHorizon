@@ -114,10 +114,10 @@ struct LobbyMod {
 struct WorldRow {
     std::string id, name, host;
     uint8_t players = 0, max = 0;
-    uint8_t kind = 0;      // 0 an Infinity Racer host, 1 an Infinity Supporter host (the badge)
+    uint8_t kind = 0;      // bit 0 an Infinity Supporter host (the badge), bit 1 a pineapple world (OD-149)
     uint8_t audience = 0;  // 0 everyone, 1 supporters, 2 friends, 3 private
     uint8_t lock = 0;      // 0 joinable, 1 tier (an older server's; shown as 6), 2 friends, 3 code, 4 full, 5 latency, 6 other,
-                           // 7 another mode (a Hardcore world), 8 another mode (a Noob world)
+                           // 7 another mode (a Hardcore world), 8 another mode (a Noob world), 9 a pineapple world (OD-149)
     uint8_t ping = 0;      // 0 unknown, 1 good, 2 fair, 3 poor
     bool friend_host = false;
     // protocol 2 (OD-112)
@@ -534,6 +534,52 @@ inline std::vector<uint8_t> EncodeWorldsListV2(const WorldsListV2 &l) {
         }
     }
     return b;
+}
+
+// OD-149 (2.0.1): pineapple worlds and the isolated player's notice ride on the protocol 3 frames as they are (no new field,
+// so the 2.0.0 layout and golden vectors stand): WorldRow.kind bit 1 a pineapple world (bit 0 stays the Supporter host),
+// WorldRow.lock 9 a pineapple world this (clean) player cannot join, and WorldsListV2.status 3 a good list for a player the
+// anti-cheat system isolated, its message "<seconds left>\n<dispute link>". An older overlay reads kind 3 as no badge, lock 9
+// as "not joinable" and status 3 as a good list whose message it ignores.
+constexpr uint8_t kKindSupporter = 1, kKindPineapple = 2, kLockPool = 9, kListIsolated = 3;
+constexpr uint32_t kMaxPoolSeconds = 7 * 24 * 3600; // the server's longest isolation is 48 h; anything past a week is refused
+
+struct PoolNotice {
+    bool isolated = false;
+    uint32_t seconds = 0; // left when the list was answered
+    std::string link;     // https only; empty: none to show
+};
+
+inline PoolNotice ParsePoolNotice(uint8_t status, const std::string &message) {
+    PoolNotice n;
+    if (status != kListIsolated) return n;
+    const size_t cut = message.find('\n');
+    const std::string digits = message.substr(0, cut);
+    if (digits.empty() || digits.size() > 7) return n;
+    uint32_t seconds = 0;
+    for (char c : digits) {
+        if (c < '0' || c > '9') return n;
+        seconds = seconds * 10 + static_cast<uint32_t>(c - '0');
+    }
+    if (seconds == 0 || seconds > kMaxPoolSeconds) return n;
+    n.isolated = true;
+    n.seconds = seconds;
+    if (cut != std::string::npos) {
+        const std::string link = message.substr(cut + 1);
+        if (link.rfind("https://", 0) == 0 && link.size() <= 256 && link.find_first_of(" \r\n\t") == std::string::npos) n.link = link;
+    }
+    return n;
+}
+
+// "1 h 23 min", "2 h" or "23 min": rounded up to the minute, at least 1 min (the same words in English and pt-BR,
+// as the launcher's AntiCheatPool.TimeLeft).
+inline std::string PoolTimeLeft(uint64_t seconds) {
+    uint64_t minutes = (seconds + 59) / 60;
+    if (minutes < 1) minutes = 1;
+    const uint64_t hours = minutes / 60, rest = minutes % 60;
+    if (hours == 0) return std::to_string(rest) + " min";
+    if (rest == 0) return std::to_string(hours) + " h";
+    return std::to_string(hours) + " h " + std::to_string(rest) + " min";
 }
 
 inline bool DecodeDetailPane(const uint8_t *body, size_t size, DetailPane &out) {

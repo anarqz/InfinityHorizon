@@ -285,7 +285,17 @@ void fi_follow_cancel(void);
    game left its session unless it sent an OpenConnection in the last 3 s (the new connection's). */
 void fi_follow_datagram(const unsigned char *data, size_t size);
 void fi_follow_left(void);
-void azimuth_carstate_local(int lights, int roof);
+/* watch.c (AC-2): in a Hardcore world the joiner measures the other players' cars against the
+   launcher's rules (Watch, 0x25: fi_watch_rules, 0 when it does not parse; version 0 clears) and
+   reports each ended episode (Observed, 0x26: fi_launch_peer_observation, 1 queued). The proxy
+   passes each datagram the world sends the game (fi_watch_datagram) and the world's watch roster
+   (fi_watch_roster, STUN kind 0x3E95 attribute 0xC0F7: peer index -> XUID). fi_watch_stop: the session ended. */
+int fi_watch_rules(const unsigned char *payload, size_t size);
+void fi_watch_datagram(const unsigned char *data, size_t size);
+void fi_watch_roster(const unsigned char *data, int size);
+void fi_watch_stop(void);
+int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned value, unsigned sustain_ms, unsigned rules_version,
+                               unsigned peer_index);void azimuth_carstate_local(int lights, int roof);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);
 /* Whether azimuth_carstate_wanted needs `car`'s position now (else it is passed NULL). */
