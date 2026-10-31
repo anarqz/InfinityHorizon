@@ -75,6 +75,9 @@ $wapAvx2 = @($wapAec3 | Where-Object { $_ -match '_avx2\.cc$' }) + @('common_aud
 if ($wapPlain.Count -lt 70 -or $wapAvx2.Count -ne 6) { throw "unexpected WebRTC AEC3 source list ($($wapPlain.Count) + $($wapAvx2.Count))" }
 $wdefs = "/std:c++20 /EHsc /utf-8 /wd4146 /wd4018 /DWEBRTC_WIN /DNOMINMAX /D_USE_MATH_DEFINES /DWIN32_LEAN_AND_MEAN /DNDEBUG " +
     "/DWEBRTC_ENABLE_AVX2 /DWEBRTC_APM_DEBUG_DUMP=0 /DRTC_DISABLE_LOGGING /DRTC_DISABLE_CHECK_MSG /I`"$wapSrc`" /I`"$absl`""
+# Source paths compiled into the DLL (__FILE__ in asserts and checks) keep only what follows this folder: no machine path
+# ships in a release (the release audit refuses one).
+$trim = "/d1trimfile:`"$here\\`""
 $codecLines = @()
 $codecObjs = @()
 # Response files: the source lists exceed cmd's line limit. "/Fo dir/": a trailing backslash breaks /MP's quoting.
@@ -84,7 +87,7 @@ foreach ($set in @(@('opus', $opus, $opusPlain, "$odefs"), @('opus_avx2', $opus,
         $od = "$vobj\$($set[0])_" + ($g.Name -replace '[\\/]', '_')
         New-Item -ItemType Directory -Force $od | Out-Null
         $files = ($g.Group | ForEach-Object { "`"$(Join-Path $set[1] $_)`"" }) -join ' '
-        Set-Content -Path "$od.rsp" -Value "/nologo /c /MT /O2 /W3 /MP /wd4244 /wd4267 /wd4305 /wd4996 $($set[3]) $files /Fo`"$od/`"" -Encoding ascii
+        Set-Content -Path "$od.rsp" -Value "/nologo /c /MT /O2 /W3 /MP $trim /wd4244 /wd4267 /wd4305 /wd4996 $($set[3]) $files /Fo`"$od/`"" -Encoding ascii
         $codecLines += "cl @`"$od.rsp`" || exit /b 1"
         $codecObjs += $g.Group | ForEach-Object { "`"$od\$([IO.Path]::ChangeExtension((Split-Path $_ -Leaf), 'obj'))`"" }
     }
@@ -100,10 +103,10 @@ $csources = @("$mh\src\buffer.c", "$mh\src\hook.c", "$mh\src\trampoline.c", "$mh
 $cmd = @"
 call "$vcvars" >nul
 $($codecLines -join "`r`n")
-cl /nologo /c /MT /O2 /W3 /I"$mh\include" $($csources -join ' ') /Fo"$out\obj\\" || exit /b 1
-cl /nologo /c /MT $opt /W3 $mzdefs "$mz\miniz.c" /Fo"$out\obj\\" || exit /b 1
+cl /nologo /c /MT /O2 /W3 $trim /I"$mh\include" $($csources -join ' ') /Fo"$out\obj\\" || exit /b 1
+cl /nologo /c /MT $opt /W3 $trim $mzdefs "$mz\miniz.c" /Fo"$out\obj\\" || exit /b 1
 rc /nologo /fo "$out\obj\fonts.res" "$here\src\fonts.rc" || exit /b 1
-cl $common $includes /LD $($sources -join ' ') "$out\obj\fonts.res" "$out\obj\buffer.obj" "$out\obj\hook.obj" "$out\obj\trampoline.obj" "$out\obj\hde64.obj" "$out\obj\miniz.obj" "$out\obj\voice_codecs.lib" /Fo"$out\obj\\" /Fd"$out\obj\\" /Fe"$out\infinity-overlay.dll" /link /DEBUG /PDBALTPATH:infinity-overlay.pdb /OPT:REF /OPT:ICF user32.lib gdi32.lib ole32.lib || exit /b 1
+cl $common $trim $includes /LD $($sources -join ' ') "$out\obj\fonts.res" "$out\obj\buffer.obj" "$out\obj\hook.obj" "$out\obj\trampoline.obj" "$out\obj\hde64.obj" "$out\obj\miniz.obj" "$out\obj\voice_codecs.lib" /Fo"$out\obj\\" /Fd"$out\obj\\" /Fe"$out\infinity-overlay.dll" /link /DEBUG /PDBALTPATH:infinity-overlay.pdb /OPT:REF /OPT:ICF user32.lib gdi32.lib ole32.lib || exit /b 1
 "@
 $bat = Join-Path $out 'build.cmd'
 Set-Content -Path $bat -Value $cmd -Encoding ascii
