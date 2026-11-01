@@ -224,11 +224,11 @@ internal sealed partial class RelayEngine
 
     /// <summary>
     /// A final score this early in a tag event (before "GO" + 20 s, or half a shorter event) is not its end. A lone Infected car is
-    /// infected from the start, so its game's final score ends the event as soon as it started (TG-4); a lone King has no early end.
+    /// infected from the start, so its game's final score ends the event from "GO" on (TG-4); a lone King has no early end.
     /// </summary>
     private bool TagTooEarlyToFinish() => _tag is { } tag
-        && !(tag.Rules.Mode == TagMode.Infected && _race is { Participants.Count: 1 })
-        && (tag.GoAt is not { } go || _now - go < Math.Min(TagEarliestFinishMs, tag.LimitMs / 2));
+        && (tag.GoAt is not { } go || _now < go
+            || !(tag.Rules.Mode == TagMode.Infected && _race is { Participants.Count: 1 }) && _now - go < Math.Min(TagEarliestFinishMs, tag.LimitMs / 2));
 
     /// <summary>Adds the time since the last bucket change to every It car's time (from "GO" on). Called before buckets change.</summary>
     private void AccountTag(TagGame tag)
