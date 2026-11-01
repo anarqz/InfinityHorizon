@@ -108,7 +108,8 @@ internal sealed partial class RelayEngine
             if (clearUnread) ClearGameOptions();
             return false;
         }
-        Note(string.Create(CultureInfo.InvariantCulture, $"options: {before} record(s) compacted to {_gameOptions.Records.Count}"));
+        if (_gameOptions.Records.Count < before)
+            Note(string.Create(CultureInfo.InvariantCulture, $"options: {before} record(s) compacted to {_gameOptions.Records.Count}"));
         return true;
     }
 

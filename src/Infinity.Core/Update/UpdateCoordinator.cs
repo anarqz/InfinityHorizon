@@ -38,8 +38,11 @@ public sealed class UpdateCoordinator : IDisposable
         _clock = clock ?? TimeProvider.System;
     }
 
-    /// <summary>The package download's diagnostics (size, speed, resumes) go to the launcher's log.</summary>
-    public Action<string>? Log { set => _source.Log = value; }
+    private Action<string>? _log;
+    private string? _loggedDecision;
+
+    /// <summary>The package download's diagnostics (size, speed, resumes) and each new update decision go to the launcher's log.</summary>
+    public Action<string>? Log { set { _source.Log = value; _log = value; } }
 
     /// <summary>The verified GitHub release's version from the last discovery (signed descriptor), or null.</summary>
     public string? DiscoveredVersion => _discovery is { } discovery && Usable(discovery) ? discovery.Descriptor.Version : null;
@@ -89,8 +92,15 @@ public sealed class UpdateCoordinator : IDisposable
         ArgumentNullException.ThrowIfNull(info);
         var decision = EvaluateCore(current, info, game);
         _requiredDiscovery = decision.Phase == UpdatePhase.Required ? _discovery : null;
+        // a log shows the offer (or why there is none); a repeated evaluation with the same outcome is not logged again
+        var line = string.Create(CultureInfo.InvariantCulture,
+            $"update: {decision.Phase}, target {decision.TargetVersion ?? "none"} (installed {Shown(current)}, signed release {DiscoveredVersion ?? "none"}, server latest {Shown(info.LatestLauncher)}, minimum {Shown(info.MinLauncher)}{(game is null ? "" : ", game " + game)})");
+        if (line != _loggedDecision) { _loggedDecision = line; _log?.Invoke(line); }
         return decision;
     }
+
+    /// <summary>A version as the log shows it: server text that does not parse is never written as it came.</summary>
+    private static string Shown(string? version) => LauncherVersion.TryParse(version, out var parsed) ? parsed.Value : "invalid";
 
     private UpdateDecision EvaluateCore(string current, ServerInfo info, string? game)
     {
