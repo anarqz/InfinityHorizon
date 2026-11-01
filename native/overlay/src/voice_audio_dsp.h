@@ -15,7 +15,7 @@ namespace fi::audio::dsp {
 
 constexpr double kPi = 3.14159265358979323846;
 
-enum class SampleKind : uint8_t { Float32, Int16, Int24, Int32 };
+enum class SampleKind : uint8_t { Float32, Int16, Int24, Int32, UInt8, Float64 };
 
 struct DeviceFormat {
     uint32_t rate = 48000;
@@ -25,16 +25,29 @@ struct DeviceFormat {
     bool operator==(const DeviceFormat &) const = default;
 };
 
-// Windowed-sinc resampler from any rate to 48 kHz (Blackman window, 32 taps, 1024-phase table with linear
-// interpolation). The cut-off follows the lower of the two rates, so 96/192 kHz microphones do not alias.
+inline const char *KindName(SampleKind k) {
+    switch (k) {
+    case SampleKind::Float32: return "float32";
+    case SampleKind::Int16: return "int16";
+    case SampleKind::Int24: return "int24";
+    case SampleKind::Int32: return "int32";
+    case SampleKind::UInt8: return "uint8";
+    case SampleKind::Float64: return "float64";
+    }
+    return "?";
+}
+
+// Windowed-sinc resampler between any two rates, 48 kHz out by default (Blackman window, 32 taps, 1024-phase table
+// with linear interpolation). The cut-off follows the lower of the two rates, so 96/192 kHz microphones do not alias.
 class Resampler {
 public:
-    void Reset(uint32_t in_rate) {
+    void Reset(uint32_t in_rate, uint32_t out_rate = 48000) {
         in_rate_ = in_rate;
-        step_ = static_cast<double>(in_rate) / 48000.0;
+        out_rate_ = out_rate;
+        step_ = static_cast<double>(in_rate) / static_cast<double>(out_rate);
         history_.assign(kHalf, 0.0f); // leading zeros: the first output sits at history_[kHalf]
         pos_ = kHalf;
-        const double cutoff = 0.5 * std::min(1.0, 48000.0 / in_rate) * 0.92; // of the input rate
+        const double cutoff = 0.5 * std::min(1.0, static_cast<double>(out_rate) / in_rate) * 0.92; // of the input rate
         table_.resize(2 * kHalf * kPhases + 1);
         for (size_t i = 0; i < table_.size(); i++) {
             const double t = static_cast<double>(i) / kPhases - kHalf; // -kHalf..kHalf input samples
@@ -44,7 +57,7 @@ public:
             table_[i] = static_cast<float>(2.0 * cutoff * sinc * w);
         }
     }
-    bool Passthrough() const { return in_rate_ == 48000; }
+    bool Passthrough() const { return in_rate_ == out_rate_; }
     // Appends `n` input samples and writes the outputs they complete to `out` (cleared first).
     void Process(const float *in, size_t n, std::vector<float> &out) {
         out.clear();
@@ -73,7 +86,7 @@ public:
 private:
     static constexpr long kHalf = 16;
     static constexpr long kPhases = 1024;
-    uint32_t in_rate_ = 48000;
+    uint32_t in_rate_ = 48000, out_rate_ = 48000;
     double step_ = 1.0, pos_ = 0.0;
     std::vector<float> history_, table_;
 };
@@ -97,12 +110,77 @@ inline void ToMono(const DeviceFormat &f, const uint8_t *data, size_t frames, st
                 break;
             }
             case SampleKind::Int32: { int32_t x; std::memcpy(&x, p, 4); v = x / 2147483648.0; break; }
+            case SampleKind::UInt8: v = (static_cast<int>(*p) - 128) / 128.0; break;
+            case SampleKind::Float64: { double x; std::memcpy(&x, p, 8); v = std::isfinite(x) ? x : 0.0; break; }
             }
             acc += v;
         }
         out[i] = static_cast<float>(std::clamp(acc / f.channels, -1.0, 1.0));
     }
 }
+
+// One sample in -1..1 written in the device's format (the playback side's converter).
+inline void WriteSample(const DeviceFormat &f, uint8_t *p, float v) {
+    const double x = std::clamp(static_cast<double>(std::isfinite(v) ? v : 0.0f), -1.0, 1.0);
+    switch (f.kind) {
+    case SampleKind::Float32: { const float y = static_cast<float>(x); std::memcpy(p, &y, 4); break; }
+    case SampleKind::Float64: std::memcpy(p, &x, 8); break;
+    case SampleKind::Int16: { const int16_t y = static_cast<int16_t>(std::lround(std::clamp(x * 32768.0, -32768.0, 32767.0))); std::memcpy(p, &y, 2); break; }
+    case SampleKind::Int24: {
+        const int32_t y = static_cast<int32_t>(std::lround(std::clamp(x * 8388608.0, -8388608.0, 8388607.0)));
+        std::memset(p, 0, f.container);
+        uint8_t *q = p + (f.container - 3);
+        q[0] = static_cast<uint8_t>(y); q[1] = static_cast<uint8_t>(y >> 8); q[2] = static_cast<uint8_t>(y >> 16);
+        break;
+    }
+    case SampleKind::Int32: { const int32_t y = static_cast<int32_t>(std::llround(std::clamp(x * 2147483648.0, -2147483648.0, 2147483647.0))); std::memcpy(p, &y, 4); break; }
+    case SampleKind::UInt8: *p = static_cast<uint8_t>(std::clamp(std::lround(x * 128.0) + 128, 0L, 255L)); break;
+    }
+}
+
+// The standard rate nearest to a measured one (by ratio).
+inline uint32_t NearestStandardRate(double measured) {
+    static const uint32_t kRates[] = {8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 176400, 192000};
+    uint32_t best = kRates[0];
+    double best_d = 1e9;
+    for (const uint32_t r : kRates) {
+        const double d = std::abs(std::log(measured / r));
+        if (d < best_d) { best_d = d; best = r; }
+    }
+    return best;
+}
+
+// Watches the rate a capture stream really delivers against the rate its format says (a Bluetooth headset that
+// switched profile under an open stream, or a driver that relabels). After 1 s of warm-up, 2 s windows; two windows
+// in a row more than 20 % off: Add returns the measured rate snapped to a standard one (else 0).
+class RateWatch {
+public:
+    explicit RateWatch(uint32_t nominal = 48000) : nominal_(nominal) {}
+    uint32_t Add(size_t frames, int64_t now_ms) {
+        if (start_ms_ < 0) { start_ms_ = now_ms; return 0; }
+        if (window_ms_ < 0) {
+            if (now_ms - start_ms_ >= 1000) { window_ms_ = now_ms; count_ = 0; } // this buffer was filled before the window
+            return 0;
+        }
+        count_ += frames;
+        const int64_t span = now_ms - window_ms_;
+        if (span < 2000) return 0;
+        const double measured = static_cast<double>(count_) * 1000.0 / static_cast<double>(span);
+        window_ms_ = now_ms;
+        count_ = 0;
+        last_ = measured;
+        strikes_ = std::abs(measured / nominal_ - 1.0) > 0.2 ? strikes_ + 1 : 0;
+        return strikes_ >= 2 ? NearestStandardRate(measured) : 0;
+    }
+    double LastMeasured() const { return last_; }
+
+private:
+    uint32_t nominal_;
+    int64_t start_ms_ = -1, window_ms_ = -1;
+    uint64_t count_ = 0;
+    int strikes_ = 0;
+    double last_ = 0.0;
+};
 
 // 2nd-order Butterworth high-pass (RBJ), 80 Hz at 48 kHz.
 class HighPass {

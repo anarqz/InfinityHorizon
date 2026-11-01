@@ -234,8 +234,11 @@ std::mutex g_devices_lock;
 std::vector<VoiceDeviceEntry> g_device_lists[2]; // [VoiceFlow]: "System default" first
 bool g_devices_known = false;                     // a refresh listed at least one endpoint
 std::atomic<bool> g_devices_wanted{true};
+HANDLE g_refresh = nullptr;                       // auto-reset: the device-list worker lists again
+std::atomic<uint32_t> g_refreshes{0};             // lists made so far
 
-// The voice thread: both lists again (COM on this thread, never the game's).
+// The device-list worker: both lists again (COM on this thread, never the game's, nor the voice thread's: an
+// enumeration a driver holds up only leaves the lists stale).
 void RefreshDevices() {
     std::vector<VoiceDeviceEntry> lists[2];
     bool known = false;
@@ -251,6 +254,14 @@ void RefreshDevices() {
     g_device_lists[0] = std::move(lists[0]);
     g_device_lists[1] = std::move(lists[1]);
     g_devices_known = known;
+}
+
+DWORD WINAPI DeviceListThread(void *) {
+    while (WaitForSingleObject(g_refresh, INFINITE) == WAIT_OBJECT_0 && !InPassthrough()) {
+        RefreshDevices();
+        g_refreshes++;
+    }
+    return 0;
 }
 
 // A chosen device that is not in the list now: said once per device for the game session; the engine already uses the
@@ -344,6 +355,7 @@ DWORD WINAPI VoiceThread(void *) {
     constexpr ULONGLONG kResubscribeMs = 5000, kStartRetryMs = 10000;
     Subscription sub;
     ULONGLONG next_start = 0, devices_at = 0;
+    uint32_t refreshes_seen = 0;
     while (!InPassthrough()) {
         Sleep(50);
         const ULONGLONG now = GetTickCount64();
@@ -376,7 +388,10 @@ DWORD WINAPI VoiceThread(void *) {
         if ((wanted && now - devices_at >= 1000) || now - devices_at >= 10000) {
             g_devices_wanted = false;
             devices_at = now;
-            RefreshDevices();
+            if (g_refresh) SetEvent(g_refresh);
+        }
+        if (const uint32_t refreshes = g_refreshes.load(); refreshes != refreshes_seen) {
+            refreshes_seen = refreshes;
             if (enabled) TellMissing(v);
         }
         audio::SetDevices(v.mic_id, v.output_id);
@@ -420,6 +435,11 @@ void SetVoiceHost(int32_t (*send)(const uint8_t *, uint32_t), uint64_t xuid) {
     if (!send || g_send.exchange(send)) return;
     g_self_xuid = xuid;
     if (xuid == 0) Log("voice: the hook gave no XUID; the relay will refuse this player's voice");
+    g_refresh = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (g_refresh) {
+        if (HANDLE thread = CreateThread(nullptr, 0, DeviceListThread, nullptr, 0, nullptr)) CloseHandle(thread);
+        else { CloseHandle(g_refresh); g_refresh = nullptr; Log("voice: no device-list thread; the settings list only the system default"); }
+    }
     if (HANDLE thread = CreateThread(nullptr, 0, VoiceThread, nullptr, 0, nullptr)) CloseHandle(thread);
     Log("voice: transport ready");
 }

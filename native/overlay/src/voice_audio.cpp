@@ -6,11 +6,23 @@
 // frames (SILK wideband 6 kbit/s, CVBR, complexity 10, no FEC/DTX) → repacketized 3 (or 6) per packet → SendFn; and
 // playback: per seat an adaptive 1-2 packet jitter buffer → Opus decoder with deep PLC for gaps → stereo mix (open:
 // every talker centred, both channels the old mono mix; proximity: voice_spatial.h places each by its car) → one
-// 2-channel XAudio2 source voice (3 × 20 ms queued, ~60 ms). The decoder starts at complexity 7 (NoLACE) on every platform and steps
+// WASAPI shared render stream on the output (~60 ms queued; resampled and mapped to the output's own format). The decoder
+// starts at complexity 7 (NoLACE) on every platform and steps
 // down only on measured decode cost (voice_audio_complexity.h): no platform-based quality choice, so a Deck player
 // gets what a Windows player gets. Releasing transmit (push-to-talk, mute) ends the spurt with a short packet that
-// carries the end flag. Every failure logs and turns voice off; a missing, unplugged or changed device is retried or
-// reopened every 2-3 s. Nothing here touches the network.
+// carries the end flag. Every codec failure logs and turns voice off; a missing, unplugged or changed device is retried
+// or reopened every 2-3 s (backing off to 16 s when the device keeps failing). Nothing here touches the network.
+//
+// The game is never held by a device (2026-10-31: an output reopen under Proton never returned and the game froze).
+// Every device open, poll, reopen and close (capture, playback, loopback) runs on the session's own device workers;
+// nothing the game's threads call (Receive, SetPose, SeatTalking, SeatHeard, Running, ListenOnly, Sending) waits for
+// them: those take the session lock only with a try (Start and Stop hold it exclusively just to swap a pointer, never
+// across a device call or a thread wait). A watchdog abandons a worker whose device call has not returned for 8 s (a
+// fresh worker retries, with backoff; the abandoned one keeps its own reference to the session, so nothing is freed
+// under it, and it touches nothing shared when it comes back). Stop waits 1.5 s at most, then leaves stuck workers
+// behind. Playback is WASAPI, not XAudio2: the game's own XAudio2 runs on the same xaudio2_9/FAudio library in this
+// process, and a voice mastering voice being torn down and rebuilt on a device change shares that library's state
+// with the game (inference for the freeze: the game's main thread waited on a lock while the voice output reopened).
 //
 // Wine/Proton audit (Windows/Deck parity). Every API the engine calls, and why it behaves the same on both. "Known":
 // Wine's implementation (mmdevapi + winepulse, FAudio-backed xaudio2_9) has it, from its sources and Proton's use by
@@ -22,20 +34,18 @@
 // | GetDefaultAudioEndpoint(eCapture, eCommunications) | yes | known: accepted; every role maps to the one default (inference) | used; same device as eConsole there   |
 // | IMMDevice::GetId, Activate(IAudioClient)       | yes     | known                                         | used                                                   |
 // | EnumAudioEndpoints(ACTIVE), GetDevice, OpenPropertyStore(FriendlyName), IMMEndpoint::GetDataFlow | yes | known: winepulse lists the output's monitor as a capture endpoint named "Monitor of ..." | monitors/loopbacks rejected by name, id and data flow; none left: listen-only |
-// | GetMixFormat → WAVEFORMATEXTENSIBLE float32    | usual   | known: winepulse reports extensible float32 at the PulseAudio/PipeWire rate (44.1 or 48 kHz), N channels | any PCM16/24/32 or float32, any rate/channels, converted by voice_audio_dsp.h |
+// | EnumAudioEndpoints: the sound server's default as its own entry | no | known: a "PulseAudio"/PipeWire default stand-in; with no microphone it captures the output's monitor | never opened nor listed (voice_audio_devices.h IsDefaultAlias) |
+// | GetMixFormat → WAVEFORMATEXTENSIBLE float32    | usual   | known: winepulse reports extensible float32 at the PulseAudio/PipeWire rate (44.1 or 48 kHz), N channels | any PCM8/16/24/32 or float32/64, any rate/channels, converted by voice_audio_dsp.h; the delivered rate is watched |
 // | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM / SRC_DEFAULT_QUALITY | Win10+ | newer Wine only; quality differs (inference) | **not used**: our own downmix + windowed-sinc resampler on both |
 // | Shared mode + AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 20 ms buffer | yes | known; Wine rounds the period to its own (~10 ms) | packet sizes are not assumed: every wake drains all packets; 500 ms wait timeout as a fallback |
 // | AUDCLNT_E_DEVICE_INVALIDATED on unplug         | yes     | not guaranteed: PulseAudio moves the stream (inference) | also: no data for 2 s = reopen; default device id polled every 3 s (capture and render) |
+// | A device call that blocks (a sink switching a2dp ↔ alsa) | rare | known (2026-10-31): mmdevapi/winepulse may block for seconds or more | on device workers only; a watchdog abandons one stuck 8 s, a fresh one retries |
 // | IMMNotificationClient                          | yes     | partial (inference)                           | **not used**: polling works on both                    |
 // | MMCSS (AvSetMmThreadCharacteristics, avrt.dll) | yes     | stub / may be absent                          | **not used** (no avrt import); plain threads          |
 // | FTZ/DAZ via _mm_setcsr on each engine thread   | yes     | known: MXCSR is per thread CPU state, Wine keeps it | set on capture, playback and test-seam entry       |
-// | xaudio2_9.dll via LoadLibraryExW(SYSTEM32)     | yes     | known: Wine/Proton builtin, FAudio-backed     | loaded at run time (no import), as toast_audio.cpp     |
-// | XAudio2Create(0, XAUDIO2_DEFAULT_PROCESSOR)    | yes     | known (FAudio)                                | flags 0 only                                           |
-// | Mastering voice on the default device; float32 stereo 48 kHz source voice; OnBufferEnd | yes | known (FAudio) | used; also a 100 ms wait timeout so a missed callback never starves the queue |
-// | Default output matrix of that source voice     | yes     | inference: FAudio's defaults match            | stereo goes L→FL, R→FR at 1.0, as the old mono voice went to both at 1.0 (read back with GetOutputMatrix on Windows, 2026-10-31): open mode's level is unchanged |
-// | CreateMasteringVoice(szDeviceId = an IMMDevice id), the player's output (§15) | yes | inference: Wine maps the id to its device list | refused: the default mastering voice, logged once, no reopen loop |
-// | GetState(XAUDIO2_VOICE_NOSAMPLESPLAYED)        | yes     | known (FAudio)                                | used                                                   |
-// | OnCriticalError on device loss                 | yes     | may not fire (inference)                      | plus the render default-device poll                    |
+// | WASAPI shared render, EVENTCALLBACK, the output's mix format | yes | known (winepulse)               | 100 ms buffer kept ~60 ms full; 20 ms wait timeout so a missed event never starves it; our resampler + channel map (L→ch0, R→ch1, mono = (L+R)/2) |
+// | IMMDeviceEnumerator::GetDevice(the player's output id, §15) | yes | known                              | refused: the default output, logged once, no reopen loop |
+// | XAudio2 for voice                              | yes     | the game's own XAudio2 shares the library     | **not used** (only the one-shot toast chime keeps it)  |
 // | Processor affinity / priority, GetActiveProcessorCount, IsProcessorFeaturePresent, wine_get_version | yes | yes | **not used**: no platform input anywhere |
 // | QueryPerformanceCounter, GetTickCount64, CreateThread, events | yes | known                                  | used (decode-cost timing, clocks, threads)             |
 // | libopus RTCD (cpuid: SSE4.1/AVX2)              | yes     | known: cpuid is the real CPU (Deck: Zen 2, AVX2) | same code paths on both CPUs with AVX2              |
@@ -54,16 +64,17 @@
 #include <mmreg.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
-#include <xaudio2.h>
 #include <xmmintrin.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -81,7 +92,7 @@ constexpr int64_t kTalkingMs = 300;
 constexpr int kMaxConcealFrames = 6;   // a talker gone quiet without an end flag: 120 ms of PLC, then silence
 constexpr size_t kMaxBuffered = 4;     // packets per seat; older ones are dropped (latency bound)
 constexpr size_t kMaxInbox = 256;
-constexpr int kQueuedBuffers = 3;      // 3 × 20 ms in XAudio2: the ~60 ms target
+constexpr int kQueuedMs = 60;          // the render stream is kept this full: the ~60 ms target
 constexpr DWORD kRetryMs = 2000;
 
 std::atomic<int64_t> g_fake_now{-1};
@@ -107,12 +118,7 @@ std::atomic<int64_t> g_sending_until{0};
 std::atomic<int> g_complexity{ComplexityController::kTop};
 std::atomic<double> g_cost_override{-1.0}, g_cost_p95{0.0};
 std::atomic<uint64_t> g_concealed{0};
-HANDLE g_stop = nullptr;
-// Release 2.0.0, always on (OD-144): AEC3 between the mix (Render, playback thread) and the microphone (Capture,
-// capture thread). Made with the engine, freed after its threads are joined (voice_echo.h).
-std::unique_ptr<echo::Canceller> g_echo;
 std::atomic<testing::EchoTap> g_echo_tap{nullptr}; // the echo bench's view of each capture block (null in a game)
-bool LoopbackLive(); // the output's loopback is AEC3's far end now (else the mix is)
 std::atomic<bool> g_mix_reference{true}; // false only in tests that loop a talker's own voice back (testing::SetMixReference)
 
 // §15: the player's levels and chosen devices; they outlive an engine session (set by voice.cpp every 50 ms anyway).
@@ -142,17 +148,55 @@ void SetOutputInUse(const std::wstring &id) { std::lock_guard lock(g_choice_lock
 
 float SafeGain(float g) { return std::isfinite(g) ? std::clamp(g, 0.0f, 1.0f) : 1.0f; }
 
+// Codec-level failures: voice is off for the game session. Flags only (any thread, the game's included): the device
+// workers see it within their next wait and the voice thread's next Start retires the session.
 void Fail(const char *what) {
     if (!g_failed.exchange(true)) Log("voice: %s; voice chat is off for this session", what);
     g_running = false;
-    if (g_stop) SetEvent(g_stop);
 }
+
+// ---------------------------------------------------------------- echo canceller and its far end
+
+// Release 2.0.0, always on (OD-144): AEC3 between the far end (Render) and the microphone (Capture). One per session.
+// The far end is the output's loopback (game + voice) while it delivers steadily, else the voice mix; exactly one of
+// the two feeds AEC3 at a time, switched with hysteresis (the loopback after 1 s of steady data, back to the mix after
+// 300 ms without), so a loopback that comes and goes never feeds AEC3 both references at once.
+struct EchoLink {
+    std::unique_ptr<echo::Canceller> canceller;
+    std::atomic<bool> loopback_open{false};
+    std::atomic<int64_t> loopback_data_ms{0}, loopback_since_ms{0};
+    std::atomic<bool> use_loopback{false};
+    int switches = 0; // the mixer's thread only
+
+    // The mixer's thread, once per 20 ms frame: true while the loopback is the far end.
+    bool UseLoopback() {
+        const int64_t now = static_cast<int64_t>(GetTickCount64());
+        const bool fresh = loopback_open.load() && now - loopback_data_ms.load() < 300;
+        const bool was = use_loopback.load();
+        bool use = was;
+        if (was && !fresh) use = false;
+        else if (!was && fresh && now - loopback_since_ms.load() >= 1000) use = true;
+        if (use != was) {
+            use_loopback.store(use);
+            if (++switches <= 5 || switches % 50 == 0)
+                Log("voice: echo reference is now the %s (switch %d)", use ? "output's loopback" : "voice mix", switches);
+        }
+        return use;
+    }
+    // The loopback worker: one 10 ms block of what the output plays (48 kHz mono).
+    void LoopbackBlock(const float *block) {
+        const int64_t now = static_cast<int64_t>(GetTickCount64());
+        if (now - loopback_data_ms.load() > 300) loopback_since_ms.store(now);
+        loopback_data_ms.store(now);
+        if (use_loopback.load() && canceller) canceller->Render(block);
+    }
+};
 
 // ---------------------------------------------------------------- capture chain
 
 class CaptureChain {
 public:
-    explicit CaptureChain(SendFn send) : send_(std::move(send)) {}
+    CaptureChain(SendFn send, EchoLink *echo) : send_(std::move(send)), echo_(echo) {}
     ~CaptureChain() {
         if (ns_) rnnoise_destroy(ns_);
         if (enc_) opus_encoder_destroy(enc_);
@@ -181,7 +225,8 @@ public:
         if (!(format == format_)) {
             format_ = format;
             resampler_.Reset(format.rate);
-            Log("voice: capture %u Hz, %u channel(s), %u-byte samples", format.rate, format.channels, format.container);
+            Log("voice: capture %u Hz, %u channel(s), %s in %u-byte samples -> 48 kHz mono", format.rate, format.channels,
+                dsp::KindName(format.kind), format.container);
         }
         if (silent || !data) mono_.assign(frames, 0.0f);
         else dsp::ToMono(format, data, frames, mono_);
@@ -205,15 +250,15 @@ private:
     // Release 2.0.0: each raw 10 ms block through AEC3 and its 100 Hz high-pass (voice_echo.h) before the gain, RNNoise
     // and Opus. Without a canceller (never in a started engine) the 80 Hz high-pass alone, as before.
     void CancelEcho() {
-        if (g_echo) {
+        if (echo::Canceller *canceller = echo_ ? echo_->canceller.get() : nullptr) {
             const testing::EchoTap tap = g_echo_tap.load(std::memory_order_relaxed);
             float before[kSub];
             if (tap) std::memcpy(before, raw_, sizeof raw_);
-            g_echo->Capture(raw_);
+            canceller->Capture(raw_);
             if (tap) tap(before, raw_, kSub);
             for (int i = 0; i < kSub; i++) sub_[i] = raw_[i] * 32768.0f;
             if (!echo_logged_ && ++echo_blocks_ % 100 == 0) { // once per session, when AEC3 has aligned to the far end
-                if (const int delay = g_echo->DelayMs(); delay >= 0) {
+                if (const int delay = canceller->DelayMs(); delay >= 0) {
                     echo_logged_ = true;
                     Log("voice: echo canceller on (AEC3, delay %d ms)", delay);
                 }
@@ -283,6 +328,7 @@ private:
     }
 
     SendFn send_;
+    EchoLink *echo_ = nullptr;
     DenoiseState *ns_ = nullptr;
     OpusEncoder *enc_ = nullptr;
     OpusRepacketizer *rp_ = nullptr;
@@ -334,7 +380,7 @@ struct Seat {
 
 class Mixer {
 public:
-    Mixer() = default;
+    explicit Mixer(EchoLink *echo) : echo_(echo) {}
     ~Mixer() {
         for (auto &s : seats_) if (s.dec) opus_decoder_destroy(s.dec);
     }
@@ -524,11 +570,14 @@ private:
         // Release 2.0.0: what will be played is the echo canceller's far end (silence too: AEC3 wants every block),
         // unless the output's loopback (game + this mix) is feeding it. NR-7: the final stereo mix as (L + R) / 2, as the
         // loopback path's ToMono does; in open mode that is the old mono mix exactly.
-        if (g_echo && g_mix_reference.load(std::memory_order_relaxed) && !LoopbackLive()) {
-            float mono[kFrame];
-            for (int k = 0; k < kFrame; k++) mono[k] = (out[2 * k] + out[2 * k + 1]) * 0.5f;
-            g_echo->Render(mono);
-            g_echo->Render(mono + kSub);
+        if (echo::Canceller *canceller = echo_ ? echo_->canceller.get() : nullptr) {
+            const bool loopback = echo_->UseLoopback();
+            if (g_mix_reference.load(std::memory_order_relaxed) && !loopback) {
+                float mono[kFrame];
+                for (int k = 0; k < kFrame; k++) mono[k] = (out[2 * k] + out[2 * k + 1]) * 0.5f;
+                canceller->Render(mono);
+                canceller->Render(mono + kSub);
+            }
         }
         // A packet decodes 3 (or 6) frames at once, so the raw time per mix frame is bursty. The load is the cost per
         // 20 ms of audio times the talkers, reported once per 20 ms of audio decoded: the controller's frames are
@@ -554,6 +603,7 @@ private:
         g_complexity = c.to;
     }
 
+    EchoLink *echo_ = nullptr;
     ComplexityController control_;
     int decodes_ = 0; // 20 ms frames decoded or concealed in this mix frame
     std::array<Seat, kSeats> seats_;
@@ -586,13 +636,72 @@ private:
 
 // ---------------------------------------------------------------- engine lifetime
 
-std::shared_mutex g_life; // exclusive: Start/Stop; shared: every call that touches the chain or the mixer
-std::unique_ptr<CaptureChain> g_capture;
-std::unique_ptr<Mixer> g_mixer;
-HANDLE g_threads[3] = {};          // capture, playback, the echo reference's loopback
-HANDLE g_first_try[2] = {};          // set after each thread's first device attempt
-std::atomic<int> g_device_ok[2] = {}; // 1 opened, 2 failed
+// One engine session: the chains, the echo canceller and the device workers that feed them. Shared by the engine (the
+// published pointer) and every worker (its own reference), so a worker left behind in a hung driver call never has
+// anything freed under it. The workers: capture, playback, the echo reference's loopback, and the watchdog.
+enum Role : int { kCaptureRole, kPlaybackRole, kLoopbackRole, kRoles, kWatchdogRole = kRoles };
+const char *const kRoleNames[kRoles] = {"microphone", "audio output", "output loopback"};
+constexpr int kMaxAbandon = 3;   // per role and session; then that part of voice stays off
+constexpr int kMaxWorkers = 16;  // alive in the process, left-behind ones included: no new session beyond it
+
+std::atomic<int> g_workers_alive{0};
+std::atomic<int> g_stuck_ms{8000};
+std::atomic<testing::FakeDevices *> g_fake{nullptr};
+
+struct RoleState {
+    std::atomic<uint32_t> gen{0};          // bumped when a stuck worker is abandoned: the old one is no longer current
+    std::atomic<int64_t> busy_since{0};    // when the current worker left its last wait (0: waiting, or none)
+    std::atomic<int> abandoned{0};
+    std::atomic<bool> active{false};       // a worker should be running for this role
+};
+
+struct Session {
+    std::atomic<bool> running{true};
+    HANDLE stop = nullptr;                 // manual reset: Stop, or a failed Start
+    EchoLink echo;                         // before the chains: they point at it
+    std::unique_ptr<CaptureChain> capture;
+    std::unique_ptr<Mixer> mixer;
+    std::mutex capture_lock, mix_lock;     // one worker at a time feeds the chain / pulls the mix (a late one skips)
+    RoleState roles[kRoles];
+    HANDLE first_try[2] = {};              // set after the capture's and the playback's first device attempt
+    std::atomic<int> device_ok[2] = {};    // 1 opened, 2 failed
+    std::mutex threads_lock;
+    std::vector<HANDLE> threads;
+    Session() = default;
+    Session(const Session &) = delete;
+    Session &operator=(const Session &) = delete;
+    ~Session() {
+        if (stop) CloseHandle(stop);
+        for (HANDLE e : first_try) if (e) CloseHandle(e);
+        for (HANDLE t : threads) CloseHandle(t);
+    }
+};
+
+// exclusive: only to publish or take the session pointer (never across a device call or a wait); shared: every call
+// that uses the session, with a try on every path the game's threads take
+std::shared_mutex g_life;
+std::shared_ptr<Session> g_session;
 std::atomic<bool> g_mic_ok{false};    // the last capture attempt opened a microphone (false: listen-only)
+
+struct Worker {
+    std::shared_ptr<Session> s;
+    int role;
+    uint32_t gen;
+    DWORD start_delay_ms;
+};
+
+int64_t RealMs() { return static_cast<int64_t>(GetTickCount64()); }
+bool Current(const Worker &w) { return w.role >= kRoles || w.s->roles[w.role].gen.load() == w.gen; }
+bool Live(const Worker &w) { return w.s->running.load() && !g_failed.load() && Current(w); }
+void Busy(const Worker &w) { if (w.role < kRoles && Current(w)) w.s->roles[w.role].busy_since.store(RealMs()); }
+void Idle(const Worker &w) { if (w.role < kRoles && Current(w)) w.s->roles[w.role].busy_since.store(0); }
+// A wait the watchdog does not count as a stuck device call.
+DWORD WaitIdle(const Worker &w, DWORD count, const HANDLE *handles, DWORD ms) {
+    Idle(w);
+    const DWORD r = WaitForMultipleObjects(count, handles, FALSE, ms);
+    Busy(w);
+    return r;
+}
 
 template <typename T> void SafeRelease(T *&p) { if (p) { p->Release(); p = nullptr; } }
 
@@ -602,6 +711,12 @@ std::string Utf8(const std::wstring &w) {
     std::string s(n > 0 ? n : 0, '\0');
     if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
     return s;
+}
+
+std::string FormatText(const dsp::DeviceFormat &f) {
+    char text[96];
+    snprintf(text, sizeof text, "%u Hz, %u channel(s), %s in %u-byte samples", f.rate, f.channels, dsp::KindName(f.kind), f.container);
+    return text;
 }
 
 // PKEY_Device_FriendlyName ({a45c254e-df1c-4efd-8020-67d146a850e0}, 14), spelled out: no INITGUID and no extra lib.
@@ -640,8 +755,9 @@ std::vector<std::wstring> EndpointIds(IMMDeviceEnumerator *enumerator, EDataFlow
 }
 
 // The active capture endpoints as voice_audio_devices.h sees them, and the default communications input's index (-1:
-// none). `logged` (the capture thread's own) logs each rejected endpoint once (its name is not personal data; no audio
-// is ever logged); null logs nothing.
+// none, or the default is not one of the enumerated endpoints: then it is never opened). `logged` (the capture
+// worker's own) logs each rejected endpoint once, by kind only: a friendly name can carry a person's name ("...'s
+// AirPods"); no audio is ever logged. null logs nothing.
 std::vector<devices::Candidate> CaptureCandidates(IMMDeviceEnumerator *enumerator, int &default_index, std::vector<std::wstring> *logged) {
     std::vector<IMMDevice *> devices;
     const std::vector<std::wstring> ids = EndpointIds(enumerator, eCapture, &devices);
@@ -666,7 +782,8 @@ std::vector<devices::Candidate> CaptureCandidates(IMMDeviceEnumerator *enumerato
         if (ids[i] == default_id) default_index = static_cast<int>(i);
         if (logged && devices::IsMonitorOrLoopback(c) && std::find(logged->begin(), logged->end(), c.id) == logged->end()) {
             logged->push_back(c.id);
-            Log("voice: capture device '%s' is a monitor/loopback; not used", Utf8(c.name.empty() ? c.id : c.name).c_str());
+            Log("voice: capture endpoint %zu%s is %s; not used", i, ids[i] == default_id ? " (the default)" : "",
+                devices::IsDefaultAlias(c) ? "the sound server's default stand-in (it may be a monitor)" : "a monitor/loopback");
         }
         list.push_back(std::move(c));
     }
@@ -674,20 +791,24 @@ std::vector<devices::Candidate> CaptureCandidates(IMMDeviceEnumerator *enumerato
 }
 
 // The capture endpoint voice may use (voice_audio_devices.h): the player's chosen microphone while it is there, else the
-// default or first microphone; empty: only monitors/loopbacks, or no input at all.
-std::wstring SelectCapture(IMMDeviceEnumerator *enumerator) {
-    static std::vector<std::wstring> logged; // capture thread only; one capture thread at a time
-    int default_index = -1;
-    const std::vector<devices::Candidate> list = CaptureCandidates(enumerator, default_index, &logged);
+// default or first microphone; empty: only monitors/loopbacks/default stand-ins, or no input at all.
+std::wstring PickFrom(const std::vector<devices::Candidate> &list, int default_index) {
     const std::wstring chosen = MicChoice();
-    static std::wstring missing_logged; // capture thread only
+    thread_local std::wstring missing_logged; // per capture worker
     if (devices::ChosenMissing(list, chosen, true)) {
-        if (missing_logged != chosen) { missing_logged = chosen; Log("voice: the chosen microphone is not there; using the system default"); }
+        if (missing_logged != chosen) { missing_logged = chosen; Log("voice: the chosen microphone is not there (or is not a microphone); using the system default"); }
     } else {
         missing_logged.clear();
     }
     const int pick = devices::PickCapture(list, default_index, chosen);
     return pick < 0 ? std::wstring() : list[pick].id;
+}
+
+std::wstring SelectCapture(IMMDeviceEnumerator *enumerator) {
+    thread_local std::vector<std::wstring> logged; // per capture worker
+    int default_index = -1;
+    const std::vector<devices::Candidate> list = CaptureCandidates(enumerator, default_index, &logged);
+    return PickFrom(list, default_index);
 }
 
 // The active render endpoints (devices::Candidate, render set), for the output's list and choice.
@@ -702,7 +823,7 @@ std::vector<devices::Candidate> RenderCandidates(IMMDeviceEnumerator *enumerator
     return list;
 }
 
-// The output to open: the player's choice while it is active, else empty (the default mastering voice).
+// The output to open: the player's choice while it is active, else empty (the default output).
 std::wstring SelectOutput(IMMDeviceEnumerator *enumerator) {
     const std::wstring chosen = OutputChoice();
     if (chosen.empty() || !enumerator) return {};
@@ -710,152 +831,7 @@ std::wstring SelectOutput(IMMDeviceEnumerator *enumerator) {
     return devices::FindChosen(list, chosen, false) >= 0 ? chosen : std::wstring();
 }
 
-bool StopRequested(DWORD wait_ms) { return WaitForSingleObject(g_stop, wait_ms) == WAIT_OBJECT_0; }
-
-void FirstTry(int which, bool ok) {
-    if (g_device_ok[which].load() == 0) { g_device_ok[which] = ok ? 1 : 2; SetEvent(g_first_try[which]); }
-    else if (ok) g_device_ok[which] = 1;
-}
-
-bool ParseFormat(const WAVEFORMATEX *w, dsp::DeviceFormat &f) {
-    if (!w || !w->nChannels || !w->nSamplesPerSec || w->nSamplesPerSec > 384000) return false;
-    WORD tag = w->wFormatTag, valid = w->wBitsPerSample;
-    if (tag == WAVE_FORMAT_EXTENSIBLE && w->cbSize >= 22) {
-        const auto *x = reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(w);
-        tag = static_cast<WORD>(x->SubFormat.Data1); // KSDATAFORMAT_SUBTYPE_PCM = 1, _IEEE_FLOAT = 3
-        if (x->Samples.wValidBitsPerSample) valid = x->Samples.wValidBitsPerSample;
-    }
-    f.rate = w->nSamplesPerSec;
-    f.channels = w->nChannels;
-    f.container = static_cast<uint16_t>(w->wBitsPerSample / 8);
-    if (w->nBlockAlign != f.container * f.channels) return false;
-    if (tag == 3 && w->wBitsPerSample == 32) f.kind = dsp::SampleKind::Float32;
-    else if (tag == 1 && w->wBitsPerSample == 16) f.kind = dsp::SampleKind::Int16;
-    else if (tag == 1 && valid == 24 && (w->wBitsPerSample == 24 || w->wBitsPerSample == 32)) f.kind = dsp::SampleKind::Int24;
-    else if (tag == 1 && w->wBitsPerSample == 32) f.kind = dsp::SampleKind::Int32;
-    else return false;
-    return true;
-}
-
-// One open capture session; returns when stopped or the device fails, true when the player chose another microphone
-// (reopen at once, no retry wait).
-bool CaptureSession(HANDLE ready) {
-    bool rechosen = false;
-    const uint32_t serial = g_mic_serial.load();
-    IMMDeviceEnumerator *enumerator = nullptr;
-    IMMDevice *device = nullptr;
-    IAudioClient *client = nullptr;
-    IAudioCaptureClient *capture = nullptr;
-    WAVEFORMATEX *mix = nullptr;
-    LPWSTR id = nullptr;
-    dsp::DeviceFormat format;
-    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
-    std::wstring chosen;
-    if (SUCCEEDED(hr)) { chosen = SelectCapture(enumerator); if (chosen.empty()) hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND); }
-    if (SUCCEEDED(hr)) hr = enumerator->GetDevice(chosen.c_str(), &device);
-    if (SUCCEEDED(hr)) hr = device->GetId(&id);
-    if (SUCCEEDED(hr)) hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&client));
-    if (SUCCEEDED(hr)) hr = client->GetMixFormat(&mix);
-    if (SUCCEEDED(hr) && !ParseFormat(mix, format)) hr = E_NOTIMPL;
-    if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 200000, 0, mix, nullptr);
-    if (SUCCEEDED(hr)) hr = client->SetEventHandle(ready);
-    if (SUCCEEDED(hr)) hr = client->GetService(IID_PPV_ARGS(&capture));
-    if (SUCCEEDED(hr)) hr = client->Start();
-    static HRESULT last_error = S_OK;
-    if (FAILED(hr)) {
-        if (hr != last_error) {
-            if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) Log("voice: no microphone (no input, or only monitor/loopback inputs); listening only, checking every 2 s");
-            else Log("voice: no microphone (0x%08lx); retrying every 2 s", static_cast<unsigned long>(hr));
-        }
-        last_error = hr;
-        g_mic_ok = false;
-        FirstTry(0, false);
-    } else {
-        last_error = S_OK;
-        g_mic_ok = true;
-        Log("voice: microphone open");
-        FirstTry(0, true);
-        g_capture->Restart();
-        ULONGLONG last_check = GetTickCount64(), last_data = last_check;
-        for (;;) {
-            HANDLE waits[2] = {g_stop, ready};
-            if (WaitForMultipleObjects(2, waits, FALSE, 500) == WAIT_OBJECT_0) break;
-            UINT32 packet = 0;
-            while (SUCCEEDED(hr = capture->GetNextPacketSize(&packet)) && packet) {
-                last_data = GetTickCount64();
-                BYTE *data = nullptr;
-                UINT32 frames = 0;
-                DWORD flags = 0;
-                hr = capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
-                if (FAILED(hr)) break;
-                g_capture->FeedDevice(format, data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
-                capture->ReleaseBuffer(frames);
-                if (!g_running.load()) break;
-            }
-            if (FAILED(hr)) { Log("voice: microphone lost (0x%08lx); retrying", static_cast<unsigned long>(hr)); break; }
-            if (!g_running.load()) break;
-            // a live shared-mode stream always delivers (silence too); none for 2 s is a lost device that did not say
-            // so (Wine/PulseAudio may not report AUDCLNT_E_DEVICE_INVALIDATED)
-            if (GetTickCount64() - last_data > 2000) { Log("voice: microphone stalled; reopening"); break; }
-            if (g_mic_serial.load() != serial) { Log("voice: the player chose another microphone; reopening"); rechosen = true; break; } // §15
-            if (GetTickCount64() - last_check > 3000) { // the microphone to use changed (the default, or one plugged in)
-                last_check = GetTickCount64();
-                const std::wstring now = SelectCapture(enumerator);
-                if (now != id) { Log("voice: microphone changed"); break; }
-            }
-        }
-        client->Stop();
-    }
-    if (mix) CoTaskMemFree(mix);
-    if (id) CoTaskMemFree(id);
-    SafeRelease(capture);
-    SafeRelease(client);
-    SafeRelease(device);
-    SafeRelease(enumerator);
-    return rechosen || g_mic_serial.load() != serial;
-}
-
-DWORD WINAPI CaptureThread(void *) {
-    FlushDenormals();
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    HANDLE ready = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    try {
-        if (FAILED(com) || !ready) { FirstTry(0, false); Log("voice: capture thread has no COM/event"); }
-        else
-            while (g_running.load()) {
-                const bool rechosen = CaptureSession(ready); // §15: the player's pick reopens at once
-                if (!g_running.load() || StopRequested(rechosen ? 0 : kRetryMs)) break;
-            }
-    } catch (...) {
-        Fail("the capture thread failed");
-    }
-    if (ready) CloseHandle(ready);
-    if (SUCCEEDED(com)) CoUninitialize();
-    FirstTry(0, false);
-    return 0;
-}
-
-struct VoiceCallback final : IXAudio2VoiceCallback {
-    HANDLE event = nullptr;
-    void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
-    void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
-    void STDMETHODCALLTYPE OnStreamEnd() override {}
-    void STDMETHODCALLTYPE OnBufferStart(void *) override {}
-    void STDMETHODCALLTYPE OnBufferEnd(void *) override { SetEvent(event); }
-    void STDMETHODCALLTYPE OnLoopEnd(void *) override {}
-    void STDMETHODCALLTYPE OnVoiceError(void *, HRESULT) override { SetEvent(event); }
-};
-
-struct EngineCallback final : IXAudio2EngineCallback {
-    HANDLE event = nullptr;
-    std::atomic<bool> lost{false};
-    void STDMETHODCALLTYPE OnProcessingPassStart() override {}
-    void STDMETHODCALLTYPE OnProcessingPassEnd() override {}
-    void STDMETHODCALLTYPE OnCriticalError(HRESULT) override { lost = true; SetEvent(event); }
-};
-
-// The default output's id (eConsole, what a default mastering voice uses), or empty: polled to follow a changed or
-// lost output on both platforms (no notification client).
+// The default output's id (eConsole), or empty: polled to follow a changed or lost output on both platforms.
 std::wstring DefaultRenderId(IMMDeviceEnumerator *enumerator) {
     std::wstring result;
     IMMDevice *device = nullptr;
@@ -866,123 +842,341 @@ std::wstring DefaultRenderId(IMMDeviceEnumerator *enumerator) {
     return result;
 }
 
-// One open playback session; true when the player chose another output (reopen at once, no retry wait).
-bool PlaybackSession(HMODULE library, HANDLE event) {
-    bool rechosen = false;
+void FirstTry(Session &s, int which, bool ok) {
+    if (s.device_ok[which].load() == 0) { s.device_ok[which] = ok ? 1 : 2; if (s.first_try[which]) SetEvent(s.first_try[which]); }
+    else if (ok) s.device_ok[which] = 1;
+}
+
+bool ParseFormat(const WAVEFORMATEX *w, dsp::DeviceFormat &f) {
+    if (!w || !w->nChannels || w->nChannels > 32 || w->nSamplesPerSec < 4000 || w->nSamplesPerSec > 384000) return false;
+    WORD tag = w->wFormatTag, valid = w->wBitsPerSample;
+    if (tag == WAVE_FORMAT_EXTENSIBLE) {
+        if (w->cbSize < 22) return false;
+        const auto *x = reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(w);
+        tag = static_cast<WORD>(x->SubFormat.Data1); // KSDATAFORMAT_SUBTYPE_PCM = 1, _IEEE_FLOAT = 3
+        if (x->Samples.wValidBitsPerSample) valid = x->Samples.wValidBitsPerSample;
+    }
+    const WORD bits = w->wBitsPerSample;
+    f.rate = w->nSamplesPerSec;
+    f.channels = w->nChannels;
+    f.container = static_cast<uint16_t>(bits / 8);
+    if (bits % 8 || w->nBlockAlign != f.container * f.channels) return false;
+    if (tag == 3 && bits == 32) f.kind = dsp::SampleKind::Float32;
+    else if (tag == 3 && bits == 64) f.kind = dsp::SampleKind::Float64;
+    else if (tag == 1 && bits == 8) f.kind = dsp::SampleKind::UInt8;
+    else if (tag == 1 && bits == 16) f.kind = dsp::SampleKind::Int16;
+    else if (tag == 1 && bits == 24) f.kind = dsp::SampleKind::Int24;
+    else if (tag == 1 && bits == 32) f.kind = valid > 16 && valid <= 24 ? dsp::SampleKind::Int24 : dsp::SampleKind::Int32;
+    else return false;
+    return true;
+}
+
+enum class Outcome { Reopen, Retry, RetrySlow }; // reopen at once; retry in 2 s; retry with backoff (2..16 s)
+
+// One device buffer into the chain, only while this worker is the current one (a worker abandoned in a driver call
+// that comes back late feeds nothing).
+bool Feed(const Worker &w, const dsp::DeviceFormat &f, const uint8_t *data, size_t frames, bool silent) {
+    std::lock_guard lock(w.s->capture_lock);
+    if (!Live(w)) return false;
+    w.s->capture->FeedDevice(f, data, frames, silent);
+    return true;
+}
+
+void RestartCapture(const Worker &w) {
+    std::lock_guard lock(w.s->capture_lock);
+    if (Live(w)) w.s->capture->Restart();
+}
+
+void MicState(const Worker &w, bool ok) {
+    if (!Live(w)) return;
+    g_mic_ok = ok;
+    FirstTry(*w.s, 0, ok);
+}
+
+// A microphone that delivers at another rate than its format says, seen again after a reopen: that rate is used (the
+// capture worker's memory; a new format or device forgets it).
+struct RateMemo {
+    dsp::DeviceFormat nominal{0, 0, dsp::SampleKind::Float32, 0};
+    uint32_t measured = 0;
+    int strikes = 0;
+};
+thread_local RateMemo t_rate;
+
+// One open capture session; returns when stopped, the device fails or must be reopened.
+Outcome CaptureSession(const Worker &w, HANDLE ready) {
+    Session &s = *w.s;
+    const uint32_t serial = g_mic_serial.load();
+    IMMDeviceEnumerator *enumerator = nullptr;
+    IMMDevice *device = nullptr;
+    IAudioClient *client = nullptr;
+    IAudioCaptureClient *capture = nullptr;
+    WAVEFORMATEX *mix = nullptr;
+    dsp::DeviceFormat format;
+    std::wstring chosen;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (SUCCEEDED(hr)) { chosen = SelectCapture(enumerator); if (chosen.empty()) hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND); }
+    if (SUCCEEDED(hr)) hr = enumerator->GetDevice(chosen.c_str(), &device);
+    if (SUCCEEDED(hr)) hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&client));
+    if (SUCCEEDED(hr)) hr = client->GetMixFormat(&mix);
+    if (SUCCEEDED(hr) && !ParseFormat(mix, format)) hr = E_NOTIMPL;
+    if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 200000, 0, mix, nullptr);
+    if (SUCCEEDED(hr)) hr = client->SetEventHandle(ready);
+    if (SUCCEEDED(hr)) hr = client->GetService(IID_PPV_ARGS(&capture));
+    if (SUCCEEDED(hr)) hr = client->Start();
+    thread_local HRESULT last_error = S_OK;
+    Outcome outcome = Outcome::Retry;
+    if (FAILED(hr)) {
+        if (hr != last_error) {
+            if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) Log("voice: no microphone (no input, or only monitor/loopback inputs); listening only, checking every 2 s");
+            else Log("voice: no microphone (0x%08lx); retrying", static_cast<unsigned long>(hr));
+        }
+        last_error = hr;
+        MicState(w, false);
+        outcome = hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ? Outcome::Retry : Outcome::RetrySlow;
+    } else {
+        last_error = S_OK;
+        MicState(w, true);
+        dsp::DeviceFormat effective = format;
+        if (t_rate.strikes >= 2 && t_rate.nominal == format) effective.rate = t_rate.measured;
+        Log("voice: microphone open (%s%s)", FormatText(format).c_str(), effective.rate != format.rate ? "; its data is resampled from the rate it really delivers" : "");
+        RestartCapture(w);
+        dsp::RateWatch watch(effective.rate);
+        ULONGLONG last_check = GetTickCount64(), last_data = last_check;
+        bool done = false;
+        while (!done) {
+            HANDLE waits[2] = {s.stop, ready};
+            if (WaitIdle(w, 2, waits, 500) == WAIT_OBJECT_0 || !Live(w)) break;
+            UINT32 packet = 0;
+            while (SUCCEEDED(hr = capture->GetNextPacketSize(&packet)) && packet) {
+                last_data = GetTickCount64();
+                BYTE *data = nullptr;
+                UINT32 frames = 0;
+                DWORD flags = 0;
+                hr = capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+                if (FAILED(hr)) break;
+                const bool fed = Feed(w, effective, data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
+                capture->ReleaseBuffer(frames);
+                if (!fed) { done = true; break; }
+                if (const uint32_t measured = watch.Add(frames, RealMs())) {
+                    // a Bluetooth profile flip or a relabelled stream: reopen; the same mismatch again: use that rate
+                    if (t_rate.nominal == format && t_rate.measured == measured) t_rate.strikes++;
+                    else t_rate = {format, measured, 1};
+                    Log("voice: the microphone delivers about %.0f Hz while its format says %u Hz; reopening", watch.LastMeasured(), effective.rate);
+                    outcome = Outcome::Reopen;
+                    done = true;
+                    break;
+                }
+            }
+            if (done) break;
+            if (FAILED(hr)) {
+                if (hr == AUDCLNT_E_DEVICE_INVALIDATED) { Log("voice: microphone lost or its format changed; reopening"); outcome = Outcome::Reopen; }
+                else Log("voice: microphone lost (0x%08lx); retrying", static_cast<unsigned long>(hr));
+                break;
+            }
+            // a live shared-mode stream always delivers (silence too); none for 2 s is a lost device that did not say
+            // so (Wine/PulseAudio may not report AUDCLNT_E_DEVICE_INVALIDATED)
+            if (GetTickCount64() - last_data > 2000) { Log("voice: microphone stalled; reopening"); break; }
+            if (g_mic_serial.load() != serial) { Log("voice: the player chose another microphone; reopening"); outcome = Outcome::Reopen; break; } // §15
+            if (GetTickCount64() - last_check > 3000) { // the microphone to use changed (the default, or one plugged in)
+                last_check = GetTickCount64();
+                if (SelectCapture(enumerator) != chosen) { Log("voice: microphone changed; reopening"); outcome = Outcome::Reopen; break; }
+            }
+        }
+        client->Stop();
+    }
+    if (mix) CoTaskMemFree(mix);
+    SafeRelease(capture);
+    SafeRelease(client);
+    SafeRelease(device);
+    SafeRelease(enumerator);
+    return g_mic_serial.load() != serial ? Outcome::Reopen : outcome;
+}
+
+// The same through the test seam's fake devices (same selection, same chain).
+Outcome FakeCaptureSession(const Worker &w, testing::FakeDevices *fake) {
+    Session &s = *w.s;
+    const uint32_t serial = g_mic_serial.load();
+    int default_index = -1;
+    const std::vector<devices::Candidate> list = fake->CaptureList(default_index);
+    const std::wstring chosen = PickFrom(list, default_index);
+    dsp::DeviceFormat format;
+    if (chosen.empty() || !fake->OpenCapture(chosen, format)) {
+        if (chosen.empty()) Log("voice: no microphone (no input, or only monitor/loopback inputs); listening only, checking every 2 s");
+        MicState(w, false);
+        return chosen.empty() ? Outcome::Retry : Outcome::RetrySlow;
+    }
+    MicState(w, true);
+    Log("voice: microphone open (%s)", FormatText(format).c_str());
+    RestartCapture(w);
+    std::vector<uint8_t> buffer;
+    Outcome outcome = Outcome::Retry;
+    for (;;) {
+        if (WaitIdle(w, 1, &s.stop, 5) == WAIT_OBJECT_0 || !Live(w)) break;
+        const int frames = fake->ReadCapture(buffer);
+        if (frames < 0) { Log("voice: microphone lost or its format changed; reopening"); outcome = Outcome::Reopen; break; }
+        if (frames > 0 && !Feed(w, format, buffer.data(), static_cast<size_t>(frames), false)) break;
+        if (g_mic_serial.load() != serial) { outcome = Outcome::Reopen; break; }
+    }
+    fake->CloseCapture();
+    return outcome;
+}
+
+// The mix (48 kHz stereo) in the output's own format: rate, channels (L → 0, R → 1, the rest silent; one channel:
+// (L + R) / 2) and sample type.
+class RenderConverter {
+public:
+    void Reset(const dsp::DeviceFormat &f) {
+        f_ = f;
+        left_.Reset(kRate, f.rate);
+        right_.Reset(kRate, f.rate);
+        fifo_.clear();
+    }
+    // `pull` gives 480 frames of the mix (false: stop). Writes `frames` device frames to `out`.
+    template <typename Pull> bool Fill(uint8_t *out, size_t frames, Pull &&pull) {
+        while (fifo_.size() / 2 < frames) {
+            float stereo[2 * kSub], l[kSub], r[kSub];
+            if (!pull(stereo, static_cast<size_t>(kSub))) return false;
+            for (int i = 0; i < kSub; i++) { l[i] = stereo[2 * i]; r[i] = stereo[2 * i + 1]; }
+            left_.Process(l, kSub, lo_);
+            right_.Process(r, kSub, ro_);
+            const size_t n = std::min(lo_.size(), ro_.size());
+            for (size_t i = 0; i < n; i++) { fifo_.push_back(lo_[i]); fifo_.push_back(ro_[i]); }
+        }
+        const size_t stride = static_cast<size_t>(f_.container) * f_.channels;
+        for (size_t i = 0; i < frames; i++) {
+            const float l = fifo_[2 * i], r = fifo_[2 * i + 1];
+            uint8_t *p = out + i * stride;
+            for (uint16_t c = 0; c < f_.channels; c++)
+                dsp::WriteSample(f_, p + static_cast<size_t>(c) * f_.container, f_.channels == 1 ? (l + r) * 0.5f : c == 0 ? l : c == 1 ? r : 0.0f);
+        }
+        fifo_.erase(fifo_.begin(), fifo_.begin() + static_cast<std::ptrdiff_t>(2 * frames));
+        return true;
+    }
+
+private:
+    dsp::DeviceFormat f_;
+    dsp::Resampler left_, right_;
+    std::vector<float> lo_, ro_, fifo_;
+};
+
+bool PullFromMixer(const Worker &w, float *stereo, size_t frames) {
+    std::lock_guard lock(w.s->mix_lock);
+    if (!Live(w)) return false;
+    w.s->mixer->Pull(stereo, frames);
+    return true;
+}
+
+void OutputState(const Worker &w, bool ok, const std::wstring &in_use) {
+    if (!Live(w)) return;
+    FirstTry(*w.s, 1, ok);
+    SetOutputInUse(in_use); // §15: the device the mix (and so the echo reference) goes to
+}
+
+// One open playback session (WASAPI shared render).
+Outcome PlaybackSession(const Worker &w, HANDLE event) {
+    Session &s = *w.s;
     const uint32_t serial = g_output_serial.load();
     IMMDeviceEnumerator *enumerator = nullptr;
-    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) enumerator = nullptr;
-    const std::wstring output = DefaultRenderId(enumerator);
-    // §15: the player's output while it is there (empty: the default mastering voice, which follows the default)
-    std::wstring chosen = SelectOutput(enumerator);
-    static bool refused = false;          // playback thread only: XAudio2 refused the chosen output's id
-    static uint32_t refused_serial = 0;
-    if (refused && refused_serial != serial) refused = false; // a new pick is tried again
+    IMMDevice *device = nullptr;
+    IAudioClient *client = nullptr;
+    IAudioRenderClient *render = nullptr;
+    WAVEFORMATEX *mix = nullptr;
+    dsp::DeviceFormat format;
+    UINT32 buffer_frames = 0;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    const std::wstring output = SUCCEEDED(hr) ? DefaultRenderId(enumerator) : std::wstring();
+    // §15: the player's output while it is there (empty: the default, followed by the poll below)
+    std::wstring chosen = SUCCEEDED(hr) ? SelectOutput(enumerator) : std::wstring();
+    thread_local bool refused = false;   // the chosen output would not open: the default until the player picks again
+    thread_local uint32_t refused_serial = 0;
+    if (refused && refused_serial != serial) refused = false;
     if (refused) chosen.clear();
     refused_serial = serial;
     if (!OutputChoice().empty() && chosen.empty() && !refused) {
-        static std::wstring missing_logged; // playback thread only
+        thread_local std::wstring missing_logged;
         if (missing_logged != OutputChoice()) { missing_logged = OutputChoice(); Log("voice: the chosen output is not there; using the system default"); }
     }
-    ULONGLONG last_check = GetTickCount64();
-    using Create = HRESULT(WINAPI *)(IXAudio2 **, UINT32, XAUDIO2_PROCESSOR);
-    auto create = reinterpret_cast<Create>(GetProcAddress(library, "XAudio2Create"));
-    IXAudio2 *engine = nullptr;
-    IXAudio2MasteringVoice *master = nullptr;
-    IXAudio2SourceVoice *voice = nullptr;
-    VoiceCallback voice_cb;
-    voice_cb.event = event;
-    EngineCallback engine_cb;
-    engine_cb.event = event;
-    WAVEFORMATEX format{};
-    format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
-    format.nChannels = 2; // NR-7: stereo (open mode: both channels the old mono mix, which reached the output the same way)
-    format.nSamplesPerSec = kRate;
-    format.wBitsPerSample = 32;
-    format.nBlockAlign = 8;
-    format.nAvgBytesPerSec = kRate * 8;
-    HRESULT hr = create ? create(&engine, 0, XAUDIO2_DEFAULT_PROCESSOR) : E_NOINTERFACE;
-    if (SUCCEEDED(hr)) hr = engine->RegisterForCallbacks(&engine_cb);
-    if (SUCCEEDED(hr) && !chosen.empty()) { // XAudio2 2.9 takes the IMMDevice id; refused: the default instead
-        const HRESULT picked = engine->CreateMasteringVoice(&master, XAUDIO2_DEFAULT_CHANNELS, XAUDIO2_DEFAULT_SAMPLERATE, 0, chosen.c_str());
-        if (FAILED(picked)) {
-            Log("voice: the chosen output refused (0x%08lx); using the system default", static_cast<unsigned long>(picked));
-            master = nullptr;
-            chosen.clear();
-            refused = true; // until the player picks again: no reopen loop on a device XAudio2 will not open
-        }
-    }
-    if (SUCCEEDED(hr) && !master) hr = engine->CreateMasteringVoice(&master);
-    if (SUCCEEDED(hr)) hr = engine->CreateSourceVoice(&voice, &format, 0, XAUDIO2_DEFAULT_FREQ_RATIO, &voice_cb);
-    static HRESULT last_error = S_OK;
-    if (FAILED(hr)) {
-        if (hr != last_error) Log("voice: no audio output (0x%08lx); retrying every 2 s", static_cast<unsigned long>(hr));
+    const std::wstring target = chosen.empty() ? output : chosen;
+    if (SUCCEEDED(hr) && target.empty()) hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    if (SUCCEEDED(hr)) hr = enumerator->GetDevice(target.c_str(), &device);
+    if (SUCCEEDED(hr)) hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&client));
+    if (SUCCEEDED(hr)) hr = client->GetMixFormat(&mix);
+    if (SUCCEEDED(hr) && !ParseFormat(mix, format)) hr = E_NOTIMPL;
+    if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 1000000, 0, mix, nullptr);
+    if (SUCCEEDED(hr)) hr = client->SetEventHandle(event);
+    if (SUCCEEDED(hr)) hr = client->GetBufferSize(&buffer_frames);
+    if (SUCCEEDED(hr)) hr = client->GetService(IID_PPV_ARGS(&render));
+    thread_local HRESULT last_error = S_OK;
+    Outcome outcome = Outcome::Retry;
+    if (FAILED(hr) && !chosen.empty()) {
+        Log("voice: the chosen output refused (0x%08lx); using the system default", static_cast<unsigned long>(hr));
+        refused = true; // until the player picks again: no reopen loop on a device that will not open
+        outcome = Outcome::Reopen;
+    } else if (FAILED(hr)) {
+        if (hr != last_error) Log("voice: no audio output (0x%08lx); retrying", static_cast<unsigned long>(hr));
         last_error = hr;
-        FirstTry(1, false);
+        OutputState(w, false, std::wstring());
+        outcome = hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ? Outcome::Retry : Outcome::RetrySlow;
     } else {
         last_error = S_OK;
-        FirstTry(1, true);
-        SetOutputInUse(chosen.empty() ? output : chosen); // §15: the device the mix (and so the echo reference) goes to
-        Log("voice: playback open");
-        static float buffers[kQueuedBuffers + 1][2 * kFrame]; // stereo, interleaved
-        int next = 0;
+        OutputState(w, true, target);
+        Log("voice: playback open (%s)", FormatText(format).c_str());
+        RenderConverter converter;
+        converter.Reset(format);
+        const UINT32 queued = std::min<UINT32>(buffer_frames, format.rate * kQueuedMs / 1000);
         bool started = false;
-        while (!engine_cb.lost.load() && g_running.load()) {
-            XAUDIO2_VOICE_STATE state{};
-            voice->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
-            bool failed = false;
-            for (UINT32 queued = state.BuffersQueued; queued < static_cast<UINT32>(kQueuedBuffers); queued++) {
-                g_mixer->Pull(buffers[next], kFrame);
-                XAUDIO2_BUFFER buffer{};
-                buffer.AudioBytes = 2 * kFrame * sizeof(float);
-                buffer.pAudioData = reinterpret_cast<const BYTE *>(buffers[next]);
-                if (FAILED(voice->SubmitSourceBuffer(&buffer))) { failed = true; break; }
-                next = (next + 1) % (kQueuedBuffers + 1); // one spare: a buffer is never rewritten while queued
+        ULONGLONG last_check = GetTickCount64();
+        for (;;) {
+            UINT32 padding = 0;
+            if (FAILED(hr = client->GetCurrentPadding(&padding))) break;
+            if (padding < queued) {
+                const UINT32 want = queued - padding;
+                BYTE *data = nullptr;
+                if (FAILED(hr = render->GetBuffer(want, &data))) break;
+                const bool ok = converter.Fill(data, want, [&](float *stereo, size_t frames) { return PullFromMixer(w, stereo, frames); });
+                render->ReleaseBuffer(want, ok ? 0 : AUDCLNT_BUFFERFLAGS_SILENT);
+                if (!ok) break;
             }
-            if (failed) { Log("voice: playback submit failed; retrying"); break; }
-            if (!started) { if (FAILED(voice->Start())) { Log("voice: playback start failed"); break; } started = true; }
-            HANDLE waits[2] = {g_stop, event};
-            if (WaitForMultipleObjects(2, waits, FALSE, 100) == WAIT_OBJECT_0) break;
-            if (g_output_serial.load() != serial) { Log("voice: the player chose another output; reopening"); rechosen = true; break; } // §15
+            if (!started) { if (FAILED(hr = client->Start())) break; started = true; }
+            HANDLE waits[2] = {s.stop, event};
+            if (WaitIdle(w, 2, waits, 20) == WAIT_OBJECT_0 || !Live(w)) break;
+            if (g_output_serial.load() != serial) { Log("voice: the player chose another output; reopening"); outcome = Outcome::Reopen; break; } // §15
             if (GetTickCount64() - last_check > 3000) {
                 last_check = GetTickCount64();
                 // the chosen output came back or went away (§15), or (on the default) the default changed
-                if (!refused && SelectOutput(enumerator) != chosen) { Log("voice: the chosen output came or went; reopening"); break; }
-                if (chosen.empty() && DefaultRenderId(enumerator) != output) { Log("voice: default audio output changed; reopening"); break; }
+                if (!refused && SelectOutput(enumerator) != chosen) { Log("voice: the chosen output came or went; reopening"); outcome = Outcome::Reopen; break; }
+                if (chosen.empty() && DefaultRenderId(enumerator) != output) { Log("voice: default audio output changed; reopening"); outcome = Outcome::Reopen; break; }
             }
         }
-        if (engine_cb.lost.load()) Log("voice: audio output lost; retrying");
-        voice->Stop();
-        voice->FlushSourceBuffers();
-        SetOutputInUse(std::wstring());
+        if (FAILED(hr)) Log("voice: audio output lost (0x%08lx); retrying", static_cast<unsigned long>(hr));
+        if (started) client->Stop();
+        if (Live(w)) SetOutputInUse(std::wstring());
     }
-    if (voice) voice->DestroyVoice();
-    if (master) master->DestroyVoice();
-    if (engine) { engine->UnregisterForCallbacks(&engine_cb); engine->StopEngine(); engine->Release(); }
+    if (mix) CoTaskMemFree(mix);
+    SafeRelease(render);
+    SafeRelease(client);
+    SafeRelease(device);
     SafeRelease(enumerator);
-    return rechosen || g_output_serial.load() != serial;
+    return g_output_serial.load() != serial ? Outcome::Reopen : outcome;
 }
 
-DWORD WINAPI PlaybackThread(void *) {
-    FlushDenormals();
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    HMODULE library = LoadLibraryExW(L"xaudio2_9.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    try {
-        if (FAILED(com) || !library || !event) { FirstTry(1, false); Log("voice: XAudio2 2.9 unavailable"); }
-        else
-            while (g_running.load()) {
-                const bool rechosen = PlaybackSession(library, event); // §15: the player's pick reopens at once
-                if (!g_running.load() || StopRequested(rechosen ? 0 : kRetryMs)) break;
-            }
-    } catch (...) {
-        Fail("the playback thread failed");
+Outcome FakePlaybackSession(const Worker &w, testing::FakeDevices *fake) {
+    Session &s = *w.s;
+    const uint32_t serial = g_output_serial.load();
+    if (!fake->OpenRender()) { OutputState(w, false, std::wstring()); return Outcome::RetrySlow; }
+    OutputState(w, true, L"fake");
+    Log("voice: playback open (fake output, 48000 Hz, 2 channel(s))");
+    float stereo[2 * kSub];
+    Outcome outcome = Outcome::Retry;
+    for (;;) {
+        if (WaitIdle(w, 1, &s.stop, 5) == WAIT_OBJECT_0 || !Live(w)) break;
+        if (!PullFromMixer(w, stereo, kSub)) break;
+        if (!fake->Render(stereo, kSub)) { Log("voice: audio output lost; retrying"); break; }
+        if (g_output_serial.load() != serial) { Log("voice: the player chose another output; reopening"); outcome = Outcome::Reopen; break; }
     }
-    if (event) CloseHandle(event);
-    if (library) FreeLibrary(library);
-    if (SUCCEEDED(com)) CoUninitialize();
-    FirstTry(1, false);
-    return 0;
+    if (Live(w)) SetOutputInUse(std::wstring());
+    fake->CloseRender();
+    return outcome;
 }
 
 // ---------------------------------------------------------------- echo reference: loopback of the output in use
@@ -991,17 +1185,12 @@ DWORD WINAPI PlaybackThread(void *) {
 // music), so while it works the reference is a WASAPI loopback of the very endpoint the voice plays to (OutputInUse:
 // the player's chosen output, or the default while it stands in), which carries the game and the voice mix together.
 // It follows that endpoint (reopened within 0.5 s of a change). Without it (no output open, loopback refused, as an
-// older Wine may: inference, not yet run on a Deck) the mix is the reference, as in the headless tests. Only one of the
-// two feeds AEC3 at a time; a switch costs AEC3 a re-alignment (about a second).
-std::atomic<bool> g_loopback_open{false};
-std::atomic<int64_t> g_loopback_data_ms{0};
-bool LoopbackLive() {
-    return g_loopback_open.load() && static_cast<int64_t>(GetTickCount64()) - g_loopback_data_ms.load() < 300;
-}
-
-void LoopbackSession() {
+// older Wine may: inference, not yet run on a Deck) the mix is the reference, as in the headless tests. EchoLink picks
+// one of the two at a time; a switch costs AEC3 a re-alignment (about a second).
+Outcome LoopbackSession(const Worker &w) {
+    Session &s = *w.s;
     const std::wstring target = OutputInUse();
-    if (target.empty()) return; // no output open: nothing plays, the retry waits
+    if (target.empty()) return Outcome::Retry; // no output open: nothing plays, the retry waits
     IMMDeviceEnumerator *enumerator = nullptr;
     IMMDevice *device = nullptr;
     IAudioClient *client = nullptr;
@@ -1017,22 +1206,26 @@ void LoopbackSession() {
     if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 200000, 0, mix, nullptr);
     if (SUCCEEDED(hr)) hr = client->GetService(IID_PPV_ARGS(&capture));
     if (SUCCEEDED(hr)) hr = client->Start();
-    static HRESULT last_error = S_OK; // loopback thread only
+    thread_local HRESULT last_error = S_OK;
+    Outcome outcome = Outcome::Retry;
     if (FAILED(hr)) {
         if (hr != last_error)
             Log("voice: no loopback of the output (0x%08lx); the echo canceller hears the voice mix only", static_cast<unsigned long>(hr));
         last_error = hr;
+        outcome = Outcome::RetrySlow;
     } else {
         last_error = S_OK;
-        Log("voice: echo reference is the output's loopback (game and voice)");
+        Log("voice: output loopback open (%s); the echo reference once it delivers steadily", FormatText(format).c_str());
         dsp::Resampler resampler;
         resampler.Reset(format.rate);
         std::vector<float> mono, at48;
         float block[echo::Canceller::kBlock];
         int fill = 0;
         ULONGLONG last_check = GetTickCount64();
-        g_loopback_open = true;
-        while (!StopRequested(10) && g_running.load()) {
+        if (Live(w)) s.echo.loopback_open = true;
+        bool done = false;
+        while (!done) {
+            if (WaitIdle(w, 1, &s.stop, 10) == WAIT_OBJECT_0 || !Live(w)) break;
             UINT32 packet = 0;
             while (SUCCEEDED(hr = capture->GetNextPacketSize(&packet)) && packet) {
                 BYTE *data = nullptr;
@@ -1043,23 +1236,21 @@ void LoopbackSession() {
                 if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data) mono.assign(frames, 0.0f);
                 else dsp::ToMono(format, data, frames, mono);
                 capture->ReleaseBuffer(frames);
+                if (!Live(w)) { done = true; break; }
                 resampler.Process(mono.data(), mono.size(), at48);
                 for (const float x : at48) {
                     block[fill++] = std::clamp(x, -1.0f, 1.0f);
-                    if (fill == echo::Canceller::kBlock) {
-                        fill = 0;
-                        g_loopback_data_ms = static_cast<int64_t>(GetTickCount64());
-                        g_echo->Render(block);
-                    }
+                    if (fill == echo::Canceller::kBlock) { fill = 0; s.echo.LoopbackBlock(block); }
                 }
             }
+            if (done) break;
             if (FAILED(hr)) { Log("voice: output loopback lost (0x%08lx); retrying", static_cast<unsigned long>(hr)); break; }
             if (GetTickCount64() - last_check > 500) {
                 last_check = GetTickCount64();
-                if (OutputInUse() != target) break; // voice moved to another output: follow it
+                if (OutputInUse() != target) { outcome = Outcome::Reopen; break; } // voice moved to another output: follow it
             }
         }
-        g_loopback_open = false;
+        if (Current(w)) s.echo.loopback_open = false;
         client->Stop();
     }
     if (mix) CoTaskMemFree(mix);
@@ -1067,97 +1258,199 @@ void LoopbackSession() {
     SafeRelease(client);
     SafeRelease(device);
     SafeRelease(enumerator);
+    return outcome;
 }
 
-DWORD WINAPI LoopbackThread(void *) {
-    FlushDenormals();
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    try {
-        if (FAILED(com)) Log("voice: loopback thread has no COM; the echo canceller hears the voice mix only");
-        else
-            while (g_running.load()) {
-                LoopbackSession();
-                if (!g_running.load() || StopRequested(500)) break; // an output opening or changing is picked up soon
-            }
-    } catch (...) {
-        Log("voice: the output loopback failed; the echo canceller hears the voice mix only"); // voice goes on
+// ---------------------------------------------------------------- the device workers and their watchdog
+
+DWORD WINAPI RoleThread(void *arg);
+DWORD WINAPI WatchdogThread(void *arg);
+
+bool SpawnWorker(const std::shared_ptr<Session> &s, int role, uint32_t gen, DWORD start_delay_ms) {
+    auto *w = new (std::nothrow) Worker{s, role, gen, start_delay_ms};
+    if (!w) return false;
+    g_workers_alive++; // counted from here: a worker that never starts is uncounted below
+    HANDLE t = CreateThread(nullptr, 0, role == kWatchdogRole ? WatchdogThread : RoleThread, w, 0, nullptr);
+    if (!t) { g_workers_alive--; delete w; return false; }
+    std::lock_guard lock(s->threads_lock);
+    s->threads.push_back(t);
+    return true;
+}
+
+Outcome RunSession(const Worker &w, HANDLE event) {
+    testing::FakeDevices *fake = g_fake.load();
+    switch (w.role) {
+    case kCaptureRole: return fake ? FakeCaptureSession(w, fake) : CaptureSession(w, event);
+    case kPlaybackRole: return fake ? FakePlaybackSession(w, fake) : PlaybackSession(w, event);
+    default: return fake ? Outcome::Retry : LoopbackSession(w);
     }
-    g_loopback_open = false;
+}
+
+DWORD WINAPI RoleThread(void *arg) {
+    const std::unique_ptr<Worker> w(static_cast<Worker *>(arg));
+    Session &s = *w->s;
+    FlushDenormals();
+    Busy(*w);
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    try {
+        if (w->start_delay_ms && WaitIdle(*w, 1, &s.stop, w->start_delay_ms) == WAIT_OBJECT_0) {
+            // stopped before the retry
+        } else if (FAILED(com) || !event) {
+            Log("voice: the %s worker has no COM/event", kRoleNames[w->role]);
+        } else {
+            int slow = 0;
+            while (Live(*w)) {
+                const Outcome outcome = RunSession(*w, event);
+                if (!Live(*w)) break;
+                DWORD wait = w->role == kLoopbackRole ? 500 : kRetryMs;
+                if (outcome == Outcome::Reopen) wait = 0;
+                if (outcome == Outcome::RetrySlow) wait = std::min<DWORD>(16000, kRetryMs << std::min(slow++, 3));
+                else slow = 0;
+                if (WaitIdle(*w, 1, &s.stop, wait) == WAIT_OBJECT_0) break;
+            }
+        }
+    } catch (...) {
+        if (Live(*w)) {
+            if (w->role == kLoopbackRole) Log("voice: the output loopback failed; the echo canceller hears the voice mix only"); // voice goes on
+            else Fail(w->role == kCaptureRole ? "the capture thread failed" : "the playback thread failed");
+        }
+    }
+    Idle(*w);
+    if (Current(*w)) {
+        if (w->role < 2) FirstTry(s, w->role, false); // only if it never tried: Start stops waiting
+        if (w->role == kLoopbackRole) s.echo.loopback_open = false;
+    }
+    if (event) CloseHandle(event);
     if (SUCCEEDED(com)) CoUninitialize();
+    g_workers_alive--;
+    return 0; // the session goes with the last reference (this one, for a worker left behind)
+}
+
+// A worker whose device call has not returned for g_stuck_ms is left behind; a fresh one retries after a backoff. At
+// most kMaxAbandon per role, and never past kMaxWorkers alive: then that part of voice stays off (the game goes on).
+void Abandon(const std::shared_ptr<Session> &s, int role, int64_t stuck_ms) {
+    RoleState &r = s->roles[role];
+    const uint32_t gen = ++r.gen;
+    r.busy_since = 0;
+    const int n = ++r.abandoned;
+    Log("voice: the %s worker's device call has not returned for %lld ms; it is left behind, a fresh one retries", kRoleNames[role],
+        static_cast<long long>(stuck_ms));
+    if (role == kCaptureRole) g_mic_ok = false;
+    if (role == kPlaybackRole) SetOutputInUse(std::wstring());
+    if (role == kLoopbackRole) s->echo.loopback_open = false;
+    if (n > kMaxAbandon || g_workers_alive.load() >= kMaxWorkers || !SpawnWorker(s, role, gen, kRetryMs * static_cast<DWORD>(n))) {
+        r.active = false;
+        Log("voice: the %s does not answer; that part of voice stays off for this session", kRoleNames[role]);
+    }
+}
+
+DWORD WINAPI WatchdogThread(void *arg) {
+    const std::unique_ptr<Worker> w(static_cast<Worker *>(arg));
+    while (WaitForSingleObject(w->s->stop, 100) == WAIT_TIMEOUT && Live(*w))
+        for (int role = 0; role < kRoles; role++) {
+            RoleState &r = w->s->roles[role];
+            const int64_t since = r.busy_since.load();
+            if (r.active.load() && since && RealMs() - since > g_stuck_ms.load()) Abandon(w->s, role, RealMs() - since);
+        }
+    g_workers_alive--;
     return 0;
 }
 
-void StopLocked() {
-    g_running = false;
-    if (g_stop) SetEvent(g_stop);
-    for (HANDLE &t : g_threads)
-        if (t) { WaitForSingleObject(t, 5000); CloseHandle(t); t = nullptr; }
-    for (HANDLE &e : g_first_try)
-        if (e) { CloseHandle(e); e = nullptr; }
-    if (g_stop) { CloseHandle(g_stop); g_stop = nullptr; }
-    g_capture.reset();
-    g_mixer.reset();
-    g_echo.reset();
-    g_sending_until = 0;
+// Ends a session: its workers are told to stop and waited for at most `wait_ms` (on the voice thread, never the
+// game's); any still in a device call after that are left behind with their own reference.
+void Retire(const std::shared_ptr<Session> &s, DWORD wait_ms) {
+    s->running = false;
+    if (s->stop) SetEvent(s->stop);
+    std::vector<HANDLE> threads;
+    {
+        std::lock_guard lock(s->threads_lock);
+        threads = s->threads;
+    }
+    if (threads.empty() || !wait_ms) return;
+    if (threads.size() > MAXIMUM_WAIT_OBJECTS) threads.resize(MAXIMUM_WAIT_OBJECTS);
+    if (WaitForMultipleObjects(static_cast<DWORD>(threads.size()), threads.data(), TRUE, wait_ms) == WAIT_TIMEOUT)
+        Log("voice: an audio device call has not returned; its worker is left behind (voice stops, the game goes on)");
 }
 
-bool CreateEngineLocked(SendFn send) {
-    if (g_failed.load()) return false;
+std::shared_ptr<Session> TakeSession() {
+    std::unique_lock lock(g_life);
+    g_running = false;
+    g_sending_until = 0;
+    return std::move(g_session);
+}
+
+void Publish(const std::shared_ptr<Session> &s) {
+    std::unique_lock lock(g_life);
+    g_session = s;
+    g_running = true;
+}
+
+std::shared_ptr<Session> CreateSession(SendFn send) {
+    if (g_failed.load()) return nullptr;
     try {
-        auto capture = std::make_unique<CaptureChain>(std::move(send));
-        auto mixer = std::make_unique<Mixer>();
-        if (!capture->Init() || !mixer->Init()) { Fail("a codec library failed to start"); return false; }
-        auto echo = std::make_unique<echo::Canceller>(); // always on (OD-144): voice does not start without it
-        if (!echo->Init()) { Fail("the echo canceller failed to start"); return false; }
-        g_capture = std::move(capture);
-        g_mixer = std::move(mixer);
-        g_echo = std::move(echo);
-        g_stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!g_stop) { Fail("no stop event"); g_capture.reset(); g_mixer.reset(); g_echo.reset(); return false; }
+        auto s = std::make_shared<Session>();
+        s->echo.canceller = std::make_unique<echo::Canceller>(); // always on (OD-144): voice does not start without it
+        s->capture = std::make_unique<CaptureChain>(std::move(send), &s->echo);
+        s->mixer = std::make_unique<Mixer>(&s->echo);
+        if (!s->capture->Init() || !s->mixer->Init()) { Fail("a codec library failed to start"); return nullptr; }
+        if (!s->echo.canceller->Init()) { Fail("the echo canceller failed to start"); return nullptr; }
+        s->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!s->stop) { Fail("no stop event"); return nullptr; }
         g_concealed = 0;
-        g_running = true;
-        return true;
+        return s;
     } catch (...) {
         Fail("the engine could not be created");
-        g_capture.reset();
-        g_mixer.reset();
-        g_echo.reset();
-        return false;
+        return nullptr;
     }
 }
+
+// The session, under a shared lock taken with a try: null when Start/Stop holds the pointer this instant (the caller
+// drops that one packet or answers "not talking" for one frame). Never waits.
+#define FI_TRY_SESSION(lock, s)                                \
+    std::shared_lock lock(g_life, std::try_to_lock);           \
+    Session *s = lock.owns_lock() ? g_session.get() : nullptr
 
 } // namespace
 
 bool Start(SendFn send) {
     try {
-        std::unique_lock lock(g_life);
         if (g_running.load()) return true;
-        StopLocked(); // a session that failed on its own: collect its threads
+        if (const auto old = TakeSession()) Retire(old, 0); // a session that failed on its own
         FlushDenormals();
-        if (!CreateEngineLocked(std::move(send))) return false;
-        for (int i = 0; i < 2; i++) {
-            g_device_ok[i] = 0;
-            g_mic_ok = false;
-            g_first_try[i] = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        }
-        g_threads[0] = CreateThread(nullptr, 0, CaptureThread, nullptr, 0, nullptr);
-        g_threads[1] = CreateThread(nullptr, 0, PlaybackThread, nullptr, 0, nullptr);
-        if (!g_threads[0] || !g_threads[1] || !g_first_try[0] || !g_first_try[1]) {
-            Log("voice: engine threads unavailable");
-            StopLocked();
+        if (g_failed.load()) return false;
+        if (g_workers_alive.load() > kMaxWorkers - 4) {
+            static std::atomic<bool> said{false};
+            if (!said.exchange(true)) Log("voice: earlier audio device calls never returned; voice stays off for this game session");
             return false;
         }
-        WaitForMultipleObjects(2, g_first_try, TRUE, 3000);
-        const bool mic = g_device_ok[0].load() == 1, out = g_device_ok[1].load() == 1;
+        const std::shared_ptr<Session> s = CreateSession(std::move(send));
+        if (!s) return false;
+        for (int i = 0; i < 2; i++) s->first_try[i] = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_mic_ok = false;
+        s->roles[kCaptureRole].active = s->roles[kPlaybackRole].active = true;
+        // the watchdog first: a first device call that hangs is caught like any later one
+        if (!s->first_try[0] || !s->first_try[1] || !SpawnWorker(s, kWatchdogRole, 0, 0) || !SpawnWorker(s, kCaptureRole, 0, 0) ||
+            !SpawnWorker(s, kPlaybackRole, 0, 0)) {
+            Log("voice: engine threads unavailable");
+            Retire(s, 500);
+            return false;
+        }
+        // the first device attempts, waited for here on the voice thread (no lock held: the game never waits on it)
+        WaitForMultipleObjects(2, s->first_try, TRUE, 3000);
+        const bool mic = s->device_ok[0].load() == 1, out = s->device_ok[1].load() == 1;
         if (!mic && !out) {
             Log("voice: no microphone and no audio output; voice stays off");
-            StopLocked();
+            Retire(s, 500);
             return false;
         }
         if (!mic) Log("voice: listening only until a microphone appears");
         if (!out) Log("voice: talking only until an audio output appears");
-        g_threads[2] = CreateThread(nullptr, 0, LoopbackThread, nullptr, 0, nullptr); // 2.0.0: optional, voice goes on without
-        if (!g_threads[2]) Log("voice: no loopback thread; the echo canceller hears the voice mix only");
+        if (!g_fake.load()) {
+            s->roles[kLoopbackRole].active = true; // 2.0.0: optional, voice goes on without
+            if (!SpawnWorker(s, kLoopbackRole, 0, 0)) { s->roles[kLoopbackRole].active = false; Log("voice: no loopback thread; the echo canceller hears the voice mix only"); }
+        }
+        Publish(s);
         Log("voice: audio engine started (decoder complexity %d)", g_complexity.load());
         return true;
     } catch (...) {
@@ -1168,8 +1461,7 @@ bool Start(SendFn send) {
 
 void Stop() {
     try {
-        std::unique_lock lock(g_life);
-        StopLocked();
+        if (const auto old = TakeSession()) Retire(old, 1500);
     } catch (...) {
         Log("voice: Stop failed");
     }
@@ -1189,21 +1481,21 @@ void SetBundle(int frames) { g_bundle = frames == 6 ? 6 : 3; }
 
 void Receive(uint8_t seat, uint16_t seq, uint32_t ts, uint8_t flags, const uint8_t *opus, size_t size) {
     try {
-        std::shared_lock lock(g_life);
-        if (g_running.load() && g_mixer) g_mixer->Receive(seat, seq, ts, flags, opus, size);
+        FI_TRY_SESSION(lock, s);
+        if (s && g_running.load()) s->mixer->Receive(seat, seq, ts, flags, opus, size);
     } catch (...) {
         Fail("Receive failed");
     }
 }
 
 void SetSilenced(uint8_t seat, bool silenced) {
-    std::shared_lock lock(g_life);
-    if (g_mixer) g_mixer->SetSilenced(seat, silenced);
+    std::shared_lock lock(g_life); // the voice thread; the exclusive side is only ever a pointer swap
+    if (g_session) g_session->mixer->SetSilenced(seat, silenced);
 }
 
 void SetVolume(float voices) {
     std::shared_lock lock(g_life);
-    if (g_mixer) g_mixer->SetVolume(voices);
+    if (g_session) g_session->mixer->SetVolume(voices);
 }
 
 void SetMicGain(float gain) { g_mic_gain.store(SafeGain(gain), std::memory_order_relaxed); }
@@ -1251,13 +1543,13 @@ std::vector<Device> ListDevices(bool capture) {
 }
 
 bool SeatTalking(uint8_t seat) {
-    std::shared_lock lock(g_life);
-    return g_running.load() && g_mixer && g_mixer->Talking(seat);
+    FI_TRY_SESSION(lock, s);
+    return s && g_running.load() && s->mixer->Talking(seat);
 }
 
 bool SeatHeard(uint8_t seat) {
-    std::shared_lock lock(g_life);
-    return g_running.load() && g_mixer && seat < kSeats && g_mixer->Heard(seat);
+    FI_TRY_SESSION(lock, s);
+    return s && g_running.load() && seat < kSeats && s->mixer->Heard(seat);
 }
 
 void SetVoiceMode(VoiceMode mode) {
@@ -1267,8 +1559,8 @@ void SetVoiceMode(VoiceMode mode) {
 
 void SetPose(uint8_t seat, const spatial::Pose &talker, const spatial::Pose &self) {
     try {
-        std::shared_lock lock(g_life);
-        if (g_running.load() && g_mixer) g_mixer->SetPose(seat, talker, self);
+        FI_TRY_SESSION(lock, s);
+        if (s && g_running.load()) s->mixer->SetPose(seat, talker, self);
     } catch (...) {
         Fail("SetPose failed");
     }
@@ -1287,31 +1579,38 @@ bool Sending() { return g_running.load() && g_allowed.load() && NowMs() < g_send
 namespace testing {
 
 bool StartHeadless(SendFn send) {
-    std::unique_lock lock(g_life);
-    StopLocked();
+    Stop();
     g_failed = false; // a test session starts clean
     g_mic_ok = true;  // the test feeds capture itself
-    return CreateEngineLocked(std::move(send));
+    const std::shared_ptr<Session> s = CreateSession(std::move(send));
+    if (!s) return false;
+    Publish(s);
+    return true;
 }
 
-void ProcessCapture(const float *interleaved, size_t frames, uint32_t rate, uint16_t channels) {
+void ProcessCaptureFormat(const dsp::DeviceFormat &format, const uint8_t *data, size_t frames) {
     std::shared_lock lock(g_life);
-    if (!g_running.load() || !g_capture) return;
+    if (!g_running.load() || !g_session) return;
     FlushDenormals();
-    dsp::DeviceFormat f{rate, channels, dsp::SampleKind::Float32, 4};
     try {
-        g_capture->FeedDevice(f, reinterpret_cast<const uint8_t *>(interleaved), frames, false);
+        std::lock_guard feed(g_session->capture_lock);
+        g_session->capture->FeedDevice(format, data, frames, false);
     } catch (...) {
         Fail("capture processing failed");
     }
 }
 
+void ProcessCapture(const float *interleaved, size_t frames, uint32_t rate, uint16_t channels) {
+    ProcessCaptureFormat(dsp::DeviceFormat{rate, channels, dsp::SampleKind::Float32, 4}, reinterpret_cast<const uint8_t *>(interleaved), frames);
+}
+
 size_t PullMixStereo(float *interleaved, size_t frames) {
     std::shared_lock lock(g_life);
-    if (!g_running.load() || !g_mixer) { std::fill(interleaved, interleaved + 2 * frames, 0.0f); return 0; }
+    if (!g_running.load() || !g_session) { std::fill(interleaved, interleaved + 2 * frames, 0.0f); return 0; }
     FlushDenormals();
     try {
-        return g_mixer->Pull(interleaved, frames);
+        std::lock_guard pull(g_session->mix_lock);
+        return g_session->mixer->Pull(interleaved, frames);
     } catch (...) {
         Fail("mixing failed");
         return 0;
@@ -1332,6 +1631,9 @@ double DecodeCostP95Us() { return g_cost_p95.load(); }
 uint64_t ConcealedFrames() { return g_concealed.load(); }
 void SetEchoTap(EchoTap tap) { g_echo_tap.store(tap); }
 void SetMixReference(bool on) { g_mix_reference.store(on); }
+void SetFakeDevices(FakeDevices *devices) { g_fake.store(devices); }
+void SetStuckMs(int ms) { g_stuck_ms.store(ms > 0 ? ms : 8000); }
+int WorkersAlive() { return g_workers_alive.load(); }
 
 } // namespace testing
 } // namespace fi::audio

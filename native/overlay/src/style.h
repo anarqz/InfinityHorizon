@@ -84,5 +84,7 @@ void FocusRing(ImDrawList *dl, ImVec2 a, ImVec2 b, float rounding);
 // `active` (else dim), the knob at `volume` (1..100). A mouse click on the track (a little taller than drawn) sets
 // `clicked` to the value under the mouse; it stays untouched otherwise.
 void VolumeSlider(ImDrawList *dl, ImVec2 a, ImVec2 b, int volume, bool active, uint8_t *clicked = nullptr);
+// The second column beside the guide (the right pane's place, pane.cpp): its background and its left edge, x..x + w.
+void ColumnPanel(ImDrawList *dl, float x, float w, float height, float alpha);
 
 } // namespace fi::ui

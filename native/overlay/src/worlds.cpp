@@ -28,7 +28,9 @@
 // - My world (OD-63): while the profile hosts a world or holds a seat in one, the tab shows that
 //   world instead of the list (updated by the launcher): the host closes it or kicks players,
 //   a player leaves it; anyone adds a player as a friend or reports them with a reason. Player
-//   names only, never their XUIDs (OD-61).
+//   names only, never their XUIDs (OD-61). Each player is their card (the name; a green border
+//   while they talk) with the big mute button beside it; A on the card opens their details in the
+//   second column beside the guide: their volume (1-100), mute, and the host's and friend actions.
 // - Once a world is created the Hosted screen follows; once a seat is reserved, the prompt to go
 //   to Free Roam Online. (The OD-65 "Syncing cars" hold is retired: the server keeps the liveries
 //   and world mates' games fetch them by the game's own calls, CR-S59.)
@@ -52,6 +54,7 @@
 
 #include "fi_overlay.h"
 #include "style.h"
+#include "ui_layout.h"
 #include "voice_audio.h"
 #include "voice_volume.h"
 #include "world_access.h"
@@ -123,7 +126,7 @@ bool g_mine_refresh = true; // one explicit reconcile on open/action/manual refr
 bool g_showing_mine = false; // the List screen shows my world this frame
 int g_mine_focus = 0;       // 0 the close or leave button, [1 the host's voice switch], then the players
 int g_mine_count = 0;       // what the focus walks: 1 [+ 1] + the players
-int g_mine_col = 0;         // on a player: 0 the name, 1 its voice bar below it (OD-154; §15: the mic button + volume)
+int g_mine_col = 0;         // on a player: layout::kStopCard the card, kStopMute the mute button beside it (OD-154)
 int g_mine_scroll = 0;      // §15: the first player row drawn (the rows follow the focus)
 bool g_mine_voice_row = false; // the host's "Voice chat" switch is item 1
 bool g_mine_x = false;      // X on a player: mute or unmute them, applied at draw time
@@ -1034,7 +1037,7 @@ void SetRowVolume(const MemberRow &m, uint8_t to) {
     else VoiceCommand(VoiceOp::PlayerVolume, m.xuid, to);
 }
 
-// The microphone button inside a player's voice bar: their voice at a glance, and A to mute them.
+// The microphone square inside a player's mute button: their voice at a glance, and A to mute them.
 void MicSquare(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m, const VoiceState &v) {
     const bool self = m.friend_state == 4, usable = VoiceUnavailable(v) == nullptr;
     const uint8_t st = v.StateOf(m.xuid);
@@ -1068,24 +1071,35 @@ void MicSquare(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &
     }
 }
 
-// §15: the shorter rectangle under a player's name: the microphone button (A mutes them; on this player's own row it
-// opens or mutes the microphone) and beside it that player's volume (Left/Right; on the own row, "My microphone
-// volume"), its value at the right. One focus stop. `mic_clicked`/`volume_clicked` report the mouse.
-void VoiceBar(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m, const VoiceState &v, bool *mic_clicked, uint8_t *volume_clicked) {
+// The big mute button beside a player's card (the card's height, square): their voice at a glance (talking green,
+// muted red, blocked or muted for the lobby amber) and A to mute or unmute them; on this player's own row it opens or
+// mutes the microphone. The player's volume is in their details (the second column).
+void MuteButton(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m, const VoiceState &v) {
     dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
     if (focus) FocusRing(dl, a, b, 6 * s);
-    const float h = b.y - a.y, pad = 4 * s;
-    const ImVec2 ma(a.x + pad, a.y + pad), mb(a.x + h - pad, b.y - pad);
-    MicSquare(dl, ma, mb, focus, m, v);
-    if (Clicked(ma, mb)) *mic_clicked = true;
+    const float in = 7 * s;
+    MicSquare(dl, ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), focus, m, v);
+}
+
+// The volume row in a player's details: "Voice volume", the slider (Left/Right, or the mouse) and the value; the same
+// 1..100 kept per XUID and the same gain law as before (VoiceOp::PlayerVolume).
+void VolumeRow(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow &m, uint8_t *picked) {
+    const VoiceState v = CurrentVoice();
+    dl->AddRectFilled(a, b, focus ? kTileFocus : kTile, 6 * s);
+    if (focus) FocusRing(dl, a, b, 6 * s);
+    const float h = b.y - a.y;
+    const char *label = T("Voice volume", "Volume da voz");
+    const ImVec2 ls = Measure(f.small, label);
+    TextAt(dl, f.small, ImVec2(a.x + 16 * s, a.y + h / 2 - ls.y / 2), focus ? kText : kTextDim, label);
     const uint8_t volume = RowVolume(m, v);
     const std::string value = std::to_string(volume);
-    const ImVec2 vs = Measure(f.small, value.c_str());
-    const ImVec2 sa(mb.x + 14 * s, a.y + h / 2 - 8 * s), sb(b.x - 22 * s - Measure(f.small, "100").x, a.y + h / 2 + 8 * s);
+    const ImVec2 vs = Measure(f.body, value.c_str());
+    const float wide = Measure(f.body, "100").x;
+    const ImVec2 sa(a.x + 16 * s + ls.x + 16 * s, a.y + h / 2 - 8 * s), sb(b.x - 28 * s - wide, a.y + h / 2 + 8 * s);
     const uint8_t st = v.StateOf(m.xuid);
-    const bool heard = !VoiceUnavailable(v) && (m.friend_state == 4 ? v.mic != MicMode::Muted : !(st & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked)));
-    VolumeSlider(dl, sa, sb, volume, focus && heard, volume_clicked);
-    TextAt(dl, f.small, ImVec2(b.x - 12 * s - vs.x, a.y + h / 2 - vs.y / 2), focus ? kText : kTextDim, value.c_str());
+    const bool heard = !VoiceUnavailable(v) && !(st & (VoiceMember::MutedByMe | VoiceMember::MutedForLobby | VoiceMember::Blocked));
+    VolumeSlider(dl, sa, sb, volume, focus && heard, picked);
+    TextAt(dl, f.body, ImVec2(b.x - 14 * s - vs.x, a.y + h / 2 - vs.y / 2), focus ? kText : kTextDim, value.c_str());
 }
 
 // The host's choice, under the close button: off, open or proximity for everyone, at any time while the lobby is open (CR-L46).
@@ -1102,7 +1116,14 @@ void VoiceSwitch(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const VoiceStat
     dl->AddTriangleFilled(ImVec2(b.x - 10 * s, a.y + h / 2), ImVec2(b.x - 18 * s, a.y + h / 2 - 7 * s), ImVec2(b.x - 18 * s, a.y + h / 2 + 7 * s), arrow);
 }
 
-void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyWorld &m) {
+// What the mouse clicked in my world this frame (item -1: nothing); the caller decides what it does.
+struct MineClick {
+    int item = -1;
+    int col = layout::kStopCard;
+};
+
+MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyWorld &m) {
+    MineClick click;
     g_mine_role = m.role;
     const VoiceState voice = CurrentVoice();
     const char *tag = m.role == 1 ? T("YOUR LOBBY", "SEU LOBBY") : m.role == 2 ? T("SEAT RESERVED", "LUGAR RESERVADO") : T("YOU ARE IN A LOBBY", "VOCÊ ESTÁ EM UM LOBBY");
@@ -1160,13 +1181,13 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
     const float bh = 52 * s;
     const ImVec2 a(x, y), b(x + w, y + bh);
     Button(dl, a, b, g_mine_focus == 0, false, m.role == 1 ? T("Close lobby", "Fechar lobby") : T("Leave lobby", "Sair do lobby"));
-    if (Clicked(a, b)) { g_mine_focus = 0; g_accept = true; }
+    if (Clicked(a, b)) click = {0, layout::kStopCard};
     y += bh + 10 * s;
     g_mine_voice_row = m.role == 1;
     if (g_mine_voice_row) {
         const ImVec2 va(x, y), vb(x + w, y + 58 * s);
         VoiceSwitch(dl, va, vb, g_mine_focus == 1, voice);
-        if (Clicked(va, vb)) { g_mine_focus = 1; g_accept = true; }
+        if (Clicked(va, vb)) click = {1, layout::kStopCard};
         y += 58 * s + 10 * s;
     }
     y += 10 * s;
@@ -1177,10 +1198,11 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("Player names arrive with the next server update.", "Os nomes dos jogadores chegam na próxima atualização do servidor."));
         y += 30 * s;
     }
-    // OD-154, §15: each player is the name's rectangle (a green border while they talk) and, below it, a shorter one
-    // with their microphone button and their volume. The rows scroll with the focus.
-    const float nh = 56 * s, vh = 40 * s, inner = 4 * s, gap = 12 * s, indent = 60 * s;
-    const float row = nh + inner + vh + gap;
+    // OD-154: each player is their card (a green border while they talk; A opens their details) and beside it the big
+    // mute button (ui_layout.h LayoutPlayerRow). The rows scroll with the focus.
+    const float nh = 56 * s, gap = 12 * s, side_gap = 10 * s;
+    const float row = nh + gap;
+    const bool details_open = g_screen != Screen::List; // a player's details are open: their card stays marked
     const int first = FirstPlayerItem();
     const int count = static_cast<int>(m.members.size());
     const int fit = std::max(1, static_cast<int>((bottom - y + gap) / row));
@@ -1195,18 +1217,20 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         const MemberRow &member = m.members[static_cast<size_t>(i)];
         const int item = i + first;
         const bool focus = g_mine_focus == item;
-        const ImVec2 ta(x, y), tb(x + w, y + nh), ba(x + indent, tb.y + inner), bb(x + w, tb.y + inner + vh);
-        MemberTile(dl, ta, tb, focus && g_mine_col == 0, member);
-        if (RowTalking(member, voice)) { // the whole name area, inside the focus ring when it has one
-            const float in = focus && g_mine_col == 0 ? 3.5f * s : 0.0f;
+        const layout::PlayerRow r = layout::LayoutPlayerRow(x, y, w, nh, side_gap);
+        const ImVec2 ta(r.card.x0, r.card.y0), tb(r.card.x1, r.card.y1), ma(r.mute.x0, r.mute.y0), mb(r.mute.x1, r.mute.y1);
+        const bool card_focus = focus && g_mine_col == layout::kStopCard;
+        MemberTile(dl, ta, tb, card_focus, member);
+        if (details_open && member.xuid == g_member.xuid) { // its details are in the column: a pink bar at its left
+            dl->AddRectFilled(ImVec2(ta.x, ta.y + 10 * s), ImVec2(ta.x + 4 * s, tb.y - 10 * s), kPinkU, 2 * s);
+        }
+        if (RowTalking(member, voice)) { // the whole card, inside the focus ring when it has one
+            const float in = card_focus ? 3.5f * s : 0.0f;
             dl->AddRect(ImVec2(ta.x + in, ta.y + in), ImVec2(tb.x - in, tb.y - in), kTalkGreen, 6 * s, 0, 2.5f * s);
         }
-        bool mic_clicked = false;
-        uint8_t volume_clicked = 0;
-        VoiceBar(dl, ba, bb, focus && g_mine_col == 1, member, voice, &mic_clicked, &volume_clicked);
-        if (Clicked(ta, tb)) { g_mine_focus = item; g_mine_col = 0; g_accept = true; }
-        if (mic_clicked) { g_mine_focus = item; g_mine_col = 1; g_accept = true; }
-        if (volume_clicked) { g_mine_focus = item; g_mine_col = 1; SetRowVolume(member, volume_clicked); }
+        MuteButton(dl, ma, mb, focus && g_mine_col == layout::kStopMute, member, voice);
+        if (Clicked(ta, tb)) click = {item, layout::kStopCard};
+        if (Clicked(ma, mb)) click = {item, layout::kStopMute};
         y += row;
     }
     if (g_mine_scroll + fit < count) { // more below
@@ -1214,6 +1238,7 @@ void DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyW
         TextAt(dl, f.tag, ImVec2(x + w - ts.x, y - gap + 1 * s), kTextDim, "...");
     }
     g_mine_count = first + count;
+    return click;
 }
 
 // The card's choices: an action number (3 kick, 4 friend, 5 report, 0 back) and its label.
@@ -1223,23 +1248,33 @@ struct Choice {
     bool enabled;
 };
 
+constexpr int kChoiceVolume = 8; // the volume row: Left/Right or the mouse, A does nothing
+
+// The details' controls in ui_layout.h's order (OD-154: voice first, the most frequent reason to open a card in a loud
+// lobby: the volume, then the mute toggle).
 std::vector<Choice> MemberChoices(const MemberRow &m) {
     std::vector<Choice> out;
-    // OD-154: voice first, the most frequent reason to open a card in a loud lobby
     const VoiceState v = CurrentVoice();
     const uint8_t st = v.StateOf(m.xuid);
-    out.push_back({6, st & VoiceMember::MutedByMe ? T("Unmute voice", "Liberar voz") : T("Mute voice", "Silenciar voz"), true});
-    if (g_mine_role == 1 && m.role != 0)
-        out.push_back({7, st & VoiceMember::MutedForLobby ? T("Unmute for the lobby", "Liberar para o lobby") : T("Mute for the lobby", "Silenciar para o lobby"), true});
-    if (g_mine_role == 1 && m.role != 0) out.push_back({3, T("Remove from my lobby", "Remover do meu lobby"), true});
-    switch (m.friend_state) {
-    case 0: out.push_back({4, T("Add friend", "Adicionar amigo"), true}); break;
-    case 2: out.push_back({4, T("Friend request sent", "Pedido de amizade enviado"), false}); break;
-    case 3: out.push_back({4, T("Accept friend request", "Aceitar pedido de amizade"), true}); break;
-    default: break;
+    for (layout::MemberItem item : layout::MemberItems(g_mine_role == 1 && m.role != 0, m.friend_state)) {
+        switch (item) {
+        case layout::MemberItem::Volume: out.push_back({kChoiceVolume, T("Voice volume", "Volume da voz"), true}); break;
+        case layout::MemberItem::Mute:
+            out.push_back({6, st & VoiceMember::MutedByMe ? T("Unmute voice", "Liberar voz") : T("Mute voice", "Silenciar voz"), true});
+            break;
+        case layout::MemberItem::MuteForLobby:
+            out.push_back({7, st & VoiceMember::MutedForLobby ? T("Unmute for the lobby", "Liberar para o lobby") : T("Mute for the lobby", "Silenciar para o lobby"), true});
+            break;
+        case layout::MemberItem::Remove: out.push_back({3, T("Remove from my lobby", "Remover do meu lobby"), true}); break;
+        case layout::MemberItem::Friend:
+            if (m.friend_state == 0) out.push_back({4, T("Add friend", "Adicionar amigo"), true});
+            else if (m.friend_state == 2) out.push_back({4, T("Friend request sent", "Pedido de amizade enviado"), false});
+            else out.push_back({4, T("Accept friend request", "Aceitar pedido de amizade"), true});
+            break;
+        case layout::MemberItem::Report: out.push_back({5, T("Report", "Denunciar"), true}); break;
+        case layout::MemberItem::Back: out.push_back({0, T("Back", "Voltar"), true}); break;
+        }
     }
-    out.push_back({5, T("Report", "Denunciar"), true});
-    out.push_back({0, T("Back", "Voltar"), true});
     return out;
 }
 
@@ -1247,12 +1282,29 @@ void Buttons(ImDrawList *dl, float x, float y, float w, const std::vector<Choice
     const float bh = 52 * s;
     for (size_t i = 0; i < choices.size(); ++i) {
         const ImVec2 a(x, y), b(x + w, y + bh);
-        Button(dl, a, b, g_button == static_cast<int>(i), false, choices[i].label);
+        const bool focus = g_button == static_cast<int>(i);
+        if (choices[i].action == kChoiceVolume) {
+            uint8_t picked = 0;
+            VolumeRow(dl, a, b, focus, g_member, &picked);
+            if (picked) { g_button = static_cast<int>(i); SetRowVolume(g_member, picked); }
+            else if (Clicked(a, b)) g_button = static_cast<int>(i);
+            y += bh + 8 * s;
+            continue;
+        }
+        Button(dl, a, b, focus, false, choices[i].label);
         if (!choices[i].enabled) dl->AddRectFilled(a, b, Rgba(0, 0, 0, 0.45f), 6 * s);
         if (Clicked(a, b)) { g_button = static_cast<int>(i); g_accept = true; }
         y += bh + 8 * s;
     }
     g_buttons = static_cast<int>(choices.size());
+}
+
+// Left/Right on the details' volume row move it; false: the focused control is not the volume.
+bool StepMemberVolume(int direction) {
+    const auto choices = MemberChoices(g_member);
+    if (g_button < 0 || g_button >= static_cast<int>(choices.size()) || choices[g_button].action != kChoiceVolume) return false;
+    SetRowVolume(g_member, audio::StepVolume(RowVolume(g_member, CurrentVoice()), direction));
+    return true;
 }
 
 void DrawMember(ImDrawList *dl, float x, float y, float w) {
@@ -1265,7 +1317,17 @@ void DrawMember(ImDrawList *dl, float x, float y, float w) {
     if (g_member.tier == 1) sub += " · Supporter"; // CR-S69: the badge
     if (const char *fs = FriendStatus(g_member.friend_state); *fs) sub += std::string(" · ") + fs;
     TextAt(dl, f.small, ImVec2(lx, y + 40 * s), kTextDim, sub.c_str());
-    y += 84 * s;
+    y += 70 * s;
+    // the player's voice now, under the name (talking, muted, blocked)
+    const VoiceState v = CurrentVoice();
+    const uint8_t st = v.StateOf(g_member.xuid);
+    const char *voice = RowTalking(g_member, v)                 ? T("Talking", "Falando")
+                        : st & VoiceMember::Blocked              ? T("Voice blocked", "Voz bloqueada")
+                        : st & VoiceMember::MutedForLobby        ? T("Muted for the lobby", "Silenciado para o lobby")
+                        : st & VoiceMember::MutedByMe            ? T("Muted by you", "Silenciado por você")
+                                                                 : "";
+    if (*voice) TextAt(dl, f.small, ImVec2(x, y), RowTalking(g_member, v) ? kTalkGreen : st & VoiceMember::MutedByMe ? kRed : kAmber, voice);
+    y += 28 * s;
     Buttons(dl, x, y, w, MemberChoices(g_member));
 }
 
@@ -1300,7 +1362,55 @@ void DrawConfirm(ImDrawList *dl, float x, float y, float w) {
     const char *yes = g_confirm == 1 ? T("Close lobby", "Fechar lobby") : g_confirm == 2 ? T("Leave lobby", "Sair do lobby") : T("Remove", "Remover");
     Buttons(dl, x, y, w, {{1, yes, true}, {0, T("Back", "Voltar"), true}});
 }
+
+// My world stays in the guide while a player's details are in the column. The controller is in the column; the mouse
+// still works here: another player's card shows their details instead, a mute button mutes, anything else goes back.
+void DrawMineBehind(ImDrawList *dl, float x, float y, float w, float bottom, const Shared &sh) {
+    const MineClick click = DrawMine(dl, x, y, w, bottom, sh.mine);
+    if (click.item < 0) return;
+    const int player = click.item - FirstPlayerItem();
+    if (player < 0 || player >= static_cast<int>(sh.mine.members.size())) {
+        g_screen = Screen::List;
+        g_mine_focus = click.item;
+        g_mine_col = layout::kStopCard;
+        g_button = 0;
+        g_accept = true;
+        return;
+    }
+    const MemberRow &m = sh.mine.members[static_cast<size_t>(player)];
+    g_mine_focus = click.item;
+    g_mine_col = click.col;
+    if (click.col == layout::kStopMute) {
+        ToggleVoice(m, CurrentVoice());
+    } else if (m.friend_state != 4 && m.xuid != g_member.xuid) {
+        g_member = m;
+        g_button = 0;
+        g_screen = Screen::Member;
+    }
+}
 } // namespace
+
+bool WorldsColumnOpen() {
+    return g_screen == Screen::Member || g_screen == Screen::Report || (g_screen == Screen::Confirm && g_confirm == 3);
+}
+
+void DrawWorldsColumn(ImDrawList *dl, float x, float w, float height, float alpha) {
+    const float pad = 26 * s, cw = w - 2 * pad;
+    if (cw < 120 * s) return;
+    ColumnPanel(dl, x, w, height, alpha);
+    dl->PushClipRect(ImVec2(x, 0), ImVec2(x + w, height - 70 * s), true);
+    const float y = 34 * s;
+    if (g_screen == Screen::Member) DrawMember(dl, x + pad, y, cw);
+    else if (g_screen == Screen::Report) DrawReport(dl, x + pad, y, cw);
+    else DrawConfirm(dl, x + pad, y, cw);
+    dl->PopClipRect();
+    const float hy = height - 46 * s;
+    dl->AddLine(ImVec2(x + pad, hy - 16 * s), ImVec2(x + w - pad, hy - 16 * s), Rgba(255, 255, 255, 0.08f * alpha));
+    FaceButton(dl, ImVec2(x + pad + 11 * s, hy + 10 * s), 11 * s, kGreen, "A");
+    TextAt(dl, f.small, ImVec2(x + pad + 28 * s, hy + 1 * s), kTextDim, T("Select", "Selecionar"), alpha);
+    FaceButton(dl, ImVec2(x + pad + 139 * s, hy + 10 * s), 11 * s, kRed, "B");
+    TextAt(dl, f.small, ImVec2(x + pad + 156 * s, hy + 1 * s), kTextDim, T("Back", "Voltar"), alpha);
+}
 
 // ---------------------------------------------------------------- public
 void SetWorldAccess(bool allowed, const std::string &message) {
@@ -1376,36 +1486,25 @@ bool WorldsNavigate(Nav nav) {
     case Screen::List:
         if (g_showing_mine) {
             const bool on_player = g_mine_focus >= FirstPlayerItem(), on_switch = g_mine_voice_row && g_mine_focus == 1;
-            // §15: a player is two stops, the name and below it the voice bar (A the microphone button, Left/Right the
-            // volume); Up/Down walk name, bar, next name. Right on a name goes down to its bar.
-            const auto step_volume = [](int direction) {
-                Shared sh;
-                { std::lock_guard<std::mutex> lock(g_lock); sh = g_shared; }
-                const int player = g_mine_focus - FirstPlayerItem();
-                if (player < 0 || player >= static_cast<int>(sh.mine.members.size())) return;
-                const MemberRow &m = sh.mine.members[static_cast<size_t>(player)];
-                SetRowVolume(m, audio::StepVolume(RowVolume(m, CurrentVoice()), direction));
+            // A player is two stops side by side (ui_layout.h): the card (A opens the details) and the mute button
+            // (A mutes). Up/Down keep the column between players; Right on a card goes to its mute button.
+            layout::LobbyFocus lf{g_mine_focus, g_mine_col};
+            const auto move = [&](layout::Move m) {
+                const bool used = layout::MoveLobbyFocus(lf, m, FirstPlayerItem(), g_mine_count);
+                g_mine_focus = lf.item;
+                g_mine_col = lf.col;
+                return used;
             };
             switch (nav) {
-            case Nav::Up:
-                if (on_player && g_mine_col == 1) { g_mine_col = 0; return true; }
-                if (g_mine_focus > 0) --g_mine_focus;
-                g_mine_col = g_mine_focus >= FirstPlayerItem() ? 1 : 0;
-                return true;
-            case Nav::Down:
-                if (on_player && g_mine_col == 0) { g_mine_col = 1; return true; }
-                if (g_mine_focus + 1 < g_mine_count) { ++g_mine_focus; g_mine_col = 0; }
-                return true;
+            case Nav::Up: return move(layout::Move::Up);
+            case Nav::Down: return move(layout::Move::Down);
             // OD-154, CR-L46: on the host's choice Left/Right step off, open, proximity
             case Nav::Right:
-                if (on_player && g_mine_col == 0) { g_mine_col = 1; return true; }
-                if (on_player) { step_volume(1); return true; }
                 if (on_switch) { StepLobbyVoice(CurrentVoice(), 1); return true; }
-                return false; // the tabs
+                return move(layout::Move::Right); // false: the tabs
             case Nav::Left:
-                if (on_player && g_mine_col == 1) { step_volume(-1); return true; }
                 if (on_switch) { StepLobbyVoice(CurrentVoice(), -1); return true; }
-                return false;
+                return move(layout::Move::Left);
             case Nav::X: if (on_player) { g_mine_x = true; return true; } return false;
             case Nav::Accept: g_accept = true; return true;
             case Nav::Y: g_mine_refresh = true; return true; // refresh
@@ -1468,6 +1567,10 @@ bool WorldsNavigate(Nav nav) {
         switch (nav) {
         case Nav::Up: if (g_button > 0) --g_button; return true;
         case Nav::Down: if (g_button + 1 < g_buttons) ++g_button; return true;
+        case Nav::Left:
+        case Nav::Right: // the details' volume row
+            if (g_screen == Screen::Member) StepMemberVolume(nav == Nav::Right ? 1 : -1);
+            return true;
         case Nav::Accept: g_accept = true; return true;
         case Nav::Back:
             g_screen = g_screen == Screen::Report || (g_screen == Screen::Confirm && g_confirm == 3) ? Screen::Member : Screen::List;
@@ -1582,7 +1685,9 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
     case Screen::List:
         g_showing_mine = sh.mine.role != 0;
         if (g_showing_mine) {
-            DrawMine(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh.mine); // OD-149: the notice stays above its own lobby
+            // OD-149: the notice stays above its own lobby
+            const MineClick click = DrawMine(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh.mine);
+            if (click.item >= 0) { g_mine_focus = click.item; g_mine_col = click.col; g_accept = true; } // A next frame
             g_mine_focus = std::clamp(g_mine_focus, 0, std::max(0, g_mine_count - 1));
             const int player = g_mine_focus - FirstPlayerItem();
             const bool x_press = g_mine_x;
@@ -1597,7 +1702,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
                     g_screen = Screen::Confirm;
                 } else if (g_mine_voice_row && g_mine_focus == 1) {
                     StepLobbyVoice(CurrentVoice(), 1);
-                } else if (player >= 0 && player < static_cast<int>(sh.mine.members.size()) && g_mine_col == 1) {
+                } else if (player >= 0 && player < static_cast<int>(sh.mine.members.size()) && g_mine_col == layout::kStopMute) {
                     ToggleVoice(sh.mine.members[player], CurrentVoice());
                 } else if (player >= 0 && player < static_cast<int>(sh.mine.members.size())) {
                     const MemberRow &m = sh.mine.members[player];
@@ -1621,8 +1726,8 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         if (accept) AcceptList(sh);
         break;
     case Screen::Member: {
-        DrawMember(dl, x, y, w);
-        if (accept) {
+        DrawMineBehind(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh); // the details are in the column (DrawWorldsColumn)
+        if (accept && g_screen == Screen::Member) {
             const auto choices = MemberChoices(g_member);
             if (g_button < static_cast<int>(choices.size()) && choices[g_button].enabled) {
                 switch (choices[g_button].action) {
@@ -1637,6 +1742,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
                     break;
                 }
                 case 5: g_button = 0; g_screen = Screen::Report; break;
+                case kChoiceVolume: break; // Left/Right move it
                 default: g_screen = Screen::List; break;
                 }
             }
@@ -1644,8 +1750,8 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         break;
     }
     case Screen::Report: {
-        DrawReport(dl, x, y, w);
-        if (accept) {
+        DrawMineBehind(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh);
+        if (accept && g_screen == Screen::Report) {
             const auto choices = ReportChoices();
             const int reason = g_button < static_cast<int>(choices.size()) ? choices[g_button].action : 0;
             if (reason == 0) { g_button = 0; g_screen = Screen::Member; } else { Act(5, g_member, static_cast<uint8_t>(reason)); }
@@ -1653,8 +1759,9 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         break;
     }
     case Screen::Confirm:
-        DrawConfirm(dl, x, y, w);
-        if (accept) {
+        if (g_confirm == 3) DrawMineBehind(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh); // removing a player: in the column
+        else DrawConfirm(dl, x, y, w);
+        if (accept && g_screen == Screen::Confirm) {
             if (g_button == 0) {
                 Act(static_cast<uint8_t>(g_confirm), g_confirm == 3 ? g_member : MemberRow{}, 0);
             } else {
