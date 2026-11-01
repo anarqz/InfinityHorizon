@@ -213,6 +213,7 @@
   "error.PORTAL.NOT_FOUND": "This was not found.",
   "error.BOARDS.NOT_FOUND": "That leaderboard doesn't exist.",
   "error.PLAYERS.NOT_FOUND": "That player profile doesn't exist.",
+  "error.CLUBS.NOT_FOUND": "That club doesn't exist.",
   "error.PORTAL.CONFLICT": "This changed in the meantime. Reload and try again.",
   "error.PORTAL.MODE_MISMATCH": "This profile is in another mode.",
   "error.POOL.FULL": "The servers are full right now. Try again soon.",
