@@ -100,6 +100,10 @@ bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
 bool WorldsMuteHint();        // X mutes the focused player (OD-154; the footer's hint)
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
+// A player's details in my lobby (their volume, mute, moderation, friend, report) fill the second column beside the
+// guide while open; the tab keeps showing the lobby. Drawn after DrawWorldsTab, x..x + w.
+bool WorldsColumnOpen();
+void DrawWorldsColumn(ImDrawList *dl, float x, float w, float height, float alpha);
 
 // --- voice chat (voice.cpp, OD-154, VOICE_CHAT.md §11): the launcher holds the state, the overlay shows it and asks
 // VoiceState and VoiceMember are in ui_frames.h (0x1B).

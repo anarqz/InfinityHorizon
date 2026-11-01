@@ -20,8 +20,10 @@ namespace fi::audio {
 // frames since the engine started. Called on an engine thread; must not block.
 using SendFn = std::function<void(const uint8_t *opus, size_t size, uint8_t flags, uint16_t seq, uint32_t ts)>;
 
-// Starts capture and playback (WASAPI shared mode, 48 kHz mono inside; XAudio2 out). False: no device or a library
-// failed; voice stays off and Start may be tried again later (a device plugged in).
+// Starts capture and playback (WASAPI shared mode both ways, 48 kHz inside). False: no device or a library failed;
+// voice stays off and Start may be tried again later (a device plugged in). Called on the voice thread: it waits up to
+// 3 s for the first device attempts (holding no lock the game's threads take); Stop waits up to 1.5 s, then leaves a
+// worker stuck in a driver call behind. Every other call here returns at once, whatever the devices do.
 bool Start(SendFn send);
 void Stop();
 bool Running();

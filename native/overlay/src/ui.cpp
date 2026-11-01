@@ -8,7 +8,8 @@
 // - Sidebar: the Xbox guide. Slides in from the left over a dimmed game: the profile header
 //   (avatar, gamertag, tier chip, connection), tabs Home, Lobbies, Friends and Settings,
 //   rounded tiles with the white focus ring, and controller hints. Friends is coming soon;
-//   Settings opens the connection diagnostic report. Transient toasts remain available.
+//   Settings lists its categories (Connection, Voice Chat; ui_layout.h) and the focused one's
+//   settings fill the second column beside the guide. Transient toasts remain available.
 // - The guide's bottom block (CR-L40 §1.3), just above the controller hints: the avatar (the
 //   launcher's 0x1A image in a circle, the initials without one) and the gamertag, then the server's
 //   host and its status lines (Online 12/50 · Lobbies 3, Hardcore 5 (210) · Noob 7 (340); profiles
@@ -31,6 +32,7 @@
 #include "fonts.h"
 #include "style.h"
 #include "toast_schedule.h"
+#include "ui_layout.h"
 #include "voice_audio.h"
 #include "voice_volume.h"
 
@@ -159,6 +161,11 @@ void VolumeSlider(ImDrawList *dl, ImVec2 a, ImVec2 b, int volume, bool active, u
         *clicked = audio::VolumeAtFraction((ImGui::GetIO().MousePos.x - x0) / (x1 - x0));
 }
 
+void ColumnPanel(ImDrawList *dl, float x, float w, float height, float alpha) {
+    dl->AddRectFilled(ImVec2(x, 0), ImVec2(x + w, height), (kPanel & 0x00FFFFFF) | (static_cast<ImU32>(((kPanel >> 24) & 0xFF) * alpha) << 24));
+    dl->AddLine(ImVec2(x, 0), ImVec2(x, height), Rgba(255, 255, 255, 0.08f * alpha));
+}
+
 } // namespace ui
 
 using namespace ui;
@@ -227,11 +234,19 @@ struct Tile {
     const char *icon;
     std::string title, subtitle;
     bool locked;
-    int action;      // 0 none, 1 close, 2 coming soon, 4 connection details, 5 quit, 6-8 voice, 9/10 device lists, 11/12 volumes
+    int action;      // 0 none, 1 close, 2 coming soon, 4 connection details, 5 quit, 6-8 voice, 9/10 device lists, 11/12 volumes,
+                     // 13 a settings category (`arg` its index)
     int slider = 0;  // §15: 1..100 draws a volume slider instead of the subtitle; Left/Right move it
     bool warn = false; // the subtitle in amber (a chosen device that is not connected)
+    int arg = 0;
 };
-constexpr int kActionMicDevice = 9, kActionOutputDevice = 10, kActionVoiceVolume = 11, kActionMicVolume = 12;
+constexpr int kActionMicDevice = 9, kActionOutputDevice = 10, kActionVoiceVolume = 11, kActionMicVolume = 12, kActionCategory = 13;
+
+// Settings (owner request): the Settings tab lists parent categories (ui_layout.h); the focused one fills the second
+// column beside the guide. A or Right enters it (the column takes the controller), B or Left comes back.
+bool g_settings_in = false; // the controller is in the settings column
+int g_column_focus = 0;
+float g_column_scroll = 0;
 
 // §15: the name of the chosen device ("System default" for none), and whether it is connected now.
 std::string DeviceLabel(VoiceFlow flow, const VoiceState &v, bool *missing) {
@@ -252,50 +267,79 @@ struct Picker {
     float scroll = 0;
 } g_picker;
 
-std::vector<Tile> TilesFor(int tab, const Model &m) {
+const char *LinkState(const Model &m) {
+    return m.link == Link::Online         ? T("Online", "Online")
+           : m.link == Link::Offline      ? T("Offline", "Offline")
+           : m.link == Link::Reconnecting ? T("Reconnecting...", "Reconectando...")
+                                          : T("Connecting...", "Conectando...");
+}
+
+// The Home tab's tiles (the Settings tab draws categories and their settings instead).
+std::vector<Tile> HomeTiles(const Model &m) {
     std::vector<Tile> tiles;
-    switch (tab) {
-    case 0: {
-        const char *state = m.link == Link::Online ? T("Online", "Online")
-                            : m.link == Link::Offline ? T("Offline", "Offline")
-                            : m.link == Link::Reconnecting ? T("Reconnecting...", "Reconectando...")
-                                                           : T("Connecting...", "Conectando...");
-        tiles.push_back({kIconGlobe, T("Connection", "Conexão"), m.detail.empty() ? state : std::string(state) + " · " + m.detail, false, 0});
-        tiles.push_back({kIconGame, T("Back to the game", "Voltar ao jogo"), T("Close the guide", "Fechar o guia"), false, 1});
-        tiles.push_back({kIconPower, g_confirm_quit ? T("Press A again to quit", "Aperte A de novo para sair") : T("Quit the game", "Sair do jogo"),
-                         g_confirm_quit ? T("Your progress is saved", "Seu progresso fica salvo") : T("Closes Forza Horizon 2", "Fecha o Forza Horizon 2"), false, 5});
-        break;
+    const char *state = LinkState(m);
+    tiles.push_back({kIconGlobe, T("Connection", "Conexão"), m.detail.empty() ? state : std::string(state) + " · " + m.detail, false, 0});
+    tiles.push_back({kIconGame, T("Back to the game", "Voltar ao jogo"), T("Close the guide", "Fechar o guia"), false, 1});
+    tiles.push_back({kIconPower, g_confirm_quit ? T("Press A again to quit", "Aperte A de novo para sair") : T("Quit the game", "Sair do jogo"),
+                     g_confirm_quit ? T("Your progress is saved", "Seu progresso fica salvo") : T("Closes Forza Horizon 2", "Fecha o Forza Horizon 2"), false, 5});
+    return tiles;
+}
+
+// One setting's tile (ui_layout.h SettingsItem). OD-154: voice chat (VOICE_CHAT.md §5); A changes each one, the
+// launcher keeps them per profile. §15: the devices and the volumes, the player's own preferences.
+Tile SettingTile(layout::SettingsItem item, const Model &m, const VoiceState &v) {
+    using layout::SettingsItem;
+    const bool enabled = v.flags & VoiceState::Enabled;
+    switch (item) {
+    case SettingsItem::ConnectionStatus: {
+        const char *state = LinkState(m);
+        return {kIconGlobe, T("Infinity server", "Servidor Infinity"), m.detail.empty() ? state : std::string(state) + " · " + m.detail, false, 0};
     }
-    default: {
-        // OD-154: voice chat (VOICE_CHAT.md §5); A changes each one, the launcher keeps them per profile
-        const VoiceState v = CurrentVoice();
-        const bool enabled = v.flags & VoiceState::Enabled;
-        tiles.push_back({kIconMessage, enabled ? T("Voice chat: On", "Chat de voz: Ligado") : T("Voice chat: Off", "Chat de voz: Desligado"),
-                         !enabled              ? T("You hear nobody and nobody hears you", "Você não ouve ninguém e ninguém te ouve")
-                         : audio::ListenOnly() ? T("No microphone: you can listen", "Sem microfone: você pode ouvir")
-                                               : T("You hear and can talk to your lobby", "Você ouve e pode falar com seu lobby"),
-                         false, 6});
-        tiles.push_back({kIconMessage, std::string(T("Microphone: ", "Microfone: ")) + MicModeName(v.mic),
-                         T("RB + R3 also changes it while you drive", "RB + R3 também muda enquanto você dirige"), !enabled, 7});
-        // §15: the devices and the volumes, the player's own preferences (the launcher keeps them per profile)
-        bool mic_missing = false, out_missing = false;
-        tiles.push_back({kIconSettings, std::string(T("Microphone device: ", "Dispositivo do microfone: ")) + DeviceLabel(VoiceFlow::Microphone, v, &mic_missing),
-                         mic_missing ? T("Not connected: voice chat uses the system default", "Não conectado: o chat de voz usa o padrão do sistema")
-                                     : T("A to choose from the microphones of this PC", "A para escolher entre os microfones deste PC"),
-                         false, kActionMicDevice, 0, mic_missing});
-        tiles.push_back({kIconSettings, std::string(T("Output device: ", "Dispositivo de saída: ")) + DeviceLabel(VoiceFlow::Output, v, &out_missing),
-                         out_missing ? T("Not connected: voice chat uses the system default", "Não conectado: o chat de voz usa o padrão do sistema")
-                                     : T("A to choose where you hear your lobby", "A para escolher onde você ouve seu lobby"),
-                         false, kActionOutputDevice, 0, out_missing});
-        tiles.push_back({kIconPeople, T("Voice chat volume", "Volume do voice chat"), "", false, kActionVoiceVolume, v.voice_volume});
-        tiles.push_back({kIconMessage, T("My microphone volume", "Volume do meu microfone"), "", false, kActionMicVolume, v.mic_volume});
-        const bool all_muted = !v.members.empty() && std::all_of(v.members.begin(), v.members.end(), [](const VoiceMember &m) { return m.state & VoiceMember::MutedByMe; });
-        tiles.push_back({kIconPeople, all_muted ? T("Unmute everyone", "Liberar todos") : T("Mute everyone", "Silenciar todos"),
-                         T("The players in your lobby now", "Os jogadores do seu lobby agora"), !enabled || v.members.empty(), 8});
-        tiles.push_back({kIconGlobe, T("CONNECTION DETAILS", "DETALHES DA CONEXÃO"), "", false, 4});
-        break;
+    case SettingsItem::ConnectionDetails:
+        return {kIconGlobe, T("Connection details", "Detalhes da conexão"),
+                T("This session's connection report", "O relatório da conexão desta sessão"), false, 4};
+    case SettingsItem::VoiceEnabled:
+        return {kIconMessage, enabled ? T("Voice chat: On", "Chat de voz: Ligado") : T("Voice chat: Off", "Chat de voz: Desligado"),
+                !enabled              ? T("You hear nobody and nobody hears you", "Você não ouve ninguém e ninguém te ouve")
+                : audio::ListenOnly() ? T("No microphone: you can listen", "Sem microfone: você pode ouvir")
+                                      : T("You hear and can talk to your lobby", "Você ouve e pode falar com seu lobby"),
+                false, 6};
+    case SettingsItem::MicMode:
+        return {kIconMessage, std::string(T("Microphone: ", "Microfone: ")) + MicModeName(v.mic),
+                T("RB + R3 also changes it while you drive", "RB + R3 também muda enquanto você dirige"), !enabled, 7};
+    case SettingsItem::MicDevice: {
+        bool missing = false;
+        const std::string label = DeviceLabel(VoiceFlow::Microphone, v, &missing);
+        return {kIconSettings, std::string(T("Microphone device: ", "Dispositivo do microfone: ")) + label,
+                missing ? T("Not connected: voice chat uses the system default", "Não conectado: o chat de voz usa o padrão do sistema")
+                        : T("A to choose from the microphones of this PC", "A para escolher entre os microfones deste PC"),
+                false, kActionMicDevice, 0, missing};
+    }
+    case SettingsItem::OutputDevice: {
+        bool missing = false;
+        const std::string label = DeviceLabel(VoiceFlow::Output, v, &missing);
+        return {kIconSettings, std::string(T("Output device: ", "Dispositivo de saída: ")) + label,
+                missing ? T("Not connected: voice chat uses the system default", "Não conectado: o chat de voz usa o padrão do sistema")
+                        : T("A to choose where you hear your lobby", "A para escolher onde você ouve seu lobby"),
+                false, kActionOutputDevice, 0, missing};
+    }
+    case SettingsItem::VoiceVolume:
+        return {kIconPeople, T("Voice chat volume", "Volume do chat de voz"), "", false, kActionVoiceVolume, v.voice_volume};
+    case SettingsItem::MicVolume:
+        return {kIconMessage, T("My microphone volume", "Volume do meu microfone"), "", false, kActionMicVolume, v.mic_volume};
+    case SettingsItem::MuteEveryone: {
+        const bool all_muted = !v.members.empty() && std::all_of(v.members.begin(), v.members.end(), [](const VoiceMember &x) { return x.state & VoiceMember::MutedByMe; });
+        return {kIconPeople, all_muted ? T("Unmute everyone", "Liberar todos") : T("Mute everyone", "Silenciar todos"),
+                T("The players in your lobby now", "Os jogadores do seu lobby agora"), !enabled || v.members.empty(), 8};
     }
     }
+    return {kIconSettings, "", "", true, 0};
+}
+
+std::vector<Tile> CategoryTilesOf(const layout::SettingsCategory &category, const Model &m) {
+    const VoiceState v = CurrentVoice();
+    std::vector<Tile> tiles;
+    for (layout::SettingsItem item : category.items) tiles.push_back(SettingTile(item, m, v));
     return tiles;
 }
 
@@ -336,8 +380,8 @@ void PickDevice(const VoiceDeviceEntry &entry) {
               entry.id.empty() ? T("System default", "Padrão do sistema") : entry.name);
 }
 
-// The list over the tab's content while open: "System default" first, then each device; A picks, B goes back.
-void DrawPicker(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom) {
+// The list over the Voice Chat column's settings while open: "System default" first, then each device; A picks, B goes back.
+void DrawPicker(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom, bool accept) {
     const auto list = VoiceDevices(g_picker.flow);
     const VoiceState v = CurrentVoice();
     const std::string &current = g_picker.flow == VoiceFlow::Microphone ? v.mic_id : v.output_id;
@@ -368,14 +412,17 @@ void DrawPicker(ImDrawList *dl, float x0, float y, float pw, float pad, float bo
         if (chosen) dl->AddText(f.icon, f.icon->FontSize, ImVec2(b.x - 40 * s, a.y + th / 2 - f.icon->FontSize / 2), kPinkU, kIconCheck);
     }
     dl->PopClipRect();
-    if (g_pending.action >= 0) {
-        g_pending.action = -1;
-        if (g_picker.open && g_picker.focus < static_cast<int>(list.size())) PickDevice(list[g_picker.focus]);
-    }
+    if (accept && g_picker.open && g_picker.focus < static_cast<int>(list.size())) PickDevice(list[g_picker.focus]);
 }
 
 void Activate(const Tile &tile) {
     switch (tile.action) {
+    case kActionCategory:
+        g_focus = tile.arg;
+        g_settings_in = true;
+        g_column_focus = 0;
+        g_column_scroll = 0;
+        break;
     case kActionMicDevice: OpenPicker(VoiceFlow::Microphone); break;
     case kActionOutputDevice: OpenPicker(VoiceFlow::Output); break;
     case 1: CloseSidebar(); break;
@@ -412,22 +459,19 @@ void Activate(const Tile &tile) {
 
 float g_tiles_scroll = 0; // the Settings list is taller than the guide at 1080p (§15): it follows the focus
 
-void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom, const Model &m) {
-    if (g_picker.open) { // §15: the device list stands in for the tiles until A or B
-        g_focused_action = 0;
-        DrawPicker(dl, x0, y, pw, pad, bottom);
-        return;
-    }
-    const std::vector<Tile> tiles = TilesFor(g_tab, m);
-    g_focus = std::clamp(g_focus, 0, std::max(0, static_cast<int>(tiles.size()) - 1));
+// A list of tiles from `y` to `bottom`, scrolled to keep `focus` in view. `live`: the controller is here (the white
+// focus ring); otherwise the focused tile reads as selected (a pink bar at its left). `accept`: A this frame activates
+// the focused tile. The mouse focuses (hover) and activates (click); `clicked` reports a click on a tile.
+void DrawTileList(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom, const std::vector<Tile> &tiles, int &focus_index,
+                  float &scroll, bool live, bool accept, bool *clicked = nullptr) {
+    focus_index = layout::ClampFocus(focus_index, static_cast<int>(tiles.size()));
     const float th = 78 * s, step = th + 10 * s;
     const float view = std::max(th, bottom - y);
-    const float focus_top = g_focus * step;
-    g_tiles_scroll = std::max(0.0f, std::clamp(g_tiles_scroll, focus_top + th - view, focus_top));
-    if (tiles.size() * step - 10 * s <= view) g_tiles_scroll = 0;
-    g_focused_action = tiles.empty() || tiles[g_focus].locked ? 0 : tiles[g_focus].action;
+    const float focus_top = focus_index * step;
+    scroll = std::max(0.0f, std::clamp(scroll, focus_top + th - view, focus_top));
+    if (tiles.size() * step - 10 * s <= view) scroll = 0;
     const float top = y;
-    y -= g_tiles_scroll;
+    y -= scroll;
     dl->PushClipRect(ImVec2(x0, top - 6 * s), ImVec2(x0 + pw, bottom + 6 * s), true);
     for (int i = 0; i < static_cast<int>(tiles.size()); ++i, y += step) {
         const Tile &tile = tiles[i];
@@ -437,17 +481,20 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, float bot
         const float lx = ta.x + 62 * s;
         const ImVec2 sa(lx, ta.y + 46 * s), sb(tb.x - 92 * s, ta.y + 64 * s); // §15: the slider's track
         if (inside && !PaneModal() && ImGui::IsMouseHoveringRect(ta, tb)) { // a modal pane holds the input
-            g_focus = i;
-            if (ImGui::IsMouseClicked(0) && !(tile.slider && ImGui::IsMouseHoveringRect(ImVec2(sa.x, sa.y - 4 * s), ImVec2(sb.x, sb.y + 4 * s)))) {
-                Activate(tile);
+            focus_index = i;
+            if (ImGui::IsMouseClicked(0)) {
+                if (clicked) *clicked = true;
+                if (!(tile.slider && ImGui::IsMouseHoveringRect(ImVec2(sa.x, sa.y - 4 * s), ImVec2(sb.x, sb.y + 4 * s)))) Activate(tile);
             }
         }
-        const bool focus = i == g_focus;
+        const bool focus = i == focus_index;
         dl->AddRectFilled(ta, tb, focus ? kTileFocus : kTile, 6 * s);
-        if (focus) {
+        if (focus && live) {
             // the Xbox focus: a white ring with a soft outer glow
             dl->AddRect(ImVec2(ta.x - 3 * s, ta.y - 3 * s), ImVec2(tb.x + 3 * s, tb.y + 3 * s), Rgba(255, 255, 255, 0.25f), 9 * s, 0, 4 * s);
             dl->AddRect(ta, tb, kText, 6 * s, 0, 2.5f * s);
+        } else if (focus) { // selected while the controller is in the column beside it
+            dl->AddRectFilled(ImVec2(ta.x, ta.y + 10 * s), ImVec2(ta.x + 4 * s, tb.y - 10 * s), kPinkU, 2 * s);
         }
         const ImU32 icon_color = tile.locked ? kTextDim : focus ? kPinkU : kText;
         dl->AddText(f.icon, f.icon->FontSize, ImVec2(ta.x + 20 * s, ta.y + th / 2 - f.icon->FontSize / 2), icon_color, tile.icon);
@@ -459,9 +506,9 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, float bot
         }
         dl->PopClipRect();
         if (tile.slider) { // §15: the value at the right, the slider under the title; Left/Right or the mouse move it
-            uint8_t clicked = 0;
-            VolumeSlider(dl, sa, sb, tile.slider, focus, inside ? &clicked : nullptr);
-            if (clicked) SetVolumeTile(tile.action, clicked);
+            uint8_t picked = 0;
+            VolumeSlider(dl, sa, sb, tile.slider, focus, inside ? &picked : nullptr);
+            if (picked) SetVolumeTile(tile.action, picked);
             const std::string value = std::to_string(tile.slider);
             const ImVec2 vs = Measure(f.title, value.c_str());
             TextAt(dl, f.title, ImVec2(tb.x - 24 * s - vs.x, ta.y + th / 2 - vs.y / 2), focus ? kText : kTextDim, value.c_str());
@@ -473,11 +520,131 @@ void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, float bot
         }
     }
     dl->PopClipRect();
-    if (g_pending.action >= 0) {
-        if (g_focus < static_cast<int>(tiles.size())) {
-            Activate(tiles[g_focus]);
-        }
-        g_pending.action = -1;
+    if (accept && focus_index < static_cast<int>(tiles.size())) Activate(tiles[focus_index]);
+}
+
+// The Home tab: its tiles, A on the focused one.
+void DrawTiles(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom, const Model &m) {
+    const bool accept = g_pending.action >= 0;
+    g_pending.action = -1;
+    DrawTileList(dl, x0, y, pw, pad, bottom, HomeTiles(m), g_focus, g_tiles_scroll, true, accept);
+}
+
+// ---------------------------------------------------------------- settings categories
+// What draws a category's column. Every category gets DrawSettingTiles (its settings as tiles); a page that needs more
+// is registered in kSettingsPages by its id (ui_layout.h). `live`: the controller is in the column; `accept`: A now.
+struct SettingsArea {
+    float x, y, w, pad, bottom;
+};
+using SettingsDraw = void (*)(ImDrawList *dl, const SettingsArea &area, const layout::SettingsCategory &category, const Model &m, bool live, bool accept);
+struct SettingsPage {
+    const char *id;
+    const char *icon;
+    std::string (*summary)(const Model &m); // the sidebar tile's subtitle
+    SettingsDraw draw;
+};
+
+void DrawSettingTiles(ImDrawList *dl, const SettingsArea &a, const layout::SettingsCategory &category, const Model &m, bool live, bool accept) {
+    if (g_picker.open) { // §15: the device list stands in for the settings until A or B
+        g_focused_action = 0;
+        DrawPicker(dl, a.x, a.y, a.w, a.pad, a.bottom, accept);
+        return;
+    }
+    const std::vector<Tile> tiles = CategoryTilesOf(category, m);
+    bool clicked = false;
+    DrawTileList(dl, a.x, a.y, a.w, a.pad, a.bottom, tiles, g_column_focus, g_column_scroll, live, accept, &clicked);
+    if (clicked) g_settings_in = true; // a click in the column moves the controller there
+    g_focused_action = tiles.empty() || tiles[g_column_focus].locked ? 0 : tiles[g_column_focus].action;
+}
+
+void DrawVoicePage(ImDrawList *dl, const SettingsArea &a, const layout::SettingsCategory &category, const Model &m, bool live, bool accept) {
+    SettingsArea area = a;
+    const VoiceState v = CurrentVoice();
+    // HOOK(listen-only): the voice engine's "no microphone: you can listen" state. Today audio::ListenOnly() (no capture
+    // device, or only monitors); when the engine exposes a richer state (a microphone reopening, listen-only by choice),
+    // read it here: this line is the settings page's place for it.
+    if ((v.flags & VoiceState::Enabled) && audio::ListenOnly() && !g_picker.open) {
+        const char *notice = T("No microphone: you can listen", "Sem microfone: você pode ouvir");
+        dl->AddText(f.small, f.small->FontSize, ImVec2(area.x + area.pad, area.y), kAmber, notice, nullptr, area.w - 2 * area.pad);
+        area.y += f.small->CalcTextSizeA(f.small->FontSize, FLT_MAX, area.w - 2 * area.pad, notice).y + 14 * s;
+    }
+    if (v.flags & VoiceState::SelfBlocked) { // CR-S67/S68: the server blocks this player's voice for now
+        TextAt(dl, f.small, ImVec2(area.x + area.pad, area.y), kAmber, T("Your voice chat is blocked for now", "Seu chat de voz está bloqueado por enquanto"));
+        area.y += 26 * s;
+    }
+    DrawSettingTiles(dl, area, category, m, live, accept);
+}
+
+std::string ConnectionSummary(const Model &m) { return LinkState(m); }
+std::string VoiceSummary(const Model &) {
+    const VoiceState v = CurrentVoice();
+    if (!(v.flags & VoiceState::Enabled)) return T("Off", "Desligado");
+    if (audio::ListenOnly()) return T("On · No microphone: you can listen", "Ligado · Sem microfone: você pode ouvir");
+    return std::string(T("On · Microphone: ", "Ligado · Microfone: ")) + MicModeName(v.mic);
+}
+
+const SettingsPage kSettingsPages[] = {
+    {"connection", kIconGlobe, ConnectionSummary, DrawSettingTiles},
+    {"voice", kIconMessage, VoiceSummary, DrawVoicePage},
+};
+
+SettingsPage PageOf(const layout::SettingsCategory &category) {
+    for (const SettingsPage &p : kSettingsPages)
+        if (std::string(p.id) == category.id) return p;
+    return {category.id, kIconSettings, nullptr, DrawSettingTiles};
+}
+
+const char *CategoryLabel(const layout::SettingsCategory &c) { return T(c.en, c.pt); }
+
+// The Settings tab's sidebar: one tile per category; the focused one is the column's.
+std::vector<Tile> CategoryTiles(const Model &m) {
+    std::vector<Tile> tiles;
+    const auto &all = layout::SettingsCategories();
+    for (size_t i = 0; i < all.size(); ++i) {
+        const SettingsPage page = PageOf(all[i]);
+        Tile t{page.icon, CategoryLabel(all[i]), page.summary ? page.summary(m) : std::string(), false, kActionCategory};
+        t.arg = static_cast<int>(i);
+        tiles.push_back(std::move(t));
+    }
+    return tiles;
+}
+
+int g_settings_shown = -1; // the category the column showed last frame: another one starts at its top
+
+// The Settings tab: the categories in the guide and the focused one's settings in the second column (x, w), unless a
+// modal pane holds that column.
+void DrawSettings(ImDrawList *dl, float x0, float y, float pw, float pad, float bottom, float cx, float cw, float height, float alpha, const Model &m) {
+    const bool accept = g_pending.action >= 0;
+    g_pending.action = -1;
+    const auto &all = layout::SettingsCategories();
+    if (all.empty()) return;
+    DrawTileList(dl, x0, y, pw, pad, bottom, CategoryTiles(m), g_focus, g_tiles_scroll, !g_settings_in, accept && !g_settings_in);
+    g_focus = layout::ClampFocus(g_focus, static_cast<int>(all.size()));
+    if (g_focus != g_settings_shown) {
+        g_settings_shown = g_focus;
+        g_column_focus = 0;
+        g_column_scroll = 0;
+        g_picker.open = false;
+    }
+    if (!g_settings_in) g_focused_action = 0;
+    if (PaneModal() || cw < 120 * s) return;
+    const layout::SettingsCategory &category = all[static_cast<size_t>(g_focus)];
+    ColumnPanel(dl, cx, cw, height, alpha);
+    const float cpad = 26 * s;
+    float cy = 34 * s;
+    TextAt(dl, f.heading, ImVec2(cx + cpad, cy), kText, CategoryLabel(category));
+    cy += 44 * s;
+    TextAt(dl, f.small, ImVec2(cx + cpad, cy), kTextDim, T("SETTINGS", "AJUSTES"));
+    cy += 34 * s;
+    const float column_bottom = height - 80 * s;
+    PageOf(category).draw(dl, {cx, cy, cw, cpad, column_bottom}, category, m, g_settings_in, accept && g_settings_in);
+    if (g_settings_in) {
+        const float hy = height - 46 * s;
+        dl->AddLine(ImVec2(cx + cpad, hy - 16 * s), ImVec2(cx + cw - cpad, hy - 16 * s), Rgba(255, 255, 255, 0.08f * alpha));
+        FaceButton(dl, ImVec2(cx + cpad + 11 * s, hy + 10 * s), 11 * s, kGreen, "A");
+        TextAt(dl, f.small, ImVec2(cx + cpad + 28 * s, hy + 1 * s), kTextDim, T("Select", "Selecionar"), alpha);
+        FaceButton(dl, ImVec2(cx + cpad + 139 * s, hy + 10 * s), 11 * s, kRed, "B");
+        TextAt(dl, f.small, ImVec2(cx + cpad + 156 * s, hy + 1 * s), kTextDim, T("Back", "Voltar"), alpha);
     }
 }
 
@@ -618,11 +785,14 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     const float content_bottom = block_top - 26 * s;
 
     SetHoverPane(nullptr); // the worlds tab sets it again for its focused row
+    if (g_tab != kTabSettings) g_settings_in = false;
+    const float column_x = b.x, column_w = std::min(420 * s, width - b.x); // the second column (the right pane's place)
     if (OfflineSession() && (g_tab == kTabWorlds || g_tab == kTabFriends)) {
         g_pending.action = -1; // OD-118: lobbies and friends need the online session
         DrawOfflineMode(dl, x0 + pw / 2, (y + content_bottom) / 2, s);
     } else if (g_tab == kTabWorlds) {
         DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, content_bottom, dt);
+        if (!PaneModal() && WorldsColumnOpen()) DrawWorldsColumn(dl, column_x, column_w, height, ease); // a player's details
     } else if (g_tab == kTabFriends) {
         g_pending.action = -1;
         const float center_x = x0 + pw / 2;
@@ -633,8 +803,10 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
         const char *soon = T("Coming soon", "Em breve");
         const ImVec2 text = Measure(f.title, soon);
         TextAt(dl, f.title, ImVec2(center_x - text.x / 2, center_y + 34 * s), kTextDim, soon);
+    } else if (g_tab == kTabSettings) {
+        RequestVoiceDevices(); // §15: the device names stay current while it shows
+        DrawSettings(dl, x0, y, pw, pad, content_bottom, column_x, column_w, height, ease, m);
     } else {
-        if (g_tab == kTabSettings) RequestVoiceDevices(); // §15: the device names stay current while it shows
         DrawTiles(dl, x0, y, pw, pad, content_bottom, m);
     }
 
@@ -717,6 +889,7 @@ void ToggleSidebar() {
     g_confirm_quit = false;
     g_connection_open = false;
     g_picker.open = false;
+    g_settings_in = false;
     if (!g_open) ClosePane();
     SendPanel(g_open);
 }
@@ -726,6 +899,7 @@ void CloseSidebar() {
         g_confirm_quit = false;
         g_connection_open = false;
         g_picker.open = false;
+        g_settings_in = false;
         ClosePane();
         SendPanel(false);
     }
@@ -766,9 +940,27 @@ void Navigate(Nav nav) {
         default: return;
         }
     }
-    // §15: on a volume tile Left/Right move the slider (LB/RB still change the tab)
-    if ((nav == Nav::Left || nav == Nav::Right) && g_tab == kTabSettings && (g_focused_action == kActionVoiceVolume || g_focused_action == kActionMicVolume)) {
-        StepVolumeTile(g_focused_action, nav == Nav::Right ? 1 : -1);
+    if (g_tab == kTabSettings && g_settings_in) { // the category's column holds the controller; LB/RB still change the tab
+        switch (nav) {
+        case Nav::Up: if (g_column_focus > 0) --g_column_focus; return;
+        case Nav::Down: ++g_column_focus; return; // clamped when drawn
+        case Nav::Left:
+        case Nav::Right:
+            // §15: on a volume tile Left/Right move the slider; elsewhere Left goes back to the categories
+            if (g_focused_action == kActionVoiceVolume || g_focused_action == kActionMicVolume) {
+                StepVolumeTile(g_focused_action, nav == Nav::Right ? 1 : -1);
+            } else if (nav == Nav::Left) {
+                g_settings_in = false;
+            }
+            return;
+        case Nav::Accept: g_pending.action = 1; return;
+        case Nav::Back: g_settings_in = false; return;
+        case Nav::TabLeft:
+        case Nav::TabRight: g_settings_in = false; break;
+        default: return;
+        }
+    } else if (g_tab == kTabSettings && nav == Nav::Right) {
+        g_pending.action = 1; // Right opens the focused category's column, as A does
         return;
     }
     switch (nav) {

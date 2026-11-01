@@ -25,9 +25,21 @@ inline std::wstring Lower(const std::wstring &s) {
     return out;
 }
 
-// True: the endpoint carries what the PC plays, not a microphone.
+// True: the endpoint is a stand-in for "the system default" rather than one device, as Wine lists PulseAudio's or
+// PipeWire's default source (named after the sound server, not a device). What it captures cannot be checked: on a PC
+// with no microphone (SAURON, 2026-10-31) the server's default source is the output's monitor, so opening it sends the
+// game and the voice mix to the lobby. Never opened, never listed; a real microphone behind it is listed on its own.
+inline bool IsDefaultAlias(const Candidate &c) {
+    static const wchar_t *const kMarks[] = {L"pulseaudio", L"pipewire", L"{default}"};
+    const std::wstring name = Lower(c.name), id = Lower(c.id);
+    for (const wchar_t *mark : kMarks)
+        if (name.find(mark) != std::wstring::npos || id.find(mark) != std::wstring::npos) return true;
+    return name == L"default" || name == L"default device" || name == L"microphone (default)";
+}
+
+// True: the endpoint carries what the PC plays (or cannot be shown not to), not a microphone.
 inline bool IsMonitorOrLoopback(const Candidate &c) {
-    if (c.render) return true;
+    if (c.render || IsDefaultAlias(c)) return true;
     static const wchar_t *const kMarks[] = {L".monitor", L"monitor of", L"loopback", L"stereo mix", L"what u hear",
                                             L"wave out mix", L"what you hear"};
     const std::wstring name = Lower(c.name), id = Lower(c.id);
@@ -37,7 +49,9 @@ inline bool IsMonitorOrLoopback(const Candidate &c) {
 }
 
 // The endpoint to capture from: the default communications input if it is a microphone, else the first microphone in
-// the system's order; -1 when there is none (listen-only). default_index < 0: there is no default.
+// the system's order; -1 when there is none (listen-only). default_index < 0: there is no default. The default is
+// always resolved to its entry in `list` and checked like any other: an unchecked default is never opened (with every
+// input a monitor, a loopback or a default stand-in, the answer is -1, never "the default anyway").
 inline int PickCapture(const std::vector<Candidate> &list, int default_index) {
     if (default_index >= 0 && default_index < static_cast<int>(list.size()) && !IsMonitorOrLoopback(list[default_index]))
         return default_index;
