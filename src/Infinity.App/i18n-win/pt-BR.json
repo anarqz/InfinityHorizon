@@ -142,6 +142,7 @@
   "error.AUTH.CHALLENGE_REQUIRED": "Conclua a verificação primeiro e tente de novo.",
   "error.AUTH.CHALLENGE_FAILED": "A verificação não passou. Tente de novo.",
   "error.AUTH.ROLE_REQUIRED": "Sua conta não tem permissão para isto.",
+  "error.AUTH.UNAUTHENTICATED": "O servidor não aceitou o pedido. Tente de novo mais tarde.",
   "error.ACCOUNTS.REGISTRATION_DISABLED": "A criação de contas está fechada neste servidor agora.",
   "error.ACCOUNTS.BANNED": "Esta conta está banida.",
   "error.ACCOUNTS.FROZEN": "Esta conta está congelada enquanto um moderador a analisa.",

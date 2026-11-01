@@ -45,18 +45,24 @@ public sealed partial class ShellViewModel
         try
         {
             await row.SetAsync(wanted, (value, ct) => session.SetWebsiteListedAsync(row.Xuid, value, ct));
-            SetWebsiteStatus(null);
+            if (_session == session) SetWebsiteStatus(null);
         }
         catch (ApiException e)
         {
             Log("website: listing refused " + e.Code);
+            if (_session != session) return;                                    // a late answer for an account signed out since
             SetWebsiteStatus(WebsiteErrors.TextKey(e) is { } key ? S[key] : ErrorText(e.Code));
-            if (WebsiteErrors.RereadsProfiles(e) && _session == session) await RereadWebsiteProfilesAsync(session);
+            if (WebsiteErrors.RereadsProfiles(e)) await RereadWebsiteProfilesAsync(session);
         }
         catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or TimeoutException or JsonException)
         {
             Log("website: listing not answered (" + e.GetType().Name + ")");
-            SetWebsiteStatus(S["native.unreachable"]);
+            if (_session == session) SetWebsiteStatus(S["native.unreachable"]);
+        }
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException)
+        {
+            // signed out while the request waited for its token (a reused refresh token, or the player's own sign-out)
+            Log("website: listing dropped, signed out (" + e.GetType().Name + ")");
         }
     }
 

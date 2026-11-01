@@ -142,6 +142,7 @@
   "error.AUTH.CHALLENGE_REQUIRED": "Complete the verification first, then try again.",
   "error.AUTH.CHALLENGE_FAILED": "The verification did not pass. Try again.",
   "error.AUTH.ROLE_REQUIRED": "Your account does not have permission for this.",
+  "error.AUTH.UNAUTHENTICATED": "This server did not accept the request. Try again later.",
   "error.ACCOUNTS.REGISTRATION_DISABLED": "New accounts are closed on this server right now.",
   "error.ACCOUNTS.BANNED": "This account is banned.",
   "error.ACCOUNTS.FROZEN": "This account is frozen while a moderator reviews it.",
