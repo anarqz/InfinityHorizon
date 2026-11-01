@@ -33,11 +33,11 @@
 // | CoInitializeEx(MTA), CoCreateInstance(MMDeviceEnumerator) | yes | known (mmdevapi)                     | used as is                                             |
 // | GetDefaultAudioEndpoint(eCapture, eCommunications) | yes | known: accepted; every role maps to the one default (inference) | used; same device as eConsole there   |
 // | IMMDevice::GetId, Activate(IAudioClient)       | yes     | known                                         | used                                                   |
-// | EnumAudioEndpoints(ACTIVE), GetDevice, OpenPropertyStore(FriendlyName), IMMEndpoint::GetDataFlow | yes | known: winepulse lists the output's monitor as a capture endpoint named "Monitor of ..." | monitors/loopbacks rejected by name, id and data flow; none left: listen-only |
+// | EnumAudioEndpoints(ACTIVE), GetDevice, OpenPropertyStore(FriendlyName), IMMEndpoint::GetDataFlow | yes | known: winepulse lists the output's monitor as a capture endpoint named "Monitor of ..." | monitors/loopbacks rejected by name (localized too; "<words> <an output's name>"), id and data flow; none left: listen-only |
 // | EnumAudioEndpoints: the sound server's default as its own entry | no | known: a "PulseAudio"/PipeWire default stand-in; with no microphone it captures the output's monitor | never opened nor listed (voice_audio_devices.h IsDefaultAlias) |
 // | GetMixFormat → WAVEFORMATEXTENSIBLE float32    | usual   | known: winepulse reports extensible float32 at the PulseAudio/PipeWire rate (44.1 or 48 kHz), N channels | any PCM8/16/24/32 or float32/64, any rate/channels, converted by voice_audio_dsp.h; the delivered rate is watched |
 // | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM / SRC_DEFAULT_QUALITY | Win10+ | newer Wine only; quality differs (inference) | **not used**: our own downmix + windowed-sinc resampler on both |
-// | Shared mode + AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 20 ms buffer | yes | known; Wine rounds the period to its own (~10 ms) | packet sizes are not assumed: every wake drains all packets; 500 ms wait timeout as a fallback |
+// | Shared mode + AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 100 ms buffer | yes | known; Wine rounds the period to its own (~10 ms) | packet sizes are not assumed: every wake drains all packets (copied, released, then processed); 500 ms wait timeout as a fallback |
 // | AUDCLNT_E_DEVICE_INVALIDATED on unplug         | yes     | not guaranteed: PulseAudio moves the stream (inference) | also: no data for 2 s = reopen; default device id polled every 3 s (capture and render) |
 // | A device call that blocks (a sink switching a2dp ↔ alsa) | rare | known (2026-10-31): mmdevapi/winepulse may block for seconds or more | on device workers only; a watchdog abandons one stuck 8 s, a fresh one retries |
 // | IMMNotificationClient                          | yes     | partial (inference)                           | **not used**: polling works on both                    |
@@ -759,9 +759,11 @@ std::vector<std::wstring> EndpointIds(IMMDeviceEnumerator *enumerator, EDataFlow
 // worker's own) logs each rejected endpoint once, by kind only: a friendly name can carry a person's name ("...'s
 // AirPods"); no audio is ever logged. null logs nothing.
 std::vector<devices::Candidate> CaptureCandidates(IMMDeviceEnumerator *enumerator, int &default_index, std::vector<std::wstring> *logged) {
-    std::vector<IMMDevice *> devices;
+    std::vector<IMMDevice *> devices, outputs;
     const std::vector<std::wstring> ids = EndpointIds(enumerator, eCapture, &devices);
-    const std::vector<std::wstring> render = EndpointIds(enumerator, eRender, nullptr);
+    const std::vector<std::wstring> render = EndpointIds(enumerator, eRender, &outputs);
+    std::vector<std::wstring> render_names; // a capture named after one is its monitor (devices::NamesAnOutput)
+    for (IMMDevice *&output : outputs) { render_names.push_back(FriendlyName(output)); SafeRelease(output); }
     std::wstring default_id;
     IMMDevice *def = nullptr;
     LPWSTR def_id = nullptr;
@@ -772,6 +774,7 @@ std::vector<devices::Candidate> CaptureCandidates(IMMDeviceEnumerator *enumerato
     default_index = -1;
     for (size_t i = 0; i < ids.size(); i++) {
         devices::Candidate c{ids[i], FriendlyName(devices[i]), std::find(render.begin(), render.end(), ids[i]) != render.end()};
+        c.monitor = devices::NamesAnOutput(c.name, render_names);
         IMMEndpoint *endpoint = nullptr;
         EDataFlow flow = eCapture;
         if (SUCCEEDED(devices[i]->QueryInterface(__uuidof(IMMEndpoint), reinterpret_cast<void **>(&endpoint))) &&
@@ -919,7 +922,8 @@ Outcome CaptureSession(const Worker &w, HANDLE ready) {
     if (SUCCEEDED(hr)) hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&client));
     if (SUCCEEDED(hr)) hr = client->GetMixFormat(&mix);
     if (SUCCEEDED(hr) && !ParseFormat(mix, format)) hr = E_NOTIMPL;
-    if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 200000, 0, mix, nullptr);
+    // 100 ms of device buffer: a worker held up (scheduling, a slow block) loses nothing
+    if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 1000000, 0, mix, nullptr);
     if (SUCCEEDED(hr)) hr = client->SetEventHandle(ready);
     if (SUCCEEDED(hr)) hr = client->GetService(IID_PPV_ARGS(&capture));
     if (SUCCEEDED(hr)) hr = client->Start();
@@ -942,6 +946,8 @@ Outcome CaptureSession(const Worker &w, HANDLE ready) {
         RestartCapture(w);
         dsp::RateWatch watch(effective.rate);
         ULONGLONG last_check = GetTickCount64(), last_data = last_check;
+        const size_t stride = static_cast<size_t>(format.container) * format.channels;
+        std::vector<uint8_t> packet_copy; // the chain runs on a copy: the device buffer is released at once
         bool done = false;
         while (!done) {
             HANDLE waits[2] = {s.stop, ready};
@@ -954,10 +960,12 @@ Outcome CaptureSession(const Worker &w, HANDLE ready) {
                 DWORD flags = 0;
                 hr = capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
                 if (FAILED(hr)) break;
-                const bool fed = Feed(w, effective, data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
+                const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+                if (!silent && frames) packet_copy.assign(data, data + static_cast<size_t>(frames) * stride);
                 capture->ReleaseBuffer(frames);
-                if (!fed) { done = true; break; }
-                if (const uint32_t measured = watch.Add(frames, RealMs())) {
+                // AEC3, RNNoise, Opus and the send run after the release, so they never hold the device buffer
+                if (!Feed(w, effective, silent ? nullptr : packet_copy.data(), frames, silent)) { done = true; break; }
+                if (const uint32_t measured = watch.Add(frames, RealMs(), (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0)) {
                     // a Bluetooth profile flip or a relabelled stream: reopen; the same mismatch again: use that rate
                     if (t_rate.nominal == format && t_rate.measured == measured) t_rate.strikes++;
                     else t_rate = {format, measured, 1};
@@ -1148,7 +1156,8 @@ Outcome PlaybackSession(const Worker &w, HANDLE event) {
                 if (chosen.empty() && DefaultRenderId(enumerator) != output) { Log("voice: default audio output changed; reopening"); outcome = Outcome::Reopen; break; }
             }
         }
-        if (FAILED(hr)) Log("voice: audio output lost (0x%08lx); retrying", static_cast<unsigned long>(hr));
+        if (hr == AUDCLNT_E_DEVICE_INVALIDATED) { Log("voice: audio output lost or its format changed; reopening"); outcome = Outcome::Reopen; }
+        else if (FAILED(hr)) Log("voice: audio output lost (0x%08lx); retrying", static_cast<unsigned long>(hr));
         if (started) client->Stop();
         if (Live(w)) SetOutputInUse(std::wstring());
     }
@@ -1376,7 +1385,11 @@ void Retire(const std::shared_ptr<Session> &s, DWORD wait_ms) {
 std::shared_ptr<Session> TakeSession() {
     std::unique_lock lock(g_life);
     g_running = false;
+    // no permission carries over to the next session: its capture worker sends nothing until VoiceThread's SetTransmit
+    g_allowed = false;
+    g_ptt = false;
     g_sending_until = 0;
+    SetOutputInUse(std::wstring()); // its playback worker, no longer live, does not clear it
     return std::move(g_session);
 }
 
