@@ -211,6 +211,7 @@
   "error.PORTAL.SESSION_REQUIRED": "Entre para continuar.",
   "error.PORTAL.VIP_REQUIRED": "Isto não está disponível neste servidor.",
   "error.PORTAL.NOT_FOUND": "Isto não foi encontrado.",
+  "error.BOARDS.NOT_FOUND": "Esse placar não existe.",
   "error.PORTAL.CONFLICT": "Isto mudou nesse meio-tempo. Recarregue e tente de novo.",
   "error.PORTAL.MODE_MISMATCH": "Este perfil está em outro modo.",
   "error.POOL.FULL": "Os servidores estão cheios agora. Tente de novo em breve.",
