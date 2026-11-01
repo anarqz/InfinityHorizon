@@ -152,16 +152,22 @@ inline uint32_t NearestStandardRate(double measured) {
 
 // Watches the rate a capture stream really delivers against the rate its format says (a Bluetooth headset that
 // switched profile under an open stream, or a driver that relabels). After 1 s of warm-up, 2 s windows; two windows
-// in a row more than 20 % off: Add returns the measured rate snapped to a standard one (else 0).
+// in a row more than 20 % off: Add returns the measured rate snapped to a standard one (else 0). Frames the device may
+// have dropped are not a rate: a buffer marked discontinuous, or one read more than kMaxGapMs after the previous (the
+// worker was held up long enough for the device buffer to overflow), restarts the current window.
 class RateWatch {
 public:
+    static constexpr int64_t kMaxGapMs = 80; // under the capture's 100 ms device buffer
     explicit RateWatch(uint32_t nominal = 48000) : nominal_(nominal) {}
-    uint32_t Add(size_t frames, int64_t now_ms) {
+    uint32_t Add(size_t frames, int64_t now_ms, bool discontinuity = false) {
+        const bool gap = discontinuity || (last_ms_ >= 0 && now_ms - last_ms_ > kMaxGapMs);
+        last_ms_ = now_ms;
         if (start_ms_ < 0) { start_ms_ = now_ms; return 0; }
         if (window_ms_ < 0) {
             if (now_ms - start_ms_ >= 1000) { window_ms_ = now_ms; count_ = 0; } // this buffer was filled before the window
             return 0;
         }
+        if (gap) { window_ms_ = now_ms; count_ = 0; return 0; } // the strikes so far stand
         count_ += frames;
         const int64_t span = now_ms - window_ms_;
         if (span < 2000) return 0;
@@ -176,7 +182,7 @@ public:
 
 private:
     uint32_t nominal_;
-    int64_t start_ms_ = -1, window_ms_ = -1;
+    int64_t start_ms_ = -1, window_ms_ = -1, last_ms_ = -1;
     uint64_t count_ = 0;
     int strikes_ = 0;
     double last_ = 0.0;
