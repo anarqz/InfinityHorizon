@@ -4,10 +4,10 @@ namespace Infinity.Core.WorldServer;
 internal enum GameOptionsUpdateResult { Ignored, Empty, Stored, Buffered, Overflow }
 
 /// <summary>
-/// An opaque, bounded journal of original GameOptions updates. Their variable schema is not
-/// established, so records are replayed individually rather than concatenated or guessed to be
-/// complete snapshots. After the first arbitrary source sequence, gaps must close before any
-/// later fragment is published. Real-client acceptance of ownership replay remains a compatibility gate.
+/// A bounded journal of original GameOptions updates, replayed individually. After the first arbitrary source sequence, gaps
+/// must close before any later fragment is published. The journal outlives events (the owner's game writes only deltas), so
+/// <see cref="Compact"/> rewrites it, when every record reads (GameOptionsFields), as the writes of its merged values.
+/// Real-client acceptance of ownership replay remains a compatibility gate.
 /// </summary>
 internal sealed class RelayGameOptionsState
 {
@@ -94,6 +94,36 @@ internal sealed class RelayGameOptionsState
         _records.Add(fragment);
         Bits += fragment.Length;
         ready.Add(fragment);
+    }
+
+    /// <summary>
+    /// Rewrites the accepted records as the game's own writes of their merged values (the last write of each variable wins): ids
+    /// ascending, each record no longer than the longest one the game wrote (so it fits the packets the game's own did), so
+    /// replaying them sets exactly what replaying the old ones did. Pending fragments and the source sequence stay. False,
+    /// changing nothing, when a record does not read.
+    /// </summary>
+    internal bool Compact()
+    {
+        if (_records.Count == 0) return true;
+        if (!GameOptionsFields.TryRead(_records, out var fields)) return false;
+        // every variable came in one of the records, so each one fits a record on its own
+        var longest = _records.Max(r => r.Length);
+        var compacted = new List<BitBuffer>();
+        var record = new BitBuffer();
+        foreach (var (id, raw) in fields.Values)
+        {
+            if (record.Length != 0 && record.Length + GameOptionsFields.IdBits + raw.Length > longest)
+            {
+                compacted.Add(record);
+                record = new();
+            }
+            record.Push((ulong)id, GameOptionsFields.IdBits).Append(raw);
+        }
+        if (record.Length != 0) compacted.Add(record);
+        _records.Clear();
+        _records.AddRange(compacted);
+        Bits = compacted.Sum(r => r.Length);
+        return true;
     }
 
     internal RelayPeer? ExpiredSource(long nowMilliseconds, long timeoutMilliseconds) =>

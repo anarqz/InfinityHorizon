@@ -40,6 +40,14 @@ internal sealed partial class RelayEngine
     private const long TagLongestLimitMs = 3600000;
     /// <summary>The games end a tag event on their own clock and send their final scores then: an earlier one is not a finish.</summary>
     private const long TagEarliestFinishMs = 20000;
+    /// <summary>
+    /// The games' final scores end a tag event; the server's own time-up is only a fallback this long after the limit. The server's
+    /// clock reaches "GO" + limit before the games' clocks do (the start travels to them), and closing then drops the hits of the
+    /// match's last seconds while the games still show the crown (TG-3).
+    /// </summary>
+    private const long TagLateCloseMs = 15000;
+    /// <summary>A lone Infected car is infected from the start: its event ends this long after "GO" when its game sends no final score.</summary>
+    private const long TagAloneCloseMs = 3000;
     private TagGame? _tag;
     private Random? _tagRandom;
     private Random TagRandom => _tagRandom ??= new(_settings.TagSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue));
@@ -88,12 +96,14 @@ internal sealed partial class RelayEngine
         }
         if (race.Stage != RaceStage.Started) return;
         var cars = TagCars();
-        if (tag.Rules.Mode == TagMode.Infected && cars.Count > 1 && cars.All(p => tag.IsIt(p.Index)))
+        // TG-4: one car alone is everyone, once "GO" passed and its game had a moment to send its own final score
+        if (tag.Rules.Mode == TagMode.Infected && cars.Count != 0 && cars.All(p => tag.IsIt(p.Index))
+            && (cars.Count > 1 || race.Participants.Count == 1 && tag.GoAt is { } start && _now >= start + TagAloneCloseMs))
         {
             Note("tag: everyone infected");
             EndRace("everyone infected");
         }
-        else if (tag.GoAt is { } go && _now >= go + tag.LimitMs)
+        else if (tag.GoAt is { } go && _now >= go + tag.LimitMs + TagLateCloseMs)
         {
             Note("tag: time up");
             EndRace("tag time up");
@@ -212,8 +222,13 @@ internal sealed partial class RelayEngine
         if (tag.Assigned) EnsureIt(tag);
     }
 
-    /// <summary>A final score this early in a tag event is not its end.</summary>
-    private bool TagTooEarlyToFinish() => _tag is { } tag && (tag.GoAt is not { } go || _now - go < TagEarliestFinishMs);
+    /// <summary>
+    /// A final score this early in a tag event (before "GO" + 20 s, or half a shorter event) is not its end. A lone Infected car is
+    /// infected from the start, so its game's final score ends the event as soon as it started (TG-4); a lone King has no early end.
+    /// </summary>
+    private bool TagTooEarlyToFinish() => _tag is { } tag
+        && !(tag.Rules.Mode == TagMode.Infected && _race is { Participants.Count: 1 })
+        && (tag.GoAt is not { } go || _now - go < Math.Min(TagEarliestFinishMs, tag.LimitMs / 2));
 
     /// <summary>Adds the time since the last bucket change to every It car's time (from "GO" on). Called before buckets change.</summary>
     private void AccountTag(TagGame tag)
