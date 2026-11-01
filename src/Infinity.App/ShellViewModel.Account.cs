@@ -59,6 +59,8 @@ public sealed partial class ShellViewModel
         DeletionEmail = _session?.Email ?? string.Empty;
         DeletionConfirmation = string.Empty;
         Message = null;
+        SetWebsiteStatus(null);
+        FillWebsiteSwitches(); // CR-L47: the switches as the session's /me has them
         Changed(string.Empty);
         _ = RefreshDiscordAsync(); // CR-S63: the link and the switches as the server has them now
     }

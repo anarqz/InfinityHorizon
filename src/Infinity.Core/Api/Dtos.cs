@@ -137,7 +137,8 @@ public sealed record BoundDevice(string DeviceId, string Label, string Platform,
 /// <summary>
 /// A game profile (<c>xuid</c> decimal, <c>gamertag</c> the plain <c>Name</c> since OD-120, <c>Name#12345</c> from older servers,
 /// <c>mode</c> hardcore or noob). <see cref="RenameNotice"/> is set while an OD-120 clash rename's free rename is unused (absent
-/// from servers before OD-120).
+/// from servers before OD-120). <see cref="WebsiteListed"/> (CR-S83): whether the play dashboard shows it; null from servers before
+/// CR-S83 (the launcher then offers no switch).
 /// </summary>
 public sealed record Profile(
     string ProfileId,
@@ -153,13 +154,17 @@ public sealed record Profile(
     // CR-S51: this server keeps the profile in the cloud / needs the OD-113 scan before admission; absent = OD-52 (a Supporter's
     // Hardcore). Explanatory: the admission decides.
     bool? CloudLine = null,
-    bool? ContentRequired = null);
+    bool? ContentRequired = null,
+    bool? WebsiteListed = null);
 
 /// <summary>Why a profile carries another name than the one its player chose (OD-120 backfill, ACCOUNTS.md §5).</summary>
 public sealed record RenameNotice(string PreviousName, string RenamedAt);
 
 /// <summary><c>POST /launcher/v1/profiles/{xuid}/name</c> (OD-120, CR-S44): the free rename after a clash rename.</summary>
 public sealed record NameChange(string Name);
+
+/// <summary><c>POST /launcher/v1/profiles/{xuid}/website</c> (CR-S83, CR-L47): show the profile on the play dashboard or hide it.</summary>
+public sealed record WebsiteVisibility(bool Listed);
 
 /// <summary>Access as the account plane reads it (internal tier id <c>vip</c>; shown as "Infinity Supporter").</summary>
 public sealed record Access(string Tier, string Status, string? AccessUntil, string? Plan, string? Provider, bool AutoRenew, bool PastDue);

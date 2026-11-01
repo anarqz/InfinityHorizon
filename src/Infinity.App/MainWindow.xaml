@@ -833,6 +833,27 @@
                   </StackPanel>
                 </StackPanel>
               </Border>
+              <!-- CR-L47: each live profile's play-dashboard switch (hidden when the server sends no websiteListed). -->
+              <Border x:Name="WebsiteCard" Style="{StaticResource Card}" Padding="24" Margin="0,18,0,0"
+                      Visibility="{Binding ShowWebsite, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding S[website.title]}" FontSize="20" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding WebsiteStatus}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}" Margin="0,8,0,0"
+                             Visibility="{Binding HasWebsiteStatus, Converter={StaticResource Visible}}" />
+                  <ItemsControl ItemsSource="{Binding WebsiteSwitches}" Focusable="False" Margin="0,8,0,0">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <DockPanel Margin="0,4">
+                          <CheckBox DockPanel.Dock="Right" IsChecked="{Binding Listed, Mode=OneWay}" IsEnabled="{Binding Idle}" Click="OnWebsiteToggle"
+                                    Content="{Binding DataContext.S[website.listed], RelativeSource={RelativeSource AncestorType=Window}}" />
+                          <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" VerticalAlignment="Center" />
+                        </DockPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock Text="{Binding S[website.hint]}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityFaint}" Margin="0,6,0,0" />
+                </StackPanel>
+              </Border>
               <Border Style="{StaticResource Card}" Padding="24" Margin="0,18,0,0">
                 <StackPanel>
                   <TextBlock Text="{Binding S[account.delete_title]}" FontSize="20" FontWeight="SemiBold" />

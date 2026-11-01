@@ -420,6 +420,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _onMods = _onSetup = _onBugReport = _loginOpen = false;
         _playStatus = null;
         ClearDiscord(); // CR-S63
+        ClearWebsite(); // CR-L47
         ClearShellStatus(); // CR-L40
         _session?.Dispose();
         _session = null;
@@ -558,6 +559,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Changed(nameof(ProfilesText));
         ChangedSeedForm();
         ChangedNoobSeedForm();
+        FillWebsiteSwitches(); // CR-L47: the account page's switches follow the same /me
     }
 
     private bool CheckName()
