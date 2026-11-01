@@ -279,6 +279,14 @@ public sealed class AccountSession : IDisposable
     public Task<ProfileAnnounce> SetAnnounceAsync(string xuid, bool announce, CancellationToken cancellation = default) =>
         Tokens.WithAccessAsync(access => Api.SetAnnounceAsync(access, xuid, announce, cancellation), cancellation);
 
+    /// <summary>CR-L47: a profile's website switch; the server's answer replaces that profile in <see cref="Me"/>.</summary>
+    public async Task<Profile> SetWebsiteListedAsync(string xuid, bool listed, CancellationToken cancellation = default)
+    {
+        var answer = await Tokens.WithAccessAsync(access => Api.SetWebsiteListedAsync(access, xuid, listed, cancellation), cancellation).ConfigureAwait(false);
+        if (Me is { } me) Me = me with { Profiles = [.. me.Profiles.Select(p => p.Xuid == answer.Xuid ? answer : p)] };
+        return answer;
+    }
+
     /// <summary>The session <see cref="SessionStore"/> kept from the last run; <see cref="RefreshMeAsync"/> proves it.</summary>
     public static AccountSession Resume(ApiClient api, ServerInfo info, Device device, SessionStore.Saved saved)
     {

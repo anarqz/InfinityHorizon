@@ -65,6 +65,17 @@ public sealed partial class ApiClient
         SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/name", change, access, idempotencyKey, cancellation);
 
     /// <summary>
+    /// <c>POST /launcher/v1/profiles/{xuid}/website</c> (CR-S83, CR-L47; ACCOUNTS.md §5) → 200 <see cref="Profile"/>: the caller's own
+    /// profile on the play dashboard or off it. Idempotent (the current value answers 200 again), so no <c>Idempotency-Key</c>.
+    /// </summary>
+    public Task<Profile> SetWebsiteListedAsync(string access, string xuid, bool listed, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(xuid);
+        return SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/website",
+            new WebsiteVisibility(listed), access, idempotencyKey: null, cancellation);
+    }
+
+    /// <summary>
     /// <c>DELETE /launcher/v1/profiles/{xuid}</c> (CR-S61, ACCOUNTS.md §5 "Profile deletion"): no body → 204, the profile's cloud data
     /// erased at once and for good. <paramref name="idempotencyKey"/> is required and reused on every retry of the same deletion (a
     /// replay answers the 204 again).

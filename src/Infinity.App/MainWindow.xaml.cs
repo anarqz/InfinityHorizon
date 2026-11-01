@@ -223,6 +223,12 @@ public partial class MainWindow : Window
         await _vm.SetAnnounceAsync((Infinity.Core.Shell.AnnounceSwitch)box.DataContext, box.IsChecked == true);
     }
 
+    private async void OnWebsiteToggle(object sender, RoutedEventArgs e)
+    {
+        var box = (System.Windows.Controls.CheckBox)sender;
+        await _vm.SetWebsiteListedAsync((Infinity.Core.Shell.WebsiteSwitch)box.DataContext, box.IsChecked == true);
+    }
+
     private async void OnConfirmDeleteProfile(object sender, RoutedEventArgs e) => await _vm.ConfirmDeleteProfileAsync();
 
     private void OnCancelDeleteProfile(object sender, RoutedEventArgs e) => _vm.CancelDeleteProfile();
