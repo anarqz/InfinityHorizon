@@ -1,4 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
+
 namespace Infinity.Core.WorldServer;
 
 internal sealed partial class RelayEngine
@@ -28,6 +30,13 @@ internal sealed partial class RelayEngine
             Note($"options ownership moves from peer {current} to peer {peer.Index} (no event running)");
         }
         else Note($"options ownership granted to peer {peer.Index}");
+        // Options kept past an event are their writer's: another player's game builds its own (it got an empty grant before TG-2),
+        // and a kept King or Infected preset must not turn its next race into a tag event
+        if (_gameOptionsOutlivedEvent && !ReferenceEquals(_gameOptions.SourceOwner, peer))
+        {
+            Note($"options ownership request from peer {peer.Index}: the previous owner's kept options are cleared");
+            ClearGameOptions();
+        }
         _eventOwner = peer.Index;
         _gameOptions.BeginSourceEpoch(peer);
         if (_gameOptions.ObjectId != request.Handle.Id || _gameOptions.Records.Count == 0)
@@ -49,6 +58,9 @@ internal sealed partial class RelayEngine
         TickGameOptions();
         if (peer.Doomed || !IsEventOwner(peer) || obj.Create) return;
         var result = _gameOptions.Apply(peer, obj.Handle.Id, obj.Sequence, obj.Payload, _now, out var ready);
+        // a long session of delta writes fills the bounded journal: its merged values take less (an overflow committed nothing)
+        if (result == GameOptionsUpdateResult.Overflow && obj.Payload.Length <= NerdCodec.MaxPayloadBits && CompactGameOptions())
+            result = _gameOptions.Apply(peer, obj.Handle.Id, obj.Sequence, obj.Payload, _now, out ready);
         if (result == GameOptionsUpdateResult.Overflow)
         {
             Rejected(peer, "game_options_overflow", obj.Id, obj.Router);
@@ -76,7 +88,29 @@ internal sealed partial class RelayEngine
         foreach (var payload in _gameOptions.Records) snapshot.Add(GameOptionsUpdate(peer, id, payload));
     }
 
-    private void ClearGameOptions() => _gameOptions.Clear();
+    /// <summary>The journal was kept past an event's end (TG-2); only its writer's game takes it over again.</summary>
+    private bool _gameOptionsOutlivedEvent;
+
+    private void ClearGameOptions() { _gameOptions.Clear(); _gameOptionsOutlivedEvent = false; }
+
+    /// <summary>
+    /// Compacts the options journal to its merged values. One that does not read is kept as it is, or with
+    /// <paramref name="clearUnread"/> (an event's end) cleared: no tag event reads it, and kept it would only grow to an overflow.
+    /// True when it read.
+    /// </summary>
+    private bool CompactGameOptions(bool clearUnread = false)
+    {
+        var before = _gameOptions.Records.Count;
+        if (before == 0) return true;
+        if (!_gameOptions.Compact())
+        {
+            Note(string.Create(CultureInfo.InvariantCulture, $"options: {before} record(s) do not read, {(clearUnread ? "cleared" : "kept as they are")}"));
+            if (clearUnread) ClearGameOptions();
+            return false;
+        }
+        Note(string.Create(CultureInfo.InvariantCulture, $"options: {before} record(s) compacted to {_gameOptions.Records.Count}"));
+        return true;
+    }
 
     /// <summary>The event's car rule from the options journal (any car when they do not read cleanly or set none).</summary>
     private CarRule EventCarRule() => GameOptionsFields.TryRead(_gameOptions.Records, out var fields) ? fields.CarRule : CarRule.Any;

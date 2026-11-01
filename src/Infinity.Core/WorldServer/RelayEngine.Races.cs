@@ -213,7 +213,9 @@ internal sealed partial class RelayEngine
         if (_race is not { Stage: RaceStage.Started } race) return;
         if (race.Participants.Count == 0) EndRace("every participant left");
         else if (race.Participants.All(race.Finished.Contains)) EndRace("every participant finished");
-        else if (race.FirstFinishAt is { } first && _now - first >= _settings.RaceFinishMs) EndRace("finish window over");
+        // Every game ends a tag event on the same limit, so once its It cars are drawn its finish window is the late time-up
+        // (TickTag): an early score never closes it under the others
+        else if (_tag is not { Assigned: true } && race.FirstFinishAt is { } first && _now - first >= _settings.RaceFinishMs) EndRace("finish window over");
     }
 
     private static string Describe(RaceStage stage) => stage switch
@@ -225,7 +227,9 @@ internal sealed partial class RelayEngine
     {
         if (_race is not { } race) return;
         TagEnded();
-        _race = null; ClearGameOptions();
+        // TG-2: the owner's game writes only deltas and never sends the whole set again, so the options outlive the event (compacted)
+        _race = null;
+        if (CompactGameOptions(clearUnread: true) && _gameOptions.Records.Count != 0) _gameOptionsOutlivedEvent = true;
         TeamEventEnded();
         // The owner's game still holds the event options after its event and asks for them again only when it lost them, so it
         // keeps them for its next race request; another player's ownership request takes them over between events.
