@@ -27,6 +27,12 @@ internal sealed partial class RelayEngine
     internal const int EventProgressUpdateNotes = 20, EventProgressLapNotes = 24;
     /// <summary>...and one line when no participant sent a 43 for this long while racing.</summary>
     internal const long EventProgressQuietMs = 30000;
+    /// <summary>
+    /// A 44 counts as a completed lap only when the racer's latest valid 43 progress (in laps) is at least its completed laps plus
+    /// this: the game also sends a 44 on crossing the start line at progress about 0 (test.4 live log, 2026-11-02), which must not
+    /// count, while a real lap ends with the progress near the next whole lap.
+    /// </summary>
+    internal const float LapScoreMinProgress = 0.5f;
 
     private sealed class EventProgress(int laps, long startedAt)
     {
@@ -38,6 +44,7 @@ internal sealed partial class RelayEngine
         internal HashSet<byte> FirstScoreNoted { get; } = [];
         internal HashSet<byte> RefusedScoreNoted { get; } = [];
         internal HashSet<byte> IgnoredScoreNoted { get; } = [];
+        internal HashSet<byte> StartLineNoted { get; } = [];
         internal int UpdateNotes { get; set; }
         internal int LapNotes { get; set; }
         /// <summary>Each participant's latest valid 43 score, in laps.</summary>
@@ -126,15 +133,29 @@ internal sealed partial class RelayEngine
     private void EventProgressLap(RelayPeer peer, BitBuffer body)
     {
         if (_eventProgress is not { } progress) return;
-        if (!NerdPayload.LapScoreOk(body))
+        if (NerdPayload.LapScore(body) is not { } fields)
         {
             if (progress.RefusedLaps.Add(peer.Index)) Note($"event progress: lap score from peer {peer.Index} refused (not the game's layout)");
             return;
         }
-        var lap = progress.LapsDone.GetValueOrDefault(peer.Index) + 1;
-        progress.LapsDone[peer.Index] = Math.Min(progress.Laps, lap);
+        var done = progress.LapsDone.GetValueOrDefault(peer.Index);
+        float? at = progress.Progress.TryGetValue(peer.Index, out var value) ? value : null;
+        var shown = string.Create(CultureInfo.InvariantCulture,
+            $"u32 {fields.Count8C}, f64 {fields.Value68:R}/{fields.Value78:R}/{fields.Value80:R}, flags {(fields.Flag89 ? 1 : 0)}{(fields.Flag8B ? 1 : 0)}");
+        // T24c: the game also sends a 44 as its car crosses the start line, at progress about 0. A lap counts only once the car's own
+        // progress (43, in laps) is at least half a lap past the laps it already completed
+        if (at is not { } reached || reached < done + LapScoreMinProgress)
+        {
+            if (progress.StartLineNoted.Add(peer.Index))
+                Note(string.Create(CultureInfo.InvariantCulture,
+                    $"event progress: lap score at progress {(at is { } p ? p.ToString("R", CultureInfo.InvariantCulture) : "none")} not counted (start line) for peer {peer.Index}; {shown}"));
+            return;
+        }
+        if (done >= progress.Laps) return; // every lap already counted
+        progress.LapsDone[peer.Index] = done + 1;
         if (progress.LapNotes++ < EventProgressLapNotes)
-            Note(string.Create(CultureInfo.InvariantCulture, $"event progress: lap {lap} of {progress.Laps} counted for peer {peer.Index}"));
+            Note(string.Create(CultureInfo.InvariantCulture,
+                $"event progress: lap {done + 1} of {progress.Laps} counted for peer {peer.Index} at progress {reached.ToString("R", CultureInfo.InvariantCulture)}; {shown}"));
         PublishEventProgress();
     }
 
@@ -220,31 +241,38 @@ internal sealed partial class RelayEngine
     private (byte, ulong, int)[] EventEndVariables() =>
         [(CountdownTypeVariable, 0, CountdownTypeBits), (4, 0, 1), (5, 0, 1), (6, 0, 1), .. EventProgressCleared()];
 
+    /// <summary>The event flags (4 EventActive, 5 participants selected, 6 InRace), cleared at every event's end at once.</summary>
+    private static readonly (byte, ulong, int)[] EventFlagsCleared = [(4, 0, 1), (5, 0, 1), (6, 0, 1)];
+
+    /// <summary>The bystander HUD's variables (2, 9 and the progress sent), cleared at the end or when the "Race complete" hold ends.</summary>
+    private (byte, ulong, int)[] HudCleared() => [(CountdownTypeVariable, 0, CountdownTypeBits), .. EventProgressCleared()];
+
     /// <summary>
-    /// "Race complete" hold: the event closed while finishers are still on their results screens, so SessionHost keeps the event as
-    /// it was (vars 2, 4, 5, 6, 9, 10, 11) until they are back in free roam. A bystander's HUD shows the completed state ("Race
-    /// complete", 100 %, the last lap) only on its in-progress branch, which needs CountdownType 2 and a past RaceStartTime: clearing
-    /// 2 and 9 first would turn it back to "about to start". Not for a Road Trip (its own state machine drives var 4 and starts the
-    /// next event itself, and everybody is in it) nor for an event that ended before its start (nobody is on a results screen).
+    /// "Race complete" hold: the event closed while finishers are still on their results screens. The event flags 4, 5 and 6 are
+    /// cleared at once, as before the hold: a finisher's game keeps its results screen (no button to go on) until they clear, so
+    /// holding them deadlocked a lone finisher (test.4 live, 2026-11-02). Only the bystander HUD's vars 2, 9, 10 and 11 are held
+    /// until the finishers are back in free roam: the HUD shows the completed state ("Race complete", 100 %, the last lap) only on
+    /// its in-progress branch, which needs CountdownType 2 and a past RaceStartTime. Not for a Road Trip (its own state machine
+    /// drives the next event, and everybody is in it) nor for an event that ended before its start (nobody is on a results screen).
     /// </summary>
     private bool _eventHeld;
 
-    /// <summary>The event closed: true when its host variables are held (the caller then sends nothing).</summary>
+    /// <summary>The event closed: true when the HUD variables are held (the caller then clears only the event flags).</summary>
     private bool HoldEventEnd(Race race)
     {
         if (race.Stage != RaceStage.Started || IsRoadTrip || !_phasing || _eventSide.Count == 0) return false;
         _eventProgress = null;
         _eventHeld = true;
-        Note(string.Create(CultureInfo.InvariantCulture, $"event: host variables held while {_eventSide.Count} player(s) are on their results"));
+        Note(string.Create(CultureInfo.InvariantCulture, $"event: HUD variables held while {_eventSide.Count} player(s) are on their results"));
         return true;
     }
 
-    /// <summary>The hold ends (everybody back in free roam, the phasing backstop, or a new event): the end's variables go out now.</summary>
+    /// <summary>The hold ends (everybody back in free roam, the phasing backstop, or a new event): the HUD variables are cleared now.</summary>
     private void ReleaseEventHold(string why)
     {
         if (!_eventHeld) return;
         _eventHeld = false;
-        Note($"event: host variables released ({why})");
-        SetHostVariables(EventEndVariables());
+        Note($"event: HUD variables released ({why})");
+        SetHostVariables(HudCleared());
     }
 }
