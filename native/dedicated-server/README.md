@@ -17,8 +17,9 @@ world socket(s) and its control endpoint.
   by the caller, so the same API is driven by the process loop and by golden-vector replays.
 - **One module per game** behind `core::game::{Game, GameWorld}`: `world.open` names the game
   (`"game": "fh2"`) and every game-scoped field (`races`, `voice`, `watch`, `settings`) is parsed
-  and owned by that module. `src/fh2` is Forza Horizon 2: the NerdCore codec (`bits`, `nerd`), the
-  side channels (`carstate`), the engines and `RelaySettings`, voice, the anti-cheat watch and the
+  and owned by that module. `src/fh2` is Forza Horizon 2: the NerdCore codec (`codec`: a placeholder that
+  decodes nothing until it is written from `docs/launcher/NERDCORE_WIRE.md`, OD-187), the side
+  channels (`carstate`), the engines and `RelaySettings`, voice, the anti-cheat watch and the
   game-data catalog.
 
 ## Build
@@ -114,7 +115,8 @@ engine, in this recommended order:
 
 | # | Feature | Where | Notes |
 | --- | --- | --- | --- |
-| 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover | fh2 | the 2026-10-20 relay and the C# `RelayEngine`, `.Join`, `.Packets` |
+| 0 | NerdCore codec (`src/fh2/codec.rs`) | fh2 | rewrite from NERDCORE_WIRE.md (OD-187); a placeholder that drops every datagram until then |
+| 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover | fh2 | behaviour from golden vectors of the C# engine; wire format from NERDCORE_WIRE.md (OD-187) |
 | 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | needs an Ed25519 verifier (a pure-Rust dependency or a reviewed implementation) |
 | 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | `nat.rs`/`upnp.rs` are here, sans-I/O, not wired yet |
 | 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | the public socket drops everything until this lands |

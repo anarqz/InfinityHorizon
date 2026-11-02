@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! The Forza Horizon 2 game module (`game: "fh2"`, OD-186): the NerdCore codec (`bits`, `nerd`),
-//! the side channels (`carstate`; the retired livery channel is dropped), the engines (free roam,
+//! The Forza Horizon 2 game module (`game: "fh2"`, OD-186): the NerdCore codec (`codec`,
+//! a placeholder until it is written from NERDCORE_WIRE.md, OD-187), the side channels (`carstate`; the retired livery channel is dropped), the engines (free roam,
 //! car meets 3 and 6, Road Trip), the FH2 settings (`RelaySettings`), voice, the anti-cheat
 //! watch and the game-data catalog (`gamedbRC.slt`).
 //!
@@ -8,10 +8,9 @@
 //!
 //! Step 1: validation and state only; the engines admit nobody yet (README, PORT_STATUS).
 
-pub mod bits;
 pub mod carstate;
+pub mod codec;
 pub mod engine;
-pub mod nerd;
 pub mod settings;
 
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
