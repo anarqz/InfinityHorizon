@@ -22,6 +22,11 @@ internal sealed partial class RelayEngine
     internal const uint BucketListStartDelayMs = 3000;
     /// <summary>A player's RequestSynchronize (63) is taken at most this often; extra ones are ignored (noted once).</summary>
     internal const long BucketListRequestMinMs = 1000;
+    /// <summary>
+    /// A PlayerState raising RequestingPartner (with its CurrentSlotId/CurrentChallengeId) is a request when no 63 from that player comes
+    /// within this long (live, 2026-11-02: the game never sent 63; START and JOIN both only raised the flag).
+    /// </summary>
+    internal const long BucketListRequestGraceMs = 800;
     /// <summary>A pair not started this long after its pairing is logged once (V11 diagnostic: who has not reported State 2).</summary>
     internal const long BucketListStartStallMs = 15000;
     /// <summary>BucketListPlayerStateSynced.State once the player's game is ready to start the challenge.</summary>
@@ -55,8 +60,11 @@ internal sealed partial class RelayEngine
         internal bool RequestingPartner { get; set; }
         /// <summary>The player object's last NetworkName, read from each relayed router-1 payload on its own.</summary>
         internal string? Name { get; set; }
-        /// <summary>A RequestingPartner without 63, logged once for this slot and challenge.</summary>
-        internal (int Slot, int Challenge)? Unrequested { get; set; }
+        /// <summary>When an update raised RequestingPartner (or moved the slot/challenge under it): a request once the grace passes.</summary>
+        internal long? FlagRequestAt { get; set; }
+        /// <summary>When the player's last RequestSynchronize (63) arrived: within the grace it wins over the flag, until a 64, a 62 or a
+        /// fallen flag ends what it asked for.</summary>
+        internal long? Last63At { get; set; }
         internal (int Slot, int Challenge, long At, long Order)? Waiting { get; set; }
         internal BucketPair? Pair { get; set; }
         /// <summary>When the last 63 was applied; cleared when a 64 or 62 ends what it asked for.</summary>
@@ -230,6 +238,8 @@ internal sealed partial class RelayEngine
         else if (player.Latest is not { } latest || AckWindow.SequenceNewer(sequence, latest)) player.Latest = sequence;
         player.HasState = true;
         var reportsReady = false; // this update itself carries State 2 (a remembered State 2 never counts)
+        var (wasRequesting, oldSlot, oldChallenge) = (player.RequestingPartner, player.Slot, player.Challenge);
+        var raises = false; // this update itself sets RequestingPartner 1 (a re-sent 1 after a cancel is a new request)
         foreach (var (variable, value) in NerdPayload.BucketListPlayerOf(payload) ?? [])
         {
             if (variable == NerdPayload.BucketListStateVariable && value == BucketListReadyState) reportsReady = true;
@@ -239,27 +249,45 @@ internal sealed partial class RelayEngine
             {
                 case NerdPayload.BucketListSlotVariable: player.Slot = unchecked((int)(uint)value); break;
                 case NerdPayload.BucketListChallengeVariable: player.Challenge = unchecked((int)(uint)value); break;
-                case NerdPayload.BucketListRequestingVariable: player.RequestingPartner = value != 0; break;
+                case NerdPayload.BucketListRequestingVariable: player.RequestingPartner = value != 0; raises |= value != 0; break;
                 case NerdPayload.BucketListStateVariable: player.State = (int)value; break;
             }
         }
-        // no pairing from the flag: only a RequestSynchronize (63) asks for a partner
-        if (!player.RequestingPartner) player.Unrequested = null;
-        else if (player.Waiting is null && player.Pair is null && player.Unrequested != (player.Slot, player.Challenge))
-        {
-            player.Unrequested = (player.Slot, player.Challenge);
-            Note($"bucket list: peer {peer.Index} requests a partner for slot {player.Slot}, challenge {player.Challenge} without RequestSynchronize: not paired");
-        }
+        if (player.RequestingPartner && (raises || player.Slot != oldSlot || player.Challenge != oldChallenge)) BucketListFlagRaised(player);
+        else if (wasRequesting && !player.RequestingPartner) BucketListFlagDropped(peer, player);
         if (!reportsReady || player.Pair is not { Started: false } pair) return;
         if (!create && pair.Floors.GetValueOrDefault(peer) is { } floor && !AckWindow.SequenceNewer(sequence, floor)) return;
         if (pair.Ready.Add(peer) && pair.Ready.Count == 2) StartBucketPair(pair);
+    }
+
+    /// <summary>
+    /// RequestingPartner raised (or the slot/challenge moved under it): a request for the current slot and challenge once
+    /// <see cref="BucketListRequestGraceMs"/> passes without a 63 (TickBucketList). Nothing for what is already being served.
+    /// </summary>
+    private void BucketListFlagRaised(BucketPlayer player)
+    {
+        if (player.Waiting is { } waiting && waiting.Slot == player.Slot && waiting.Challenge == player.Challenge && _now - waiting.At < BucketListWaitMs
+            || player.Pair is { } pair && pair.Slot == player.Slot && pair.Challenge == player.Challenge)
+        { player.FlagRequestAt = null; return; }
+        if (player.Last63At is { } at && _now - at < BucketListRequestGraceMs) return; // a 63 came: it wins
+        player.FlagRequestAt ??= _now; // a move inside the grace keeps its deadline; the values are read when it is applied
+    }
+
+    /// <summary>RequestingPartner fell to 0: a pending flag request is dropped; before a pair the wait ends (as 64); a pair stays.</summary>
+    private void BucketListFlagDropped(RelayPeer peer, BucketPlayer player)
+    {
+        player.FlagRequestAt = null;
+        if (player.Pair is not null || player.Waiting is null) return;
+        player.LastRequestAt = null; player.Last63At = null; player.PendingRequest = null; // its next request is taken at once
+        CancelBucketWait(peer, player, "RequestingPartner fell to 0");
     }
 
     /// <summary>The player deleted its own PlayerState: its wait ends (a partner would get a key to nothing); a pair stays.</summary>
     private void BucketListPlayerDeleted(RelayPeer peer)
     {
         if (!_bucketPlayers.TryGetValue(peer, out var player)) return;
-        player.HasState = false; player.Latest = null; player.Sequences.Clear();
+        player.HasState = false; player.Latest = null; player.Sequences.Clear(); player.FlagRequestAt = null;
+        player.RequestingPartner = false; player.Slot = 0; player.Challenge = 0;
         if (player.Waiting is not null) CancelBucketWait(peer, player, "its PlayerState was deleted");
     }
 
@@ -268,7 +296,11 @@ internal sealed partial class RelayEngine
         var reader = new BitReader(message.Body.Bytes, message.Body.Length);
         switch (message.Kind)
         {
-            case 63: RequestBucketPartner(peer, unchecked((int)(uint)reader.Read(32)), unchecked((int)(uint)reader.Read(32))); break;
+            case 63:
+                var player = BucketPlayerOf(peer);
+                player.Last63At = _now; player.FlagRequestAt = null; // the 63 wins over a flag request inside the grace
+                RequestBucketPartner(peer, unchecked((int)(uint)reader.Read(32)), unchecked((int)(uint)reader.Read(32)));
+                break;
             case 64: CancelBucketRequest(peer); break;
             case 62: BucketChallengeEnded(peer, reader.Boolean()); break;
         }
@@ -300,7 +332,7 @@ internal sealed partial class RelayEngine
             player.RateNoted = true;
             return;
         }
-        player.LastRequestAt = _now; player.PendingRequest = null; player.RateNoted = false; player.RepeatNoted = false; player.Unrequested = null;
+        player.LastRequestAt = _now; player.PendingRequest = null; player.RateNoted = false; player.RepeatNoted = false;
         if (player.Pair is { } current) EndBucketPair(current, $"peer {peer.Index} asks for another challenge");
         if (player.Waiting is not null) CancelBucketWait(peer, player, "a new request replaces it");
         var waiter = _bucketPlayers.Where(p => p.Key != peer && p.Key.Synced && p.Value.Pair is null
@@ -349,10 +381,10 @@ internal sealed partial class RelayEngine
     private void CancelBucketRequest(RelayPeer peer)
     {
         if (!_bucketPlayers.TryGetValue(peer, out var player)) return;
-        player.PendingRequest = null;
+        player.PendingRequest = null; player.FlagRequestAt = null; // a cancel inside the grace also ends the flag's request
         if (player.Pair is not null) { Note($"bucket list: peer {peer.Index} cancel after pairing: the pair stays"); return; }
         if (player.Waiting is null) return;
-        player.LastRequestAt = null; // what it asked for is over: its next 63 is taken at once
+        player.LastRequestAt = null; player.Last63At = null; // what it asked for is over: its next request is taken at once
         CancelBucketWait(peer, player, "cancelled");
     }
 
@@ -360,15 +392,15 @@ internal sealed partial class RelayEngine
     private void BucketChallengeEnded(RelayPeer peer, bool completed)
     {
         if (!_bucketPlayers.TryGetValue(peer, out var player)) return;
-        player.PendingRequest = null;
+        player.PendingRequest = null; player.FlagRequestAt = null;
         if (player.Pair is { } pair)
         {
             // the pair is over for both partners: their next 63 is taken at once
             foreach (var partner in new[] { pair.First, pair.Second })
-                if (_bucketPlayers.TryGetValue(partner, out var other)) other.LastRequestAt = null;
+                if (_bucketPlayers.TryGetValue(partner, out var other)) { other.LastRequestAt = null; other.Last63At = null; }
             EndBucketPair(pair, $"peer {peer.Index} ended its challenge ({(completed ? 1 : 0)})");
         }
-        else if (player.Waiting is not null) { player.LastRequestAt = null; CancelBucketWait(peer, player, "its challenge ended"); }
+        else if (player.Waiting is not null) { player.LastRequestAt = null; player.Last63At = null; CancelBucketWait(peer, player, "its challenge ended"); }
     }
 
     private void CancelBucketWait(RelayPeer peer, BucketPlayer player, string why)
@@ -398,6 +430,17 @@ internal sealed partial class RelayEngine
         foreach (var (peer, player) in _bucketPlayers.ToArray())
         {
             if (player.Waiting is { } waiting && _now - waiting.At >= BucketListWaitMs) CancelBucketWait(peer, player, $"no partner in {BucketListWaitMs} ms");
+            // RequestingPartner raised and no 63 within the grace: the flag is the request, for the slot and challenge it has now
+            if (player.FlagRequestAt is { } raised && _now - raised >= BucketListRequestGraceMs)
+            {
+                player.FlagRequestAt = null;
+                // no challenge selected (slot 0, challenge 0) is no request, whatever the flag says
+                if (player.RequestingPartner && _peers.Contains(peer) && (player.Slot != 0 || player.Challenge != 0))
+                {
+                    Note($"bucket list: peer {peer.Index} request from PlayerState (no 63 within {BucketListRequestGraceMs} ms): slot {player.Slot}, challenge {player.Challenge}");
+                    RequestBucketPartner(peer, player.Slot, player.Challenge);
+                }
+            }
             // the newest request that came inside the rate window, once the window has passed
             if (player.PendingRequest is { } pending && (player.LastRequestAt is not { } at || _now - at >= BucketListRequestMinMs) && _peers.Contains(peer))
             {
