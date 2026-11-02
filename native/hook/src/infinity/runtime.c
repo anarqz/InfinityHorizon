@@ -27,7 +27,9 @@ static void fi_game_first(const char *where) {
     /* the first start after the self-update from a hook that had ExtraOptions inside, and no
        ExtraOptions of the player's own: say where those features went (an overlay notice).
        ExtraOptions v0.2.98 runs only on Azimuth 0.9.10 (it refuses any other azimuth.exe), so on
-       an older Azimuth the player is told to update that first. */
+       an older Azimuth the player is told to update that first. Not in ExtraOptions.Infinity
+       (FI_EO_BUILD): this winmm.dll is ExtraOptions, so there is nothing separate to install. */
+#ifndef FI_EO_BUILD
     const FiEo *eo = fi_eo();
     if (fi_cfg_migrated() && eo && eo->state == FI_EO_ABSENT) {
         if (azimuth_host_build((const unsigned char *)GetModuleHandleW(0)) == AZIMUTH_0910) {
@@ -36,6 +38,7 @@ static void fi_game_first(const char *where) {
             azimuth_account_set_notice("ExtraOptions features are now separate. Update Azimuth to 0.9.10, install ExtraOptions v0.2.98, then reinstall the Infinity hook from the launcher.");
         }
     }
+#endif
 }
 
 /* The car update (a game thread, after ExtraOptions). */

@@ -21,7 +21,8 @@
    once when online is closed (result 2), it says "expired". After the launcher's CancelMatchmaking
    it says "canceled" without asking, until the next search ("canceled" ends a ticket as "expired"
    does). Outside a live launcher session, for a kind not asked yet, or after a handshake nobody
-   answered, nothing changes. One log line per changed answer, with the server's status.
+   answered, nothing changes. One log line per changed answer, with the server's status; a passed
+   answer is one line per ticket id with its reason (bounded: the first 32, then powers of two).
 
    The target the game then leaves. When the game reads a found target it cannot use, its
    matchmaker drops the found session and writes members.me null on that target; the join step
@@ -44,6 +45,14 @@ static unsigned tg_asks[3];                /* asks without a seat since the last
 static char tg_target[TG_NAME];            /* the last passed target's name ("" none) */
 static unsigned long long tg_found_at;     /* when it passed */
 static int tg_associated, tg_left_logged;  /* an association since; its leave already logged */
+/* Passed answers (T34 follow-up): one line per ticket id (a repeated GET of the same found ticket is
+   not a line again: the last TG_IDS ids, as 64-bit hashes), the first TG_PASS_FIRST lines, then a
+   count at every power of two. */
+#define TG_IDS 16u
+#define TG_PASS_FIRST 32u
+static unsigned long long tg_ids[TG_IDS];
+static unsigned tg_id_next;
+static LONG tg_passes;
 
 /* ------------------------------------------------------------------ text */
 
@@ -290,7 +299,60 @@ void fi_ticket_guard_search(unsigned kind) {
     ReleaseSRWLockExclusive(&tg_lock);
 }
 
-const char *fi_ticket_guard_check(unsigned kind, const unsigned char *body, size_t size, volatile LONG *aborted) {
+/* A passed found answer: "TICKET: <kind> ticket <first 8 of its id> found -> passed (<why>)", once per
+   ticket id, bounded (TG_PASS_FIRST lines, then a count at every power of two). */
+static void tg_passed(unsigned kind, const wchar_t *url, const char *why) {
+    const wchar_t *id = 0;
+    for (const wchar_t *at = url; at && *at && *at != L'?' && *at != L'#'; ++at) {
+        if (tg_wstarts(at, L"/tickets/")) id = at + 9;
+    }
+    unsigned long long hash = 1469598103934665603ull;
+    char cut[9];
+    unsigned n = 0;
+    for (const wchar_t *at = id; at && *at && *at != L'/' && *at != L'?' && *at != L'#'; ++at) {
+        hash = (hash ^ (unsigned long long)tg_wlower(*at)) * 1099511628211ull;
+        wchar_t c = *at;
+        if (n < 8) {
+            cut[n++] = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'-' ||
+                               c == L'_' || c == L'.'
+                           ? (char)c
+                           : '?';
+        }
+    }
+    cut[n] = 0;
+    hash += !hash; /* 0 is a free slot */
+    AcquireSRWLockExclusive(&tg_lock);
+    int seen = 0;
+    for (unsigned i = 0; i < TG_IDS && !seen; ++i) seen = tg_ids[i] == hash;
+    if (!seen) {
+        tg_ids[tg_id_next] = hash;
+        tg_id_next = (tg_id_next + 1) % TG_IDS;
+    }
+    ReleaseSRWLockExclusive(&tg_lock);
+    if (seen) return;
+    LONG number = InterlockedIncrement(&tg_passes);
+    if (number > (LONG)TG_PASS_FIRST && (number & (number - 1))) return;
+    TgLine line;
+    line.size = 0;
+    line.text[0] = 0;
+    tg_text(&line, "TICKET: ");
+    tg_text(&line, tg_kinds[kind]);
+    tg_text(&line, " ticket ");
+    tg_text(&line, n ? cut : "-");
+    tg_text(&line, " found -> passed (");
+    tg_text(&line, why);
+    tg_text(&line, ")");
+    if (number > (LONG)TG_PASS_FIRST) {
+        tg_text(&line, "; ");
+        tg_number(&line, (unsigned long long)number);
+        tg_text(&line, " tickets passed");
+    }
+    tg_text(&line, ".\r\n");
+    log_append(line.text);
+}
+
+const char *fi_ticket_guard_check(unsigned kind, const wchar_t *url, const unsigned char *body, size_t size,
+                                  volatile LONG *aborted) {
     if (kind > 2) return 0;
     int seat = fi_launch_seat(kind);
     if (seat == FI_SEAT_CANCELLED) {
@@ -298,7 +360,11 @@ const char *fi_ticket_guard_check(unsigned kind, const unsigned char *body, size
         return tg_answer(kind, "was found after the launcher's CancelMatchmaking", 0, 0, "canceled",
                          "(the game ends this search)");
     }
-    if (seat < 0) return 0; /* no live launcher session, or this lobby was never asked for (or no answer) */
+    if (seat < 0) {
+        tg_passed(kind, url, !fi_launch_protocol() || !fi_launch_live() ? "no launcher session"
+                                                                     : "this kind never asked, or its ask unanswered");
+        return 0;
+    }
     if (seat == 0) {
         AcquireSRWLockExclusive(&tg_lock);
         unsigned asks = tg_asks[kind];
@@ -330,6 +396,7 @@ const char *fi_ticket_guard_check(unsigned kind, const unsigned char *body, size
     tg_associated = 0;
     tg_left_logged = 0;
     ReleaseSRWLockExclusive(&tg_lock);
+    tg_passed(kind, url, "seat held");
     return 0;
 }
 

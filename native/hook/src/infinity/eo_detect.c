@@ -14,7 +14,8 @@
       ExtraOptions). Wine without the override loads its own winmm even for the file next to
       azimuth.exe and reports that file's path: its "Wine builtin DLL" header mark is ABSENT too;
    2. its export Fh2TweaksStatus, else FOREIGN_WINMM (another proxy);
-   3. its VS_FIXEDFILEINFO (version resource 1): 0.2.98.0, else OTHER_VERSION;
+   3. its VS_FIXEDFILEINFO (version resource 1): the supported build's (0.2.98.0; 0.4.4.0 under
+      FI_EO_BUILD, where that winmm.dll is ExtraOptions.Infinity itself), else OTHER_VERSION;
    4. Fh2TweaksStatus(): "OK:..." is 0298_OK, anything else (DISABLED, REFUSED, INACTIVE) is
       0298_INACTIVE.
    Headlight and roof sync (carstate.c) runs only for 0298_OK, and not with [hook] CarState=off. */
@@ -22,20 +23,12 @@
 #include "../core/logging.h"
 #include "../core/support.h"
 
-/* The ExtraOptions build headlight and roof sync supports: the player's 0.2.98 (the TLS-helper hook on
-   Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125), the ExtraOptions 0.4.4 linked into this
-   same winmm.dll: its version resource (FILEVERSION 0.4.4.0) and its Fh2TweaksStatus are this module's own. */
-#ifdef FI_EO_BUILD
-#define EO_SUPPORTED_MS 0x00000004u
-#define EO_SUPPORTED_LS 0x00040000u
-#define EO_SUPPORTED "0.4.4"
-#define EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.4.4)"
-#else
-#define EO_SUPPORTED_MS 0x00000002u
-#define EO_SUPPORTED_LS 0x00620000u
-#define EO_SUPPORTED "0.2.98"
-#define EO_NAME "ExtraOptions 0.2.98"
-#endif
+/* The ExtraOptions build headlight and roof sync supports (infinity.h: FI_EO_SUPPORTED, FI_EO_NAME,
+   FI_EO_SHOWN): the player's 0.2.98, or ExtraOptions.Infinity's own 0.4.4 under FI_EO_BUILD. */
+#define EO_SUPPORTED_MS FI_EO_SUPPORTED_MS
+#define EO_SUPPORTED_LS FI_EO_SUPPORTED_LS
+#define EO_SUPPORTED FI_EO_SUPPORTED
+#define EO_NAME FI_EO_NAME
 
 static FiEo eo_result;
 /* 0 not looked at yet, 1 looking, 2 known */
@@ -255,13 +248,13 @@ const wchar_t *fi_eo_summary(int *version_follows) {
     }
     switch (eo_result.state) {
     case FI_EO_0298_OK:
-        return fi_eo_sync_enabled() ? L"ExtraOptions v0.2.98 found: headlight and roof sync on."
-                                    : L"ExtraOptions v0.2.98 found; headlight and roof sync is off in Infinity.cfg (CarState=off).";
+        return fi_eo_sync_enabled() ? FI_EO_W(FI_EO_SHOWN) L" found: headlight and roof sync on."
+                                    : FI_EO_W(FI_EO_SHOWN) L" found; headlight and roof sync is off in Infinity.cfg (CarState=off).";
     case FI_EO_0298_INACTIVE:
-        return L"ExtraOptions v0.2.98 is installed but not active (its FH2_ExtraOptions.log says why): headlight and roof sync off.";
+        return FI_EO_W(FI_EO_SHOWN) L" is installed but not active (its FH2_ExtraOptions.log says why): headlight and roof sync off.";
     case FI_EO_OTHER_VERSION:
         *version_follows = 1;
-        return L"ExtraOptions found, not v0.2.98 (headlight and roof sync needs v0.2.98): ";
+        return L"ExtraOptions found, not v" FI_EO_W(FI_EO_SUPPORTED) L" (headlight and roof sync needs v" FI_EO_W(FI_EO_SUPPORTED) L"): ";
     case FI_EO_FOREIGN_WINMM:
         return L"A winmm.dll that is not ExtraOptions is next to azimuth.exe: headlight and roof sync off.";
     default:

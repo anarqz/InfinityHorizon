@@ -47,6 +47,7 @@ SOURCES = [
     "src/infinity/game_stream.c",
     "src/infinity/livery_share.c",
     "src/infinity/game_ready.c",
+    "src/infinity/race_conn.c",
     "src/infinity/offsets.c",
     "src/infinity/net.c",
     "src/infinity/net_observe.c",

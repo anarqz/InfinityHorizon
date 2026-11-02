@@ -1,9 +1,9 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE). */
-/* FH2Online free roam: events (races) are not run by the world's relay yet, and entering one
-   left the game stuck: its state NetworkGetGameOptionsOwnership (vtable game+0x2d0e2a0) asks the
+/* FH2Online free roam: events (races) are run only by a relay with races on, and entering one
+   where no answer comes would leave the game stuck: its state NetworkGetGameOptionsOwnership (vtable game+0x2d0e2a0) asks the
    server for the GameOptions object (ObjectRequestOwnership), takes it locally as pending
-   (owner +0x38 = 0xfffffffe, pending +0x70) and waits for the server's answer, which the relay
-   never gives.
+   (owner +0x38 = 0xfffffffe, pending +0x70) and waits for the server's answer, which an older
+   relay, or one with races off, never gives.
 
    A relay with races on ([Events] Races=1) answers it: the event is granted or denied. Otherwise
    (an older relay, races off) the answer is given here after EV_ANSWER_WAIT_MS, as the game's own
@@ -148,7 +148,9 @@ void azimuth_apply_events(unsigned char *game_image) {
         log_append("EVENTS: the event ownership state is not where expected (decide); not guarded.\r\n");
         return;
     }
-    log_append("EVENTS: entering an event in free roam online goes back to free roam (no races on the relay yet).\r\n");
+    log_append("EVENTS: an event entered in free roam online runs when the world server grants it; it goes back to "
+               "free roam if denied, or if the world server does not answer within 4 s (races off, or an older "
+               "relay).\r\n");
     if (!ev_patch_vtable(EV_SCOREBOARD_VTABLE_RVA, EV_SCOREBOARD_SETUP_SLOT, EV_SCOREBOARD_SETUP_RVA,
                          (void *)(uintptr_t)ev_scoreboard_setup, &ev_scoreboard_setup_original)) {
         log_append("EVENTS: the scoreboard setup is not where expected; online race times stay off the boards.\r\n");

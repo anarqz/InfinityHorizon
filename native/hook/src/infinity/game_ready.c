@@ -135,6 +135,7 @@ static unsigned char gr_update(void *self, float dt) {
         gr_observe(ready, player, record, car, garage_id, now);
         if (ready && fi_launch_protocol()) fi_launch_car(gr_current_car_key(record, garage_id), now);
         azimuth_freeroam_observe_tick();
+        fi_race_conn_tick(); /* T38b: race connectivity changes, in the log */
     }
     return result;
 }
@@ -175,4 +176,5 @@ int fi_game_ready_ticking(void) {
 void fi_game_ready_apply(unsigned char *image) {
     log_append(gr_install(image) ? "GAME: loaded-player/car readiness installed on the main update.\r\n"
                                  : "GAME: readiness unavailable (update bytes differ); world entry stays disabled.\r\n");
+    fi_race_conn_apply(image); /* T38b: read only, sampled from the main update */
 }

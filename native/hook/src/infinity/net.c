@@ -1547,7 +1547,7 @@ static void net_ticket_guard(NetRequest *request) {
         !fi_ticket_found(request->response_body.data, request->response_body.size, &at)) {
         return;
     }
-    const char *status = fi_ticket_guard_check((unsigned)hopper - 1, request->response_body.data,
+    const char *status = fi_ticket_guard_check((unsigned)hopper - 1, buffer_wide(&request->url), request->response_body.data,
                                                request->response_body.size, &request->aborted);
     if (!status) return;
     Buffer out = {0};
