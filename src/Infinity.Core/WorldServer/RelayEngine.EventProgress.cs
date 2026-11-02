@@ -23,10 +23,23 @@ internal sealed partial class RelayEngine
     internal const float FurthestProgressMinDelta = 0.005f;
     /// <summary>GameOptions EndConditionType 1: laps. Another end condition's score is not a lap count.</summary>
     private const int LapsEndCondition = 1;
+    /// <summary>Diagnostics, per event: at most this many var 10/11 updates and counted laps are logged...</summary>
+    internal const int EventProgressUpdateNotes = 20, EventProgressLapNotes = 24;
+    /// <summary>...and one line when no participant sent a 43 for this long while racing.</summary>
+    internal const long EventProgressQuietMs = 30000;
 
-    private sealed class EventProgress(int laps)
+    private sealed class EventProgress(int laps, long startedAt)
     {
         internal int Laps { get; } = laps;
+        internal long StartedAt { get; } = startedAt;
+        /// <summary>The last 43 from any participant (read or not), on the server clock.</summary>
+        internal long? LastScoreAt { get; set; }
+        internal bool QuietNoted { get; set; }
+        internal HashSet<byte> FirstScoreNoted { get; } = [];
+        internal HashSet<byte> RefusedScoreNoted { get; } = [];
+        internal HashSet<byte> IgnoredScoreNoted { get; } = [];
+        internal int UpdateNotes { get; set; }
+        internal int LapNotes { get; set; }
         /// <summary>Each participant's latest valid 43 score, in laps.</summary>
         internal Dictionary<byte, float> Progress { get; } = [];
         /// <summary>Each participant's 44 count, at most <see cref="Laps"/>.</summary>
@@ -54,9 +67,11 @@ internal sealed partial class RelayEngine
     }
 
     /// <summary>The race started: progress is followed for a lap race of known length (not a Road Trip's, nor a tag event).</summary>
-    private void BeginEventProgress()
+    private void BeginEventProgress(uint start)
     {
         _eventProgress = null;
+        // T24b: var 9 is on the network clock the games get from TimeSync and Pong (NowWire), as is the StartRace (40) they count down to
+        Note(string.Create(CultureInfo.InvariantCulture, $"event progress: RaceStartTime {start} (network ms, now {NowWire})"));
         string? off = null;
         if (IsRoadTrip) off = "a Road Trip event";
         else if (_tag is not null) off = "a tag event";
@@ -64,7 +79,7 @@ internal sealed partial class RelayEngine
         else if (fields.EndCondition is { } end && end != LapsEndCondition)
             off = string.Create(CultureInfo.InvariantCulture, $"end condition {end}");
         else if (fields.NumLaps is not (> 0 and <= byte.MaxValue and var laps)) off = "lap count unknown"; // NumLapsCompleted is a u8
-        else _eventProgress = new((int)laps);
+        else _eventProgress = new((int)laps, _now);
         Note(off is null
             ? string.Create(CultureInfo.InvariantCulture, $"event progress: followed over {_eventProgress!.Laps} lap(s)")
             : $"event progress: off ({off})");
@@ -73,11 +88,38 @@ internal sealed partial class RelayEngine
     /// <summary>A participant's 43: its f32 is the car's progress in laps, kept when finite and within 0..laps + 1 (sign dropped).</summary>
     private void EventProgressScore(RelayPeer peer, BitBuffer body)
     {
-        if (_eventProgress is not { } progress || NerdPayload.InProgressScore(body) is not { } raw) return;
+        if (_eventProgress is not { } progress) return;
+        progress.LastScoreAt = _now;
+        if (NerdPayload.InProgressScore(body) is not var (raw, flag))
+        {
+            RefusedScore(progress, peer, "?", "does not read");
+            return;
+        }
+        var shown = raw.ToString("R", CultureInfo.InvariantCulture);
+        if (progress.FirstScoreNoted.Add(peer.Index))
+            Note(string.Create(CultureInfo.InvariantCulture, $"event progress: first 43 from peer {peer.Index}: {shown}, flag {(flag ? 1 : 0)}"));
         var value = Math.Abs(raw);
-        if (!float.IsFinite(value) || value > progress.Laps + 1) return;
+        if (!float.IsFinite(value)) { RefusedScore(progress, peer, shown, "not finite"); return; }
+        if (value > progress.Laps + 1)
+        {
+            RefusedScore(progress, peer, shown, string.Create(CultureInfo.InvariantCulture, $"above {progress.Laps + 1} laps"));
+            return;
+        }
         progress.Progress[peer.Index] = value;
         PublishEventProgress();
+    }
+
+    /// <summary>A score the race does not take (a non-participant's, or not for the sender's own car): logged once per peer and event.</summary>
+    private void EventProgressIgnored(RelayPeer peer, byte kind, string why)
+    {
+        if (kind is 43 or 44 && _eventProgress is { } progress && progress.IgnoredScoreNoted.Add(peer.Index))
+            Note($"event progress: score {kind} from peer {peer.Index} ignored ({why})");
+    }
+
+    /// <summary>Logs a participant's first refused 43 of the event, with why.</summary>
+    private void RefusedScore(EventProgress progress, RelayPeer peer, string value, string why)
+    {
+        if (progress.RefusedScoreNoted.Add(peer.Index)) Note($"event progress: 43 from peer {peer.Index} refused: {value} ({why})");
     }
 
     /// <summary>A participant's 44: one more lap done (at most the event's laps), when its body has the game's layout.</summary>
@@ -89,7 +131,10 @@ internal sealed partial class RelayEngine
             if (progress.RefusedLaps.Add(peer.Index)) Note($"event progress: lap score from peer {peer.Index} refused (not the game's layout)");
             return;
         }
-        progress.LapsDone[peer.Index] = Math.Min(progress.Laps, progress.LapsDone.GetValueOrDefault(peer.Index) + 1);
+        var lap = progress.LapsDone.GetValueOrDefault(peer.Index) + 1;
+        progress.LapsDone[peer.Index] = Math.Min(progress.Laps, lap);
+        if (progress.LapNotes++ < EventProgressLapNotes)
+            Note(string.Create(CultureInfo.InvariantCulture, $"event progress: lap {lap} of {progress.Laps} counted for peer {peer.Index}"));
         PublishEventProgress();
     }
 
@@ -101,7 +146,17 @@ internal sealed partial class RelayEngine
         progress.LapsDone.Remove(peer.Index);
     }
 
-    private void TickEventProgress() => PublishEventProgress();
+    private void TickEventProgress()
+    {
+        if (_eventProgress is { QuietNoted: false } progress && _race is { Stage: RaceStage.Started } race
+            && _now - (progress.LastScoreAt ?? progress.StartedAt) >= EventProgressQuietMs)
+        {
+            progress.QuietNoted = true;
+            Note(string.Create(CultureInfo.InvariantCulture,
+                $"event progress: no 43 from any participant for {EventProgressQuietMs / 1000} s while racing ({race.Participants.Count} participant(s))"));
+        }
+        PublishEventProgress();
+    }
 
     /// <summary>
     /// The maxima over the current participants, kept as high-water marks: NumLapsCompleted goes out at once when it changes;
@@ -139,6 +194,12 @@ internal sealed partial class RelayEngine
         if (updates.Count == 0) return;
         _eventProgressWritten = true;
         SetHostVariables([.. updates]);
+        if (progress.UpdateNotes++ >= EventProgressUpdateNotes) return;
+        var sent = string.Join(", ", updates.Select(u => u.Item1 == NumLapsCompletedVariable
+            ? string.Create(CultureInfo.InvariantCulture, $"NumLapsCompleted {u.Item2}")
+            : string.Create(CultureInfo.InvariantCulture, $"FurthestProgress {BitConverter.UInt32BitsToSingle((uint)u.Item2):0.000}")));
+        Note($"event progress: sent {sent}"
+            + (progress.UpdateNotes == EventProgressUpdateNotes ? " (later updates of this event are not logged)" : string.Empty));
     }
 
     /// <summary>

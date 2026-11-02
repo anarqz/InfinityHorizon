@@ -9,7 +9,8 @@ internal sealed record CarMeetSessionRequest(uint Id, byte Kind, IReadOnlyList<u
 /// Request 26); the others get a 20 s countdown and join or cancel (27). When it ends, the platform creates one shared session for the
 /// starter and everybody who joined. The joiners are told to wait (MsgCarMeetNotifyPending 29, wait) and then where to go
 /// (MsgCarMeetSessionReady 32, plus CarMeetSynced vars 16/17). Any failure, or the starter leaving, cancels it for everybody (invite
-/// type 0). Updates go out reliably, so the state is never re-broadcast on a timer.
+/// type 0); the players already waiting first get MsgCarMeetNotifyPending(none), which ends their wait. Updates go out reliably, so
+/// the state is never re-broadcast on a timer.
 /// </summary>
 internal sealed partial class RelayEngine
 {
@@ -94,7 +95,7 @@ internal sealed partial class RelayEngine
                 _inviteUntil = _now + CarMeetCreateMs;
                 _inviteRequest = unchecked(_inviteRequest + 1);
                 // nobody creates the session on the game side: everybody waits for the one the platform makes
-                foreach (var peer in _inviteJoined) SendSequenced(peer, [NerdPayload.CarMeetNotifyPending(1)]);
+                foreach (var peer in _inviteJoined) SendSequenced(peer, [NerdPayload.CarMeetNotifyPending(NerdPayload.CarMeetPendingWait)]);
                 Note($"car meet: countdown over, {_inviteJoined.Count} in, asking for the session");
                 create(new(_inviteRequest, _inviteKind, _inviteJoined.Select(p => p.Xuid).ToArray()));
                 break;
@@ -128,6 +129,15 @@ internal sealed partial class RelayEngine
 
     private void CancelInvite(string why)
     {
+        // T33: the players told to wait (29, wait) sit on WAITING FOR SESSION until the pending action is cleared: the game's
+        // handler then ends its matchmaking as CarMeetAbortedByServer. Invite type 0 alone clears the wait but never ends it.
+        // Sent before the CarMeetSynced update, on the same reliable channel, so it arrives first.
+        if (_invite == InviteStage.Creating && _inviteJoined.Where(_peers.Contains).ToArray() is { Length: > 0 } waiting)
+        {
+            var release = NerdPayload.CarMeetNotifyPending(NerdPayload.CarMeetPendingNone);
+            foreach (var peer in waiting) SendSequenced(peer, [release]);
+            Note($"car meet: {waiting.Length} waiting player(s) released (pending action none)");
+        }
         _invite = InviteStage.Idle; _inviteStarter = null; _inviteJoined.Clear();
         _sessionName = _sessionTemplate = null;
         CarMeetUpdate(new BitBuffer().Push(0, 5).Push(0, 2));

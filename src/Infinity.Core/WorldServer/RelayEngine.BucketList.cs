@@ -29,8 +29,23 @@ internal sealed partial class RelayEngine
     internal const long BucketListRequestGraceMs = 800;
     /// <summary>A pair not started this long after its pairing is logged once (V11 diagnostic: who has not reported State 2).</summary>
     internal const long BucketListStartStallMs = 15000;
-    /// <summary>BucketListPlayerStateSynced.State once the player's game is ready to start the challenge.</summary>
-    internal const int BucketListReadyState = 2;
+    /// <summary>
+    /// The PlayerStates that make a partner ready for 61 when an update after the pairing reports them (the game's
+    /// BucketListPlayerStateEnum: 1 Loading, 2 Ready, 3 Active, 4 Finished, 5 Retry): 2 Ready, and 3 Active, which only follows Ready
+    /// (a game past Ready whose Ready report was folded into a later one); never 4 Finished or 5 Retry. The reference capture showed
+    /// State 1, then 2, before its 61. Live test.3 saw no State past 0 because State is 4 bits, not 3: every update carrying it failed
+    /// the sanitizer, so it was neither read nor relayed to the partner.
+    /// </summary>
+    internal const int BucketListStateReady = 2, BucketListStateActive = 3;
+    private static bool BucketListReady(ulong state) => state is BucketListStateReady or BucketListStateActive;
+    /// <summary>
+    /// A last resort, unverified: when both partners never report Ready, 61 still goes this long after both partners' cancel/desync (64,
+    /// sent right after the game took its 65 and its own RequestChallenge, so 61 is not wiped), before the games' own ~15 s timeout ends a
+    /// pair that would otherwise never start. V11 decides whether it ever fires.
+    /// </summary>
+    internal const long BucketListStartFallbackMs = 10000;
+    /// <summary>Diagnostic lines per player and wait or pair (decoded PlayerState updates) and per player (sanitizer refusals).</summary>
+    internal const int BucketListTraceLines = 12;
     internal const int BucketListNameMax = 36;
     /// <summary>The 5-bit start positions in 65: the first waiter's, then its partner's. Unverified; the two-client capture (V11) decides.</summary>
     internal const byte BucketListFirstStart = 0, BucketListSecondStart = 1;
@@ -75,6 +90,10 @@ internal sealed partial class RelayEngine
         internal bool RepeatNoted { get; set; }
         internal bool EarlyNoted { get; set; }
         internal bool RefusalNoted { get; set; }
+        /// <summary>Decoded PlayerState lines left for this wait or pair (V11 diagnostic).</summary>
+        internal int Trace { get; set; }
+        /// <summary>Sanitizer refusal lines left for this player (V11 diagnostic).</summary>
+        internal int RefusedTrace { get; set; } = BucketListTraceLines;
         internal bool CapNoted { get; set; }
     }
 
@@ -90,6 +109,11 @@ internal sealed partial class RelayEngine
         internal HashSet<RelayPeer> Ready { get; } = [];
         internal bool Started { get; set; }
         internal bool StallNoted { get; set; }
+        /// <summary>The partners whose cancel/desync (64) came after the pairing, and when the second one did.</summary>
+        internal HashSet<RelayPeer> Cancelled { get; } = [];
+        internal long? CancelledAt { get; set; }
+        /// <summary>The partners whose RequestingPartner fell to 0 after the pairing: both of them backed out, so no fallback start.</summary>
+        internal HashSet<RelayPeer> FlagFell { get; } = [];
     }
 
     private readonly Dictionary<RelayPeer, BucketPlayer> _bucketPlayers = [];
@@ -205,6 +229,31 @@ internal sealed partial class RelayEngine
         Note($"bucket list: peer {peer.Index} router-12 object refused (create {obj.Create}, type {obj.Type}, {obj.Handle.Kind} id {obj.Handle.Id}, {obj.Payload.Length} bits)");
     }
 
+    /// <summary>
+    /// Fail open for the player's own PlayerState (live test.3: a layout mismatch refused every State update, so neither game ever saw
+    /// its partner Ready): a payload the pinned table cannot read fully still passes on its clean prefix (the variables before the first
+    /// unknown or repeated id, cut value or State past the enum), re-encoded, within its size bound and only from its owner; the raw bits
+    /// never pass. Nothing decodes: dropped. False: every such payload is dropped, as for routers 1-3.
+    /// </summary>
+    internal const bool BucketListPlayerFailOpen = true;
+
+    /// <summary>
+    /// A PlayerState the sanitizer refused (V11: an id order or width other than the table's shows here), bounded per player. The clean
+    /// prefix to relay instead (<see cref="BucketListPlayerFailOpen"/>), or null: dropped.
+    /// </summary>
+    private BitBuffer? BucketListSanitizeRefused(RelayPeer peer, NerdMessage.Object obj, PayloadFailure? fault)
+    {
+        var prefix = BucketListPlayerFailOpen && obj.Payload.Length <= NerdPayload.BucketListPlayerMaxBits
+            && NerdPayload.BucketListPlayerOf(obj.Payload) is { Count: > 0 } clean ? NerdPayload.BucketListPlayer(clean) : null;
+        var player = BucketPlayerOf(peer);
+        if (player.RefusedTrace > 0)
+        {
+            player.RefusedTrace--;
+            Note($"bucket list: peer {peer.Index} PlayerState {(obj.Create ? "create" : "update")} seq {obj.Sequence} refused by the sanitizer: {fault?.Fault} {fault?.Value}, {obj.Payload.Length} bits {Convert.ToHexString(obj.Payload.Bytes)}{(prefix is not null ? $"; its clean prefix relayed ({prefix.Length} bits, fail open)" : "; dropped")}");
+        }
+        return prefix;
+    }
+
     /// <summary>A PlayerState create refused at the 256-object cap: noted once per peer.</summary>
     private void BucketListCapped(RelayPeer peer)
     {
@@ -237,12 +286,18 @@ internal sealed partial class RelayEngine
         }
         else if (player.Latest is not { } latest || AckWindow.SequenceNewer(sequence, latest)) player.Latest = sequence;
         player.HasState = true;
-        var reportsReady = false; // this update itself carries State 2 (a remembered State 2 never counts)
+        var reportsReady = false; // this update itself carries State Ready or Active (a remembered State never counts)
         var (wasRequesting, oldSlot, oldChallenge) = (player.RequestingPartner, player.Slot, player.Challenge);
         var raises = false; // this update itself sets RequestingPartner 1 (a re-sent 1 after a cancel is a new request)
-        foreach (var (variable, value) in NerdPayload.BucketListPlayerOf(payload) ?? [])
+        var variables = NerdPayload.BucketListPlayerOf(payload);
+        if ((player.Waiting is not null || player.Pair is not null) && player.Trace > 0)
         {
-            if (variable == NerdPayload.BucketListStateVariable && value == BucketListReadyState) reportsReady = true;
+            player.Trace--; // V11: what the game reports while it waits or plays co-op
+            Note($"bucket list: trace peer {peer.Index} PlayerState {(create ? "create" : "update")} seq {sequence}{(player.Pair is not null ? " (paired)" : " (waiting)")}: {string.Join(" ", variables.Select(v => $"{v.Variable}={v.Value}"))}");
+        }
+        foreach (var (variable, value) in variables)
+        {
+            if (variable == NerdPayload.BucketListStateVariable && BucketListReady(value)) reportsReady = true;
             if (player.Sequences.TryGetValue(variable, out var last) && !AckWindow.SequenceNewer(sequence, last)) continue;
             player.Sequences[variable] = sequence;
             switch (variable)
@@ -277,7 +332,8 @@ internal sealed partial class RelayEngine
     private void BucketListFlagDropped(RelayPeer peer, BucketPlayer player)
     {
         player.FlagRequestAt = null;
-        if (player.Pair is not null || player.Waiting is null) return;
+        if (player.Pair is { } pair) { pair.FlagFell.Add(peer); return; }
+        if (player.Waiting is null) return;
         player.LastRequestAt = null; player.Last63At = null; player.PendingRequest = null; // its next request is taken at once
         CancelBucketWait(peer, player, "RequestingPartner fell to 0");
     }
@@ -340,6 +396,7 @@ internal sealed partial class RelayEngine
             .OrderBy(p => p.Value.Waiting!.Value.Order).Select(p => p.Key).FirstOrDefault();
         if (waiter is not null) { PairBucketPlayers(waiter, peer, slot, challenge); return; }
         player.Waiting = (slot, challenge, _now, _bucketOrder++);
+        player.Trace = BucketListTraceLines;
         _bucketUniverseDue.Add(peer); // a waiter is at universe 0
         ClaimBucketEntry(peer, slot, challenge);
         BucketListStatus(66, slot, challenge, peer);
@@ -352,14 +409,21 @@ internal sealed partial class RelayEngine
         foreach (var peer in new[] { first, second })
         {
             var player = BucketPlayerOf(peer);
-            player.Waiting = null; player.Pair = pair; pair.Floors[peer] = player.Latest;
+            player.Waiting = null; player.Pair = pair; pair.Floors[peer] = player.Latest; player.Trace = BucketListTraceLines;
             _bucketUniverseDue.Add(peer); // paired during an event's phasing: back to the shared universe
         }
         if (!BucketListEntryKeptWhilePaired) FreeBucketEntries(first);
-        BucketListSend(first, BucketListPartnerMessage(second, BucketListFirstStart));
-        BucketListSend(second, BucketListPartnerMessage(first, BucketListSecondStart));
+        foreach (var (receiver, partner, start) in new[] { (first, second, BucketListFirstStart), (second, first, BucketListSecondStart) })
+        {
+            var message = BucketListPartnerMessage(partner, start);
+            BucketListSend(receiver, message);
+            // V11: the bytes each game gets, and whether the PlayerState they name has reached it (relayed live and in join snapshots;
+            // routers 12 are never held for a joiner)
+            var known = partner.Objects.TryGetValue((BucketListRouter, 0), out var state) ? $"yes (its sequence {state.Last})" : "no";
+            Note($"bucket list: 65 to peer {receiver.Index}: {Convert.ToHexString(message.Bytes)} ({message.Length} bits; partner peer {partner.Index}, start {start}); partner PlayerState known to it: {known}");
+        }
         BucketListStatus(67, slot, challenge, first, second);
-        Note($"bucket list: peers {first.Index} and {second.Index} paired (slot {slot}, challenge {challenge}); the start waits for both at State {BucketListReadyState}");
+        Note($"bucket list: peers {first.Index} and {second.Index} paired (slot {slot}, challenge {challenge}); the start waits for both at State {BucketListStateReady}/{BucketListStateActive}, or {BucketListStartFallbackMs} ms after both cancels");
     }
 
     /// <summary>65 for one partner: the other's PlayerState as a relayed key, the receiver's start position, found, the other's name.</summary>
@@ -367,22 +431,35 @@ internal sealed partial class RelayEngine
         NerdPayload.BucketListPartner(new(HandleKind.Relay, 0, partner.Index), start, true,
             BucketListPartnerNameIsGamertag ? _bucketPlayers.GetValueOrDefault(partner)?.Name ?? string.Empty : string.Empty, BucketListNameMax);
 
-    private void StartBucketPair(BucketPair pair)
+    private void StartBucketPair(BucketPair pair, bool fallback = false)
     {
         pair.Started = true;
         var start = unchecked(NowWire + BucketListStartDelayMs);
         if (start == 0) start = 1; // 0 is "no start time"
         var message = NerdPayload.BucketListStart(start);
         BucketListSend(pair.First, message); BucketListSend(pair.Second, message);
-        Note($"bucket list: peers {pair.First.Index} and {pair.Second.Index} both ready, start sent ({BucketListStartDelayMs} ms)");
+        Note($"bucket list: peers {pair.First.Index} and {pair.Second.Index} {(fallback ? "by fallback" : "both ready")}, start sent ({BucketListStartDelayMs} ms)");
     }
+
+    /// <summary>
+    /// The pair still runs on both sides: both partners here, both still in it, and not both with RequestingPartner fallen since the
+    /// pairing (a 62 or a leave ends the pair itself).
+    /// </summary>
+    private bool BucketPairLive(BucketPair pair) => new[] { pair.First, pair.Second }.All(p => _peers.Contains(p)
+        && _bucketPlayers.GetValueOrDefault(p)?.Pair == pair) && pair.FlagFell.Count < 2;
 
     /// <summary>Cancel/desync (64): ends a wait; a pair stays (the game sends one right after it is paired).</summary>
     private void CancelBucketRequest(RelayPeer peer)
     {
         if (!_bucketPlayers.TryGetValue(peer, out var player)) return;
         player.PendingRequest = null; player.FlagRequestAt = null; // a cancel inside the grace also ends the flag's request
-        if (player.Pair is not null) { Note($"bucket list: peer {peer.Index} cancel after pairing: the pair stays"); return; }
+        if (player.Pair is { } pair)
+        {
+            // the game's own cancel/desync right after taking its 65: the pair stays; both of them arm the start fallback
+            if (pair.Cancelled.Add(peer) && pair.Cancelled.Count == 2) pair.CancelledAt = _now;
+            Note($"bucket list: peer {peer.Index} cancel after pairing: the pair stays");
+            return;
+        }
         if (player.Waiting is null) return;
         player.LastRequestAt = null; player.Last63At = null; // what it asked for is over: its next request is taken at once
         CancelBucketWait(peer, player, "cancelled");
@@ -450,6 +527,12 @@ internal sealed partial class RelayEngine
         }
         foreach (var pair in _bucketPlayers.Values.Select(p => p.Pair).OfType<BucketPair>().Distinct().ToArray())
         {
+            if (!pair.Started && pair.CancelledAt is { } cancelled && _now - cancelled >= BucketListStartFallbackMs && BucketPairLive(pair))
+            {
+                Note($"bucket list: peers {pair.First.Index} and {pair.Second.Index}: STARTED WITHOUT BOTH READY (start by fallback, {BucketListStartFallbackMs} ms after both cancels) (ready: {string.Join(",", pair.Ready.Select(p => p.Index))}; last States {_bucketPlayers.GetValueOrDefault(pair.First)?.State}/{_bucketPlayers.GetValueOrDefault(pair.Second)?.State})");
+                StartBucketPair(pair, fallback: true);
+            }
+            // a log line only: nothing is sent, the pair stays (the games' own timeout ends it)
             if (pair.Started || pair.StallNoted || _now - pair.PairedAt < BucketListStartStallMs) continue;
             pair.StallNoted = true;
             var partners = new[] { pair.First, pair.Second }.Select(p =>
