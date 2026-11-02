@@ -10,7 +10,7 @@
 
 use std::net::SocketAddr;
 
-use super::settings::RelaySettings;
+use super::{codec, settings::RelaySettings};
 use crate::core::game::Send;
 
 /// One engine kind of a world (the `engine` field of logs and events).
@@ -67,10 +67,13 @@ impl Engine {
         }
     }
 
-    /// A datagram from `from` (canonical endpoint) at `now_ms`. Step 1: nobody is admitted, so
-    /// it is dropped.
-    pub fn receive(&mut self, _data: &[u8], _from: SocketAddr, _now_ms: u64, _out: &mut Vec<Send>) {
-        self.dropped += 1;
+    /// A datagram from `from` (canonical endpoint) at `now_ms`. Step 1: nobody is admitted and
+    /// the codec is a placeholder (OD-187) that decodes nothing, so it is dropped.
+    pub fn receive(&mut self, data: &[u8], _from: SocketAddr, _now_ms: u64, _out: &mut Vec<Send>) {
+        match codec::decode(data) {
+            Ok(d) => match d {},
+            Err(codec::CodecError::NotImplemented) => self.dropped += 1,
+        }
     }
 
     /// The 20 ms tick. Never called for an idle engine (`is_idle`); a no-op when nothing is
