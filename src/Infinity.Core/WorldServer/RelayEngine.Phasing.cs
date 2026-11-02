@@ -63,6 +63,7 @@ internal sealed partial class RelayEngine
         if (!_phasing || _race is not null || _eventSide.Count != 0) return;
         _phasing = false;
         Note("phasing: everybody is back in free roam, private universes released");
+        ReleaseEventHold("nobody is on the event side any more"); // T24: the "Race complete" hold ends with the event side
         foreach (var peer in _peers.Where(p => p.Universe != 0)) SetUniverse(peer, 0);
         RefreshCars();
     }
