@@ -47,6 +47,14 @@ internal sealed record RelaySettings
     public long AbuseMs { get; init; } = 5000;
     public long AbuseBanMs { get; init; } = 60000;
     public int HistoryMaxBits { get; init; } = 2 * 1024 * 1024;
+    /// <summary>The kept history entries of one peer (<see cref="RelayPeer.HistoryEntries"/>), checked after each packet like the
+    /// bits. Each entry costs about 96 B of managed memory whatever its bits (a BitBuffer and its array), so under the bits cap alone
+    /// tiny updates could pile up by the hundred thousand. Over it, the peer's largest histories are trimmed first
+    /// (<see cref="RelayPeer.TrimHistory"/>: each to 1 + 2048 + 16 at most, as the per-object guard does); only a peer still over
+    /// after that (a flood across many objects) is dropped. 16384 entries × 96 B are about 1.6 MB worst case; one object peaks at
+    /// 1 + 6144 + 16 untrimmed, so several objects carrying streams nothing supersedes still fit, and ordinary traffic keeps a few
+    /// hundred.</summary>
+    public int HistoryMaxEntries { get; init; } = 16384;
     public int QueueMaxBits { get; init; } = 8 * 1024 * 1024;
 }
 
@@ -66,7 +74,8 @@ internal sealed record ReliablePacket(ushort Id, BitBuffer[] Messages, long Sent
 /// </remarks>
 internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, byte router = 0, Action<string>? note = null)
 {
-    /// <summary>The kept updates are compacted when they reach this count, then when they double again (amortised).</summary>
+    /// <summary>The kept updates are compacted when they reach this count, then when they double again (amortised), or grow by
+    /// half of <see cref="MaxKeptUpdates"/>, whichever comes first.</summary>
     internal const int CompactAt = 32;
     /// <summary>... or these bits (the old fixed tail's bound), likewise doubling.</summary>
     internal const int CompactBits = 64 * 1024;
@@ -95,6 +104,8 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
     /// <summary>The create's sequence in a snapshot (before <see cref="Injected"/>): the kept updates end at <see cref="Last"/>.</summary>
     internal byte CreateSequence => (byte)(((Last - Tail.Count) % 255 + 255) % 255);
     internal int HistoryBits => Base.Length + _tailBits + Pending.Sum(p => p.Payload.Length);
+    /// <summary>The kept entries, each its own buffer whatever its bits: the create (Base), the tail and the pending updates.</summary>
+    internal int HistoryEntries => 1 + Tail.Count + Pending.Count;
 
     internal bool Update(byte next, BitBuffer update)
     {
@@ -131,7 +142,23 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
     {
         Supersede();
         if (Tail.Count > MaxKeptUpdates || _tailBits > MaxKeptBits) Guard();
-        _compactCount = Math.Max(CompactAt, Tail.Count * 2);
+        Rearm();
+    }
+
+    /// <summary>The peer's guard (<see cref="RelaySettings.HistoryMaxEntries"/>): compacts now and, while the tail is over half the
+    /// hard guard, trims it as the hard guard does (folded into the create while it fits, else discarded and logged once).</summary>
+    internal void Trim()
+    {
+        Supersede();
+        if (Tail.Count > MaxKeptUpdates / 2 || _tailBits > MaxKeptBits / 2) Guard();
+        Rearm();
+    }
+
+    private void Rearm()
+    {
+        // doubling, but at most half the guard further: the tail then stays under 1.5 × MaxKeptUpdates + 1 entries, not twice
+        // that (RelaySettings.HistoryMaxEntries counts on it), and a compaction still comes at least half a guard after the last
+        _compactCount = Math.Max(CompactAt, Math.Min(Tail.Count * 2, Tail.Count + MaxKeptUpdates / 2 + 1));
         _compactBits = Math.Max(CompactBits, _tailBits * 2);
     }
 
@@ -273,6 +300,23 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     /// <summary>The TeamId last written to this player's player object (null: never; it starts at the game's 0).</summary>
     internal byte? TeamWritten { get; set; }
     internal int HistoryBits => Objects.Values.Sum(p => p.HistoryBits) + Orphans.Sum(p => p.Payload.Length);
+    /// <summary>The kept history entries across this peer's objects and orphans (<see cref="RelaySettings.HistoryMaxEntries"/>).</summary>
+    internal int HistoryEntries => Objects.Values.Sum(p => p.HistoryEntries) + Orphans.Count;
+
+    /// <summary>Over <paramref name="limit"/> entries: trims the largest object histories first (<see cref="RelayObject.Trim"/>)
+    /// until under it. Returns the entries left: still over means many objects each with a short history, a flood to refuse.</summary>
+    internal int TrimHistory(int limit)
+    {
+        var entries = HistoryEntries;
+        foreach (var history in Objects.Values.OrderByDescending(p => p.HistoryEntries).ToArray())
+        {
+            if (entries <= limit) break;
+            var before = history.HistoryEntries;
+            history.Trim();
+            entries -= before - history.HistoryEntries;
+        }
+        return entries;
+    }
 
     internal ushort TakePacketId()
     {

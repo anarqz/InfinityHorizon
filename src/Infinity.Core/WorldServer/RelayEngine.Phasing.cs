@@ -1,4 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
+
 namespace Infinity.Core.WorldServer;
 
 /// <summary>
@@ -28,7 +30,7 @@ internal sealed partial class RelayEngine
     /// <summary>Participants were selected: they form the event side, and every player gets a private universe.</summary>
     private void BeginPhase(IEnumerable<byte> participants)
     {
-        _eventSide.Clear();
+        _eventSide.Clear(); _resultsKept.Clear();
         foreach (var index in participants) _eventSide.Add(index);
         WatchEventStart("event: participants selected");
         if (!_phasing)
@@ -42,18 +44,59 @@ internal sealed partial class RelayEngine
     /// <summary>A player left the event side (back in free roam, dropped, or gone).</summary>
     private void LeaveEventSide(RelayPeer peer)
     {
+        _resultsKept.Remove(peer.Index);
         if (!_phasing || !_eventSide.Remove(peer.Index)) return;
         if (_peers.Contains(peer)) RefreshCars();
         EndPhaseWhenDone();
     }
 
-    /// <summary>The event closed: the participants still in it (on their results screen) keep the side until they leave it.</summary>
+    /// <summary>
+    /// T38: how long a finisher that already reported RaceInProgress 0 while the race ran stays on the event side after the close.
+    /// It is on its results waiting for InRace 0, then the results' 8 s and the post-race flow; the game reports 0 at about its
+    /// race-end save, which came 14 s (16:17, test.4) and 34 s (18:09, test.5) after the close. It gives no later 1 -> 0 edge.
+    /// </summary>
+    internal const long ResultsExitMs = 35_000;
+    private readonly HashSet<byte> _resultsKept = [];
+    private long _resultsKeptUntil;
+
+    /// <summary>
+    /// The event closed: the participants still in it (on their results screen) keep the side until they leave it. A finisher
+    /// whose RaceInProgress already went 1 -> 0 in this race (T38: around its 45) is on its results too: it keeps the side until a later
+    /// RaceInProgress 0 report, its departure, or <see cref="ResultsExitMs"/>. Any other participant at 0 is back in free roam.
+    /// </summary>
     private void EventClosed(Race race)
     {
         if (!_phasing) return;
         _phaseReleasedAt = _now;
+        _resultsKept.Clear();
         foreach (var index in race.Participants.ToArray())
-            if (_peers.FirstOrDefault(p => p.Index == index) is not { } peer || peer.ConsoleValues[3] == 0) _eventSide.Remove(index);
+        {
+            if (_peers.FirstOrDefault(p => p.Index == index) is not { } peer) { _eventSide.Remove(index); continue; }
+            if (peer.ConsoleValues[3] != 0) continue;
+            // a finisher seen going 1 -> 0 in this race (resolved, or in the packet that closes it); one never seen at 1 is not kept
+            if (race.Stage == RaceStage.Started && race.Finished.Contains(index) && !IsRoadTrip && _eventSide.Contains(index)
+                && (race.ResultsNoted.Contains(index) || _raceExits.Contains(peer)))
+                _resultsKept.Add(index);
+            else _eventSide.Remove(index);
+        }
+        if (_resultsKept.Count != 0)
+        {
+            _resultsKeptUntil = _now + ResultsExitMs;
+            Note(string.Create(CultureInfo.InvariantCulture,
+                $"phasing: {_resultsKept.Count} finisher(s) at RaceInProgress 0 kept on the event side for their results ({ResultsExitMs / 1000} s at most)"));
+        }
+        RefreshCars();
+        EndPhaseWhenDone();
+    }
+
+    /// <summary>The finishers kept at the close whose results window ran out are back in free roam.</summary>
+    private void TickResultsKept()
+    {
+        if (_resultsKept.Count == 0 || _now < _resultsKeptUntil) return;
+        var released = _resultsKept.Count(_eventSide.Remove);
+        _resultsKept.Clear();
+        if (!_phasing || released == 0) return;
+        Note(string.Create(CultureInfo.InvariantCulture, $"phasing: {released} finisher(s) kept for their results released ({ResultsExitMs / 1000} s)"));
         RefreshCars();
         EndPhaseWhenDone();
     }
@@ -63,13 +106,15 @@ internal sealed partial class RelayEngine
         if (!_phasing || _race is not null || _eventSide.Count != 0) return;
         _phasing = false;
         Note("phasing: everybody is back in free roam, private universes released");
-        ReleaseEventHold("nobody is on the event side any more"); // T24: the "Race complete" hold ends with the event side
+        ReleaseEventHold("nobody is on the event side any more"); // T24/T38: the event-end hold ends with the event side
         foreach (var peer in _peers.Where(p => p.Universe != 0)) SetUniverse(peer, 0);
         RefreshCars();
     }
 
     private void TickPhasing()
     {
+        TickResultsKept();
+        TickEventHold();
         if (_phasing && _race is null && _now - _phaseReleasedAt >= PhaseHoldMs && _eventSide.Count != 0)
         {
             Note($"phasing: {_eventSide.Count} player(s) never left the results, released");
@@ -84,11 +129,11 @@ internal sealed partial class RelayEngine
         if (FreeUniverse() is { } universe) SetUniverse(peer, universe);
     }
 
-    /// <summary>The first private universe nobody holds; null when all are taken.</summary>
+    /// <summary>The first private universe nobody holds, a bucket-list pair's included (RelayEngine.BucketList.cs); null when all are taken.</summary>
     private byte? FreeUniverse()
     {
         for (var universe = FirstPrivateUniverse; universe <= LastPrivateUniverse; universe++)
-            if (_peers.All(p => p.Universe != universe)) return universe;
+            if (_peers.All(p => p.Universe != universe) && !BucketListUniverseHeld(universe)) return universe;
         return null;
     }
 
@@ -118,9 +163,15 @@ internal sealed partial class RelayEngine
         TeamObjectCreated(peer); // NR-10 (RelayEngine.Teams.cs)
     }
 
-    /// <summary>A car prediction for one receiver: across the event boundary it is in its owner's private universe.</summary>
-    private BitBuffer CarFor(RelayPeer sender, RelayPeer receiver, NerdMessage.Car car) =>
-        NerdCodec.Write(SameSide(sender, receiver) || sender.Universe == 0 ? car : car with { Body = WithBits(car.Body, CarUniverseOffset, PrivateUniverseBits, sender.Universe) });
+    /// <summary>
+    /// A car prediction for one receiver: across the event boundary it is in its owner's private universe. A bucket-list partner's car is
+    /// in its pair's universe instead (the one the game enters for the challenge), never another.
+    /// </summary>
+    private BitBuffer CarFor(RelayPeer sender, RelayPeer receiver, NerdMessage.Car car)
+    {
+        var universe = BucketListPairUniverse(sender) ?? sender.Universe;
+        return NerdCodec.Write(SameSide(sender, receiver) || universe == 0 ? car : car with { Body = WithBits(car.Body, CarUniverseOffset, PrivateUniverseBits, universe) });
+    }
 
     /// <summary>A packet's car prediction and car events: events (contacts) stay on their side of the event boundary.</summary>
     private void ForwardCars(RelayPeer sender, NerdMessage.Car? car, List<BitBuffer> events)

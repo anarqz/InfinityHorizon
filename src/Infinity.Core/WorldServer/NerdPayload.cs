@@ -424,14 +424,15 @@ internal static class NerdPayload
 
     /// <summary>
     /// The co-op partner (65), server to client: the partner's BucketListPlayerStateSynced key as the receiver knows it (7-bit id), the
-    /// receiver's 5-bit start position, found, then a compact-length Latin-1 string of at most <paramref name="nameMax"/> bytes.
+    /// pair's 5-bit bucket-list universe (the game's ToBucketListUniverse override for the challenge; 0 is free roam), found, then a
+    /// compact-length Latin-1 string of at most <paramref name="nameMax"/> bytes.
     /// </summary>
-    internal static BitBuffer BucketListPartner(ObjectHandle partner, byte start, bool found, string name, int nameMax)
+    internal static BitBuffer BucketListPartner(ObjectHandle partner, byte universe, bool found, string name, int nameMax)
     {
         var output = new BitBuffer().Push(65, 7);
         partner.Write(output, 7);
-        var text = System.Text.Encoding.Latin1.GetBytes(name.Select(c => c is >= ' ' and <= '~' or >= ' ' and <= 'ÿ' ? c : '?').ToArray());
-        return output.Push(start, 5).Boolean(found).ByteString(text.AsSpan(0, Math.Min(text.Length, nameMax)));
+        var text = System.Text.Encoding.Latin1.GetBytes(name.Select(c => c is >= ' ' and <= '~' or >= '\u00a0' and <= '\u00ff' ? c : '?').ToArray());
+        return output.Push(universe, 5).Boolean(found).ByteString(text.AsSpan(0, Math.Min(text.Length, nameMax)));
     }
 
     /// <summary>The co-op challenge's start time (61) on the network clock, server to client.</summary>

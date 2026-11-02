@@ -47,8 +47,6 @@ internal sealed partial class RelayEngine
     /// <summary>Diagnostic lines per player and wait or pair (decoded PlayerState updates) and per player (sanitizer refusals).</summary>
     internal const int BucketListTraceLines = 12;
     internal const int BucketListNameMax = 36;
-    /// <summary>The 5-bit start positions in 65: the first waiter's, then its partner's. Unverified; the two-client capture (V11) decides.</summary>
-    internal const byte BucketListFirstStart = 0, BucketListSecondStart = 1;
     /// <summary>Whether the s32 in 66-68 is the slot (true) or the challenge (false). Unverified; the two-client capture (V11) decides.</summary>
     internal const bool BucketListStatusCarriesSlot = false;
     /// <summary>
@@ -114,6 +112,11 @@ internal sealed partial class RelayEngine
         internal long? CancelledAt { get; set; }
         /// <summary>The partners whose RequestingPartner fell to 0 after the pairing: both of them backed out, so no fallback start.</summary>
         internal HashSet<RelayPeer> FlagFell { get; } = [];
+        /// <summary>The pair's bucket-list universe (65's 5-bit value, the same to both): freed when the pair ends.</summary>
+        internal byte Universe { get; init; }
+        /// <summary>Each partner's last car prediction when 61 went (V11: the first one after it shows the universe the car is in).</summary>
+        internal Dictionary<RelayPeer, NerdMessage.Car?> CarsAtStart { get; } = [];
+        internal bool CarsNoted { get; set; }
     }
 
     private readonly Dictionary<RelayPeer, BucketPlayer> _bucketPlayers = [];
@@ -123,12 +126,28 @@ internal sealed partial class RelayEngine
     private readonly List<(RelayPeer To, BitBuffer Message)> _bucketOutbox = [];
     private byte _bucketSlotsSequence;
     private long _bucketOrder;
+    /// <summary>When each pair universe was last freed (a pair ended).</summary>
+    private readonly Dictionary<byte, long> _bucketUniversesFreed = [];
+    /// <summary>
+    /// A freed pair universe is not handed to another pair for this long when another is free: the former partners' games may still be
+    /// in it (and their cars report it) until they clear their override and send their next prediction.
+    /// </summary>
+    internal const long BucketListUniverseCoolMs = 30000;
 
     /// <summary>Bucket-list co-op is free roam's: no car meet or Road Trip world serves it. Not behind <see cref="RelaySettings.Races"/>.</summary>
     private bool BucketListWorld => _settings.CarMeetLobby is null && !IsRoadTrip;
 
     /// <summary>A waiting or paired player keeps universe 0 (no private universe for it while an event phases the others).</summary>
     private bool BucketListBusy(RelayPeer peer) => _bucketPlayers.TryGetValue(peer, out var player) && (player.Waiting is not null || player.Pair is not null);
+
+    /// <summary>Whether a running pair holds this universe (event phasing never hands it out meanwhile).</summary>
+    private bool BucketListUniverseHeld(byte universe) => universe != 0 && _bucketPlayers.Values.Any(p => p.Pair?.Universe == universe);
+
+    /// <summary>
+    /// A paired player's car universe for the relay's phasing (its pair's, which the game enters itself for the challenge); null when not
+    /// paired. The player's PrivateUniverseId stays 0: the game's bucket-list override, not var 40, moves the car.
+    /// </summary>
+    private byte? BucketListPairUniverse(RelayPeer peer) => _bucketPlayers.GetValueOrDefault(peer)?.Pair is { Universe: not 0 } pair ? pair.Universe : null;
 
     private BucketPlayer BucketPlayerOf(RelayPeer peer)
     {
@@ -249,6 +268,8 @@ internal sealed partial class RelayEngine
         if (player.RefusedTrace > 0)
         {
             player.RefusedTrace--;
+            // the hex is safe to log: a PlayerState payload (at most 128 bits, router 12 only) holds numbers and flags (Score, slot,
+            // challenge, State), never a name, XUID, address or player text
             Note($"bucket list: peer {peer.Index} PlayerState {(obj.Create ? "create" : "update")} seq {obj.Sequence} refused by the sanitizer: {fault?.Fault} {fault?.Value}, {obj.Payload.Length} bits {Convert.ToHexString(obj.Payload.Bytes)}{(prefix is not null ? $"; its clean prefix relayed ({prefix.Length} bits, fail open)" : "; dropped")}");
         }
         return prefix;
@@ -405,35 +426,84 @@ internal sealed partial class RelayEngine
 
     private void PairBucketPlayers(RelayPeer first, RelayPeer second, int slot, int challenge)
     {
-        var pair = new BucketPair(first, second, slot, challenge, _now);
+        var pair = new BucketPair(first, second, slot, challenge, _now) { Universe = BucketListPickUniverse() };
         foreach (var peer in new[] { first, second })
         {
             var player = BucketPlayerOf(peer);
             player.Waiting = null; player.Pair = pair; pair.Floors[peer] = player.Latest; player.Trace = BucketListTraceLines;
-            _bucketUniverseDue.Add(peer); // paired during an event's phasing: back to the shared universe
+            _bucketUniverseDue.Add(peer); // the relay's own phasing keeps the partners at 0: the game moves them to the pair's universe
         }
         if (!BucketListEntryKeptWhilePaired) FreeBucketEntries(first);
-        foreach (var (receiver, partner, start) in new[] { (first, second, BucketListFirstStart), (second, first, BucketListSecondStart) })
+        foreach (var (receiver, partner) in new[] { (first, second), (second, first) })
         {
-            var message = BucketListPartnerMessage(partner, start);
+            var name = BucketListPartnerName(partner);
+            var message = BucketListPartnerMessage(partner, pair.Universe, name);
             BucketListSend(receiver, message);
-            // V11: the bytes each game gets, and whether the PlayerState they name has reached it (relayed live and in join snapshots;
-            // routers 12 are never held for a joiner)
+            // V11: what each game gets, and whether the PlayerState it names has reached it (relayed live and in join snapshots; routers 12
+            // are never held for a joiner). No bytes: 65 carries the partner's name, and the log carries no names, only its length
             var known = partner.Objects.TryGetValue((BucketListRouter, 0), out var state) ? $"yes (its sequence {state.Last})" : "no";
-            Note($"bucket list: 65 to peer {receiver.Index}: {Convert.ToHexString(message.Bytes)} ({message.Length} bits; partner peer {partner.Index}, start {start}); partner PlayerState known to it: {known}");
+            Note($"bucket list: 65 to peer {receiver.Index}: {message.Length} bits; partner peer {partner.Index}, universe {pair.Universe}, name of {Math.Min(name.Length, BucketListNameMax)} characters; partner PlayerState known to it: {known}");
         }
         BucketListStatus(67, slot, challenge, first, second);
-        Note($"bucket list: peers {first.Index} and {second.Index} paired (slot {slot}, challenge {challenge}); the start waits for both at State {BucketListStateReady}/{BucketListStateActive}, or {BucketListStartFallbackMs} ms after both cancels");
+        Note($"bucket list: peers {first.Index} and {second.Index} paired (slot {slot}, challenge {challenge}) in universe {pair.Universe}; the start waits for both at State {BucketListStateReady}/{BucketListStateActive}, or {BucketListStartFallbackMs} ms after both cancels");
     }
 
-    /// <summary>65 for one partner: the other's PlayerState as a relayed key, the receiver's start position, found, the other's name.</summary>
-    private BitBuffer BucketListPartnerMessage(RelayPeer partner, byte start) =>
-        NerdPayload.BucketListPartner(new(HandleKind.Relay, 0, partner.Index), start, true,
-            BucketListPartnerNameIsGamertag ? _bucketPlayers.GetValueOrDefault(partner)?.Name ?? string.Empty : string.Empty, BucketListNameMax);
+    /// <summary>
+    /// The pair's bucket-list universe: the highest OnlinePrivate universe (<see cref="LastPrivateUniverse"/> down to
+    /// <see cref="FirstPrivateUniverse"/>) that no player holds for event phasing, no running pair uses and no pair left in the last
+    /// <see cref="BucketListUniverseCoolMs"/> (when all free ones are that fresh, the least recently freed). Event phasing takes the lowest
+    /// free one for each player not waiting or paired, so with P pairs it holds at most 12 - 2P universes (1 to 12 - 2P) while the pairs
+    /// hold 17 down to 18 - P: the two never meet. 0 (free roam) only if all are taken, which 12 players cannot reach.
+    /// </summary>
+    private byte BucketListPickUniverse()
+    {
+        var taken = _bucketPlayers.Values.Select(p => p.Pair?.Universe ?? 0).Concat(_peers.Select(p => p.Universe)).ToHashSet();
+        var free = Enumerable.Range(FirstPrivateUniverse, LastPrivateUniverse - FirstPrivateUniverse + 1).Select(u => (byte)u)
+            .Where(u => !taken.Contains(u)).OrderByDescending(u => u).ToList();
+        // a universe a pair just left stays out a while: its cars may still report it until their games leave it
+        bool Cooling(byte u) => _bucketUniversesFreed.TryGetValue(u, out var at) && _now - at < BucketListUniverseCoolMs;
+        if (free.FirstOrDefault(u => !Cooling(u)) is var rested and not 0) return rested;
+        if (free.Count != 0) return free.MinBy(u => _bucketUniversesFreed.GetValueOrDefault(u)); // all cooling: the least recently freed
+        Note("bucket list: no free private universe for a pair, it stays in free roam (0)");
+        return 0;
+    }
+
+    /// <summary>
+    /// 65 for one partner: the other's PlayerState as a relayed key, the pair's bucket-list universe (the same for both: the game stores it
+    /// in its bucket-list component and enters it through its ToBucketListUniverse network override for the challenge, clearing it at the
+    /// end), found, the other's name.
+    /// </summary>
+    private static BitBuffer BucketListPartnerMessage(RelayPeer partner, byte universe, string name) =>
+        NerdPayload.BucketListPartner(new(HandleKind.Relay, 0, partner.Index), universe, true, name, BucketListNameMax);
+
+    /// <summary>The name 65 gives a partner (never logged).</summary>
+    private string BucketListPartnerName(RelayPeer partner) =>
+        BucketListPartnerNameIsGamertag ? _bucketPlayers.GetValueOrDefault(partner)?.Name ?? string.Empty : string.Empty;
+
+    /// <summary>The universe a car prediction says its car is in (CarPredictionFull bits 395-399); null without one.</summary>
+    private static ulong? CarUniverseOf(NerdMessage.Car? car)
+    {
+        if (car is null || car.Body.Length < CarUniverseOffset + PrivateUniverseBits) return null;
+        var reader = new BitReader(car.Body.Bytes, car.Body.Length);
+        reader.Skip(CarUniverseOffset);
+        return reader.Read(PrivateUniverseBits);
+    }
+
+    /// <summary>V11: the first car prediction of each partner after 61, with the universe it reports (once per partner and pair).</summary>
+    private void TraceBucketPairCars(BucketPair pair)
+    {
+        foreach (var (peer, atStart) in pair.CarsAtStart.ToArray())
+        {
+            if (ReferenceEquals(peer.LastCar, atStart) || peer.LastCar is null) continue;
+            pair.CarsAtStart.Remove(peer);
+            Note($"bucket list: peer {peer.Index}'s car after the start reports universe {CarUniverseOf(peer.LastCar)} (the pair's is {pair.Universe})");
+        }
+    }
 
     private void StartBucketPair(BucketPair pair, bool fallback = false)
     {
         pair.Started = true;
+        foreach (var peer in new[] { pair.First, pair.Second }) pair.CarsAtStart[peer] = peer.LastCar;
         var start = unchecked(NowWire + BucketListStartDelayMs);
         if (start == 0) start = 1; // 0 is "no start time"
         var message = NerdPayload.BucketListStart(start);
@@ -499,7 +569,8 @@ internal sealed partial class RelayEngine
         // still phasing: the former partners get their private universe as everybody else has one (at the flush, so one that waits
         // again at once stays at 0)
         foreach (var peer in partners) _bucketUniverseDue.Add(peer);
-        Note($"bucket list: pair of peers {pair.First.Index} and {pair.Second.Index} ended: {why}");
+        if (pair.Universe != 0) _bucketUniversesFreed[pair.Universe] = _now;
+        Note($"bucket list: pair of peers {pair.First.Index} and {pair.Second.Index} ended: {why}; universe {pair.Universe} freed{(pair.Started ? $", its cars last reported universe {CarUniverseOf(pair.First.LastCar)}/{CarUniverseOf(pair.Second.LastCar)}" : string.Empty)}");
     }
 
     private void TickBucketList()
@@ -533,6 +604,7 @@ internal sealed partial class RelayEngine
                 StartBucketPair(pair, fallback: true);
             }
             // a log line only: nothing is sent, the pair stays (the games' own timeout ends it)
+            if (pair.Started) TraceBucketPairCars(pair);
             if (pair.Started || pair.StallNoted || _now - pair.PairedAt < BucketListStartStallMs) continue;
             pair.StallNoted = true;
             var partners = new[] { pair.First, pair.Second }.Select(p =>
@@ -552,7 +624,7 @@ internal sealed partial class RelayEngine
 
     private void ClearBucketList()
     {
-        _bucketPlayers.Clear(); _bucketOutbox.Clear(); _bucketUniverseDue.Clear();
+        _bucketPlayers.Clear(); _bucketOutbox.Clear(); _bucketUniverseDue.Clear(); _bucketUniversesFreed.Clear();
         Array.Clear(_bucketSlots); Array.Clear(_bucketSlotsSent);
     }
 }

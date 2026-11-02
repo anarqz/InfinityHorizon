@@ -132,7 +132,12 @@ internal sealed partial class RelayEngine
                 // Server-only, traffic, collidable, chat and other layouts are parsed but never relayed.
             }
         }
+        ResolveRaceExits(); // T38: a RaceInProgress 1 -> 0 is decided after the packet's own 45
         if (peer.HistoryBits > _settings.HistoryMaxBits) { Doom(peer, "object history over its limit"); return; }
+        // each kept entry costs its own buffer whatever its bits: tiny updates must not pile up under the bits cap. The largest
+        // histories are trimmed first; still over after that is a flood across many objects
+        if (peer.HistoryEntries > _settings.HistoryMaxEntries && peer.TrimHistory(_settings.HistoryMaxEntries) > _settings.HistoryMaxEntries)
+        { Doom(peer, "object history over its entry limit"); return; }
         if (carNow is not null) WatchCar(peer, carNow); // AC-2: a Hardcore host measures the other players' cars
         Forward(peer, forward, true); ForwardCars(peer, carNow, cars);
         FlushBucketList(); // after the relayed objects: a PlayerState create precedes the 65 that names it
