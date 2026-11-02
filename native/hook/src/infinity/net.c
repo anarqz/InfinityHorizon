@@ -620,8 +620,11 @@ static void net_log_guid(const char *prefix, const unsigned char *guid) {
     buffer_free(&line);
 }
 
+/* The first 64 opens; matchmaking and the session directory have their own budget (net_observe.c),
+   so their opens still pair with their answer lines late in a session. */
 static void net_log_open(NetRequest *request) {
-    if (InterlockedIncrement(&net_logged_opens) > 64) {
+    int family = fi_netobs_family(buffer_wide(&request->url), request->url.size / sizeof(wchar_t));
+    if (family ? !fi_netobs_open(family, request->id) : InterlockedIncrement(&net_logged_opens) > 64) {
         return;
     }
     Buffer line = {0};
@@ -1475,6 +1478,12 @@ static DWORD WINAPI net_worker(void *parameter) {
                         (unsigned)request->status, request->response_body.data, request->response_body.size);
     }
     net_capture(request, answered, error);
+    /* what matchmaking and the session directory answered, in infinity.log (read only) */
+    int family = fi_netobs_family(buffer_wide(&request->url), request->url.size / sizeof(wchar_t));
+    if (family) {
+        fi_netobs_answer(family, request->id, answered, (unsigned)request->status, error, request->response_body.data,
+                         request->response_body.size);
+    }
     /* Take the callback out of the request: msxml6 drops it after the final
        notification, and XSAPI's callback owns the request (cycle otherwise). */
     XhrCallback *callback = InterlockedExchangePointer((void *volatile *)&request->callback, NULL);
