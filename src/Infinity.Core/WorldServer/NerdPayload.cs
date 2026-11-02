@@ -3,7 +3,7 @@ using System.Numerics;
 
 namespace Infinity.Core.WorldServer;
 
-internal enum PayloadFault { Router, Index, Duplicate, NotFinite, NameTooLong, Truncated, TooBig }
+internal enum PayloadFault { Router, Index, Duplicate, NotFinite, NameTooLong, Truncated, TooBig, OutOfRange }
 internal readonly record struct PayloadFailure(PayloadFault Fault, int Value = 0);
 internal readonly record struct OwnershipRequest(byte Router, uint Type, ObjectHandle Handle);
 
@@ -15,19 +15,21 @@ internal static class NerdPayload
     internal const float FloatMax = 1e6f;
     internal const float PositionMax = 1e5f;
 
-    // Positive = bits, -1 = finite f32, -2 = bounded UTF-16 NetworkName, -3 = finite f32 score (BucketListScoreMax).
+    // Positive = bits, -1 = finite f32, -2 = bounded UTF-16 NetworkName.
     private static readonly int[] PlayerVariables = [64, 1, 1, -2, 64, 1, 32, 1, 32, 32, 32, 32];
     private static readonly int[] CarVariables = [.. Enumerable.Repeat(-1, 21), 5];
     private static readonly int[] ConsoleVariables = [1, 1, 1, 1, 1, 1, 1, 2, 2];
     /// <summary>
-    /// BucketListPlayerStateSynced (router 12, type 0; 3-bit var ids), in the game's declaration order: 0 Score (f32), 1 CurrentSlotId
-    /// (s32), 2 CurrentChallengeId (s32), 3 RequestingPartner (bool), 4 State (3 bits), 5 ArrivedAtDestination (bool).
+    /// BucketListPlayerStateSynced (router 12, type 0), as the game's constructor declares it (the 6 variables give 3-bit var ids, the
+    /// bit length of the count): 0 Score (SyncedInt&lt;float, Range -2^31..2^31-1, 32 bits&gt;: an integer on the wire, kept opaque),
+    /// 1 CurrentSlotId and 2 CurrentChallengeId (SyncedInt&lt;long, 32 bits&gt;), 3 RequestingPartner (SyncedBool), 4 State
+    /// (SyncedEnum&lt;BucketListPlayerStateEnum, default 0, 4 bits&gt;: 1 Loading, 2 Ready, 3 Active, 4 Finished, 5 Retry), 5
+    /// ArrivedAtDestination (SyncedBool). Pinned from the game binary, T22 (2026-11-02).
     /// </summary>
-    private static readonly int[] BucketListPlayerVariables = [-3, 32, 32, 1, 3, 1];
+    private static readonly int[] BucketListPlayerVariables = [32, 32, 32, 1, 4, 1];
     internal const byte BucketListSlotVariable = 1, BucketListChallengeVariable = 2, BucketListRequestingVariable = 3, BucketListStateVariable = 4;
-    /// <summary>Every BucketListPlayerStateSynced variable once (119 bits), rounded up; a repeated id is refused anyway.</summary>
+    /// <summary>Every BucketListPlayerStateSynced variable once (120 bits), rounded up; a repeated id is refused anyway.</summary>
     internal const int BucketListPlayerMaxBits = 128;
-    internal const float BucketListScoreMax = 1e9f;
     internal static int? MaxBits(byte router) => router switch
     {
         1 => PlayerDataMaxBits, 2 => 787, 3 => 47, 12 => BucketListPlayerMaxBits, _ => null,
@@ -69,7 +71,7 @@ internal static class NerdPayload
             1 => PlayerSingleWidths.GetValueOrDefault(index),
             2 when index < CarVariables.Length => CarVariables[index] == -1 ? 32 : CarVariables[index],
             3 when index < ConsoleVariables.Length => ConsoleVariables[index],
-            12 when index < BucketListPlayerVariables.Length => BucketListPlayerVariables[index] == -3 ? 32 : BucketListPlayerVariables[index],
+            12 when index < BucketListPlayerVariables.Length => BucketListPlayerVariables[index],
             _ => 0,
         };
         return width > 0 && payload.Length == indexWidth + width ? index : null;
@@ -108,9 +110,9 @@ internal static class NerdPayload
                 var entry = new BitBuffer().Push((ulong)index, indexWidth);
                 switch (variables[index])
                 {
-                    case -1 or -3:
+                    case -1:
                         var bits = (uint)reader.Read(32);
-                        if (!FloatOk(bits, variables[index] == -3 ? BucketListScoreMax : FloatMax)) { failure = new(PayloadFault.NotFinite, index); return false; }
+                        if (!FloatOk(bits, FloatMax)) { failure = new(PayloadFault.NotFinite, index); return false; }
                         entry.Push(bits, 32);
                         break;
                     case -2:
@@ -119,7 +121,13 @@ internal static class NerdPayload
                         entry.Push((ulong)count, 5);
                         for (var i = 0; i < count; i++) entry.Push(reader.Read(16), 16);
                         break;
-                    default: entry.Push(reader.Read(variables[index]), variables[index]); break;
+                    default:
+                        var value = reader.Read(variables[index]);
+                        // a bucket-list State past the game's enum (EnumCount 8) is no state the game writes
+                        if (router == 12 && index == BucketListStateVariable && value > BucketListStateMax)
+                        { failure = new(PayloadFault.OutOfRange, (int)value); return false; }
+                        entry.Push(value, variables[index]);
+                        break;
                 }
                 if (router != 3 || index is not (1 or 2 or 4)) result.Append(entry);
             }
@@ -303,8 +311,14 @@ internal static class NerdPayload
         return output;
     }
 
-    /// <summary>MsgCarMeetNotifyPending (29): the 2-bit pending action (1: wait for the session the server makes, then join it).</summary>
+    /// <summary>
+    /// MsgCarMeetNotifyPending (29): the 2-bit pending action. <see cref="CarMeetPendingWait"/>: wait for the session the server
+    /// makes, then join it (the game shows WAITING FOR SESSION). <see cref="CarMeetPendingNone"/>: no pending action; a game that
+    /// was waiting for the server's session ends that matchmaking as aborted by the server and leaves the wait.
+    /// </summary>
     internal static BitBuffer CarMeetNotifyPending(byte action) => new BitBuffer().Push(29, 7).Push(action, 2);
+
+    internal const byte CarMeetPendingNone = 0, CarMeetPendingWait = 1;
 
     /// <summary>MsgCarMeetSessionReady (32): the session's name and template, each a compact-length Latin-1 string.</summary>
     internal static BitBuffer CarMeetSessionReady(string name, string template) =>
@@ -332,22 +346,40 @@ internal static class NerdPayload
         return new(false, 3, new(HandleKind.Server, id), 0, sequence, payload);
     }
 
-    /// <summary>A sanitized BucketListPlayerStateSynced payload's variables, in order; null when it does not read.</summary>
-    internal static IReadOnlyList<(byte Variable, ulong Value)>? BucketListPlayerOf(BitBuffer payload)
+    /// <summary>The highest BucketListPlayerStateEnum value (EnumCount is 8): a larger State only comes from a misread payload.</summary>
+    internal const int BucketListStateMax = 7;
+
+    /// <summary>
+    /// A BucketListPlayerStateSynced payload's variables, in order. A payload that does not read fully gives its clean prefix: the
+    /// variables before the first unknown id, repeated id, cut value or impossible State.
+    /// </summary>
+    internal static IReadOnlyList<(byte Variable, ulong Value)> BucketListPlayerOf(BitBuffer payload)
     {
         var result = new List<(byte, ulong)>();
         var reader = new BitReader(payload.Bytes, payload.Length);
+        var seen = 0;
         try
         {
             while (reader.Left > 0)
             {
                 var index = (byte)reader.Read(3);
-                if (index >= BucketListPlayerVariables.Length) return null;
-                result.Add((index, reader.Read(BucketListPlayerVariables[index] == -3 ? 32 : BucketListPlayerVariables[index])));
+                if (index >= BucketListPlayerVariables.Length || (seen & (1 << index)) != 0) break;
+                var value = reader.Read(BucketListPlayerVariables[index]);
+                if (index == BucketListStateVariable && value > BucketListStateMax) break;
+                seen |= 1 << index;
+                result.Add((index, value));
             }
-            return result;
         }
-        catch (WireFormatException) { return null; }
+        catch (WireFormatException) { /* cut: the variables before it */ }
+        return result;
+    }
+
+    /// <summary>BucketListPlayerStateSynced variables re-encoded in the game's layout (3-bit ids, the pinned widths).</summary>
+    internal static BitBuffer BucketListPlayer(IEnumerable<(byte Variable, ulong Value)> variables)
+    {
+        var output = new BitBuffer();
+        foreach (var (variable, value) in variables) output.Push(variable, 3).Push(value, BucketListPlayerVariables[variable]);
+        return output;
     }
 
     /// <summary>
@@ -409,16 +441,17 @@ internal static class NerdPayload
     /// <summary>
     /// MsgInProgressScoreUpdate (43): the sender's own handle (7-bit id), then 33 bits: the f32 score first, then one flag bit. The
     /// game's send writes them in that order (the scoring metric's double narrowed to a float, then a car flag). This returns the
-    /// raw f32, unvalidated; null when the body does not read.
+    /// raw f32, unvalidated, and the flag; null when the body does not read.
     /// </summary>
-    internal static float? InProgressScore(BitBuffer body)
+    internal static (float Value, bool Flag)? InProgressScore(BitBuffer body)
     {
         var reader = new BitReader(body.Bytes, body.Length);
         try
         {
             ObjectHandle.Read(ref reader, 7);
             if (reader.Left != 33) return null;
-            return BitConverter.UInt32BitsToSingle((uint)reader.Read(32));
+            var value = BitConverter.UInt32BitsToSingle((uint)reader.Read(32));
+            return (value, reader.Boolean());
         }
         catch (WireFormatException) { return null; }
     }

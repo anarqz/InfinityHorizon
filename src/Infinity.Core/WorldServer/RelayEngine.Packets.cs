@@ -175,7 +175,12 @@ internal sealed partial class RelayEngine
             if (bucketPlayer && obj.Create && !peer.Objects.ContainsKey((BucketListRouter, 0)) && peer.Objects.Count >= 256)
             { BucketListCapped(peer); return null; }
             if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
-            { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
+            {
+                Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value);
+                // a bucket-list PlayerState fails open: its clean prefix, re-encoded, from its owner (RelayEngine.BucketList.cs)
+                if (!bucketPlayer || BucketListSanitizeRefused(peer, obj, fault) is not { } prefix) return null;
+                payload = prefix;
+            }
             obj = obj with { Payload = payload! };
             if (obj.Router == 1 && !obj.Create && obj.Payload.Length >= RoadTripCarChoiceBits) RoadTripCarPicked(peer);
             if (obj.Router == 1) ObserveCarChoice(peer, obj.Payload);

@@ -189,15 +189,19 @@ internal sealed partial class RelayEngine
             Note($"event: race started with {race.Participants.Count}");
             WatchEventStart("event: race start");
             TagStarted(_now + 5000);
-            BeginEventProgress();
+            BeginEventProgress(start);
         }
     }
 
     private bool PassScore(RelayPeer peer, byte kind, BitBuffer body)
     {
         TickRace();
-        if (kind is not (43 or 44 or 45) || _race is not { Stage: RaceStage.Started } race || !race.Participants.Contains(peer.Index)
-            || NerdPayload.ScoreForOthers(body, peer.Index) is not { } payload) return false;
+        if (kind is not (43 or 44 or 45) || _race is not { Stage: RaceStage.Started } race) return false;
+        if (!race.Participants.Contains(peer.Index) || NerdPayload.ScoreForOthers(body, peer.Index) is not { } payload)
+        {
+            EventProgressIgnored(peer, kind, race.Participants.Contains(peer.Index) ? "not its own handle" : "not a participant");
+            return false;
+        }
         var message = NerdCodec.Write(new NerdMessage.Other(kind, payload));
         foreach (var other in _peers.Where(p => p != peer && p.Synced && race.Participants.Contains(p.Index)))
             if (kind == 43) Send(other, [message], false); else SendSequenced(other, [message]);
