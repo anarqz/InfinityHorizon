@@ -13,7 +13,8 @@ public interface IHostRelay : IDisposable
 
     bool Running { get; }
 
-    /// <summary>The XUIDs (decimal) of the players synced in the world now.</summary>
+    /// <summary>The XUIDs (decimal) of the players synced in the world now (every lobby: while any but the host's own remain,
+    /// the host's game leaving never closes the world, OD-180.2).</summary>
     Task<IReadOnlyList<string>> PeersAsync(CancellationToken cancellation);
 
     /// <summary>Drops a player (the server's <c>kicked</c> punch, the host's moderation).</summary>

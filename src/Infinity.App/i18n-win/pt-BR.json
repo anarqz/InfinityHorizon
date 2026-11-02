@@ -558,6 +558,8 @@
   "play.online": "JOGAR ONLINE",
   "play.ready": "Sua próxima viagem começa aqui. Entre nos servidores e iniciaremos o jogo quando chegar a sua vez.",
   "play.setup_needed": "Configure seu jogo primeiro",
+  "play.hook_stale_game_running": "O hook do Infinity na pasta do jogo precisa ser atualizado antes de jogar. Feche o jogo e aperte Jogar de novo.",
+  "play.hook_stale_failed": "O hook do Infinity na pasta do jogo precisa ser atualizado, mas o launcher não conseguiu gravar nessa pasta (acesso negado, ou outro programa está com o arquivo aberto). Vá em Configurar e reinstale o hook, ou abra o launcher com permissão para alterar a pasta do jogo.",
   "play.prepare": "Configurar",
   "queue.waiting_title": "Você está na fila",
   "queue.join_message": "Você está na fila para entrar nos servidores. Sua posição é #{n}.",

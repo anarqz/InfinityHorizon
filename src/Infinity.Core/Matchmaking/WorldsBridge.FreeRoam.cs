@@ -74,8 +74,10 @@ public sealed partial class WorldsBridge
     /// another leave of free roam ends this wait first. A lobby ask answered Ready within the grace BEFORE this leave counts
     /// too (live, test.9: back from a Road Trip the game asks for free roam, opens it, and only then closes its Road Trip
     /// connection): no wait starts. Only the close or leave waits: the world's announces and the seat's renewals go on
-    /// meanwhile. A hosted world whose Road Trip or car meet still has players (<see cref="IHostRelay.LobbyPlayers"/>) is
-    /// not closed: it is weighed again every grace.
+    /// meanwhile. OD-180.2: a hosted world that still has other players (<see cref="OtherPlayersAsync"/>) is not closed: with
+    /// any at the leave it is held for them at once, else after the grace; it is weighed again every grace, the relay, the
+    /// announces and the admissions go on, and it closes (DELETE) once the last of them is gone. The host's game joining
+    /// again (<see cref="GameJoined"/>) or asking for its lobby keeps the same world; the session's end still closes it.
     /// </summary>
     public async Task FreeRoamLeftAsync(CancellationToken cancellation)
     {
@@ -90,21 +92,37 @@ public sealed partial class WorldsBridge
         var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _onlineStop.Token);
         CancelFreeRoamLeave(Interlocked.Exchange(ref _freeRoamLeave, pending)); // a new leave starts the wait again
         var world = HostedWorldId ?? Volatile.Read(ref _seatWorld);
-        if (world is not null) _log($"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
         var due = false;
         var held = false;
+        long heldSince = 0, heldHours = 0;
         try
         {
+            // OD-180.2: a host whose game leaves while other players are in its world keeps it for them from this moment on
+            if (HostedWorldId is { } stays && await OtherPlayersAsync(pending.Token).ConfigureAwait(false) is var others and > 0)
+            {
+                (held, heldSince) = (true, _clock.GetTimestamp());
+                _log($"worlds: the host's game left {stays}; it stays open while {others} other player(s) remain");
+            }
+            else if (world is not null) _log($"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
             while (true)
             {
                 await Task.Delay(FreeRoamLeftGrace, _clock, pending.Token).ConfigureAwait(false);
                 if (Volatile.Read(ref _freeRoamLeave) != pending) break; // called off meanwhile
-                // a hosted world whose Road Trip or car meet still has players stays for them (live, test.8: the host's game
-                // left its session between two Road Trip events while the other player drove on); it is weighed again later
-                if (HostedWorldId is { } kept && LobbyPlayers() is var players and > 0)
+                // a hosted world that still has other players (free roam, Road Trip or car meet) stays for them (live, test.8 and
+                // T28: the host's game left its session after a race while the other player drove on); it is weighed again later
+                if (HostedWorldId is { } kept && await OtherPlayersAsync(pending.Token).ConfigureAwait(false) is var players and > 0)
                 {
-                    if (!held) _log($"worlds: free roam left; {kept} stays: {players} player(s) in its road trip/car meet");
-                    held = true;
+                    if (!held)
+                    {
+                        (held, heldSince) = (true, _clock.GetTimestamp());
+                        _log($"worlds: free roam left; {kept} stays: {players} other player(s) remain");
+                    }
+                    // bounded in the log, not in time: a world kept with no host game says so once an hour
+                    else if ((long)(_clock.GetElapsedTime(heldSince) / HeldWorldLogEvery) is var hours && hours > heldHours)
+                    {
+                        heldHours = hours;
+                        _log($"worlds: {kept} kept {hours} h with no host game; {players} other player(s) remain");
+                    }
                     continue;
                 }
                 due = Interlocked.CompareExchange(ref _freeRoamLeave, null, pending) == pending; // nothing called it off meanwhile
@@ -120,17 +138,28 @@ public sealed partial class WorldsBridge
         if (!due) return;
         var hosted = HostedWorldId;
         if ((hosted ?? Volatile.Read(ref _seatWorld)) is { } gone)
-            _log(held && hosted is not null ? $"worlds: free roam left; closing {gone}: no player left in its road trip/car meet"
+            _log(held && hosted is not null ? $"worlds: free roam left; closing {gone}: no other player left"
                 : $"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {(hosted is null ? "leaving" : "closing")} {gone}");
         await (hosted is not null ? CloseHostAsync(cancellation) : LeaveAsync(cancellation)).ConfigureAwait(false);
     }
 
-    // the hosted relay's Road Trip and car meet players (IHostRelay.LobbyPlayers); 0 without a relay
-    private int LobbyPlayers()
+    /// <summary>How often a hosted world kept for its other players with no host game says so in the log (OD-180.2).</summary>
+    public static readonly TimeSpan HeldWorldLogEvery = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// OD-180.2: the players of the hosted relay other than the host's own game: those synced in any of its worlds (free roam,
+    /// Road Trip, car meets; <see cref="IHostRelay.PeersAsync"/> without the host's XUID), at least its Road Trip and car meet
+    /// players (<see cref="IHostRelay.LobbyPlayers"/>); 0 without a running relay or when it cannot be read.
+    /// </summary>
+    private async Task<int> OtherPlayersAsync(CancellationToken cancellation)
     {
         IHostRelay? relay;
         lock (_hostState) relay = _relay;
-        return relay?.LobbyPlayers ?? 0;
+        if (relay is not { Running: true }) return 0;
+        var others = 0;
+        try { others = (await relay.PeersAsync(cancellation).ConfigureAwait(false)).Count(x => x != _ownXuid); }
+        catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException) { } // the relay just stopped
+        return Math.Max(others, relay.LobbyPlayers);
     }
 
     /// <summary>

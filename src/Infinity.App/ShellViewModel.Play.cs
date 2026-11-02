@@ -124,6 +124,8 @@ public sealed partial class ShellViewModel
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         RefreshHook(); // the hook as it is now, not as it was when the screen last looked
+        // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
+        if (!Playing && !EnsureHookCurrentForPlay()) return;
         if (!GameConfigurationReady && !Playing)
         {
             Message = S["play.setup_needed"];

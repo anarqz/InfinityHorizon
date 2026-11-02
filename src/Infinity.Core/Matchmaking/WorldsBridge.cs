@@ -87,11 +87,24 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private string? _hostedWorldId;
 
     /// <summary>A car meet invitation's shared session for the world this launcher hosts now; null when there is none or it was refused.</summary>
+    // T33: every outcome is logged (never a XUID); an exception reaches the relay, which logs its type
     private async Task<(string Name, string Template)?> GameModeSessionAsync(string kind, IReadOnlyList<string> xuids, CancellationToken cancellation)
     {
-        if (HostedWorldId is not { } worldId || xuids.Count is 0 or > GameModeSessionRequest.MaxMembers) return null;
+        if (HostedWorldId is not { } worldId) { _log?.Invoke("world: car meet session not asked: this launcher hosts no world now"); return null; }
+        var world = worldId[..Math.Min(8, worldId.Length)];
+        if (xuids.Count is 0 or > GameModeSessionRequest.MaxMembers)
+        {
+            _log?.Invoke($"world: car meet session not asked for {world}: {xuids.Count} player(s), 1 to {GameModeSessionRequest.MaxMembers} allowed");
+            return null;
+        }
         var answer = await _mm.GameModeSessionAsync(worldId, new GameModeSessionRequest { Kind = kind, Xuids = xuids }, cancellation).ConfigureAwait(false);
-        if (answer is not { Ok: true, Value: { } session }) { _log?.Invoke($"world: car meet session refused ({answer.Error?.Code ?? "no answer"})"); return null; }
+        if (answer is not { Ok: true, Value: { } session })
+        {
+            var field = answer.Error?.Field is { } named ? $", field {named}" : string.Empty;
+            _log?.Invoke($"world: car meet session refused for {world} (HTTP {(int)answer.Status} {answer.Error?.Code ?? "no body"}{field})");
+            return null;
+        }
+        _log?.Invoke($"world: car meet session created for {world} ({kind}, {xuids.Count} player(s))");
         return (session.Name, session.TemplateName);
     }
     private DateTimeOffset _nextAdmissionsRefresh;
