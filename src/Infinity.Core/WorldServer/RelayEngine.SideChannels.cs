@@ -85,7 +85,7 @@ internal sealed partial class RelayEngine
     {
         if (from.CarState is not { } state || !Allowed(from.Xuid, from.Endpoint)
             || from.CarHook is not { } source || !AllowedHook(from.Xuid, source)) return;
-        var packet = CarStateCodec.WriteDown(new(state, from.Index, from.Xuid, from.CarPosition));
+        var packet = CarStateCodec.WriteDown(new(state, from.Index, from.Xuid, from.CarPosition), Transaction());
         foreach (var peer in _peers)
             if (peer != from && peer.Synced && Allowed(peer.Xuid, peer.Endpoint) && peer.CarHook is { } hook && AllowedHook(peer.Xuid, hook)) Emit(hook, packet);
     }

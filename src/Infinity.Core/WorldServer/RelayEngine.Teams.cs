@@ -1,6 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
-using System.Security.Cryptography;
 
 namespace Infinity.Core.WorldServer;
 
@@ -58,7 +57,7 @@ internal sealed partial class RelayEngine
             return;
         }
         var order = race.Participants.ToList();
-        var random = _teamRandom ??= new Random(_settings.TeamSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue));
+        var random = _teamRandom ??= new Random(_settings.TeamSeed ?? _random.Seed(RelaySeed.Team));
         for (var i = order.Count - 1; i > 0; i--)
         {
             var j = random.Next(i + 1);

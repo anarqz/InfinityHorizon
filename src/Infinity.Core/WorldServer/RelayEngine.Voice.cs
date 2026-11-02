@@ -78,6 +78,14 @@ internal sealed partial class RelayEngine
 
     internal long VoiceForwarded { get; private set; }
 
+    /// <summary>A voice down's random transaction tail (the 3 bytes after its seat).</summary>
+    private byte[] VoiceTail()
+    {
+        var tail = new byte[3];
+        _random.Fill(tail);
+        return tail;
+    }
+
     /// <summary>The lobby's voice is on (the mode is not off; state down's <c>lobby</c> bit).</summary>
     internal bool LobbyVoice => _voiceMode != VoiceMode.Off;
 
@@ -173,7 +181,7 @@ internal sealed partial class RelayEngine
         { DropVoice("talker cap"); return; }
         if (VoiceSeatOf(peer) is not { } seat) { DropVoice("no seat"); return; }
         StartPacket(voice, up);
-        var packet = VoiceCodec.WriteDown(new VoiceDown(up.Header, seat, up.Opus));
+        var packet = VoiceCodec.WriteDown(new VoiceDown(up.Header, seat, up.Opus), VoiceTail());
         foreach (var (listener, heard) in _voice)
         {
             if (listener == peer || !Listening(listener, heard, peer)) continue;
@@ -235,7 +243,7 @@ internal sealed partial class RelayEngine
                 _voiceStateDue.Add(listener);
             }
             var pose = new VoicePose(talker.Side, me.Side, me.Known ? me.Qx : (short)0, me.Known ? me.Qy : (short)0, me.Known ? me.Qz : (short)0);
-            Emit(heard.Hook, VoiceCodec.WriteDown(new VoiceDown(up.Header, seat, up.Opus, pose)));
+            Emit(heard.Hook, VoiceCodec.WriteDown(new VoiceDown(up.Header, seat, up.Opus, pose), VoiceTail()));
             VoiceForwarded++;
         }
         if (voice.SpurtEnded) ForgetHeard(peer); // its spurt ended: it leaves every heard set
@@ -370,7 +378,7 @@ internal sealed partial class RelayEngine
     private void SendVoiceState(RelayPeer peer, VoicePeer voice)
     {
         if (peer.Synced && Allowed(peer.Xuid, peer.Endpoint) && AllowedHook(peer.Xuid, voice.Hook))
-            Emit(voice.Hook, VoiceCodec.WriteState(VoiceStateFor(VoiceStatePerListener ? peer : null)));
+            Emit(voice.Hook, VoiceCodec.WriteState(VoiceStateFor(VoiceStatePerListener ? peer : null), Transaction()));
     }
 
     /// <summary>Every subscriber's state, now.</summary>

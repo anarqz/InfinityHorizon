@@ -126,6 +126,11 @@ internal sealed partial class RelayEngine
     private readonly List<(RelayPeer To, BitBuffer Message)> _bucketOutbox = [];
     private byte _bucketSlotsSequence;
     private long _bucketOrder;
+    /// <summary>
+    /// The game's UniverseIds (FUN_140111040): 0 OfflineDefault, 1-17 OnlinePrivate0..16 (event phasing), 18-23 BucketList1..6 (a
+    /// co-op pair's, sent raw in 65 and entered through the ToBucketListUniverse override), 24 OnlineFreeroam.
+    /// </summary>
+    internal const byte FirstBucketListUniverse = 18, LastBucketListUniverse = 23;
     /// <summary>When each pair universe was last freed (a pair ended).</summary>
     private readonly Dictionary<byte, long> _bucketUniversesFreed = [];
     /// <summary>
@@ -140,7 +145,7 @@ internal sealed partial class RelayEngine
     /// <summary>A waiting or paired player keeps universe 0 (no private universe for it while an event phases the others).</summary>
     private bool BucketListBusy(RelayPeer peer) => _bucketPlayers.TryGetValue(peer, out var player) && (player.Waiting is not null || player.Pair is not null);
 
-    /// <summary>Whether a running pair holds this universe (event phasing never hands it out meanwhile).</summary>
+    /// <summary>Whether a running pair holds this universe. Pairs use 18..23 and event phasing 1..17, so this is only a guard against a future overlap.</summary>
     private bool BucketListUniverseHeld(byte universe) => universe != 0 && _bucketPlayers.Values.Any(p => p.Pair?.Universe == universe);
 
     /// <summary>
@@ -415,7 +420,10 @@ internal sealed partial class RelayEngine
         var waiter = _bucketPlayers.Where(p => p.Key != peer && p.Key.Synced && p.Value.Pair is null
                 && p.Value.Waiting is { } w && w.Slot == slot && w.Challenge == challenge && _now - w.At < BucketListWaitMs)
             .OrderBy(p => p.Value.Waiting!.Value.Order).Select(p => p.Key).FirstOrDefault();
-        if (waiter is not null) { PairBucketPlayers(waiter, peer, slot, challenge); return; }
+        if (waiter is not null && BucketListPickUniverse() is { } universe) { PairBucketPlayers(waiter, peer, slot, challenge, universe); return; }
+        // a guard (12 players make at most 6 pairs, so a world never gets here): all six bucket-list universes in use means
+        // no 65, never a shared universe; this player waits too (the first waiter keeps waiting) and the next request pairs them
+        if (waiter is not null) Note($"bucket list: peers {waiter.Index} and {peer.Index} not paired: all {LastBucketListUniverse - FirstBucketListUniverse + 1} bucket-list universes are in use");
         player.Waiting = (slot, challenge, _now, _bucketOrder++);
         player.Trace = BucketListTraceLines;
         _bucketUniverseDue.Add(peer); // a waiter is at universe 0
@@ -424,9 +432,9 @@ internal sealed partial class RelayEngine
         Note($"bucket list: peer {peer.Index} waits for a partner (slot {slot}, challenge {challenge})");
     }
 
-    private void PairBucketPlayers(RelayPeer first, RelayPeer second, int slot, int challenge)
+    private void PairBucketPlayers(RelayPeer first, RelayPeer second, int slot, int challenge, byte universe)
     {
-        var pair = new BucketPair(first, second, slot, challenge, _now) { Universe = BucketListPickUniverse() };
+        var pair = new BucketPair(first, second, slot, challenge, _now) { Universe = universe };
         foreach (var peer in new[] { first, second })
         {
             var player = BucketPlayerOf(peer);
@@ -449,23 +457,22 @@ internal sealed partial class RelayEngine
     }
 
     /// <summary>
-    /// The pair's bucket-list universe: the highest OnlinePrivate universe (<see cref="LastPrivateUniverse"/> down to
-    /// <see cref="FirstPrivateUniverse"/>) that no player holds for event phasing, no running pair uses and no pair left in the last
-    /// <see cref="BucketListUniverseCoolMs"/> (when all free ones are that fresh, the least recently freed). Event phasing takes the lowest
-    /// free one for each player not waiting or paired, so with P pairs it holds at most 12 - 2P universes (1 to 12 - 2P) while the pairs
-    /// hold 17 down to 18 - P: the two never meet. 0 (free roam) only if all are taken, which 12 players cannot reach.
+    /// The pair's bucket-list universe: the highest of the game's BucketList1..6 universes (<see cref="LastBucketListUniverse"/> down to
+    /// <see cref="FirstBucketListUniverse"/>) that no running pair uses and no pair left in the last <see cref="BucketListUniverseCoolMs"/>;
+    /// when all free ones are that fresh, the least recently freed. Event phasing uses OnlinePrivate0..16 (1-17), a separate range (a peer
+    /// holding one of these is still skipped, as a guard). Null when all six are in use: 12 players make at most 6 pairs, so a world never
+    /// gets there.
     /// </summary>
-    private byte BucketListPickUniverse()
+    private byte? BucketListPickUniverse()
     {
         var taken = _bucketPlayers.Values.Select(p => p.Pair?.Universe ?? 0).Concat(_peers.Select(p => p.Universe)).ToHashSet();
-        var free = Enumerable.Range(FirstPrivateUniverse, LastPrivateUniverse - FirstPrivateUniverse + 1).Select(u => (byte)u)
+        var free = Enumerable.Range(FirstBucketListUniverse, LastBucketListUniverse - FirstBucketListUniverse + 1).Select(u => (byte)u)
             .Where(u => !taken.Contains(u)).OrderByDescending(u => u).ToList();
         // a universe a pair just left stays out a while: its cars may still report it until their games leave it
         bool Cooling(byte u) => _bucketUniversesFreed.TryGetValue(u, out var at) && _now - at < BucketListUniverseCoolMs;
         if (free.FirstOrDefault(u => !Cooling(u)) is var rested and not 0) return rested;
         if (free.Count != 0) return free.MinBy(u => _bucketUniversesFreed.GetValueOrDefault(u)); // all cooling: the least recently freed
-        Note("bucket list: no free private universe for a pair, it stays in free roam (0)");
-        return 0;
+        return null;
     }
 
     /// <summary>
