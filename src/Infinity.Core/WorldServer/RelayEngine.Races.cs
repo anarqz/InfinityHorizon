@@ -85,6 +85,15 @@ internal sealed partial class RelayEngine
     private void SelectParticipants()
     {
         if (_race is not { Stage: RaceStage.Inviting } race) return;
+        // OD-183: every event (free roam, tag, Road Trip) needs two participants. With fewer when the invitation closes (or nobody
+        // else to invite) it is dropped the way an event before its start ends: the host and console flags clear and the starter is
+        // back in free roam. A Road Trip checks its ready players first (RoadTripReady), so this is its backstop.
+        if (race.Participants.Count < MinEventParticipants)
+        {
+            Note($"event: dropped, {race.Participants.Count} participant(s) when the invitation closed (an event needs {MinEventParticipants})");
+            EndRace("too few participants");
+            return;
+        }
         race.Stage = RaceStage.Gathering;
         race.StageUntil = _now + _settings.RacePrepareMs;
         Note($"event: {race.Participants.Count} participant(s) selected, loading cars");
@@ -247,8 +256,8 @@ internal sealed partial class RelayEngine
         Note($"event closed: {why}");
         EventClosed(race);
         RoadTripEventClosed();
-        // T24: with finishers still on their results the host variables stay as they are (the "Race complete" hold)
-        if (!HoldEventEnd(race)) SetHostVariables(EventEndVariables());
+        // T24: with finishers still on their results only the bystander HUD's variables stay (the "Race complete" hold)
+        SetHostVariables(HoldEventEnd(race) ? EventFlagsCleared : EventEndVariables());
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));
     }
@@ -314,4 +323,6 @@ internal sealed partial class RelayEngine
     }
 
     private const long StuckStepMs = 10000;
+    /// <summary>OD-183: the fewest participants a free-roam event starts with.</summary>
+    internal const int MinEventParticipants = 2;
 }

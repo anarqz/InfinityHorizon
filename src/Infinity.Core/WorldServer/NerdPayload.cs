@@ -6,6 +6,8 @@ namespace Infinity.Core.WorldServer;
 internal enum PayloadFault { Router, Index, Duplicate, NotFinite, NameTooLong, Truncated, TooBig, OutOfRange }
 internal readonly record struct PayloadFailure(PayloadFault Fault, int Value = 0);
 internal readonly record struct OwnershipRequest(byte Router, uint Type, ObjectHandle Handle);
+/// <summary>A MsgLapScore's fields in wire order (<see cref="NerdPayload.LapScore"/>): three doubles, a u32, two flags.</summary>
+internal readonly record struct LapScoreFields(double Value68, double Value78, double Value80, uint Count8C, bool Flag89, bool Flag8B);
 
 /// <summary>Read and rewrite forwarded payloads before they reach a game's trusting deserializers.</summary>
 internal static class NerdPayload
@@ -460,16 +462,31 @@ internal static class NerdPayload
     /// Whether a MsgLapScore (44) body has the game's layout: the sender's own handle (7-bit id), three compact-length strings of
     /// exactly 8 bytes (the send writes three doubles), then exactly 34 bits (a u32 and two flags).
     /// </summary>
-    internal static bool LapScoreOk(BitBuffer body)
+    internal static bool LapScoreOk(BitBuffer body) => LapScore(body) is not null;
+
+    /// <summary>
+    /// A MsgLapScore (44) read field by field (<see cref="LapScoreOk"/>'s layout), null when it does not have it. The game's send
+    /// (FUN_141804270, filled by FUN_140f924d0 from its scoring object) writes the object's doubles at +0x68, +0x78 and +0x80, its
+    /// u32 at +0x8c and its flags at +0x89 and +0x8b, in that order. The ranking comparator (FUN_140fa1440) ranks a non-zero u32
+    /// first, then the +0x8b flag, then the +0x80 double; what each one means in a lap is not pinned (the server only logs them).
+    /// </summary>
+    internal static LapScoreFields? LapScore(BitBuffer body)
     {
         var reader = new BitReader(body.Bytes, body.Length);
         try
         {
-            if (ObjectHandle.Read(ref reader, 7).Kind != HandleKind.Own) return false;
-            for (var i = 0; i < 3; i++) if (reader.ByteString(8).Length != 8) return false;
-            return reader.Left == 34;
+            if (ObjectHandle.Read(ref reader, 7).Kind != HandleKind.Own) return null;
+            Span<double> values = stackalloc double[3];
+            for (var i = 0; i < 3; i++)
+            {
+                var bytes = reader.ByteString(8);
+                if (bytes.Length != 8) return null;
+                values[i] = BitConverter.ToDouble(bytes);
+            }
+            if (reader.Left != 34) return null;
+            return new(values[0], values[1], values[2], (uint)reader.Read(32), reader.Boolean(), reader.Boolean());
         }
-        catch (WireFormatException) { return false; }
+        catch (WireFormatException) { return null; }
     }
 
     /// <summary>A SessionHostSynced f32 value: its 32 bits as written by <see cref="SessionHost"/> at width 32.</summary>

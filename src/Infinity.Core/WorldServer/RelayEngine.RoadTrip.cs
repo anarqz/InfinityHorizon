@@ -28,6 +28,10 @@ internal sealed partial class RelayEngine
     internal const long RoadTripCarSelectMs = 30000, RoadTripAllPickedMs = 3000, RoadTripConfigureMs = 12000;
     internal const long RoadTripDriveCapMs = 300000, RoadTripFirstArrivalMs = 30000, RoadTripDriveHoldMs = 180000;
     internal const long RoadTripPrepareMs = 120000;
+    /// <summary>OD-183: how long a first player waits alone for a second before its trip is dropped...</summary>
+    internal const long RoadTripWaitForPlayersMs = 60000;
+    /// <summary>...and how long the last player of a trip the others left stays before the trip ends for it.</summary>
+    internal const long RoadTripAloneMs = 10000;
     /// <summary>A router-1 update this large during car select is a player's car choice.</summary>
     internal const int RoadTripCarChoiceBits = 1000;
     /// <summary>
@@ -61,6 +65,11 @@ internal sealed partial class RelayEngine
         internal bool HoldDrive { get; set; }
         internal long HoldUntil { get; set; }
         internal byte? Leader { get; set; }
+        /// <summary>OD-183: since when one player is alone in the trip; whether two players have been in it.</summary>
+        internal long? AloneSince { get; set; }
+        internal bool Began { get; set; }
+        /// <summary>The last event was dropped before it ran (too few ready): no results to wait for, no finish to travel to.</summary>
+        internal bool LastDropped { get; set; }
         internal int CurrentRace => Plan![Winner!.Value].Events[EventIndex];
     }
 
@@ -303,7 +312,8 @@ internal sealed partial class RelayEngine
         SetHostVariables((4, 1, 1));
         RoadTripUpdate((0, trip.Plan![trip.Winner!.Value].Location), (1, trip.EventIndex), (2, trip.LastRace ?? 0),
             (3, trip.CurrentRace), (8, WireState(trip.State)), (9, 0));
-        if (trip.EventIndex == 0) BeginCountdown();
+        // a dropped event (OD-183) never ran: nobody is on a results screen, so its next drive starts at once
+        if (trip.EventIndex == 0 || trip.LastDropped) { trip.LastDropped = false; BeginCountdown(); }
         else
         {
             // after an event the players are still on their results: the countdown waits until they are back on the road
@@ -379,6 +389,17 @@ internal sealed partial class RelayEngine
         var players = RoadTripPlayers.ToList();
         var ready = players.Where(p => p.ConsoleValues[4] != 0).ToList();
         if (ready.Count == 0 || !force && ready.Count != players.Count) return;
+        // OD-183: an event needs two players. Fewer ready when the time is up: the event is dropped and the trip goes on to its next
+        // event (a trip left with one player ends by itself, TickRoadTrip)
+        if (ready.Count < MinEventParticipants)
+        {
+            if (!force) return;
+            Note($"road trip: event {trip.CurrentRace} dropped, {ready.Count}/{players.Count} ready (an event needs {MinEventParticipants})");
+            // as EndRace does for its participants: the ready flag clears, so the next preparation needs a fresh Ready
+            foreach (var peer in ready) SetConsoleVariables(peer, (2, false), (4, false));
+            RoadTripEventDropped();
+            return;
+        }
         var leader = ready.FirstOrDefault(p => p.Index == trip.Leader) ?? ready[0];
         _eventOwner = leader.Index;
         trip.Until = long.MaxValue;
@@ -396,6 +417,7 @@ internal sealed partial class RelayEngine
     {
         if (_roadTrip is not { Winner: not null } trip) return;
         trip.LastRace = trip.CurrentRace;
+        trip.LastDropped = false;
         if (trip.EventIndex + 1 < RoadTripCatalog.EventsPerDestination)
         {
             trip.EventIndex++;
@@ -410,21 +432,85 @@ internal sealed partial class RelayEngine
         }
     }
 
+    /// <summary>
+    /// An event dropped before it ran (OD-183): the trip goes on to the destination's next event (or a new vote after its fourth)
+    /// like a closed one, but it is no EventRaceId (nothing to fast-travel to: 0, the players start where they are) and its drive
+    /// does not wait for results screens.
+    /// </summary>
+    private void RoadTripEventDropped()
+    {
+        if (_roadTrip is not { Winner: not null } trip) return;
+        trip.LastRace = null;
+        trip.LastDropped = true;
+        if (trip.EventIndex + 1 < RoadTripCatalog.EventsPerDestination)
+        {
+            trip.EventIndex++;
+            trip.State = RoadTripState.FinaliseEvent;
+            trip.Until = _now;
+            ConfigureNextEvent();
+        }
+        else BeginVote();
+    }
+
     private void TickRoadTrip()
     {
         if (_roadTrip is not { } trip) return;
+        if (RoadTripAlone(trip)) return;
         StartRoadTripPlayers();
         if (trip.State == RoadTripState.DriveToEvent && trip.HoldDrive && _now >= trip.HoldUntil) { BeginCountdown(); return; }
         if (_now < trip.Until) return;
         switch (trip.State)
         {
-            case RoadTripState.Initialising when RoadTripPlayers.Any(): BeginVote(); break;
+            // OD-183: the vote is drawn for two players or more (RoadTripJoined draws it as the second arrives); one alone never gets it
+            case RoadTripState.Initialising when RoadTripPlayers.Count() >= MinEventParticipants: BeginVote(); break;
             case RoadTripState.DestinationVote: FinishVote(); break;
             case RoadTripState.CarSelect when trip.Configured || _now >= trip.ConfigureUntil: StartDrive(); break;
             case RoadTripState.FinaliseEvent when trip.Configured || _now >= trip.ConfigureUntil: StartDrive(); break;
             case RoadTripState.DriveToEvent: BeginPrepare(); break;
             case RoadTripState.PrepareForEvent: RoadTripReady(force: true); break;
         }
+    }
+
+    /// <summary>
+    /// OD-183: an online Road Trip is for two players or more ("there's no sense to get into an ONLINE ROAD TRIP alone"). A player
+    /// alone in the trip, before anybody else joined (<see cref="RoadTripWaitForPlayersMs"/>) or after the others left
+    /// (<see cref="RoadTripAloneMs"/>), is sent back: the server closes its connection, as a host ending the session does, and the
+    /// game returns to free roam. With nobody left the trip starts over for the next players. True when the tick is done.
+    /// </summary>
+    private bool RoadTripAlone(RoadTrip trip)
+    {
+        // a doomed player is on its way out; one still handshaking (admitted, not synced yet) is on its way in
+        var present = _peers.Where(p => !p.Doomed).ToList();
+        var players = present.Where(p => p.Synced).ToList();
+        if (players.Count == 0)
+        {
+            trip.AloneSince = null;
+            if (present.Count == 0 && (trip.State != RoadTripState.Initialising || trip.FirstSeenAt >= 0)) ResetRoadTrip("nobody left");
+            return false;
+        }
+        if (players.Count >= MinEventParticipants) { trip.AloneSince = null; trip.Began = true; return false; }
+        if (present.Count >= MinEventParticipants) { trip.AloneSince = null; return false; } // a second player is joining
+        trip.AloneSince ??= _now;
+        var limit = trip.Began ? RoadTripAloneMs : RoadTripWaitForPlayersMs;
+        if (_now - trip.AloneSince < limit) return false;
+        var lone = players[0];
+        Note(trip.Began
+            ? $"road trip: peer {lone.Index} is alone in the trip, it ends (a Road Trip needs {MinEventParticipants} players)"
+            : $"road trip: nobody joined peer {lone.Index}'s trip, it is dropped (a Road Trip needs {MinEventParticipants} players)");
+        Doom(lone, "alone in the Road Trip");
+        // at once, not when the doomed player is gone: a player joining in between gets a fresh trip and its full wait
+        ResetRoadTrip("its last player was sent back");
+        return true;
+    }
+
+    /// <summary>The trip starts over as a new one, and SessionHost's event flag goes back to free roam's.</summary>
+    private void ResetRoadTrip(string why)
+    {
+        if (_settings.RoadTrip is not { } settings) return;
+        _roadTrip = new(settings);
+        _roadTripStateSent = null;
+        if (_hostVariables.TryGetValue(4, out var active) && active.Value != 0) SetHostVariables((4, 0, 1));
+        Note($"road trip: {why}, the trip starts over");
     }
 
     private void RoadTripPeerLeft(RelayPeer peer)
