@@ -226,6 +226,14 @@ internal static class NerdCodec
             case 50: // ConfigureGameOptionsForRoadTripEvent, server to the leader: the event, then u32
                 reader.Skip(64);
                 return;
+            case 61 or 66 or 67 or 68: // bucket-list co-op, server to client: 61 the start time (u32); 66-68 waiting/started/ended (s32)
+                reader.Skip(32);
+                return;
+            case 65: // bucket-list co-op partner, server to client: PlayerState key, 5-bit start position, found, a name of at most 36 bytes
+                ObjectHandle.Read(ref reader, 7);
+                reader.Skip(6);
+                reader.ByteString(RelayEngine.BucketListNameMax);
+                return;
             case 39:
                 ObjectHandle.Read(ref reader, 2);
                 var count = (int)reader.Read(4);

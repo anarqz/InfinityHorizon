@@ -15,11 +15,24 @@ internal static class NerdPayload
     internal const float FloatMax = 1e6f;
     internal const float PositionMax = 1e5f;
 
-    // Positive = bits, -1 = finite f32, -2 = bounded UTF-16 NetworkName.
+    // Positive = bits, -1 = finite f32, -2 = bounded UTF-16 NetworkName, -3 = finite f32 score (BucketListScoreMax).
     private static readonly int[] PlayerVariables = [64, 1, 1, -2, 64, 1, 32, 1, 32, 32, 32, 32];
     private static readonly int[] CarVariables = [.. Enumerable.Repeat(-1, 21), 5];
     private static readonly int[] ConsoleVariables = [1, 1, 1, 1, 1, 1, 1, 2, 2];
-    internal static int? MaxBits(byte router) => router switch { 1 => PlayerDataMaxBits, 2 => 787, 3 => 47, _ => null };
+    /// <summary>
+    /// BucketListPlayerStateSynced (router 12, type 0; 3-bit var ids), in the game's declaration order: 0 Score (f32), 1 CurrentSlotId
+    /// (s32), 2 CurrentChallengeId (s32), 3 RequestingPartner (bool), 4 State (3 bits), 5 ArrivedAtDestination (bool).
+    /// </summary>
+    private static readonly int[] BucketListPlayerVariables = [-3, 32, 32, 1, 3, 1];
+    internal const byte BucketListSlotVariable = 1, BucketListChallengeVariable = 2, BucketListRequestingVariable = 3, BucketListStateVariable = 4;
+    /// <summary>Every BucketListPlayerStateSynced variable once (119 bits), rounded up; a repeated id is refused anyway.</summary>
+    internal const int BucketListPlayerMaxBits = 128;
+    internal const float BucketListScoreMax = 1e9f;
+    internal static int? MaxBits(byte router) => router switch
+    {
+        1 => PlayerDataMaxBits, 2 => 787, 3 => 47, 12 => BucketListPlayerMaxBits, _ => null,
+    };
+    private static int IndexWidth(byte router) => router switch { 1 => 8, 2 => 5, 3 => 4, 12 => 3, _ => 0 };
 
     /// <summary>
     /// Player object (router 1) variables past the mapped twelve whose width is known, so that an update carrying exactly one of
@@ -47,7 +60,7 @@ internal static class NerdPayload
     /// </summary>
     internal static int? SingleVariable(byte router, BitBuffer payload)
     {
-        var indexWidth = router switch { 1 => 8, 2 => 5, 3 => 4, _ => 0 };
+        var indexWidth = IndexWidth(router);
         if (indexWidth == 0 || payload.Length <= indexWidth) return null;
         var index = (int)new BitReader(payload.Bytes, payload.Length).Read(indexWidth);
         var width = router switch
@@ -56,6 +69,7 @@ internal static class NerdPayload
             1 => PlayerSingleWidths.GetValueOrDefault(index),
             2 when index < CarVariables.Length => CarVariables[index] == -1 ? 32 : CarVariables[index],
             3 when index < ConsoleVariables.Length => ConsoleVariables[index],
+            12 when index < BucketListPlayerVariables.Length => BucketListPlayerVariables[index] == -3 ? 32 : BucketListPlayerVariables[index],
             _ => 0,
         };
         return width > 0 && payload.Length == indexWidth + width ? index : null;
@@ -65,10 +79,10 @@ internal static class NerdPayload
     {
         clean = null;
         failure = null;
-        var variables = router switch { 1 => PlayerVariables, 2 => CarVariables, 3 => ConsoleVariables, _ => null };
+        var variables = router switch { 1 => PlayerVariables, 2 => CarVariables, 3 => ConsoleVariables, 12 => BucketListPlayerVariables, _ => null };
         if (variables is null) { failure = new(PayloadFault.Router, router); return false; }
         if (payload.Length > MaxBits(router)) { failure = new(PayloadFault.TooBig, payload.Length); return false; }
-        var indexWidth = router == 1 ? 8 : router == 2 ? 5 : 4;
+        var indexWidth = IndexWidth(router);
         var room = router == 1 ? 163 : variables.Length;
         var reader = new BitReader(payload.Bytes, payload.Length);
         var result = new BitBuffer();
@@ -94,9 +108,9 @@ internal static class NerdPayload
                 var entry = new BitBuffer().Push((ulong)index, indexWidth);
                 switch (variables[index])
                 {
-                    case -1:
+                    case -1 or -3:
                         var bits = (uint)reader.Read(32);
-                        if (!FloatOk(bits, FloatMax)) { failure = new(PayloadFault.NotFinite, index); return false; }
+                        if (!FloatOk(bits, variables[index] == -3 ? BucketListScoreMax : FloatMax)) { failure = new(PayloadFault.NotFinite, index); return false; }
                         entry.Push(bits, 32);
                         break;
                     case -2:
@@ -317,4 +331,78 @@ internal static class NerdPayload
         foreach (var (variable, value) in entries) payload.Push(variable, 4).Boolean(value);
         return new(false, 3, new(HandleKind.Server, id), 0, sequence, payload);
     }
+
+    /// <summary>A sanitized BucketListPlayerStateSynced payload's variables, in order; null when it does not read.</summary>
+    internal static IReadOnlyList<(byte Variable, ulong Value)>? BucketListPlayerOf(BitBuffer payload)
+    {
+        var result = new List<(byte, ulong)>();
+        var reader = new BitReader(payload.Bytes, payload.Length);
+        try
+        {
+            while (reader.Left > 0)
+            {
+                var index = (byte)reader.Read(3);
+                if (index >= BucketListPlayerVariables.Length) return null;
+                result.Add((index, reader.Read(BucketListPlayerVariables[index] == -3 ? 32 : BucketListPlayerVariables[index])));
+            }
+            return result;
+        }
+        catch (WireFormatException) { return null; }
+    }
+
+    /// <summary>
+    /// The player object's NetworkName (var 3) in one relayed payload, the last one it carries: read from the payload's start while the
+    /// variables' widths are known (<see cref="PlayerVariables"/>, <see cref="PlayerSingleWidths"/>). A name after a variable of unknown
+    /// width in the same payload is not seen; each payload is read on its own, so a later update carrying the name still is. Null: none.
+    /// </summary>
+    internal static string? PlayerName(BitBuffer payload)
+    {
+        var reader = new BitReader(payload.Bytes, payload.Length);
+        string? name = null;
+        try
+        {
+            while (reader.Left >= 8)
+            {
+                var index = (int)reader.Read(8);
+                if (index >= PlayerVariables.Length)
+                {
+                    if (PlayerSingleWidths.GetValueOrDefault(index) is not (> 0 and var width)) return name;
+                    reader.Skip(width);
+                    continue;
+                }
+                if (PlayerVariables[index] != -2) { reader.Skip(PlayerVariables[index]); continue; }
+                var units = new char[(int)reader.Read(5)];
+                for (var i = 0; i < units.Length; i++) units[i] = (char)reader.Read(16);
+                name = new string(units);
+            }
+        }
+        catch (WireFormatException) { }
+        return name;
+    }
+
+    /// <summary>BucketListSlotArraySynced variables (6-bit ids, s32 values), in the order given.</summary>
+    internal static BitBuffer BucketListSlots(IEnumerable<(byte Variable, int Value)> variables)
+    {
+        var output = new BitBuffer();
+        foreach (var (variable, value) in variables) output.Push(variable, 6).Push(unchecked((uint)value), 32);
+        return output;
+    }
+
+    /// <summary>
+    /// The co-op partner (65), server to client: the partner's BucketListPlayerStateSynced key as the receiver knows it (7-bit id), the
+    /// receiver's 5-bit start position, found, then a compact-length Latin-1 string of at most <paramref name="nameMax"/> bytes.
+    /// </summary>
+    internal static BitBuffer BucketListPartner(ObjectHandle partner, byte start, bool found, string name, int nameMax)
+    {
+        var output = new BitBuffer().Push(65, 7);
+        partner.Write(output, 7);
+        var text = System.Text.Encoding.Latin1.GetBytes(name.Select(c => c is >= ' ' and <= '~' or >= ' ' and <= 'ÿ' ? c : '?').ToArray());
+        return output.Push(start, 5).Boolean(found).ByteString(text.AsSpan(0, Math.Min(text.Length, nameMax)));
+    }
+
+    /// <summary>The co-op challenge's start time (61) on the network clock, server to client.</summary>
+    internal static BitBuffer BucketListStart(uint time) => new BitBuffer().Push(61, 7).Push(time, 32);
+
+    /// <summary>A co-op challenge waiting (66), started (67) or ended (68), server to client: one s32.</summary>
+    internal static BitBuffer BucketListStatus(byte kind, int value) => new BitBuffer().Push(kind, 7).Push(unchecked((uint)value), 32);
 }

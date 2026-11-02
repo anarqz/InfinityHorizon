@@ -128,6 +128,7 @@ internal sealed partial class RelayEngine
         if (StunCodec.IsStun(data)) { ReceiveSideChannel(data, endpoint); return; }
         try { ReceivePacket(data, endpoint); }
         catch (WireFormatException) { /* malformed input ends this datagram only */ }
+        FlushBucketList(); // a packet that returned before its forwarding staged co-op output too
         DropDoomed();
     }
 
@@ -144,6 +145,7 @@ internal sealed partial class RelayEngine
         _retiredAttempts.Clear(); _retiredOrder.Clear(); _heldOpens.Clear();
         ClearGameOptions();
         ClearSideChannels();
+        ClearBucketList();
         _eventSide.Clear(); _phasing = false;
     }
 
@@ -325,6 +327,7 @@ internal sealed partial class RelayEngine
             snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, _carMeetSequence, CarMeetState())));
         AppendGameOptionsSnapshot(peer, snapshot);
         AppendRoadTripSnapshot(peer, snapshot);
+        AppendBucketListSnapshot(snapshot);
         foreach (var owner in _peers.Where(p => p != peer && p.Synced))
             foreach (var (key, obj) in owner.Objects) snapshot.AddRange(obj.Snapshot(key.Router, new(HandleKind.Relay, key.Id, owner.Index)));
         foreach (var message in snapshot)
@@ -357,6 +360,7 @@ internal sealed partial class RelayEngine
         LeaveEventSide(peer);
         CarMeetPeerLeft(peer);
         RoadTripPeerLeft(peer);
+        BucketListPeerLeft(peer);
     }
 
     private void DropDoomed()

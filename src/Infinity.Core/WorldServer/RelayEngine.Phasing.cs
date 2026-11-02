@@ -79,9 +79,16 @@ internal sealed partial class RelayEngine
 
     private void AssignUniverse(RelayPeer peer)
     {
-        if (peer.Universe != 0) return;
+        if (peer.Universe != 0 || BucketListBusy(peer)) return; // a bucket-list co-op player stays at 0 (RelayEngine.BucketList.cs)
+        if (FreeUniverse() is { } universe) SetUniverse(peer, universe);
+    }
+
+    /// <summary>The first private universe nobody holds; null when all are taken.</summary>
+    private byte? FreeUniverse()
+    {
         for (var universe = FirstPrivateUniverse; universe <= LastPrivateUniverse; universe++)
-            if (_peers.All(p => p.Universe != universe)) { SetUniverse(peer, universe); return; }
+            if (_peers.All(p => p.Universe != universe)) return universe;
+        return null;
     }
 
     /// <summary>The server's value of a player's PrivateUniverseId: to the owner, and to everybody else on its relayed object.</summary>
