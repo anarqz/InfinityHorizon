@@ -869,13 +869,38 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
     return 0;
 }
 
+/* T34 (OD-182): the seat each lobby kind's last handshake left (-1 none asked yet or no answer, 0
+   none, 1 a world is ready), so a "found" ticket answer reaches the game only with a seat
+   (ticket_guard.c). A CancelMatchmaking makes every seat FI_SEAT_CANCELLED until a handshake
+   answers again. Under launch_fr_lock. */
+static int launch_fr_seat[3] = {-1, -1, -1};
+
+static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted);
+
 /* The net worker, before it forwards a request (net.c): for the FreeRoam_qos POST in a live
    launcher session, the FreeRoamNeed handshake. The result (0 a world is ready, 1 none, 2 not
    online), -1 when nothing was asked or nothing came (the request goes on either way). */
 int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG *aborted) {
     int hopper = fi_launch_protocol() ? fi_launch_free_roam_request(method, url) : 0;
     if (!hopper) return -1;
-    unsigned kind = (unsigned)hopper - 1;
+    fi_ticket_guard_search((unsigned)hopper - 1); /* T34: a new search */
+    return launch_free_roam_kind((unsigned)hopper - 1, aborted);
+}
+
+int fi_launch_seat(unsigned kind) {
+    if (kind > 2 || !fi_launch_protocol() || !fi_launch_live() || !launch_connected) return -1;
+    AcquireSRWLockShared(&launch_fr_lock);
+    int seat = launch_fr_seat[kind];
+    ReleaseSRWLockShared(&launch_fr_lock);
+    return seat;
+}
+
+int fi_launch_seat_ask(unsigned kind, volatile LONG *aborted) {
+    if (kind > 2 || !fi_launch_protocol()) return -1;
+    return launch_free_roam_kind(kind, aborted);
+}
+
+static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted) {
     if (!fi_launch_live() || !launch_connected) {
         static volatile LONG logged;
         if (!InterlockedExchange(&logged, 1)) {
@@ -925,8 +950,10 @@ int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG
         int answered = launch_fr_nonce != nonce;
         if (answered) {
             result = launch_fr_done == nonce ? (int)launch_fr_result : -1;
+            launch_fr_seat[kind] = result < 0 ? -1 : result == 0; /* no answer for this nonce: unknown */
         } else if (GetTickCount64() >= launch_fr_deadline || !launch_connected || fi_launch_suspended()) {
             launch_fr_nonce = 0; /* the next request asks again */
+            launch_fr_seat[kind] = -1; /* unknown: a found answer goes through, as before T34 */
             answered = 1;
         } else if (aborted && *aborted) {
             answered = 1; /* only this request leaves: other waiters keep the shared handshake */
@@ -1880,6 +1907,10 @@ static int launch_session_frame(void) {
         }
         if (fi_launch_suspended()) return 1;
         launch_log("CancelMatchmaking: the launcher gave up on its seat; the game's matchmaking is cancelled.", 0, 0, "");
+        AcquireSRWLockExclusive(&launch_fr_lock);
+        /* T34: given up; a found ticket says "canceled", never asks again, until the next search */
+        launch_fr_seat[0] = launch_fr_seat[1] = launch_fr_seat[2] = FI_SEAT_CANCELLED;
+        ReleaseSRWLockExclusive(&launch_fr_lock);
         fi_follow_cancel();
         return 1;
     case FRAME_WATCH:

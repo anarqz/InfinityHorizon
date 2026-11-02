@@ -184,6 +184,35 @@ void fi_launch_capture(unsigned what, int ok);
    was asked or nothing came; the request is forwarded either way. */
 int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url);
 int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG *aborted);
+/* T34 (OD-182): the launcher's seat for a lobby kind (0 free roam, 1 car meet, 2 Road Trip) as its
+   last handshake left it: 1 a world is ready, 0 none, -1 not asked yet, unanswered or no live
+   launcher session, FI_SEAT_CANCELLED after a CancelMatchmaking (until the next search's handshake).
+   fi_launch_seat_ask asks again on the calling net worker (the launcher joins the first open lobby
+   or opens one) and returns the result as fi_launch_free_roam. */
+#define FI_SEAT_CANCELLED (-2)
+int fi_launch_seat(unsigned kind);
+int fi_launch_seat_ask(unsigned kind, volatile LONG *aborted);
+/* ticket_guard.c (T34, OD-182): a "found" matchmaking ticket answer (GET momatch .../hoppers/
+   {FreeRoam,CarMeet,RoadTrip}_qos/tickets/{id}) reaches the game only while the launcher holds a
+   seat; otherwise the launcher is asked again and the answer says "searching" (the game polls it
+   again; also once after a successful ask) or, after FI_TICKET_ASKS asks in one search or with
+   online closed, "expired" (the game's own end of a search); after a CancelMatchmaking, "canceled".
+   fi_ticket_guard_search: a new search (the hopper's POST) starts the asks again. The status the
+   answer should carry instead, 0 to pass it through. Then the rewrite of
+   the body (fi_ticket_rewrite: its new size, 0 when it does not fit). A target the game then leaves
+   (a session directory PUT of members.me null on it before any association) is logged loudly:
+   fi_ticket_guard_request on each forwarded request, fi_ticket_guard_associated from
+   CreateAssociationAsync. */
+#define FI_TICKET_ASKS 3u
+int fi_ticket_hopper(const wchar_t *method, const wchar_t *url);
+int fi_ticket_found(const unsigned char *body, size_t size, size_t *value_at);
+size_t fi_ticket_target(const unsigned char *body, size_t size, char *name, size_t capacity);
+const char *fi_ticket_guard_check(unsigned kind, const unsigned char *body, size_t size, volatile LONG *aborted);
+void fi_ticket_guard_search(unsigned kind);
+size_t fi_ticket_rewrite(const unsigned char *body, size_t size, size_t value_at, const char *status, unsigned char *out,
+                         size_t capacity);
+void fi_ticket_guard_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
+void fi_ticket_guard_associated(void);
 /* N-H2: the native mod runtime's snapshot as a ModsReport (0x1b) for the launcher; the session
    writer sends it once it changed. 0 outside a launcher session. */
 struct InfinityModsSnapshotV2;

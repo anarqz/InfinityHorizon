@@ -1538,6 +1538,69 @@ static int net_answer_backoff(NetRequest *request) {
            buffer_append(&request->response_body, body, size);
 }
 
+/* T34 (ticket_guard.c): a 200 "found" ticket status answer while the launcher holds no seat for
+   that lobby says "searching" or "expired" instead (only the status; the rest is as answered). */
+static void net_ticket_guard(NetRequest *request) {
+    size_t at;
+    int hopper = fi_ticket_hopper(buffer_wide(&request->method), buffer_wide(&request->url));
+    if (!hopper || request->status != 200 ||
+        !fi_ticket_found(request->response_body.data, request->response_body.size, &at)) {
+        return;
+    }
+    const char *status = fi_ticket_guard_check((unsigned)hopper - 1, request->response_body.data,
+                                               request->response_body.size, &request->aborted);
+    if (!status) return;
+    Buffer out = {0};
+    size_t size = 0;
+    if (buffer_reserve(&out, request->response_body.size + 16)) {
+        size = fi_ticket_rewrite(request->response_body.data, request->response_body.size, at, status, out.data,
+                                 out.capacity);
+    }
+    if (!size) {
+        buffer_free(&out);
+        log_append("TICKET: the found answer could not be rewritten; passed through.\r\n");
+        return;
+    }
+    out.size = size;
+    buffer_free(&request->response_body);
+    request->response_body = out;
+    /* the body's length changed: Content-Length says the new size, and a Transfer-Encoding (WinHTTP
+       already decoded the chunks) no longer applies */
+    Buffer headers = {0};
+    const wchar_t *text = buffer_wide(&request->response_headers);
+    size_t length = request->response_headers.size / sizeof(wchar_t), line = 0;
+    int ok = 1, had_length = 0;
+    while (ok && text && line < length) {
+        size_t end = line;
+        while (end < length && text[end] != L'\n') ++end;
+        if (end < length) ++end;
+        if (wide_starts_ignore_case(text + line, end - line, L"content-length:")) {
+            had_length = 1;
+        } else if (!wide_starts_ignore_case(text + line, end - line, L"transfer-encoding:")) {
+            ok = buffer_append(&headers, text + line, (end - line) * sizeof(wchar_t));
+        }
+        line = end;
+    }
+    if (ok && had_length) {
+        wchar_t digits[24];
+        unsigned n = 0;
+        size_t value = size;
+        do {
+            digits[n++] = (wchar_t)(L'0' + value % 10);
+            value /= 10;
+        } while (value);
+        ok = buffer_append_wide(&headers, L"Content-Length: ");
+        while (ok && n) ok = buffer_append(&headers, &digits[--n], sizeof(wchar_t));
+        ok = ok && buffer_append_wide(&headers, L"\r\n");
+    }
+    if (ok && text) {
+        buffer_free(&request->response_headers);
+        request->response_headers = headers;
+    } else {
+        buffer_free(&headers);
+    }
+}
+
 static int net_forward_noted(NetRequest *request, HRESULT *error) {
     int answered = net_forward(request, error);
     if (answered) net_backoff_note(request);
@@ -1558,11 +1621,17 @@ static DWORD WINAPI net_worker(void *parameter) {
         /* CR-L40: FREE ROAM ONLINE's matchmaking waits (this worker only, at most 20 s) until
            the launcher has seated the player in a lobby; it is forwarded whatever the answer */
         (void)fi_launch_free_roam(buffer_wide(&request->method), buffer_wide(&request->url), &request->aborted);
+        /* T34: a leave of the target a found ticket named, in the log (read only) */
+        fi_ticket_guard_request(buffer_wide(&request->method), buffer_wide(&request->url), request->request_body.data,
+                                request->request_body.size);
     }
     int answered = net_mode == NET_MODE_PROXY && !request->aborted &&
                    (net_answer_without_profile(request) || net_answer_foreign(request) || net_answer_livery(request) ||
                     net_answer_no_line(request) || net_hold_progress(request) || net_answer_backoff(request) ||
                     net_forward_noted(request, &error));
+    if (answered && net_mode == NET_MODE_PROXY && !request->aborted) {
+        net_ticket_guard(request); /* T34: a found ticket only with the launcher's seat */
+    }
     if (request->aborted) {
         answered = 0;
         error = E_ABORT;

@@ -1145,6 +1145,7 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
             fi_launch_event(FI_EVENT_FREE_ROAM_ENTERED, "join"); /* never an address in a log or a frame */
         }
     }
+    fi_ticket_guard_associated(); /* T34: a found target was joined, not left */
     fr_log("SecureDeviceAssociationTemplate.CreateAssociationAsync -> completed.");
     return fr_completed((FrCom *)(void *)association, out);
 }
@@ -1476,10 +1477,13 @@ static const char *const fr_obs_names[FR_OBS_KINDS] = {
                     20 0x1417CD16C, 22 0x1417CD0CC, 24 0x1417CCF8C (handler, &token);
                     remove_ 25 0x1417CEB04 (token) has no out.
      4b907f32       8 0x1409EBAFA, 10 0x1409ECADA (a, b, &out)
-     15946429       6 0x1417B57A0 (a, &out), 8 0x1417A34EA (a, b, &out)
+     15946429       6 0x1417B57A0 (User.Users, &out; an action on the local users' party, async:
+                    when it ends the game's party manager resets its party state, game+0x17adf10,
+                    and a search waiting for its ticket deletes it and leaves its own session,
+                    game+0x17ade10), 8 0x1417A34EA (a, b, &out)
      87521843       6 0x1417A680E (int, &out)
      ISystemUIStatics 9 0x1417B98B0 (a, &out action; the invite UI, async)
-   Every other slot logs its HRESULT only. Only the two async slots are asked for IAsyncInfo. */
+   Every other slot logs its HRESULT only. Only the async slots are asked for IAsyncInfo. */
 static const unsigned char fr_obs_outs[FR_OBS_KINDS][FR_SLOTS] = {
     [FR_OBS_PARTY] = {[6] = FR_OBS_OUT_ASYNC | 3, [7] = FR_OBS_OUT_ASYNC | 3,
                       [10] = FR_OBS_OUT_OBJECT | 3, [11] = FR_OBS_OUT_OBJECT | 3,
@@ -1488,7 +1492,7 @@ static const unsigned char fr_obs_outs[FR_OBS_KINDS][FR_SLOTS] = {
                       [20] = FR_OBS_OUT_TOKEN | 2, [22] = FR_OBS_OUT_TOKEN | 2,
                       [24] = FR_OBS_OUT_TOKEN | 2},
     [FR_OBS_PARTY_4B90] = {[8] = FR_OBS_OUT_OBJECT | 3, [10] = FR_OBS_OUT_OBJECT | 3},
-    [FR_OBS_PARTY_1594] = {[6] = FR_OBS_OUT_OBJECT | 2, [8] = FR_OBS_OUT_OBJECT | 3},
+    [FR_OBS_PARTY_1594] = {[6] = FR_OBS_OUT_ASYNC | 2, [8] = FR_OBS_OUT_OBJECT | 3},
     [FR_OBS_PARTY_8752] = {[6] = FR_OBS_OUT_OBJECT | 2},
     [FR_OBS_SYSTEM_UI] = {[9] = FR_OBS_OUT_ASYNC | 2},
 };
