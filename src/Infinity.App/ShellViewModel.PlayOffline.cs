@@ -134,6 +134,10 @@ public sealed partial class ShellViewModel
 
     public async Task PlayOfflineAsync()
     {
+        if (!CanPlayOffline) return;
+        // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
+        RefreshHook();
+        if (!EnsureHookCurrentForPlay()) return;
         if (!CanPlayOffline || _install is not { } install || OfflinePlayProfile is not { } profile || ModManagerFactory() is not { } factory) return;
         _modLaunchFailure = null;
         if (GameRunning()) { Message = S["mods.close_game"]; return; }

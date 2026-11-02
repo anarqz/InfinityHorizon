@@ -39,10 +39,11 @@ public sealed partial class ShellViewModel
 
     // OD-113: a pending or expired integrity check never sends the player to Configure; only a Hardcore profile's
     // missing game folder or a real mismatch does.
-    private bool GameConfigurationReady => !_configurationHasError && AzimuthCardReady && IntegrityConfigurationReady;
+    // T30: a stale signed hook does not stop Play: Play replaces it first (EnsureHookCurrentForPlay), or refuses with its own message
+    private bool GameConfigurationReady => !_configurationHasError && AzimuthPlayable && IntegrityConfigurationReady;
 
-    private bool HookUpdateNeeded => _hook is not null && _hookPackage is not null
-        && HookInstaller.Build(_hookPackage.Version) > HookInstaller.Build(_hook.Version);
+    /// <summary>T30: the installed hook is ours and signed, but its bytes are not the package's (by hash; the build only labels it).</summary>
+    private bool HookUpdateNeeded => _hook is not null && HookInstaller.IsStale(_hook, _hookPackage);
 
     /// <summary>Pending or failed configuration is explained only in Configure.</summary>
     public bool SetupNeeded
@@ -129,7 +130,7 @@ public sealed partial class ShellViewModel
 
     public string HookInstallLabel => _hookPackage is null ? string.Empty
         : S.Format(_hook?.Kind != HookKind.Ours ? "setup.hook_install"
-            : HookInstaller.Build(_hookPackage.Version) > HookInstaller.Build(_hook.Version) ? "setup.hook_update" : "setup.hook_reinstall",
+            : HookInstaller.Build(_hookPackage.Version) > HookInstaller.Build(_hook.Version) || HookUpdateNeeded ? "setup.hook_update" : "setup.hook_reinstall",
             ("version", _hookPackage.Version));
 
     /// <summary>Why the launcher cannot install a hook (no package, or one whose signature failed).</summary>
@@ -138,8 +139,9 @@ public sealed partial class ShellViewModel
 
     public bool HasHookPackageProblem => HookPackageProblem is not null;
 
-    public bool AzimuthCardReady => !_searching && !_azimuthChoiceFailed && SetupStatus == AzimuthStatus.Ready
-        && !HasHookPackageProblem && !HookUpdateNeeded;
+    private bool AzimuthPlayable => !_searching && !_azimuthChoiceFailed && SetupStatus == AzimuthStatus.Ready && !HasHookPackageProblem;
+
+    public bool AzimuthCardReady => AzimuthPlayable && !HookUpdateNeeded;
     public string AzimuthCardStatus => S[_searching ? "configure.checking" : AzimuthCardReady ? "configure.ready" : "configure.attention"];
 
     public string SetupSummary => SetupStatus switch
@@ -263,6 +265,30 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
+    /// <summary>
+    /// T30: before every Play (online and offline), a signed Infinity hook whose bytes are not the package's is replaced with it
+    /// through the same install (its <c>.previous</c> backup, kept signature, ExtraOptions.Infinity's ini kept), only with the game
+    /// closed. False, with the player's message, when it is stale and the game runs or the replace failed: Play never starts on it.
+    /// </summary>
+    private bool EnsureHookCurrentForPlay()
+    {
+        if (_install is null || _hook is null || !HookUpdateNeeded) return true;
+        var refresh = HookInstaller.EnsureCurrent(_install.Root, _hook, _hookPackage, DevHookKey, GameRunning);
+        if (refresh.LogLine is { } line) Log(line);
+        if (refresh.Outcome == HookRefreshOutcome.Replaced)
+        {
+            try { Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(_install.Root)); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("extraoptions: " + e.Message); }
+            Install = AzimuthInstall.Detect(_install.Root); // re-reads the hook (RefreshHook) for the session's HookSha256
+            return true;
+        }
+        if (refresh.AllowsPlay) return true;
+        RefreshHook();
+        Message = S[refresh.Outcome == HookRefreshOutcome.RefusedGameRunning ? "play.hook_stale_game_running" : "play.hook_stale_failed"];
+        Changed(string.Empty);
+        return false;
+    }
+
     /// <summary>The package next to the launcher (<c>hook\</c>, or <c>FI_HOOK_PACKAGE</c>) and the installed hook.</summary>
     internal void RefreshHook()
     {
@@ -294,8 +320,8 @@ public sealed partial class ShellViewModel
         // every check, once per change: what is next to the launcher, what is installed, and the decision
         var line = $"hook: check: devServer={DevServer} devKey={(DevHookKey is null ? "none" : "set")} " +
             $"package={(_hookPackage is { } p ? $"{p.Version} {p.Signer} {p.Sha256[..16]}… at {p.Path}" : _hookPackageError ?? "none at " + Path.Combine(AppContext.BaseDirectory, "hook"))} " +
-            $"installed={(_hook is { } h ? $"{h.Kind} {h.Version ?? "?"} verified={h.Verified} ({h.Signer})" : "no Azimuth")} " +
-            $"offer={(_hook is null ? "no" : HookInstaller.ShouldInstall(_hook, _hookPackage).ToString())}";
+            $"installed={(_hook is { } h ? $"{h.Kind} {h.Version ?? "?"} verified={h.Verified} ({h.Signer}){(h.Sha256 is { } s ? $" {s[..16]}…" : "")}" : "no Azimuth")} " +
+            $"offer={(_hook is null ? "no" : HookInstaller.ShouldInstall(_hook, _hookPackage).ToString())} stale={HookUpdateNeeded}";
         if (line != _lastHookLine)
         {
             _lastHookLine = line;

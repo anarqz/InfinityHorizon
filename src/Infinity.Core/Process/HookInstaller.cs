@@ -42,6 +42,28 @@ public sealed record InstalledHook(HookKind Kind, string? Version, string? Sha25
     public bool Verified => Kind == HookKind.Ours && Signer != HookSigner.None;
 }
 
+/// <summary>What <see cref="HookInstaller.EnsureCurrent"/> did before a launch.</summary>
+public enum HookRefreshOutcome
+{
+    /// <summary>Nothing to replace: the package's bytes, or a hook the existing rules handle.</summary>
+    Current,
+
+    /// <summary>A stale signed hook was replaced with the package (the old one kept as <c>.previous</c>).</summary>
+    Replaced,
+
+    /// <summary>Stale, and the game is running: nothing written, Play refused.</summary>
+    RefusedGameRunning,
+
+    /// <summary>Stale, and the replace failed (rolled back): Play refused.</summary>
+    Failed,
+}
+
+/// <summary>The outcome, the hook now installed, and the log line (null when current).</summary>
+public sealed record HookRefresh(HookRefreshOutcome Outcome, InstalledHook Installed, string? LogLine)
+{
+    public bool AllowsPlay => Outcome is HookRefreshOutcome.Current or HookRefreshOutcome.Replaced;
+}
+
 /// <summary>The hook package the launcher carries (<c>hook\infinity.dll</c> + <c>.sig</c>), verified.</summary>
 public sealed record HookPackage(string Path, byte[] Bytes, byte[] Signature, string Version, string Sha256, HookSigner Signer);
 
@@ -223,7 +245,78 @@ public static class HookInstaller
         {
             return false;
         }
-        return !installed.Verified || Build(package.Version) > Build(installed.Version);
+        // T30: a verified hook whose bytes differ from the package's is not current, even with the same build
+        // (the build only labels it); the downgrade rule above still keeps a newer one
+        return !installed.Verified || Build(package.Version) >= Build(installed.Version);
+    }
+
+    /// <summary>
+    /// T30: an Infinity hook signed by a key the launcher trusts whose bytes are not the package's, and which the package may replace
+    /// (never a newer build than the package's): it is not current, on Windows and under Wine/Proton alike. The hash decides; the
+    /// build is only the downgrade guard.
+    /// </summary>
+    public static bool IsStale(InstalledHook installed, HookPackage? package)
+    {
+        ArgumentNullException.ThrowIfNull(installed);
+        // same signer only: a development-signed hook is never replaced at Play by a release package (Configure still offers it);
+        // an unparseable build on either side is unknown, so only the signer and the hash decide (logged by EnsureCurrent)
+        return package is not null && installed.Verified && installed.Sha256 is not null && installed.Signer == package.Signer
+            && !string.Equals(installed.Sha256, package.Sha256, StringComparison.OrdinalIgnoreCase)
+            && !(Build(installed.Version) is { } have && Build(package.Version) is { } offer && offer < have);
+    }
+
+    /// <summary>Why <see cref="IsStale"/> said so, for the log.</summary>
+    private static string StaleReason(InstalledHook installed, HookPackage package) =>
+        Build(installed.Version) is null || Build(package.Version) is null
+            ? $"build unknown ({installed.Version ?? "?"} / {package.Version}), same signer {package.Signer}, hash differs"
+            : $"{installed.Version} -> {package.Version}, same signer {package.Signer}, hash differs";
+
+    /// <summary>
+    /// T30: before a launch, a stale signed hook (<see cref="IsStale"/>) is replaced with the package by <see cref="Install"/>
+    /// (its <c>.previous</c> backup and kept signature), only with the game closed. Anything else (current, missing, unsigned,
+    /// another mod's DLL, a newer build) is left for the existing rules. The log line names both hashes and the outcome.
+    /// </summary>
+    public static HookRefresh EnsureCurrent(string azimuthRoot, InstalledHook installed, HookPackage? package, byte[]? devKey, Func<bool> gameRunning)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(installed);
+        ArgumentNullException.ThrowIfNull(gameRunning);
+        if (package is null || !IsStale(installed, package))
+        {
+            return new HookRefresh(HookRefreshOutcome.Current, installed, null);
+        }
+        var head = $"hook: installed hook differs from the package (installed {installed.Sha256![..8]}, package {package.Sha256[..8]})";
+        var reason = " [" + StaleReason(installed, package) + "]";
+        if (gameRunning())
+        {
+            return new HookRefresh(HookRefreshOutcome.RefusedGameRunning, installed, head + ": refused (game running)" + reason);
+        }
+        try
+        {
+            var now = Install(azimuthRoot, package, devKey, gameRunning);
+            return new HookRefresh(HookRefreshOutcome.Replaced, now,
+                head + $": replaced (previous kept as {HookDll}.previous)" + reason);
+        }
+        catch (Exception e) when (e is HookException or IOException or UnauthorizedAccessException)
+        {
+            // Install refuses while the DLL is mapped (the game started in between) and rolls back a failed swap
+            var running = gameRunning();
+            var after = TryInspect(azimuthRoot, devKey) ?? installed;
+            return new HookRefresh(running ? HookRefreshOutcome.RefusedGameRunning : HookRefreshOutcome.Failed, after,
+                head + (running ? ": refused (game running)" : ": refused (" + e.Message + ")") + reason);
+        }
+    }
+
+    private static InstalledHook? TryInspect(string azimuthRoot, byte[]? devKey)
+    {
+        try
+        {
+            return Inspect(azimuthRoot, devKey);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Explicit install/repair also permits the current signed build, while still refusing downgrades.</summary>

@@ -81,22 +81,62 @@ public sealed class IntegratedHostRelay : IHostRelay
     private void StartGameSession(RelayEngine engine, CarMeetSessionRequest request)
     {
         var sessions = GameSessions;
-        var xuids = request.Xuids.Select(x => x.ToString(CultureInfo.InvariantCulture)).ToArray();
+        var stop = _stop.Token;
         _ = Task.Run(async () =>
         {
-            (string Name, string Template)? session = null;
-            try
-            {
-                if (sessions is not null && request.Kind == RelayEngine.InviteFreeRoam)
-                {
-                    using var bounded = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
-                    bounded.CancelAfter(TimeSpan.FromMilliseconds(RelayEngine.CarMeetCreateMs - 1000));
-                    session = await sessions("freeroam", xuids, bounded.Token).ConfigureAwait(false);
-                }
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException) { session = null; }
-            Enqueue(() => engine.GameSessionCreated(request.Id, session?.Name, session?.Template, _clock.ElapsedMilliseconds));
-        });
+            var session = await RequestGameSessionAsync(sessions, request, TimeSpan.FromMilliseconds(RelayEngine.CarMeetCreateMs - 1000),
+                line => { if (Volatile.Read(ref _diagnosticLog) is { } sink) Diagnostics.UdpDiagnostics.Enqueue(sink, line); }, stop).ConfigureAwait(false);
+            if (!Enqueue(() => engine.GameSessionCreated(request.Id, session?.Name, session?.Template, _clock.ElapsedMilliseconds))
+                && Volatile.Read(ref _diagnosticLog) is { } closed)
+                Diagnostics.UdpDiagnostics.Enqueue(closed, "world: car meet session answer dropped: the world server stopped");
+        }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// T33: one car meet session call, every outcome logged without an identity (the platform's answers are logged by
+    /// <paramref name="sessions"/> itself): no call wired, an invitation type not served, an empty request, a timeout, the
+    /// world server stopping, or an exception's type and message. Null when there is no session.
+    /// </summary>
+    internal static async Task<(string Name, string Template)?> RequestGameSessionAsync(
+        Func<string, IReadOnlyList<string>, CancellationToken, Task<(string Name, string Template)?>>? sessions,
+        CarMeetSessionRequest request, TimeSpan budget, Action<string> log, CancellationToken stop)
+    {
+        if (sessions is null) { log("world: car meet session not asked: this world server has no platform call for it"); return null; }
+        if (request.Kind != RelayEngine.InviteFreeRoam) { log($"world: car meet session not asked: invitation type {request.Kind} is not served"); return null; }
+        if (request.Xuids.Count == 0) { log("world: car meet session not asked: nobody joined"); return null; }
+        var xuids = request.Xuids.Select(x => x.ToString(CultureInfo.InvariantCulture)).ToArray();
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        bounded.CancelAfter(budget);
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            var session = await sessions(GameModeSessionKinds.FreeRoam, xuids, bounded.Token).ConfigureAwait(false);
+            if (session is null) log($"world: car meet session: none after {Elapsed()} ms");
+            return session;
+        }
+        catch (OperationCanceledException) when (bounded.IsCancellationRequested)
+        {
+            log(stop.IsCancellationRequested ? "world: car meet session abandoned: the world server stopped"
+                : $"world: car meet session timed out after {Elapsed()} ms");
+            return null;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            log($"world: car meet session failed after {Elapsed()} ms: {exception.GetType().Name}: {Anonymous(exception.Message)}");
+            return null;
+        }
+
+        long Elapsed() => (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+    }
+
+    // an exception message in the log: bounded; IPv4 (with its port), IPv6-looking hex:colon runs and long digit runs (a XUID) masked
+    internal static string Anonymous(string message)
+    {
+        var text = System.Text.RegularExpressions.Regex.Replace(message ?? string.Empty, @"\b[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?\b", "#ip");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\[?\b[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7}\b\]?(:[0-9]{1,5})?|\[?::[0-9A-Fa-f:]*\]?(:[0-9]{1,5})?", "#ip");
+        text = System.Text.RegularExpressions.Regex.Replace(text, "[0-9]{6,}", "#");
+        text = text.ReplaceLineEndings(" ");
+        return text.Length <= 160 ? text : text[..160];
     }
 
     private RelayEngine NewEngine(uint? carMeet, RoadTripSettings? roadTrip = null)
