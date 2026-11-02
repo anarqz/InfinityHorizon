@@ -128,3 +128,11 @@ engine, in this recommended order:
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
 | 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | |
+
+## Provenance
+
+The game-protocol layer (NerdCore packets and the bit stream in `src/fh2/nerd.rs` and `src/fh2/bits.rs`, and the relay
+basics the engine grew from) is derived in part from fh2-mods (https://github.com/conner-mcvay/fh2-mods), MIT,
+Copyright (c) 2026 conner-mcvay and contributors. Its licence text is in
+[`../../licenses/fh2-mods-LICENSE.txt`](../../licenses/fh2-mods-LICENSE.txt); the MIT notice applies to those portions,
+and the crate as a whole is GPL-3.0-only like the rest of this repository.

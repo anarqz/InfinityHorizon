@@ -1,4 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+// Derived in part from fh2-mods (https://github.com/conner-mcvay/fh2-mods), MIT, Copyright (c) 2026 conner-mcvay and
+// contributors; see licenses/fh2-mods-LICENSE.txt.
 //! NerdCore (Engine\NetV2\NerdCore) packets and messages, as the game reads and writes them.
 //! Kept from the 2026-10-20 engine (the addresses are the game's, 1.0.0.64).
 //!
