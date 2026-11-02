@@ -1,8 +1,8 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE). */
 /* FH2Online free roam: what ExtraOptions changes on a player's own car and the game never sends
    (its headlights forced on or off, its roof open or closed), shown on that car in the other
-   players' games. Only while the player's own ExtraOptions 0.2.98 is active in this process
-   (fi_eo_sync_enabled, eo_detect.c): without it nothing is sent, and what the relay passes is
+   players' games. Only while the supported ExtraOptions (FI_EO_NAME: the player's 0.2.98, or the
+   0.4.4 inside ExtraOptions.Infinity) is active in this process (fi_eo_sync_enabled, eo_detect.c): without it nothing is sent, and what the relay passes is
    dropped. The relay forwards these indications blindly, so hooks with and without
    ExtraOptions (and older hooks) share a world unchanged.
 

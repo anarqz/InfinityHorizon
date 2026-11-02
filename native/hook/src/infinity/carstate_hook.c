@@ -3,8 +3,9 @@
    features/vehicle_controls.c and features/autodrive_game.c: the local car, a car's animation
    and its events), GPL-3.0-or-later. See LICENSE and NOTICE.md.
 
-   Headlights and roof of the players' cars in online free roam, next to the player's own
-   ExtraOptions 0.2.98 (which is what changes them on a car: right stick click, hold 3 s) and
+   Headlights and roof of the players' cars in online free roam, next to ExtraOptions (the
+   supported build, FI_EO_NAME in infinity.h: the player's 0.2.98, or the 0.4.4 inside
+   ExtraOptions.Infinity; it is what changes them on a car: right stick click, hold 3 s) and
    without touching any byte of it. carstate.c carries the states through the world's relay;
    this file finds them on the cars and shows the others' on theirs.
 
@@ -15,7 +16,7 @@
    - game+0xf5d300, a car's animation event ("roof:open", "roof:close", "roof:toggle"...; the
      game calls it, and ExtraOptions calls it to move a roof): the last roof event of each car
      is its roof state.
-   Only with ExtraOptions 0.2.98 active (fi_eo_sync_enabled):
+   Only with the supported ExtraOptions active (FI_EO_NAME, fi_eo_sync_enabled):
    - the local car's state is read from the car itself: +0x51a1 is "headlights forced", +0x51a2
      their value (the game's own setters at game+0xf74ee0 / +0xf74ef0 write exactly those two
      bytes; ExtraOptions toggles them through the setters), so lights = 0 (the game's), 1
@@ -442,6 +443,6 @@ void fi_carstate_apply(unsigned char *game_image) {
     }
     if (cs_install(game_image)) {
         log_append("CARSTATE: car update and animation event hooks in place; headlight and roof sync runs only "
-                   "with the player's ExtraOptions 0.2.98 active.\r\n");
+                   "with " FI_EO_NAME " active.\r\n");
     }
 }

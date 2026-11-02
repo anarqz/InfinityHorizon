@@ -1026,6 +1026,7 @@ static ULONG STDMETHODCALLTYPE fr_assoc_release(FrAssociation *self) {
 }
 static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **out) {
     (void)self;
+    fi_race_conn_teardown(); /* T38b: the race connectivity the game left its world with */
     fr_log("association DestroyAsync -> completed.");
     azimuth_proxy_stop();
     fi_follow_left(); /* no lobby type until the game's next OpenConnection */

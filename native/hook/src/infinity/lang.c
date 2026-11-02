@@ -14,20 +14,25 @@ static volatile LONG lang_portuguese;
 static const LangText lang_texts[] = {
     {L"The online profile's save on this PC differed from the server's, so the server's was put in its place. If the game shows other progress, restart it.",
      L"O save do perfil online neste PC era diferente do servidor e foi substituído pelo save do servidor. Se o jogo mostrar outro progresso, reinicie-o."},
+#ifndef FI_EO_BUILD
+    /* runtime.c's notice for the first start after the hook that had ExtraOptions inside; never
+       shown by ExtraOptions.Infinity, which is ExtraOptions itself */
     {L"ExtraOptions features are now separate. Install ExtraOptions v0.2.98, then reinstall the Infinity hook from the launcher.",
      L"Os recursos do ExtraOptions agora são separados. Instale o ExtraOptions v0.2.98 e reinstale o hook Infinity pelo launcher."},
     {L"ExtraOptions features are now separate. Update Azimuth to 0.9.10, install ExtraOptions v0.2.98, then reinstall the Infinity hook from the launcher.",
      L"Os recursos do ExtraOptions agora são separados. Atualize o Azimuth para 0.9.10, instale o ExtraOptions v0.2.98 e reinstale o hook Infinity pelo launcher."},
+#endif
     {L"ExtraOptions: not looked at yet.",
      L"ExtraOptions: ainda não verificado."},
-    {L"ExtraOptions v0.2.98 found: headlight and roof sync on.",
-     L"ExtraOptions v0.2.98 encontrado: sincronização de faróis e teto ligada."},
-    {L"ExtraOptions v0.2.98 found; headlight and roof sync is off in Infinity.cfg (CarState=off).",
-     L"ExtraOptions v0.2.98 encontrado; a sincronização de faróis e teto está desligada no Infinity.cfg (CarState=off)."},
-    {L"ExtraOptions v0.2.98 is installed but not active (its FH2_ExtraOptions.log says why): headlight and roof sync off.",
-     L"O ExtraOptions v0.2.98 está instalado, mas não ativo (o FH2_ExtraOptions.log dele diz por quê): sincronização de faróis e teto desligada."},
-    {L"ExtraOptions found, not v0.2.98 (headlight and roof sync needs v0.2.98): ",
-     L"ExtraOptions encontrado, mas não é a v0.2.98 (a sincronização de faróis e teto precisa da v0.2.98): "},
+    /* eo_detect.c's fi_eo_summary, built from the same FI_EO_* names (infinity.h) */
+    {FI_EO_W(FI_EO_SHOWN) L" found: headlight and roof sync on.",
+     FI_EO_W(FI_EO_SHOWN) L" encontrado: sincronização de faróis e teto ligada."},
+    {FI_EO_W(FI_EO_SHOWN) L" found; headlight and roof sync is off in Infinity.cfg (CarState=off).",
+     FI_EO_W(FI_EO_SHOWN) L" encontrado; a sincronização de faróis e teto está desligada no Infinity.cfg (CarState=off)."},
+    {FI_EO_W(FI_EO_SHOWN) L" is installed but not active (its FH2_ExtraOptions.log says why): headlight and roof sync off.",
+     L"O " FI_EO_W(FI_EO_SHOWN) L" está instalado, mas não ativo (o FH2_ExtraOptions.log dele diz por quê): sincronização de faróis e teto desligada."},
+    {L"ExtraOptions found, not v" FI_EO_W(FI_EO_SUPPORTED) L" (headlight and roof sync needs v" FI_EO_W(FI_EO_SUPPORTED) L"): ",
+     L"ExtraOptions encontrado, mas não é a v" FI_EO_W(FI_EO_SUPPORTED) L" (a sincronização de faróis e teto precisa da v" FI_EO_W(FI_EO_SUPPORTED) L"): "},
     {L"A winmm.dll that is not ExtraOptions is next to azimuth.exe: headlight and roof sync off.",
      L"Há um winmm.dll que não é o ExtraOptions ao lado do azimuth.exe: sincronização de faróis e teto desligada."},
     {L"ExtraOptions is installed but did not load (on Steam Deck or Linux the game needs WINEDLLOVERRIDES=\"winmm.dll=n,b\"): headlight and roof sync off.",
@@ -96,10 +101,12 @@ static const LangText lang_texts[] = {
 static const LangText8 lang_texts8[] = {
     {"The online profile's save on this PC differed from the server's, so the server's was put in its place. If the game shows other progress, restart it.",
      "O save do perfil online neste PC era diferente do servidor e foi substituído pelo save do servidor. Se o jogo mostrar outro progresso, reinicie-o."},
+#ifndef FI_EO_BUILD
     {"ExtraOptions features are now separate. Install ExtraOptions v0.2.98, then reinstall the Infinity hook from the launcher.",
      "Os recursos do ExtraOptions agora são separados. Instale o ExtraOptions v0.2.98 e reinstale o hook Infinity pelo launcher."},
     {"ExtraOptions features are now separate. Update Azimuth to 0.9.10, install ExtraOptions v0.2.98, then reinstall the Infinity hook from the launcher.",
      "Os recursos do ExtraOptions agora são separados. Atualize o Azimuth para 0.9.10, instale o ExtraOptions v0.2.98 e reinstale o hook Infinity pelo launcher."},
+#endif
     {"ForzaInfinity ",
      "ForzaInfinity "},
     {" is installed (",

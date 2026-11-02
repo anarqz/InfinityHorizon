@@ -68,10 +68,20 @@ int fi_cfg_relay(FiRelayConfig *out);
 void azimuth_apply_livery_compatibility(void);
 void fi_game_ready_apply(unsigned char *game_image);
 int fi_game_ready(unsigned *generation);
+/* race_conn.c (T38b): the lobby's race connectivity (0 Undefined, 1 Online), read only. check: the
+   build's bytes as expected; apply (from fi_game_ready_apply); read: the value, 0 when unreadable;
+   tick (the main update's sample): a change is one bounded line; teardown: the value at the
+   association's DestroyAsync, one bounded line. */
+int fi_race_conn_check(const unsigned char *image);
+void fi_race_conn_apply(unsigned char *image);
+int fi_race_conn_read(int *value);
+void fi_race_conn_tick(void);
+void fi_race_conn_teardown(void);
 void azimuth_apply_network(const wchar_t *directory);
 void azimuth_apply_economy_probe(unsigned char *game_image);
-/* events.c: entering an event in free roam online goes back to free roam (the relay does
-   not run races yet). */
+/* events.c: an event entered in free roam online runs when the world's relay grants it; it goes
+   back to free roam when the relay denies it, or does not answer within EV_ANSWER_WAIT_MS (races
+   off, or an older relay). */
 void azimuth_apply_events(unsigned char *game_image);
 void azimuth_apply_no_game_clips(unsigned char *game_image);
 
@@ -207,7 +217,8 @@ int fi_launch_seat_ask(unsigned kind, volatile LONG *aborted);
 int fi_ticket_hopper(const wchar_t *method, const wchar_t *url);
 int fi_ticket_found(const unsigned char *body, size_t size, size_t *value_at);
 size_t fi_ticket_target(const unsigned char *body, size_t size, char *name, size_t capacity);
-const char *fi_ticket_guard_check(unsigned kind, const unsigned char *body, size_t size, volatile LONG *aborted);
+const char *fi_ticket_guard_check(unsigned kind, const wchar_t *url, const unsigned char *body, size_t size,
+                                  volatile LONG *aborted);
 void fi_ticket_guard_search(unsigned kind);
 size_t fi_ticket_rewrite(const unsigned char *body, size_t size, size_t value_at, const char *status, unsigned char *out,
                          size_t capacity);
@@ -295,7 +306,7 @@ void azimuth_proxy_stop(void);
 int azimuth_proxy_send_world(const void *data, int size);
 /* carstate.c: the ExtraOptions headlights (0 the game's, 1 forced on, 2 forced off) and
    roof (0 closed, 1 open) of the players' cars, through the world's relay; only while the
-   player's ExtraOptions 0.2.98 is active (fi_eo_sync_enabled). carstate_hook.c: the car update
+   supported ExtraOptions (FI_EO_NAME) is active (fi_eo_sync_enabled). carstate_hook.c: the car update
    and animation event detours that read and show them. */
 void fi_carstate_apply(unsigned char *game_image);
 /* carmeet.c: car meet invitation joins and the online car meet entries (free roam on). */
@@ -444,14 +455,37 @@ int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char
 int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned long long own, int no_line, char *json,
                           size_t json_cap);
 
-/* eo_detect.c: the player's ExtraOptions in this process (looked at once, from the first game
-   callback, when ExtraOptions has run): absent, 0.2.98 active or not, another version, or a
-   winmm.dll that is not ExtraOptions. */
+/* The ExtraOptions build headlight and roof sync supports: the player's ExtraOptions 0.2.98 (the
+   TLS-helper hook on Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125/OD-127,
+   Azimuth 1.0.4), the ExtraOptions 0.4.4 linked into this same winmm.dll: its version resource
+   (FILEVERSION 0.4.4.0) and its Fh2TweaksStatus are this module's own. FI_EO_NAME is for
+   infinity.log, FI_EO_SHOWN for the player (azimuth_tr's tables are keyed by it, lang.c);
+   FI_EO_W makes a wide literal of either. */
+#ifdef FI_EO_BUILD
+#define FI_EO_SUPPORTED_MS 0x00000004u
+#define FI_EO_SUPPORTED_LS 0x00040000u
+#define FI_EO_SUPPORTED "0.4.4"
+#define FI_EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.4.4)"
+#define FI_EO_SHOWN "ExtraOptions.Infinity (ExtraOptions v0.4.4)"
+#else
+#define FI_EO_SUPPORTED_MS 0x00000002u
+#define FI_EO_SUPPORTED_LS 0x00620000u
+#define FI_EO_SUPPORTED "0.2.98"
+#define FI_EO_NAME "ExtraOptions 0.2.98"
+#define FI_EO_SHOWN "ExtraOptions v0.2.98"
+#endif
+#define FI_EO_W_(text) L##text
+#define FI_EO_W(text) FI_EO_W_(text)
+
+/* eo_detect.c: the ExtraOptions in this process (looked at once, from the first game callback,
+   when ExtraOptions has run): absent, the supported build (FI_EO_SUPPORTED) active or not,
+   another version, or a winmm.dll that is not ExtraOptions. The FI_EO_0298_* names are kept from
+   the first supported build; they mean FI_EO_SUPPORTED in either build. */
 enum { FI_EO_ABSENT = 1, FI_EO_0298_OK, FI_EO_0298_INACTIVE, FI_EO_OTHER_VERSION, FI_EO_FOREIGN_WINMM };
 typedef struct {
     int state;          /* FI_EO_* */
-    char version[24];   /* "0.2.98", "0.2.88", "(no version)" */
-    char status[160];   /* its Fh2TweaksStatus text (0.2.98 only) */
+    char version[24];   /* FI_EO_SUPPORTED, another ("0.2.88"), or "(no version)" */
+    char status[160];   /* its Fh2TweaksStatus text (the supported build only) */
     int on_disk;        /* <Azimuth>\winmm.dll exists (whether or not it is loaded) */
 } FiEo;
 void fi_eo_detect(void);
@@ -460,7 +494,8 @@ void fi_eo_detect(void);
 void fi_eo_settle(unsigned timeout_ms);
 /* 0 until fi_eo_detect ran. */
 const FiEo *fi_eo(void);
-/* Headlight and roof sync: ExtraOptions 0.2.98 active, and [hook] CarState is not off. */
+/* Headlight and roof sync: the supported ExtraOptions (FI_EO_NAME) active, and [hook] CarState
+   is not off. */
 int fi_eo_sync_enabled(void);
 /* The "EO: ..." line of infinity.log. */
 const char *fi_eo_line(void);
