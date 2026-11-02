@@ -182,10 +182,12 @@ internal sealed partial class RelayEngine
             var start = unchecked(NowWire + 5000);
             foreach (var index in race.Participants)
                 if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SendSequenced(peer, [NerdPayload.StartRace(start)]);
-            SetHostVariables((6, 1, 1), (9, start, 32));
+            // T24: CountdownType StartRace with the start time, so free-roam players see the race in progress from "GO"
+            SetHostVariables((CountdownTypeVariable, CountdownStartRace, CountdownTypeBits), (6, 1, 1), (RaceStartTimeVariable, start, 32));
             Note($"event: race started with {race.Participants.Count}");
             WatchEventStart("event: race start");
             TagStarted(_now + 5000);
+            BeginEventProgress();
         }
     }
 
@@ -197,6 +199,8 @@ internal sealed partial class RelayEngine
         var message = NerdCodec.Write(new NerdMessage.Other(kind, payload));
         foreach (var other in _peers.Where(p => p != peer && p.Synced && race.Participants.Contains(p.Index)))
             if (kind == 43) Send(other, [message], false); else SendSequenced(other, [message]);
+        if (kind == 43) EventProgressScore(peer, body);
+        else if (kind == 44) EventProgressLap(peer, body);
         return true;
     }
 
@@ -237,7 +241,7 @@ internal sealed partial class RelayEngine
         Note($"event closed: {why}");
         EventClosed(race);
         RoadTripEventClosed();
-        SetHostVariables((2, 0, 2), (4, 0, 1), (5, 0, 1), (6, 0, 1));
+        SetHostVariables([(2, 0, 2), (4, 0, 1), (5, 0, 1), (6, 0, 1), .. EventProgressCleared()]);
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));
     }
@@ -246,6 +250,7 @@ internal sealed partial class RelayEngine
     {
         if (_race is not { } race || !race.Participants.Remove(peer.Index)) return;
         race.Finished.Remove(peer.Index); race.InProgress.Remove(peer.Index);
+        EventProgressLeft(peer);
         TeamPlayerLeft(peer);
         SetConsoleVariables(peer, (2, false), (4, false));
         LeaveEventSide(peer);
@@ -274,6 +279,7 @@ internal sealed partial class RelayEngine
         else if (race.Stage is RaceStage.Gathering or RaceStage.Grid && _now >= race.StageUntil) StageTimedOut(race);
         else ReevaluateRaceCompletion();
         TickTag();
+        TickEventProgress();
     }
 
     /// <summary>

@@ -405,4 +405,40 @@ internal static class NerdPayload
 
     /// <summary>A co-op challenge waiting (66), started (67) or ended (68), server to client: one s32.</summary>
     internal static BitBuffer BucketListStatus(byte kind, int value) => new BitBuffer().Push(kind, 7).Push(unchecked((uint)value), 32);
+
+    /// <summary>
+    /// MsgInProgressScoreUpdate (43): the sender's own handle (7-bit id), then 33 bits: the f32 score first, then one flag bit. The
+    /// game's send writes them in that order (the scoring metric's double narrowed to a float, then a car flag). This returns the
+    /// raw f32, unvalidated; null when the body does not read.
+    /// </summary>
+    internal static float? InProgressScore(BitBuffer body)
+    {
+        var reader = new BitReader(body.Bytes, body.Length);
+        try
+        {
+            ObjectHandle.Read(ref reader, 7);
+            if (reader.Left != 33) return null;
+            return BitConverter.UInt32BitsToSingle((uint)reader.Read(32));
+        }
+        catch (WireFormatException) { return null; }
+    }
+
+    /// <summary>
+    /// Whether a MsgLapScore (44) body has the game's layout: the sender's own handle (7-bit id), three compact-length strings of
+    /// exactly 8 bytes (the send writes three doubles), then exactly 34 bits (a u32 and two flags).
+    /// </summary>
+    internal static bool LapScoreOk(BitBuffer body)
+    {
+        var reader = new BitReader(body.Bytes, body.Length);
+        try
+        {
+            if (ObjectHandle.Read(ref reader, 7).Kind != HandleKind.Own) return false;
+            for (var i = 0; i < 3; i++) if (reader.ByteString(8).Length != 8) return false;
+            return reader.Left == 34;
+        }
+        catch (WireFormatException) { return false; }
+    }
+
+    /// <summary>A SessionHostSynced f32 value: its 32 bits as written by <see cref="SessionHost"/> at width 32.</summary>
+    internal static ulong HostFloat(float value) => BitConverter.SingleToUInt32Bits(value);
 }
