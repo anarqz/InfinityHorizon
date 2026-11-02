@@ -27,8 +27,10 @@
    0x1903d50, void (module *, const event descriptor *)) with NetworkMatchmakingRequestDisconnect's
    descriptor (game+0x34bdc28, a static in .data's uninitialized part). A start queued meanwhile
    (module+0x150, a heap StartMatchmakingEventArgument) is freed first with the game's operator
-   delete (game+0x31c7b0) and the slot zeroed, so it cannot fire later. Only when the send's and the
-   delete's first 16 bytes are as expected; otherwise the request is only logged.
+   delete (game+0x31c7b0) and the slot zeroed, so it cannot fire later. The disconnect is sent only
+   while the module has a matchmaking entity (module+0xc0 non-null), as the game's own senders check.
+   Only when the send's and the delete's first 16 bytes are as expected; otherwise the request is only
+   logged.
 
    Diagnostics: a queued start (module+0x150) that stays for more than FH_QUEUED_LOG_MS is logged
    once with what keeps it parked (the entity at +0xc0, bytes +0x15c, +0x15d, +0x170, dwords +0x134,
@@ -177,12 +179,17 @@ static int fh_queued_free(unsigned char *module, void *queued) {
     return 1;
 }
 
-/* The launcher gave up: a queued start is freed the game's way, then the game's own disconnect. */
+/* The launcher gave up: a queued start is freed the game's way, then the game's own disconnect, only
+   while a matchmaking entity exists (module+0xc0 non-null), as the game's own senders check first. */
 static void fh_cancel_now(unsigned char *module) {
-    void *queued = 0;
+    void *queued = 0, *entity = 0;
     if (memory_read_pointer(module + FH_QUEUED_OFFSET, &queued)) fh_queued_free(module, queued);
     fh_queued_seen = 0;
     fh_queued_logged = 0;
+    if (!memory_read_pointer(module + FH_ENTITY_OFFSET, &entity)) {
+        log_append("FOLLOW: the launcher gave up, but the game has no matchmaking to cancel; no disconnect sent.\r\n");
+        return;
+    }
     ((FhSendFn)(uintptr_t)(fh_game + FH_SEND_RVA))(module, fh_game + FH_DISCONNECT_RVA);
     log_append("FOLLOW: matchmaking cancelled (the launcher gave up).\r\n");
 }

@@ -300,9 +300,22 @@ static FrSocketFn fr_real_close;
 static FrShutdownFn fr_real_shutdown;
 static FrSetErrorFn fr_set_error;
 static FrCancelIoFn fr_cancel_io;
+/* T32: the bound sockets, for the quarantine (azimuth_freeroam_suspend). fr_socket_lock guards the
+   table and fr_game_socket only: it is never held across a ws2_32 call (a receive, close, bind,
+   shutdown or cancel can block under Proton while the peer vanishes, and the game's closesocket
+   would wait on the lock behind it). A slot the quarantine is working on is `busy`; a close or a
+   failed bind meanwhile only marks it (`pending`), and the quarantine closes or forgets it when it
+   is done, so a handle is never shut down after it was closed and reused. */
 static SRWLOCK fr_socket_lock = SRWLOCK_INIT;
 #define FR_SOCKET_LIMIT 64u
-static UINT_PTR fr_bound_sockets[FR_SOCKET_LIMIT];
+enum { FR_PENDING_NONE, FR_PENDING_DROP, FR_PENDING_CLOSE };
+typedef struct {
+    UINT_PTR socket; /* 0 free */
+    LONG busy;       /* quarantines working on it */
+    int pending;     /* FR_PENDING_* once busy ends */
+} FrSocketSlot;
+static FrSocketSlot fr_bound_sockets[FR_SOCKET_LIMIT];
+static volatile LONG fr_quarantined; /* azimuth_freeroam_suspend ran: a bind that ends later is shut */
 /* Set when the car database changed during the session (azimuth_world.c): from then on the
    game's socket sends to [::1]:9, so the world stops hearing this player and drops it, and
    the game, hearing nothing back, leaves the world. Only a copy of the destination is
@@ -346,18 +359,28 @@ static int fr_load_ws2(void) {
 static int WINAPI fr_bind(UINT_PTR socket, const void *address, int length) {
     unsigned short family = 0;
     unsigned slot = FR_SOCKET_LIMIT;
-    AcquireSRWLockExclusive(&fr_socket_lock);
+    int fresh = 0;
     if (address && length >= 2) memory_read(address, &family, sizeof(family));
     if (family == FR_AF_INET6 || family == 2 /* AF_INET */) {
-        if (!fi_launch_network_allowed()) {
-            ReleaseSRWLockExclusive(&fr_socket_lock);
+        /* launch.c's lock, before ours and never under it */
+        if (fr_quarantined || !fi_launch_network_allowed()) {
             fr_set_error(10050); /* WSAENETDOWN: never replace the quarantined world socket */
             return -1;
         }
-        slot = 0;
-        while (slot < FR_SOCKET_LIMIT && fr_bound_sockets[slot] && fr_bound_sockets[slot] != socket) ++slot;
+        /* the slot is claimed before the bind, so a quarantine meanwhile shuts this socket too */
+        AcquireSRWLockExclusive(&fr_socket_lock);
+        unsigned free_slot = FR_SOCKET_LIMIT;
+        for (slot = 0; slot < FR_SOCKET_LIMIT && fr_bound_sockets[slot].socket != socket; ++slot) {
+            if (free_slot == FR_SOCKET_LIMIT && !fr_bound_sockets[slot].socket) free_slot = slot;
+        }
+        if (slot == FR_SOCKET_LIMIT && free_slot < FR_SOCKET_LIMIT) {
+            slot = free_slot;
+            fr_bound_sockets[slot].socket = socket;
+            fr_bound_sockets[slot].pending = FR_PENDING_NONE;
+            fresh = 1;
+        }
+        ReleaseSRWLockExclusive(&fr_socket_lock);
         if (slot == FR_SOCKET_LIMIT) {
-            ReleaseSRWLockExclusive(&fr_socket_lock);
             fr_set_error(10055); /* WSAENOBUFS: never leave a bound socket outside quarantine */
             return -1;
         }
@@ -367,11 +390,24 @@ static int WINAPI fr_bind(UINT_PTR socket, const void *address, int length) {
         fr_real_setsockopt(socket, FR_IPPROTO_IPV6, FR_IPV6_V6ONLY, (const char *)&off, sizeof(off));
     }
     int result = fr_real_bind(socket, address, length);
-    if (result == 0) {
-        if (slot < FR_SOCKET_LIMIT) fr_bound_sockets[slot] = socket;
-        if (family == FR_AF_INET6) fr_game_socket = socket;
+    if (slot < FR_SOCKET_LIMIT) {
+        AcquireSRWLockExclusive(&fr_socket_lock);
+        FrSocketSlot *entry = &fr_bound_sockets[slot];
+        if (result != 0 && fresh && entry->socket == socket) {
+            /* the quarantine forgets it when done; a close the game already asked for still runs */
+            if (entry->busy) { if (!entry->pending) entry->pending = FR_PENDING_DROP; }
+            else entry->socket = 0;
+        }
+        if (result == 0 && family == FR_AF_INET6) fr_game_socket = socket;
+        ReleaseSRWLockExclusive(&fr_socket_lock);
+        if (result == 0 && fr_quarantined) {
+            /* the quarantine came during the bind: this socket is shut as the others were */
+            fr_real_shutdown(socket, 2 /* SD_BOTH */);
+            fr_cancel_io((HANDLE)socket, NULL);
+            fr_set_error(10050);
+            result = -1;
+        }
     }
-    ReleaseSRWLockExclusive(&fr_socket_lock);
     FR_LINE(line);
     fr_text(&line, "FREEROAM: game socket bound, family ");
     fr_number(&line, family);
@@ -394,15 +430,25 @@ static int fr_is_suspended(UINT_PTR socket) {
     return 0;
 }
 
+/* The table forgets the socket first, then the real close runs without the lock: a receive blocked
+   on it ends with Winsock's own error, as without the hook. A slot the quarantine is shutting
+   down is closed by the quarantine right after (a handle is never shut down once reused). */
 static int WINAPI fr_close(UINT_PTR socket) {
+    int deferred = 0;
     AcquireSRWLockExclusive(&fr_socket_lock);
     if (fr_game_socket == socket) fr_game_socket = 0;
     for (unsigned i = 0; i < FR_SOCKET_LIMIT; ++i) {
-        if (fr_bound_sockets[i] == socket) fr_bound_sockets[i] = 0;
+        FrSocketSlot *entry = &fr_bound_sockets[i];
+        if (!socket || entry->socket != socket) continue;
+        if (entry->busy) {
+            entry->pending = FR_PENDING_CLOSE;
+            deferred = 1;
+        } else {
+            entry->socket = 0;
+        }
     }
-    int result = fr_real_close(socket);
     ReleaseSRWLockExclusive(&fr_socket_lock);
-    return result;
+    return deferred ? 0 : fr_real_close(socket);
 }
 
 static int WINAPI fr_sendto(UINT_PTR socket, const char *data, int size, int flags, const void *to, int to_size) {
@@ -431,18 +477,13 @@ static int WINAPI fr_recvfrom(UINT_PTR socket, char *data, int size, int flags, 
 
 static int WINAPI fr_wsa_recvfrom(UINT_PTR socket, void *buffers, DWORD count, DWORD *received, DWORD *flags,
                                  void *from, int *from_size, void *overlapped, void *completion) {
-    /* Serialize asynchronous registration with cancellation. Never replace WSA_IO_PENDING
-       with an immediate failure: its caller must retain buffers until the cancellation completes. */
-    if (overlapped) AcquireSRWLockExclusive(&fr_socket_lock);
-    if (fr_is_suspended(socket)) {
-        if (overlapped) ReleaseSRWLockExclusive(&fr_socket_lock);
-        return -1;
-    }
+    /* No lock (T32): the quarantine shuts a socket before it cancels its I/O, so a receive
+       registered before the shutdown is cancelled and one after it fails. Never replace
+       WSA_IO_PENDING with an immediate failure: its caller must retain buffers until the
+       cancellation completes. */
+    if (fr_is_suspended(socket)) return -1;
     int result = fr_real_wsa_recvfrom(socket, buffers, count, received, flags, from, from_size, overlapped, completion);
-    if (overlapped) {
-        ReleaseSRWLockExclusive(&fr_socket_lock);
-        return result;
-    }
+    if (overlapped) return result;
     return fr_is_suspended(socket) ? -1 : result;
 }
 
@@ -463,32 +504,45 @@ static int WINAPI fr_recv(UINT_PTR socket, char *data, int size, int flags) {
 
 static int WINAPI fr_wsa_recv(UINT_PTR socket, void *buffers, DWORD count, DWORD *received, DWORD *flags,
                              void *overlapped, void *completion) {
-    if (overlapped) AcquireSRWLockExclusive(&fr_socket_lock);
-    if (fr_is_suspended(socket)) {
-        if (overlapped) ReleaseSRWLockExclusive(&fr_socket_lock);
-        return -1;
-    }
+    if (fr_is_suspended(socket)) return -1; /* no lock, as fr_wsa_recvfrom */
     int result = fr_real_wsa_recv(socket, buffers, count, received, flags, overlapped, completion);
-    if (overlapped) {
-        ReleaseSRWLockExclusive(&fr_socket_lock);
-        return result;
-    }
+    if (overlapped) return result;
     return fr_is_suspended(socket) ? -1 : result;
 }
 
 /* Shutdown retains game ownership of its handle (no descriptor reuse/double close). Existing
-   receives are released by Winsock; all subsequent sends/receives and binds fail closed. */
+   receives are released by Winsock; all subsequent sends/receives and binds fail closed.
+   T32: the table is copied under the lock (each slot marked busy), the shutdowns and cancels run
+   without it (shutdown first, so a receive registered between the two still fails), and a close
+   or failed bind that came meanwhile is carried out after. */
 void azimuth_freeroam_suspend(void) {
+    InterlockedExchange(&fr_quarantined, 1);
+    if (!fr_real_shutdown || !fr_cancel_io || !fr_real_close) return;
+    unsigned slots[FR_SOCKET_LIMIT], count = 0;
+    UINT_PTR sockets[FR_SOCKET_LIMIT], closing[FR_SOCKET_LIMIT];
+    unsigned closes = 0;
     AcquireSRWLockExclusive(&fr_socket_lock);
-    if (fr_real_shutdown) {
-        for (unsigned i = 0; i < FR_SOCKET_LIMIT; ++i) {
-            if (fr_bound_sockets[i]) {
-                fr_cancel_io((HANDLE)fr_bound_sockets[i], NULL);
-                fr_real_shutdown(fr_bound_sockets[i], 2 /* SD_BOTH */);
-            }
-        }
+    for (unsigned i = 0; i < FR_SOCKET_LIMIT; ++i) {
+        if (!fr_bound_sockets[i].socket || fr_bound_sockets[i].pending) continue;
+        ++fr_bound_sockets[i].busy;
+        slots[count] = i;
+        sockets[count++] = fr_bound_sockets[i].socket;
     }
     ReleaseSRWLockExclusive(&fr_socket_lock);
+    for (unsigned k = 0; k < count; ++k) {
+        fr_real_shutdown(sockets[k], 2 /* SD_BOTH */);
+        fr_cancel_io((HANDLE)sockets[k], NULL);
+    }
+    AcquireSRWLockExclusive(&fr_socket_lock);
+    for (unsigned k = 0; k < count; ++k) {
+        FrSocketSlot *entry = &fr_bound_sockets[slots[k]];
+        if (--entry->busy || !entry->pending) continue;
+        if (entry->pending == FR_PENDING_CLOSE) closing[closes++] = entry->socket;
+        entry->socket = 0;
+        entry->pending = FR_PENDING_NONE;
+    }
+    ReleaseSRWLockExclusive(&fr_socket_lock);
+    for (unsigned k = 0; k < closes; ++k) fr_real_close(closing[k]);
 }
 
 /* Cuts this game off the world it is in (see fr_cut). */
