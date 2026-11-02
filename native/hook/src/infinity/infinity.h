@@ -275,15 +275,23 @@ void fi_carmeet_apply(unsigned char *game_image);
 void fi_carmeet_ticket_log(const unsigned char *body, size_t size);
 /* net_observe.c: matchmaking and session directory answers in the log (observation only). The
    family of a URL by its host (momatch.* or sessiondirectory.*, ignoring case); whether an open
-   line of that family is still within its own budget (past it, a count line at each power of two);
-   one bounded answer line (a few safe fields of a JSON body, or the HRESULT when nothing answered). */
+   line of that family is still within its own budget (GET and non-GET apart; a repeat of a polled
+   request collapses into a count; past the budget, a count line at each power of two); one bounded
+   answer line (a few safe fields of a JSON body, or the HRESULT when nothing answered), or a count
+   when it equals the last answer of the same method and URL. */
 enum { FI_NETOBS_NONE, FI_NETOBS_MOMATCH, FI_NETOBS_SESSIONDIRECTORY, FI_NETOBS_FAMILIES };
 int fi_netobs_family(const wchar_t *url, size_t length);
-int fi_netobs_open(int family, long id);
-void fi_netobs_answer(int family, long id, int answered, unsigned status, HRESULT error, const unsigned char *body,
+int fi_netobs_open(int family, long id, const wchar_t *method, size_t method_length, const wchar_t *url,
+                   size_t url_length);
+void fi_netobs_answer(int family, long id, const wchar_t *method, size_t method_length, const wchar_t *url,
+                      size_t url_length, int answered, unsigned status, HRESULT error, const unsigned char *body,
                       size_t size);
 void fi_netobs_answer_text(char *out, size_t capacity, long id, unsigned status, const unsigned char *body,
                            size_t size);
+/* A session document's members line ("NETWORK: session #<id> host=... gsp=... members: ..."; no
+   identity, tokens as lengths); 0 when the body is not a session. Logged by fi_netobs_answer for
+   sessiondirectory answers when it changed for the URL. */
+int fi_netobs_session_text(char *out, size_t capacity, long id, const unsigned char *body, size_t size);
 /* follow.c (OD-151): a seated guest's game starts its own matchmaking for the host's new activity
    (the launcher's FollowHost; the player confirms with (X)). Applied with car meets (free roam on). */
 void fi_follow_apply(unsigned char *game_image);

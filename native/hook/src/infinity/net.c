@@ -32,6 +32,18 @@
 #define NET_MAX_BODY (64u << 20)
 #define NET_LOG_NAME FI_NETWORK_LOG_NAME
 #define NET_XHR_PROP_TIMEOUT 2
+/* T32: every forwarded request ends within a bound. WinHTTP's own timeouts per step (connect,
+   send, each receive), the game's XHR timeout (SetProperty) taking the receive's place and capped
+   at NET_FORWARD_RECEIVE_MAX_MS; the forward's deadline (a body trickling in) is connect + send +
+   two receives, checked between reads, so one read started before it may still run its own
+   receive timeout. Bounded, not tight: with the game's timeout at the cap and the waits before the
+   forward (the car database, the free-roam lobby) about four minutes in the worst case. A timeout
+   or a transport error reaches the game as OnError, never a hang. */
+#define NET_FORWARD_CONNECT_MS 5000u
+#define NET_FORWARD_SEND_MS 30000u
+#define NET_FORWARD_RECEIVE_MS 30000u
+#define NET_FORWARD_RECEIVE_MAX_MS 60000u
+#define NET_FAILURE_LINES 32
 
 static const unsigned char net_clsid_xhr[16] = {0x09, 0x6a, 0xd9, 0x88, 0x92, 0xf1, 0xd4, 0x11,
                                                 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5};
@@ -60,6 +72,8 @@ static int net_auto_update = 1; /* [hook] AutoUpdate (update.c) */
 static wchar_t net_log_path[PATH_CAPACITY];
 static unsigned char *net_azimuth_base;
 static volatile LONG net_next_id;
+static volatile LONG net_live_requests; /* IXMLHTTPRequest2 objects not yet destroyed */
+static volatile LONG net_failures;      /* forwards that ended without an answer */
 static SRWLOCK net_log_lock = SRWLOCK_INIT;
 static SRWLOCK net_api_lock = SRWLOCK_INIT;
 
@@ -497,6 +511,7 @@ static void net_request_destroy(NetRequest *request) {
     buffer_free(&request->response_headers);
     buffer_free(&request->response_body);
     net_free(request);
+    InterlockedDecrement(&net_live_requests);
 }
 
 static HRESULT STDMETHODCALLTYPE net_request_query(NetRequest *self, REFIID iid, void **out) {
@@ -624,7 +639,10 @@ static void net_log_guid(const char *prefix, const unsigned char *guid) {
    so their opens still pair with their answer lines late in a session. */
 static void net_log_open(NetRequest *request) {
     int family = fi_netobs_family(buffer_wide(&request->url), request->url.size / sizeof(wchar_t));
-    if (family ? !fi_netobs_open(family, request->id) : InterlockedIncrement(&net_logged_opens) > 64) {
+    if (family ? !fi_netobs_open(family, request->id, buffer_wide(&request->method),
+                                 request->method.size / sizeof(wchar_t), buffer_wide(&request->url),
+                                 request->url.size / sizeof(wchar_t))
+               : InterlockedIncrement(&net_logged_opens) > 64) {
         return;
     }
     Buffer line = {0};
@@ -722,6 +740,47 @@ static int net_query_text(HINTERNET request, DWORD query, Buffer *out) {
     return 1;
 }
 
+/* A forward that ended without an answer (T32): one line, "NETWORK: #<id> <method> no answer
+   (<why>, Win32 <code>) after <ms> ms; the game gets error 0x<HRESULT>.", for the first
+   NET_FAILURE_LINES, then a count at every power of two. No URL (its open line has it), no
+   header or body. Never under a lock. */
+static void net_log_failure(NetRequest *request, const char *why, DWORD win32, ULONGLONG elapsed, HRESULT error) {
+    LONG count = InterlockedIncrement(&net_failures);
+    Buffer line = {0};
+    int ok;
+    if (count > NET_FAILURE_LINES) {
+        if (count & (count - 1)) return;
+        ok = buffer_append_text(&line, "NETWORK: forwards without an answer: ") &&
+             buffer_append_number(&line, (ULONGLONG)count) && buffer_append_text(&line, " (last #") &&
+             buffer_append_number(&line, (ULONGLONG)(ULONG)request->id) && buffer_append_text(&line, " ") &&
+             buffer_append_text(&line, why) &&
+             buffer_append_text(&line, "; lines past the first 32 are counted only).\r\n");
+    } else {
+        size_t method_length = request->method.size / sizeof(wchar_t);
+        ok = buffer_append_text(&line, "NETWORK: #") && buffer_append_number(&line, (ULONGLONG)(ULONG)request->id) &&
+             buffer_append_text(&line, " ") &&
+             buffer_append_json_wide(&line, buffer_wide(&request->method), method_length < 16 ? method_length : 16) &&
+             buffer_append_text(&line, " no answer (") && buffer_append_text(&line, why) &&
+             buffer_append_text(&line, ", Win32 ") && buffer_append_number(&line, win32) &&
+             buffer_append_text(&line, ") after ") && buffer_append_number(&line, elapsed) &&
+             buffer_append_text(&line, " ms; the game gets error ") && buffer_append_hresult(&line, error) &&
+             buffer_append_text(&line, ".\r\n");
+    }
+    if (ok) log_append((const char *)line.data);
+    buffer_free(&line);
+}
+
+static const char *net_failure_why(DWORD win32) {
+    switch (win32) {
+    case ERROR_WINHTTP_TIMEOUT: return "timeout";
+    case ERROR_WINHTTP_CONNECTION_ERROR: return "connection reset";
+    case ERROR_WINHTTP_CANNOT_CONNECT: return "cannot connect";
+    case ERROR_WINHTTP_NAME_NOT_RESOLVED: return "name not resolved";
+    case ERROR_WINHTTP_INVALID_SERVER_RESPONSE: return "invalid response";
+    default: return "transport error";
+    }
+}
+
 /* Forward to the test server as http://SERVER/<original host + path>. */
 static int net_forward(NetRequest *request, HRESULT *error) {
     if (net_mode != NET_MODE_PROXY || fi_cfg()->launch == FI_LAUNCH_OFFLINE) {
@@ -730,6 +789,8 @@ static int net_forward(NetRequest *request, HRESULT *error) {
     HINTERNET session = 0, connection = 0, http = 0;
     Buffer path = {0}, headers = {0}, raw = {0};
     int answered = 0;
+    DWORD failure = 0; /* the WinHTTP error that ended the forward (logged), 0 for none */
+    ULONGLONG started = 0, deadline = 0;
     *error = NET_OFFLINE_ERROR;
     const wchar_t *url = buffer_wide(&request->url), *rest = url;
     for (const wchar_t *p = url; p[0] && p[1] && p[2]; ++p) {
@@ -800,13 +861,20 @@ static int net_forward(NetRequest *request, HRESULT *error) {
         (!buffer_append_wide(&headers, activity) || !buffer_append_wide(&headers, L"\r\n"))) {
         goto done;
     }
+    /* T32: each step bounded; the game's XHR timeout, when it set one, bounds the receive */
+    DWORD receive_ms = request->timeout_ms ? request->timeout_ms : NET_FORWARD_RECEIVE_MS;
+    if (receive_ms > NET_FORWARD_RECEIVE_MAX_MS) receive_ms = NET_FORWARD_RECEIVE_MAX_MS;
+    DWORD connect_ms = receive_ms < NET_FORWARD_CONNECT_MS ? receive_ms : NET_FORWARD_CONNECT_MS;
+    DWORD send_ms = receive_ms < NET_FORWARD_SEND_MS ? receive_ms : NET_FORWARD_SEND_MS;
+    started = GetTickCount64();
+    deadline = started + connect_ms + send_ms + 2ull * receive_ms;
     session = http_open(L"FH2Online/1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
+        failure = GetLastError();
         goto done;
     }
-    int receive_timeout = request->timeout_ms ? (int)request->timeout_ms : 30000;
-    http_set_timeouts(session, 5000, 5000, 30000, receive_timeout);
+    http_set_timeouts(session, (int)connect_ms, (int)connect_ms, (int)send_ms, (int)receive_ms);
     connection = http_connect(session, net_server_host, net_server_port, 0);
     http = connection ? http_open_request(connection, buffer_wide(&request->method),
                                           buffer_wide(&path), NULL, WINHTTP_NO_REFERER,
@@ -814,6 +882,7 @@ static int net_forward(NetRequest *request, HRESULT *error) {
                                           net_server_secure ? WINHTTP_FLAG_SECURE : 0)
                       : 0;
     if (!http) {
+        failure = GetLastError();
         goto done;
     }
     /* One header per call: a single odd line must not sink the whole request. */
@@ -839,6 +908,7 @@ static int net_forward(NetRequest *request, HRESULT *error) {
                    body_size ? request->request_body.data : WINHTTP_NO_REQUEST_DATA, body_size,
                    body_size, 0) ||
         !http_receive(http, NULL)) {
+        failure = GetLastError(); /* the game gets NET_OFFLINE_ERROR, as without a server */
         goto done;
     }
     if (fi_launch_protocol() && !fi_launch_live()) goto done;
@@ -846,6 +916,7 @@ static int net_forward(NetRequest *request, HRESULT *error) {
     if (!http_query_headers(http, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
                             WINHTTP_NO_HEADER_INDEX)) {
+        failure = GetLastError();
         goto done;
     }
     request->status = status;
@@ -871,9 +942,16 @@ static int net_forward(NetRequest *request, HRESULT *error) {
     }
     for (;;) {
         if (fi_launch_protocol() && !fi_launch_live()) goto done;
+        if (request->aborted) goto done; /* the worker answers E_ABORT */
+        if (GetTickCount64() >= deadline) {
+            failure = ERROR_WINHTTP_TIMEOUT; /* a body trickling in past the whole bound */
+            *error = HRESULT_FROM_WIN32(failure);
+            goto done;
+        }
         DWORD available = 0, read = 0;
         if (!http_query_available(http, &available)) {
-            *error = HRESULT_FROM_WIN32(GetLastError());
+            failure = GetLastError();
+            *error = HRESULT_FROM_WIN32(failure);
             goto done;
         }
         if (!available) {
@@ -886,11 +964,23 @@ static int net_forward(NetRequest *request, HRESULT *error) {
         }
         if (!http_read(http, request->response_body.data + request->response_body.size, available,
                        &read)) {
-            *error = HRESULT_FROM_WIN32(GetLastError());
+            failure = GetLastError();
+            *error = HRESULT_FROM_WIN32(failure);
             goto done;
         }
         request->response_body.size += read;
         request->response_body.data[request->response_body.size] = 0;
+    }
+    /* a connection closed before its Content-Length arrived is an error, never a short body */
+    DWORD declared = 0, declared_size = sizeof(declared);
+    if (status >= 200 && status != 204 && status != 304 &&
+        !wide_starts_ignore_case(buffer_wide(&request->method), request->method.size / sizeof(wchar_t), L"head") &&
+        http_query_headers(http, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                           &declared, &declared_size, WINHTTP_NO_HEADER_INDEX) &&
+        request->response_body.size < declared) {
+        failure = ERROR_WINHTTP_CONNECTION_ERROR;
+        *error = HRESULT_FROM_WIN32(failure);
+        goto done;
     }
     if (fi_launch_refused(status)) {
         /* CR-S4: the game falls back to offline play as it does without a profile */
@@ -918,6 +1008,10 @@ done:
     buffer_free(&path);
     buffer_free(&headers);
     buffer_free(&raw);
+    if (!answered && failure && !request->aborted) {
+        ULONGLONG now = GetTickCount64();
+        net_log_failure(request, net_failure_why(failure), failure, started && now > started ? now - started : 0, *error);
+    }
     return answered;
 }
 
@@ -1481,8 +1575,9 @@ static DWORD WINAPI net_worker(void *parameter) {
     /* what matchmaking and the session directory answered, in infinity.log (read only) */
     int family = fi_netobs_family(buffer_wide(&request->url), request->url.size / sizeof(wchar_t));
     if (family) {
-        fi_netobs_answer(family, request->id, answered, (unsigned)request->status, error, request->response_body.data,
-                         request->response_body.size);
+        fi_netobs_answer(family, request->id, buffer_wide(&request->method), request->method.size / sizeof(wchar_t),
+                         buffer_wide(&request->url), request->url.size / sizeof(wchar_t), answered,
+                         (unsigned)request->status, error, request->response_body.data, request->response_body.size);
     }
     /* Take the callback out of the request: msxml6 drops it after the final
        notification, and XSAPI's callback owns the request (cycle otherwise). */
@@ -1670,6 +1765,7 @@ static HRESULT net_co_create_instance(REFCLSID clsid, void *outer, DWORD context
         if (!request) {
             return E_OUTOFMEMORY;
         }
+        InterlockedIncrement(&net_live_requests);
         request->lpVtbl = &net_request_vtable;
         request->references = 1;
         request->id = InterlockedIncrement(&net_next_id);

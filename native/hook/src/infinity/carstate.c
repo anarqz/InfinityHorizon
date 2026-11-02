@@ -127,6 +127,23 @@ static int cs_from_relay(const unsigned char *from, int size, unsigned port) {
     return port && size >= (int)sizeof(CsAddr4) && memory_equal(from, &relay, 8);
 }
 
+/* Car state (the game's threads) and voice (voice_net.c, an overlay thread) share the socket:
+   only one makes it. */
+static SRWLOCK cs_host_lock = SRWLOCK_INIT;
+static int cs_host_making;          /* a thread is making the socket (cs_host_lock) */
+static volatile LONG cs_host_users; /* senders on a copy of cs_host_socket */
+
+/* The listener's socket goes: out of cs_host_socket (if still there), then closed once no sender
+   still holds a copy (a send is one non-blocking UDP datagram; bounded wait, never under the lock),
+   so a handle is never sent on after it was closed and reused. */
+static void cs_host_retire(UINT_PTR s) {
+    AcquireSRWLockExclusive(&cs_host_lock);
+    if (cs_host_socket == s) cs_host_socket = CS_INVALID;
+    ReleaseSRWLockExclusive(&cs_host_lock);
+    for (unsigned waited = 0; cs_host_users && waited < 1000; ++waited) Sleep(1);
+    cs.closesocket(s);
+}
+
 /* The relay's answers to the host's hook (the others' states, and voice for the overlay), while
    this PC hosts. */
 static DWORD WINAPI cs_host_listen(void *argument) {
@@ -147,55 +164,63 @@ static DWORD WINAPI cs_host_listen(void *argument) {
             break;
         }
     }
-    if (cs_host_socket == s) {
-        cs_host_socket = CS_INVALID;
-    }
-    cs.closesocket(s);
+    cs_host_retire(s);
     return 0;
 }
 
-/* Car state (the game's threads) and voice (voice_net.c, an overlay thread) share the socket:
-   only one makes it. */
-static SRWLOCK cs_host_lock = SRWLOCK_INIT;
-
-/* Sends to the relay from the host's loopback socket (made the first time). */
-static int cs_host_send_locked(const unsigned char *data, int size) {
+/* Sends to the relay from the host's loopback socket (made the first time). T32: cs_host_lock
+   guards cs_host_socket, cs_host_port, cs_host_making and cs_host_users only; the socket calls
+   run without it. */
+static int cs_host_send(const unsigned char *data, int size) {
     unsigned port = azimuth_world_port();
     if (!port || !cs_load()) {
         return 0;
     }
-    if (cs_host_socket == CS_INVALID || cs_host_port != port) {
-        UINT_PTR s = cs.socket(CS_AF_INET, CS_SOCK_DGRAM, CS_IPPROTO_UDP);
-        if (s == CS_INVALID) {
-            return 0;
-        }
+    CsAddr4 relay;
+    cs_relay_address(&relay, port);
+    AcquireSRWLockExclusive(&cs_host_lock);
+    UINT_PTR s = cs_host_socket;
+    int make = 0;
+    if (s != CS_INVALID && cs_host_port == port) {
+        InterlockedIncrement(&cs_host_users); /* cs_host_retire waits for it before it closes the socket */
+    } else {
+        s = CS_INVALID;
+        make = !cs_host_making; /* one thread makes it; another's datagram meanwhile is dropped */
+        if (make) cs_host_making = 1;
+    }
+    ReleaseSRWLockExclusive(&cs_host_lock);
+    if (s != CS_INVALID) {
+        int sent = cs.sendto(s, (const char *)data, size, 0, &relay, (int)sizeof(relay)) == size;
+        InterlockedDecrement(&cs_host_users);
+        return sent;
+    }
+    if (!make) return 0;
+    s = cs.socket(CS_AF_INET, CS_SOCK_DGRAM, CS_IPPROTO_UDP);
+    int sent = 0;
+    if (s != CS_INVALID) {
         DWORD timeout = 250;
         cs.setsockopt(s, CS_SOL_SOCKET, CS_SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-        CsAddr4 relay;
-        cs_relay_address(&relay, port);
         /* the first send binds it (an ephemeral loopback port), then it can receive */
-        if (cs.sendto(s, (const char *)data, size, 0, &relay, (int)sizeof(relay)) != size) {
+        sent = cs.sendto(s, (const char *)data, size, 0, &relay, (int)sizeof(relay)) == size;
+        if (!sent) {
             cs.closesocket(s);
-            return 0;
+            s = CS_INVALID;
         }
-        cs_host_socket = s;
+    }
+    AcquireSRWLockExclusive(&cs_host_lock);
+    if (s != CS_INVALID) {
+        cs_host_socket = s; /* the previous one's listener sees the change and retires it */
         cs_host_port = port;
+    }
+    cs_host_making = 0;
+    ReleaseSRWLockExclusive(&cs_host_lock);
+    if (s != CS_INVALID) {
         HANDLE t = CreateThread(0, 0, cs_host_listen, (void *)s, 0, 0);
         if (t) {
             CloseHandle(t);
         }
         log_append("CARSTATE: this PC hosts; headlights and roof go to the relay from a loopback socket.\r\n");
-        return 1;
     }
-    CsAddr4 relay;
-    cs_relay_address(&relay, port);
-    return cs.sendto(cs_host_socket, (const char *)data, size, 0, &relay, (int)sizeof(relay)) == size;
-}
-
-static int cs_host_send(const unsigned char *data, int size) {
-    AcquireSRWLockExclusive(&cs_host_lock);
-    int sent = cs_host_send_locked(data, size);
-    ReleaseSRWLockExclusive(&cs_host_lock);
     return sent;
 }
 
