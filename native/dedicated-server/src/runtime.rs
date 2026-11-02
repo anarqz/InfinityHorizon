@@ -231,7 +231,9 @@ pub fn run(rc: RunConfig) -> i32 {
     if let Some(k) = &rc.grant_keys {
         cfg.keys = k.clone();
     }
+    let mut catalog = crate::fh2::Catalog::default();
     if let Some(db) = &rc.game_db {
+        catalog.path = Some(db.clone());
         // Step 1 reads no catalog yet (the SQLite reader comes with Road Trip and the parts
         // rule); a missing or unreadable file is never a start failure (contract §9).
         let readable = std::fs::File::open(db).is_ok();
@@ -240,6 +242,7 @@ pub fn run(rc: RunConfig) -> i32 {
             .field("loaded", false)
             .emit();
     }
+    cfg.games = crate::registered_games(catalog);
     let ids = Arc::new(AtomicU64::new(1));
     // the control endpoint
     match &rc.control {

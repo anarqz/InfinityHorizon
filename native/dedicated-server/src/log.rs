@@ -15,7 +15,7 @@ use std::{
     io::Write,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
         mpsc::{self, SyncSender, TrySendError},
     },
     thread::JoinHandle,
@@ -65,6 +65,12 @@ static LOGGER: OnceLock<Logger> = OnceLock::new();
 static LEVEL: AtomicU8 = AtomicU8::new(Level::Info as u8);
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITTEN: AtomicU64 = AtomicU64::new(0);
+static MUTED: AtomicBool = AtomicBool::new(false);
+
+/// Silences every line (a library user replaying vectors or running tests in-process).
+pub fn mute() {
+    MUTED.store(true, Ordering::Relaxed);
+}
 
 /// Starts the writer thread. Later calls do nothing.
 pub fn start(level: Level) {
@@ -115,7 +121,7 @@ pub fn shutdown(wait: Duration) {
 }
 
 pub fn enabled(level: Level) -> bool {
-    level as u8 <= LEVEL.load(Ordering::Relaxed)
+    !MUTED.load(Ordering::Relaxed) && level as u8 <= LEVEL.load(Ordering::Relaxed)
 }
 
 /// Lines dropped because the queue was full.
