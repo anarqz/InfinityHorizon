@@ -67,6 +67,8 @@ internal sealed partial class RelayEngine
                 : $"race request from peer {peer.Index}: ignored (it never requested the event options)");
             return;
         }
+        // a held event end goes out first, as it would have at the end, so the invitation's update follows it unchanged
+        ReleaseEventHold("a new event");
         foreach (var other in _peers.Where(p => p.Synced && p.ConsoleValues[4] != 0)) SetConsoleVariables(other, (4, false));
         var others = _peers.Any(p => p != peer && p.Synced);
         var wait = others ? _settings.RaceInviteMs : 0;
@@ -241,7 +243,8 @@ internal sealed partial class RelayEngine
         Note($"event closed: {why}");
         EventClosed(race);
         RoadTripEventClosed();
-        SetHostVariables([(2, 0, 2), (4, 0, 1), (5, 0, 1), (6, 0, 1), .. EventProgressCleared()]);
+        // T24: with finishers still on their results the host variables stay as they are (the "Race complete" hold)
+        if (!HoldEventEnd(race)) SetHostVariables(EventEndVariables());
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));
     }

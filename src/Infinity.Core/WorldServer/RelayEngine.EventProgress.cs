@@ -45,11 +45,12 @@ internal sealed partial class RelayEngine
     /// <summary>Whether vars 10/11 were written during the current event, so its end clears them.</summary>
     private bool _eventProgressWritten;
 
-    /// <summary>Forgets the event progress state (the engine's Clear).</summary>
+    /// <summary>Forgets the event progress state and any held event end (the engine's Clear).</summary>
     internal void EventProgressReset()
     {
         _eventProgress = null;
         _eventProgressWritten = false;
+        _eventHeld = false;
     }
 
     /// <summary>The race started: progress is followed for a lap race of known length (not a Road Trip's, nor a tag event).</summary>
@@ -152,5 +153,37 @@ internal sealed partial class RelayEngine
             : [(RaceStartTimeVariable, 0, 32)];
         _eventProgressWritten = false;
         return cleared;
+    }
+
+    /// <summary>Every SessionHost variable an event's end clears: the event flags, the countdown, the start and the progress sent.</summary>
+    private (byte, ulong, int)[] EventEndVariables() =>
+        [(CountdownTypeVariable, 0, CountdownTypeBits), (4, 0, 1), (5, 0, 1), (6, 0, 1), .. EventProgressCleared()];
+
+    /// <summary>
+    /// "Race complete" hold: the event closed while finishers are still on their results screens, so SessionHost keeps the event as
+    /// it was (vars 2, 4, 5, 6, 9, 10, 11) until they are back in free roam. A bystander's HUD shows the completed state ("Race
+    /// complete", 100 %, the last lap) only on its in-progress branch, which needs CountdownType 2 and a past RaceStartTime: clearing
+    /// 2 and 9 first would turn it back to "about to start". Not for a Road Trip (its own state machine drives var 4 and starts the
+    /// next event itself, and everybody is in it) nor for an event that ended before its start (nobody is on a results screen).
+    /// </summary>
+    private bool _eventHeld;
+
+    /// <summary>The event closed: true when its host variables are held (the caller then sends nothing).</summary>
+    private bool HoldEventEnd(Race race)
+    {
+        if (race.Stage != RaceStage.Started || IsRoadTrip || !_phasing || _eventSide.Count == 0) return false;
+        _eventProgress = null;
+        _eventHeld = true;
+        Note(string.Create(CultureInfo.InvariantCulture, $"event: host variables held while {_eventSide.Count} player(s) are on their results"));
+        return true;
+    }
+
+    /// <summary>The hold ends (everybody back in free roam, the phasing backstop, or a new event): the end's variables go out now.</summary>
+    private void ReleaseEventHold(string why)
+    {
+        if (!_eventHeld) return;
+        _eventHeld = false;
+        Note($"event: host variables released ({why})");
+        SetHostVariables(EventEndVariables());
     }
 }
