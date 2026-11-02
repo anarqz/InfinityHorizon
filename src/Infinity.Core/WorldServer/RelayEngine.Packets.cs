@@ -77,7 +77,9 @@ internal sealed partial class RelayEngine
                 case NerdMessage.Object obj:
                     if (OnObject(peer, obj) is { } relayed) { peer.CompletionConfirmed = true; forward.Add(relayed); }
                     break;
-                case NerdMessage.Delete deleted when deleted.Handle.Kind == HandleKind.Own && deleted.Router is >= 1 and <= 3:
+                case NerdMessage.Delete deleted when deleted.Handle.Kind == HandleKind.Own && (deleted.Router is >= 1 and <= 3
+                    || deleted.Router == BucketListRouter && deleted.Handle.Id == 0 && BucketListWorld):
+                    if (deleted.Router == BucketListRouter) BucketListPlayerDeleted(peer);
                     peer.Objects.Remove((deleted.Router, deleted.Handle.Id), out var deletedObject);
                     var kept = peer.Orphans.Where(p => p.Router != deleted.Router || p.Handle.Id != deleted.Handle.Id).ToArray();
                     peer.Orphans.Clear(); foreach (var item in kept) peer.Orphans.Enqueue(item);
@@ -105,6 +107,7 @@ internal sealed partial class RelayEngine
                 case NerdMessage.Other { Kind: 27 } answer: JoinOrCancel(peer, answer.Body); break;
                 case NerdMessage.Other { Kind: 47 } vote when IsRoadTrip: RoadTripVote(peer, vote.Body); break;
                 case NerdMessage.Other { Kind: 51 } when IsRoadTrip: RoadTripConfigured(peer); break;
+                case NerdMessage.Other { Kind: 62 or 63 or 64 } bucket when BucketListWorld: BucketListMessage(peer, bucket); break;
                 case NerdMessage.Other other when _settings.Races:
                     switch (other.Kind)
                     {
@@ -124,6 +127,7 @@ internal sealed partial class RelayEngine
         if (peer.HistoryBits > _settings.HistoryMaxBits) { Doom(peer, "object history over its limit"); return; }
         if (carNow is not null) WatchCar(peer, carNow); // AC-2: a Hardcore host measures the other players' cars
         Forward(peer, forward, true); ForwardCars(peer, carNow, cars);
+        FlushBucketList(); // after the relayed objects: a PlayerState create precedes the 65 that names it
         if (peer.UniverseDue) { peer.UniverseDue = false; PlayerObjectCreated(peer); }
         if (Finalise(peer) is { } finalised) reliable.Add(finalised);
         if (reliable.Count != 0) SendSequenced(peer, reliable);
@@ -139,13 +143,20 @@ internal sealed partial class RelayEngine
         // the game makes its RoadTripPlayerSynced in every session type (free roam and car meets too): relayed in every world
         var roadTripPlayer = obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
             && (obj.Create ? obj.Type == 2 : peer.Objects.ContainsKey((9, obj.Handle.Id)));
+        // a player's own BucketListPlayerStateSynced (router 12, type 0, id 0) in free roam; every other router-12 shape is refused
+        var bucketPlayer = obj.Router == BucketListRouter && BucketListWorld && obj.Handle is { Kind: HandleKind.Own, Id: 0 }
+            && (obj.Create ? obj.Type == BucketListPlayerType : peer.Objects.ContainsKey((BucketListRouter, 0)));
         if (!roadTripPlayer)
         {
-            if (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0)
+            if (!bucketPlayer && (obj.Handle.Kind != HandleKind.Own || obj.Router is < 1 or > 3 || obj.Type != 0))
             {
                 if (obj.Router == 9) Note($"road trip: peer {peer.Index} router-9 object refused (create {obj.Create}, type {obj.Type}, {obj.Handle.Kind} id {obj.Handle.Id}, {obj.Payload.Length} bits)");
+                if (obj.Router == BucketListRouter) BucketListRefused(peer, obj);
                 return null;
             }
+            // a PlayerState the object store cannot keep is not relayed either: its updates would be refused and joiners would miss it
+            if (bucketPlayer && obj.Create && !peer.Objects.ContainsKey((BucketListRouter, 0)) && peer.Objects.Count >= 256)
+            { BucketListCapped(peer); return null; }
             if (!NerdPayload.TrySanitize(obj.Router, obj.Payload, out var payload, out var fault))
             { Rejected(peer, "invalid_payload", obj.Id, obj.Router, fault?.Value); return null; }
             obj = obj with { Payload = payload! };
@@ -201,6 +212,8 @@ internal sealed partial class RelayEngine
                 }
             ObserveConsole(peer, observations);
         }
+        if (bucketPlayer) BucketListPlayerUpdate(peer, obj.Create, obj.Sequence, obj.Payload);
+        if (obj.Router == 1) BucketListPlayerObject(peer, obj.Payload); // the name 65 gives a partner
         var injected = peer.Objects.GetValueOrDefault(key)?.Injected ?? 0;
         return NerdCodec.Write(obj with { Handle = new(HandleKind.Relay, obj.Handle.Id, peer.Index), Sequence = AckWindow.SequenceAdd(obj.Sequence, injected) });
     }
@@ -227,7 +240,7 @@ internal sealed partial class RelayEngine
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
         TickHeldOpens();
-        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip(); TickWatch();
+        TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip(); TickBucketList(); TickWatch();
         if (_now - _lastResend >= 50)
         {
             _lastResend = _now;
