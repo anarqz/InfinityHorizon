@@ -100,6 +100,7 @@ public sealed partial class ShellViewModel
             {
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 ModSet = mods,
+                ModName = LobbyModName, // OD-181: the catalog's names of the mods players declare
                 Gamertag = gamertag,
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
@@ -113,6 +114,17 @@ public sealed partial class ShellViewModel
                 GameDatabase = ContentLocation?.Mount is { } gameMount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(gameMount) : null,
             };
         };
+    }
+
+    /// <summary>
+    /// OD-181 (CR-L48): a declared mod's name in the player's language, from the loaded catalog by its multiplayer id
+    /// (<c>compatibilityId</c>); null when the catalog does not know it (the overlay then shows the id).
+    /// </summary>
+    private string? LobbyModName(string compatibilityId)
+    {
+        var catalog = _manifestCatalog;
+        var mod = catalog.FirstOrDefault(m => string.Equals(m.Multiplayer?.CompatibilityId, compatibilityId, StringComparison.Ordinal));
+        return mod?.Text("name", S.Locale);
     }
 
     /// <summary>The official server and a custom one (CR-L39) prove the relay socket against the server's clock and relay keys.</summary>

@@ -112,6 +112,8 @@ public sealed partial class WorldsBridge
                 // T28: the host's game left its session after a race while the other player drove on); it is weighed again later
                 if (HostedWorldId is { } kept && await OtherPlayersAsync(pending.Token).ConfigureAwait(false) is var players and > 0)
                 {
+                    // CR-L49: past the grace the host is away: its heartbeat says so until its game is back in the world
+                    SetHostAway(true, $"its game left free roam {(int)FreeRoamLeftGrace.TotalSeconds} s ago");
                     if (!held)
                     {
                         (held, heldSince) = (true, _clock.GetTimestamp());
@@ -159,7 +161,8 @@ public sealed partial class WorldsBridge
         var others = 0;
         try { others = (await relay.PeersAsync(cancellation).ConfigureAwait(false)).Count(x => x != _ownXuid); }
         catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException) { } // the relay just stopped
-        return Math.Max(others, relay.LobbyPlayers);
+        // CR-L49: and the reserved or seated places the server counted on the last PUT or heartbeat (a guest on its way in)
+        return Math.Max(Math.Max(others, relay.LobbyPlayers), Volatile.Read(ref _hostedOtherSeats));
     }
 
     /// <summary>
@@ -170,6 +173,7 @@ public sealed partial class WorldsBridge
     public void GameJoined(bool join = false)
     {
         if (join) SeatPlays("the game joined"); // a guest's join (detail join:…) is the seat's proof: no give-up
+        else SetHostAway(false, "its game joined it again"); // CR-L49: the host's game is back in its world
         if (Interlocked.Exchange(ref _freeRoamLeave, null) is not { } pending) return;
         CancelFreeRoamLeave(pending);
         if ((HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } world) _log($"worlds: the game joined again; {world} stays");
@@ -195,7 +199,7 @@ public sealed partial class WorldsBridge
     // the world a FREE ROAM ONLINE ask stays in, for the log
     private string Staying(string? why = null) => HostsOrOpensWorld || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting
         ? $"stay in {HostedWorldId ?? "its own world"} (hosted)"
-        : $"stay in {Volatile.Read(ref _seatWorld) ?? "its seat"} (seated{(why is null ? string.Empty : ", " + why)})";
+        : $"stay in {Volatile.Read(ref _seatWorld) ?? "its seat"} (seated{SeatOrigin()}{(why is null ? string.Empty : ", " + why)})";
 
     private byte Decided(byte kind, byte result, string what)
     {
@@ -274,7 +278,7 @@ public sealed partial class WorldsBridge
             if (UnprovenOtherSeat(kind) is { } stale)
             {
                 var staleWorld = Volatile.Read(ref _seatWorld) ?? "its seat";
-                if (await ReleaseUnprovenSeatAsync(stale.Grant).ConfigureAwait(false))
+                if (await ReleaseUnprovenSeatAsync(stale.Grant, $"an unproven {KindName(stale.Kind)} seat dropped for a {KindName(kind)} ask").ConfigureAwait(false))
                     _log($"worlds: {KindName(kind)}: dropped the unproven {KindName(stale.Kind)} seat in {staleWorld}; joining again");
             }
             if (lobby is not null && _seat.GrantId is not null)
@@ -287,18 +291,18 @@ public sealed partial class WorldsBridge
                 catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
                 if (view is not { Ok: true, Value: { } seated }) return Decided(kind, FreeRoamResult.Ready, Staying("its world could not be read"));
                 if (seated.Lobbies.Contains(lobby)) return Decided(kind, FreeRoamResult.Ready, Staying($"it runs {lobby}"));
-                await LeaveForLobbyAsync(cancellation).ConfigureAwait(false);
+                await LeaveForLobbyAsync($"the seat's world does not run {lobby}", cancellation).ConfigureAwait(false);
                 _log($"worlds: {KindName(kind)}: left {seatWorld}: it does not run {lobby}; finding a world that does");
             }
-            var local = ModSet.State;
             List<(WorldView World, LobbyRow Row)> candidates = [];
             try
             {
                 var read = await ReadLobbiesAsync(WorldFilters.Every, notFull: true, cancellation).ConfigureAwait(false);
                 // open lobbies may exist: a transient failure never splits players into a new one
                 if (read.FailureKey is { } failure) return Decided(kind, FreeRoamResult.None, $"no world (the lobby list failed: {failure})");
-                // matching rows the player enters without a code: everyone's or Supporters' (the server's canJoin; OD-129 opens both to every ticket)
-                candidates = OrderLobbies(read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))))
+                // matching rows the player enters without a code: everyone's or Supporters' (the server's canJoin; OD-129 opens both to every ticket;
+                // OD-181: whatever their mods)
+                candidates = OrderLobbies(read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked))))
                     .Where(r => Matching(r.Row) && !r.World.NeedsCode
                         && r.World.Audience is WorldAudiences.Everyone or WorldAudiences.Supporters
                         && (lobby is null || r.World.Lobbies.Contains(lobby))
@@ -365,12 +369,12 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>The seat is let go to find a world that runs the asked lobby (not "on purpose": that world may come back later).</summary>
-    private async Task LeaveForLobbyAsync(CancellationToken cancellation)
+    private async Task LeaveForLobbyAsync(string why, CancellationToken cancellation)
     {
         InvalidateMine(reset: true);
         Volatile.Write(ref _seatWorld, null);
         _seat.Left();
-        await ClearSeatEndAsync().ConfigureAwait(false); // no relay leg outlives the seat
+        await ClearSeatEndAsync(why).ConfigureAwait(false); // no relay leg outlives the seat
         try { Observe(await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false)); }
         catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { } // the seat lapses on its own
     }
@@ -388,6 +392,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     private void ObserveActivity(Seat seat)
     {
+        ObserveHostAway(seat); // CR-L49: a guest is told once when its host goes away
         if (seat.State == SeatStates.Hosting || seat.World.Id != seat.WorldId) { _seatActivity = null; return; }
         var activity = seat.World.Activity;
         if (activity is not (WorldActivities.FreeRoam or WorldActivities.RoadTrip)) return; // a value this launcher does not know

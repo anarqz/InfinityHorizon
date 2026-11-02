@@ -12,12 +12,18 @@ public sealed partial class WorldsBridge
 
     private IReadOnlyList<ModEntry> _hostedMods = [];
 
-    /// <summary>The set to send (null: vanilla, left out of the body), or the <c>worlds.*</c> key of why nothing may be sent now.</summary>
+    /// <summary>
+    /// The set to send (null: vanilla, left out of the body), or the <c>worlds.*</c> key of why nothing may be sent now. OD-181
+    /// (CR-L48): every player declares the set its game loads, so a modded session (the gate's <c>modded</c>, a non-empty plan)
+    /// never sends an empty set: one whose ready set came out empty joins and hosts nothing (the server would answer 400
+    /// <c>{field: "mods"}</c>).
+    /// </summary>
     private (IReadOnlyList<ModEntry>? Mods, string? Refusal) WireMods()
     {
         var state = ModSet.State;
         return state.Phase switch
         {
+            ModSetPhase.Ready when state.Mods.Count == 0 && ModSets.Modded(ModSet) => (null, "worlds.mods_failed"),
             ModSetPhase.Ready => (state.Mods.Count == 0 ? null : state.Mods, null),
             ModSetPhase.NotReady => (null, "worlds.mods_not_ready"),
             _ => (null, "worlds.mods_failed"),
@@ -29,8 +35,9 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// The protocol 2 list (0x14 → 0x15), CR-L40 §2.2: every lobby of the filter (4 all, the overlay's default),
-    /// modded and vanilla, ordered matching rows first (<see cref="OrderLobbies"/>), each with its players, mods
-    /// and whether its mods equal this session's. An OD-112 overlay's <c>modded</c> query still lists modded rows only.
+    /// modded and vanilla, ordered matching rows first (<see cref="OrderLobbies"/>), each with its players and the host's
+    /// mods (OD-181: shown, never a reason the row cannot be joined). An OD-112 overlay's <c>modded</c> query still lists
+    /// modded rows only.
     /// </summary>
     public async Task<UiFrame.WorldsListV2> ListV2Async(UiFrame.WorldsQueryV2 query, CancellationToken cancellation)
     {
@@ -50,7 +57,6 @@ public sealed partial class WorldsBridge
         };
         try
         {
-            var local = ModSet.State;
             List<(WorldView World, LobbyRow Row)> rows;
             if (query.Modded)
             {
@@ -61,7 +67,7 @@ public sealed partial class WorldsBridge
                 if (answer is not { Ok: true, Value: { } list })
                     return Failed(_text("worlds.list_failed"));
                 ObservePool(list.Pool);
-                rows = list.Items.Select(w => (w, SessionRow(w, false, local))).Concat(list.Locked.Select(w => (w, SessionRow(w, true, local))))
+                rows = list.Items.Select(w => (w, SessionRow(w, false))).Concat(list.Locked.Select(w => (w, SessionRow(w, true))))
                     // an older server ignores the filter: never show a world of the other kind
                     .Where(r => r.Item2.Modded).ToList();
             }
@@ -71,7 +77,7 @@ public sealed partial class WorldsBridge
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return Failed(DeniedMessage(changed, "list"));
                 if (read.FailureKey is { } key) return Failed(_text(key));
-                rows = read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked, local))).ToList();
+                rows = read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked))).ToList();
             }
             var ordered = OrderLobbies(rows).Select(r => r.Row with { World = WithActivity(r.Row.World, r.World) }).ToList();
             // OD-149: a player the anti-cheat system isolated gets the red notice's countdown with the list
@@ -91,20 +97,72 @@ public sealed partial class WorldsBridge
     private WorldRow WithActivity(WorldRow row, WorldView world) =>
         row with { Host = Clip(row.Host + " · " + ActivityName(world.Activity), 128) };
 
-    /// <summary>One matchmaking world as a protocol 2 row: <c>ModsMatch</c> only when this session's set is ready and equal.</summary>
-    public static LobbyRow LobbyRow(WorldView world, bool lockedSection, ModSetState local)
+    /// <summary>
+    /// OD-181 (CR-L48): the catalog's name of a mod by its multiplayer id (the localized name, or null when the catalog does
+    /// not know it); the lobby list, the player details and the roster's mods show it with the version, else the id.
+    /// </summary>
+    public Func<string, string?>? ModName { get; init; }
+
+    /// <summary>One mod as shown: the catalog's name when <paramref name="names"/> knows it, else its id; then its version (cut to the pipe's limits).</summary>
+    public static LobbyMod ShownMod(ModEntry mod, Func<string, string?>? names)
+    {
+        ArgumentNullException.ThrowIfNull(mod);
+        var name = names?.Invoke(mod.Id);
+        var shown = Clip(string.IsNullOrWhiteSpace(name) ? mod.Id : name.Trim(), 64);
+        return new LobbyMod(shown.Length == 0 ? Clip(mod.Id, 64) : shown, Clip(mod.Version, 16));
+    }
+
+    /// <summary>
+    /// One matchmaking world as a protocol 2 row with the host's mods (<c>WorldView.mods</c>) as shown. OD-181 (CR-L48)
+    /// retired the equal-set join rule: <c>ModsMatch</c> is always true, so no overlay blocks a join over mods.
+    /// </summary>
+    public static LobbyRow LobbyRow(WorldView world, bool lockedSection, Func<string, string?>? names = null)
     {
         ArgumentNullException.ThrowIfNull(world);
-        ArgumentNullException.ThrowIfNull(local);
         var mods = world.Mods ?? [];
         var modded = mods.Count > 0;
         var members = (world.Members ?? []).Take(UiFrame.MaxLobbyMembers)
             .Select(m => new LobbyMember(Clip(m.Gamertag, 64), UiTier.Of(m.Tier),
                 m.Role switch { "host" => (byte)0, "seated" => (byte)1, _ => (byte)2 }))
             .ToList();
-        var shown = mods.Take(UiFrame.MaxLobbyMods).Select(m => new LobbyMod(Clip(m.Id, 64), Clip(m.Version, 16))).ToList();
-        return new LobbyRow(Row(world, lockedSection), modded, local.Ready && ModSets.Same(local.Mods, mods), members, shown,
-            WorldModes.OpenToBoth(world));
+        var shown = mods.Take(UiFrame.MaxLobbyMods).Select(m => ShownMod(m, names)).ToList();
+        return new LobbyRow(Row(world, lockedSection), modded, true, members, shown, WorldModes.OpenToBoth(world));
+    }
+
+    /// <summary>
+    /// OD-181 (CR-L48): the mods each player of a roster declared, for <see cref="UiFrame.RosterMods"/> and the player
+    /// details. The host's row falls back to the world's set (<paramref name="worldMods"/>) when the server sends none for it
+    /// (a server before CR-S84). Players without mods are left out.
+    /// </summary>
+    public static UiFrame.RosterMods RosterModsOf(string worldId, IEnumerable<(string Xuid, bool Host, IReadOnlyList<ModEntry>? Mods)> members,
+        IReadOnlyList<ModEntry>? worldMods, Func<string, string?>? names)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+        if (string.IsNullOrEmpty(worldId) || System.Text.Encoding.UTF8.GetByteCount(worldId) > UiFrame.MaxPaneId) return UiFrame.RosterMods.None;
+        var listed = new List<RosterModsMember>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (xuid, host, declared) in members)
+        {
+            if (listed.Count == UiFrame.MaxRosterMembers) break;
+            if (xuid is not { Length: >= 1 and <= 20 } || !xuid.All(char.IsAsciiDigit) || !seen.Add(xuid)) continue;
+            var mods = declared is { Count: > 0 } ? declared : host ? worldMods ?? [] : [];
+            // server text is untrusted: an entry without a usable id is skipped (the frame refuses an empty name), and
+            // ShownMod cuts names and versions to the frame's limits
+            var shown = mods.Where(m => m is { Id: { } id } && !string.IsNullOrWhiteSpace(id))
+                .Select(m => ShownMod(m, names)).Where(m => m.Id.Length > 0).Take(UiFrame.MaxLobbyMods).ToList();
+            if (shown.Count > 0) listed.Add(new RosterModsMember(xuid, shown));
+        }
+        return new UiFrame.RosterMods(worldId, listed);
+    }
+
+    private UiFrame.RosterMods _rosterMods = UiFrame.RosterMods.None;
+
+    /// <summary>OD-181: the mods of each player of the last "my world" answer (protocol 4 overlays; no request).</summary>
+    public UiFrame.RosterMods RosterModsFrame()
+    {
+        var mods = Volatile.Read(ref _rosterMods);
+        var mine = Volatile.Read(ref _mineSnapshot);
+        return mine.Role == UiWorldRole.None || mods.WorldId != mine.WorldId ? UiFrame.RosterMods.None : mods;
     }
 
     /// <summary>
@@ -166,8 +224,16 @@ public sealed partial class WorldsBridge
             rows.Add(new(_text("pane.player_lobby"), _text(member.Role switch { 0 => "pane.role_host", 1 => "pane.role_in", _ => "pane.role_reserved" }),
                 member.Role == 0 ? UiPaneIcon.Host : UiPaneIcon.None));
         }
-        return new UiFrame.DetailPane("player:" + xuid, name, _text("pane.player_subtitle"), string.Empty,
-            [new PaneSection(UiPaneSection.Rows, _text("pane.profile"), rows)],
+        List<PaneSection> sections = [new PaneSection(UiPaneSection.Rows, _text("pane.profile"), rows)];
+        // OD-181 (CR-L48): the mods this player declared, as the catalog names them (else the id), with their versions
+        if (member is not null && RosterModsFrame().Members.FirstOrDefault(m => m.Xuid == xuid) is { } declared)
+        {
+            sections.Add(new PaneSection(UiPaneSection.Items, _text("pane.player_mods"), declared.Mods.Take(UiFrame.MaxPaneEntries)
+                .Select(m => new PaneEntry(m.Id, Clip(_text("pane.mod_version").Replace("{version}", m.Version, StringComparison.Ordinal), UiFrame.MaxPaneText), UiPaneIcon.Mod))
+                .ToList()));
+        }
+        else if (member is not null) rows.Add(new(_text("pane.player_mods"), _text("pane.no_mods"), UiPaneIcon.None));
+        return new UiFrame.DetailPane("player:" + xuid, name, _text("pane.player_subtitle"), string.Empty, sections,
             [new PaneAction(PaneActions.FriendAdd, _text("pane.add_friend"), false)]);
     }
 

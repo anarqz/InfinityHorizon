@@ -227,9 +227,19 @@ public sealed record ListMember
     public required string Tier { get; init; }
 
     public required string Role { get; init; }
+
+    /// <summary>
+    /// CR-S84 (OD-181, §2.7): the set this player declared (the host's row: the world's set); absent, null or empty: none.
+    /// An older server sends none.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ModEntry>? Mods { get; init; }
 }
 
-/// <summary><c>not_allowed {reason: "mods"}</c>: the world's set (<c>expected</c>) and the caller's (<c>actual</c>).</summary>
+/// <summary>
+/// <c>not_allowed {reason: "mods"}</c>: the world's set (<c>expected</c>) and the caller's (<c>actual</c>). Retired by OD-181
+/// (CR-S84); still read so an older server's refusal keeps its message.
+/// </summary>
 public sealed record ModsMismatch
 {
     public required IReadOnlyList<ModEntry> Expected { get; init; }
@@ -559,7 +569,7 @@ public sealed record JoinAnswer
 
     public LatencyRefusal? Latency { get; init; }
 
-    /// <summary>With <c>not_allowed {reason: "mods"}</c> (OD-112).</summary>
+    /// <summary>With <c>not_allowed {reason: "mods"}</c> (OD-112); retired by OD-181 (CR-S84), read only from an older server.</summary>
     public ModsMismatch? Details { get; init; }
 
     public uint? RetryAfterSeconds { get; init; }
@@ -731,6 +741,13 @@ public sealed record WorldMember
     /// included. Never why or who muted. Absent on older servers (null).
     /// </summary>
     public string? VoiceBlockedUntil { get; init; }
+
+    /// <summary>
+    /// CR-S84 (OD-181, §3.7): the set this member declared (the host's row: the world's set; a seat's: its join's); absent,
+    /// null or empty: none. An older server sends none.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ModEntry>? Mods { get; init; }
 }
 
 /// <summary>CR-L25 (OD-63) → 200.</summary>

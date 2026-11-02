@@ -155,6 +155,29 @@ public sealed class OverlayChannel : IDisposable
     public Task SendFrameAsync(UiFrame frame, CancellationToken cancellation) =>
         Ready ? SendAsync(frame, cancellation) : Task.CompletedTask;
 
+    /// <summary>
+    /// A frame only a newer overlay has (OD-181's roster mods, sent after every "my world"): sent when this overlay's protocol
+    /// has it, else skipped without the dropped-frame note (an older overlay simply shows no mods). A frame that cannot be
+    /// encoded (server text past the frame's rules) is skipped and noted once, never thrown: the supervisor's seat and host
+    /// loop that sends it must keep running.
+    /// </summary>
+    public async Task SendIfAcceptedAsync(UiFrame frame, CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (!Ready || !Accepts(frame)) return;
+        try
+        {
+            await SendAsync(frame, cancellation).ConfigureAwait(false);
+        }
+        catch (ProtocolException)
+        {
+            if (Interlocked.Exchange(ref _unencodableNoted, 1) == 0)
+                _incoming.Writer.TryWrite(new UiIncoming.Event(UiEventKind.Passthrough, $"ui pipe: skipped an unencodable type 0x{frame.Type:x2}"));
+        }
+    }
+
+    private int _unencodableNoted;
+
     public Task PanelAsync(bool open, CancellationToken cancellation) =>
         Ready ? SendAsync(new UiFrame.Panel(open), cancellation) : Task.CompletedTask;
 

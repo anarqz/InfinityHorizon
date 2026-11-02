@@ -106,7 +106,7 @@ public sealed partial class WorldsBridge
         if (!RelayJoinerCapable || SendRelayLeg is not { } send) return;
         var grant = Guid.Parse(verified.Grant);
         // a seat given up after SeatGiveUp (or dropped unproven): a late renewal never pushes its leg again
-        if (Volatile.Read(ref _givenUpGrant) == verified.Grant) { await ClearLegAsync(cancellation).ConfigureAwait(false); return; }
+        if (Volatile.Read(ref _givenUpGrant) == verified.Grant) { await ClearLegAsync("the seat was given up", cancellation).ConfigureAwait(false); return; }
         if (verified.Relay is not { } named || !IPAddress.TryParse(named.Addr, out var address)
             || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || named.Addr.Count(c => c == '.') != 3
             || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0
@@ -114,7 +114,7 @@ public sealed partial class WorldsBridge
         {
             if (Interlocked.Exchange(ref _noRelayGrant, verified.Grant) != verified.Grant)
                 _log("worlds: this seat's grant names no usable relay: direct only, no fallback if it fails");
-            await ClearLegAsync(cancellation).ConfigureAwait(false);
+            await ClearLegAsync("the seat's grant names no usable relay", cancellation).ConfigureAwait(false);
             return;
         }
         Forget(ref _noRelayGrant, verified.Grant);
@@ -150,15 +150,35 @@ public sealed partial class WorldsBridge
         }
     }
 
-    /// <summary>Clears the pushed leg (caller holds <c>_proofWrites</c>).</summary>
-    private async Task ClearLegAsync(CancellationToken cancellation)
+    /// <summary>
+    /// Clears the pushed leg (caller holds <c>_proofWrites</c>). T35: <paramref name="why"/> says who cleared it and why (the
+    /// seat ended, the server shows no seat, a newer seat read, a refusal...), logged once per pushed leg.
+    /// </summary>
+    private async Task ClearLegAsync(string why, CancellationToken cancellation)
     {
         if (_legGrant is null) return;
+        _log($"worlds: relay leg cleared ({why})");
         (_legGrant, _legRelayKey, _legViaRelay) = (null, null, false);
         Volatile.Write(ref _legSent, null);
         if (SendRelayLeg is not { } send) return;
         try { await send(Frame.RelayLeg.Clear(), cancellation).ConfigureAwait(false); }
         catch (Exception error) when (error is IOException or InvalidOperationException or ObjectDisposedException) { }
+    }
+
+    /// <summary>T35: the joiner's log line when the server shows its seat <paramref name="grant"/> ended, with the server's reason.</summary>
+    private string SeatEndedLine(SeatEnded? ended, string grant)
+    {
+        var world = Volatile.Read(ref _seatWorld) ?? "its world";
+        var reason = ended is { } end && end.GrantId == grant ? end.Reason switch
+        {
+            SeatEnds.Released => "released: the host's heartbeat no longer lists this player, or the seat was let go",
+            SeatEnds.Expired => "expired: the reserved seat was never used in time",
+            SeatEnds.Kicked => "kicked by the host",
+            SeatEnds.WorldClosed => "its world closed",
+            SeatEnds.Pool => "moved to another pool",
+            var other => other,
+        } : "the server shows no seat";
+        return $"worlds: the seat in {world} ended ({reason}); its context and relay leg are cleared";
     }
 
     /// <summary>
@@ -224,7 +244,7 @@ public sealed partial class WorldsBridge
                 if (Interlocked.Exchange(ref _refusedGrant, grantId) == grantId) return null;
                 Forget(ref _fallbackGrant, grantId);
                 await _proofWrites.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-                try { if (_legGrant == frame.Grant) await ClearLegAsync(CancellationToken.None).ConfigureAwait(false); }
+                try { if (_legGrant == frame.Grant) await ClearLegAsync("the server refused the relay fallback", CancellationToken.None).ConfigureAwait(false); }
                 finally { _proofWrites.Release(); }
                 return _text(key);
             }
