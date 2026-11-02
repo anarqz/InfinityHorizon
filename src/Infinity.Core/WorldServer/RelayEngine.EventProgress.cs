@@ -241,38 +241,58 @@ internal sealed partial class RelayEngine
     private (byte, ulong, int)[] EventEndVariables() =>
         [(CountdownTypeVariable, 0, CountdownTypeBits), (4, 0, 1), (5, 0, 1), (6, 0, 1), .. EventProgressCleared()];
 
-    /// <summary>The event flags (4 EventActive, 5 participants selected, 6 InRace), cleared at every event's end at once.</summary>
-    private static readonly (byte, ulong, int)[] EventFlagsCleared = [(4, 0, 1), (5, 0, 1), (6, 0, 1)];
-
-    /// <summary>The bystander HUD's variables (2, 9 and the progress sent), cleared at the end or when the "Race complete" hold ends.</summary>
-    private (byte, ulong, int)[] HudCleared() => [(CountdownTypeVariable, 0, CountdownTypeBits), .. EventProgressCleared()];
+    /// <summary>InRace (var 6), cleared at every event's end at once: a finisher's results screen waits for it.</summary>
+    private static readonly (byte, ulong, int)[] InRaceCleared = [(6, 0, 1)];
 
     /// <summary>
-    /// "Race complete" hold: the event closed while finishers are still on their results screens. The event flags 4, 5 and 6 are
-    /// cleared at once, as before the hold: a finisher's game keeps its results screen (no button to go on) until they clear, so
-    /// holding them deadlocked a lone finisher (test.4 live, 2026-11-02). Only the bystander HUD's vars 2, 9, 10 and 11 are held
-    /// until the finishers are back in free roam: the HUD shows the completed state ("Race complete", 100 %, the last lap) only on
-    /// its in-progress branch, which needs CountdownType 2 and a past RaceStartTime. Not for a Road Trip (its own state machine
-    /// drives the next event, and everybody is in it) nor for an event that ended before its start (nobody is on a results screen).
+    /// What the hold keeps until it ends: RaceReady (4) and RaceParticipantsSelected (5), then the bystander HUD's variables
+    /// (2, 9 and the progress sent).
+    /// </summary>
+    private (byte, ulong, int)[] HeldCleared() => [(4, 0, 1), (5, 0, 1), (CountdownTypeVariable, 0, CountdownTypeBits), .. EventProgressCleared()];
+
+    /// <summary>T38: the longest the hold keeps RaceReady and RaceParticipantsSelected after the event closed.</summary>
+    internal const long EventEndHoldMs = 120_000;
+
+    /// <summary>
+    /// The event-end hold, used when the event closed while finishers are still on their results screens. InRace (6) is cleared at
+    /// once: the results screen ends only when it clears (NetworkWaitForRaceEnd, 0x1408EEB20, waits for SessionHost slot 0x100,
+    /// field +0x168 = var 6, to be false), so holding it left a lone finisher stuck on its results (test.4 live, 2026-11-02).
+    /// RaceReady (4, slot 0xE0 / +0x128) and RaceParticipantsSelected (5, +0x148) stay set until every finisher is back in free
+    /// roam, as the reference server does (T38: clearing them with InRace preceded the finishers' games leaving the online session).
+    /// The bystander HUD's vars 2, 9, 10 and 11 are held as well: the HUD shows the completed state ("Race complete", 100 %, the
+    /// last lap) only on its in-progress branch, which needs CountdownType 2 and a past RaceStartTime. The hold ends when the event
+    /// side empties (every finisher reported RaceInProgress 0 or left), when a new event opens, or after
+    /// <see cref="EventEndHoldMs"/>. Not used for a Road Trip (its own state machine drives the next event, and everybody is in it)
+    /// nor for an event that ended before its start (nobody is on a results screen).
     /// </summary>
     private bool _eventHeld;
+    private long _eventHeldAt;
 
-    /// <summary>The event closed: true when the HUD variables are held (the caller then clears only the event flags).</summary>
+    /// <summary>The event closed: true when the hold starts (the caller then clears only InRace).</summary>
     private bool HoldEventEnd(Race race)
     {
         if (race.Stage != RaceStage.Started || IsRoadTrip || !_phasing || _eventSide.Count == 0) return false;
         _eventProgress = null;
         _eventHeld = true;
-        Note(string.Create(CultureInfo.InvariantCulture, $"event: HUD variables held while {_eventSide.Count} player(s) are on their results"));
+        _eventHeldAt = _now;
+        Note(string.Create(CultureInfo.InvariantCulture,
+            $"event: InRace cleared; RaceReady, participants and HUD variables held while {_eventSide.Count} player(s) are on their results"));
         return true;
     }
 
-    /// <summary>The hold ends (everybody back in free roam, the phasing backstop, or a new event): the HUD variables are cleared now.</summary>
+    /// <summary>The hold ends (everybody back in free roam, a new event, or the backstop): RaceReady, participants and HUD clear now.</summary>
     private void ReleaseEventHold(string why)
     {
         if (!_eventHeld) return;
         _eventHeld = false;
-        Note($"event: HUD variables released ({why})");
-        SetHostVariables(HudCleared());
+        Note($"event: held variables released ({why})");
+        SetHostVariables(HeldCleared());
+    }
+
+    private void TickEventHold()
+    {
+        // never under another open event: its own RaceReady and participants are not the hold's (RequestRace releases it first)
+        if (_eventHeld && _race is null && _now - _eventHeldAt >= EventEndHoldMs)
+            ReleaseEventHold(string.Create(CultureInfo.InvariantCulture, $"{EventEndHoldMs / 1000} s after the event closed"));
     }
 }

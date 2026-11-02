@@ -11,6 +11,8 @@ internal sealed partial class RelayEngine
         internal List<byte> Participants { get; } = [owner.Index];
         internal HashSet<byte> Finished { get; } = [];
         internal HashSet<byte> InProgress { get; } = [];
+        /// <summary>Finishers whose RaceInProgress 0 during the race was already logged (once per peer and event).</summary>
+        internal HashSet<byte> ResultsNoted { get; } = [];
         internal RaceStage Stage { get; set; }
         internal long InviteUntil { get; set; } = inviteUntil;
         internal long StageUntil { get; set; }
@@ -157,11 +159,37 @@ internal sealed partial class RelayEngine
             if (index == 3 && value == 0 && _race is null) LeaveEventSide(peer);
             if (index != 3 || _race is not { Stage: RaceStage.Started } race || !race.Participants.Contains(peer.Index)) continue;
             if (value != 0) race.InProgress.Add(peer.Index);
-            else if (race.InProgress.Remove(peer.Index))
+            // Initial/countdown zeroes are not departures. Only an observed active -> inactive transition is, decided at the end
+            // of the packet (ResolveRaceExits), so a 45 later in the same packet still makes it a finisher's (T38).
+            else if (race.InProgress.Remove(peer.Index)) _raceExits.Add(peer);
+        }
+    }
+
+    /// <summary>The players whose RaceInProgress went 1 -> 0 in the packet being processed.</summary>
+    private readonly List<RelayPeer> _raceExits = [];
+
+    /// <summary>
+    /// After a packet: each RaceInProgress 1 -> 0 it carried. Before finishing, the player left the race. After its 45 (T38) it is
+    /// on its results: it stays a participant and on the event side until the event closes, where EndRace and the event-end hold
+    /// take it (EventClosed keeps it on the side for <see cref="ResultsExitMs"/>).
+    /// </summary>
+    private void ResolveRaceExits()
+    {
+        if (_raceExits.Count == 0) return;
+        var exits = _raceExits.ToArray();
+        _raceExits.Clear();
+        foreach (var peer in exits)
+        {
+            if (_race is not { Stage: RaceStage.Started } race || !_peers.Contains(peer) || !race.Participants.Contains(peer.Index)
+                || peer.ConsoleValues[3] != 0) continue;
+            if (race.Finished.Contains(peer.Index))
             {
-                // Initial/countdown zeroes are not departures. Only an observed active -> inactive transition is.
-                RemoveRaceParticipant(peer);
+                if (race.ResultsNoted.Add(peer.Index))
+                    Note($"event: peer {peer.Index} reported RaceInProgress 0 after finishing (on its results; kept in the event)");
+                continue;
             }
+            Note($"event: peer {peer.Index} left the race (RaceInProgress 0 before finishing)");
+            RemoveRaceParticipant(peer);
         }
     }
 
@@ -256,8 +284,8 @@ internal sealed partial class RelayEngine
         Note($"event closed: {why}");
         EventClosed(race);
         RoadTripEventClosed();
-        // T24: with finishers still on their results only the bystander HUD's variables stay (the "Race complete" hold)
-        SetHostVariables(HoldEventEnd(race) ? EventFlagsCleared : EventEndVariables());
+        // T24/T38: with finishers still on their results only InRace clears now; RaceReady, participants and the HUD are held
+        SetHostVariables(HoldEventEnd(race) ? InRaceCleared : EventEndVariables());
         foreach (var index in race.Participants)
             if (_peers.FirstOrDefault(p => p.Index == index) is { } peer) SetConsoleVariables(peer, (2, false), (4, false));
     }

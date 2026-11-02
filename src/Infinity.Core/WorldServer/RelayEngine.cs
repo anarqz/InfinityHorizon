@@ -59,7 +59,7 @@ internal sealed partial class RelayEngine
         _settings = settings ?? new();
         if (_settings.MaxPlayers is < 1 or > 12 || _settings.MaxPeersPerIp < 1 || _settings.MaxUnsynced is < 1 or > 254
             || _settings.RatePackets < 1 || _settings.RateMessages < 1 || _settings.RateBytes < 1
-            || _settings.HistoryMaxBits < 1 || _settings.QueueMaxBits < 1 || _settings.QueueMaxMessages < 1
+            || _settings.HistoryMaxBits < 1 || _settings.HistoryMaxEntries < 1 || _settings.QueueMaxBits < 1 || _settings.QueueMaxMessages < 1
             || _settings.ReliableWindow is < 1 or > 256 || _settings.RacePrepareMs < 1 || _settings.RaceGridMs < 1
             || _settings.RaceFinishMs < 1 || _settings.GameOptionsGapMs < 1 || _settings.SyncCompleteMs < 1 || _settings.ResendAfterMs < 1
             || _settings.CarMeetLobby is { } lobby && !IsCarMeetLobby(lobby))
