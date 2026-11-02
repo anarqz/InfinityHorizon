@@ -1,6 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
-using System.Security.Cryptography;
 
 namespace Infinity.Core.WorldServer;
 
@@ -50,7 +49,7 @@ internal sealed partial class RelayEngine
     private const long TagAloneCloseMs = 3000;
     private TagGame? _tag;
     private Random? _tagRandom;
-    private Random TagRandom => _tagRandom ??= new(_settings.TagSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue));
+    private Random TagRandom => _tagRandom ??= new(_settings.TagSeed ?? _random.Seed(RelaySeed.Tag));
 
     private static string Describe(TagMode mode) => mode == TagMode.King ? "King" : "Infected";
 

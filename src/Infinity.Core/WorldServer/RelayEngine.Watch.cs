@@ -125,7 +125,7 @@ internal sealed partial class RelayEngine
         {
             if (IsLoopback(receiver.Endpoint.Address) || !Allowed(receiver.Xuid, receiver.Endpoint) || !AllowedHook(receiver.Xuid, receiver.Endpoint)) continue;
             var others = synced.Where(p => p != receiver && !SharedXuid(p.Xuid)).Take(WatchRosterCodec.MaxEntries).Select(p => (p.Index, p.Xuid)).ToArray();
-            Emit(receiver.Endpoint, WatchRosterCodec.Write(others));
+            Emit(receiver.Endpoint, WatchRosterCodec.Write(others, Transaction()));
         }
     }
 }

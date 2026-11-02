@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
 using System.Net;
-using System.Security.Cryptography;
 
 namespace Infinity.Core.WorldServer;
 
@@ -54,8 +53,12 @@ internal sealed partial class RelayEngine
     internal int PeerCount => _peers.Count;
     internal int SyncedCount => _peers.Count(p => p.Synced);
 
-    internal RelayEngine(RelaySettings? settings, Action<RelayDatagram> send)
+    internal RelayEngine(RelaySettings? settings, Action<RelayDatagram> send) : this(settings, send, null) { }
+
+    /// <param name="random">Every random draw (null: the OS's cryptographic generator); a seeded source makes a run replayable.</param>
+    internal RelayEngine(RelaySettings? settings, Action<RelayDatagram> send, IRelayRandom? random)
     {
+        _random = random ?? CryptoRelayRandom.Instance;
         _settings = settings ?? new();
         if (_settings.MaxPlayers is < 1 or > 12 || _settings.MaxPeersPerIp < 1 || _settings.MaxUnsynced is < 1 or > 254
             || _settings.RatePackets < 1 || _settings.RateMessages < 1 || _settings.RateBytes < 1
@@ -70,8 +73,18 @@ internal sealed partial class RelayEngine
         if (_settings.CarMeetLobby is { } carMeet) _hostVariables[0] = (carMeet, 3);
         else if (_settings.RoadTrip is not null) _hostVariables[0] = (RoadTripLobby, 3);
         if (_settings.TimeSyncMs < 1 || _settings.InviteCloseMs < 0) throw new ArgumentOutOfRangeException(nameof(settings));
-        _weather = new(_settings.WeatherSeed ?? RandomNumberGenerator.GetInt32(int.MaxValue), _now, NowWire);
+        _weather = new(_settings.WeatherSeed ?? _random.Seed(RelaySeed.Weather), _now, NowWire);
         StartRoadTrip();
+    }
+
+    private readonly IRelayRandom _random;
+
+    /// <summary>A fresh STUN transaction id for a datagram this engine writes.</summary>
+    private byte[] Transaction()
+    {
+        var transaction = new byte[12];
+        _random.Fill(transaction);
+        return transaction;
     }
 
     private readonly RelayWeather _weather;
@@ -213,7 +226,7 @@ internal sealed partial class RelayEngine
             if (_peers.All(p => p.Index != candidate)) { index = candidate; _nextIndex = (byte)(candidate % 254 + 1); break; }
         }
         if (index == 0) return null;
-        var attempt = BitConverter.ToUInt32(RandomNumberGenerator.GetBytes(4));
+        var attempt = _random.Attempt();
         var peer = new RelayPeer(endpoint, index, open.User, attempt, _now)
         { ClientAttempt = open.Attempt, PacketTokens = _settings.RatePackets * 2.0, MessageTokens = _settings.RateMessages * 2.0, ByteTokens = _settings.RateBytes * 2.0 };
         _peers.Add(peer);

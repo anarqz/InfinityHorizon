@@ -129,7 +129,7 @@ internal sealed partial class RelayEngine
         if (FreeUniverse() is { } universe) SetUniverse(peer, universe);
     }
 
-    /// <summary>The first private universe nobody holds, a bucket-list pair's included (RelayEngine.BucketList.cs); null when all are taken.</summary>
+    /// <summary>The first private universe (1..17) nobody holds; null when all are taken. Bucket-list pairs use 18..23, so the pair check is only a guard.</summary>
     private byte? FreeUniverse()
     {
         for (var universe = FirstPrivateUniverse; universe <= LastPrivateUniverse; universe++)
