@@ -17,7 +17,9 @@
      SecureDeviceAssociation  CreateAssociationAsync completes with an
                            association whose remote socket address is the
                            world the server put in the session.
-     Party                 Register{Game,Match}SessionAsync complete.
+     Party                 Register{Game,Match}SessionAsync complete; every other
+                           Party and SystemUI statics call is observed (logged
+                           without its arguments) and forwarded unchanged.
      Winsock               the game's ws2_32 imports go to Windows' ws2_32
                            (Azimuth's WSASocketW fails with WSAENETDOWN), and
                            its IPv6 socket is made dual-stack.
@@ -80,6 +82,12 @@ static const GUID fr_iid_qos_statics = {0xe58ad357, 0xb957, 0x4cce, {0x92, 0xad,
 static const GUID fr_iid_address_statics = {0x02addb0f, 0x4880, 0x4b1e, {0x98, 0xb8, 0xee, 0x63, 0x8a, 0xd8, 0x9b, 0x55}};
 static const GUID fr_iid_template_statics = {0x46745a18, 0x697a, 0x47e1, {0xbb, 0x62, 0xcc, 0x71, 0xde, 0x0f, 0xdd, 0x8c}};
 static const GUID fr_iid_party_statics = {0xe6110c4c, 0x3660, 0x4230, {0x98, 0x80, 0x20, 0x8b, 0x14, 0x9a, 0x3c, 0xa4}};
+/* Three more statics interfaces the game asks Windows.Xbox.Multiplayer.Party for, and
+   ISystemUIStatics: observed only (see "observation" below). */
+static const GUID fr_iid_party_4b90 = {0x4b907f32, 0x9165, 0x4193, {0x9c, 0xce, 0x1d, 0x5c, 0xcd, 0xdd, 0x06, 0x0e}};
+static const GUID fr_iid_party_1594 = {0x15946429, 0x17a1, 0x4fdf, {0x9d, 0x67, 0x76, 0x6e, 0xd0, 0xf4, 0xb8, 0x68}};
+static const GUID fr_iid_party_8752 = {0x87521843, 0x2298, 0x43c4, {0x81, 0xf1, 0xc7, 0xc5, 0x0a, 0xb7, 0x94, 0xe1}};
+static const GUID fr_iid_system_ui_statics = {0x1a0dd80e, 0x3f9d, 0x4cfa, {0x8e, 0x50, 0x0e, 0x2e, 0xbd, 0x1a, 0xa7, 0x2f}};
 /* IIterable<Windows.Xbox.Networking.QualityOfServiceMeasurement> */
 static const GUID fr_iid_qos_iterable = {0x36a3a9bb, 0x712a, 0x5297, {0xb5, 0xa0, 0xec, 0xdc, 0x0c, 0xb2, 0x4b, 0x9f}};
 
@@ -760,6 +768,7 @@ typedef struct {
     volatile LONG references;
     FrCom *inner;
     const GUID *iid;
+    int observe; /* observed statics: their FR_OBS_* kind */
     wchar_t base64[96]; /* addresses: what the object was made from */
 } FrWrap;
 
@@ -1382,21 +1391,320 @@ static HRESULT STDMETHODCALLTYPE fr_qos_measure(FrWrap *self, FrCom *addresses, 
     return fr_completed((FrCom *)(void *)result, out);
 }
 
+/* ---------------------------------------------------------- observation */
+/* What the game asks the Party statics (IPartyStatics and three more interfaces of the same
+   class) and ISystemUIStatics, for a two-player session to read. Observation only: an
+   observed slot calls Azimuth's slot with the same arguments and hands back its HRESULT and
+   outs untouched. No argument is logged (no user, XUID, gamertag or string): only the slot,
+   the HRESULT, whether the out was set and, for an asynchronous out, its IAsyncInfo status.
+   Each (interface, slot) logs its first FR_OBS_FIRST calls, then its count at every power of
+   two. An out still Started is watched (one reference, FR_OBS_WATCH at most) from the main
+   update (azimuth_freeroam_observe_tick) until it settles, and released then. */
+#define FR_OBS_FIRST 8
+#define FR_OBS_WATCH 16
+#define FR_OBS_GIVE_UP_MS 120000ull
+#define FR_OBS_CALLS_MAX 0x7fffffffL
+#define FR_OBS_OUT_OBJECT 0x10 /* an interface: only "set" is logged, never touched */
+#define FR_OBS_OUT_ASYNC 0x20  /* an async operation: its IAsyncInfo status is read */
+#define FR_OBS_OUT_TOKEN 0x40  /* an event token: only "set" is logged */
+#define FR_ASYNC_STARTED 0
+#define FR_ASYNC_ERROR 3
+enum { FR_OBS_PARTY, FR_OBS_PARTY_4B90, FR_OBS_PARTY_1594, FR_OBS_PARTY_8752, FR_OBS_SYSTEM_UI, FR_OBS_KINDS };
+static const char *const fr_obs_names[FR_OBS_KINDS] = {
+    "IPartyStatics(e6110c4c)", "Party statics(4b907f32)", "Party statics(15946429)",
+    "Party statics(87521843)", "ISystemUIStatics(1a0dd80e)"};
+/* The out argument of a slot (1 = the first after `this`), only where the game's own call
+   site shows it (the vtable call's address in the supported executable; each passes the
+   address of a zeroed local, then AddRefs what it got, or for add_ passes a token pointer):
+     IPartyStatics  6 0x1417B47EA, 7 0x1417B4BEA (a, b, &out; Register{Game,Match}SessionAsync,
+                    async), 10 0x14179A18A, 11 0x1417B290A, 12 0x1417B2B6A (a, b, &out),
+                    13 0x1417A5970 (a, &out); add_ 16 0x1417CD02C, 18 0x1417CD20C,
+                    20 0x1417CD16C, 22 0x1417CD0CC, 24 0x1417CCF8C (handler, &token);
+                    remove_ 25 0x1417CEB04 (token) has no out.
+     4b907f32       8 0x1409EBAFA, 10 0x1409ECADA (a, b, &out)
+     15946429       6 0x1417B57A0 (a, &out), 8 0x1417A34EA (a, b, &out)
+     87521843       6 0x1417A680E (int, &out)
+     ISystemUIStatics 9 0x1417B98B0 (a, &out action; the invite UI, async)
+   Every other slot logs its HRESULT only. Only the two async slots are asked for IAsyncInfo. */
+static const unsigned char fr_obs_outs[FR_OBS_KINDS][FR_SLOTS] = {
+    [FR_OBS_PARTY] = {[6] = FR_OBS_OUT_ASYNC | 3, [7] = FR_OBS_OUT_ASYNC | 3,
+                      [10] = FR_OBS_OUT_OBJECT | 3, [11] = FR_OBS_OUT_OBJECT | 3,
+                      [12] = FR_OBS_OUT_OBJECT | 3, [13] = FR_OBS_OUT_OBJECT | 2,
+                      [16] = FR_OBS_OUT_TOKEN | 2, [18] = FR_OBS_OUT_TOKEN | 2,
+                      [20] = FR_OBS_OUT_TOKEN | 2, [22] = FR_OBS_OUT_TOKEN | 2,
+                      [24] = FR_OBS_OUT_TOKEN | 2},
+    [FR_OBS_PARTY_4B90] = {[8] = FR_OBS_OUT_OBJECT | 3, [10] = FR_OBS_OUT_OBJECT | 3},
+    [FR_OBS_PARTY_1594] = {[6] = FR_OBS_OUT_OBJECT | 2, [8] = FR_OBS_OUT_OBJECT | 3},
+    [FR_OBS_PARTY_8752] = {[6] = FR_OBS_OUT_OBJECT | 2},
+    [FR_OBS_SYSTEM_UI] = {[9] = FR_OBS_OUT_ASYNC | 2},
+};
+static volatile LONG fr_obs_calls[FR_OBS_KINDS][FR_SLOTS];
+
+/* The next call number of a slot, saturated (never wraps). */
+static LONG fr_obs_next(int kind, unsigned slot) {
+    volatile LONG *calls = &fr_obs_calls[kind][slot];
+    for (;;) {
+        LONG seen = *calls;
+        if (seen >= FR_OBS_CALLS_MAX) return FR_OBS_CALLS_MAX;
+        if (InterlockedCompareExchange(calls, seen + 1, seen) == seen) return seen + 1;
+    }
+}
+
+typedef HRESULT(STDMETHODCALLTYPE *FrGetInt)(FrCom *, int *);
+typedef struct {
+    volatile LONG state; /* 0 free, 1 being filled, 2 watched, 3 being polled */
+    FrCom *info;          /* our IAsyncInfo reference */
+    int kind;
+    unsigned slot, call;
+    unsigned long long since;
+} FrWatch;
+static FrWatch fr_obs_watch[FR_OBS_WATCH];
+static volatile LONG fr_obs_watched;
+
+static void fr_obs_head(FrLine *line, const char *note, int kind, unsigned slot, LONG call) {
+    fr_text(line, "FREEROAM: ");
+    fr_text(line, note ? note : "observed");
+    fr_text(line, note ? ": " : " ");
+    fr_text(line, fr_obs_names[kind]);
+    fr_text(line, ".");
+    fr_number(line, slot);
+    fr_text(line, " #");
+    fr_number(line, (unsigned long long)call);
+}
+
+static void fr_obs_status(FrLine *line, int status, HRESULT error) {
+    static const char *const names[4] = {"Started", "Completed", "Canceled", "Error"};
+    fr_text(line, status >= 0 && status < 4 ? names[status] : "unreadable");
+    if (status == FR_ASYNC_ERROR) {
+        fr_text(line, " 0x");
+        fr_hex(line, (unsigned)error, 8);
+    }
+}
+
+/* IAsyncInfo (IInspectable, then Id 6, Status 7, ErrorCode 8): -1 when it does not answer. */
+static int fr_obs_read(FrCom *info, HRESULT *error) {
+    int status = -1;
+    *error = S_OK;
+    FrGetInt get = (FrGetInt)((void *const *)(const void *)info->lpVtbl)[7];
+    if (FAILED(get(info, &status))) return -1;
+    if (status == FR_ASYNC_ERROR) {
+        get = (FrGetInt)((void *const *)(const void *)info->lpVtbl)[8];
+        if (FAILED(get(info, (int *)error))) *error = S_OK;
+    }
+    return status;
+}
+
+/* A COM object whose QueryInterface is code of a loaded module, read without faulting. */
+static int fr_obs_com(void *object) {
+    void *vtable = 0, *query = 0;
+    HMODULE module = 0;
+    return object && memory_read(object, &vtable, sizeof(vtable)) && vtable &&
+           memory_read(vtable, &query, sizeof(query)) && query &&
+           GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              (LPCWSTR)query, &module) && module;
+}
+
+/* A free watch entry, filled but not yet published (state 1); null when none is free. */
+static FrWatch *fr_obs_watch_claim(FrCom *info, int kind, unsigned slot, LONG call) {
+    for (unsigned i = 0; i < FR_OBS_WATCH; ++i) {
+        FrWatch *watch = &fr_obs_watch[i];
+        if (InterlockedCompareExchange(&watch->state, 1, 0) == 0) {
+            watch->info = info;
+            watch->kind = kind;
+            watch->slot = slot;
+            watch->call = (unsigned)call;
+            watch->since = GetTickCount64();
+            InterlockedIncrement(&fr_obs_watched);
+            return watch;
+        }
+    }
+    return 0;
+}
+
+/* An async out: its status now; while Started, a claimed watch entry the caller publishes
+   after its line is written. Without the main update nothing is watched. Every reference
+   this takes is released (a watched one when it settles). */
+static FrWatch *fr_obs_async(FrLine *line, int kind, unsigned slot, LONG call, FrCom *object) {
+    FrCom *info = 0;
+    if (!fr_obs_com(object)) {
+        fr_text(line, ", not a COM object");
+        return 0;
+    }
+    if (FAILED(object->lpVtbl->QueryInterface(object, &fr_iid_async_info, (void **)&info)) || !info) {
+        fr_text(line, ", not async");
+        return 0;
+    }
+    HRESULT error;
+    int status = fr_obs_read(info, &error);
+    fr_text(line, ", async ");
+    fr_obs_status(line, status, error);
+    if (status == FR_ASYNC_STARTED) {
+        FrWatch *watch = fi_game_ready_ticking() ? fr_obs_watch_claim(info, kind, slot, call) : 0;
+        if (watch) {
+            fr_text(line, " (watched)");
+            return watch;
+        }
+        fr_text(line, " (not watched)");
+    }
+    info->lpVtbl->Release(info);
+    return 0;
+}
+
+/* One observed call, numbered `call` (fr_obs_next). */
+static void fr_observed(FrWrap *self, unsigned slot, LONG call, HRESULT result, const char *note,
+                        uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e, uintptr_t f) {
+    int kind = self->observe;
+    FR_LINE(line);
+    if (call > FR_OBS_FIRST) {
+        if (call & (call - 1)) return;
+        fr_text(&line, "FREEROAM: observed ");
+        fr_text(&line, fr_obs_names[kind]);
+        fr_text(&line, ".");
+        fr_number(&line, slot);
+        fr_text(&line, " called ");
+        fr_number(&line, (unsigned long long)call);
+        fr_text(&line, " times (last 0x");
+        fr_hex(&line, (unsigned)result, 8);
+        fr_text(&line, ").");
+        fr_end(&line);
+        return;
+    }
+    fr_obs_head(&line, note, kind, slot, call);
+    fr_text(&line, " -> 0x");
+    fr_hex(&line, (unsigned)result, 8);
+    FrWatch *watch = 0;
+    unsigned out = fr_obs_outs[kind][slot], at = out & 15;
+    if (at) {
+        uintptr_t args[6] = {a, b, c, d, e, f};
+        void *pointer = (void *)args[at - 1], *value = 0;
+        if (!pointer) {
+            fr_text(&line, ", no out pointer");
+        } else if (FAILED(result) || !memory_read(pointer, &value, sizeof(value)) || !value) {
+            fr_text(&line, ", out empty");
+        } else if (out & FR_OBS_OUT_TOKEN) {
+            fr_text(&line, ", out token set");
+        } else {
+            fr_text(&line, ", out object");
+            if (out & FR_OBS_OUT_ASYNC) watch = fr_obs_async(&line, kind, slot, call, (FrCom *)value);
+        }
+    }
+    fr_text(&line, ".");
+    fr_end(&line);
+    /* published after its line, so "settled" never comes first */
+    if (watch) InterlockedExchange(&watch->state, 2);
+}
+
+/* The main update (game_ready.c), every 250 ms: a watched out that settled gets its final
+   line and its reference back. */
+void azimuth_freeroam_observe_tick(void) {
+    if (!fr_obs_watched) return;
+    for (unsigned i = 0; i < FR_OBS_WATCH; ++i) {
+        FrWatch *watch = &fr_obs_watch[i];
+        if (InterlockedCompareExchange(&watch->state, 3, 2) != 2) continue;
+        HRESULT error;
+        int status = fr_obs_read(watch->info, &error);
+        unsigned long long now = GetTickCount64();
+        unsigned long long waited = now > watch->since ? now - watch->since : 0;
+        if (status == FR_ASYNC_STARTED && waited < FR_OBS_GIVE_UP_MS) {
+            InterlockedExchange(&watch->state, 2);
+            continue;
+        }
+        FR_LINE(line);
+        fr_obs_head(&line, 0, watch->kind, watch->slot, (LONG)watch->call);
+        if (status == FR_ASYNC_STARTED) {
+            fr_text(&line, " still Started after ");
+            fr_number(&line, waited);
+            fr_text(&line, " ms; no longer watched.");
+        } else {
+            fr_text(&line, " settled ");
+            fr_obs_status(&line, status, error);
+            fr_text(&line, " after ");
+            fr_number(&line, waited);
+            fr_text(&line, " ms.");
+        }
+        fr_end(&line);
+        FrCom *info = watch->info;
+        watch->info = 0;
+        info->lpVtbl->Release(info);
+        InterlockedDecrement(&fr_obs_watched);
+        InterlockedExchange(&watch->state, 0);
+    }
+}
+
+#define FR_OBSERVE(slot)                                                                           \
+    static HRESULT STDMETHODCALLTYPE fr_observe##slot(FrWrap *self, uintptr_t a, uintptr_t b,      \
+                                                      uintptr_t c, uintptr_t d, uintptr_t e,       \
+                                                      uintptr_t f) {                               \
+        FrCall6 call = (FrCall6)((void *const *)(const void *)self->inner->lpVtbl)[slot];          \
+        HRESULT result = call(self->inner, a, b, c, d, e, f);                                      \
+        fr_observed(self, slot, fr_obs_next(self->observe, slot), result, 0, a, b, c, d, e, f);   \
+        return result;                                                                             \
+    }
+FR_OBSERVE(6) FR_OBSERVE(7) FR_OBSERVE(8) FR_OBSERVE(9) FR_OBSERVE(10) FR_OBSERVE(11)
+FR_OBSERVE(12) FR_OBSERVE(13) FR_OBSERVE(14) FR_OBSERVE(15) FR_OBSERVE(16) FR_OBSERVE(17)
+FR_OBSERVE(18) FR_OBSERVE(19) FR_OBSERVE(20) FR_OBSERVE(21) FR_OBSERVE(22) FR_OBSERVE(23)
+FR_OBSERVE(24) FR_OBSERVE(25) FR_OBSERVE(26) FR_OBSERVE(27) FR_OBSERVE(28) FR_OBSERVE(29)
+FR_OBSERVE(30) FR_OBSERVE(31)
+#undef FR_OBSERVE
+
+/* IInspectable's slots are forwarded; 6 to 31 are observed. */
+static void fr_vtable_observed(void **vtable) {
+    static void *const observers[FR_SLOTS - 6] = {
+        (void *)(uintptr_t)fr_observe6, (void *)(uintptr_t)fr_observe7,
+        (void *)(uintptr_t)fr_observe8, (void *)(uintptr_t)fr_observe9,
+        (void *)(uintptr_t)fr_observe10, (void *)(uintptr_t)fr_observe11,
+        (void *)(uintptr_t)fr_observe12, (void *)(uintptr_t)fr_observe13,
+        (void *)(uintptr_t)fr_observe14, (void *)(uintptr_t)fr_observe15,
+        (void *)(uintptr_t)fr_observe16, (void *)(uintptr_t)fr_observe17,
+        (void *)(uintptr_t)fr_observe18, (void *)(uintptr_t)fr_observe19,
+        (void *)(uintptr_t)fr_observe20, (void *)(uintptr_t)fr_observe21,
+        (void *)(uintptr_t)fr_observe22, (void *)(uintptr_t)fr_observe23,
+        (void *)(uintptr_t)fr_observe24, (void *)(uintptr_t)fr_observe25,
+        (void *)(uintptr_t)fr_observe26, (void *)(uintptr_t)fr_observe27,
+        (void *)(uintptr_t)fr_observe28, (void *)(uintptr_t)fr_observe29,
+        (void *)(uintptr_t)fr_observe30, (void *)(uintptr_t)fr_observe31};
+    fr_vtable_base(vtable);
+    memory_copy(vtable + 6, observers, sizeof(observers));
+}
+
+/* ISystemUIStatics slot 9 (user, out action): the system "invite to party" UI. Its entry is
+   logged before Azimuth's slot runs, in case that never returns; both lines share one number. */
+static HRESULT STDMETHODCALLTYPE fr_system_ui_invite(FrWrap *self, uintptr_t a, uintptr_t b, uintptr_t c,
+                                                     uintptr_t d, uintptr_t e, uintptr_t f) {
+    LONG number = fr_obs_next(self->observe, 9);
+    if (number <= FR_OBS_FIRST) {
+        FR_LINE(line);
+        fr_obs_head(&line, 0, self->observe, 9, number);
+        fr_text(&line, " entered (system party invite UI).");
+        fr_end(&line);
+    }
+    FrCall6 call = (FrCall6)((void *const *)(const void *)self->inner->lpVtbl)[9];
+    HRESULT result = call(self->inner, a, b, c, d, e, f);
+    fr_observed(self, 9, number, result, 0, a, b, c, d, e, f);
+    return result;
+}
+
 /* ---------------------------------------------------------------- party */
 /* Slots 6 and 7 (user, session reference, out): Register{Game,Match}SessionAsync, which the
    game calls after writing its sessions. Azimuth's actions fail, and that fails the session
-   activity (0x1417AE470) before the world is reached. */
-static HRESULT STDMETHODCALLTYPE fr_party_register(FrWrap *self, void *user, void *session, void **out) {
-    (void)self, (void)user, (void)session;
-    static volatile LONG logged;
-    if (InterlockedIncrement(&logged) <= 4) fr_log("Party session registered (completed).");
-    return fr_completed(0, out);
-}
+   activity (0x1417AE470) before the world is reached. Both complete here, observed. */
+#define FR_PARTY_REGISTER(slot)                                                                    \
+    static HRESULT STDMETHODCALLTYPE fr_party_register##slot(FrWrap *self, uintptr_t a, uintptr_t b, \
+                                                             uintptr_t c, uintptr_t d, uintptr_t e,  \
+                                                             uintptr_t f) {                          \
+        HRESULT result = fr_completed(0, (void **)c);                                               \
+        fr_observed(self, slot, fr_obs_next(self->observe, slot), result,                           \
+                    "Party session registered (completed)", a, b, c, d, e, f);                      \
+        return result;                                                                              \
+    }
+FR_PARTY_REGISTER(6) FR_PARTY_REGISTER(7)
+#undef FR_PARTY_REGISTER
 
 /* -------------------------------------------------------------- vtables */
 
 static void *fr_qos_statics_vtable[FR_SLOTS], *fr_address_statics_vtable[FR_SLOTS],
-    *fr_template_statics_vtable[FR_SLOTS], *fr_party_statics_vtable[FR_SLOTS];
+    *fr_template_statics_vtable[FR_SLOTS], *fr_party_statics_vtable[FR_SLOTS],
+    *fr_observed_vtable[FR_SLOTS], *fr_system_ui_vtable[FR_SLOTS];
 static volatile LONG fr_vtables_ready;
 
 static void fr_build_vtables(void) {
@@ -1414,9 +1722,12 @@ static void fr_build_vtables(void) {
     fr_template_statics_vtable[6] = (void *)(uintptr_t)fr_template_by_name;
     fr_vtable_base(fr_template_vtable);
     fr_template_vtable[8] = (void *)(uintptr_t)fr_template_create;
-    fr_vtable_base(fr_party_statics_vtable);
-    fr_party_statics_vtable[6] = (void *)(uintptr_t)fr_party_register;
-    fr_party_statics_vtable[7] = (void *)(uintptr_t)fr_party_register;
+    fr_vtable_observed(fr_party_statics_vtable);
+    fr_party_statics_vtable[6] = (void *)(uintptr_t)fr_party_register6;
+    fr_party_statics_vtable[7] = (void *)(uintptr_t)fr_party_register7;
+    fr_vtable_observed(fr_observed_vtable);
+    fr_vtable_observed(fr_system_ui_vtable);
+    fr_system_ui_vtable[9] = (void *)(uintptr_t)fr_system_ui_invite;
     InterlockedExchange(&fr_vtables_ready, 2);
 }
 
@@ -1433,8 +1744,8 @@ int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out) {
     const GUID *guid = 0;
     const char *what = 0;
     /* the game activates some of these every frame: each activation is wrapped, only the first few are logged */
-    static volatile LONG wrapped_logs[4];
-    int kind = 0;
+    static volatile LONG wrapped_logs[4], observed_logs[FR_OBS_KINDS];
+    int kind = 0, observe = -1;
     if (fr_guid_is(iid, &fr_iid_qos_statics) &&
         fr_wide_equal(name, L"Windows.Xbox.Networking.QualityOfService")) {
         vtable = fr_qos_statics_vtable, guid = &fr_iid_qos_statics, what = "QualityOfService";
@@ -1447,6 +1758,19 @@ int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out) {
     } else if (fr_guid_is(iid, &fr_iid_party_statics) &&
                fr_wide_equal(name, L"Windows.Xbox.Multiplayer.Party")) {
         vtable = fr_party_statics_vtable, guid = &fr_iid_party_statics, what = "Party", kind = 3;
+        observe = FR_OBS_PARTY;
+    } else if (fr_wide_equal(name, L"Windows.Xbox.Multiplayer.Party")) {
+        /* observed only: the three other statics interfaces the game asks this class for */
+        if (fr_guid_is(iid, &fr_iid_party_4b90)) {
+            guid = &fr_iid_party_4b90, observe = FR_OBS_PARTY_4B90;
+        } else if (fr_guid_is(iid, &fr_iid_party_1594)) {
+            guid = &fr_iid_party_1594, observe = FR_OBS_PARTY_1594;
+        } else if (fr_guid_is(iid, &fr_iid_party_8752)) {
+            guid = &fr_iid_party_8752, observe = FR_OBS_PARTY_8752;
+        }
+        if (guid) vtable = fr_observed_vtable;
+    } else if (fr_guid_is(iid, &fr_iid_system_ui_statics) && fr_wide_equal(name, L"Windows.Xbox.UI.SystemUI")) {
+        vtable = fr_system_ui_vtable, guid = &fr_iid_system_ui_statics, observe = FR_OBS_SYSTEM_UI;
     }
     if (!vtable) {
         return 0;
@@ -1456,6 +1780,19 @@ int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out) {
         return 0;
     }
     *out = wrap;
+    if (observe >= 0) wrap->observe = observe;
+    if (observe > FR_OBS_PARTY) {
+        if (!InterlockedExchange(&observed_logs[observe], 1)) {
+            FR_LINE(line);
+            fr_text(&line, "FREEROAM: ");
+            fr_text(&line, fr_obs_names[observe]);
+            fr_text(&line, " wrapped for observation (class ");
+            fr_wide(&line, name, fr_wide_length(name));
+            fr_text(&line, ").");
+            fr_end(&line);
+        }
+        return 1;
+    }
     if (InterlockedIncrement(&wrapped_logs[kind]) <= 4) {
         FR_LINE(line);
         fr_text(&line, "FREEROAM: ");
