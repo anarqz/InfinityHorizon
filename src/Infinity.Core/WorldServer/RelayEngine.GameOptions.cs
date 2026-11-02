@@ -70,7 +70,8 @@ internal sealed partial class RelayEngine
             return;
         }
         if (result != GameOptionsUpdateResult.Stored) return;
-        foreach (var other in _peers.Where(p => p != peer && p.Synced))
+        // a held joiner gets none, and its sequence does not move: its release replays the journal after what it was really sent
+        foreach (var other in _peers.Where(p => p != peer && p.Synced && !_holding.ContainsKey(p)))
             SendSequenced(other, ready.Select(payload => GameOptionsUpdate(other, obj.Handle.Id, payload)).ToArray());
     }
 
