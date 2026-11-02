@@ -104,6 +104,12 @@ public record WorldView : World
 
     public required bool FriendHost { get; init; }
 
+    /// <summary>
+    /// OD-180.2 (S29, CR-S85): the host's game is not in the world and its launcher holds it for the other players.
+    /// Omitted when false; null here reads as false.
+    /// </summary>
+    public bool? HostAway { get; init; }
+
     public required bool Invited { get; init; }
 
     /// <summary>Only to the host of a <c>friends</c> or <c>private</c> world: 8 digits.</summary>
@@ -364,6 +370,13 @@ public sealed record Heartbeat
     /// <summary>CR-S67: the host changed the lobby's voice setting (<see cref="VoiceModes"/>); null: left out (unchanged).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Voice { get; init; }
+
+    /// <summary>
+    /// OD-180.2 (S29, CR-S85): the host's game is away and its launcher holds the world for the other players. Absent means
+    /// false on every heartbeat; null here is never written (a server before CR-S85 refuses the field).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? HostAway { get; init; }
 }
 
 /// <summary>The host's answer to <c>PUT</c> and the announce: the world as its host sees it (<c>code</c> included) and the punches.</summary>
