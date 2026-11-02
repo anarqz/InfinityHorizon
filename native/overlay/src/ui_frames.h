@@ -11,7 +11,7 @@
 //   0x18 PaneActionClick{str paneId, str actionId} (enabled actions only)
 // Launcher -> overlay:
 //   0x15 WorldsListV2{u8 filter, u8 modded, u8 status, str message, u8 count <= 50, count x LobbyRow},
-//        the rows already ordered: matching ones (lock 0 and modsMatch) first, then the others
+//        the rows already ordered: matching ones (lock 0; modsMatch before OD-181) first, then the others
 //        LobbyRow{str id, str name, str host, u8 players, u8 max, u8 kind, u8 audience, u8 lock,
 //        u8 ping, u8 friendHost, u8 modded, u8 modsMatch, u8 anyMode (OD-141: open to Hardcore and Noob),
 //        u8 members <= 12 x {str gamertag, u8 tier, u8 role}, u8 mods <= 32 x {str id, str version}}
@@ -47,6 +47,11 @@
 //        (ops 7-9: value 1..100, VOICE_CHAT.md §15)
 //   0x1D VoiceDevice, overlay -> launcher {u8 flow (0 microphone, 1 output), str id, str name} (each <= 256 B; an empty
 //        id is the system default and comes with an empty name): the device the player picked (§15)
+// Protocol 4 (OD-181, CR-L48): players may mix mods; every player shows the mods it declared
+//   0x1E RosterMods, launcher -> overlay {str worldId (<= 64 B; empty: no world, nobody listed), u8 count <= 16 x {str xuid
+//        (decimal), u8 mods 1..32 x {str name (<= 64 B: the catalog's name, else the mod's id), str version (<= 16 B)}}}, sent
+//        after every 0x0E MyWorld: only the players with mods (anyone else uses none). LobbyRow.modsMatch is always 1 since
+//        OD-181 (mods never block a join) and LobbyRow's mod id is that same display name.
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -57,7 +62,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 3;
+constexpr uint16_t kUiProtocol = 4;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
@@ -124,7 +129,7 @@ struct WorldRow {
     bool friend_host = false;
     // protocol 2 (OD-112)
     bool modded = false;
-    bool mods_match = true; // false: the join is blocked here
+    bool mods_match = true; // OD-181: always true from the launcher; read and ignored (mods are shown, never a lock)
     bool any_mode = false;  // OD-141: open to Hardcore and Noob (the "Hardcore + Noob" badge; never locked for mode)
     std::vector<LobbyMember> members;
     std::vector<LobbyMod> mods;
@@ -174,6 +179,23 @@ struct MyWorld {
 };
 constexpr uint8_t kTransportUnknown = 0, kTransportRelay = 1, kTransportDirect = 2;
 constexpr size_t kMaxMineMembers = 16;
+
+// 0x1E (protocol 4, OD-181): the mods each player of "my world" declared, by XUID (the action key, never shown).
+struct RosterModsMember {
+    std::string xuid;
+    std::vector<LobbyMod> mods; // 1..32, as shown: name (or id) and version
+};
+struct RosterMods {
+    std::string world; // the MyWorld it belongs to; empty: none
+    std::vector<RosterModsMember> members;
+    const std::vector<LobbyMod> *Of(const std::string &world_id, const std::string &xuid) const {
+        if (world.empty() || world != world_id) return nullptr;
+        for (const auto &m : members)
+            if (m.xuid == xuid) return &m.mods;
+        return nullptr;
+    }
+};
+constexpr size_t kMaxRosterMembers = 16;
 
 namespace wire {
 
@@ -461,6 +483,47 @@ inline std::vector<uint8_t> EncodeMyWorld(const MyWorld &m) {
     if (m.transport != kTransportUnknown) { // OD-160: only when known (the 2.0.0 layout otherwise)
         wire::U8(b, m.transport);
         wire::Str(b, m.notice);
+    }
+    return b;
+}
+
+// 0x1E (protocol 4): strict, as the launcher writes it (UiFrame.RosterMods.Validate)
+inline bool DecodeRosterMods(const uint8_t *body, size_t size, RosterMods &out) {
+    wire::Reader r{body, size};
+    RosterMods m;
+    m.world = r.Text(kMaxPaneId);
+    const size_t count = r.Count(kMaxRosterMembers);
+    if (r.ok && m.world.empty() && count != 0) r.ok = false;
+    for (size_t i = 0; i < count && r.ok; ++i) {
+        RosterModsMember p;
+        p.xuid = r.Text(kMaxXuid);
+        const size_t mods = r.Count(kMaxLobbyMods);
+        if (!XuidText(p.xuid) || mods == 0) r.ok = false;
+        for (size_t k = 0; k < mods && r.ok; ++k) {
+            LobbyMod mod;
+            mod.id = r.Text(kMaxModId);
+            mod.version = r.Text(kMaxModVersion);
+            if (mod.id.empty()) r.ok = false;
+            p.mods.push_back(std::move(mod));
+        }
+        m.members.push_back(std::move(p));
+    }
+    if (!r.Done()) return false;
+    out = std::move(m);
+    return true;
+}
+
+inline std::vector<uint8_t> EncodeRosterMods(const RosterMods &m) {
+    std::vector<uint8_t> b;
+    wire::Str(b, m.world);
+    wire::U8(b, static_cast<uint8_t>(m.members.size()));
+    for (const auto &p : m.members) {
+        wire::Str(b, p.xuid);
+        wire::U8(b, static_cast<uint8_t>(p.mods.size()));
+        for (const auto &mod : p.mods) {
+            wire::Str(b, mod.id);
+            wire::Str(b, mod.version);
+        }
     }
     return b;
 }
