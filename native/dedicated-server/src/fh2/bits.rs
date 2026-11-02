@@ -1,6 +1,4 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Derived in part from fh2-mods (https://github.com/conner-mcvay/fh2-mods), MIT, Copyright (c) 2026 conner-mcvay and
-// contributors; see licenses/fh2-mods-LICENSE.txt.
 //! NerdCore's bit stream (Engine\NetV2\NerdCore BitStream): values are packed LSB first, one
 //! after another, with no alignment between them; a packet is padded with zero bits to a byte
 //! at the end only.

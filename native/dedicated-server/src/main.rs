@@ -1,6 +1,4 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Derived in part from fh2-mods (https://github.com/conner-mcvay/fh2-mods), MIT, Copyright (c) 2026 conner-mcvay and
-// contributors; see licenses/fh2-mods-LICENSE.txt.
 //! `dedicated-server`: the Infinity world server (contract DEDICATED_SERVER.md §2).
 //!
 //! ```text
