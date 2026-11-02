@@ -129,6 +129,7 @@ internal sealed partial class RelayEngine
         try { ReceivePacket(data, endpoint); }
         catch (WireFormatException) { /* malformed input ends this datagram only */ }
         FlushBucketList(); // a packet that returned before its forwarding staged co-op output too
+        CheckCarsPending(); // an ACK may have completed a joiner's release (RelayEngine.Join.cs)
         DropDoomed();
     }
 
@@ -142,8 +143,9 @@ internal sealed partial class RelayEngine
     {
         _closed = true;
         _peers.Clear(); _handshakes.Clear(); _bans.Clear(); _hostVariables.Clear();
-        _retiredAttempts.Clear(); _retiredOrder.Clear(); _heldOpens.Clear();
+        _retiredAttempts.Clear(); _retiredOrder.Clear(); _heldOpens.Clear(); _holding.Clear(); _carsPending.Clear(); _skippedCarsNoted.Clear();
         ClearGameOptions();
+        EventProgressReset();
         ClearSideChannels();
         ClearBucketList();
         _eventSide.Clear(); _phasing = false;
@@ -313,6 +315,7 @@ internal sealed partial class RelayEngine
         }
         if (SyncedCount >= _settings.MaxPlayers) { Drop(peer, "world full at sync"); return; }
         peer.Synced = true; peer.JoinedAt = _now;
+        HoldJoiner(peer); // quiet join: cars, options and car traffic wait for its FinaliseSessionEntry (RelayEngine.Join.cs)
         SendCompletion(peer);
         var payload = NerdPayload.SessionHost(_hostVariables.Select(p => (p.Key, p.Value.Value, p.Value.Width)).ToArray());
         if (_groupNode != 0) payload.Append(NerdPayload.GroupSatNav(_groupNode));
@@ -325,11 +328,13 @@ internal sealed partial class RelayEngine
         // The car meet's one server-owned CarMeetSynced (router 11, id 0); the variables it omits keep their constructor defaults
         if (_settings.CarMeetLobby is not null)
             snapshot.Add(NerdCodec.Write(new NerdMessage.Object(true, 11, new(HandleKind.Own, 0), 0, _carMeetSequence, CarMeetState())));
-        AppendGameOptionsSnapshot(peer, snapshot);
+        // the game options are held until the joiner's FinaliseSessionEntry (ReleaseJoiner)
         AppendRoadTripSnapshot(peer, snapshot);
         AppendBucketListSnapshot(snapshot);
+        // the players already here (their routers 1, 3, 9 and 12); their cars (router 2) follow at the finalise
         foreach (var owner in _peers.Where(p => p != peer && p.Synced))
-            foreach (var (key, obj) in owner.Objects) snapshot.AddRange(obj.Snapshot(key.Router, new(HandleKind.Relay, key.Id, owner.Index)));
+            foreach (var (key, obj) in owner.Objects.Where(p => p.Key.Router != 2))
+                snapshot.AddRange(obj.Snapshot(key.Router, new(HandleKind.Relay, key.Id, owner.Index)));
         foreach (var message in snapshot)
         {
             if (!QueueReliable(peer, message)) break;
@@ -350,6 +355,7 @@ internal sealed partial class RelayEngine
     private void Drop(RelayPeer peer, string reason)
     {
         if (!_peers.Remove(peer)) return;
+        _holding.Remove(peer); _carsPending.Remove(peer);
         Note(string.Create(CultureInfo.InvariantCulture, $"peer {peer.Index} dropped: {reason}{(peer.Synced ? string.Empty : " (not synced)")}"));
         var deletes = peer.Objects.Select(p => NerdCodec.Write(new NerdMessage.Delete(p.Key.Router,
             new(HandleKind.Relay, p.Key.Id, peer.Index), AckWindow.SequenceAdd(AckWindow.SequenceNext(p.Value.Last), p.Value.Injected)))).ToArray();
@@ -394,6 +400,8 @@ internal sealed partial class RelayEngine
     private void Send(RelayPeer peer, IReadOnlyList<BitBuffer> messages, bool sequenced, int tries = 0)
     {
         if (!MaySend(peer)) return;
+        // a held joiner's first copy (a resend repeats what already passed); RelayEngine.Join.cs
+        if (tries == 0 && (messages = Unheld(peer, messages)).Count == 0) return;
         var chunks = new List<BitBuffer>(); var bits = 0;
         void Flush()
         {
@@ -440,6 +448,8 @@ internal sealed partial class RelayEngine
     private void SendSequenced(RelayPeer peer, IReadOnlyList<BitBuffer> messages)
     {
         if (!MaySend(peer)) return;
+        messages = Unheld(peer, messages); // nothing held enters the queue, so a release never finds a stale copy there
+        if (messages.Count == 0) return;
         if (peer.Queue.Count == 0) { Send(peer, messages, true); return; }
         foreach (var message in messages)
         {

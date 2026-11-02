@@ -49,7 +49,7 @@ internal sealed partial class RelayEngine
             return;
         }
         var answers = new List<BitBuffer>(); var reliable = new List<BitBuffer>();
-        var forward = new List<BitBuffer>(); var cars = new List<BitBuffer>(); var syncedNow = false;
+        var forward = new List<BitBuffer>(); var cars = new List<BitBuffer>(); var syncedNow = false; var earlyFinalise = false; var readyRelease = false;
         NerdMessage.Car? carNow = null;
         var synced = peer.Synced;
         for (var i = 0; i < header.Count && reader.Left >= 7; i++)
@@ -73,6 +73,8 @@ internal sealed partial class RelayEngine
                 case NerdMessage.Pong pong:
                     if (pong.Echo == 0 && pong.Time <= NowWire && NowWire - pong.Time < 60000) peer.Rtt = NowWire - pong.Time;
                     break;
+                // a FinaliseSessionEntry in the packet that proves the address: applied once the handshake completes (below)
+                case NerdMessage.FinaliseSessionEntry when !synced: earlyFinalise = true; break;
                 case var _ when !synced: break;
                 case NerdMessage.Object obj:
                     if (OnObject(peer, obj) is { } relayed) { peer.CompletionConfirmed = true; forward.Add(relayed); }
@@ -113,7 +115,13 @@ internal sealed partial class RelayEngine
                     {
                         case 10: reliable.AddRange(Ownership(peer, other.Body)); break;
                         case 38: RequestRace(peer); break;
-                        case 41: if (NerdPayload.ReadyRequest(other.Body) is { } ready) Ready(peer, ready); break;
+                        case 41:
+                            if (NerdPayload.ReadyRequest(other.Body) is not { } ready) break;
+                            // a participant's grid needs the others' cars: a Ready ends the join's hold (RelayEngine.Join.cs), after this
+                            // packet's own answers (an ownership refusal's sequence precedes the options replay), before any race step
+                            if (ready && _holding.ContainsKey(peer)) readyRelease = true;
+                            Ready(peer, ready);
+                            break;
                         case 43 or 44 or 45:
                             if (PassScore(peer, other.Kind, other.Body) && other.Kind == 45) Finished(peer);
                             break;
@@ -131,9 +139,18 @@ internal sealed partial class RelayEngine
         if (peer.UniverseDue) { peer.UniverseDue = false; PlayerObjectCreated(peer); }
         if (Finalise(peer) is { } finalised) reliable.Add(finalised);
         if (reliable.Count != 0) SendSequenced(peer, reliable);
+        // after its console's var 1: the cars, options and car traffic held for this joiner (RelayEngine.Join.cs)
+        if (peer.FinaliseAsked) ReleaseJoiner(peer, JoinRelease.Finalise);
+        if (readyRelease) ReleaseJoiner(peer, JoinRelease.Ready);
         RaceStep();
         if (answers.Count != 0 || header.Id != NerdCodec.NoSequence) SendAck(peer, answers);
-        if (syncedNow) CompleteHandshake(peer);
+        if (!syncedNow) return;
+        CompleteHandshake(peer);
+        if (earlyFinalise && peer.Synced && _peers.Contains(peer))
+        {
+            peer.CompletionConfirmed = true; peer.FinaliseAsked = true;
+            ReleaseJoiner(peer, JoinRelease.Finalise);
+        }
     }
 
     private BitBuffer? OnObject(RelayPeer peer, NerdMessage.Object obj)
@@ -240,6 +257,7 @@ internal sealed partial class RelayEngine
         if (_closed) return;
         _now = Math.Max(_now, nowMilliseconds);
         TickHeldOpens();
+        TickQuietJoins();
         TickSideChannels(); TickRace(); TickGameOptions(); TickPhasing(); TickWeather(); TickCarMeet(); TickRoadTrip(); TickBucketList(); TickWatch();
         if (_now - _lastResend >= 50)
         {
