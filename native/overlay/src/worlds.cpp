@@ -34,10 +34,10 @@
 // - Once a world is created the Hosted screen follows; once a seat is reserved, the prompt to go
 //   to Free Roam Online. (The OD-65 "Syncing cars" hold is retired: the server keeps the liveries
 //   and world mates' games fetch them by the game's own calls, CR-S59.)
-// - Modded lobbies (OD-112): modded and vanilla worlds share the list (mods are a reason, not a
-//   filter, CR-L40). A world whose mods differ from the player's carries a warning icon and is never
-//   joined from here: the player is told which mods it uses. The focused or hovered world fills the
-//   right pane (pane.cpp) with its players and mods, from the list's own rows.
+// - Modded lobbies (OD-112, OD-181): modded and vanilla worlds share the list (CR-L40) and players may mix mods: mods
+//   never block a join. The focused or hovered world fills the right pane (pane.cpp) with its players and the host's
+//   mods, from the list's own rows. In my world, a gear beside a player's name says they use mods (0x1E RosterMods), and
+//   their details list them.
 // - Pineapple lobbies (OD-149, 2.0.1): a world hosted by a Hardcore player the anti-cheat system isolated carries the
 //   pineapple mark and its name in the list; focused, the right pane opens with the notice that explains it. A clean player
 //   sees it dimmed and cannot join it (lock 9). An isolated player gets the red notice with the time left counting down above
@@ -82,6 +82,7 @@ struct Shared {
     uint64_t hosted_serial = 0;
     MyWorld mine;
     uint64_t mine_serial = 0;
+    RosterMods roster_mods; // OD-181 (0x1E): each player's declared mods, for mine.world only
     uint8_t action = 0, action_status = 0;
     std::string action_message;
     uint64_t action_serial = 0;
@@ -132,6 +133,8 @@ bool g_mine_voice_row = false; // the host's "Voice chat" switch is item 1
 bool g_mine_x = false;      // X on a player: mute or unmute them, applied at draw time
 MemberRow g_member;         // the player the card is about
 uint8_t g_mine_role = 0;    // of the world last drawn
+std::string g_mine_world;   // of the world last drawn (OD-181: whose players' mods g_roster holds)
+RosterMods g_roster;        // OD-181: the render thread's copy of Shared::roster_mods
 int g_confirm = 0;          // the action to confirm: 1 close, 2 leave, 3 kick
 int g_buttons = 0;          // how many buttons the current card has
 uint64_t g_seen_mine = 0, g_seen_action = 0;
@@ -235,14 +238,14 @@ const char *PineappleExplained() {
              "Isolado pelo sistema anti-trapaça. Os jogadores que ele isola jogam só em lobbies abacaxi até o tempo acabar; só eles podem entrar.");
 }
 
-// Why a row is not "matching" (CR-L40 §2.2), the first that applies; None: the player joins it as they are.
-enum class Why { None, Mode, Mods, Friends, Code, Full, Far, Pool, Other };
+// Why a row is not "matching" (CR-L40 §2.2), the first that applies; None: the player joins it as they are. OD-181: mods are
+// never a reason (players may mix mods; the lobby's pane shows the host's).
+enum class Why { None, Mode, Friends, Code, Full, Far, Pool, Other };
 
 Why WhyOf(const WorldRow &w) {
     if ((w.lock == 7 || w.lock == 8) && !w.any_mode) return Why::Mode; // a lobby open to both modes is never another mode's
     if (w.lock == 7 || w.lock == 8) return Why::Other;
     if (w.lock == kLockPool) return Why::Pool; // OD-149: a pineapple world and a clean player
-    if (!w.mods_match) return Why::Mods;
     switch (w.lock) {
     case 0: return Why::None;
     case 2: return Why::Friends;
@@ -253,21 +256,8 @@ Why WhyOf(const WorldRow &w) {
     }
 }
 
-// A vanilla row matches only a session without mods: one in the list tells whether the player has mods.
-// 1 no mods, 0 mods, -1 unknown.
-int LocalVanilla(const std::vector<WorldRow> &rows) {
-    for (const auto &r : rows) {
-        if (!r.modded && r.lock != 7 && r.lock != 8) return r.mods_match ? 1 : 0;
-    }
-    return -1;
-}
-
 // The reason in a row's subtitle.
-std::string WhyText(const WorldRow &w, int local_vanilla) {
-    if (WhyOf(w) != Why::Mods) return LockName(w.lock);
-    if (!w.modded) return T("No mods", "Sem mods");
-    return local_vanilla == 1 ? T("Modded lobby", "Lobby com mods") : T("Mods differ", "Mods diferentes");
-}
+std::string WhyText(const WorldRow &w) { return LockName(w.lock); }
 
 std::string FormatCode(const std::string &code) {
     return code.size() == 8 ? code.substr(0, 4) + "-" + code.substr(4) : code;
@@ -403,8 +393,7 @@ void DevAnswer() {
         g_shared.rows.push_back({"w2", "Nice coastline run", "Synthetic#00117", 3, 6, 0, 0, 0, 0, false});
         g_shared.rows.push_back({"w3", "Drift crew", "Synthetic#00230", 11, 12, 0, 0, 0, 2, false});
         WorldRow modded{"m1", "Nitro drift night", "Synthetic#00117", 4, 8, 0, 0, 0, 1, false};
-        modded.modded = true;
-        modded.mods_match = false;
+        modded.modded = true; // OD-181: joinable whatever the player's own mods; the pane shows the host's
         modded.members = members({{"Synthetic#00117", 1, 0}, {"Synthetic#00230", 0, 1}, {"RallyFox98", 0, 1}, {"Synthetic#00042", 1, 2}});
         modded.mods = {{"extraoptions", "2"}, {"nitrosystem", "3"}};
         g_shared.rows.push_back(modded);
@@ -456,6 +445,13 @@ void DevAnswer() {
             m.members.push_back({"1", m.host, 1, 0, static_cast<uint8_t>(g_dev_mine == 1 ? 4 : 0)});
             m.members.push_back({"2", g_dev_mine == 1 ? "Synthetic#00230" : "Synthetic#00117", 0, 1, static_cast<uint8_t>(g_dev_mine == 1 ? 0 : 4)});
             m.members.push_back({"3", "Synthetic#00042", 1, 2, 3});
+        }
+        // OD-181: the dev roster mixes mods (the launcher's 0x1E): the host and the third player declare some, the second none
+        g_shared.roster_mods = RosterMods{};
+        if (g_dev_mine != 0) {
+            g_shared.roster_mods.world = m.world;
+            g_shared.roster_mods.members.push_back({"1", {{"Synthetic Handling Pack", "3"}, {"extraoptions", "2"}}});
+            g_shared.roster_mods.members.push_back({"3", {{"Synthetic Night Lights", "1"}}});
         }
         g_shared.mine = m;
         ++g_shared.mine_serial;
@@ -567,7 +563,7 @@ float PoolBanner(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
 
 // One lobby row. A matching row is drawn as is; any other at about 45% with its reason after the
 // host (CR-L40 §2.2). The focus ring stays at full strength on either.
-void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w, int local_vanilla) {
+void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w) {
     const Why why = WhyOf(w);
     const bool other = why != Why::None;
     const bool ready = GameReady();
@@ -583,11 +579,11 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     if (w.kind & kKindSupporter) sub += " · Supporter"; // CR-S69: the host's badge, nothing more
     if (Pineapple(w)) sub += std::string(" · ") + PineappleName();
     if (w.any_mode) sub += std::string(" · ") + kAnyModeBadge; // OD-141
+    if (w.modded) sub += std::string(" · ") + T("Mods", "Mods"); // OD-181: the host's mods are in the pane; never a lock
     if (w.friend_host) sub = std::string(T("Friend · ", "Amigo · ")) + sub;
-    if (other) sub += " · " + WhyText(w, local_vanilla);
+    if (other) sub += " · " + WhyText(w);
     if (!ready) sub = T("Load your game to access lobbies", "Carregue sua partida para acessar os lobbies");
-    const ImU32 sub_color = !ready ? kTextDim : why == Why::Mods ? kAmber : kTextDim;
-    TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), sub_color, sub.c_str());
+    TextAt(dl, f.small, ImVec2(lx, a.y + 38 * s), kTextDim, sub.c_str());
     dl->PopClipRect();
     const std::string count = std::to_string(w.players) + "/" + std::to_string(w.max);
     const ImVec2 cs = Measure(f.body, count.c_str());
@@ -595,31 +591,9 @@ void WorldTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const WorldRow &w
     PingBars(dl, ImVec2(b.x - 38 * s, a.y + 14 * s), w.ping);
     if (why == Why::Code) {
         dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 40 * s), kText, kIconLock);
-    } else if (why == Why::Mods) {
-        // OD-112: the small "your mods don't match" mark
-        dl->AddText(f.icon, f.icon->FontSize * 0.75f, ImVec2(b.x - 36 * s, a.y + 38 * s), kAmber, kIconWarning);
     }
     if (other) FadeSince(dl, first, 0.45f);
     if (focus) FocusRing(dl, a, b, 6 * s);
-}
-
-std::string ModList(const WorldRow &w) {
-    std::string out;
-    for (const auto &m : w.mods) {
-        if (!out.empty()) out += ", ";
-        out += m.id + " " + m.version;
-    }
-    return out;
-}
-
-// Why a row whose mods differ from the player's cannot be joined (modsMatch false; vanilla rows too).
-std::string MismatchText(const WorldRow &w) {
-    if (!w.modded) return T("This lobby has no mods; turn your mods off in the launcher to join.",
-                            "Este lobby não tem mods; desligue seus mods no launcher para entrar.");
-    const std::string list = ModList(w);
-    return (list.empty() ? std::string(T("This lobby uses other mods.", "Este lobby usa outros mods."))
-                         : std::string(T("This lobby uses: ", "Este lobby usa: ")) + list + ".") +
-           T(" Use the same mods in the launcher to join.", " Use os mesmos mods no launcher para entrar.");
 }
 
 // The right pane for a lobby (OD-112): built here from the row, so hovering costs no request.
@@ -642,22 +616,18 @@ const DetailPane &LobbyPane(const WorldRow &w) {
                                                    "Só jogadores isolados pelo sistema anti-trapaça podem entrar neste lobby."),
                                                  PaneIcon::None});
     }
-    if (!w.mods_match) {
-        p.sections.push_back({1, "", {{T("Your mods don't match this lobby", "Seus mods não batem com os deste lobby"),
-                                       w.modded ? T("Use the same mods in the launcher to join", "Use os mesmos mods no launcher para entrar")
-                                                : T("This lobby has no mods; turn your mods off to join", "Este lobby não tem mods; desligue seus mods para entrar"),
-                                       PaneIcon::Warning}}});
-    }
     PaneSection players{1, T("PLAYERS", "JOGADORES"), {}};
     for (const auto &m : w.members) {
         std::string role = m.role == 0 ? T("Host", "Anfitrião") : m.role == 1 ? T("In the lobby", "No lobby") : T("On the way", "Chegando");
         if (m.tier == 1) role += " · Supporter"; // CR-S69: the badge
+        if (m.role == 0 && w.modded) role += std::string(" · ") + T("Mods", "Mods"); // OD-181: the host's set is the world's (below)
         players.entries.push_back({m.gamertag, role, m.role == 0 ? PaneIcon::Host : m.tier == 1 ? PaneIcon::Supporter : PaneIcon::Player});
     }
     if (players.entries.empty()) players.entries.push_back({w.host, T("Host", "Anfitrião"), PaneIcon::Host});
     p.sections.push_back(std::move(players));
     if (w.modded) {
-        PaneSection mods{1, T("MODS", "MODS"), {}};
+        // OD-181: what joining players see, the host's mods (the launcher's catalog name, else the id) and their versions
+        PaneSection mods{1, T("HOST'S MODS", "MODS DO ANFITRIÃO"), {}};
         for (const auto &m : w.mods) mods.entries.push_back({m.id, std::string(T("Version ", "Versão ")) + m.version, PaneIcon::Mod});
         p.sections.push_back(std::move(mods));
     } else {
@@ -763,7 +733,6 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, const Sha
         if (row_top + wh > g_scroll + view) g_scroll = row_top + wh - view;
     }
     g_scroll = std::clamp(g_scroll, 0.0f, std::max(0.0f, content - view));
-    const int local_vanilla = LocalVanilla(rows);
     const WorldRow *hovered = nullptr, *focused = nullptr;
     dl->PushClipRect(ImVec2(x - 4 * s, top), ImVec2(x + w + 4 * s, bottom), true);
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -773,7 +742,7 @@ void DrawList(ImDrawList *dl, float x, float y, float w, float bottom, const Sha
         if (focus_of(index)) focused = &rows[i];
         if (ry + wh <= top || ry >= bottom) continue; // out of view: still walked by the focus
         const ImVec2 a(x, ry), b(x + w, ry + wh);
-        WorldTile(dl, a, b, focus_of(index), rows[i], local_vanilla);
+        WorldTile(dl, a, b, focus_of(index), rows[i]);
         const bool inside = ImGui::GetIO().MousePos.y >= top && ImGui::GetIO().MousePos.y < bottom;
         if (inside && Clicked(a, b)) { g_focus = index; g_accept = true; }
         if (inside && ImGui::IsMouseHoveringRect(a, b)) hovered = &rows[i];
@@ -812,10 +781,7 @@ void AcceptList(const Shared &sh) {
         switch (WhyOf(r)) {
         case Why::None: Join(r.id, std::string()); break;
         case Why::Code: JoinByCode(); break;            // a code row opens the code entry
-        case Why::Mods:
-            // OD-112: only the exact same mods join (a vanilla lobby: none); the server refuses it too
-            PushToast(ToastKind::Warning, T("Your mods don't match", "Seus mods não batem"), MismatchText(r));
-            break;
+        // OD-181: no mods case; an older server's mods refusal comes back as the join's message
         case Why::Mode:
             PushToast(ToastKind::Info, r.name, r.lock == 7 ? T("This lobby is for Hardcore profiles.", "Este lobby é para perfis Hardcore.")
                                                            : T("This lobby is for Noob profiles.", "Este lobby é para perfis Noob."));
@@ -970,6 +936,11 @@ void MemberTile(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, const MemberRow 
     const float lx = a.x + 60 * s;
     dl->PushClipRect(ImVec2(lx, a.y), ImVec2(b.x - 44 * s, b.y), true);
     TextAt(dl, f.body, ImVec2(lx, a.y + 9 * s), kText, m.gamertag.c_str());
+    if (const auto *mods = g_roster.Of(g_mine_world, m.xuid); mods && !mods->empty()) {
+        // OD-181: the small gear right after the name: this player uses mods (A on the card lists them)
+        const float gx = lx + Measure(f.body, m.gamertag.c_str()).x + 8 * s;
+        dl->AddText(f.icon, f.icon->FontSize * 0.6f, ImVec2(gx, a.y + 12 * s), kTextDim, kIconSettings);
+    }
     std::string sub = MemberStatus(m);
     if (const char *fs = FriendStatus(m.friend_state); *fs) sub += std::string(" · ") + fs;
     TextAt(dl, f.small, ImVec2(lx, a.y + 36 * s), m.friend_state == 3 ? kPinkU : kTextDim, sub.c_str());
@@ -1125,6 +1096,7 @@ struct MineClick {
 MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyWorld &m) {
     MineClick click;
     g_mine_role = m.role;
+    g_mine_world = m.world;
     const VoiceState voice = CurrentVoice();
     const char *tag = m.role == 1 ? T("YOUR LOBBY", "SEU LOBBY") : m.role == 2 ? T("SEAT RESERVED", "LUGAR RESERVADO") : T("YOU ARE IN A LOBBY", "VOCÊ ESTÁ EM UM LOBBY");
     TextAt(dl, f.tag, ImVec2(x, y), kPinkU, tag);
@@ -1328,7 +1300,23 @@ void DrawMember(ImDrawList *dl, float x, float y, float w) {
                                                                  : "";
     if (*voice) TextAt(dl, f.small, ImVec2(x, y), RowTalking(g_member, v) ? kTalkGreen : st & VoiceMember::MutedByMe ? kRed : kAmber, voice);
     y += 28 * s;
-    Buttons(dl, x, y, w, MemberChoices(g_member));
+    const std::vector<Choice> choices = MemberChoices(g_member);
+    Buttons(dl, x, y, w, choices);
+    // OD-181: the mods this player declared, under the actions (shown, never a reason to leave): the catalog's name, else the id
+    y += static_cast<float>(choices.size()) * 60 * s + 10 * s;
+    TextAt(dl, f.tag, ImVec2(x, y), kTextDim, T("MODS", "MODS"));
+    y += 24 * s;
+    const auto *mods = g_roster.Of(g_mine_world, g_member.xuid);
+    if (!mods || mods->empty()) {
+        TextAt(dl, f.small, ImVec2(x, y), kTextDim, T("None", "Nenhum"));
+        return;
+    }
+    std::string list;
+    for (const auto &mod : *mods) {
+        if (!list.empty()) list += "  ·  ";
+        list += mod.id + " v" + mod.version;
+    }
+    Wrapped(dl, f.small, ImVec2(x, y), w, kText, list.c_str());
 }
 
 std::vector<Choice> ReportChoices() {
@@ -1458,6 +1446,11 @@ void SetMyWorld(MyWorld mine) {
     std::lock_guard<std::mutex> lock(g_lock);
     g_shared.mine = std::move(mine);
     ++g_shared.mine_serial;
+}
+
+void SetRosterMods(RosterMods mods) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_shared.roster_mods = std::move(mods);
 }
 
 void SetActionResult(uint8_t action, uint8_t status, const std::string &message) {
@@ -1596,6 +1589,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         std::lock_guard<std::mutex> lock(g_lock);
         sh = g_shared;
     }
+    g_roster = sh.roster_mods; // OD-181: the cards and the details column read it this frame
     const bool world_access = DevHost() || sh.access.Allowed(GetTickCount64());
     if (!world_access && (g_screen == Screen::Warning || g_screen == Screen::Create || g_screen == Screen::Hosted
         || (g_screen == Screen::Busy && !g_world_action_busy))) {

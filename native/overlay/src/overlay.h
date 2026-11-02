@@ -94,6 +94,8 @@ void SetHosted(const HostedWorld &hosted);
 
 // "My world" (OD-63): MemberRow and MyWorld are in ui_frames.h (CR-L43 adds any_mode).
 void SetMyWorld(MyWorld mine);
+// OD-181 (protocol 4, 0x1E): the mods each player of my world declared (RosterMods in ui_frames.h).
+void SetRosterMods(RosterMods mods);
 void SetActionResult(uint8_t action, uint8_t status, const std::string &message); // status 0 done
 void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)

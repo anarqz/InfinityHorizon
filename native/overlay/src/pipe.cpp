@@ -43,6 +43,9 @@
 // mode, voice on/off, the volumes) and 0x1D VoiceDevice (the chosen microphone or output, VOICE_CHAT.md §15). 0x0B
 // CreateWorld ends with u8 voice.
 //
+// Protocol 4 (OD-181): 0x1E RosterMods from the launcher after each 0x0E, the mods each player of my world declared
+// (players may mix mods; modsMatch is always 1 and is ignored).
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
@@ -120,6 +123,12 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         VoiceState voice;
         if (DecodeVoiceState(body, size, voice)) SetVoiceState(std::move(voice));
         else Log("ui pipe: malformed VoiceState ignored");
+        break;
+    }
+    case 0x1E: { // OD-181 (protocol 4): each lobby player's declared mods
+        RosterMods mods;
+        if (DecodeRosterMods(body, size, mods)) SetRosterMods(std::move(mods));
+        else Log("ui pipe: malformed RosterMods ignored");
         break;
     }
     case 0x13: {
