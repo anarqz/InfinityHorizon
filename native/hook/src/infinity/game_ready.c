@@ -134,6 +134,7 @@ static unsigned char gr_update(void *self, float dt) {
         int ready = gr_sample(&player, &record, &car, &garage_id);
         gr_observe(ready, player, record, car, garage_id, now);
         if (ready && fi_launch_protocol()) fi_launch_car(gr_current_car_key(record, garage_id), now);
+        azimuth_freeroam_observe_tick();
     }
     return result;
 }
@@ -164,6 +165,11 @@ static int gr_install(unsigned char *image) {
     FlushInstructionCache(GetCurrentProcess(), image + GR_UPDATE_RVA, 14);
     VirtualProtect(image + GR_UPDATE_RVA, 14, old, &ignored);
     return 1;
+}
+
+/* 1 once the main update is hooked, so azimuth_freeroam_observe_tick runs. */
+int fi_game_ready_ticking(void) {
+    return gr_original != 0;
 }
 
 void fi_game_ready_apply(unsigned char *image) {
