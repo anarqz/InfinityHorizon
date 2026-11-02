@@ -49,6 +49,7 @@ SOURCES = [
     "src/infinity/game_ready.c",
     "src/infinity/offsets.c",
     "src/infinity/net.c",
+    "src/infinity/net_observe.c",
     "src/infinity/freeroam.c",
     "src/infinity/world.c",
     "src/infinity/proxy.c",
