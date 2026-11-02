@@ -67,13 +67,12 @@ impl Engine {
         }
     }
 
-    /// A datagram from `from` (canonical endpoint) at `now_ms`. Step 1: nobody is admitted and
-    /// the codec is a placeholder (OD-187) that decodes nothing, so it is dropped.
+    /// A datagram from `from` (canonical endpoint) at `now_ms`. Step 1: nobody is admitted, so
+    /// every datagram is dropped whether or not it decodes (the codec is in place, OD-187; the
+    /// handshake and admission come with the engines).
     pub fn receive(&mut self, data: &[u8], _from: SocketAddr, _now_ms: u64, _out: &mut Vec<Send>) {
-        match codec::decode(data) {
-            Ok(d) => match d {},
-            Err(codec::CodecError::NotImplemented) => self.dropped += 1,
-        }
+        let _ = codec::Packet::decode(data, &codec::Registry::fh2(), true);
+        self.dropped += 1;
     }
 
     /// The 20 ms tick. Never called for an idle engine (`is_idle`); a no-op when nothing is

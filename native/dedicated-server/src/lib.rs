@@ -8,8 +8,8 @@
 //!     output buffer. Golden vectors replay against this layer.
 //!   - `core::game`: the trait between the core and a game module (OD-186: one game-agnostic
 //!     core, one module per game; `world.open` names the game).
-//!   - `fh2`: the Forza Horizon 2 module: NerdCore codec (`codec`, a placeholder
-//!     until it is written from NERDCORE_WIRE.md, OD-187), side channels
+//!   - `fh2`: the Forza Horizon 2 module: NerdCore codec (`codec`, written
+//!     from NERDCORE_WIRE.md, OD-187), side channels
 //!     (`carstate`), engines and settings. Scaffold only in this step; the game features are
 //!     ported later against golden vectors (README).
 //!   - `runtime`: the single network loop thread, the sockets, the control transports.
