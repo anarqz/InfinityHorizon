@@ -23,6 +23,10 @@ public sealed partial class ShellViewModel
     private CancellationTokenSource? _play;
     private Channel<SupervisorCommand>? _commands;
     private Task? _playTask;
+    // OD-180.2 follow-up (CR-L49): the game exited but its hosted world stays for the other players (the session lives on)
+    private bool _awayHosting;
+    // completed once a Play's whole flow (its finally included) is over: a takeover of an away host's session waits for it
+    private TaskCompletionSource? _playEnded;
     /// <summary>
     /// OD-125, before every launch: FH2 added to Azimuth 1.0's <c>data\azimuth.ini</c> (so <c>--skip-launcher</c> starts it)
     /// with the game folder chosen in Configure, and ExtraOptions.Infinity's <c>FH2_ExtraOptions.ini</c> when there is none.
@@ -109,7 +113,7 @@ public sealed partial class ShellViewModel
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && (!Playing || _awayHosting) && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked;
 
     public string? PlayStatus => _playStatus;
 
@@ -117,6 +121,14 @@ public sealed partial class ShellViewModel
 
     public async Task PlayAsync()
     {
+        // CR-L49: a new Play by an away host takes its session over: the kept world closes and the session leaves first
+        if (_awayHosting && _playEnded is { } ending)
+        {
+            _commands?.Writer.TryWrite(new SupervisorCommand.Quit());
+            SetStatus(S["supervisor.hosting_away_ending"]);
+            await ending.Task;
+            if (Playing) return;
+        }
         // OD-118: without an account (or with a profile not on it) Play is the offline launch.
         RefreshChosenLocal(); // OD-118: an upload since it was chosen makes it play online
         if (!PlaysOnline) { await PlayOfflineAsync(); return; }
@@ -265,6 +277,7 @@ public sealed partial class ShellViewModel
         var caches = SwitchCaches(_install.Root, online: true);
         _playOnlineActivity = onlineActivity;
         _playModSet = modSet;
+        var playEnded = _playEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             _playTask = Task.Run(() => supervisor.RunAsync(_play.Token));
@@ -287,10 +300,19 @@ public sealed partial class ShellViewModel
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
             _playModSet = null;
+            _awayHosting = false;
             RefreshMods();
             Changed(string.Empty);
-            if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
-                await RefreshIntegrityAutomaticallyAsync();
+            try
+            {
+                if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
+                    await RefreshIntegrityAutomaticallyAsync();
+            }
+            finally
+            {
+                if (ReferenceEquals(_playEnded, playEnded)) _playEnded = null;
+                playEnded.TrySetResult();
+            }
         }
     }
 
@@ -477,12 +499,19 @@ public sealed partial class ShellViewModel
                 PresentCrash(captured.Incident);
                 break;
             case SupervisorEvent.Exited:
-                SetStatus(S["supervisor.closing"]);
+                SetStatus(S[_awayHosting ? "supervisor.hosting_away" : "supervisor.closing"]); // CR-L49: the world stays
                 break;
             case SupervisorEvent.Relaunching:
                 SetStatus(S["supervisor.relaunching"]);
                 break;
+            case SupervisorEvent.HostingAway:
+                // CR-L49: the game is closed, the world is not: Play takes the session over (the world closes first)
+                _awayHosting = true;
+                SetStatus(S["supervisor.hosting_away"]);
+                Changed(string.Empty);
+                break;
             case SupervisorEvent.Ended ended:
+                _awayHosting = false;
                 _waitingForAdmission = _queued = false;
                 if (ended.Reason is not "error") { ClearRuntimeConfigurationIssue(); ClearHookOfflineNotice(); }
                 var text = ended.Reason switch

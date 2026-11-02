@@ -57,18 +57,22 @@ public sealed partial class WorldsBridge
     /// <summary>
     /// A protocol 2 row of this session's view. CR-L43 (OD-141): no mode check of its own; the server decides. A world is
     /// <see cref="UiLobby.LockHardcore"/> / <see cref="UiLobby.LockNoob"/> only when the server says <c>canJoin: false,
-    /// why: "mode"</c> (<see cref="Row"/>), and a world open to both modes never is.
+    /// why: "mode"</c> (<see cref="Row"/>), and a world open to both modes never is. OD-181: no mods check either; the
+    /// host's mods are shown by their catalog names (<see cref="ModName"/>).
     /// </summary>
-    private static LobbyRow SessionRow(WorldView world, bool locked, ModSetState local) => LobbyRow(world, locked, local);
+    private LobbyRow SessionRow(WorldView world, bool locked) => LobbyRow(world, locked, ModName);
 
     private static byte ModeLock(string? worldMode) =>
         string.Equals(worldMode, WorldModes.Hardcore, StringComparison.Ordinal) ? UiLobby.LockHardcore : UiLobby.LockNoob;
 
-    /// <summary>A row this session can join as it is: the server lets it in (an <c>any</c> world counts for both modes) and the same mods.</summary>
+    /// <summary>
+    /// A row this session can join as it is: the server lets it in (an <c>any</c> world counts for both modes). OD-181 (CR-L48):
+    /// mods are never a reason; any declared set joins any world.
+    /// </summary>
     public static bool Matching(LobbyRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        return row.World.Lock == 0 && row.ModsMatch;
+        return row.World.Lock == 0;
     }
 
     /// <summary>
@@ -91,7 +95,7 @@ public sealed partial class WorldsBridge
     {
         ArgumentNullException.ThrowIfNull(rows);
         static int Str(string text) => 2 + Encoding.UTF8.GetByteCount(text);
-        // players, max, kind, audience, lock, ping; friendHost, modded, modsMatch, anyMode
+        // players, max, kind, audience, lock, ping; friendHost, modded, modsMatch (always 1 since OD-181), anyMode
         static int Size(LobbyRow r) => Str(r.World.Id) + Str(r.World.Name) + Str(r.World.Host) + 6 + 4
             + 1 + r.Members.Sum(m => Str(m.Gamertag) + 2) + 1 + r.Mods.Sum(m => Str(m.Id) + Str(m.Version));
         var fitted = rows.Take(UiFrame.MaxLobbyRows).ToList();

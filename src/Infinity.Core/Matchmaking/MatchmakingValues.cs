@@ -26,10 +26,13 @@ public static class NotAllowedReasons
     public const string Tier = "tier";
     public const string Host = "host";
     public const string Friends = "friends";
+
+    /// <summary>Retired by OD-181 (CR-S84): only an older server still sends it; read so its refusal keeps today's message.</summary>
     public const string Mods = "mods";
     public const string Latency = "latency";
 
-    public static IReadOnlyList<string> All { get; } = [OwnWorld, Mode, Tier, Host, Friends, Mods, Latency];
+    /// <summary>The contract's reasons (<see cref="Mods"/> is no longer one).</summary>
+    public static IReadOnlyList<string> All { get; } = [OwnWorld, Mode, Tier, Host, Friends, Latency];
 }
 
 /// <summary><c>WorldView.why</c>, in the order the server decides them.</summary>

@@ -69,13 +69,14 @@ public enum UiDirection
 /// One UI-pipe frame between the launcher and the overlay (<c>&lt;control pipe&gt;-ui</c>; overlay_ui.rs).
 /// Same envelope as the control pipe, its own type space 0x01-0x1A (0x07-0x10: worlds, OD-54, OD-63;
 /// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
-/// status and avatar, CR-L40; native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
+/// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
+/// native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
 /// never sees it.
 /// </summary>
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 3;
+    public const ushort ProtocolVersion = 4;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -100,8 +101,14 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 3 (voice chat, OD-154).</summary>
     public const byte FirstProtocol3Type = 0x1B;
 
+    /// <summary>The lowest type that needs protocol 4 (each lobby player's declared mods, OD-181).</summary>
+    public const byte FirstProtocol4Type = 0x1E;
+
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x1D;
+    public const byte LastType = 0x1E;
+
+    /// <summary>OD-181: the players a <see cref="RosterMods"/> names (the "my world" roster's own bound).</summary>
+    public const int MaxRosterMembers = 16;
 
     /// <summary>OD-154: the other players a <see cref="VoiceState"/> lists.</summary>
     public const int MaxVoiceMembers = 16;
@@ -496,6 +503,42 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x1E, launcher → overlay (protocol 4, OD-181 / CR-L48): the mods each player of "my world" declared, sent after every
+    /// <see cref="MyWorld"/>. <c>WorldId</c> the world of that <see cref="MyWorld"/> (empty: no world, nobody listed);
+    /// <c>Members</c> only the players with at least one mod (at most 16; a player not listed uses none), each by XUID (the
+    /// roster's action key, never shown) with its mods as shown: the catalog's name when known, else the mod's id, and its
+    /// version (sorted by id, at most 32). The overlay marks each listed player's card and lists the mods in their details.
+    /// </summary>
+    public sealed record RosterMods(string WorldId, IReadOnlyList<RosterModsMember> Members) : UiFrame
+    {
+        public override byte Type => 0x1E;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        /// <summary>No world: the overlay forgets every player's mods.</summary>
+        public static RosterMods None { get; } = new(string.Empty, []);
+
+        internal void Validate()
+        {
+            Limit(WorldId, MaxPaneId, "roster world id");
+            if (WorldId.Length == 0 && Members.Count != 0) throw new ProtocolException("no world lists no players");
+            Bound(Members.Count, MaxRosterMembers, "roster members");
+            foreach (var member in Members)
+            {
+                CheckXuid(member.Xuid, "roster member xuid");
+                if (member.Mods.Count == 0) throw new ProtocolException("a roster member without mods is not listed");
+                Bound(member.Mods.Count, MaxLobbyMods, "roster member mods");
+                foreach (var mod in member.Mods)
+                {
+                    if (mod.Id.Length == 0) throw new ProtocolException("empty roster mod");
+                    Limit(mod.Id, 64, "roster mod name");
+                    Limit(mod.Version, 16, "roster mod version");
+                }
+            }
+        }
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -784,6 +827,21 @@ public abstract record UiFrame
                 w.Str(d.Id);
                 w.Str(d.Name);
                 break;
+            case RosterMods m:
+                m.Validate();
+                w.Str(m.WorldId);
+                w.U8((byte)m.Members.Count);
+                foreach (var member in m.Members)
+                {
+                    w.Str(member.Xuid);
+                    w.U8((byte)member.Mods.Count);
+                    foreach (var mod in member.Mods)
+                    {
+                        w.Str(mod.Id);
+                        w.Str(mod.Version);
+                    }
+                }
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -856,12 +914,13 @@ public abstract record UiFrame
             0x1A => DecodeAvatar(ref r),
             0x1B => DecodeVoiceState(ref r),
             0x1C => new VoiceCommand(r.U8(), r.Str(), r.U8()),
-            _ => new VoiceDevice(r.U8(), r.Str(), r.Str()),
+            0x1D => new VoiceDevice(r.U8(), r.Str(), r.Str()),
+            _ => DecodeRosterMods(ref r),
         };
         r.End();
         switch (frame)
         {
-            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice:
+            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -880,6 +939,24 @@ public abstract record UiFrame
         var members = new List<VoiceMember>(count);
         for (var i = 0; i < count; ++i) members.Add(new VoiceMember(r.Str(), r.Str(), r.U8(), r.U8()));
         return new VoiceState(flags, mic, members, r.U8(), r.U8(), r.Str(), r.Str(), r.Str(), r.Str());
+    }
+
+    private static RosterMods DecodeRosterMods(ref WireReader r)
+    {
+        var world = r.Str();
+        var count = r.U8();
+        Bound(count, MaxRosterMembers, "roster members");
+        var members = new List<RosterModsMember>(count);
+        for (var i = 0; i < count; ++i)
+        {
+            var xuid = r.Str();
+            var modCount = r.U8();
+            Bound(modCount, MaxLobbyMods, "roster member mods");
+            var mods = new List<LobbyMod>(modCount);
+            for (var m = 0; m < modCount; ++m) mods.Add(new LobbyMod(r.Str(), r.Str()));
+            members.Add(new RosterModsMember(xuid, mods));
+        }
+        return new RosterMods(world, members);
     }
 
     private static Avatar DecodeAvatar(ref WireReader r)
@@ -1125,9 +1202,10 @@ public static class UiVoiceOp
 
 /// <summary>
 /// One row of <see cref="UiFrame.WorldsListV2"/> (OD-112): the protocol 1 <see cref="WorldRow"/>, whether
-/// the world is modded, whether its mods equal the local set (a false <c>ModsMatch</c> blocks the join in
-/// the overlay), its players (host first unless dedicated, at most 12) and its mods (sorted by id, at most
-/// 32; empty for a vanilla world). Members carry no XUID (OD-61). <c>AnyMode</c> (OD-141, CR-L43; on the wire after
+/// the world is modded, <c>ModsMatch</c> (OD-181 retired the equal-set rule: the launcher always sends true, so no
+/// overlay blocks a join over mods; an overlay before OD-181 blocked on false), its players (host first unless dedicated,
+/// at most 12) and the host's mods (sorted by id, at most 32; empty for a vanilla world). Members carry no XUID (OD-61).
+/// <c>AnyMode</c> (OD-141, CR-L43; on the wire after
 /// <c>ModsMatch</c>): the world is open to Hardcore and Noob, the row's "Hardcore + Noob" badge; such a world is never
 /// locked for mode.
 /// </summary>
@@ -1155,8 +1233,14 @@ public sealed record LobbyRow(WorldRow World, bool Modded, bool ModsMatch, IRead
 /// <summary><c>Tier</c> <see cref="UiTier"/>; <c>Role</c> 0 host, 1 in the world, 2 seat reserved.</summary>
 public sealed record LobbyMember(string Gamertag, byte Tier, byte Role);
 
-/// <summary>A mod of a lobby: the manifest's multiplayer <c>compatibilityId</c> and its revision (display only; MODDED_LOBBIES.md §2).</summary>
+/// <summary>
+/// A mod of a lobby or a player, display only (MODDED_LOBBIES.md §2): <c>Id</c> the text shown, the catalog's name when the
+/// launcher knows the mod (OD-181), else the manifest's multiplayer <c>compatibilityId</c>; <c>Version</c> its revision.
+/// </summary>
 public sealed record LobbyMod(string Id, string Version);
+
+/// <summary>One player of <see cref="UiFrame.RosterMods"/>: the roster's XUID (the action key, never shown) and the mods it declared.</summary>
+public sealed record RosterModsMember(string Xuid, IReadOnlyList<LobbyMod> Mods);
 
 /// <summary>One ordered section of a <see cref="UiFrame.DetailPane"/>: <see cref="UiPaneSection"/>, a heading (may be empty) and up to 32 entries.</summary>
 public sealed record PaneSection(byte Kind, string Heading, IReadOnlyList<PaneEntry> Entries);
@@ -1339,7 +1423,8 @@ public sealed class UiSession
     public bool Accepts(UiFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3);
+        return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
+            && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1375,7 +1460,8 @@ public sealed class UiSession
             Protocol = hello.Protocol;
             return new UiIncoming.Hello(hello.OverlayVersion, [_status]);
         }
-        if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3)
+        if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
+            || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }

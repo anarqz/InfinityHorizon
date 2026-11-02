@@ -66,7 +66,7 @@ public sealed partial class WorldsBridge
         try { frame=ProofFrame(relay,world,grant,out verified); }
         catch(InvalidDataException)
         {
-            await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);
+            await ClearProofAsync("the seat's grant proof is unusable",CancellationToken.None,epoch).ConfigureAwait(false);
             if(NeedsProof)return false;
             _log("worlds: development grant proof unusable; joining without a socket proof");
             return true; // development only: never worse than the old path
@@ -83,11 +83,18 @@ public sealed partial class WorldsBridge
                 _log("worlds: development guest could not push the socket proof context; joining without a socket proof");
                 return true;
             }
-            if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch))
+            // T35: a newer seat read, renewal or reconcile (the epoch moved while the context was written) does not cost a seat that
+            // still holds this grant its context and leg: they are kept (and the leg pushed) and the newer view decides. Only online
+            // closing or the seat ending meanwhile clears them, with its reason in the log.
+            var stale=epoch!=Volatile.Read(ref _mineEpoch);
+            if(!OnlineOpen || stale && _seat.GrantId!=grant)
             {
                 await SendRelayContext(new([0]),CancellationToken.None).ConfigureAwait(false);
-                await ClearLegAsync(CancellationToken.None).ConfigureAwait(false);return false;
+                if(_proofPayload is not null) {CryptographicOperations.ZeroMemory(_proofPayload);_proofPayload=null;_proofGeneration++;}
+                await ClearLegAsync(!OnlineOpen ? "online closed while the seat's context was written" : "the seat ended or changed while its context was written",
+                    CancellationToken.None).ConfigureAwait(false);return false;
             }
+            if(stale)_log("worlds: a newer seat view arrived while the context was written; the same grant keeps its context and leg");
             if(_proofPayload is null || !_proofPayload.AsSpan(1,48).SequenceEqual(frame.Payload.AsSpan(1,48))
                 || !CryptographicOperations.FixedTimeEquals(_proofPayload.AsSpan(57,32),frame.Payload.AsSpan(57,32)))
             { _networkRevision=0;_proofGeneration++; }
@@ -101,14 +108,17 @@ public sealed partial class WorldsBridge
     }
     private Task<bool> SendSeatProofAsync(Seat? seat,long epoch,CancellationToken cancellation)
     {
-        if(!NeedsProof && !ProofFor(seat?.Relay))return ProofInstalled ? ClearSeatProofAsync(epoch) : Task.FromResult(true);
-        if(seat is null || seat.State==SeatStates.Hosting)return ClearSeatProofAsync(epoch);
-        if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync(epoch,success:false);
+        if(!NeedsProof && !ProofFor(seat?.Relay))return ProofInstalled ? ClearSeatProofAsync("the seat's grant carries no proof",epoch) : Task.FromResult(true);
+        // T35: the server's answer shows no seat (it ended: released, expired, kicked, its world closed): the hook stops using it
+        if(seat is null)return ClearSeatProofAsync("the server shows no seat",epoch);
+        if(seat.State==SeatStates.Hosting)return ClearSeatProofAsync("this player hosts its world",epoch);
+        if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync("the seat has no grant",epoch,success:false);
         RememberRelayName(seat.World.Relay);
         return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation,seat.Transport);
     }
-    private async Task<bool> ClearSeatProofAsync(long epoch,bool success=true) {await ClearProofAsync(CancellationToken.None,epoch).ConfigureAwait(false);return success;}
-    private async Task ClearProofAsync(CancellationToken cancellation,long? expectedEpoch=null)
+    private async Task<bool> ClearSeatProofAsync(string why,long epoch,bool success=true) {await ClearProofAsync(why,CancellationToken.None,epoch).ConfigureAwait(false);return success;}
+    /// <summary>Clears the hook's socket context and relay leg; <paramref name="why"/> goes to the leg's log line (T35).</summary>
+    private async Task ClearProofAsync(string why,CancellationToken cancellation,long? expectedEpoch=null)
     {
         if(!NeedsProof && !ProofInstalled)return; // a development context, once pushed, is cleared like a production one
         var epoch=expectedEpoch ?? Volatile.Read(ref _mineEpoch);
@@ -120,7 +130,7 @@ public sealed partial class WorldsBridge
             if(_proofPayload is not null) {CryptographicOperations.ZeroMemory(_proofPayload);_proofPayload=null;_proofGeneration++;}
             _networkRevision=0;
             if(SendRelayContext is not null)await SendRelayContext(new([0]),bound.Token).ConfigureAwait(false);
-            await ClearLegAsync(bound.Token).ConfigureAwait(false);
+            await ClearLegAsync(why,bound.Token).ConfigureAwait(false);
         }
         finally {_proofWrites.Release();}
     }

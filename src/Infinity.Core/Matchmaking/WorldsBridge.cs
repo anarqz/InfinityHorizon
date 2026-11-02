@@ -183,6 +183,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 _roster.Reset();
                 _publicWarning.Reset();
                 _seatActivity = null; // a new seat's first read is never a change
+                _seatHostAway = null; // CR-L49: a new seat's host away is said afresh
                 Volatile.Write(ref _followHost, null); // nor does a change of a seat that is gone move the game
                 CrashContext?.ObserveWorld(null);
                 Volatile.Write(ref _mineSnapshot, NoWorld);
@@ -400,7 +401,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             // the host's relay first (game exit, session end, pause): its legs stop with its socket
             var stopping = StopRelayAsync();
-            try {await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);}
+            try {await ClearProofAsync("online suspended or the session ended",CancellationToken.None).ConfigureAwait(false);}
             catch(Exception error) when(HostFailure(error)) { }
             await stopping.WaitAsync(budget.Token).ConfigureAwait(false);
             var close = world is not null ? CloseWorldAsync(world, budget.Token) : Task.CompletedTask;
@@ -556,6 +557,12 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _log($"worlds: join refused: {answer.Error?.Reason}");
                         return new UiFrame.JoinResult(UiJoin.NotAllowed, _text(relayKey));
                     }
+                    // OD-181 (CR-S84): a modded session's join without its set is 400 {field: "mods"} (WireMods never sends one)
+                    if (answer.Error is { Kind: MmErrorKind.Invalid, Field: "mods" })
+                    {
+                        _log("worlds: join refused: the server wants this session's mods");
+                        return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.mods_failed"));
+                    }
                     return new UiFrame.JoinResult(UiJoin.Closed, _text(answer.Error?.Kind == MmErrorKind.WorldNotFound ? "worlds.closed" : "worlds.join_failed"));
                 }
                 switch (join.Status)
@@ -663,7 +670,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         {
             _seat.Left();
             InvalidateMine(reset: true);
-            await ClearSeatEndAsync().ConfigureAwait(false); // the hook's context and relay leg end with the seat
+            await ClearSeatEndAsync(next.Why == SeatDecision.Lapsed ? "the seat lapsed" : "the seat's hold ended").ConfigureAwait(false); // the hook's context and relay leg end with the seat
             return _text("worlds.seat_ended");
         }
         if (next.Step != SeatStep.Renew || next.GrantId is not { } grantId)
@@ -706,7 +713,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 // A successful renew is authoritative too: an older in-flight GET cannot undo it.
                 Interlocked.Increment(ref _mineEpoch);
                 if (seatAt is not null) _lastSeatAt = seatAt;
-                if (after.Step == SeatStep.Stop) InvalidateMine(reset: true);
+                if (after.Step == SeatStep.Stop)
+                {
+                    InvalidateMine(reset: true);
+                    _log(SeatEndedLine(seat.Ended, grantId)); // T35: with its reason
+                }
                 // OD-149: isolated by the anti-cheat system: the seat in a clean world ended, the launcher moves the player
                 if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text("worlds.pool_moved");
                 return after.Step == SeatStep.Stop && after.Why != SeatDecision.LeftSeat ? _text("worlds.seat_ended") : null;
@@ -816,6 +827,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     _mineReconciled = true; _mineUncertain = false;
                     if (seatAt is not null) _lastSeatAt = seatAt;
                     var heldGrant = _seat.GrantId;
+                    // T35: the joiner's seat ending on the server is said with its reason (released: the host's heartbeat no
+                    // longer listed this player), so a cleared relay leg is never silent
+                    if (heldGrant is not null) _log(SeatEndedLine(value.Ended, heldGrant));
                     _seat.Observe(value, Now);
                     // OD-149: the seat this launcher held ended because the anti-cheat system isolated the player: it is moved
                     if (SeatEndedForPool(value.Ended, heldGrant)) _freeRoamToasts.Enqueue(PoolToast());
@@ -892,6 +906,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
                         m.Role switch { 0 => "host", 1 => "seated", _ => "reserved" })).ToArray()) : null);
+                // OD-181 (CR-L48): every player's declared mods, for the overlay's roster and the player details
+                Volatile.Write(ref _rosterMods, RosterModsOf(seat.WorldId, named
+                    ? boundedRoster!.Items.Select(i => (i.Xuid, i.Role == "host", i.Mods))
+                    : [(world.Host.Xuid, true, (IReadOnlyList<ModEntry>?)null)], world.Mods, ModName));
                 return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.Gamertag, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
                     WorldModes.OpenToBoth(world));
             }
@@ -960,7 +978,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // left on purpose: never the world the game's next "find me a lobby" goes back to
                     LeftOnPurpose();
                     _seat.Left();
-                    await ClearSeatEndAsync().ConfigureAwait(false); // no relay leg outlives the seat
+                    await ClearSeatEndAsync("the player left from the overlay").ConfigureAwait(false); // no relay leg outlives the seat
                     var left = await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false);
                     Observe(left);
                     _log(left.Ok ? "worlds: seat left from the overlay" : $"worlds: leave refused: {left.Error?.Kind}");
@@ -1129,6 +1147,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         Volatile.Write(ref _hostedCode, world.Code);
                         Volatile.Write(ref _hostedMods, mods ?? []);
                         Volatile.Write(ref _hostedPlayers, world.Players);
+                        ResetHostAway(); ObserveOtherSeats(world); // CR-L49: a new world's host is in it
                         Volatile.Write(ref _hostedTransport, world.Transport);
                         ObserveNoticeWorld(world.Modes is null ? world with { Modes = settings.Modes } : world); // OD-160's notice
                         Volatile.Write(ref _hostedRelayName, world.Relay?.Name);
@@ -1291,7 +1310,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (wallRemaining < remaining) remaining = wallRemaining;
             var endpoint = Announcement(relay);
             var sentExternalPort = endpoint.External?.Port ?? 0;
-            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint, Activity = activity, Voice = voice }, token), stop.Token,
+            var beat = await OperationAsync(_announceRetry, token => _mm.AnnounceAsync(id, new Heartbeat { Peers = peers, Endpoint = endpoint, Activity = activity, Voice = voice, HostAway = HostAwayField }, token), stop.Token,
                 remaining: remaining).ConfigureAwait(false);
             if (beat is null) return null;
             stop.Token.ThrowIfCancellationRequested();
@@ -1357,6 +1376,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 _hostJoining = world.Punches.Any(p => !p.Kicked && !peers.Contains(p.Xuid, StringComparer.Ordinal));
                 _nextAdmissionsRefresh = Now + AdmissionsEvery;
                 Volatile.Write(ref _hostedPlayers, world.Players);
+                ObserveOtherSeats(world); // CR-L49: the other players' places, for an away host
                 // A dedicated host has no game of its own and stays open while empty (OD-109).
                 if (!_closeWhenAlone) return null;
                 // Only the host, no grant, no held seat (pending invites and requests hold one, §3.4).
@@ -1438,6 +1458,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         if (id is not null) InvalidateMine(reset: true);
         _host.Stop();
         Volatile.Write(ref _hostedWorldId, null);
+        ResetHostAway();
         await StopRelayAsync().ConfigureAwait(false);
         if (id is null)
         {
@@ -1537,9 +1558,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private static bool HostFailure(Exception exception) => exception is HttpRequestException or OperationCanceledException or InvalidOperationException or IOException or SocketException or ArgumentException or TimeoutException;
 
     /// <summary>A seat that ended here (left, lapsed): the hook's socket context and relay leg are cleared; a failed write is not the seat's.</summary>
-    private async Task ClearSeatEndAsync()
+    private async Task ClearSeatEndAsync(string why)
     {
-        try { await ClearProofAsync(CancellationToken.None).ConfigureAwait(false); }
+        try { await ClearProofAsync(why, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception error) when (HostFailure(error)) { }
     }
 
@@ -1548,7 +1569,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     {
         CancelFreeRoamLeave();
         InvalidateMine(reset: true);
-        await ClearProofAsync(CancellationToken.None).ConfigureAwait(false);
+        await ClearProofAsync("the seat is let go (leave)", CancellationToken.None).ConfigureAwait(false);
         if (_seat.GrantId is null)
         {
             return;

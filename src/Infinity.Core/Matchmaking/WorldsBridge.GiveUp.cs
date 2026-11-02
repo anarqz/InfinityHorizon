@@ -29,6 +29,17 @@ public sealed partial class WorldsBridge
 
     private void SeatTakenFor(string grant, byte kind) => Volatile.Write(ref _seatTaken, new SeatTaken(grant, kind));
 
+    /// <summary>
+    /// T35: the seat's lobby origin for the log of a lobby ask kept in it (", from its car meet seat, played"): a car meet → free
+    /// roam move in the same world says which seat it keeps; empty without a seat.
+    /// </summary>
+    private string SeatOrigin()
+    {
+        if (_seat.GrantId is not { } grant) return string.Empty;
+        var kind = Volatile.Read(ref _seatTaken) is { } taken && taken.Grant == grant ? taken.Kind : FreeRoamKind.FreeRoam;
+        return $", from its {KindName(kind)} seat, {(Played(grant) ? "played" : "not played yet")}";
+    }
+
     private bool Played(string grant) => string.Equals(Volatile.Read(ref _seatPlayedGrant), grant, StringComparison.Ordinal);
 
     private bool Hosting => HostsOrOpensWorld || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting;
@@ -89,7 +100,7 @@ public sealed partial class WorldsBridge
         if (Volatile.Read(ref _joinAttempt) != 0) return;
         lock (_freeRoamState) if (_freeRoamRun is { IsCompleted: false }) return;
         var reason = GiveUpReason(grant);
-        if (!await ReleaseUnprovenSeatAsync(grant).ConfigureAwait(false)) return;
+        if (!await ReleaseUnprovenSeatAsync(grant, $"the seat was given up after {(int)SeatGiveUp.TotalSeconds} s: {reason}").ConfigureAwait(false)) return;
         _log($"worlds: {KindName(kind)}: gave up on {world} after {(int)SeatGiveUp.TotalSeconds} s: {reason}");
         await CancelMatchmakingAsync().ConfigureAwait(false);
     }
@@ -106,12 +117,12 @@ public sealed partial class WorldsBridge
     /// Lets go of the seat <paramref name="grant"/> when it is still this bridge's: not on purpose (its world may be picked
     /// again), not a recent world to go back to; its proof context and relay leg are cleared. False: another seat by now.
     /// </summary>
-    private async Task<bool> ReleaseUnprovenSeatAsync(string grant)
+    private async Task<bool> ReleaseUnprovenSeatAsync(string grant, string why)
     {
         if (_seat.GrantId != grant) return false;
         Volatile.Write(ref _givenUpGrant, grant);
         CancelFreeRoamLeave(Interlocked.Exchange(ref _giveUp, null));
-        await LeaveForLobbyAsync(CancellationToken.None).ConfigureAwait(false);
+        await LeaveForLobbyAsync(why, CancellationToken.None).ConfigureAwait(false);
         return true;
     }
 
