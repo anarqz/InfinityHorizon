@@ -15,6 +15,7 @@ use super::{
     Config, Datagram, Io, PUBLIC_SOCKET, Profile, SockId,
     events::{self, EventQueue},
     fields::{Obj, text_id},
+    game::{OpenInfo, Send},
     keys::KeyRing,
     rng::Rng,
     timers::{Timer, Timers},
@@ -25,7 +26,6 @@ use crate::{
         ConnId, Transport,
         proto::{self, CmdError, CmdResult},
     },
-    engine::{Engine, EngineKind, Seeds, Send},
     log, log_ids,
 };
 
@@ -647,8 +647,23 @@ impl Server {
     fn world_open(&mut self, io: &mut dyn Io, o: Obj) -> CmdResult {
         let id = world_id_of(o)?;
         let spec = world::parse_open(o, self.cfg.profile)?;
+        let Some(game) = self.cfg.games.iter().find(|g| g.id() == spec.game).cloned() else {
+            return Err(CmdError::bad("game"));
+        };
+        let profile = self.cfg.profile;
+        let info = |rng| OpenInfo {
+            request: o,
+            profile,
+            host_xuid: spec.host_xuid,
+            is_player: spec.is_player,
+            max_players: spec.max_players,
+            rng,
+        };
         if let Some(w) = self.worlds.get(&id) {
-            return if w.spec == spec {
+            // the game side normalizes its own fields; a scratch RNG keeps the server's untouched
+            let mut scratch = self.rng.clone();
+            let (candidate, _) = game.open(info(&mut scratch))?;
+            return if w.spec == spec && w.game.spec() == candidate.spec() {
                 Ok(w.open_reply.clone())
             } else {
                 Err(CmdError::code(proto::EXISTS))
@@ -687,6 +702,9 @@ impl Server {
             );
             return Err(self.refuse("cpu"));
         }
+        let mut rng = self.rng.clone();
+        let (game_world, game_notices) = game.open(info(&mut rng))?;
+        self.rng = rng;
         // private: the socket is bound before the reply, on exactly the asked port (§5.1)
         let bound = match &spec.network {
             Some(n) => match io.bind_world(n.port) {
@@ -705,62 +723,30 @@ impl Server {
             },
             None => None,
         };
-        let seeds = Seeds {
-            weather: spec
-                .settings
-                .weather_seed
-                .unwrap_or_else(|| self.rng.seed_i32()),
-            tag: spec
-                .settings
-                .tag_seed
-                .unwrap_or_else(|| self.rng.seed_i32()),
-            team: spec
-                .settings
-                .team_seed
-                .unwrap_or_else(|| self.rng.seed_i32()),
-        };
-        let mut engines = BTreeMap::new();
-        engines.insert(
-            EngineKind::FreeRoam,
-            Engine::new(EngineKind::FreeRoam, spec.settings.clone(), seeds),
-        );
-        let wants_parts = spec
-            .watch
-            .as_ref()
-            .is_some_and(|w| w.parts && w.rules.is_some());
-        let mut w = World::new(&id, spec, engines, self.now);
+        let mut w = World::new(&id, spec, game_world, self.now);
         w.reserved_mb = reserve;
         if let Some(b) = bound {
             w.sock = Some(b.sock);
             w.port = b.port;
             w.dual = b.dual;
         }
-        if self.cfg.catalog.road_trip_events {
-            w.lobbies.push("roadtrip");
-        }
         let mut reply = Map::new();
         reply.insert("worldId".into(), json!(id));
-        reply.insert("lobbies".into(), json!(w.lobbies));
+        reply.insert("lobbies".into(), json!(w.game.lobbies()));
         if let Some(n) = w.network_facts() {
             reply.insert("network".into(), n);
         }
         w.open_reply = reply.clone();
-        if !self.cfg.catalog.road_trip_events {
-            self.events.push(
-                events::NOTICE,
-                Some(&id),
-                obj(json!({"id": events::N_NO_ROADTRIP, "level": "info", "worldId": id})),
-            );
-        }
-        if wants_parts && !self.cfg.catalog.parts {
-            self.events.push(
-                events::NOTICE,
-                Some(&id),
-                obj(json!({"id": events::N_NO_PARTS, "level": "info", "worldId": id})),
-            );
+        for n in game_notices {
+            let mut body = obj(json!({"id": n.id, "level": n.level, "worldId": id}));
+            if let Some(a) = n.args {
+                body.insert("args".into(), a);
+            }
+            self.events.push(events::NOTICE, Some(&id), body);
         }
         log::info(log_ids::WORLD_OPENED)
             .world(&id)
+            .field("game", w.spec.game.as_str())
             .field("maxPlayers", w.spec.max_players)
             .field("isPlayer", w.spec.is_player)
             .field("port", w.port)
@@ -807,32 +793,30 @@ impl Server {
         let mut ctx = Ctx {
             profile: cfg.profile,
             keys_empty: keys.is_empty(),
-            catalog: cfg.catalog,
             events,
             timers,
             now: *now,
         };
+        let mut sends = Vec::new();
         let result = catch_unwind(AssertUnwindSafe(|| -> CmdResult {
             match op {
                 "world.context" => w.context(o, &mut ctx),
                 "world.admission" => w.admission(o, &mut ctx),
                 "world.admission.end" => w.admission_end(o, &mut ctx),
-                "world.voice" => w.voice(o),
-                "world.voiceBlocks" => w.voice_blocks(o),
-                "world.watch" => w.watch(o, &mut ctx),
-                "world.kick" => w.kick(o, &mut ctx),
+                "world.kick" => w.kick(o, &mut ctx, &mut sends),
                 "world.status" => match w.state(ctx.now) {
                     Value::Object(m) => Ok(m),
                     _ => Ok(Map::new()),
                 },
-                "world.gameSession.answer" => game_session_answer(o),
                 #[cfg(feature = "test-hooks")]
                 "debug.fault" => panic!("debug.fault"),
-                _ => Err(CmdError::code(proto::UNKNOWN_OP)),
+                _ => w.game_command(op, o, &mut ctx),
             }
         }));
         match result {
             Ok(r) => {
+                let sock = self.worlds.get(&id).and_then(|w| w.sock);
+                push_sends(&mut self.out, sock, sends);
                 self.after_world(&id);
                 r
             }
@@ -858,13 +842,12 @@ impl Server {
         let mut ctx = Ctx {
             profile: cfg.profile,
             keys_empty: keys.is_empty(),
-            catalog: cfg.catalog,
             events,
             timers,
             now: *now,
         };
         w.emit_state(&mut ctx, false);
-        match w.next_tick(cfg.profile, *now) {
+        match w.game.next_tick(cfg.profile, *now) {
             Some(at) => timers.schedule(Timer::EngineTick(id.to_string()), at),
             None => timers.cancel(&Timer::EngineTick(id.to_string())),
         }
@@ -894,9 +877,7 @@ impl Server {
         if send_close {
             let mut sends = Vec::new();
             let closing = catch_unwind(AssertUnwindSafe(|| {
-                for e in w.engines.values_mut() {
-                    e.close_all(&mut sends);
-                }
+                w.game.close_all(&mut sends);
             }));
             if closing.is_ok() {
                 push_sends(&mut self.out, w.sock, sends);
@@ -959,13 +940,13 @@ impl Server {
             return;
         };
         let mut sends = Vec::new();
-        let before = w.dropped + w.engines.values().map(|e| e.dropped).sum::<u64>();
+        let before = w.game.dropped();
         let r = catch_unwind(AssertUnwindSafe(|| {
             w.receive(data, from, self.now, &mut sends)
         }));
         match r {
             Ok(()) => {
-                let after = w.dropped + w.engines.values().map(|e| e.dropped).sum::<u64>();
+                let after = w.game.dropped();
                 self.stats.datagrams_dropped += after - before;
                 let sock = w.sock;
                 push_sends(&mut self.out, sock, sends);
@@ -994,7 +975,7 @@ impl Server {
         };
         let mut sends = Vec::new();
         let now = self.now;
-        match catch_unwind(AssertUnwindSafe(|| w.tick(now, &mut sends))) {
+        match catch_unwind(AssertUnwindSafe(|| w.game.tick(now, &mut sends))) {
             Ok(()) => {
                 let sock = w.sock;
                 push_sends(&mut self.out, sock, sends);
@@ -1048,7 +1029,6 @@ impl Server {
             let mut ctx = Ctx {
                 profile: cfg.profile,
                 keys_empty: keys.is_empty(),
-                catalog: cfg.catalog,
                 events,
                 timers,
                 now,
@@ -1102,24 +1082,6 @@ fn obj(v: Value) -> Map<String, Value> {
         Value::Object(m) => m,
         _ => Map::new(),
     }
-}
-
-/// `world.gameSession.answer` (§4.4): validated; no invitation is pending in step 1, so `stale`.
-fn game_session_answer(o: Obj) -> CmdResult {
-    o.int("rid", 0, u32::MAX as u64)?;
-    match o.map.get("session") {
-        Some(Value::Null) => {}
-        Some(Value::Object(s)) => {
-            let s = Obj::new(s, "session");
-            s.str("name")?;
-            s.str("templateName")?;
-        }
-        _ => return Err(o.bad("session")),
-    }
-    if o.has("error") {
-        o.str("error")?;
-    }
-    Err(CmdError::code(proto::STALE))
 }
 
 /// Compares in time independent of where the inputs differ (length is not secret: 64).

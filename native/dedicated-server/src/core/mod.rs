@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! The deterministic, I/O-free server (contract §4-§8): control commands, worlds, admission
+//! The deterministic, I/O-free, game-agnostic server (contract §4-§8): control commands, worlds, admission
 //! state, timers and events. The caller supplies the monotonic clock (`now_ms`), the random seed
 //! and an `Io` for what must touch the system (binding a private world's socket, reading memory
 //! and CPU); datagrams leave through `Server::take_datagrams`, events through
@@ -7,13 +7,14 @@
 
 pub mod events;
 pub mod fields;
+pub mod game;
 pub mod keys;
 pub mod rng;
 pub mod server;
 pub mod timers;
 pub mod world;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 pub use server::Server;
 
@@ -78,16 +79,8 @@ pub trait Io {
     fn rss_bytes(&self) -> Option<u64>;
 }
 
-/// The game-data catalogs loaded at start (contract §9). Step 1 loads none: the SQLite reader
-/// and the Road Trip and parts tables come with those features.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Catalog {
-    pub road_trip_events: bool,
-    pub parts: bool,
-}
-
 /// The server's settings (from the CLI, contract §2).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub profile: Profile,
     pub max_worlds: usize,
@@ -98,7 +91,8 @@ pub struct Config {
     /// 0: off.
     pub stats_seconds: u64,
     pub keys: keys::KeyRing,
-    pub catalog: Catalog,
+    /// The game modules this server hosts (OD-186), by `world.open`'s `game`.
+    pub games: Vec<Arc<dyn game::Game>>,
     /// The co-located relay's endpoint (public): the only source the public socket accepts.
     pub relay: SocketAddr,
     /// The public socket is bound (public profile; the runtime sets it).
@@ -119,7 +113,7 @@ impl Config {
             drain_seconds: 25,
             stats_seconds: 60,
             keys: keys::KeyRing::default(),
-            catalog: Catalog::default(),
+            games: Vec::new(),
             relay: SocketAddr::from(([127, 0, 0, 1], 5101)),
             public_socket: false,
             control_secret: None,

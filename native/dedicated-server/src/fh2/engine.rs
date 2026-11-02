@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! The game engines of a world (contract §7): free roam (made at `world.open`), a car meet per
+//! FH2's engines of a world (contract §7): free roam (made at `world.open`), a car meet per
 //! lobby type 3 and 6 (made on demand), Road Trip (lobby type 1, made on demand, only with a
 //! catalog that has events).
 //!
@@ -8,11 +8,10 @@
 //! is exactly what a world does before its admission is ported (fail closed, contract §2.2). The
 //! features are ported one by one against golden vectors (README, PORT_STATUS).
 
-pub mod settings;
-
 use std::net::SocketAddr;
 
-pub use settings::RelaySettings;
+use super::settings::RelaySettings;
+use crate::core::game::Send;
 
 /// One engine kind of a world (the `engine` field of logs and events).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -32,13 +31,6 @@ impl EngineKind {
             EngineKind::RoadTrip => "roadtrip",
         }
     }
-}
-
-/// A datagram an engine sends; the world maps it to its socket (or a relay leg).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Send {
-    pub to: SocketAddr,
-    pub data: Vec<u8>,
 }
 
 /// The seeds an engine draws at creation (weather, tag, team), fixed by the settings or drawn

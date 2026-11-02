@@ -1,80 +1,34 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! One world (contract §4.3, §4.5, §6): its normalized `world.open` request, its engines, its
-//! admission state, its voice and watch settings, and its `world.state`.
+//! One world, game-agnostic part (contract §4.3, §4.5, §6): its normalized `world.open`, its
+//! socket, its admission state and its `world.state`; the game side is a `GameWorld`.
 //!
 //! Step 1: every command validates its input and answers per the contract; admission keeps the
 //! context checks, the 45 s host lease (renewed by `world.context` only) and the clear-on-failure
 //! rule, but verifies no grant yet (no Ed25519, FIUP, legs or hints), so nobody is admitted:
 //! fail closed, as before the first `world.context`.
 
-use std::collections::BTreeMap;
+use std::net::SocketAddr;
 
 use serde_json::{Map, Value, json};
 
 use super::{
-    Catalog, Profile, SockId,
+    Profile, SockId,
     events::{self, EventQueue},
     fields::{Obj, parse_xuid},
+    game::{GameCtx, GameWorld, Notice, Send},
     timers::{Timer, Timers},
 };
-use crate::{
-    control::proto::{self, CmdError, CmdResult},
-    engine::{Engine, EngineKind, RelaySettings, Send},
-};
+use crate::control::proto::{self, CmdError, CmdResult};
 
 /// The host lease (`M/WorldRelayAdmission.cs` `HostLease`).
 pub const HOST_LEASE_MS: u64 = 45_000;
 /// Punches per snapshot (contract §6.2: more is `context_invalid`).
 pub const PUNCHES_MAX: usize = 256;
-/// `world.voice.lobbyMuted`, `world.voiceBlocks.blocks`.
-pub const VOICE_LIST_MAX: usize = 64;
 /// `world.state` at most 4 per second per world, at least every 15 s.
 pub const STATE_MIN_GAP_MS: u64 = 250;
 pub const STATE_REFRESH_MS: u64 = 15_000;
 /// JSON numbers the controller reads exactly (2^53).
 pub const JSON_INT_MAX: u64 = (1 << 53) - 1;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoiceMode {
-    Off,
-    Open,
-    Proximity,
-}
-
-impl VoiceMode {
-    pub fn parse(s: &str) -> Option<VoiceMode> {
-        match s {
-            "off" => Some(VoiceMode::Off),
-            "open" => Some(VoiceMode::Open),
-            "proximity" => Some(VoiceMode::Proximity),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Voice {
-    pub mode: VoiceMode,
-    pub lobby_muted: Vec<u64>,
-}
-
-impl Default for Voice {
-    fn default() -> Voice {
-        Voice {
-            mode: VoiceMode::Open,
-            lobby_muted: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Watch {
-    /// MATCHMAKING_API §3.9 `WatchRules`, verbatim (`None`: stopped).
-    pub rules: Option<Value>,
-    pub self_xuid: Option<u64>,
-    pub parts: bool,
-    pub force_speed: bool,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkSpec {
@@ -100,73 +54,29 @@ impl Default for NetworkSpec {
     }
 }
 
-/// A normalized `world.open` (the same values answer `ok` again, idempotent; others `exists`).
+/// The game-agnostic part of a normalized `world.open`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenSpec {
+    pub game: String,
     pub host_xuid: u64,
     pub is_player: bool,
     pub max_players: u8,
-    pub races: bool,
     pub require_proof: bool,
     pub dev_lan_peers: bool,
-    pub voice: Voice,
-    pub watch: Option<Watch>,
     pub network: Option<NetworkSpec>,
-    pub settings: RelaySettings,
 }
 
-fn xuid_list(o: Obj, key: &str, max: usize) -> Result<Vec<u64>, CmdError> {
-    let mut out = Vec::new();
-    for v in o.arr(key)? {
-        let x = v.as_str().and_then(parse_xuid).ok_or_else(|| o.bad(key))?;
-        out.push(x);
+/// The world's game: `game` (OD-186); absent means `"fh2"`, the only game before the field.
+pub fn game_of<'a>(o: Obj<'a>) -> Result<&'a str, CmdError> {
+    match o.get("game") {
+        None => Ok("fh2"),
+        Some(Value::String(g)) if !g.is_empty() && g.len() <= 16 => Ok(g),
+        Some(_) => Err(o.bad("game")),
     }
-    if out.len() > max {
-        return Err(o.bad(key));
-    }
-    out.sort_unstable();
-    out.dedup();
-    Ok(out)
-}
-
-pub fn parse_voice(o: Obj) -> Result<Voice, CmdError> {
-    let mode = VoiceMode::parse(o.str("mode")?).ok_or_else(|| o.bad("mode"))?;
-    let lobby_muted = if o.has("lobbyMuted") {
-        xuid_list(o, "lobbyMuted", VOICE_LIST_MAX)?
-    } else {
-        Vec::new()
-    };
-    Ok(Voice { mode, lobby_muted })
-}
-
-pub fn parse_watch(o: Obj, profile: Profile, is_player: bool) -> Result<Watch, CmdError> {
-    let rules = match o.map.get("rules") {
-        Some(Value::Null) => None,
-        Some(v @ Value::Object(_)) => Some(v.clone()),
-        _ => return Err(o.bad("rules")),
-    };
-    let self_xuid = if o.has("self") {
-        if !is_player {
-            return Err(o.bad("self"));
-        }
-        Some(o.xuid("self")?)
-    } else {
-        None
-    };
-    let parts = o.bool("parts")?;
-    let force_speed = o.opt_bool("forceSpeed", false)?;
-    if force_speed && profile == Profile::Public {
-        return Err(o.bad("forceSpeed"));
-    }
-    Ok(Watch {
-        rules,
-        self_xuid,
-        parts,
-        force_speed,
-    })
 }
 
 pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
+    let game = game_of(o)?.to_string();
     let host = Obj::new(o.obj("host")?, "host");
     let host_xuid = host.xuid("xuid")?;
     if host_xuid == 0 {
@@ -177,27 +87,12 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
         return Err(host.bad("isPlayer"));
     }
     let max_players = o.int("maxPlayers", 1, 12)? as u8;
-    let races = o.bool("races")?;
     // public worlds: proof forced (contract §4.3)
     let require_proof = o.bool("requireProof")? || profile == Profile::Public;
     let dev_lan_peers = o.opt_bool("devLanPeers", false)?;
     if dev_lan_peers && (require_proof || profile == Profile::Public) {
         return Err(o.bad("devLanPeers"));
     }
-    let voice = if o.has("voice") {
-        parse_voice(Obj::new(o.obj("voice")?, "voice"))?
-    } else {
-        Voice::default()
-    };
-    let watch = if o.has("watch") {
-        Some(parse_watch(
-            Obj::new(o.obj("watch")?, "watch"),
-            profile,
-            is_player,
-        )?)
-    } else {
-        None
-    };
     let network = match (profile, o.has("network")) {
         (Profile::Public, true) => return Err(o.bad("network")),
         (Profile::Public, false) => None,
@@ -231,21 +126,14 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
             })
         }
     };
-    let mut settings = RelaySettings::for_profile(profile);
-    if o.has("settings") {
-        settings.apply(o.obj("settings")?)?;
-    }
     Ok(OpenSpec {
+        game,
         host_xuid,
         is_player,
         max_players,
-        races,
         require_proof,
         dev_lan_peers,
-        voice,
-        watch,
         network,
-        settings,
     })
 }
 
@@ -307,7 +195,6 @@ pub struct Admission {
 pub struct Ctx<'a> {
     pub profile: Profile,
     pub keys_empty: bool,
-    pub catalog: Catalog,
     pub events: &'a mut EventQueue,
     pub timers: &'a mut Timers,
     pub now: u64,
@@ -326,65 +213,55 @@ impl Ctx<'_> {
         }
         self.events.push(events::NOTICE, world, body);
     }
+
+    pub fn game_notices(&mut self, world: &str, notices: Vec<Notice>) {
+        for n in notices {
+            self.notice(n.id, n.level, Some(world), n.args);
+        }
+    }
 }
 
 pub struct World {
     pub id: String,
     pub spec: OpenSpec,
-    pub engines: BTreeMap<EngineKind, Engine>,
+    pub game: Box<dyn GameWorld>,
     pub sock: Option<SockId>,
     pub port: u16,
     pub dual: bool,
     pub reserved_mb: u64,
     pub opened_at: u64,
-    pub lobbies: Vec<&'static str>,
     pub clock: TrustedClock,
     pub admission: Admission,
-    pub roster_blocks: BTreeMap<u64, u64>,
     pub open_reply: Map<String, Value>,
     pub last_state: Option<Value>,
     pub last_state_at: Option<u64>,
-    /// Datagrams dropped by this world (step 1: all).
-    pub dropped: u64,
 }
 
 impl World {
-    pub fn new(id: &str, spec: OpenSpec, engines: BTreeMap<EngineKind, Engine>, now: u64) -> World {
+    pub fn new(id: &str, spec: OpenSpec, game: Box<dyn GameWorld>, now: u64) -> World {
         World {
             id: id.to_string(),
             spec,
-            engines,
+            game,
             sock: None,
             port: 0,
             dual: false,
             reserved_mb: 0,
             opened_at: now,
-            lobbies: vec!["carmeet"],
             clock: TrustedClock::default(),
             admission: Admission::default(),
-            roster_blocks: BTreeMap::new(),
             open_reply: Map::new(),
             last_state: None,
             last_state_at: None,
-            dropped: 0,
         }
     }
 
     pub fn synced(&self) -> usize {
-        self.engines.values().map(Engine::synced).sum()
+        self.game.synced()
     }
 
     pub fn handshaking(&self) -> usize {
-        self.engines.values().map(Engine::handshaking).sum()
-    }
-
-    pub fn idle(&self) -> bool {
-        self.engines.values().all(Engine::is_idle)
-    }
-
-    /// The trusted clock's now, if a context gave one.
-    pub fn trusted_now(&mut self, mono: u64) -> Option<u64> {
-        self.clock.now(mono)
+        self.game.handshaking()
     }
 
     /// Whether the host lease is live at `mono`.
@@ -400,10 +277,11 @@ impl World {
         let had = self.admission.has_context || self.admission.lease_until.is_some();
         self.admission = Admission::default();
         if had {
+            let id = self.id.clone();
             ctx.notice(
                 events::N_ADMISSION_CLEARED,
                 "warn",
-                Some(&self.id.clone()),
+                Some(&id),
                 Some(json!({"why": why})),
             );
         }
@@ -432,8 +310,8 @@ impl World {
         m
     }
 
-    /// `world.context`: the checks of §6.2, the lease renewal, the snapshot (verification not
-    /// ported: every punch is skipped).
+    /// `world.context`: the checks of §6.2 (the game named by the context must be the world's),
+    /// the lease renewal, the snapshot (verification not ported: every punch is skipped).
     pub fn context(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
         let world = Obj::new(o.obj("world")?, "world");
         let id = world.str("id")?;
@@ -442,7 +320,7 @@ impl World {
         let host_xuid = host.str("xuid")?;
         let (server_ms, punches) = self.snapshot(o, ctx)?;
         let host_ok = parse_xuid(host_xuid).is_some_and(|x| x != 0 && x == self.spec.host_xuid);
-        if !host_ok || game != "fh2" || id != self.id {
+        if !host_ok || game != self.spec.game || id != self.id {
             self.clear_admission(ctx, "context");
             return Err(CmdError::code(proto::CONTEXT_INVALID).reason("context"));
         }
@@ -460,7 +338,7 @@ impl World {
     /// `world.admission`: a new snapshot without renewing the lease.
     pub fn admission(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
         if !self.admission.has_context {
-            // validate the shape first so a malformed request stays bad_request
+            // the shape first, so a malformed request stays bad_request
             o.int("serverTimeMs", 0, JSON_INT_MAX)?;
             o.arr("punches")?;
             self.clear_admission(ctx, "no_context");
@@ -486,56 +364,28 @@ impl World {
         Ok(Map::new())
     }
 
-    pub fn voice(&mut self, o: Obj) -> CmdResult {
-        self.spec.voice = parse_voice(o)?;
-        Ok(Map::new())
-    }
-
-    pub fn voice_blocks(&mut self, o: Obj) -> CmdResult {
-        if o.str("source")? != "roster" {
-            return Err(o.bad("source"));
-        }
-        let blocks = o.obj("blocks")?;
-        if blocks.len() > VOICE_LIST_MAX {
-            return Err(o.bad("blocks"));
-        }
-        let mut next = BTreeMap::new();
-        for (k, v) in blocks {
-            let x = parse_xuid(k).ok_or_else(|| o.bad("blocks"))?;
-            let until = v
-                .as_u64()
-                .filter(|n| *n <= JSON_INT_MAX)
-                .ok_or_else(|| o.bad("blocks"))?;
-            next.insert(x, until);
-        }
-        let changed = next != self.roster_blocks;
-        self.roster_blocks = next;
-        let mut m = Map::new();
-        m.insert("changed".into(), Value::Bool(changed));
-        Ok(m)
-    }
-
-    pub fn watch(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
-        let w = parse_watch(o, ctx.profile, self.spec.is_player)?;
-        if w.parts && w.rules.is_some() && !ctx.catalog.parts {
-            let id = self.id.clone();
-            ctx.notice(events::N_NO_PARTS, "info", Some(&id), None);
-        }
-        self.spec.watch = w.rules.is_some().then_some(w);
-        Ok(Map::new())
-    }
-
-    pub fn kick(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
+    pub fn kick(&mut self, o: Obj, ctx: &mut Ctx, out: &mut Vec<Send>) -> CmdResult {
         let xuid = o.xuid("xuid")?;
-        let mut out: Vec<Send> = Vec::new();
-        let dropped: usize = self
-            .engines
-            .values_mut()
-            .map(|e| e.kick(xuid, ctx.now, &mut out))
-            .sum();
+        let dropped = self.game.kick(xuid, ctx.now, out);
         let mut m = Map::new();
         m.insert("dropped".into(), json!(dropped));
         Ok(m)
+    }
+
+    /// A game-scoped command, through the game module.
+    pub fn game_command(&mut self, op: &str, o: Obj, ctx: &mut Ctx) -> CmdResult {
+        let mut gctx = GameCtx {
+            profile: ctx.profile,
+            now: ctx.now,
+            notices: Vec::new(),
+        };
+        let r = self
+            .game
+            .command(op, o, &mut gctx)
+            .unwrap_or_else(|| Err(CmdError::code(proto::UNKNOWN_OP)));
+        let id = self.id.clone();
+        ctx.game_notices(&id, gctx.notices);
+        r
     }
 
     /// NetworkFacts (private worlds). Step 1: discovery and UPnP are not wired yet, so the facts
@@ -556,31 +406,23 @@ impl World {
         }))
     }
 
-    /// `WorldState` (contract §4.5).
+    /// `WorldState` (contract §4.5): the core's fields plus the game's.
     pub fn state(&mut self, mono: u64) -> Value {
-        let mut engines = Map::new();
-        for (k, e) in &self.engines {
-            engines.insert(k.as_str().into(), json!(e.synced()));
-        }
         let live = self.lease_live(mono);
+        let game = self.game.state();
         let mut m = Map::new();
         m.insert("worldId".into(), json!(self.id));
         m.insert("running".into(), Value::Bool(true));
-        m.insert("peers".into(), json!([]));
-        m.insert(
-            "lobbyPlayers".into(),
-            json!(
-                self.engines
-                    .iter()
-                    .filter(|(k, _)| **k != EngineKind::FreeRoam)
-                    .map(|(_, e)| e.synced())
-                    .sum::<usize>()
-            ),
-        );
-        m.insert("activity".into(), Value::Null);
-        m.insert("engines".into(), Value::Object(engines));
+        for k in ["peers", "lobbyPlayers", "activity", "engines"] {
+            m.insert(k.into(), game.get(k).cloned().unwrap_or(Value::Null));
+        }
         m.insert("handshaking".into(), json!(self.handshaking()));
-        m.insert("hostInWorld".into(), Value::Bool(false));
+        m.insert(
+            "hostInWorld".into(),
+            game.get("hostInWorld")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+        );
         m.insert(
             "admission".into(),
             json!({
@@ -622,44 +464,8 @@ impl World {
         self.last_state_at = Some(ctx.now);
     }
 
-    /// A datagram for this world. Step 1: nobody is admitted; the free roam engine drops it.
-    pub fn receive(
-        &mut self,
-        data: &[u8],
-        from: std::net::SocketAddr,
-        now: u64,
-        out: &mut Vec<Send>,
-    ) {
-        if crate::stun::is_stun(data) && u16::from_be_bytes([data[0], data[1]]) == LIVERY_KIND {
-            // the retired livery channel (contract §5.3)
-            self.dropped += 1;
-            return;
-        }
-        match self.engines.get_mut(&EngineKind::FreeRoam) {
-            Some(e) => e.receive(data, from, now, out),
-            None => self.dropped += 1,
-        }
-    }
-
-    /// The world's engine ticks (only engines that are not idle).
-    pub fn tick(&mut self, now: u64, out: &mut Vec<Send>) {
-        for e in self.engines.values_mut().filter(|e| !e.is_idle()) {
-            e.tick(now, out);
-        }
-    }
-
-    /// The next engine tick: 20 ms with synced peers, 100 ms with only handshaking ones (public),
-    /// none when idle (contract §8 "Ticks").
-    pub fn next_tick(&self, profile: Profile, now: u64) -> Option<u64> {
-        if self.idle() {
-            None
-        } else if self.synced() > 0 || profile == Profile::Private {
-            Some(now + 20)
-        } else {
-            Some(now + 100)
-        }
+    /// A datagram for this world, handed to its game.
+    pub fn receive(&mut self, data: &[u8], from: SocketAddr, now: u64, out: &mut Vec<Send>) {
+        self.game.receive(data, from, now, out);
     }
 }
-
-/// The retired livery side channel's STUN message type (contract §5.3: dropped).
-pub const LIVERY_KIND: u16 = 0x3E92;

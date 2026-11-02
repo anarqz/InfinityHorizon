@@ -25,7 +25,7 @@
 //! server-to-console messages (a console never sends them), and ObjectNeedsUpdates (13) for
 //! objects whose var index width is not known (every router but ConsoleSynced).
 
-use crate::bits::{BitError, BitResult, Bits, Reader};
+use crate::fh2::bits::{BitError, BitResult, Bits, Reader};
 
 pub const HEADER_LEN: usize = 11;
 /// Packet id of an unsequenced packet.
