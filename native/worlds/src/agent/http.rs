@@ -20,6 +20,7 @@ pub struct Reply {
     pub body: Vec<u8>,
 }
 
+/// Shared by the loop and the game-session calls (ureq's agent is `Send + Sync`).
 pub struct Client {
     agent: ureq::Agent,
     base: String,
@@ -28,10 +29,17 @@ pub struct Client {
 }
 
 impl Client {
+    /// The loop's client: every call ends within 10 s.
     pub fn new(base: &str, vm_id: &str, key: SigningKey) -> Client {
+        Client::with_timeout(base, vm_id, key, Duration::from_secs(10))
+    }
+
+    /// A client whose calls end within `timeout` (the game-session calls: past their 14 s
+    /// budget, so the agent's own deadline answers first).
+    pub fn with_timeout(base: &str, vm_id: &str, key: SigningKey, timeout: Duration) -> Client {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(10)))
+            .timeout_global(Some(timeout))
             .timeout_connect(Some(Duration::from_secs(5)))
             .user_agent(format!("worlds-agent/{}", crate::VERSION))
             .build();

@@ -169,12 +169,17 @@ fn ep(s: &str) -> SocketAddr {
 }
 
 fn open_connection(user: u64) -> Vec<u8> {
+    open_connection_to(user, 2)
+}
+
+/// An OpenConnection for lobby type `lobby` (1 Road Trip, 2 free roam, 3/6 car meets).
+fn open_connection_to(user: u64, lobby: u32) -> Vec<u8> {
     let m = Message::encode(&Message::Connect {
         version: message::PROTOCOL_VERSION.to_vec(),
         game: message::GAME_TITLE.to_vec(),
         flags: 0,
         user,
-        a: 2,
+        a: lobby,
         b: 1,
         attempt: 0x1234_5678,
     });
@@ -440,4 +445,87 @@ fn a_player_hosted_grant_is_refused_on_an_official_world() {
     p["relay"]["signature"] = json!(sig);
     let r = admit(&mut s, &mut io, W1, vec![p]);
     assert_eq!(r["admitted"], 0, "{r}");
+}
+
+/// The lobby types a proven joiner's OpenConnection is admitted to (0) or refused from (4) in a
+/// public world opened with `activity` (and `carMeetLobby`, when given).
+fn answers_by_lobby(activity: &str, car_meet_lobby: Option<u32>) -> Vec<(u32, Vec<u8>)> {
+    [1u32, 2, 3, 6]
+        .into_iter()
+        .map(|lobby| {
+            let (mut s, mut io) = server();
+            let mut req = open_req(W1, VM);
+            req["activity"] = json!(activity);
+            if let Some(l) = car_meet_lobby {
+                req["carMeetLobby"] = json!(l);
+            }
+            let r = call(&mut s, &mut io, 0, req);
+            assert_eq!(r["ok"], true, "{r}");
+            let r = call(&mut s, &mut io, 0, context_req(W1, json!({"official": VM})));
+            assert_eq!(r["leaseUntilMs"], S0 + 45_000, "{r}");
+            admit(&mut s, &mut io, W1, vec![punch(G1, W1, &official_host())]);
+            let game = ep("192.0.2.20:3074");
+            assert_eq!(
+                prove(&mut s, &mut io, game, fiup::official_host_tag(VM)),
+                Some(4)
+            );
+            s.datagram(
+                &mut io,
+                2000,
+                PUBLIC_SOCKET,
+                game,
+                &open_connection_to(J1, lobby),
+            );
+            (lobby, responses(&mut s, game))
+        })
+        .collect()
+}
+
+#[test]
+fn the_official_car_meet_lobby_serves_both_locations_and_their_free_roam() {
+    // OD-190: `carmeet` without a location is the official car meet lobby, open to both modes
+    // (the server's seats decide); Road Trip is the one lobby it refuses
+    let (mut s, mut io) = server();
+    let mut req = open_req(W1, VM);
+    req["activity"] = json!("carmeet");
+    let r = call(&mut s, &mut io, 0, req.clone());
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["lobbies"], json!(["carmeet"]), "{r}");
+    // the same open again is idempotent; with a location it is another world's spec
+    assert_eq!(call(&mut s, &mut io, 0, req.clone())["ok"], true);
+    let mut located = req.clone();
+    located["carMeetLobby"] = json!(3);
+    let r = call(&mut s, &mut io, 0, located);
+    assert_eq!(r["error"]["code"], "exists", "{r}");
+    let r = call(&mut s, &mut io, 0, context_req(W1, json!({"official": VM})));
+    assert_eq!(r["leaseUntilMs"], S0 + 45_000, "{r}");
+    let r = call(
+        &mut s,
+        &mut io,
+        10,
+        json!({"id": 9, "op": "world.status", "worldId": W1}),
+    );
+    assert_eq!(r["activity"], "carmeet", "{r}");
+    assert_eq!(
+        answers_by_lobby("carmeet", None),
+        vec![(1, vec![4]), (2, vec![0]), (3, vec![0]), (6, vec![0])]
+    );
+}
+
+#[test]
+fn a_located_car_meet_and_a_free_roam_world_serve_only_their_own_lobby() {
+    assert_eq!(
+        answers_by_lobby("carmeet", Some(3)),
+        vec![(1, vec![4]), (2, vec![4]), (3, vec![0]), (6, vec![4])]
+    );
+    assert_eq!(
+        answers_by_lobby("freeroam", None),
+        vec![(1, vec![0]), (2, vec![0]), (3, vec![4]), (6, vec![4])]
+    );
+    // a location belongs to `carmeet` only
+    let (mut s, mut io) = server();
+    let mut req = open_req(W1, VM);
+    req["carMeetLobby"] = json!(3);
+    let r = call(&mut s, &mut io, 0, req);
+    assert_eq!(r["error"]["field"], "carMeetLobby", "{r}");
 }

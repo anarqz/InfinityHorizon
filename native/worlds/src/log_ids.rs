@@ -61,3 +61,4 @@ pub const AGENT_WORLD_ENDED: &str = "agent.world.ended";
 pub const AGENT_WORLD_CLOSED: &str = "agent.world.closed";
 pub const AGENT_WORLD_DELETED: &str = "agent.world.deleted";
 pub const AGENT_WORLD_ADMISSION: &str = "agent.world.admission";
+pub const AGENT_GAME_SESSION: &str = "agent.game_session";
