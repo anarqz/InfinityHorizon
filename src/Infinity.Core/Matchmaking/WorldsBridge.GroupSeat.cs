@@ -94,7 +94,7 @@ public sealed partial class WorldsBridge
                 : $"worlds: the car meet seat moved to {reached} after {reads} read(s); its context is installed");
             // the game's join, held while the seat moved, is bound to the seat there is now
             if (Interlocked.Exchange(ref _joinDeferred, 0) != 0)
-                SeatPlays(reached is null ? "the game joined" : "the game joined its group world");
+            { SeatPlays(reached is null ? "the game joined" : "the game joined its group world"); GameInWorld(true); }
         }
     }
 
@@ -121,6 +121,113 @@ public sealed partial class WorldsBridge
             || seat.World.Official != true || Volatile.Read(ref _seatOfficial) != previous
             || _seatActivity is not { Activity: WorldActivities.CarMeet } seen || seen.WorldId != previous) return;
         Volatile.Write(ref _groupSeat, new GroupSeatTaken(grant, Now));
+    }
+
+    // ---- W-6: a new seat in another world while the game still plays in the held seat's world ----
+    //
+    // Live 2026-11-03 18:54:51: the server reserved the group seat around SessionReady while the game still played in the car meet;
+    // the regular seat read took it over and pushed its context, the hook's live car meet leg failed at once (direct_failed) and the
+    // game never got the invitation. Such a seat is staged instead: the hook keeps its context and leg, the staged seat is kept alive
+    // (renewed every 20 s), and it is installed when the game leaves its world (Event 4), joins another (Event 3 join), or once the
+    // server's moving window (60 s) ends. The old seat is never left or renewed on purpose meanwhile (it is seated: no renewal runs).
+
+    /// <summary>How often a staged seat is renewed (MATCHMAKING_API §3.2's cadence for a reserved seat).</summary>
+    public static readonly TimeSpan StagedRenewEvery = TimeSpan.FromSeconds(20);
+
+    private sealed record StagedSeat(SeatAnswer Answer, string Grant, string World, DateTimeOffset Since, DateTimeOffset RenewAt);
+    private StagedSeat? _staged;
+    // 1 from the game's bound join (Event 3 join) until it leaves its world (Event 4)
+    private int _gameInWorld;
+    private Task _stagedInstall = Task.CompletedTask;
+
+    /// <summary>The staged seat's grant, if any.</summary>
+    internal string? StagedGrant => Volatile.Read(ref _staged)?.Grant;
+
+    /// <summary>The install a join started (tests wait for it).</summary>
+    internal Task StagedInstall => Volatile.Read(ref _stagedInstall);
+
+    private void GameInWorld(bool playing) => Volatile.Write(ref _gameInWorld, playing ? 1 : 0);
+
+    /// <summary>
+    /// A seat read whose seat is a new grant in another world while the game plays in the held seat's world: staged, true (the read
+    /// changes nothing else). Past the moving window it is not staged again: the read takes it over as usual.
+    /// </summary>
+    private bool StageSeat(SeatAnswer value)
+    {
+        if (value.Seat is not { GrantId: { } grant } seat || seat.State == SeatStates.Hosting || seat.World.Id != seat.WorldId) return false;
+        if (_seat.GrantId is not { } held || held == grant || Volatile.Read(ref _gameInWorld) == 0 || !Played(held)) return false;
+        if (Volatile.Read(ref _seatWorld) is not { } playing || playing == seat.WorldId) return false;
+        var before = Volatile.Read(ref _staged);
+        var same = before is not null && before.Grant == grant;
+        if (same && Now - before!.Since >= GroupSeatHold) return false;
+        Volatile.Write(ref _staged, new StagedSeat(value, grant, seat.WorldId, same ? before!.Since : Now, same ? before!.RenewAt : Now + StagedRenewEvery));
+        if (!same) _log($"worlds: a seat in {seat.WorldId} arrived while the game plays in {playing}; staged (the hook keeps its context and leg)");
+        lock (_mineState) { _mineReconciled = true; _mineUncertain = false; }
+        return true;
+    }
+
+    /// <summary>A read that does not stage (another seat, none, or the moving window ended): the staged seat is dropped, said why.</summary>
+    private void DropStaged(SeatAnswer value)
+    {
+        if (Interlocked.Exchange(ref _staged, null) is not { } dropped) return;
+        _log(value.Seat?.GrantId == dropped.Grant
+            ? $"worlds: the staged seat in {dropped.World} is taken over by this read (the old seat's moving window ended, or the game left)"
+            : $"worlds: the staged seat in {dropped.World} is gone ({(value.Ended is { } ended && ended.GrantId == dropped.Grant ? ended.Reason : "another seat")})");
+    }
+
+    /// <summary>
+    /// Installs the staged seat now, with no read: its proof context first, then the grant, its world and activity (as a read's
+    /// takeover). False with none staged, or when its context could not be written (the next read decides).
+    /// </summary>
+    private async Task<bool> InstallStagedAsync(string why)
+    {
+        if (Interlocked.Exchange(ref _staged, null) is not { Answer.Seat: { } seat } staged) return false;
+        long epoch;
+        lock (_mineState) epoch = Interlocked.Increment(ref _mineEpoch);
+        bool sent;
+        try { sent = await SendSeatProofAsync(seat, epoch, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception error) when (HostFailure(error)) { sent = false; }
+        if (!sent) { _log($"worlds: the staged seat in {staged.World} could not be installed ({why}); the next seat read decides"); RequestReconcile(); return false; }
+        lock (_mineState)
+        {
+            if (!OnlineOpen) return false;
+            _seat.Observe(staged.Answer, Now);
+            ObserveGroupSeat(Volatile.Read(ref _seatWorld), seat);
+            SeatWorldIs(seat.WorldId);
+            ObserveActivity(seat);
+        }
+        RequestReconcile(); // the overlay's world follows on the next read
+        _log($"worlds: the staged seat in {staged.World} is installed ({why})");
+        return true;
+    }
+
+    /// <summary>The game joined (Event 3 join) with a seat staged: it is installed first, then the join is bound to it.</summary>
+    private bool JoinStaged()
+    {
+        if (Volatile.Read(ref _staged) is null) return false;
+        Volatile.Write(ref _joinDeferred, 1);
+        Volatile.Write(ref _stagedInstall, Task.Run(async () =>
+        {
+            await InstallStagedAsync("the game joined another world").ConfigureAwait(false);
+            if (Interlocked.Exchange(ref _joinDeferred, 0) != 0) { SeatPlays("the game joined its new world"); GameInWorld(true); }
+        }));
+        return true;
+    }
+
+    /// <summary>The staged seat's renewal, every <see cref="StagedRenewEvery"/> (the held seat is seated: it has none).</summary>
+    private async Task RenewStagedAsync(CancellationToken cancellation)
+    {
+        if (Volatile.Read(ref _staged) is not { } staged || Now < staged.RenewAt) return;
+        try
+        {
+            var renewed = await OperationAsync(_renewRetry, token => _mm.RenewSeatAsync(staged.Grant, token), cancellation).ConfigureAwait(false);
+            if (renewed is not { Ok: true, Value: { } answer }) return;
+            if (answer.Seat?.GrantId == staged.Grant)
+                Interlocked.CompareExchange(ref _staged, staged with { Answer = answer, RenewAt = Now + StagedRenewEvery }, staged);
+            else if (Interlocked.CompareExchange(ref _staged, null, staged) == staged)
+                _log($"worlds: the staged seat in {staged.World} ended before it was installed");
+        }
+        catch (Exception error) when (HostFailure(error)) { }
     }
 
     /// <summary>

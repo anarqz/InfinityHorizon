@@ -695,6 +695,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             await LeaveAsync(cancellation).ConfigureAwait(false);
             return hadSeat ? _text(denied.MessageKey) : null;
         }
+        await RenewStagedAsync(cancellation).ConfigureAwait(false); // W-6: a staged seat is kept alive until it is installed
         var now = Now;
         var next = _seat.Next(now);
         if (next.Step == SeatStep.Stop && next.Why is SeatDecision.Lapsed or SeatDecision.HoldReached)
@@ -849,6 +850,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             var seatAt = DateTimeOffset.TryParse(value.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.AssumeUniversal, out var observedAt) ? observedAt : (DateTimeOffset?)null;
             if (seatAt is { } observed && _lastSeatAt is { } previous && observed < previous) return _mineSnapshot;
+            // W-6: a new seat in another world while the game plays here is staged: the hook's context and leg stay
+            if (StageSeat(value)) return _mineSnapshot;
+            DropStaged(value);
             if(!ClaimSeatProof(value,ref epoch) || !await SendSeatProofAsync(value.Seat,epoch,cancellation).ConfigureAwait(false))
             { _mineUncertain=true;return _mineSnapshot; }
             ObservePool(value.Pool);
