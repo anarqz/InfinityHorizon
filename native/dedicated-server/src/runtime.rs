@@ -273,6 +273,12 @@ pub fn run(rc: RunConfig) -> i32 {
                         .emit();
                     return exit::CONTROL_UNAVAILABLE;
                 }
+                Err(unix::ListenError::DirectoryOwner) => {
+                    log::error(log_ids::DS_CONTROL_UNAVAILABLE)
+                        .field("reason", "dir_owner")
+                        .emit();
+                    return exit::CONTROL_UNAVAILABLE;
+                }
                 Err(unix::ListenError::InUse) => {
                     log::error(log_ids::DS_CONTROL_UNAVAILABLE)
                         .field("reason", "in_use")
