@@ -537,6 +537,38 @@ impl std::fmt::Debug for Engine {
     }
 }
 
+/// Tests only (`test-hooks`): the reference engine read datagrams of any size; the private runner
+/// turns the 1,372-byte inbound cap off to show a vector's divergence is that rule alone.
+#[cfg(feature = "test-hooks")]
+pub static INBOUND_CAP_OFF: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn inbound_cap_off() -> bool {
+    #[cfg(feature = "test-hooks")]
+    {
+        INBOUND_CAP_OFF.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        false
+    }
+}
+
+/// Tests only (`test-hooks`): the reference engine sent a message whatever its size.
+#[cfg(feature = "test-hooks")]
+pub static SEND_CAP_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn send_cap_off() -> bool {
+    #[cfg(feature = "test-hooks")]
+    {
+        SEND_CAP_OFF.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        false
+    }
+}
+
 fn shared_xuid(xuid: u64) -> bool {
     xuid == 0 || xuid == 0x0009_0000_0000_0000
 }
@@ -1182,7 +1214,7 @@ impl Engine {
         self.now = self.now.max(now_ms);
         // no datagram over the game's 1,372-byte limit is read at all (nothing legitimate is
         // larger; one that is could carry a message no copy of it fits)
-        if data.len() > wire::MAX_DATAGRAM {
+        if data.len() > wire::MAX_DATAGRAM && !inbound_cap_off() {
             self.dropped += 1;
             self.oversize_in += 1;
             return;
