@@ -16,6 +16,8 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
     public const string DescriptorName = "infinity-horizon-update-windows-x64.json";
     public const string SignaturePrefix = "fi-launcher-release-v1\n";
     public const int MaxDescriptorBytes = 65536;
+    /// <summary>The optional world server next to infinity.exe (DEDICATED_SERVER.md §2.4); shipped only with its .sig.</summary>
+    public const string DedicatedServerExe = "dedicated-server.exe";
     public const long MaxZipBytes = 536870912;
     public const long MaxExpandedBytes = 1073741824;
     public static string DefaultStateDirectory => Auth.ServerConfig.Default.StateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher"));
@@ -28,7 +30,8 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
         "licenses/BouncyCastle-LICENSE.md", "licenses/fh2-mods-LICENSE.txt", "licenses/Hook-NOTICE.md", "licenses/ImGui-LICENSE.txt",
         "licenses/MinHook-LICENSE.txt", "licenses/Selawik-LICENSE.txt", "licenses/FluentSystemIcons-LICENSE.txt", "SHA256SUMS", "SHA256SUMS.sig"];
     /// <summary>The top-level names of the launcher's release layout (files and folders next to infinity.exe).</summary>
-    public static IReadOnlyList<string> PayloadRoots { get; } = Required.Select(path => path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Append("mod").ToArray();
+    public static IReadOnlyList<string> PayloadRoots { get; } = Required.Select(path => path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase)
+        .Concat(["mod", "dedicated-server.exe", "dedicated-server.exe.sig"]).ToArray();
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false, NumberHandling = JsonNumberHandling.Strict,
@@ -82,6 +85,8 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
                 || file.ByteLength > MaxExpandedBytes || total > (ulong)MaxExpandedBytes - file.ByteLength) Invalid();
             total += file.ByteLength;
         }
+        // The world server is optional, but only as an exe with its signature (never one without the other).
+        if (paths.Contains(DedicatedServerExe) != paths.Contains(DedicatedServerExe + ".sig")) Invalid();
         if (Required.Any(path => !paths.Contains(path)) || value.Files.Any(file => file.Path.EndsWith(".sig", StringComparison.Ordinal) && file.ByteLength != 64)) Invalid();
         return value;
     }
@@ -97,7 +102,10 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
         var previous = Previous(plan, transaction);
         if (!SamePrevious(plan.PreviousFiles, previous)) Invalid();
         foreach (var file in plan.Files) await CheckFileAsync(Path.Combine(plan.StageRoot, file.Path.Replace('/', Path.DirectorySeparatorChar)), file, cancellation).ConfigureAwait(false);
-        foreach (var binary in new[] { "infinity.exe", "infinity-updater.exe", "hook/infinity.dll", "overlay/infinity-overlay.dll", "SHA256SUMS" })
+        // The world server, when a release ships it, carries the launcher's release signature too.
+        string[] signed = ["infinity.exe", "infinity-updater.exe", "hook/infinity.dll", "overlay/infinity-overlay.dll", "SHA256SUMS",
+            .. plan.Files.Any(file => file.Path == DedicatedServerExe) ? new[] { DedicatedServerExe } : []];
+        foreach (var binary in signed)
             if (!ReleaseSignature.VerifyFile(Path.Combine(plan.StageRoot, binary), Path.Combine(plan.StageRoot, binary + ".sig"), _key)) Invalid();
         foreach (var retired in previous.Where(old => !plan.Files.Any(file => file.Path == old.Path)))
         {
