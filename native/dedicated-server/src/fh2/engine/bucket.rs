@@ -13,9 +13,10 @@
 //! A 62 or a leave ends the pair; a 64 ends only a wait. Waiting and paired players stay in
 //! universe 0, also while an event phases the others.
 //!
-//! The status messages 66-68 carry the receiver-relative PlayerState keys first (the waiter's for
-//! 66; both partners' for 67 and 68, then 68's result flag), then the challenge; 66 goes to
-//! everyone but the waiter, 67 and 68 to everyone.
+//! The status messages 66-68 carry the receiver-relative PlayerState keys first (66 the waiter's;
+//! 67 the joiner's who completed the pair, then the waiter's; 68 the ender's, then its partner's),
+//! then the challenge, and 68 the ending 62's flag; 66 goes to everyone but the waiter, 67 and 68
+//! to everyone. A message one of whose PlayerStates is missing (a leaver's) goes to nobody.
 //!
 //! Output produced while a packet is handled (65, 61, 66-68 and the slot array's one delta) is
 //! staged and sent after that packet's relayed objects ([`Engine::flush_bucket_list`]), so a
@@ -368,25 +369,57 @@ impl Engine {
         }
     }
 
-    /// 66 (the waiter's key), 67 or 68 (both partners' keys; 68 then its result flag), then the
-    /// challenge, to every synced peer but the waiter of a 66.
-    fn bucket_list_status(&mut self, kind: u8, keys: &[(u64, u8)], challenge: i32, result: bool) {
+    /// Whether every game has `subject`'s PlayerState: its own, or one relayed to it (live or in
+    /// its join snapshot; router 12 is never held for a joiner). A leaver's is gone everywhere.
+    fn bucket_state_known(&self, subject: u64) -> bool {
+        self.peer(subject)
+            .is_some_and(|p| p.objects.contains_key(&(BUCKET_LIST_ROUTER, 0)))
+    }
+
+    /// A status message (66 waiting: `a` the waiter; 67 started: `a` the joiner who completed the
+    /// pair, `b` the waiter; 68 ended: `a` the ender, `b` its partner, then the ending 62's flag),
+    /// the keys relative to each receiver, then the challenge, to every synced receiver but
+    /// `except`. When a key's PlayerState is missing, no receiver gets it and the skipped receivers
+    /// are noted once per message.
+    fn bucket_list_status(
+        &mut self,
+        kind: u8,
+        challenge: i32,
+        a: (u64, u8),
+        b: Option<(u64, u8)>,
+        flag: bool,
+        except: Option<u64>,
+    ) {
+        let known =
+            self.bucket_state_known(a.0) && b.is_none_or(|(s, _)| self.bucket_state_known(s));
         let receivers: Vec<u64> = self
             .synced_serials_except(None)
             .into_iter()
-            .filter(|s| kind != 66 || keys.iter().all(|(k, _)| k != s))
+            .filter(|s| Some(*s) != except)
             .collect();
+        let mut skipped = Vec::new();
         for r in receivers {
-            let mut b = Bits::new();
-            b.push(u64::from(kind), 7);
-            for (owner, index) in keys {
-                key_for(r, *owner, *index).write(&mut b, 7);
+            if !known {
+                skipped.push(self.bucket_index(r));
+                continue;
             }
-            b.push(u64::from(challenge as u32), 32);
+            let mut m = Bits::new();
+            m.push(u64::from(kind), 7);
+            for (owner, index) in std::iter::once(a).chain(b) {
+                key_for(r, owner, index).write(&mut m, 7);
+            }
+            m.push(u64::from(challenge as u32), 32);
             if kind == 68 {
-                b.boolean(result);
+                m.boolean(flag);
             }
-            self.bucket_send(r, b);
+            self.bucket_send(r, m);
+        }
+        if !skipped.is_empty() {
+            let subjects: Vec<u8> = std::iter::once(a.1).chain(b.map(|x| x.1)).collect();
+            self.note(
+                "bucket.status_skipped",
+                vec![json!(kind), json!(skipped), json!(subjects)],
+            );
         }
     }
 
@@ -830,6 +863,7 @@ impl Engine {
             self.end_bucket_pair(
                 pid,
                 &format!("peer {index} asks for another challenge"),
+                serial,
                 false,
             );
         }
@@ -875,7 +909,8 @@ impl Engine {
         player.trace = TRACE_LINES;
         self.bucket_universe_due(serial); // a waiter is at universe 0
         self.claim_bucket_entry(serial, slot, challenge);
-        self.bucket_list_status(66, &[(serial, index)], challenge, false);
+        // to everyone but the waiter
+        self.bucket_list_status(66, challenge, (serial, index), None, false, Some(serial));
         self.note(
             "bucket.waiting",
             vec![json!(index), json!(slot), json!(challenge)],
@@ -956,11 +991,14 @@ impl Engine {
                 ],
             );
         }
+        // A: the player who joined (completed the pair), B: the waiter
         self.bucket_list_status(
             67,
-            &[(first, first_index), (second, second_index)],
             challenge,
+            (second, second_index),
+            Some((first, first_index)),
             false,
+            None,
         );
         self.note(
             "bucket.paired",
@@ -1096,7 +1134,7 @@ impl Engine {
                 }
             }
             let why = format!("peer {index} ended its challenge ({})", u8::from(completed));
-            self.end_bucket_pair(pid, &why, completed);
+            self.end_bucket_pair(pid, &why, serial, completed);
         } else if player.waiting.is_some() {
             player.last_request_at = None;
             player.last_63_at = None;
@@ -1122,7 +1160,9 @@ impl Engine {
         );
     }
 
-    fn end_bucket_pair(&mut self, pid: u64, why: &str, completed: bool) {
+    /// `ender`: the partner whose 62 (or new request, or leave) ended the pair, 68's first key;
+    /// `flag`: the ending 62's flag (false for a new request or a leave).
+    fn end_bucket_pair(&mut self, pid: u64, why: &str, ender: u64, flag: bool) {
         let Some(pair) = self.bucket.pairs.remove(&pid) else {
             return;
         };
@@ -1135,15 +1175,19 @@ impl Engine {
             }
         }
         self.free_bucket_entries(&[pair.first_index, pair.second_index]);
-        self.bucket_list_status(
-            68,
-            &[
+        // a leaver's PlayerState is gone from every game (its deletes went out first): skipped
+        let (a, b) = if ender == pair.first {
+            (
                 (pair.first, pair.first_index),
                 (pair.second, pair.second_index),
-            ],
-            pair.challenge,
-            completed,
-        );
+            )
+        } else {
+            (
+                (pair.second, pair.second_index),
+                (pair.first, pair.first_index),
+            )
+        };
+        self.bucket_list_status(68, pair.challenge, a, Some(b), flag, None);
         for s in pair.partners() {
             self.bucket_universe_due(s);
         }
@@ -1339,7 +1383,12 @@ impl Engine {
             return;
         };
         if let Some(pid) = player.pair {
-            self.end_bucket_pair(pid, &format!("peer {} left", peer.index), false);
+            self.end_bucket_pair(
+                pid,
+                &format!("peer {} left", peer.index),
+                peer.serial,
+                false,
+            );
         } else if player.waiting.is_some() {
             self.free_bucket_entries(&[peer.index]);
         }

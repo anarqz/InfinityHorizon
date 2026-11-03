@@ -310,8 +310,15 @@ fn skip_other(r: &mut Rd<'_>, id: u8) -> Rr<()> {
         29 => r.skip(2),
         // ConfigureGameOptionsForRoadTripEvent: the event, then a u32
         50 => r.skip(64),
-        // bucket-list co-op, server to client: 61 the start time; 66-68 one s32
-        61 | 66 | 67 | 68 => r.skip(32),
+        // bucket-list co-op, server to client: 61 the start time; 66-68 their keys, an s32 (68 a
+        // flag)
+        61 => r.skip(32),
+        66..=68 => {
+            for _ in 0..if id == 66 { 1 } else { 2 } {
+                Handle::read(r, 7)?;
+            }
+            r.skip(if id == 68 { 33 } else { 32 })
+        }
         // bucket-list partner: key, 5-bit universe, found, a name
         65 => {
             Handle::read(r, 7)?;
