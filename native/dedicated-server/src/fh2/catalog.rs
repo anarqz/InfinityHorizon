@@ -110,20 +110,34 @@ pub struct ModelParts {
     pub by_slot: Vec<BTreeSet<u32>>,
     /// The controller found the model (false: a car pack or a placeholder, not judged).
     pub known: bool,
+    /// Which slot tables the answer carried: a table the controller could not send whole is
+    /// omitted, and an omitted table is not judged (never read as "no rows allowed").
+    pub sent: Vec<bool>,
     /// Every slot's rows together, built once when the answer is stored (never per check).
     all: BTreeSet<u32>,
 }
 
 impl ModelParts {
     /// One model's rows; `all` is derived here.
-    pub fn new(model: u32, by_slot: Vec<BTreeSet<u32>>, known: bool) -> ModelParts {
+    pub fn new(
+        model: u32,
+        by_slot: Vec<BTreeSet<u32>>,
+        sent: Vec<bool>,
+        known: bool,
+    ) -> ModelParts {
         let all = by_slot.iter().flatten().copied().collect();
         ModelParts {
             model,
             by_slot,
             known,
+            sent,
             all,
         }
+    }
+
+    /// Whether the answer carried slot `slot`'s table (judged).
+    pub fn judged(&self, slot: usize) -> bool {
+        self.sent.get(slot).copied().unwrap_or(false)
     }
 
     /// Every row of any slot's table that belongs to this model.
@@ -236,6 +250,7 @@ impl CatalogStore {
         let model = o.int("model", 0, u64::from(u32::MAX))? as u32;
         let slots = o.obj("slots")?;
         let mut by_slot = vec![BTreeSet::new(); SLOT_TABLES.len()];
+        let mut sent = vec![false; SLOT_TABLES.len()];
         let mut total = 0usize;
         for (table, rows) in slots {
             let Some(slot) = SLOT_TABLES.iter().position(|t| t == table) else {
@@ -247,6 +262,7 @@ impl CatalogStore {
             if rows.len() > MAX_SLOT_ROWS {
                 return Err(o.bad("slots"));
             }
+            sent[slot] = true;
             total += rows.len();
             if total > MAX_PART_ROWS {
                 return Err(o.bad("slots"));
@@ -263,7 +279,7 @@ impl CatalogStore {
         self.pending.remove(&model);
         self.parts.retain(|p| p.model != model);
         self.unknown.retain(|p| p.model != model);
-        let entry = Arc::new(ModelParts::new(model, by_slot, known));
+        let entry = Arc::new(ModelParts::new(model, by_slot, sent, known));
         // an absent model goes to the negative cache: it never evicts a known one
         let (cache, cap) = if known {
             (&mut self.parts, MAX_CACHED_MODELS)
@@ -388,6 +404,21 @@ mod tests {
             panic!()
         };
         assert!(!absent.known);
+    }
+
+    #[test]
+    fn road_trip_rows_outside_locations_3_to_9_are_dropped() {
+        let mut s = CatalogStore::default();
+        let ev = |id: u32, location: u32| {
+            json!({"id": id, "location": location, "mode": 1, "minPlayers": 0, "classes": [1]})
+        };
+        let body = json!({"version": "v1", "roadTrip": {"events": [
+            ev(1, 2), ev(2, 3), ev(3, 9), ev(4, 10), ev(5, 0)]}});
+        let Value::Object(m) = body else { panic!() };
+        let r = s.set(Obj::new(&m, "")).unwrap();
+        assert_eq!(r["events"], json!(2));
+        let rt = s.road_trip().unwrap();
+        assert!(rt.events.iter().all(|e| (3..=9).contains(&e.location) && e.min_players >= 1));
     }
 
     #[test]

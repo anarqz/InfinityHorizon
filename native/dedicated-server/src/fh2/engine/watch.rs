@@ -1085,7 +1085,8 @@ impl PartsWatch {
         let in_slot = |slot: usize, p: u32| rows.by_slot.get(slot).is_some_and(|s| s.contains(&p));
         let present: Vec<u32> = installed.iter().copied().filter(|p| is_part(*p)).collect();
         let known = present.iter().filter(|p| all.contains(p)).count();
-        let has = |slot: usize| present.iter().any(|p| in_slot(slot, *p));
+        // an omitted table can't be checked: its slot counts as present and is never judged
+        let has = |slot: usize| !rows.judged(slot) || present.iter().any(|p| in_slot(slot, *p));
         if !(has(0) || has(3)) || !has(1) || !has(2) {
             out.push(Out::Note(
                 "parts.layout",
@@ -1102,7 +1103,7 @@ impl PartsWatch {
         let (mut outside, mut misplaced, mut unsendable) = (0usize, 0usize, 0usize);
         let mut offending = None;
         for (slot, &part) in installed.iter().enumerate() {
-            if !is_part(part) {
+            if !is_part(part) || !rows.judged(slot) {
                 continue;
             }
             if !all.contains(&part) {
@@ -1465,7 +1466,7 @@ mod tests {
         for &m in models {
             let body = json!({"model": m, "slots": {
                 "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11],
-                "List_UpgradeCarBody": [12]}});
+                "List_UpgradeCarBody": [12], "List_UpgradeSpringDamper": []}});
             let Value::Object(o) = body else { panic!() };
             s.set_parts(Obj::new(&o, "")).unwrap();
         }
@@ -1480,6 +1481,58 @@ mod tests {
 
     fn reports(out: &[Out]) -> usize {
         out.iter().filter(|o| matches!(o, Out::Report(_))).count()
+    }
+
+    fn watch(store: Arc<Mutex<CatalogStore>>) -> PartsWatch {
+        PartsWatch {
+            store,
+            rules_version: 1,
+            cars: DotMap::new(),
+            reported: HashSet::new(),
+            per_player: HashMap::new(),
+            world: 1,
+        }
+    }
+
+    fn answer(store: &Arc<Mutex<CatalogStore>>, body: Value) {
+        let Value::Object(o) = body else { panic!() };
+        store.lock().unwrap().set_parts(Obj::new(&o, "")).unwrap();
+    }
+
+    fn notes(out: &[Out], id: &str) -> usize {
+        out.iter()
+            .filter(|o| matches!(o, Out::Note(n, _) if *n == id))
+            .count()
+    }
+
+    #[test]
+    fn an_empty_answer_is_a_model_the_database_lacks_and_is_not_judged() {
+        let store = store_with(&[]);
+        answer(&store, json!({"model": 300, "slots": {}}));
+        let mut w = watch(store);
+        let mut out = Vec::new();
+        w.observe(3, 42, Some(300), Some(rows(5000)), false, 0, &mut out);
+        assert_eq!(reports(&out), 0);
+        assert_eq!(notes(&out, "parts.unknown_model"), 1);
+    }
+
+    #[test]
+    fn an_omitted_table_is_not_judged_but_a_sent_empty_one_is() {
+        let store = store_with(&[]);
+        // slot 5 (List_UpgradeSpringDamper) omitted: its part is not judged
+        answer(&store, json!({"model": 301, "slots": {
+            "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11], "List_UpgradeCarBody": [12]}}));
+        // slot 5 sent with no row: a part there belongs to none of the car's tables
+        answer(&store, json!({"model": 302, "slots": {
+            "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11], "List_UpgradeCarBody": [12],
+            "List_UpgradeSpringDamper": []}}));
+        let mut w = watch(store);
+        let mut out = Vec::new();
+        w.observe(3, 42, Some(301), Some(rows(5000)), false, 0, &mut out);
+        assert_eq!(reports(&out), 0);
+        out.clear();
+        w.observe(4, 43, Some(302), Some(rows(5000)), false, 0, &mut out);
+        assert_eq!(reports(&out), 1);
     }
 
     #[test]
