@@ -10,10 +10,13 @@ pub mod proto;
 #[cfg(unix)]
 pub mod unix;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-    mpsc::SyncSender,
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc::SyncSender,
+    },
 };
 
 use serde_json::Value;
@@ -50,6 +53,15 @@ pub enum ControlMsg {
     Closed {
         conn: ConnId,
     },
+}
+
+/// Runs a control thread's body; a panic there is an internal fault outside any world (§2.1
+/// exit 70): the loop is told (`Hub::Fatal`, logged `ds.fault`) instead of leaving the
+/// connection half-open.
+pub fn guarded(hub: &crate::runtime::HubTx, what: &'static str, body: impl FnOnce()) {
+    if catch_unwind(AssertUnwindSafe(body)).is_err() {
+        let _ = hub.send(crate::runtime::Hub::Fatal(what));
+    }
 }
 
 /// The reader side of a connection: frames lines, answers framing errors and `busy` itself,
@@ -99,5 +111,21 @@ impl Feeder {
             .send(crate::runtime::Hub::Control(ControlMsg::Closed {
                 conn: self.conn,
             }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_panicking_control_thread_reports_a_fault_to_the_loop() {
+        let (hub, rx) = std::sync::mpsc::sync_channel(4);
+        let t = std::thread::spawn(move || {
+            super::guarded(&hub, "control reader", || panic!("synthetic control panic"));
+        });
+        t.join().unwrap();
+        match rx.try_recv() {
+            Ok(crate::runtime::Hub::Fatal(what)) => assert_eq!(what, "control reader"),
+            _ => panic!("no fault reported"),
+        }
     }
 }

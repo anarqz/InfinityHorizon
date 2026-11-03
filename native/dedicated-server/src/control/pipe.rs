@@ -110,7 +110,7 @@ fn is_eof(e: &io::Error) -> bool {
 }
 
 /// Runs the connection on a thread of its own.
-pub fn serve(mut file: File, conn: u64, hub: crate::runtime::HubTx) -> io::Result<()> {
+pub fn serve(file: File, conn: u64, hub: crate::runtime::HubTx) -> io::Result<()> {
     let (writer, lines) = mpsc::sync_channel::<String>(WRITER_QUEUE);
     let inflight = Arc::new(AtomicUsize::new(0));
     let closed = Arc::new(AtomicBool::new(false));
@@ -125,6 +125,7 @@ pub fn serve(mut file: File, conn: u64, hub: crate::runtime::HubTx) -> io::Resul
     .map_err(|_| io::Error::other("loop gone"))?;
     hub.send(Hub::Closer { conn, closer })
         .map_err(|_| io::Error::other("loop gone"))?;
+    let fault = hub.clone();
     let feeder = Feeder {
         conn,
         writer,
@@ -134,56 +135,62 @@ pub fn serve(mut file: File, conn: u64, hub: crate::runtime::HubTx) -> io::Resul
     std::thread::Builder::new()
         .name("ds-control-pipe".into())
         .spawn(move || {
-            let mut framer = framing::Framer::new();
-            let mut chunk = vec![0u8; 16 * 1024];
-            let mut idle_ms = 1u64;
-            'run: loop {
-                let mut busy = false;
-                // writes first: replies and events waiting for the launcher
-                loop {
-                    match lines.try_recv() {
-                        Ok(line) => {
-                            busy = true;
-                            if file.write_all(line.as_bytes()).is_err() {
-                                break 'run;
-                            }
-                        }
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => break 'run,
+            super::guarded(&fault, "control pipe", move || {
+                run(file, lines, closed, feeder)
+            })
+        })?;
+    Ok(())
+}
+
+fn run(mut file: File, lines: mpsc::Receiver<String>, closed: Arc<AtomicBool>, feeder: Feeder) {
+    let mut framer = framing::Framer::new();
+    let mut chunk = vec![0u8; 16 * 1024];
+    let mut idle_ms = 1u64;
+    'run: loop {
+        let mut busy = false;
+        // writes first: replies and events waiting for the launcher
+        loop {
+            match lines.try_recv() {
+                Ok(line) => {
+                    busy = true;
+                    if file.write_all(line.as_bytes()).is_err() {
+                        break 'run;
                     }
                 }
-                if closed.load(Ordering::Acquire) {
-                    break;
-                }
-                match available(&file) {
-                    Ok(0) => {}
-                    Ok(n) => {
-                        busy = true;
-                        let want = (n as usize).min(chunk.len());
-                        match file.read(&mut chunk[..want]) {
-                            Ok(0) => break,
-                            Ok(got) => {
-                                for f in framer.push(&chunk[..got]) {
-                                    if !feeder.frame(f) {
-                                        break 'run;
-                                    }
-                                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break 'run,
+            }
+        }
+        if closed.load(Ordering::Acquire) {
+            break;
+        }
+        match available(&file) {
+            Ok(0) => {}
+            Ok(n) => {
+                busy = true;
+                let want = (n as usize).min(chunk.len());
+                match file.read(&mut chunk[..want]) {
+                    Ok(0) => break,
+                    Ok(got) => {
+                        for f in framer.push(&chunk[..got]) {
+                            if !feeder.frame(f) {
+                                break 'run;
                             }
-                            Err(e) if is_eof(&e) => break,
-                            Err(_) => break,
                         }
                     }
                     Err(e) if is_eof(&e) => break,
                     Err(_) => break,
                 }
-                if busy {
-                    idle_ms = 1;
-                } else {
-                    std::thread::sleep(Duration::from_millis(idle_ms));
-                    idle_ms = (idle_ms * 2).min(10);
-                }
             }
-            feeder.closed();
-        })?;
-    Ok(())
+            Err(e) if is_eof(&e) => break,
+            Err(_) => break,
+        }
+        if busy {
+            idle_ms = 1;
+        } else {
+            std::thread::sleep(Duration::from_millis(idle_ms));
+            idle_ms = (idle_ms * 2).min(10);
+        }
+    }
+    feeder.closed();
 }
