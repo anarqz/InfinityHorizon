@@ -115,11 +115,15 @@ pub fn parse_down(data: &[u8]) -> Option<Down> {
 }
 
 fn message(value: &[u8]) -> Vec<u8> {
+    message_with_txid(value, &stun::new_txid())
+}
+
+fn message_with_txid(value: &[u8], txid: &[u8; 12]) -> Vec<u8> {
     let mut m = Vec::with_capacity(24 + value.len());
     m.extend_from_slice(&KIND.to_be_bytes());
     m.extend_from_slice(&((4 + value.len()) as u16).to_be_bytes());
     m.extend_from_slice(&stun::MAGIC.to_be_bytes());
-    m.extend_from_slice(&stun::new_txid());
+    m.extend_from_slice(txid);
     m.extend_from_slice(&ATTR.to_be_bytes());
     m.extend_from_slice(&(value.len() as u16).to_be_bytes());
     m.extend_from_slice(value);
@@ -137,6 +141,11 @@ pub fn up(state: State, xuid: u64) -> Vec<u8> {
 }
 
 pub fn down(d: &Down) -> Vec<u8> {
+    down_with_txid(d, &stun::new_txid())
+}
+
+/// [`down`] with a given transaction id (the engine draws it from its own random source).
+pub fn down_with_txid(d: &Down, txid: &[u8; 12]) -> Vec<u8> {
     let mut v = [0u8; DOWN_LEN];
     v[0] = VERSION;
     v[1] = d.state.lights;
@@ -150,5 +159,5 @@ pub fn down(d: &Down) -> Vec<u8> {
             v[16 + 4 * i..20 + 4 * i].copy_from_slice(&c.to_be_bytes());
         }
     }
-    message(&v)
+    message_with_txid(&v, txid)
 }

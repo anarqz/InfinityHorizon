@@ -6,7 +6,8 @@
 //!
 //! World-scoped FH2 fields of `world.open`: `races`, `voice`, `watch`, `settings`.
 //!
-//! Step 1: validation and state only; the engines admit nobody yet (README, PORT_STATUS).
+//! Step 2: the free-roam engine is ported (contract §7); it runs behind a deny-all policy until
+//! the admission snapshot is wired to it, so a world admits nobody yet (README, PORT_STATUS).
 
 pub mod carstate;
 pub mod codec;
@@ -25,7 +26,7 @@ use crate::{
         game::{Game, GameCtx, GameWorld, Notice, OpenInfo, Send},
     },
 };
-use engine::{Engine, EngineKind, Seeds};
+use engine::{DenyAll, Engine, EngineKind, EngineSettings, Event, random::EngineRandom};
 pub use settings::RelaySettings;
 
 pub const GAME_ID: &str = "fh2";
@@ -190,16 +191,24 @@ impl Game for Fh2 {
         if o.has("settings") {
             settings.apply(o.obj("settings")?)?;
         }
-        let seeds = Seeds {
-            weather: settings.weather_seed.unwrap_or_else(|| info.rng.seed_i32()),
-            tag: settings.tag_seed.unwrap_or_else(|| info.rng.seed_i32()),
-            team: settings.team_seed.unwrap_or_else(|| info.rng.seed_i32()),
+        let max_players = usize::from(info.max_players);
+        let engine_settings = EngineSettings {
+            relay: settings.clone(),
+            max_players,
+            races,
+            car_meet_lobby: None,
         };
-        let mut engines = BTreeMap::new();
-        engines.insert(
+        let rng = &mut *info.rng;
+        let random = EngineRandom::from_source(|| rng.next_u64());
+        let free_roam = Engine::new(
             EngineKind::FreeRoam,
-            Engine::new(EngineKind::FreeRoam, settings.clone(), seeds),
-        );
+            engine_settings,
+            random,
+            Box::new(DenyAll),
+        )
+        .ok_or_else(|| CmdError::bad("settings"))?;
+        let mut engines = BTreeMap::new();
+        engines.insert(EngineKind::FreeRoam, free_roam);
         let mut notices = Vec::new();
         if !self.catalog.road_trip_events {
             notices.push(Notice {
@@ -246,6 +255,23 @@ pub struct Fh2World {
 }
 
 impl Fh2World {
+    /// The engines' world-log lines go to the process log (indexes and ids only, never an
+    /// identity or an address); the other events feed `world.state`, which is read fresh.
+    fn drain_events(&mut self) {
+        for e in self.engines.values_mut() {
+            for ev in e.take_events() {
+                if let Event::Note { id, args } = ev
+                    && crate::log::enabled(crate::log::Level::Debug)
+                {
+                    crate::log::debug("world.note")
+                        .field("note", id)
+                        .field("args", Value::Array(args))
+                        .emit();
+                }
+            }
+        }
+    }
+
     fn voice_blocks(&mut self, o: Obj) -> CmdResult {
         if o.str("source")? != "roster" {
             return Err(o.bad("source"));
@@ -340,17 +366,23 @@ impl GameWorld for Fh2World {
             self.dropped += 1;
             return;
         }
-        // routing by lobby type (contract §5.1) comes with the engines; step 1: free roam
+        // routing by lobby type (contract §5.1) comes with the car meet and Road Trip engines
         match self.engines.get_mut(&EngineKind::FreeRoam) {
-            Some(e) => e.receive(data, from, now, out),
+            Some(e) => {
+                e.receive(data, from, now as i64);
+                out.extend(e.take_out());
+            }
             None => self.dropped += 1,
         }
+        self.drain_events();
     }
 
     fn tick(&mut self, now: u64, out: &mut Vec<Send>) {
         for e in self.engines.values_mut().filter(|e| !e.is_idle()) {
-            e.tick(now, out);
+            e.tick(now as i64);
+            out.extend(e.take_out());
         }
+        self.drain_events();
     }
 
     fn next_tick(&self, profile: Profile, now: u64) -> Option<u64> {
@@ -372,16 +404,21 @@ impl GameWorld for Fh2World {
     }
 
     fn kick(&mut self, xuid: u64, now: u64, out: &mut Vec<Send>) -> usize {
-        self.engines
-            .values_mut()
-            .map(|e| e.kick(xuid, now, out))
-            .sum()
+        let mut n = 0;
+        for e in self.engines.values_mut() {
+            n += e.kick(xuid, now as i64);
+            out.extend(e.take_out());
+        }
+        self.drain_events();
+        n
     }
 
     fn close_all(&mut self, out: &mut Vec<Send>) {
         for e in self.engines.values_mut() {
-            e.close_all(out);
+            e.close_all();
+            out.extend(e.take_out());
         }
+        self.drain_events();
     }
 
     fn state(&self) -> Map<String, Value> {
@@ -395,8 +432,17 @@ impl GameWorld for Fh2World {
             .filter(|(k, _)| **k != EngineKind::FreeRoam)
             .map(|(_, e)| e.synced())
             .sum();
+        let mut peers: Vec<String> = Vec::new();
+        for e in self.engines.values() {
+            for x in e.peer_xuids() {
+                let x = x.to_string();
+                if !peers.contains(&x) {
+                    peers.push(x);
+                }
+            }
+        }
         let mut m = Map::new();
-        m.insert("peers".into(), json!([]));
+        m.insert("peers".into(), json!(peers));
         m.insert("lobbyPlayers".into(), json!(lobby));
         m.insert("activity".into(), Value::Null);
         m.insert("engines".into(), Value::Object(engines));
