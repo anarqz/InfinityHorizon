@@ -8,7 +8,7 @@ use std::{
     fs,
     io::{self, Write},
     os::unix::{
-        fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
+        fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::Path,
@@ -29,13 +29,17 @@ pub const CONNECTIONS_MAX: usize = 8;
 pub enum ListenError {
     /// The directory exists with group/other access.
     DirectoryMode(u32),
+    /// The directory belongs to another user than the engine's.
+    DirectoryOwner,
     /// Another engine answers on that socket.
     InUse,
     Io(io::Error),
 }
 
 /// Creates the parent directory (`0700`) when missing, refuses one that others can enter,
-/// removes a stale socket nobody answers on, binds and sets the socket to `0600`.
+/// removes a stale socket nobody answers on, binds and sets the socket to `0600`, and refuses a
+/// directory another user owns (its owner could replace the socket): the socket just bound
+/// belongs to the engine's effective user, so its owner is compared with the directory's.
 pub fn listen(path: &Path) -> Result<UnixListener, ListenError> {
     let dir = path.parent().ok_or_else(|| {
         ListenError::Io(io::Error::new(io::ErrorKind::InvalidInput, "no directory"))
@@ -67,6 +71,14 @@ pub fn listen(path: &Path) -> Result<UnixListener, ListenError> {
         fs::remove_file(path).map_err(ListenError::Io)?;
     }
     let listener = UnixListener::bind(path).map_err(ListenError::Io)?;
+    let owners = fs::symlink_metadata(path)
+        .and_then(|socket| Ok((socket.uid(), fs::metadata(dir)?.uid())))
+        .map_err(ListenError::Io)?;
+    if owners.0 != owners.1 {
+        drop(listener);
+        let _ = fs::remove_file(path);
+        return Err(ListenError::DirectoryOwner);
+    }
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(ListenError::Io)?;
     Ok(listener)
 }

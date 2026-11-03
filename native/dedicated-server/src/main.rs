@@ -129,9 +129,9 @@ fn health(endpoint: &Endpoint) -> i32 {
     if stream.set_read_timeout(wait).is_err() || stream.set_write_timeout(wait).is_err() {
         return 1;
     }
+    // the contract's integer `proto` (§3.2)
     let request = format!(
-        "{{\"id\":1,\"op\":\"hello\",\"proto\":[{},{}]}}\n{{\"id\":2,\"op\":\"health\"}}\n",
-        dedicated_server::PROTO_MIN,
+        "{{\"id\":1,\"op\":\"hello\",\"proto\":{}}}\n{{\"id\":2,\"op\":\"health\"}}\n",
         dedicated_server::PROTO_MAX
     );
     if stream.write_all(request.as_bytes()).is_err() {

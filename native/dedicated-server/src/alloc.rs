@@ -54,9 +54,7 @@ unsafe impl GlobalAlloc for CountingAlloc {
 
 fn add(n: usize) {
     let live = LIVE.fetch_add(n, Ordering::Relaxed) + n;
-    if live > PEAK.load(Ordering::Relaxed) {
-        PEAK.store(live, Ordering::Relaxed);
-    }
+    PEAK.fetch_max(live, Ordering::Relaxed);
 }
 
 /// Live heap bytes (0 when the counting allocator is not installed).
