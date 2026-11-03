@@ -162,7 +162,8 @@ impl Engine {
         let kind = kind as u8;
         if kind != INVITE_FREE_ROAM {
             // Road Trip and Showdown invitations: their sessions do not exist on the platform yet
-            self.peer_noted(serial,
+            self.peer_noted(
+                serial,
                 "carmeet.invite_ignored_type",
                 vec![json!(kind), json!(index)],
             );
@@ -170,7 +171,8 @@ impl Engine {
         }
         if self.car_meet.stage != InviteStage::Idle {
             let stage = self.car_meet.stage.name();
-            self.peer_noted(serial,
+            self.peer_noted(
+                serial,
                 "carmeet.invite_ignored_busy",
                 vec![json!(index), json!(stage)],
             );

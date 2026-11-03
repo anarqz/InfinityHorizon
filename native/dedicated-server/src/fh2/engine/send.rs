@@ -249,7 +249,11 @@ impl Engine {
     /// its budget.
     pub(super) fn charge_fanout(&mut self, sender: u64, n: usize) -> bool {
         let now = self.now;
-        let (tokens, at) = self.fanout.get(&sender).copied().unwrap_or((FANOUT_BURST, now));
+        let (tokens, at) = self
+            .fanout
+            .get(&sender)
+            .copied()
+            .unwrap_or((FANOUT_BURST, now));
         let refilled =
             (tokens + (now - at).max(0) as f64 * FANOUT_PER_SECOND / 1000.0).min(FANOUT_BURST);
         let left = refilled - n as f64;

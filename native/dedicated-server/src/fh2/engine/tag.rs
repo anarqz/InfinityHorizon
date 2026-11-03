@@ -409,7 +409,8 @@ impl Engine {
         let (it, other) = if tag.is_it(x) { (x, y) } else { (y, x) };
         self.account_tag();
         let Some(tag) = self.tag.as_mut() else { return };
-        tag.swapped_at.retain(|_, at| now - *at < TAG_SWAP_COOLDOWN_MS);
+        tag.swapped_at
+            .retain(|_, at| now - *at < TAG_SWAP_COOLDOWN_MS);
         tag.swapped_at.insert(pair_key, now);
         tag.buckets.insert(it, tag.rules.it_becomes as u8);
         tag.buckets.insert(other, tag.rules.not_it_becomes as u8);
