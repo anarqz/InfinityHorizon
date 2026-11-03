@@ -22,7 +22,10 @@ Everything lives in `~/.local/share/InfinityHorizon`, including the launcher's P
 ## Build
 
 On Windows, install PowerShell 7, .NET SDK 10.0.401 (or a newer patch in that feature band),
-Visual Studio C++ build tools with a Windows SDK, Python 3.10+ and Zig 0.15.2.
+Visual Studio C++ build tools with a Windows SDK, Python 3.10+, Zig 0.15.2 and
+[rustup](https://rustup.rs) for the world server (`native/dedicated-server`): its
+`rust-toolchain.toml` pins Rust 1.99.0 with the `x86_64-pc-windows-msvc` target, which rustup installs
+on the first build, and it links with the MSVC build tools above (no other C toolchain).
 NuGet restores the pinned BouncyCastle package; ImGui, MinHook, SQLite and the embedded fonts are vendored.
 The overlay's voice chat codecs (libopus 1.5.2 and RNNoise 0.2) are not in git: the first overlay build runs
 `native/overlay/fetch.ps1`, which downloads their release tarballs and refuses any whose SHA-256 is not the pinned
@@ -40,7 +43,10 @@ Infinity's patches to a copy of it with `git apply`, so Git must be on `PATH`.
 
 The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
 `hook/infinity.dll`, `overlay/infinity-overlay.dll`, `mod/infinity_mod.dll`,
-`mod/infinity-mod-prepare.exe`, their development signatures,
+`mod/infinity-mod-prepare.exe`, `dedicated-server.exe` (the world server, built with
+`cargo build --release --locked --target x86_64-pc-windows-msvc`; an existing `CARGO_TARGET_DIR` is
+used, `DS_COMMIT` stamps its `--version` commit, git `HEAD` by default, and `DS_PRODUCT_VERSION` its
+VERSIONINFO, `-Version` by default), their development signatures,
 English/pt-BR catalogs and license notices. No private repository or game installation is needed
 to compile. Build just the managed projects with `dotnet build Infinity.sln -c Release`.
 
