@@ -39,6 +39,9 @@ public sealed partial class WorldsBridge
     /// <summary>The longest one ask may take, reads included: inside the hook's 18 s (PlaySupervisor.FreeRoamBudget), so its notice shows.</summary>
     public static readonly TimeSpan FreeRoamAskBudget = TimeSpan.FromSeconds(15);
 
+    /// <summary>The most joins one ask sends (the <c>mm.join</c> bucket is 6 a minute, MATCHMAKING_API §1): one is left for the player.</summary>
+    public const int MaxJoinsPerAsk = 5;
+
     // OD-190: the Retry-After of the last quick join answered lobbies_full, as ticks; -1: the last join was not one
     private long _lobbiesFullAfter = -1;
     // OD-190: the seat's world when it is an official one (a quick join's, or a seat read or world read said so)
@@ -131,6 +134,7 @@ public sealed partial class WorldsBridge
                 // T28: the host's game left its session after a race while the other player drove on); it is weighed again later
                 if (HostedWorldId is { } kept && await OtherPlayersAsync(pending.Token).ConfigureAwait(false) is var players and > 0)
                 {
+                    if (Volatile.Read(ref _freeRoamLeave) != pending) break; // the game joined again while the players were read
                     // CR-L49: past the grace the host is away: its heartbeat says so until its game is back in the world
                     SetHostAway(true, $"its game left free roam {(int)FreeRoamLeftGrace.TotalSeconds} s ago");
                     if (!held)
@@ -191,9 +195,11 @@ public sealed partial class WorldsBridge
     /// </summary>
     public void GameJoined(bool join = false)
     {
+        // the wait is taken first, so a grace loop waking meanwhile sees it called off before it says the host is away again
+        var pending = Interlocked.Exchange(ref _freeRoamLeave, null);
         if (join) SeatPlays("the game joined"); // a guest's join (detail join:…) is the seat's proof: no give-up
         else SetHostAway(false, "its game joined it again"); // CR-L49: the host's game is back in its world
-        if (Interlocked.Exchange(ref _freeRoamLeave, null) is not { } pending) return;
+        if (pending is null) return;
         CancelFreeRoamLeave(pending);
         if ((HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } world) _log($"worlds: the game joined again; {world} stays");
     }
@@ -413,6 +419,7 @@ public sealed partial class WorldsBridge
             }
             if (OwnWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
             string? moved = null;
+            var joins = 0; // every join of this ask counts toward MaxJoinsPerAsk
             if (_seat.GrantId is not null)
             {
                 // OD-190 (§11.3 item 1), OD-191: any held seat (reserved or seated) whose world runs this ask stays; otherwise the quick
@@ -430,6 +437,7 @@ public sealed partial class WorldsBridge
                 && lobby is null && !Isolated && moved is null && Volatile.Read(ref _seatOfficial) != recent.WorldId)
             {
                 token.ThrowIfCancellationRequested();
+                joins++;
                 var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, token, kind).ConfigureAwait(false);
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
@@ -440,7 +448,7 @@ public sealed partial class WorldsBridge
             if (Isolated || Volatile.Read(ref _poolMoving) != 0)
                 return await PoolJoinAsync(kind, lobby, activity, token).ConfigureAwait(false)
                     ?? Decided(kind, FreeRoamResult.None, "no world (isolated: no pineapple lobby to join)");
-            return await QuickJoinAsync(kind, moved, started, token).ConfigureAwait(false);
+            return await QuickJoinAsync(kind, moved, started, joins, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (budget.IsCancellationRequested && !cancellation.IsCancellationRequested && OnlineOpen)
         {
@@ -459,15 +467,18 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// OD-190 (§11.2, §11.3): <c>POST /mm/v1/join {activity}</c> through the overlay's own join (its grant, socket proof context and
-    /// relay leg, so the game's ticket lands in the new world). <c>lobbies_full</c> waits its <c>Retry-After</c> (1-5 s) and asks again
-    /// until <see cref="LobbiesFullBudget"/> has passed on the clock since the first ask (each ask's own time counts), then says "All
-    /// Infinity lobbies are full"; never past <see cref="FreeRoamAskBudget"/> from <paramref name="started"/>. Any other refusal says
-    /// "Couldn't join an Infinity lobby". <paramref name="moved"/>: the notice of a move.
+    /// relay leg, so the game's ticket lands in the new world). <c>lobbies_full</c> waits its <c>Retry-After</c> (2-5 s) and asks again
+    /// until <see cref="LobbiesFullBudget"/> has passed on the clock since the first ask (each ask's own time counts), at most
+    /// <see cref="MaxJoinsPerAsk"/> joins in all (<paramref name="joins"/> already sent; the <c>mm.join</c> bucket is 6 a minute), then
+    /// says "All Infinity lobbies are full"; never past <see cref="FreeRoamAskBudget"/> from <paramref name="started"/>. A rate-limited
+    /// answer stops at once. 409 <c>pool</c> (a flagged caller) starts OD-149's anti-cheat move. Any other refusal says "Couldn't join
+    /// an Infinity lobby". <paramref name="moved"/>: the notice of a move.
     /// </summary>
-    private async Task<byte> QuickJoinAsync(byte kind, string? moved, long started, CancellationToken cancellation)
+    private async Task<byte> QuickJoinAsync(byte kind, string? moved, long started, int joins, CancellationToken cancellation)
     {
         var placement = PlacementOf(kind);
         TimeSpan? firstAsk = null;
+        var full = false;
         while (true)
         {
             if (OwnWorld) return Decided(kind, FreeRoamResult.Ready, Staying()); // the player opened a world meanwhile
@@ -476,6 +487,7 @@ public sealed partial class WorldsBridge
             cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join past it
             firstAsk ??= _clock.GetElapsedTime(started);
             Volatile.Write(ref _lobbiesFullAfter, -1);
+            joins++;
             var joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty, string.Empty), placement, cancellation, kind).ConfigureAwait(false);
             if (joined.Result == UiJoin.Reserved)
             {
@@ -490,9 +502,10 @@ public sealed partial class WorldsBridge
             }
             if (Interlocked.Exchange(ref _lobbiesFullAfter, -1) is var ticks and >= 0)
             {
-                var after = TimeSpan.FromTicks(Math.Clamp(ticks, TimeSpan.TicksPerSecond, 5 * TimeSpan.TicksPerSecond));
+                full = true;
+                var after = TimeSpan.FromTicks(Math.Clamp(ticks, 2 * TimeSpan.TicksPerSecond, 5 * TimeSpan.TicksPerSecond));
                 var now = _clock.GetElapsedTime(started);
-                if (now + after - firstAsk.Value > LobbiesFullBudget || now + after > FreeRoamAskBudget)
+                if (joins >= MaxJoinsPerAsk || now + after - firstAsk.Value > LobbiesFullBudget || now + after > FreeRoamAskBudget)
                 {
                     _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.lobbies_full")));
                     return Decided(kind, FreeRoamResult.None, $"no world (every official {placement} world was full for {(int)(now - firstAsk.Value).TotalSeconds} s)");
@@ -503,6 +516,19 @@ public sealed partial class WorldsBridge
             }
             if (joined.Result == UiJoin.SlowDown && Volatile.Read(ref _joinAttempt) != 0)
                 return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
+            if (LastJoinRefusal == ConflictReasons.Pool && PoolApplies)
+            {
+                // OD-149: the server flagged this caller (409 pool): the anti-cheat move joins a pineapple world or opens one
+                _freeRoamToasts.Enqueue(PoolToast());
+                StartPoolMove($"a quick join of {placement} answered pool");
+                return Decided(kind, FreeRoamResult.None, $"no world (quick join {placement}: pool; the anti-cheat move takes over)");
+            }
+            // a rate-limited answer (429, or the join circuit's wait) stops at once: never spin against the mm.join bucket
+            if (joined.Result == UiJoin.SlowDown && full && OnlineOpen)
+            {
+                _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.lobbies_full")));
+                return Decided(kind, FreeRoamResult.None, $"no world (quick join {placement} rate limited after full lobbies)");
+            }
             if (OnlineOpen) PlacementFailedToast();
             return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no world (quick join {placement} refused: {joined.Result})");
         }

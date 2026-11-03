@@ -142,6 +142,12 @@ public sealed partial class WorldsBridge
             Task hostQueue;
             lock (_hostState) hostQueue = _hostOperation;
             await hostQueue.ConfigureAwait(false);
+            // and a lobby ask that started it (a quick join answered pool) has ended, so the move runs its own ask, not that one's answer
+            Task<byte>? asking;
+            lock (_freeRoamState) asking = _freeRoamRun;
+            if (asking is not null)
+                try { await asking.ConfigureAwait(false); }
+                catch (Exception error) when (HostFailure(error) || error is OperationCanceledException) { }
             using var deadline = new CancellationTokenSource(PoolMoveBudget, _clock);
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_onlineStop.Token, deadline.Token);
             var result = await EnsureFreeRoamWorldAsync(FreeRoamKind.FreeRoam, budget.Token).ConfigureAwait(false);
