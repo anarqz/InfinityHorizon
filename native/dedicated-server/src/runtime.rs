@@ -648,7 +648,11 @@ mod tests {
         match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Hub::Datagram { sock, data, .. }) => {
                 assert_eq!(sock, 7);
-                assert_eq!(data, vec![2u8; 10], "the oversize one never reaches the loop");
+                assert_eq!(
+                    data,
+                    vec![2u8; 10],
+                    "the oversize one never reaches the loop"
+                );
             }
             _ => panic!("no datagram"),
         }

@@ -365,11 +365,8 @@ impl ProofHost {
 
     fn reindex(&mut self) {
         self.bound.clear();
-        self.bound.extend(
-            self.bindings
-                .iter()
-                .map(|b| (b.peer, b.kind, b.endpoint)),
-        );
+        self.bound
+            .extend(self.bindings.iter().map(|b| (b.peer, b.kind, b.endpoint)));
     }
 
     /// Drops expired state. Runs on housekeeping, on a snapshot or kick, and before a verified

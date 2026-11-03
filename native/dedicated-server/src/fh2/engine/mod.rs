@@ -965,7 +965,13 @@ impl Engine {
         let s = self.settings.clone();
         let reason = if !self.allowed(open.user, endpoint) {
             Some(4)
-        } else if self.bans.get(&crate::net::ip_key(endpoint)).copied().unwrap_or(0) > self.now {
+        } else if self
+            .bans
+            .get(&crate::net::ip_key(endpoint))
+            .copied()
+            .unwrap_or(0)
+            > self.now
+        {
             Some(3)
         } else if open.version != wire::VERSION {
             Some(1)
