@@ -276,6 +276,7 @@ impl Engine {
         }
         self.side_rates.remove(&serial);
         self.voice_peer_left(serial);
+        self.watch_peer_left(p.index);
         if self.peers.is_empty() {
             self.group_node = 0;
         }
@@ -350,6 +351,7 @@ impl Engine {
         self.tick_bucket_list();
         self.tick_car_meet();
         self.tick_road_trip();
+        self.tick_watch();
         let now = self.now;
         let r = self.settings.relay.clone();
         if now - self.last_resend >= 50 {

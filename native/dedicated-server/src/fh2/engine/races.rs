@@ -720,7 +720,7 @@ impl Engine {
                 },
             );
             self.note("event.grid", vec![json!(participants.len())]);
-            self.watch_event_start();
+            self.watch_event_start("event: starting grid");
             for receiver in &participants {
                 let grid: Vec<Handle> = order
                     .iter()
@@ -758,7 +758,7 @@ impl Engine {
                 (RACE_START_TIME, u64::from(start), 32),
             ]);
             self.note("event.started", vec![json!(participants.len())]);
-            self.watch_event_start();
+            self.watch_event_start("event: race start");
             self.tag_started(self.now + 5000);
             self.begin_event_progress(start);
         }
@@ -1599,7 +1599,7 @@ impl Engine {
     fn begin_phase(&mut self, participants: &[u8]) {
         self.ev.event_side = participants.iter().copied().collect();
         self.ev.results_kept.clear();
-        self.watch_event_start();
+        self.watch_event_start("event: participants selected");
         if !self.ev.phasing {
             self.ev.phasing = true;
             for s in self.synced_serials_except(None) {
