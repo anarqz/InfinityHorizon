@@ -48,10 +48,24 @@ impl Engine {
 
     /// The messages a later feature consumes (car meet invitations, Road Trip, bucket-list
     /// requests): true when the message is that feature's (read, not acted on yet).
-    pub(super) fn other_seam(&mut self, _serial: u64, kind: u8, _body: &Bits) -> bool {
+    pub(super) fn other_seam(&mut self, serial: u64, kind: u8, body: &Bits) -> bool {
         match kind {
-            26 | 27 => true,
-            47 | 51 => self.kind == super::EngineKind::RoadTrip,
+            26 => {
+                self.invite_request(serial, body);
+                true
+            }
+            27 => {
+                self.join_or_cancel(serial, body);
+                true
+            }
+            47 if self.is_road_trip() => {
+                self.road_trip_vote(serial, body);
+                true
+            }
+            51 if self.is_road_trip() => {
+                self.road_trip_configured(serial);
+                true
+            }
             62..=64 => self.bucket_list_world(),
             _ => false,
         }
@@ -125,26 +139,17 @@ impl Engine {
         self.release_keep.remove(&peer.serial);
         self.race_peer_left(peer.index, peer.serial);
         self.leave_event_side(peer.index, false);
+        self.car_meet_peer_left(peer.serial);
+        self.road_trip_peer_left(peer.serial, peer.index);
     }
 
     // ---- step 4: Road Trip, tag events, teams, bucket-list pairs, the watch ----
-
-    /// A Road Trip's own event start once its players are ready (step 4).
-    pub(super) fn road_trip_ready(&mut self) {}
-
-    /// A Road Trip event closed (step 4).
-    pub(super) fn road_trip_event_closed(&mut self) {}
 
     /// The watch's exclusion at an event boundary (step 4).
     pub(super) fn watch_event_start(&mut self) {}
 
     /// Voice's hearing groups changed (a team event's teams; the voice port).
     pub(super) fn voice_groups_changed(&mut self) {}
-
-    /// The running Road Trip event's catalog id (its team twin is id + 10000).
-    pub(super) fn road_trip_current_race(&self) -> Option<i32> {
-        None
-    }
 
     /// A bucket-list co-op player stays in universe 0 during an event (step 4).
     pub(super) fn bucket_list_busy(&self, _serial: u64) -> bool {

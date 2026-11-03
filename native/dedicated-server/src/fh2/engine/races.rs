@@ -314,8 +314,8 @@ impl Engine {
         self.peer(serial).map(|p| p.index)
     }
 
-    fn is_road_trip(&self) -> bool {
-        self.kind == super::EngineKind::RoadTrip
+    pub(super) fn is_road_trip(&self) -> bool {
+        self.road_trip.is_some()
     }
 
     pub(super) fn is_event_owner(&self, serial: u64) -> bool {
@@ -494,7 +494,7 @@ impl Engine {
         }
     }
 
-    fn select_participants(&mut self) {
+    pub(super) fn select_participants(&mut self) {
         let Some(race) = self.ev.race.as_mut().filter(|r| r.stage == Stage::Inviting) else {
             return;
         };

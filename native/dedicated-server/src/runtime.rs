@@ -233,14 +233,10 @@ pub fn run(rc: RunConfig) -> i32 {
     }
     let mut catalog = crate::fh2::Catalog::default();
     if let Some(db) = &rc.game_db {
+        // deprecated (contract §9): the engine reads no game file; the catalogs come through
+        // `catalog.set` / `catalog.parts`
         catalog.path = Some(db.clone());
-        // Step 1 reads no catalog yet (the SQLite reader comes with Road Trip and the parts
-        // rule); a missing or unreadable file is never a start failure (contract §9).
-        let readable = std::fs::File::open(db).is_ok();
-        log::info(log_ids::DS_CATALOG)
-            .field("readable", readable)
-            .field("loaded", false)
-            .emit();
+        log::info(log_ids::DS_CATALOG).field("ignored", true).emit();
     }
     cfg.games = crate::registered_games(catalog);
     let ids = Arc::new(AtomicU64::new(1));
