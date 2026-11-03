@@ -7,7 +7,10 @@
 //! bounded state only; the keys never enter a frame, a log or an event. Ported from the C#
 //! `UdpProofCodec`/`UdpProofHost` (client f81d09c).
 
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    collections::HashSet,
+    net::{IpAddr, SocketAddr},
+};
 
 use hmac::{KeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -27,14 +30,19 @@ const DOMAINS: [&[u8]; 5] = [
 const BINDING_MS: u64 = 45_000;
 const PENDING_MS: u64 = 5_000;
 const SEEN_MS: u64 = 90_000;
+/// Retransmitted hellos (or responses) answered per pending challenge (or completed proof),
+/// counted per endpoint: a replay from elsewhere never spends another endpoint's retries.
+const RETRIES: u32 = 16;
 
 /// The FIUP authority of one grant (from a verified punch): the frame header it must carry, its
-/// key and its expiry (Unix seconds).
+/// key and its expiry (Unix seconds). Its fingerprint (SHA-256 of header and key, what bindings
+/// and pending state remember instead of the key) is computed once, when the snapshot is built.
 #[derive(Clone)]
 pub struct Authority {
     pub header: [u8; 56],
     pub key: [u8; 32],
     pub expires: i64,
+    fingerprint: [u8; 32],
 }
 
 impl std::fmt::Debug for Authority {
@@ -43,21 +51,44 @@ impl std::fmt::Debug for Authority {
     }
 }
 
+#[cfg(feature = "test-hooks")]
+thread_local! {
+    static FINGERPRINTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Test support: how many authority fingerprints (SHA-256) this thread has computed.
+#[cfg(feature = "test-hooks")]
+pub fn fingerprint_count() -> u64 {
+    FINGERPRINTS.with(std::cell::Cell::get)
+}
+
 impl Authority {
-    /// Overwrites the key (a replaced or revoked grant).
+    pub fn new(header: [u8; 56], key: [u8; 32], expires: i64) -> Authority {
+        #[cfg(feature = "test-hooks")]
+        FINGERPRINTS.with(|c| c.set(c.get() + 1));
+        let mut h = Sha256::new();
+        h.update(header);
+        h.update(key);
+        Authority {
+            header,
+            key,
+            expires,
+            fingerprint: h.finalize().into(),
+        }
+    }
+
+    /// Overwrites the key (a replaced or revoked grant); nothing matches its fingerprint after.
     pub fn zero(&mut self) {
-        for b in self.key.iter_mut() {
+        for b in self.key.iter_mut().chain(self.fingerprint.iter_mut()) {
             // volatile-free best effort: the value is dropped right after
             *b = 0;
         }
         std::hint::black_box(&self.key);
+        std::hint::black_box(&self.fingerprint);
     }
 
     fn fingerprint(&self) -> [u8; 32] {
-        let mut h = Sha256::new();
-        h.update(self.header);
-        h.update(self.key);
-        h.finalize().into()
+        self.fingerprint
     }
 }
 
@@ -218,6 +249,8 @@ struct Pending {
     at: u64,
     renewal: bool,
     fingerprint: [u8; 32],
+    /// Retransmissions answered for this hello from this endpoint.
+    retries: u32,
 }
 
 struct Completed {
@@ -226,6 +259,8 @@ struct Completed {
     ack: Vec<u8>,
     at: u64,
     fingerprint: [u8; 32],
+    /// Retransmissions answered for this response from this endpoint.
+    retries: u32,
 }
 
 struct Binding {
@@ -251,6 +286,20 @@ struct PreRate {
     at: u64,
     count: u32,
     ips: Vec<(IpAddr, u32)>,
+    /// Frames from an endpoint already bound to the grant: their own budget, which frames
+    /// from other endpoints (a replay included) cannot spend.
+    bound: u32,
+}
+
+/// A grant's hellos in the current second: hellos from new endpoints and renewals from an
+/// endpoint already bound to it are counted apart, so replays from new endpoints never use up
+/// the bound endpoint's renewal.
+#[derive(Clone, Copy)]
+struct GrantRate {
+    grant: [u8; 16],
+    at: u64,
+    fresh_hellos: u32,
+    renewals: u32,
 }
 
 /// The grant authorities the host knows now (the live verified snapshot).
@@ -279,14 +328,15 @@ pub struct ProofHost {
     pending: Vec<Pending>,
     completed: Vec<Completed>,
     bindings: Vec<Binding>,
+    /// (peer, kind, endpoint) of every binding: `allowed` rejects an unbound endpoint here.
+    bound: HashSet<(u64, u8, SocketAddr)>,
     seen: Vec<Seen>,
-    rates: Vec<([u8; 16], u64, u32, u32)>,
+    rates: Vec<GrantRate>,
     pre: Vec<([u8; 16], PreRate)>,
     rate_at: u64,
     pre_at: u64,
     new_count: u32,
     renew_count: u32,
-    retry_count: u32,
     pub counters: Counters,
 }
 
@@ -310,14 +360,29 @@ impl std::fmt::Debug for ProofHost {
 impl ProofHost {
     fn same_authority(l: &dyn Lookup, grant: &[u8; 16], fp: &[u8; 32], unix: i64) -> bool {
         l.authority(grant)
-            .is_some_and(|a| a.expires > unix && a.fingerprint() == *fp)
+            .is_some_and(|a| a.expires > unix && a.fingerprint() == *fp && *fp != [0; 32])
     }
 
+    fn reindex(&mut self) {
+        self.bound.clear();
+        self.bound.extend(
+            self.bindings
+                .iter()
+                .map(|b| (b.peer, b.kind, b.endpoint)),
+        );
+    }
+
+    /// Drops expired state. Runs on housekeeping, on a snapshot or kick, and before a verified
+    /// frame is handled; never per game datagram (`allowed` checks what it reads itself).
     fn prune(&mut self, l: &dyn Lookup, now: u64, unix: i64) {
         let u = unix.max(0) as u64;
+        let before = self.bindings.len();
         self.bindings.retain(|b| {
             fresh(b.at, now, BINDING_MS) && Self::same_authority(l, &b.grant, &b.key_hash, unix)
         });
+        if self.bindings.len() != before {
+            self.reindex();
+        }
         self.pending.retain(|p| {
             fresh(p.at, now, PENDING_MS)
                 && u64::from_be_bytes(p.challenge[107..115].try_into().unwrap_or([0; 8])) > u
@@ -331,13 +396,12 @@ impl ProofHost {
         self.seen.retain(|p| {
             fresh(p.at, now, SEEN_MS) && Self::same_authority(l, &p.grant, &p.fingerprint, unix)
         });
-        self.rates.retain(|r| fresh(r.1, now, 1000));
+        self.rates.retain(|r| fresh(r.at, now, 1000));
         self.pre.retain(|r| fresh(r.1.at, now, 1000));
         if !fresh(self.rate_at, now, 1000) {
             self.rate_at = now;
             self.new_count = 0;
             self.renew_count = 0;
-            self.retry_count = 0;
         }
     }
 
@@ -346,7 +410,12 @@ impl ProofHost {
         self.prune(l, now, unix);
     }
 
-    fn preliminary(&mut self, grant: [u8; 16], ip: IpAddr, now: u64) -> bool {
+    fn preliminary(&mut self, grant: [u8; 16], source: SocketAddr, now: u64) -> bool {
+        let bound = self
+            .bindings
+            .iter()
+            .any(|b| b.grant == grant && b.endpoint == source);
+        let ip = crate::net::ip_key(source);
         if !fresh(self.pre_at, now, 1000) {
             self.pre.clear();
             self.pre_at = now;
@@ -373,6 +442,13 @@ impl ProofHost {
             }
         };
         let rate = &mut self.pre[i].1;
+        if bound {
+            if rate.bound >= 64 {
+                return false;
+            }
+            rate.bound += 1;
+            return true;
+        }
         let have = rate.ips.iter().find(|x| x.0 == ip).map_or(0, |x| x.1);
         if rate.count >= 64 || have >= 16 || (rate.ips.len() >= 16 && have == 0) {
             return false;
@@ -385,9 +461,11 @@ impl ProofHost {
         true
     }
 
-    /// Whether `endpoint` is bound to `peer` for `kind` now.
+    /// Whether `endpoint` is bound to `peer` for `kind` now: an indexed miss for any unbound
+    /// endpoint; a bound one is checked for its 45 s and its authority's cached fingerprint (no
+    /// hashing, no pruning: this runs per game datagram).
     pub fn allowed(
-        &mut self,
+        &self,
         l: &dyn Lookup,
         peer: u64,
         kind: u8,
@@ -395,11 +473,17 @@ impl ProofHost {
         now: u64,
         unix: i64,
     ) -> bool {
-        self.prune(l, now, unix);
         let endpoint = crate::stun::canonical(endpoint);
-        self.bindings
-            .iter()
-            .any(|b| b.peer == peer && b.kind == kind && b.endpoint == endpoint)
+        if !self.bound.contains(&(peer, kind, endpoint)) {
+            return false;
+        }
+        self.bindings.iter().any(|b| {
+            b.peer == peer
+                && b.kind == kind
+                && b.endpoint == endpoint
+                && fresh(b.at, now, BINDING_MS)
+                && Self::same_authority(l, &b.grant, &b.key_hash, unix)
+        })
     }
 
     /// A FIUP datagram from `source`: the frame to answer with, if any.
@@ -451,7 +535,7 @@ impl ProofHost {
         let authority = l.authority(&p.grant)?.clone();
         if authority.expires <= unix
             || !same_context(&p, &authority.header)
-            || !self.preliminary(p.grant, source.ip(), now)
+            || !self.preliminary(p.grant, source, now)
             || !verify(&p, &authority.key)
         {
             return None;
@@ -462,13 +546,11 @@ impl ProofHost {
         if p.ty == 1 {
             if let Some(c) = self
                 .pending
-                .iter()
+                .iter_mut()
                 .find(|x| x.endpoint == source && x.hello.raw == p.raw)
             {
-                let ch = c.challenge.clone();
-                let retry = self.retry_count;
-                self.retry_count += 1;
-                return (retry < 16).then_some(ch);
+                c.retries += 1;
+                return (c.retries <= RETRIES).then(|| c.challenge.clone());
             }
             let nonce: [u8; 16] = p.raw[56..72].try_into().ok()?;
             // a consumed nonce cannot start a new lifetime
@@ -500,16 +582,23 @@ impl ProofHost {
             {
                 return None;
             }
-            let rate = self
-                .rates
-                .iter()
-                .find(|r| r.0 == p.grant)
-                .map_or((now, 0, 0), |r| (r.1, r.2, r.3));
+            let known = self.rates.iter().position(|r| r.grant == p.grant);
+            let rate = known.map_or(
+                GrantRate {
+                    grant: p.grant,
+                    at: now,
+                    fresh_hellos: 0,
+                    renewals: 0,
+                },
+                |i| self.rates[i],
+            );
             let established = self.bindings.iter().any(|b| b.grant == p.grant);
-            if rate.1 >= 2
-                || (!renewal && established && rate.2 >= 1)
-                || (self.rates.len() >= 4096 && !self.rates.iter().any(|r| r.0 == p.grant))
-            {
+            let over = if renewal {
+                rate.renewals >= 2
+            } else {
+                rate.fresh_hellos >= 2 || (established && rate.fresh_hellos >= 1)
+            };
+            if over || (self.rates.len() >= 4096 && known.is_none()) {
                 return None;
             }
             if if renewal {
@@ -519,12 +608,15 @@ impl ProofHost {
             } {
                 return None;
             }
+            // a grant's pending slots: two for new endpoints, two for renewals, never shared
             if self.pending.len() >= 64
                 || (!renewal && self.pending.iter().filter(|x| !x.renewal).count() >= 32)
                 || self
                     .pending
                     .iter()
-                    .filter(|x| x.hello.grant == p.grant && x.hello.kind == p.kind)
+                    .filter(|x| {
+                        x.hello.grant == p.grant && x.hello.kind == p.kind && x.renewal == renewal
+                    })
                     .count()
                     >= 2
                 || (!renewal
@@ -536,14 +628,14 @@ impl ProofHost {
             {
                 return None;
             }
-            let entry = (
-                p.grant,
-                if rate.1 == 0 { now } else { rate.0 },
-                rate.1 + 1,
-                rate.2 + u32::from(!renewal),
-            );
-            match self.rates.iter_mut().find(|r| r.0 == p.grant) {
-                Some(r) => *r = entry,
+            let entry = GrantRate {
+                grant: p.grant,
+                at: rate.at,
+                fresh_hellos: rate.fresh_hellos + u32::from(!renewal),
+                renewals: rate.renewals + u32::from(renewal),
+            };
+            match known {
+                Some(i) => self.rates[i] = entry,
                 None => self.rates.push(entry),
             }
             if renewal {
@@ -568,18 +660,17 @@ impl ProofHost {
                 at: now,
                 renewal,
                 fingerprint,
+                retries: 0,
             });
             return Some(ch);
         }
         if let Some(c) = self
             .completed
-            .iter()
+            .iter_mut()
             .find(|x| x.endpoint == source && x.response.raw == p.raw)
         {
-            let ack = c.ack.clone();
-            let retry = self.retry_count;
-            self.retry_count += 1;
-            return (retry < 16).then_some(ack);
+            c.retries += 1;
+            return (c.retries <= RETRIES).then(|| c.ack.clone());
         }
         let at = self.pending.iter().position(|x| {
             x.endpoint == source
@@ -615,6 +706,7 @@ impl ProofHost {
             key_hash: fingerprint,
             at: now,
         });
+        self.reindex();
         let ack = change_type(&p.raw, 4, &authority.key);
         if self.completed.len() == 64 {
             self.completed.remove(0);
@@ -625,6 +717,7 @@ impl ProofHost {
             ack: ack.clone(),
             at: now,
             fingerprint,
+            retries: 0,
         });
         Some(ack)
     }
