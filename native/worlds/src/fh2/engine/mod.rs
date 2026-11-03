@@ -26,6 +26,7 @@
 pub mod bits;
 mod bucket;
 mod carmeet;
+pub use carmeet::INVITE_ROAD_TRIP;
 pub mod datagram;
 pub mod dict;
 pub mod history;

@@ -30,7 +30,7 @@ use serde_json::{Map, Value, json};
 use super::{
     catalog::{self, Catalog},
     config::{self, AgentConfig, GAME},
-    engine::{self, Control, Input, SessionAnswer},
+    engine::{self, Control, Input, MadeSession, SessionAnswer},
     exit,
     http::{Client, Reply},
     sign, uuid_v4,
@@ -56,6 +56,9 @@ const PUNCHES_MAX: usize = 256;
 const GAME_SESSION_BUDGET: Duration = Duration::from_secs(14);
 /// The most game-session calls in flight (an engine holds at most 16 requests per world).
 const GAME_SESSIONS_MAX: usize = 32;
+/// A group world nobody reached is closed after the seats' longest hold (`FI_MM_SEAT_HOLD_SECS`
+/// default 600, MATCHMAKING_API §3.2) and a minute empty; the server ends it then anyway.
+const GROUP_HOLD: Duration = Duration::from_secs(600);
 /// `GameModeSessionRequest.xuids`: 1-12 (MATCHMAKING_API §3.8).
 const GAME_SESSION_XUIDS_MAX: usize = 12;
 
@@ -71,6 +74,11 @@ struct World {
     /// One key per logical announce, kept for its retries.
     announce_key: String,
     last_admission: Option<(usize, u64)>,
+    /// A car meet session's group world (WORLDS_OFFICIAL.md §11.4): never a spare.
+    group: bool,
+    /// Somebody was in it once (a group world closes when it empties again).
+    seen_peers: bool,
+    opened: Instant,
 }
 
 /// A `world.gameSession.request` waiting for its call.
@@ -601,6 +609,7 @@ impl Agent {
                     .unwrap_or(0);
                 let handshaking = ev.get("handshaking").and_then(Value::as_u64).unwrap_or(0);
                 w.peers = peers;
+                w.seen_peers |= !w.peers.is_empty();
                 w.busy = grants > 0 || handshaking > 0;
                 if w.peers.is_empty() && !w.busy {
                     w.idle_since.get_or_insert_with(Instant::now);
@@ -682,14 +691,19 @@ impl Agent {
         let ours = self
             .worlds
             .iter()
-            .any(|w| w.id == world && w.activity == config::MIXED);
-        let refusal = if !ours {
+            .any(|w| w.id == world && w.activity == config::MIXED && !w.group);
+        // OD-191: free roam, or Road Trip with a catalog (the group world runs it); Showdown and
+        // anything else are not served, answered at once
+        let kind = match kind {
+            Some("freeroam") => Some("freeroam"),
+            Some("roadtrip") if self.road_trip.is_some() => Some("roadtrip"),
+            _ => None,
+        };
+        let refusal = if !ours || kind.is_none() {
             Some("not_served")
-        } else if kind != Some("freeroam")
-            || xuids.as_ref().is_none_or(|x| {
-                x.is_empty() || x.len() > GAME_SESSION_XUIDS_MAX || x.iter().any(|v| !v.is_string())
-            })
-        {
+        } else if xuids.as_ref().is_none_or(|x| {
+            x.is_empty() || x.len() > GAME_SESSION_XUIDS_MAX || x.iter().any(|v| !v.is_string())
+        }) {
             Some("invalid")
         } else if self.sessions.len() >= GAME_SESSIONS_MAX {
             Some("busy")
@@ -700,7 +714,7 @@ impl Agent {
             self.answer_session(control, &world, rid, Err(code), None);
             return;
         }
-        let body = json!({"kind": "freeroam", "xuids": xuids}).to_string();
+        let body = json!({"kind": kind, "xuids": xuids}).to_string();
         let target = format!("{}/game-sessions", Self::world_target(&world));
         let key = uuid_v4();
         let seconds = self.seconds();
@@ -716,6 +730,13 @@ impl Agent {
                 let (session, status) = match reply {
                     Ok(r) if r.status == 200 || r.status == 201 => {
                         (session_of(&r.body).ok_or("body"), Some(r.status))
+                    }
+                    // the VM is at `maxWorlds` (a group world counts): not served here now
+                    Ok(r)
+                        if r.status == 409
+                            && error_reason(&r.body).as_deref() == Some("max_worlds") =>
+                    {
+                        (Err("not_served"), Some(r.status))
                     }
                     Ok(r) => (Err("refused"), Some(r.status)),
                     Err(()) => (Err("network"), None),
@@ -742,16 +763,92 @@ impl Agent {
     }
 
     /// A game-session call came back: answered unless its deadline already answered `null`.
+    /// A made session's group world is opened on the engine (with its context) **before** the
+    /// answer, so the players' games find it when they connect (WORLDS_OFFICIAL.md §11.4).
     fn session_answered(&mut self, control: &Control, a: SessionAnswer) {
         let Some(i) = self
             .sessions
             .iter()
             .position(|p| p.world == a.world && p.rid == a.rid)
         else {
+            if let Ok(made) = &a.session {
+                // answered null already: the server's group world is not served here
+                self.schedule_delete(made.world.clone());
+            }
             return;
         };
         self.sessions.remove(i);
-        self.answer_session(control, &a.world, a.rid, a.session, a.status);
+        let session = match a.session {
+            Ok(made) => match self.open_group(control, &made) {
+                Ok(()) => Ok(made),
+                Err(code) => {
+                    self.schedule_delete(made.world.clone());
+                    Err(code)
+                }
+            },
+            Err(code) => Err(code),
+        };
+        self.answer_session(control, &a.world, a.rid, session, a.status);
+    }
+
+    /// `world.open` + `world.context` of a session's group world, then announced like the
+    /// others from now on (its first announce at once: the punches admit its players).
+    fn open_group(&mut self, control: &Control, made: &MadeSession) -> Result<(), &'static str> {
+        if self.worlds.iter().any(|w| w.id == made.world) {
+            return Ok(());
+        }
+        let opened = control.request_retry(
+            "world.open",
+            json!({"worldId": made.world, "game": GAME,
+                "host": {"kind": "official", "vmId": self.cfg.vm_id},
+                "activity": made.activity, "maxPlayers": self.cfg.max_players,
+                "races": true, "requireProof": true}),
+        );
+        if let Err(e) = opened {
+            self.engine_refused("world.open", &e);
+            if e.code == "capacity" {
+                self.engine_full = true;
+            }
+            return Err(if e.code == "capacity" {
+                "capacity"
+            } else {
+                "engine"
+            });
+        }
+        let context = control.request_retry(
+            "world.context",
+            json!({"worldId": made.world, "serverTimeMs": self.server_ms(),
+                "world": {"id": made.world, "game": GAME, "host": {"official": self.cfg.vm_id}}}),
+        );
+        if let Err(e) = context {
+            self.engine_refused("world.context", &e);
+            let _ = control.request_retry(
+                "world.close",
+                json!({"worldId": made.world, "reason": "controller"}),
+            );
+            return Err("engine");
+        }
+        let now = Instant::now();
+        self.worlds.push(World {
+            id: made.world.clone(),
+            mode: self.cfg.modes.first().copied().unwrap_or("noob"),
+            activity: made.activity,
+            peers: Vec::new(),
+            busy: false,
+            idle_since: Some(now),
+            next_announce: now,
+            announce_key: uuid_v4(),
+            last_admission: None,
+            group: true,
+            seen_peers: false,
+            opened: now,
+        });
+        log::info(log_ids::AGENT_WORLD_OPENED)
+            .world(&made.world)
+            .field("activity", made.activity)
+            .field("group", true)
+            .emit();
+        Ok(())
     }
 
     /// `world.gameSession.answer`: the session, or `session: null` with the refusal's code (the
@@ -761,13 +858,13 @@ impl Agent {
         control: &Control,
         world: &str,
         rid: u64,
-        session: Result<(String, String), &'static str>,
+        session: Result<MadeSession, &'static str>,
         status: Option<u16>,
     ) {
         let (fields, outcome) = match &session {
-            Ok((name, template)) => (
+            Ok(made) => (
                 json!({"worldId": world, "rid": rid,
-                    "session": {"name": name, "templateName": template}}),
+                    "session": {"name": made.name, "templateName": made.template}}),
                 "created",
             ),
             Err(code) => (
@@ -943,9 +1040,20 @@ impl Agent {
             return;
         }
         let max = usize::from(self.cfg.max_players);
+        // a group world closes once it emptied again, or nobody came within the seats' hold
+        let ended = self.worlds.iter().find(|w| {
+            w.group
+                && idle_for(w, now) >= IDLE_CLOSE
+                && (w.seen_peers || now.saturating_duration_since(w.opened) >= GROUP_HOLD)
+        });
+        if let Some(id) = ended.map(|w| w.id.clone()) {
+            self.close(control, &id, "group_ended");
+            return;
+        }
         // worlds of an activity or mode no longer placed close once idle
         let stray = self.worlds.iter().find(|w| {
-            (!self.activities.contains(&w.activity) || !self.cfg.modes.contains(&w.mode))
+            !w.group
+                && (!self.activities.contains(&w.activity) || !self.cfg.modes.contains(&w.mode))
                 && idle_for(w, now) >= IDLE_CLOSE
         });
         if let Some(id) = stray.map(|w| w.id.clone()) {
@@ -956,7 +1064,7 @@ impl Agent {
             let group: Vec<&World> = self
                 .worlds
                 .iter()
-                .filter(|w| w.mode == mode && w.activity == activity)
+                .filter(|w| !w.group && w.mode == mode && w.activity == activity)
                 .collect();
             let free = group.iter().filter(|w| w.peers.len() < max).count();
             if free == 0 {
@@ -1050,6 +1158,9 @@ impl Agent {
                     next_announce: now + Duration::from_secs(self.cfg.announce_seconds),
                     announce_key: uuid_v4(),
                     last_admission: None,
+                    group: false,
+                    seen_peers: false,
+                    opened: now,
                 });
                 log::info(log_ids::AGENT_WORLD_OPENED)
                     .world(&id)
@@ -1213,13 +1324,27 @@ fn spare_groups(
     groups
 }
 
-/// `GameModeSession {name, templateName}` of a `game-sessions` answer (MATCHMAKING_API §3.8).
-fn session_of(body: &[u8]) -> Option<(String, String)> {
+/// `GameModeSession {name, templateName, world: {worldId, activity}}` of a `game-sessions`
+/// answer (MATCHMAKING_API §3.8; WORLDS_OFFICIAL.md §11.4): the group world's id a UUID and its
+/// activity `freeroam` or `roadtrip`.
+fn session_of(body: &[u8]) -> Option<MadeSession> {
     let v: Value = serde_json::from_slice(body).ok()?;
-    Some((
-        v.get("name")?.as_str()?.to_string(),
-        v.get("templateName")?.as_str()?.to_string(),
-    ))
+    let world = v.get("world")?;
+    let id = world.get("worldId")?.as_str()?;
+    if !crate::core::grant::uuid(id) {
+        return None;
+    }
+    let activity = match world.get("activity")?.as_str()? {
+        "freeroam" => "freeroam",
+        "roadtrip" => "roadtrip",
+        _ => return None,
+    };
+    Some(MadeSession {
+        name: v.get("name")?.as_str()?.to_string(),
+        template: v.get("templateName")?.as_str()?.to_string(),
+        world: id.to_string(),
+        activity,
+    })
 }
 
 fn idle_for(w: &World, now: Instant) -> Duration {
@@ -1293,11 +1418,32 @@ mod tests {
 
     #[test]
     fn a_game_session_answer_needs_its_name_and_template() {
-        let ok = br#"{"kind":"freeroam","scid":"788f0100-a4bc-46c3-b19b-d1001a96545b","templateName":"defaulttemplate","name":"fh2inf-invite-a-b","members":["1"]}"#;
+        let body = |world: &str| {
+            format!(
+                r#"{{"kind":"roadtrip","scid":"788f0100-a4bc-46c3-b19b-d1001a96545b","templateName":"defaulttemplate","name":"fh2inf-invite-a-b","members":["1"]{world}}}"#
+            )
+        };
+        let w = "4f1c2a6e-1b2d-4c3e-8f40-5a6b7c8d9e01";
+        let ok = body(&format!(
+            r#","world":{{"worldId":"{w}","activity":"roadtrip"}}"#
+        ));
         assert_eq!(
-            session_of(ok),
-            Some(("fh2inf-invite-a-b".into(), "defaulttemplate".into()))
+            session_of(ok.as_bytes()),
+            Some(MadeSession {
+                name: "fh2inf-invite-a-b".into(),
+                template: "defaulttemplate".into(),
+                world: w.into(),
+                activity: "roadtrip",
+            })
         );
+        // OD-191: no group world, a malformed id or another activity is not a session
+        for world in [
+            String::new(),
+            r#","world":{"worldId":"nope","activity":"freeroam"}"#.to_string(),
+            format!(r#","world":{{"worldId":"{w}","activity":"carmeet"}}"#),
+        ] {
+            assert_eq!(session_of(body(&world).as_bytes()), None, "{world}");
+        }
         assert_eq!(session_of(br#"{"name":"x"}"#), None);
         assert_eq!(session_of(b"not json"), None);
     }

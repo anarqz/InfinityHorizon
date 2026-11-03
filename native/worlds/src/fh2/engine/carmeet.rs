@@ -21,6 +21,9 @@ use super::{
 use crate::fh2::codec::object::seq_next;
 
 pub const INVITE_FREE_ROAM: u8 = 1;
+/// The Road Trip invitation (`CarMeetInviteType` 2; served only where the world allows it,
+/// OD-191: an official car meet lobby).
+pub const INVITE_ROAD_TRIP: u8 = 2;
 pub const CAR_MEET_JOIN_MS: i64 = 20_000;
 pub const CAR_MEET_CREATE_MS: i64 = 15_000;
 pub const CAR_MEET_READY_MS: i64 = 30_000;
@@ -62,6 +65,8 @@ pub(super) struct CarMeet {
     request: u32,
     session: Option<(String, String)>,
     pub sequence: u8,
+    /// Road Trip invitations are asked for too (OD-191); off: only free roam, as the reference.
+    road_trip_invites: bool,
 }
 
 /// CarMeetSynced variables: 1 InviteCountDownTime and, when given, 16/17 the session's name and
@@ -150,6 +155,12 @@ impl Engine {
         b
     }
 
+    /// OD-191: an official car meet lobby also asks for Road Trip sessions (the agent opens a
+    /// group world for them); Showdown and other types stay ignored.
+    pub fn serve_road_trip_invites(&mut self, on: bool) {
+        self.car_meet.road_trip_invites = on;
+    }
+
     /// 26: a player starts an invitation.
     pub(super) fn invite_request(&mut self, serial: u64, body: &Bits) {
         if self.settings.car_meet_lobby.is_none() {
@@ -162,7 +173,9 @@ impl Engine {
             return;
         };
         let kind = kind as u8;
-        if kind != INVITE_FREE_ROAM {
+        let served = kind == INVITE_FREE_ROAM
+            || (kind == INVITE_ROAD_TRIP && self.car_meet.road_trip_invites);
+        if !served {
             // Road Trip and Showdown invitations: their sessions do not exist on the platform yet
             self.peer_noted(
                 serial,
@@ -362,5 +375,92 @@ impl Engine {
 
     pub(super) fn car_meet_peer_left(&mut self, serial: u64) {
         self.car_meet.joined.retain(|s| *s != serial);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{super::testkit, *};
+    use crate::{core::Profile, fh2::RelaySettings};
+
+    /// Admits everyone and has a controller to ask for sessions.
+    struct Asks;
+    impl super::super::Policy for Asks {
+        fn has_authorize(&self) -> bool {
+            false
+        }
+        fn has_authorize_hook(&self) -> bool {
+            false
+        }
+        fn authorize(&mut self, _: u64, _: std::net::SocketAddr, _: i64) -> bool {
+            true
+        }
+        fn authorize_hook(&mut self, _: u64, _: std::net::SocketAddr, _: i64) -> bool {
+            true
+        }
+        fn awaits_proof(&mut self, _: u64, _: i64) -> Option<bool> {
+            None
+        }
+        fn can_create_game_session(&self) -> bool {
+            true
+        }
+    }
+
+    fn car_meet() -> Engine {
+        let settings = super::super::EngineSettings {
+            relay: RelaySettings::for_profile(Profile::Public),
+            max_players: 12,
+            races: true,
+            car_meet_lobby: Some(3),
+            enforce_car_rule: false,
+            road_trip: None,
+        };
+        let seeds = super::super::random::Seeds {
+            weather: 1,
+            tag: 2,
+            team: 3,
+            attempt: 4,
+            transaction: 5,
+        };
+        Engine::new(
+            super::super::EngineKind::CarMeet3,
+            settings,
+            super::super::random::EngineRandom::new(seeds),
+            Box::new(Asks),
+        )
+        .expect("valid settings")
+    }
+
+    /// The kinds of the sessions asked for after one invitation of `kind` and its countdown.
+    fn asked(road_trip: bool, kind: u8) -> Vec<u8> {
+        let mut e = car_meet();
+        e.serve_road_trip_invites(road_trip);
+        let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_102);
+        let mut body = Bits::new();
+        body.push(u64::from(kind), 2).push(0, 32);
+        e.invite_request(starter, &body);
+        e.now += CAR_MEET_JOIN_MS + 1;
+        e.tick_car_meet();
+        e.take_events()
+            .into_iter()
+            .filter_map(|ev| match ev {
+                Event::CreateGameSession { kind, xuids, .. } => {
+                    assert_eq!(xuids, vec![1_000_000_000_000_102]);
+                    Some(kind)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn road_trip_invitations_are_asked_for_only_where_the_world_serves_them() {
+        // the reference (and every player-hosted car meet): free roam only
+        assert_eq!(asked(false, INVITE_FREE_ROAM), vec![INVITE_FREE_ROAM]);
+        assert!(asked(false, INVITE_ROAD_TRIP).is_empty());
+        // OD-191: the official car meet lobby asks for Road Trip too; type 3 stays ignored
+        assert_eq!(asked(true, INVITE_ROAD_TRIP), vec![INVITE_ROAD_TRIP]);
+        assert_eq!(asked(true, INVITE_FREE_ROAM), vec![INVITE_FREE_ROAM]);
+        assert!(asked(true, 3).is_empty());
     }
 }
