@@ -351,12 +351,12 @@ pub const FH2_MESSAGES: &[MessageSpec] = &[
     m(64, "RequestDesynchronizeBucketListChallenge", Some(2), 2, Some(12), false, Both, EMPTY),
     m(65, "RespondBucketListPartner", None, 2, Some(12), false, ToGame,
         f(&[Key(7), U(5), Bool, Str(36)])),
-    // 66-68: §6.3 reads key(7) s32 / key(7) key(7) s32 / key(7) key(7) s32 bool from the
-    // executable; the C# engine sends a lone s32 and the D2 vectors (the judge, OD-187) agree.
-    // Reported back: a game reading §6.3's layout would misread these.
-    m(66, "BucketListStatusPlayerWaiting", None, 2, Some(12), false, ToGame, f(&[S(32)])),
-    m(67, "BucketListStatusChallengeStarted", None, 2, Some(12), false, ToGame, f(&[S(32)])),
-    m(68, "BucketListStatusChallengeEnded", None, 2, Some(12), false, ToGame, f(&[S(32)])),
+    // 66-68 as §6.3 reads them from the executable (the final C# engine and the D2 vectors agree)
+    m(66, "BucketListStatusPlayerWaiting", None, 2, Some(12), false, ToGame, f(&[Key(7), S(32)])),
+    m(67, "BucketListStatusChallengeStarted", None, 2, Some(12), false, ToGame,
+        f(&[Key(7), Key(7), S(32)])),
+    m(68, "BucketListStatusChallengeEnded", None, 2, Some(12), false, ToGame,
+        f(&[Key(7), Key(7), S(32), Bool])),
     m(69, "MsgDebugLog", None, 2, Some(3), false, ToGame, f(&[U(2)])),
     m(70, "MsgInactivePlayersPulled", Some(2), 1, Some(6), true, Both, f(&[Key(2)])),
     m(71, "ServerTrafficMessage", Some(1), 1, None, false, FromGame, f(TRAFFIC_MESSAGE)),
