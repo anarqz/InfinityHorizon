@@ -68,7 +68,10 @@ pub enum Role {
     Serve(Vec<String>),
     /// `worlds --version` (the same line as `worlds serve --version`).
     Version,
-    /// `worlds relay` / `worlds agent`: named, not implemented yet (exit 7).
+    /// `worlds agent <arguments>`: the world agent (WORLDS_OFFICIAL.md §4; DEDICATED_SERVER.md §16);
+    /// the arguments go to `agent::config::parse`.
+    Agent(Vec<String>),
+    /// `worlds relay`: named, not implemented yet (exit 7).
     Unimplemented(&'static str),
 }
 
@@ -78,7 +81,7 @@ pub fn parse_role(args: &[String]) -> Result<Role, Invalid> {
         Some((role, rest)) if role == "serve" => Ok(Role::Serve(rest.to_vec())),
         Some((flag, [])) if flag == "--version" => Ok(Role::Version),
         Some((role, _)) if role == "relay" => Ok(Role::Unimplemented("relay")),
-        Some((role, _)) if role == "agent" => Ok(Role::Unimplemented("agent")),
+        Some((role, rest)) if role == "agent" => Ok(Role::Agent(rest.to_vec())),
         _ => Err("role"),
     }
 }
@@ -285,7 +288,7 @@ mod tests {
         );
         assert_eq!(
             parse_role(&args(&["agent", "--x"])),
-            Ok(Role::Unimplemented("agent"))
+            Ok(Role::Agent(args(&["--x"])))
         );
         for bad in [
             &[][..],
