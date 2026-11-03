@@ -543,3 +543,101 @@ impl Engine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::super::{
+        races::Race,
+        testkit::{engine, seat},
+    };
+    use super::*;
+
+    /// Two participants of a started King event, car 1 It; their cars at `x1` and `x2` (m).
+    fn king(x1: f32, x2: f32) -> (Engine, u64, u64) {
+        let mut e = engine();
+        let a = seat(&mut e, 1, 1001);
+        let b = seat(&mut e, 2, 1002);
+        e.now = 10_000;
+        for (s, x) in [(a, x1), (b, x2)] {
+            let p = e.peer_mut(s).unwrap();
+            p.car_position = Some([x, 0.0, 0.0]);
+            p.last_car_at = Some(10_000);
+        }
+        e.ev.race = Some(Race {
+            owner_serial: a,
+            owner: 1,
+            participants: vec![1, 2],
+            finished: HashSet::new(),
+            in_progress: HashSet::new(),
+            results_noted: HashSet::new(),
+            stage: Stage::Started,
+            invite_until: 0,
+            stage_until: 0,
+            first_finish_at: None,
+            grid: None,
+        });
+        e.tag = Some(TagGame {
+            rules: TagRules {
+                mode: TagMode::King,
+                it_bucket: TagRules::IT,
+                it_becomes: TagRules::NOT_IT,
+                not_it_becomes: TagRules::IT,
+                players_per_it: None,
+            },
+            limit_ms: 600_000,
+            assign_at: 0,
+            assigned: true,
+            buckets: BTreeMap::from([(1, 1), (2, 0)]),
+            swapped_at: BTreeMap::new(),
+            repeats: Vec::new(),
+            go_at: None,
+            marked: 0,
+            held_ms: BTreeMap::new(),
+            hits: BTreeMap::new(),
+        });
+        (e, a, b)
+    }
+
+    fn buckets(e: &Engine) -> (u8, u8) {
+        let t = e.tag.as_ref().unwrap();
+        (t.buckets[&1], t.buckets[&2])
+    }
+
+    /// Peer `serial` (index `me`) reports hitting `other`, with the buckets it saw.
+    fn hit(e: &mut Engine, serial: u64, me: u8, other: u8) {
+        let (b1, b2) = buckets(e);
+        let (mine, theirs) = if me == 1 { (b1, b2) } else { (b2, b1) };
+        e.tag_collision(
+            serial,
+            ObjKey::own(7),
+            ObjKey::relay(7, other),
+            [mine, 1 - mine, theirs, 1 - theirs],
+        );
+    }
+
+    #[test]
+    fn a_hit_across_the_map_is_ignored() {
+        let (mut e, a, _) = king(0.0, 500.0);
+        hit(&mut e, a, 1, 2);
+        assert_eq!(buckets(&e), (1, 0));
+    }
+
+    #[test]
+    fn a_near_hit_swaps_and_the_same_pair_cannot_swap_back_at_once() {
+        let (mut e, a, b) = king(0.0, 5.0);
+        hit(&mut e, a, 1, 2);
+        assert_eq!(buckets(&e), (0, 1));
+        // the tag-back at message rate is refused
+        hit(&mut e, b, 2, 1);
+        assert_eq!(buckets(&e), (0, 1));
+        // after the cooldown (the cars still fresh and near) it counts
+        e.now += TAG_SWAP_COOLDOWN_MS;
+        for s in [a, b] {
+            e.peer_mut(s).unwrap().last_car_at = Some(e.now);
+        }
+        hit(&mut e, b, 2, 1);
+        assert_eq!(buckets(&e), (1, 0));
+    }
+}

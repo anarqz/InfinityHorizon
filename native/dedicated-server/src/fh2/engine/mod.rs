@@ -43,6 +43,8 @@ mod send;
 mod side;
 mod tag;
 pub mod teams;
+#[cfg(test)]
+mod testkit;
 mod voice;
 pub mod watch;
 pub mod weather;
@@ -1017,14 +1019,35 @@ impl Engine {
         let attempt = self.random.attempt();
         let serial = self.next_serial;
         self.next_serial += 1;
+        let peer = self.new_peer(serial, endpoint, index, open.user, attempt, open.attempt);
+        self.peers.push(peer);
+        self.events.push(Event::ConnectionOpened {
+            index,
+            a: open.a,
+            b: open.b,
+            refusal: None,
+        });
+        Some(serial)
+    }
+
+    /// A new peer's state (every counter at its start; the rate buckets full).
+    fn new_peer(
+        &self,
+        serial: u64,
+        endpoint: SocketAddr,
+        index: u8,
+        xuid: u64,
+        attempt: u32,
+        client_attempt: u32,
+    ) -> Peer {
         let r = &self.settings.relay;
-        self.peers.push(Peer {
+        Peer {
             serial,
             endpoint,
             index,
-            xuid: open.user,
+            xuid,
             attempt,
-            client_attempt: open.attempt,
+            client_attempt,
             completion_confirmed: false,
             last_completion: 0,
             acks: AckWindow::default(),
@@ -1079,14 +1102,7 @@ impl Engine {
             road_trip_selection_sequence: None,
             oversize_dropped: 0,
             notes_used: HashMap::new(),
-        });
-        self.events.push(Event::ConnectionOpened {
-            index,
-            a: open.a,
-            b: open.b,
-            refusal: None,
-        });
-        Some(serial)
+        }
     }
 
     fn refuse(
