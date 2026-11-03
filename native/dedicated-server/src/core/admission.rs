@@ -176,7 +176,7 @@ fn private_ip(ip: IpAddr) -> bool {
 }
 
 fn loopback(e: SocketAddr) -> bool {
-    crate::stun::canonical(e).ip().is_loopback()
+    crate::stun::plain_endpoint(e).ip().is_loopback()
 }
 
 /// Unix milliseconds of an RFC 3339 instant (`Z` or a numeric offset, optional fraction).
@@ -434,7 +434,7 @@ impl Gate {
                 let port = u16::try_from(e.get("port")?.as_u64()?)
                     .ok()
                     .filter(|p| *p > 0)?;
-                unicast(ip).then(|| crate::stun::canonical(SocketAddr::new(ip, port)))
+                unicast(ip).then(|| crate::stun::plain_endpoint(SocketAddr::new(ip, port)))
             });
             let mut proof_key: Option<[u8; 32]> = relay.get("udpProof").and_then(|u| {
                 let key = u.get("key")?.as_str()?;
@@ -601,7 +601,7 @@ impl Gate {
 
     /// The decision for (xuid, endpoint, kind 0 game / 1 hook), in §6.2's order.
     pub fn allowed(&mut self, xuid: u64, endpoint: SocketAddr, kind: u8, mono: u64) -> bool {
-        let endpoint = crate::stun::canonical(endpoint);
+        let endpoint = crate::stun::plain_endpoint(endpoint);
         if self.rules.host_xuid != 0 && xuid == self.rules.host_xuid {
             return self.rules.is_player && self.host_live(mono) && loopback(endpoint);
         }

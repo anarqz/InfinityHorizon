@@ -23,7 +23,7 @@ use super::{
     timers::{Timer, Timers},
     world::{self, Ctx, World},
 };
-use crate::nat::{Nat, NatSettings};
+use crate::nat::{NatProbe, ProbeConfig};
 use crate::{
     control::{
         ConnId, Transport,
@@ -772,10 +772,14 @@ impl Server {
             // STUN, UPnP and punches on the world socket (§5.1); their threads only resolve the
             // STUN servers and talk to the router
             if let Some(n) = &w.spec.network {
-                let mut settings = NatSettings::new(b.port, n.discovery, n.discovery && n.upnp);
-                settings.stun_servers = n.stun_servers.clone();
-                settings.stun_every_ms = n.stun_interval_ms;
-                w.nat = Some(Nat::new(settings, b.dual, self.now));
+                let config = ProbeConfig {
+                    stun_names: n.stun_names.clone(),
+                    round_ms: n.stun_interval_ms,
+                    resolve_names: n.resolve_stun,
+                    map_port: n.resolve_stun && n.map_port,
+                    ..ProbeConfig::for_port(b.port)
+                };
+                w.nat = Some(NatProbe::start(config, b.dual, self.now));
             }
         }
         let mut reply = Map::new();
@@ -1013,9 +1017,9 @@ impl Server {
     ) {
         self.advance(now);
         self.stats.datagrams_in += 1;
-        let from = crate::stun::canonical(from);
+        let from = crate::stun::plain_endpoint(from);
         if self.cfg.profile == Profile::Public {
-            if sock != PUBLIC_SOCKET || from != crate::stun::canonical(self.cfg.relay) {
+            if sock != PUBLIC_SOCKET || from != crate::stun::plain_endpoint(self.cfg.relay) {
                 self.stats.not_relay_dropped += 1;
                 self.stats.datagrams_dropped += 1;
                 return;

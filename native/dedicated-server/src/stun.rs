@@ -9,7 +9,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 /// The magic cookie (RFC 8489 §5).
-pub const MAGIC: u32 = 0x2112_A442;
+pub const MAGIC_COOKIE: u32 = 0x2112_A442;
 /// Binding request (method 0x001, class request).
 pub const BINDING_REQUEST: u16 = 0x0001;
 /// Binding success response (method 0x001, class success).
@@ -35,10 +35,12 @@ const FAMILY_V6: u8 = 0x02;
 /// What the world reads from a STUN message: its type, its transaction, and the address a
 /// (XOR-)MAPPED-ADDRESS reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Message {
-    pub kind: u16,
-    pub txid: TxId,
-    pub mapped: Option<SocketAddr>,
+pub struct Decoded {
+    /// The message type (class and method, RFC 8489 §5).
+    pub msg_type: u16,
+    pub transaction: TxId,
+    /// The reflexive transport address a (XOR-)MAPPED-ADDRESS carried.
+    pub reflexive: Option<SocketAddr>,
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 {
@@ -52,16 +54,16 @@ fn padded(value_len: usize) -> usize {
 
 /// The shape check: a 32-bit aligned datagram of 20..=548 bytes whose two top bits are zero,
 /// whose header carries the magic cookie, and whose length field covers exactly the rest.
-pub fn is_stun(data: &[u8]) -> bool {
+pub fn is_framed(data: &[u8]) -> bool {
     let size = data.len();
     (HEADER_LEN..=MAX_LEN).contains(&size)
         && size.is_multiple_of(4)
         && data[0] & 0b1100_0000 == 0
-        && data[4..8] == MAGIC.to_be_bytes()
+        && data[4..8] == MAGIC_COOKIE.to_be_bytes()
         && usize::from(u16_at(data, 2)) == size - HEADER_LEN
 }
 
-/// The attributes of a message that passed [`is_stun`], in order. An attribute whose declared
+/// The attributes of a message that passed [`is_framed`], in order. An attribute whose declared
 /// length runs past the datagram yields one `Err` and ends the walk.
 struct Attributes<'a> {
     data: &'a [u8],
@@ -98,7 +100,7 @@ fn attributes(data: &[u8]) -> Attributes<'_> {
 /// The value of the first `attribute` of a STUN message of type `kind`; `None` when the message
 /// is not that, lacks it, or an attribute before it is truncated.
 pub fn attribute(data: &[u8], kind: u16, attribute: u16) -> Option<&[u8]> {
-    if !is_stun(data) || u16_at(data, 0) != kind {
+    if !is_framed(data) || u16_at(data, 0) != kind {
         return None;
     }
     for item in attributes(data) {
@@ -111,10 +113,26 @@ pub fn attribute(data: &[u8], kind: u16, attribute: u16) -> Option<&[u8]> {
     None
 }
 
+/// Like [`attribute`], but the whole message must walk: an attribute running past the end
+/// refuses the message even when it comes after the one asked for (the side channels' rule).
+pub fn attribute_strict(data: &[u8], kind: u16, wanted: u16) -> Option<&[u8]> {
+    if !is_framed(data) || u16_at(data, 0) != kind {
+        return None;
+    }
+    let mut first = None;
+    for item in attributes(data) {
+        let (tag, value) = item.ok()?;
+        if tag == wanted && first.is_none() {
+            first = Some(value);
+        }
+    }
+    first
+}
+
 /// The cookie followed by the transaction: the XOR key of the address forms (RFC 8489 §14.2).
 fn xor_key(txid: &[u8]) -> [u8; 16] {
     let mut key = [0u8; 16];
-    key[..4].copy_from_slice(&MAGIC.to_be_bytes());
+    key[..4].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
     key[4..].copy_from_slice(txid);
     key
 }
@@ -148,8 +166,8 @@ fn decode_address(value: &[u8], key: Option<&[u8; 16]>) -> Option<SocketAddr> {
 
 /// Reads a message of any type. An XOR-MAPPED-ADDRESS (either code point) wins over a plain
 /// MAPPED-ADDRESS; unknown attributes are skipped; a truncated attribute refuses the whole message.
-pub fn parse(data: &[u8]) -> Option<Message> {
-    let header = data.get(..HEADER_LEN).filter(|_| is_stun(data))?;
+pub fn decode(data: &[u8]) -> Option<Decoded> {
+    let header = data.get(..HEADER_LEN).filter(|_| is_framed(data))?;
     let mut txid: TxId = [0; 12];
     txid.copy_from_slice(&header[8..]);
     let key = xor_key(&txid);
@@ -164,10 +182,10 @@ pub fn parse(data: &[u8]) -> Option<Message> {
             _ => {}
         }
     }
-    Some(Message {
-        kind: u16_at(header, 0),
-        txid,
-        mapped: found,
+    Some(Decoded {
+        msg_type: u16_at(header, 0),
+        transaction: txid,
+        reflexive: found,
     })
 }
 
@@ -177,7 +195,7 @@ pub fn indication(kind: u16, txid: &TxId, attrs: &[(u16, &[u8])]) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_LEN + body];
     out[0..2].copy_from_slice(&kind.to_be_bytes());
     out[2..4].copy_from_slice(&(body as u16).to_be_bytes());
-    out[4..8].copy_from_slice(&MAGIC.to_be_bytes());
+    out[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
     out[8..HEADER_LEN].copy_from_slice(txid);
     let mut at = HEADER_LEN;
     for (tag, value) in attrs {
@@ -190,18 +208,18 @@ pub fn indication(kind: u16, txid: &TxId, attrs: &[(u16, &[u8])]) -> Vec<u8> {
 }
 
 /// A Binding request with no attributes.
-pub fn binding_request(txid: &TxId) -> [u8; 20] {
+pub fn request_binding(txid: &TxId) -> [u8; 20] {
     let mut out = [0u8; HEADER_LEN];
     out[..2].copy_from_slice(&BINDING_REQUEST.to_be_bytes());
-    out[4..8].copy_from_slice(&MAGIC.to_be_bytes());
+    out[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
     out[8..].copy_from_slice(txid);
     out
 }
 
 /// The Binding success for `txid` telling the requester the address it was `seen` from (canonical:
 /// an IPv4-mapped source is answered with the IPv4 family).
-pub fn binding_success(txid: &TxId, seen: SocketAddr) -> Vec<u8> {
-    let who = canonical(seen);
+pub fn answer_binding(txid: &TxId, seen: SocketAddr) -> Vec<u8> {
+    let who = plain_endpoint(seen);
     let key = xor_key(txid);
     let (family, ip): (u8, Vec<u8>) = match who.ip() {
         IpAddr::V4(v4) => (FAMILY_V4, v4.octets().to_vec()),
@@ -217,7 +235,7 @@ pub fn binding_success(txid: &TxId, seen: SocketAddr) -> Vec<u8> {
 
 /// A fresh random transaction ID (RFC 8489 §5: uniformly random). Should the OS source fail,
 /// a time-derived value still differs between calls.
-pub fn new_txid() -> TxId {
+pub fn random_txid() -> TxId {
     let mut t: TxId = [0; 12];
     if getrandom::fill(&mut t).is_err() {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -233,7 +251,7 @@ pub fn new_txid() -> TxId {
 }
 
 /// The comparable form of an endpoint: `[::ffff:a.b.c.d]:p` becomes `a.b.c.d:p`.
-pub fn canonical(a: SocketAddr) -> SocketAddr {
+pub fn plain_endpoint(a: SocketAddr) -> SocketAddr {
     if let SocketAddr::V6(v6) = a
         && let Some(plain) = v6.ip().to_ipv4_mapped()
     {
@@ -244,7 +262,7 @@ pub fn canonical(a: SocketAddr) -> SocketAddr {
 
 /// The destination form for a socket: a dual-stack (IPv6) socket reaches an IPv4 target through
 /// its IPv4-mapped address; an IPv4 socket takes it as it is.
-pub fn for_socket(a: SocketAddr, socket_is_v6: bool) -> SocketAddr {
+pub fn endpoint_for_socket(a: SocketAddr, socket_is_v6: bool) -> SocketAddr {
     if let (true, SocketAddr::V4(v4)) = (socket_is_v6, a) {
         return SocketAddr::from((v4.ip().to_ipv6_mapped(), v4.port()));
     }
@@ -279,14 +297,14 @@ mod tests {
              000800149aeaa70cbfd8cb56781ef2b5b2d3f249c1b571a2
              80280004e57a3bcf");
         assert_eq!(m.len(), 108);
-        assert!(is_stun(&m));
-        let p = parse(&m).unwrap();
+        assert!(is_framed(&m));
+        let p = decode(&m).unwrap();
         assert_eq!(
             p,
-            Message {
-                kind: BINDING_REQUEST,
-                txid: RFC5769_TXID,
-                mapped: None
+            Decoded {
+                msg_type: BINDING_REQUEST,
+                transaction: RFC5769_TXID,
+                reflexive: None
             }
         );
         assert_eq!(
@@ -304,15 +322,15 @@ mod tests {
              002000080001a147e112a643
              000800142b91f599fd9e90c38c7489f92af9ba53f06be7d7
              80280004c07d4c96");
-        let p = parse(&m).unwrap();
-        assert_eq!(p.kind, BINDING_SUCCESS);
-        assert_eq!(p.mapped, Some("192.0.2.1:32853".parse().unwrap()));
+        let p = decode(&m).unwrap();
+        assert_eq!(p.msg_type, BINDING_SUCCESS);
+        assert_eq!(p.reflexive, Some("192.0.2.1:32853".parse().unwrap()));
     }
 
     #[test]
     fn xor_form_beats_the_plain_one_in_either_order() {
-        let t = new_txid();
-        let xor = binding_success(&t, "198.51.100.9:4000".parse().unwrap());
+        let t = random_txid();
+        let xor = answer_binding(&t, "198.51.100.9:4000".parse().unwrap());
         let xor_value = attribute(&xor, BINDING_SUCCESS, ATTR_XOR_MAPPED).unwrap();
         let plain = [0, FAMILY_V4, 0x0f, 0xa0, 10, 0, 0, 1];
         let want: SocketAddr = "198.51.100.9:4000".parse().unwrap();
@@ -324,40 +342,40 @@ mod tests {
             ],
         ] {
             let m = indication(BINDING_SUCCESS, &t, &attrs);
-            assert_eq!(parse(&m).unwrap().mapped, Some(want));
+            assert_eq!(decode(&m).unwrap().reflexive, Some(want));
         }
         let only_plain = indication(BINDING_SUCCESS, &t, &[(ATTR_MAPPED, &plain[..])]);
         assert_eq!(
-            parse(&only_plain).unwrap().mapped,
+            decode(&only_plain).unwrap().reflexive,
             Some("10.0.0.1:4000".parse().unwrap())
         );
     }
 
     #[test]
     fn answer_sizes_follow_the_family() {
-        let t = new_txid();
-        assert_eq!(binding_request(&t).len(), 20);
+        let t = random_txid();
+        assert_eq!(request_binding(&t).len(), 20);
         assert_eq!(
-            binding_success(&t, "[::ffff:192.0.2.4]:9".parse().unwrap()).len(),
+            answer_binding(&t, "[::ffff:192.0.2.4]:9".parse().unwrap()).len(),
             32
         );
         assert_eq!(
-            binding_success(&t, "[2001:db8::4]:9".parse().unwrap()).len(),
+            answer_binding(&t, "[2001:db8::4]:9".parse().unwrap()).len(),
             44
         );
     }
 
     #[test]
     fn shape_limits() {
-        let t = new_txid();
+        let t = random_txid();
         let big = indication(0x3e99, &t, &[(0xc0ff, &[0u8; MAX_LEN - 24])]);
         assert_eq!(big.len(), MAX_LEN);
-        assert!(is_stun(&big));
+        assert!(is_framed(&big));
         let over = indication(0x3e99, &t, &[(0xc0ff, &[0u8; MAX_LEN - 20])]);
-        assert!(!is_stun(&over));
-        let mut top = binding_request(&t);
+        assert!(!is_framed(&over));
+        let mut top = request_binding(&t);
         top[0] = 0x40;
-        assert!(!is_stun(&top));
+        assert!(!is_framed(&top));
         // an odd value is padded on the wire, and the next attribute is read after the padding
         let m = indication(0x3e99, &t, &[(0xc001, &[1, 2, 3][..]), (0xc002, &[9][..])]);
         assert_eq!(m.len(), 36);
@@ -366,24 +384,24 @@ mod tests {
 
     #[test]
     fn short_or_unknown_address_values_are_ignored() {
-        let t = new_txid();
+        let t = random_txid();
         for value in [
             &[0u8, 1, 0, 0][..],
             &[0, 3, 0, 1, 1, 2, 3, 4][..],
             &[0, 2, 0, 1, 1, 2, 3, 4][..],
         ] {
             let m = indication(BINDING_SUCCESS, &t, &[(ATTR_XOR_MAPPED, value)]);
-            assert_eq!(parse(&m).unwrap().mapped, None);
+            assert_eq!(decode(&m).unwrap().reflexive, None);
         }
     }
 
     #[test]
     fn canonical_and_socket_forms() {
         let v6: SocketAddr = "[2001:db8::1]:5".parse().unwrap();
-        assert_eq!(canonical(v6), v6);
-        assert_eq!(for_socket(v6, false), v6);
-        assert_eq!(for_socket(v6, true), v6);
+        assert_eq!(plain_endpoint(v6), v6);
+        assert_eq!(endpoint_for_socket(v6, false), v6);
+        assert_eq!(endpoint_for_socket(v6, true), v6);
         let v4: SocketAddr = "192.0.2.8:7".parse().unwrap();
-        assert_eq!(canonical(for_socket(v4, true)), v4);
+        assert_eq!(plain_endpoint(endpoint_for_socket(v4, true)), v4);
     }
 }

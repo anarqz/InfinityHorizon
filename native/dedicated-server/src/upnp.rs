@@ -14,9 +14,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket
 use std::time::{Duration, Instant};
 
 /// The lease asked for a mapping, in seconds.
-pub const LEASE_SECS: u32 = 1800;
+pub const LEASE_DURATION_SECS: u32 = 1800;
 /// A live mapping is asked for again this often (half the lease).
-pub const RENEW_EVERY: Duration = Duration::from_secs(900);
+pub const RENEW_INTERVAL: Duration = Duration::from_secs(900);
 
 /// The largest router answer read.
 const HTTP_LIMIT: usize = 256 * 1024;
@@ -24,13 +24,13 @@ const HTTP_LIMIT: usize = 256 * 1024;
 const HTTP_DEADLINE: Duration = Duration::from_secs(3);
 /// After a failure or a router not found, the next attempt.
 const RETRY_AFTER: Duration = Duration::from_secs(300);
-/// How long discovery listens for SSDP answers in [`run`].
+/// How long discovery listens for SSDP answers in [`hold_mapping`].
 const SEARCH_WAIT: Duration = Duration::from_secs(3);
 /// Distinct description URLs taken from one search.
 const LOCATIONS_MAX: usize = 8;
 /// The external ports tried: the world's port and the next four.
 const PORT_TRIES: u16 = 5;
-/// Granularity of the waits in [`run_while`], so a stop is seen quickly.
+/// Granularity of the waits in [`hold_mapping`], so a stop is seen quickly.
 const STOP_POLL: Duration = Duration::from_millis(250);
 
 const SSDP_GROUP: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(239, 255, 255, 250)), 1900);
@@ -49,11 +49,11 @@ const ERR_ONLY_PERMANENT_LEASES: u32 = 725;
 
 /// What a mapping attempt ended with.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Outcome {
+pub enum MapResult {
     Mapped {
-        external_ip: IpAddr,
-        external_port: u16,
-        lease: u32,
+        public_ip: IpAddr,
+        public_port: u16,
+        lease_secs: u32,
     },
     /// No gateway answered the search.
     NotFound,
@@ -63,7 +63,7 @@ pub enum Outcome {
 
 /// An http:// URL as routers write them: host (no brackets), port, path with query.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Url {
+pub struct Location {
     pub host: String,
     pub port: u16,
     pub path: String,
@@ -74,10 +74,10 @@ fn header_safe(s: &str) -> bool {
     s.bytes().all(|b| b.is_ascii_graphic())
 }
 
-impl Url {
+impl Location {
     /// `http://host[:port][/path]`; `None` for another scheme, user info, a fragment, an empty
     /// host, a port outside 1..=65535 or bytes that do not belong in a request line.
-    pub fn parse(s: &str) -> Option<Url> {
+    pub fn from_text(s: &str) -> Option<Location> {
         let s = s.trim();
         let scheme = s.get(..7)?;
         if !scheme.eq_ignore_ascii_case("http://") || !header_safe(s) || s.contains('#') {
@@ -111,7 +111,7 @@ impl Url {
         if host.is_empty() {
             return None;
         }
-        Some(Url {
+        Some(Location {
             host: host.to_string(),
             port,
             path,
@@ -120,18 +120,18 @@ impl Url {
 
     /// A link from a description: an absolute URL replaces this one; anything else is a path
     /// from this URL's root (routers write `ctl/IPConn` meaning `/ctl/IPConn`).
-    pub fn join(&self, link: &str) -> Option<Url> {
+    pub fn resolve(&self, link: &str) -> Option<Location> {
         let text = link.trim();
         let absolute = text
             .get(..7)
             .is_some_and(|p| p.eq_ignore_ascii_case("http://"));
         if absolute {
-            Url::parse(text)
+            Location::from_text(text)
         } else if text.contains("://") || text.contains('#') || !header_safe(text) {
             None
         } else {
             let path = format!("/{}", text.trim_start_matches('/'));
-            Some(Url {
+            Some(Location {
                 path,
                 ..self.clone()
             })
@@ -151,24 +151,26 @@ impl Url {
 /// A gateway's control endpoint, the service type it speaks, and the local address this machine
 /// reaches it from (the mapping's internal client).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Gateway {
-    pub control: Url,
-    pub service: String,
-    pub local: IpAddr,
+pub struct Igd {
+    pub control_url: Location,
+    pub service_type: String,
+    pub client_ip: IpAddr,
 }
 
-/// A gateway known without discovery.
-pub fn gateway_at(control: Url, service: &str, local: IpAddr) -> Gateway {
-    Gateway {
-        control,
-        service: service.into(),
-        local,
+impl Igd {
+    /// A gateway known without discovery.
+    pub fn known(control_url: Location, service_type: &str, client_ip: IpAddr) -> Igd {
+        Igd {
+            control_url,
+            service_type: service_type.to_owned(),
+            client_ip,
+        }
     }
 }
 
 /// The LOCATION of an SSDP search answer (`HTTP/1.x 200`); notifications and other statuses
 /// carry none.
-pub fn ssdp_location(answer: &str) -> Option<String> {
+pub fn location_header(answer: &str) -> Option<String> {
     let mut rows = answer.lines();
     let status = rows.next()?;
     let is_ok = status.len() >= 7
@@ -328,22 +330,22 @@ fn escape(text: &str) -> String {
 
 /// The trimmed text of the first `name` element (by local name). Tolerates fragments: only the
 /// element itself has to be closed.
-pub fn soap_value(xml: &str, name: &str) -> Option<String> {
+pub fn element_text(xml: &str, name: &str) -> Option<String> {
     elements(xml, name)
         .first()
         .map(|inner| unescape(inner).trim().to_string())
 }
 
 /// The UPnP errorCode of a SOAP fault.
-pub fn soap_error(xml: &str) -> Option<u32> {
-    soap_value(xml, "errorCode")?.parse().ok()
+pub fn upnp_error_code(xml: &str) -> Option<u32> {
+    element_text(xml, "errorCode")?.parse().ok()
 }
 
 /// The service to control and its control URL from a device description: the preferred service
 /// type found anywhere in the device tree, its controlURL resolved against URLBase (when valid)
 /// or the description's own URL.
-pub fn find_service(xml: &str, location: &Url) -> Option<(String, Url)> {
-    let declared = soap_value(xml, "URLBase").and_then(|b| Url::parse(&b));
+pub fn wan_service(xml: &str, location: &Location) -> Option<(String, Location)> {
+    let declared = element_text(xml, "URLBase").and_then(|b| Location::from_text(&b));
     let base = match declared {
         Some(b) => b,
         None => location.clone(),
@@ -352,8 +354,8 @@ pub fn find_service(xml: &str, location: &Url) -> Option<(String, Url)> {
         .into_iter()
         .filter_map(|block| {
             Some((
-                soap_value(block, "serviceType")?,
-                soap_value(block, "controlURL")?,
+                element_text(block, "serviceType")?,
+                element_text(block, "controlURL")?,
             ))
         })
         .filter(|(_, control)| !control.is_empty())
@@ -362,13 +364,13 @@ pub fn find_service(xml: &str, location: &Url) -> Option<(String, Url)> {
         offered
             .iter()
             .filter(|(kind, _)| kind.eq_ignore_ascii_case(wanted))
-            .find_map(|(_, control)| base.join(control))
+            .find_map(|(_, control)| base.resolve(control))
             .map(|url| (wanted.to_string(), url))
     })
 }
 
 /// A SOAP 1.1 envelope calling `action` of `service` with these arguments, values escaped.
-pub fn soap_body(service: &str, action: &str, args: &[(&str, String)]) -> String {
+pub fn soap_envelope(service: &str, action: &str, args: &[(&str, String)]) -> String {
     let mut call = String::new();
     for (name, value) in args {
         call.push_str(&format!("<{name}>{}</{name}>", escape(value)));
@@ -411,7 +413,7 @@ fn dechunk(mut body: &[u8]) -> Option<Vec<u8>> {
 
 /// A complete HTTP/1.x response: its status and body (de-chunked, or cut to Content-Length).
 /// `None` for anything malformed, incomplete or over the limit.
-pub fn http_split(raw: &[u8]) -> Option<(u16, Vec<u8>)> {
+pub fn split_http_response(raw: &[u8]) -> Option<(u16, Vec<u8>)> {
     if raw.len() > HTTP_LIMIT {
         return None;
     }
@@ -457,7 +459,7 @@ pub fn http_split(raw: &[u8]) -> Option<(u16, Vec<u8>)> {
 /// loopback. Discovery and control never leave the local network.
 fn local_network(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => !v4.is_unspecified() && behind_another_nat(ip),
+        IpAddr::V4(v4) => !v4.is_unspecified() && unroutable_external(ip),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => local_network(IpAddr::V4(v4)),
             None => {
@@ -487,7 +489,7 @@ struct Reply {
 }
 
 /// One HTTP/1.1 exchange with a router, under [`HTTP_DEADLINE`].
-fn exchange(url: &Url, method: &str, extra_headers: &str, body: &str) -> Option<Reply> {
+fn exchange(url: &Location, method: &str, extra_headers: &str, body: &str) -> Option<Reply> {
     let deadline = Instant::now() + HTTP_DEADLINE;
     let left = || {
         deadline
@@ -528,11 +530,11 @@ fn exchange(url: &Url, method: &str, extra_headers: &str, body: &str) -> Option<
             return None;
         }
         got.extend_from_slice(&chunk[..n]);
-        if declares_framing(&got) && http_split(&got).is_some() {
+        if declares_framing(&got) && split_http_response(&got).is_some() {
             break;
         }
     }
-    let (status, body) = http_split(&got)?;
+    let (status, body) = split_http_response(&got)?;
     Some(Reply {
         status,
         body: String::from_utf8_lossy(&body).into_owned(),
@@ -540,16 +542,16 @@ fn exchange(url: &Url, method: &str, extra_headers: &str, body: &str) -> Option<
     })
 }
 
-fn soap(g: &Gateway, action: &str, args: &[(&str, String)]) -> Option<Reply> {
+fn soap(g: &Igd, action: &str, args: &[(&str, String)]) -> Option<Reply> {
     let headers = format!(
         "Content-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: \"{}#{}\"\r\n",
-        g.service, action
+        g.service_type, action
     );
     exchange(
-        &g.control,
+        &g.control_url,
         "POST",
         &headers,
-        &soap_body(&g.service, action, args),
+        &soap_envelope(&g.service_type, action, args),
     )
 }
 
@@ -557,7 +559,7 @@ fn soap(g: &Gateway, action: &str, args: &[(&str, String)]) -> Option<Reply> {
 
 /// Searches the LAN for a gateway for at most `wait`, then reads the descriptions found (up to
 /// eight) until one offers a WAN connection service.
-pub fn find_gateway(wait: Duration) -> Option<Gateway> {
+pub fn discover_igd(wait: Duration) -> Option<Igd> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     socket.set_multicast_ttl_v4(2).ok()?;
     for target in SEARCH_TARGETS {
@@ -585,23 +587,23 @@ pub fn find_gateway(wait: Duration) -> Option<Gateway> {
         if !local_network(from.ip()) {
             continue;
         }
-        if let Some(l) = ssdp_location(&String::from_utf8_lossy(&inbox[..n]))
+        if let Some(l) = location_header(&String::from_utf8_lossy(&inbox[..n]))
             && !locations.contains(&l)
         {
             locations.push(l);
         }
     }
     locations.iter().find_map(|l| {
-        let url = Url::parse(l)?;
+        let url = Location::from_text(l)?;
         let reply = exchange(&url, "GET", "", "")?;
         if reply.status != 200 {
             return None;
         }
-        let (service, control) = find_service(&reply.body, &url)?;
-        Some(Gateway {
-            control,
-            service,
-            local: reply.local,
+        let (service, control) = wan_service(&reply.body, &url)?;
+        Some(Igd {
+            control_url: control,
+            service_type: service,
+            client_ip: reply.local,
         })
     })
 }
@@ -619,10 +621,10 @@ fn mapping_key(outside: u16) -> Vec<(&'static str, String)> {
     .collect()
 }
 
-fn add_mapping(g: &Gateway, inside: u16, outside: u16, lease: u32) -> Option<Reply> {
+fn add_mapping(g: &Igd, inside: u16, outside: u16, lease: u32) -> Option<Reply> {
     let mut args = mapping_key(outside);
     args.push(("NewInternalPort", inside.to_string()));
-    args.push(("NewInternalClient", g.local.to_string()));
+    args.push(("NewInternalClient", g.client_ip.to_string()));
     args.push(("NewEnabled", String::from("1")));
     args.push(("NewPortMappingDescription", String::from("Infinity world")));
     args.push(("NewLeaseDuration", lease.to_string()));
@@ -630,51 +632,51 @@ fn add_mapping(g: &Gateway, inside: u16, outside: u16, lease: u32) -> Option<Rep
 }
 
 /// Asks the router to drop a mapping this process made (best effort).
-fn delete_mapping(g: &Gateway, outside: u16) {
+fn delete_mapping(g: &Igd, outside: u16) {
     let _ = soap(g, "DeletePortMapping", &mapping_key(outside));
 }
 
-fn external_ip(g: &Gateway) -> Option<IpAddr> {
+fn external_ip(g: &Igd) -> Option<IpAddr> {
     let reply = soap(g, "GetExternalIPAddress", &[])?;
     if reply.status != 200 {
         return None;
     }
-    soap_value(&reply.body, "NewExternalIPAddress")?
+    element_text(&reply.body, "NewExternalIPAddress")?
         .parse()
         .ok()
 }
 
 /// Maps UDP `port` on the gateway: the same external port first, then up to four after it when
 /// the router reports a conflict; a router that only takes permanent leases gets lease 0.
-pub fn map(g: &Gateway, port: u16) -> Outcome {
+pub fn map_port(g: &Igd, port: u16) -> MapResult {
     let candidates = (0..PORT_TRIES).map_while(|step| port.checked_add(step));
     for outside in candidates {
-        let mut lease = LEASE_SECS;
+        let mut lease = LEASE_DURATION_SECS;
         loop {
             let Some(reply) = add_mapping(g, port, outside, lease) else {
-                return Outcome::Failed;
+                return MapResult::Failed;
             };
             if reply.status == 200 {
-                return external_ip(g).map_or(Outcome::Failed, |public_ip| Outcome::Mapped {
-                    external_ip: public_ip,
-                    external_port: outside,
-                    lease,
+                return external_ip(g).map_or(MapResult::Failed, |public_ip| MapResult::Mapped {
+                    public_ip,
+                    public_port: outside,
+                    lease_secs: lease,
                 });
             }
-            match soap_error(&reply.body) {
+            match upnp_error_code(&reply.body) {
                 Some(ERR_ONLY_PERMANENT_LEASES) if lease != 0 => lease = 0,
                 Some(ERR_CONFLICT) => break,
-                _ => return Outcome::Failed,
+                _ => return MapResult::Failed,
             }
         }
     }
-    Outcome::Failed
+    MapResult::Failed
 }
 
 /// Is `ip` an address no Internet host can reach directly: private, shared (CGNAT 100.64/10),
 /// link-local, loopback or unspecified IPv4? A UPnP "external" address like that means another
 /// NAT sits between the router and the Internet.
-pub fn behind_another_nat(ip: IpAddr) -> bool {
+pub fn unroutable_external(ip: IpAddr) -> bool {
     let octets = match ip {
         IpAddr::V4(v4) => v4.octets(),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
@@ -705,26 +707,22 @@ fn pause(total: Duration, keep_going: &dyn Fn() -> bool) -> bool {
     keep_going()
 }
 
-/// The mapping loop for `port`, forever: discover, map, report each outcome, renew every
-/// [`RENEW_EVERY`] while mapped, retry after five minutes otherwise.
-pub fn run(port: u16, report: impl Fn(Outcome)) {
-    run_while(port, report, || true);
-}
-
-/// [`run`] until `keep_going` returns false; a mapping still held then is deleted.
-pub fn run_while(port: u16, report: impl Fn(Outcome), keep_going: impl Fn() -> bool) {
+/// The mapping loop for `port` while `keep_going` holds: discover, map, report each result,
+/// renew every [`RENEW_INTERVAL`] while mapped, retry after five minutes otherwise; a mapping
+/// still held when it stops is deleted.
+pub fn hold_mapping(port: u16, report: impl Fn(MapResult), keep_going: impl Fn() -> bool) {
     while keep_going() {
-        match find_gateway(SEARCH_WAIT) {
-            None => report(Outcome::NotFound),
+        match discover_igd(SEARCH_WAIT) {
+            None => report(MapResult::NotFound),
             Some(gateway) => {
                 let mut held: Option<u16> = None;
                 loop {
                     if !keep_going() {
                         break;
                     }
-                    let outcome = map(&gateway, port);
+                    let outcome = map_port(&gateway, port);
                     let mapped = match &outcome {
-                        Outcome::Mapped { external_port, .. } => Some(*external_port),
+                        MapResult::Mapped { public_port, .. } => Some(*public_port),
                         _ => None,
                     };
                     report(outcome);
@@ -732,7 +730,7 @@ pub fn run_while(port: u16, report: impl Fn(Outcome), keep_going: impl Fn() -> b
                         Some(p) => held = Some(p),
                         None => break,
                     }
-                    if !pause(RENEW_EVERY, &keep_going) {
+                    if !pause(RENEW_INTERVAL, &keep_going) {
                         break;
                     }
                 }
@@ -754,33 +752,36 @@ mod tests {
 
     #[test]
     fn urls_with_brackets_queries_and_bad_bytes() {
-        let u = Url::parse("HTTP://[fe80::1]:49152/desc?x=1").unwrap();
+        let u = Location::from_text("HTTP://[fe80::1]:49152/desc?x=1").unwrap();
         assert_eq!(
             (u.host.as_str(), u.port, u.path.as_str()),
             ("fe80::1", 49152, "/desc?x=1")
         );
         assert_eq!(u.authority(), "[fe80::1]:49152");
-        assert_eq!(Url::parse("http://10.0.0.1?q").unwrap().path, "/?q");
-        assert!(Url::parse("http://user@10.0.0.1/").is_none());
-        assert!(Url::parse("http://10.0.0.1/a#b").is_none());
-        assert!(Url::parse("http://10.0.0.1/a b").is_none());
-        assert!(Url::parse("http://10.0.0.1:0/").is_none());
-        assert!(Url::parse("http://10.0.0.1:/").is_none());
-        let base = Url::parse("http://10.0.0.1:80/x/y.xml").unwrap();
-        assert_eq!(base.join("/abs").unwrap().path, "/abs");
-        assert!(base.join("ftp://10.0.0.1/").is_none());
-        assert!(base.join("a\r\nb").is_none());
+        assert_eq!(
+            Location::from_text("http://10.0.0.1?q").unwrap().path,
+            "/?q"
+        );
+        assert!(Location::from_text("http://user@10.0.0.1/").is_none());
+        assert!(Location::from_text("http://10.0.0.1/a#b").is_none());
+        assert!(Location::from_text("http://10.0.0.1/a b").is_none());
+        assert!(Location::from_text("http://10.0.0.1:0/").is_none());
+        assert!(Location::from_text("http://10.0.0.1:/").is_none());
+        let base = Location::from_text("http://10.0.0.1:80/x/y.xml").unwrap();
+        assert_eq!(base.resolve("/abs").unwrap().path, "/abs");
+        assert!(base.resolve("ftp://10.0.0.1/").is_none());
+        assert!(base.resolve("a\r\nb").is_none());
     }
 
     #[test]
     fn scanner_handles_prefixes_nesting_comments_and_entities() {
         let xml = "<?xml version=\"1.0\"?><!-- <errorCode>1</errorCode> -->\
                    <s:Body><m:errorCode> 402 </m:errorCode><a><a>in</a></a><e/></s:Body>";
-        assert_eq!(soap_error(xml), Some(402));
+        assert_eq!(upnp_error_code(xml), Some(402));
         assert_eq!(elements(xml, "a"), vec!["<a>in</a>"]);
-        assert_eq!(soap_value(xml, "e").as_deref(), Some(""));
+        assert_eq!(element_text(xml, "e").as_deref(), Some(""));
         assert_eq!(unescape("a&lt;&#65;&#x42;&bogus;&"), "a<AB&bogus;&");
-        assert_eq!(soap_value("<x>open", "x"), None);
+        assert_eq!(element_text("<x>open", "x"), None);
     }
 
     #[test]
@@ -788,8 +789,8 @@ mod tests {
         let xml = "<root><URLBase>not a url</URLBase><serviceList><service>\
                    <serviceType>URN:schemas-upnp-org:service:WANPPPConnection:1</serviceType>\
                    <controlURL>/ppp</controlURL></service></serviceList></root>";
-        let loc = Url::parse("http://192.168.0.1:5431/d.xml").unwrap();
-        let (kind, url) = find_service(xml, &loc).unwrap();
+        let loc = Location::from_text("http://192.168.0.1:5431/d.xml").unwrap();
+        let (kind, url) = wan_service(xml, &loc).unwrap();
         assert_eq!(kind, WAN_PPP_1);
         assert_eq!(
             (url.host.as_str(), url.port, url.path.as_str()),
@@ -799,7 +800,7 @@ mod tests {
 
     #[test]
     fn soap_body_shape() {
-        let b = soap_body(WAN_IP_1, "GetExternalIPAddress", &[]);
+        let b = soap_envelope(WAN_IP_1, "GetExternalIPAddress", &[]);
         assert!(b.starts_with("<?xml version=\"1.0\"?><s:Envelope "));
         assert!(b.contains("<s:Body><u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\"></u:GetExternalIPAddress></s:Body></s:Envelope>"));
     }
@@ -807,26 +808,28 @@ mod tests {
     #[test]
     fn http_framing_rules() {
         assert_eq!(
-            http_split(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabcdef"),
+            split_http_response(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabcdef"),
             Some((200, b"abc".to_vec()))
         );
         assert_eq!(
-            http_split(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nabc"),
+            split_http_response(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nabc"),
             None
         );
         assert_eq!(
-            http_split(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabcd"),
+            split_http_response(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabcd"
+            ),
             None
         );
         assert_eq!(
-            http_split(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n"),
+            split_http_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n"),
             None
         );
         assert_eq!(
-            http_split(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab"),
+            split_http_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab"),
             None
         );
-        assert_eq!(http_split(b"ICY 200 OK\r\n\r\n"), None);
+        assert_eq!(split_http_response(b"ICY 200 OK\r\n\r\n"), None);
         assert!(declares_framing(
             b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n"
         ));
@@ -848,14 +851,14 @@ mod tests {
         for ip in ["0.0.0.0", "8.8.8.8", "2001:db8::1", "::"] {
             assert!(!local_network(ip.parse().unwrap()), "{ip}");
         }
-        assert!(behind_another_nat("::ffff:10.0.0.1".parse().unwrap()));
-        assert!(!behind_another_nat("fd00::1".parse().unwrap()));
+        assert!(unroutable_external("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!unroutable_external("fd00::1".parse().unwrap()));
     }
 
     #[test]
     fn a_stopped_loop_returns_without_reporting() {
         let reported = std::cell::Cell::new(0);
-        run_while(5101, |_| reported.set(reported.get() + 1), || false);
+        hold_mapping(5101, |_| reported.set(reported.get() + 1), || false);
         assert_eq!(reported.get(), 0);
     }
 }

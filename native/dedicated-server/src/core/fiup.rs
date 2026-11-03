@@ -169,7 +169,7 @@ fn parse(d: &[u8]) -> Option<Packet> {
         if port == 0 {
             return None;
         }
-        observed = Some(crate::stun::canonical(SocketAddr::new(ip, port)));
+        observed = Some(crate::stun::plain_endpoint(SocketAddr::new(ip, port)));
         expires = u64::from_be_bytes(d[107..115].try_into().ok()?);
         if expires == 0 || expires > i64::MAX as u64 {
             return None;
@@ -210,7 +210,7 @@ fn same_context(p: &Packet, header: &[u8; 56]) -> bool {
 }
 
 fn challenge(hello: &Packet, endpoint: SocketAddr, expiry: u64, key: &[u8; 32]) -> Vec<u8> {
-    let endpoint = crate::stun::canonical(endpoint);
+    let endpoint = crate::stun::plain_endpoint(endpoint);
     let mut raw = vec![0u8; FRAME_LEN];
     raw[..72].copy_from_slice(&hello.raw[..72]);
     raw[5] = 2;
@@ -470,7 +470,7 @@ impl ProofHost {
         now: u64,
         unix: i64,
     ) -> bool {
-        let endpoint = crate::stun::canonical(endpoint);
+        let endpoint = crate::stun::plain_endpoint(endpoint);
         if !self.bound.contains(&(peer, kind, endpoint)) {
             return false;
         }
@@ -525,7 +525,7 @@ impl ProofHost {
         unix: i64,
     ) -> Option<Vec<u8>> {
         let p = p.filter(|p| p.ty == 1 || p.ty == 3)?;
-        let source = crate::stun::canonical(source);
+        let source = crate::stun::plain_endpoint(source);
         if source.port() == 0 || !unicast(source.ip()) {
             return None;
         }

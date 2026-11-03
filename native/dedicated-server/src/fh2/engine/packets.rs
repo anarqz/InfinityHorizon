@@ -285,8 +285,9 @@ impl Engine {
                     })));
                 }
                 Message::CarState { car: handle, body } if handle.kind == KeyOwner::Own => {
-                    match payload::car_position(&body) {
-                        Some(position) => {
+                    match payload::vet_car_body(15, &body) {
+                        Some([x, y, z, ..]) => {
+                            let position = [x, y, z];
                             // voice proximity's jump counter, on the previous car
                             self.car_accepted(serial, handle.id, position);
                             let Some(p) = self.peer_mut(serial) else {
@@ -307,7 +308,7 @@ impl Engine {
                     car: handle,
                     body,
                 } if handle.kind == KeyOwner::Own => {
-                    if payload::car_event_ok(kind, &body) {
+                    if payload::vet_car_body(kind, &body).is_some() {
                         let change = Arc::new(Message::encode(&Message::CarEvent {
                             id: kind,
                             car: ObjKey::relay(handle.id, index),
@@ -543,18 +544,18 @@ impl Engine {
                         self.watch_player_object(serial, obj.is_create, &obj.vars);
                     }
                 }
-                Err(fault) => {
+                Err(refusal) => {
                     let message = if obj.is_create { 7 } else { 8 };
                     self.rejected(
                         xuid,
                         "invalid_payload",
                         Some(message),
                         Some(u32::from(obj.router_id)),
-                        Some(fault.value()),
+                        Some(refusal.detail),
                     );
                     // a bucket-list PlayerState fails open: its clean prefix, re-encoded
                     obj.vars = bucket_player
-                        .then(|| self.bucket_list_sanitize_refused(serial, &obj, fault))
+                        .then(|| self.bucket_list_sanitize_refused(serial, &obj, refusal))
                         .flatten()?;
                 }
             }
@@ -563,14 +564,14 @@ impl Engine {
             // validated against its variable list (NERDCORE_WIRE.md §7.9), as routers 1-3 are
             match payload::sanitize(9, &obj.vars) {
                 Ok(clean) => obj.vars = clean,
-                Err(fault) => {
+                Err(refusal) => {
                     let message = if obj.is_create { 7 } else { 8 };
                     self.rejected(
                         xuid,
                         "invalid_payload",
                         Some(message),
                         Some(9),
-                        Some(fault.value()),
+                        Some(refusal.detail),
                     );
                     if self.peer_note(serial, "roadtrip_player") {
                         self.note(
@@ -579,8 +580,8 @@ impl Engine {
                                 json!(index),
                                 json!(if obj.is_create { "create" } else { "update" }),
                                 json!(obj.sequence),
-                                json!(fault.name()),
-                                json!(fault.value()),
+                                json!(refusal.cause.label()),
+                                json!(refusal.detail),
                                 json!(obj.vars.len()),
                             ],
                         );

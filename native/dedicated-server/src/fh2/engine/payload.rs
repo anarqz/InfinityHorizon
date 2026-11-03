@@ -6,14 +6,16 @@
 //! that does not read, repeats a variable or carries a non-finite or out-of-range value is refused.
 //! The console's server-owned flags (1, 2, 4) are stripped: only the server writes them.
 
+use std::sync::OnceLock;
+
 use super::{
     bits::{Bits, Rd},
     key::ObjKey,
-    message::{CAR_BODY_BITS, ObjectChange},
+    message::{CAR_BODY_BITS, ObjectChange, car_event_body_bits},
 };
+use crate::fh2::codec::synced;
 
 pub const NETWORK_NAME_MAX: u64 = 16;
-pub const PLAYER_DATA_MAX_BITS: usize = 8192;
 pub const FLOAT_MAX: f32 = 1e6;
 pub const POSITION_MAX: f32 = 1e5;
 
@@ -36,44 +38,54 @@ const CAR_VARIABLES: [i32; 22] = [
 const CONSOLE_VARIABLES: [i32; 9] = [1, 1, 1, 1, 1, 1, 1, 2, 2];
 const BUCKET_LIST_PLAYER_VARIABLES: [i32; 6] = [32, 32, 32, 1, 4, 1];
 
-/// Why a payload was refused (`validation_rejected`'s value is its number).
+/// What made the sanitizer refuse a payload, with the number `validation_rejected` reports
+/// (the router, the variable id, the value or the payload's length; 0 for a cut payload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fault {
-    Router(u32),
-    Index(u32),
-    Duplicate(u32),
-    NotFinite(u32),
-    NameTooLong(u32),
-    Truncated,
-    TooBig(u32),
-    OutOfRange(u32),
+pub struct Refusal {
+    pub cause: Cause,
+    pub detail: u32,
 }
 
-impl Fault {
-    /// The fault's name as the world log writes it.
-    pub fn name(&self) -> &'static str {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    /// No variable list for this router.
+    UnsanitizedRouter,
+    /// A variable id past the object's capacity.
+    IdPastCapacity,
+    /// The same variable twice in one payload.
+    RepeatedId,
+    /// A float that is NaN, infinite or past its bound.
+    BadFloat,
+    /// A NetworkName longer than the game's 16 units.
+    LongNetworkName,
+    /// The payload ends inside a variable.
+    CutShort,
+    /// The payload is longer than the object can be.
+    Oversized,
+    /// An enum or counter past its range.
+    PastRange,
+}
+
+impl Cause {
+    /// The cause as the world log's notes name it: the reference engine's `PayloadFault` names,
+    /// which the D2 vectors pin.
+    pub fn label(self) -> &'static str {
         match self {
-            Fault::Router(_) => "Router",
-            Fault::Index(_) => "Index",
-            Fault::Duplicate(_) => "Duplicate",
-            Fault::NotFinite(_) => "NotFinite",
-            Fault::NameTooLong(_) => "NameTooLong",
-            Fault::Truncated => "Truncated",
-            Fault::TooBig(_) => "TooBig",
-            Fault::OutOfRange(_) => "OutOfRange",
+            Cause::UnsanitizedRouter => "Router",
+            Cause::IdPastCapacity => "Index",
+            Cause::RepeatedId => "Duplicate",
+            Cause::BadFloat => "NotFinite",
+            Cause::LongNetworkName => "NameTooLong",
+            Cause::CutShort => "Truncated",
+            Cause::Oversized => "TooBig",
+            Cause::PastRange => "OutOfRange",
         }
     }
 
-    pub fn value(&self) -> u32 {
-        match *self {
-            Fault::Router(v)
-            | Fault::Index(v)
-            | Fault::Duplicate(v)
-            | Fault::NotFinite(v)
-            | Fault::NameTooLong(v)
-            | Fault::TooBig(v)
-            | Fault::OutOfRange(v) => v,
-            Fault::Truncated => 0,
+    fn with(self, detail: impl TryInto<u32>) -> Refusal {
+        Refusal {
+            cause: self,
+            detail: detail.try_into().unwrap_or(u32::MAX),
         }
     }
 }
@@ -86,11 +98,38 @@ const ROAD_TRIP_PLAYER_MAXIMA: [Option<u64>; 3] = [Some(8), Some(4), None];
 /// The largest RoadTripPlayerSynced payload relayed.
 pub const ROAD_TRIP_PLAYER_MAX_BITS: usize = 256;
 
+/// What the codec's §7 variable list says about routers 1-3's objects: the variable-id width,
+/// the capacity (ids below it are legal) and the longest well-formed payload.
+#[derive(Debug, Clone, Copy)]
+struct SchemaFacts {
+    id_bits: u32,
+    capacity: usize,
+    widest: usize,
+}
+
+fn schema_facts(router: u8) -> Option<SchemaFacts> {
+    static FACTS: OnceLock<[SchemaFacts; 3]> = OnceLock::new();
+    let slot = usize::from(router).checked_sub(1).filter(|i| *i < 3)?;
+    let all = FACTS.get_or_init(|| {
+        [1u8, 2, 3].map(|r| {
+            let schema = synced::object_schema(r, 0).expect("routers 1-3 have a §7 list");
+            SchemaFacts {
+                id_bits: u32::from(schema.var_id_bits()),
+                capacity: schema.count as usize,
+                widest: schema.widest_payload_bits(),
+            }
+        })
+    });
+    Some(all[slot])
+}
+
+/// The longest payload relayed for `router`. The player object keeps room above its widest
+/// encoding (rounded up to a power of two) for the unmapped tail it copies as it came; the car
+/// and the console are held to theirs exactly.
 pub fn max_bits(router: u8) -> Option<usize> {
     match router {
-        1 => Some(PLAYER_DATA_MAX_BITS),
-        2 => Some(787),
-        3 => Some(47),
+        1 => schema_facts(1).map(|f| f.widest.next_power_of_two()),
+        2 | 3 => schema_facts(router).map(|f| f.widest),
         ROAD_TRIP_PLAYER_ROUTER => Some(ROAD_TRIP_PLAYER_MAX_BITS),
         12 => Some(BUCKET_LIST_PLAYER_MAX_BITS),
         _ => None,
@@ -99,11 +138,8 @@ pub fn max_bits(router: u8) -> Option<usize> {
 
 fn index_width(router: u8) -> u32 {
     match router {
-        1 => 8,
-        2 => 5,
-        3 => 4,
-        ROAD_TRIP_PLAYER_ROUTER => 3,
-        12 => 3,
+        1..=3 => schema_facts(router).map_or(0, |f| f.id_bits),
+        ROAD_TRIP_PLAYER_ROUTER | 12 => 3,
         _ => 0,
     }
 }
@@ -156,59 +192,62 @@ pub fn float_ok(bits: u32, maximum: f32) -> bool {
     n.is_finite() && n.abs() <= maximum
 }
 
-/// The re-encoded payload, or the fault that refused it.
-pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Fault> {
+/// The re-encoded payload, or why it was refused.
+pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Refusal> {
     let variables: &[i32] = match router {
         1 => &PLAYER_VARIABLES,
         2 => &CAR_VARIABLES,
         3 => &CONSOLE_VARIABLES,
         ROAD_TRIP_PLAYER_ROUTER => &ROAD_TRIP_PLAYER_VARIABLES,
         12 => &BUCKET_LIST_PLAYER_VARIABLES,
-        _ => return Err(Fault::Router(u32::from(router))),
+        _ => return Err(Cause::UnsanitizedRouter.with(router)),
     };
     if max_bits(router).is_some_and(|m| payload.len() > m) {
-        return Err(Fault::TooBig(payload.len() as u32));
+        return Err(Cause::Oversized.with(payload.len()));
     }
     let iw = index_width(router);
-    let room = if router == 1 { 163 } else { variables.len() };
+    let room = match router {
+        1 => schema_facts(1).map_or(variables.len(), |f| f.capacity),
+        _ => variables.len(),
+    };
     let mut r = payload.reader();
-    let mut out = Bits::new();
-    let mut seen = [false; 32];
-    let t = |_| Fault::Truncated;
+    let mut clean = Bits::new();
+    let mut written = 0u32;
+    let t = |_| Cause::CutShort.with(0u32);
     while r.left() > 0 {
         let start = r;
         let index = r.read(iw).map_err(t)? as usize;
         if index >= variables.len() {
             if index >= room {
-                return Err(Fault::Index(index as u32));
+                return Err(Cause::IdPastCapacity.with(index));
             }
             // the player object's unmapped tail is kept within its size limit, but for TeamId
             // (var 90), which only the server writes
-            player_tail(start, &mut out);
-            return Ok(out);
+            player_tail(start, &mut clean);
+            return Ok(clean);
         }
-        if seen[index] {
-            return Err(Fault::Duplicate(index as u32));
+        if written & (1 << index) != 0 {
+            return Err(Cause::RepeatedId.with(index));
         }
-        seen[index] = true;
-        let mut entry = Bits::new();
-        entry.push(index as u64, iw);
+        written |= 1 << index;
+        let mut variable = Bits::new();
+        variable.push(index as u64, iw);
         match variables[index] {
             -1 => {
                 let bits = r.read(32).map_err(t)? as u32;
                 if !float_ok(bits, FLOAT_MAX) {
-                    return Err(Fault::NotFinite(index as u32));
+                    return Err(Cause::BadFloat.with(index));
                 }
-                entry.push(u64::from(bits), 32);
+                variable.push(u64::from(bits), 32);
             }
             -2 => {
                 let count = r.read(5).map_err(t)?;
                 if count > NETWORK_NAME_MAX {
-                    return Err(Fault::NameTooLong(count as u32));
+                    return Err(Cause::LongNetworkName.with(count));
                 }
-                entry.push(count, 5);
+                variable.push(count, 5);
                 for _ in 0..count {
-                    entry.push(r.read(16).map_err(t)?, 16);
+                    variable.push(r.read(16).map_err(t)?, 16);
                 }
             }
             w => {
@@ -217,23 +256,24 @@ pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Fault> {
                     && index == BUCKET_LIST_STATE_VARIABLE
                     && value > BUCKET_LIST_STATE_MAX
                 {
-                    return Err(Fault::OutOfRange(value as u32));
+                    return Err(Cause::PastRange.with(value));
                 }
                 // a road-trip player State past RoadTripServerState, a CompletedEventCount past
                 // its range
                 if router == ROAD_TRIP_PLAYER_ROUTER
                     && ROAD_TRIP_PLAYER_MAXIMA[index].is_some_and(|m| value > m)
                 {
-                    return Err(Fault::OutOfRange(value as u32));
+                    return Err(Cause::PastRange.with(value));
                 }
-                entry.push(value, w as u32);
+                variable.push(value, w as u32);
             }
         }
+        // the console's server-owned flags are dropped, every other variable kept
         if router != 3 || !matches!(index, 1 | 2 | 4) {
-            out.append(&entry);
+            clean.append(&variable);
         }
     }
-    Ok(out)
+    Ok(clean)
 }
 
 /// The player object's unmapped tail (ids from 12): copied, but for every TeamId entry, while
@@ -282,33 +322,40 @@ pub fn console_variables(payload: &Bits) -> Option<Vec<(u8, u64)>> {
     Some(out)
 }
 
-/// A car prediction's position when its body is whole and the position is finite and bounded.
-pub fn car_position(body: &Bits) -> Option<[f32; 3]> {
-    if body.len() != CAR_BODY_BITS {
-        return None;
-    }
-    let mut r = body.reader();
-    let x = r.read(32).ok()? as u32;
-    let y = r.read(32).ok()? as u32;
-    let z = r.read(32).ok()? as u32;
-    (float_ok(x, POSITION_MAX) && float_ok(y, POSITION_MAX) && float_ok(z, POSITION_MAX))
-        .then(|| [f32::from_bits(x), f32::from_bits(y), f32::from_bits(z)])
+/// The floats a car message's body leads with, once vetted (unused slots are zero).
+pub type CarFloats = [f32; 9];
+
+/// How the engine vets a relayed car message body (15: the car state; 20, 21, 35: car events):
+/// its registered width, the bits ahead of its floats, how many floats, and their bound.
+fn car_layout(message: u8) -> Option<(usize, usize, usize, f32)> {
+    let (skip, floats, bound) = match message {
+        15 => (0, 3, POSITION_MAX),
+        20 => (32, 9, FLOAT_MAX),
+        21 => (0, 6, FLOAT_MAX),
+        35 => (0, 0, FLOAT_MAX),
+        _ => return None,
+    };
+    let width = match message {
+        15 => CAR_BODY_BITS,
+        _ => car_event_body_bits(message)?,
+    };
+    Some((width, skip, floats, bound))
 }
 
-pub fn car_event_ok(id: u8, body: &Bits) -> bool {
-    if super::message::car_event_body_bits(id) != Some(body.len()) {
-        return false;
+/// Vets a car message body: `Some` with its leading floats when the body has the registered width
+/// and every float is finite within its bound (a car state's are its position), `None` refuses it.
+pub fn vet_car_body(message: u8, body: &Bits) -> Option<CarFloats> {
+    let (width, skip, floats, bound) = car_layout(message)?;
+    (body.len() == width).then_some(())?;
+    let mut cursor = body.reader();
+    cursor.skip(skip).ok()?;
+    let mut vetted: CarFloats = [0.0; 9];
+    for slot in vetted.iter_mut().take(floats) {
+        let raw = cursor.read(32).ok()? as u32;
+        float_ok(raw, bound).then_some(())?;
+        *slot = f32::from_bits(raw);
     }
-    let mut r = body.reader();
-    if id == 20 && r.skip(32).is_err() {
-        return false;
-    }
-    let count = match id {
-        20 => 9,
-        21 => 6,
-        _ => 0,
-    };
-    (0..count).all(|_| r.read(32).is_ok_and(|b| float_ok(b as u32, FLOAT_MAX)))
+    Some(vetted)
 }
 
 /// SessionHostSynced variables (4-bit ids), each at its width.

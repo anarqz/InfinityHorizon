@@ -1227,7 +1227,7 @@ pub fn roster(entries: &[(u8, u64)], txid: &[u8; 12]) -> Vec<u8> {
         v.push(*index);
         v.extend_from_slice(&xuid.to_be_bytes());
     }
-    crate::fh2::voice::indication(ROSTER_KIND, txid, &[(ROSTER_ATTRIBUTE, &v)])
+    crate::stun::indication(ROSTER_KIND, txid, &[(ROSTER_ATTRIBUTE, &v)])
 }
 
 impl Engine {

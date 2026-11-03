@@ -44,7 +44,7 @@ pub enum CodecError {
     /// connect-only mode, §2.4).
     Unparsed(u8),
     /// An object message names a router the client does not register (§4.1).
-    Router(u8),
+    UnregisteredRouter(u8),
     /// An object payload's variables do not fill exactly its 14-bit length, or name a variable id
     /// the object type does not have (§4.5).
     Payload,

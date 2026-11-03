@@ -72,6 +72,19 @@ impl VarType {
         bit_length(u32::from(max))
     }
 
+    /// The most bits one value of this type takes on the wire (a string at its maximum length).
+    pub fn widest_bits(&self) -> usize {
+        match self {
+            VarType::UInt { bits } | VarType::SInt { bits } => usize::from(*bits),
+            VarType::F32 => 32,
+            VarType::U64 => 64,
+            VarType::Bool => 1,
+            VarType::Array { elem, count } => elem.widest_bits() * usize::from(*count),
+            VarType::WString { max } => usize::from(Self::len_bits(*max)) + 16 * usize::from(*max),
+            VarType::CString { max } => usize::from(Self::len_bits(*max)) + 8 * usize::from(*max),
+        }
+    }
+
     /// Reads one value.
     pub fn read(&self, r: &mut BitReader<'_>) -> Result<VarValue, CodecError> {
         Ok(match self {
@@ -173,6 +186,13 @@ impl ObjectSchema {
     /// The variable-id width: the bit length of the variable count (§4.5).
     pub fn var_id_bits(&self) -> u8 {
         bit_length(self.count)
+    }
+
+    /// The longest payload a well-formed sender writes: every registered variable once, each at
+    /// its widest, behind its id.
+    pub fn widest_payload_bits(&self) -> usize {
+        let id = usize::from(self.var_id_bits());
+        self.vars.iter().map(|(_, t)| id + t.widest_bits()).sum()
     }
 
     /// Decodes a payload's `(variable id, value)` pairs; they must fill exactly the payload.

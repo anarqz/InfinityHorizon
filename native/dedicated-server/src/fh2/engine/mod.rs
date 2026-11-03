@@ -323,7 +323,7 @@ pub(crate) struct Peer {
     queue_bits: usize,
     doomed: bool,
     doomed_by: Option<Why>,
-    car_state: Option<super::carstate::State>,
+    car_state: Option<super::carstate::CarLook>,
     car_position: Option<[f32; 3]>,
     car_id: Option<u32>,
     /// The last car prediction (its relay key and body), sent again with a newer time.
@@ -581,7 +581,7 @@ fn shared_xuid(xuid: u64) -> bool {
 }
 
 fn canonical(a: SocketAddr) -> SocketAddr {
-    crate::stun::canonical(a)
+    crate::stun::plain_endpoint(a)
 }
 
 impl Engine {
@@ -731,7 +731,7 @@ impl Engine {
 
     /// The lobby type (A) a datagram's first message asks for, when it is an OpenConnection.
     pub fn lobby_type_of(data: &[u8]) -> Option<u32> {
-        if crate::stun::is_stun(data) {
+        if crate::stun::is_framed(data) {
             return None;
         }
         let h = datagram::header_of(data)?;
@@ -747,7 +747,7 @@ impl Engine {
     /// A world that does not serve this datagram's lobby type (a public world runs one
     /// activity): its OpenConnection gets refusal 4, past the handshake rate.
     pub fn refuse_open(&mut self, data: &[u8], from: SocketAddr, now_ms: i64) {
-        if self.closed || data.len() > datagram::MAX_DATAGRAM || crate::stun::is_stun(data) {
+        if self.closed || data.len() > datagram::MAX_DATAGRAM || crate::stun::is_framed(data) {
             return;
         }
         self.now = self.now.max(now_ms);
@@ -1288,7 +1288,7 @@ impl Engine {
         // no datagram over the game's 1,372-byte limit is read at all (nothing legitimate is
         // larger; one that is could carry a message no copy of it fits)
         let from = canonical(from);
-        if crate::stun::is_stun(data) {
+        if crate::stun::is_framed(data) {
             self.receive_side_channel(data, from);
             return;
         }
