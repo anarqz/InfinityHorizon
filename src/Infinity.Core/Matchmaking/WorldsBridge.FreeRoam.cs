@@ -103,7 +103,10 @@ public sealed partial class WorldsBridge
     /// </summary>
     public async Task FreeRoamLeftAsync(CancellationToken cancellation)
     {
-        StartGroupSeatWatch(cancellation); // OD-191: an official car meet's session moves the seat to a group world
+        GameInWorld(false);
+        // W-6: a seat staged while the game played is installed at once (no read); OD-191: else an official car meet's seat is watched
+        if (Volatile.Read(ref _staged) is not null) await InstallStagedAsync("the game left its world").ConfigureAwait(false);
+        StartGroupSeatWatch(cancellation);
         var asked = Interlocked.Exchange(ref _lobbyReadyTicks, 0); // one ask covers one leave
         if (asked != 0 && Now - new DateTimeOffset(asked, TimeSpan.Zero) is var ago && ago >= TimeSpan.Zero && ago <= FreeRoamLeftGrace)
         {
@@ -199,7 +202,8 @@ public sealed partial class WorldsBridge
         // the wait is taken first, so a grace loop waking meanwhile sees it called off before it says the host is away again
         var pending = Interlocked.Exchange(ref _freeRoamLeave, null);
         // a guest's join (detail join:…) is the seat's proof: no give-up; OD-191: never bound to a car meet seat that is moving
-        if (join) { if (!HoldJoinForGroupSeat()) SeatPlays("the game joined"); }
+        // W-6: with a seat staged it is installed first and the join bound to it
+        if (join) { if (!JoinStaged() && !HoldJoinForGroupSeat()) { SeatPlays("the game joined"); GameInWorld(true); } }
         else SetHostAway(false, "its game joined it again"); // CR-L49: the host's game is back in its world
         if (pending is null) return;
         CancelFreeRoamLeave(pending);
