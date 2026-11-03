@@ -226,7 +226,9 @@ pub enum Message {
     Disconnect,
     /// Ping (3): the sender's clock.
     Ping { clock: u32 },
-    /// Pong (4): the clock value being answered, then the answering side's clock.
+    /// Pong (4): two clock fields. The engine answers a Ping with that ping's clock first and its
+    /// own clock second; a peer's Pong to the engine's Ping carries a zero first and the engine's
+    /// ping clock second (the round-trip time comes from that field).
     Pong { echoed: u32, clock: u32 },
     /// TimeSync (5): the sync round, then the server clock.
     ClockSync { round: u16, clock: u32 },
