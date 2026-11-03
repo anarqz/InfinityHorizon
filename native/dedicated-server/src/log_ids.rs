@@ -30,5 +30,7 @@ pub const WORLD_FAULT: &str = "world.fault";
 pub const WORLD_ADMISSION: &str = "world.admission";
 pub const WORLD_LINES_SUPPRESSED: &str = "world.lines_suppressed";
 pub const WORLD_OPEN_CONNECTION: &str = "world.open_connection";
+/// An engine's world-log line (the C# `Note`): a stable note id and its args (indexes only).
+pub const WORLD_NOTE: &str = "world.note";
 pub const PEER_REJECTED: &str = "peer.rejected";
 pub const WATCH_REPORT_DROPPED: &str = "watch.report_dropped";

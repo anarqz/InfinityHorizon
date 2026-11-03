@@ -5,10 +5,14 @@
 //! and CPU); datagrams leave through `Server::take_datagrams`, events through
 //! `Server::pop_event_line`. The runtime's loop and the golden-vector runner drive the same API.
 
+pub mod admission;
 pub mod events;
 pub mod fields;
+pub mod fiup;
 pub mod game;
+pub mod grant;
 pub mod keys;
+pub mod legs;
 pub mod rng;
 pub mod server;
 pub mod timers;

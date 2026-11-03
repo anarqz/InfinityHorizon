@@ -24,7 +24,10 @@ world socket(s) and its control endpoint.
 
 ## Build
 
-Rust 1.99 or newer (edition 2024). One dependency, `serde_json`, pinned exactly; no C code.
+Rust 1.99 or newer (edition 2024). Exact pins, no C code: `serde`/`serde_json` (the control
+channel, the strict grant claims) and the platform's own crypto crates at its versions:
+`ed25519-dalek` (relay-grant signatures), `hmac` + `sha2` (FIUP's HMAC-SHA256), `getrandom` (the
+FIUP challenge nonce).
 
 ```sh
 cargo build --release                                    # Linux (the VM: add --target x86_64-unknown-linux-musl)
@@ -113,10 +116,11 @@ it reached the right launcher with the per-launch secret.
 
 ## PORT_STATUS
 
-Step 1 was the process and its scaffold. Step 2 ports the free-roam engine (`src/fh2/engine/`)
+Step 1 was the process and its scaffold. Step 2 ported the free-roam engine (`src/fh2/engine/`)
 from the Infinity C# world engine's behaviour, judged by WINDOWS' D2 golden vectors at the engine
-level; it runs behind a deny-all policy until the admission snapshot (row 2) feeds it, so a world
-still admits nobody (fail closed).
+level. Step 3 adds admission (`core/admission.rs`, `grant.rs`, `fiup.rs`), the relay legs
+(`core/legs.rs`), the private world's network (NAT, UPnP, granted punches) and free-roam events
+(`fh2/engine/races.rs`, `options.rs`): a world serves granted players.
 The game features come next, each one passing its golden vectors recorded from the current C#
 engine, in this recommended order:
 
@@ -124,29 +128,46 @@ engine, in this recommended order:
 | --- | --- | --- | --- |
 | 0 | NerdCore codec (`src/fh2/codec/`) | fh2 | core written for Infinity from NERDCORE_WIRE.md, the C# engine and fh2-mods as references (OD-187; no code copied): bit stream, header, reliability state, objects, synced variables, every message body but 22 (none exists); every §7 variable list (7.1-7.12), checked against the corpus's object payloads (**done**) |
 | 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover; quiet joins (T25), weather, group navigation, held opens, the car-state side channel | fh2 | **done** for free roam: the D2 Delivery, Boundary, WorldFoundation, Integration and SideChannel suites and the free-roam RelayEngineTests replay exactly |
-| 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | needs an Ed25519 verifier (a pure-Rust dependency or a reviewed implementation) |
-| 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | `nat.rs`/`upnp.rs` are here, sans-I/O, not wired yet |
-| 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | the public socket drops everything until this lands |
+| 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | **done** (private tests `admission.rs`) |
+| 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | **done**: wired, granted punches (2 per candidate, 10 per 15 s per grant); the C# 5 s STUN keepalive between rounds is not ported yet |
+| 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | **done** for private worlds; the public multiplex routes by grant id but no official world opens until S34 fixes the grant form |
 | 5 | Side channels: car state, control/state, their authorisation and rates | fh2 | livery is retired and dropped |
 | 6 | Engine routing by lobby type, car meet engines 3 and 6, moves between engines, weather, quiet joins, the 30 s seat behaviour | fh2 | |
-| 7 | Races: grid, start, scores, departures, deadlines; two players for everything; event progress HUD (43/44, start line); race-end split and finishers staying participants | fh2 | |
-| 8 | Event phasing and universes; tag modes (Infected, King) and teams | fh2 | |
+| 7 | Races: grid, start, scores, departures, deadlines; two players for everything; event progress HUD (43/44, start line); race-end split and finishers staying participants | fh2 | **done** (RaceLifecycle, GameOptions, EventProgress suites) |
+| 8 | Event phasing and universes; tag modes (Infected, King) and teams | fh2 | phasing **done**; tag and teams are seams (`seams.rs`) for step 4 |
 | 9 | Car meet invitations and the game-session request/answer | fh2 + core | |
 | 10 | Road Trip (vote, events, alone/wait/drop) with the catalog reader | fh2 | needs a read-only SQLite reader of the catalog; `RoadTripServerState` includes Solo = 3 |
 | 11 | Bucket-list co-op: pairing, 61 gating and fallback, message 65's universe per pair | fh2 | the universe must be BucketList1..6 (18..23), one per pair, at most 6 per world |
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
-| 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | |
+| 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | **done**: `diag` every 3 s (2048, one at close), `peer.rejected` (128 per 30 s, 1 s dedup), `peer.synced`/`peer.left`, `world.empty`/`world.occupied`, note lines at info |
 
 ## Decisions taken in step 2
 
 - **The engine reads messages with its own acceptance set** (`engine/wire.rs`): exactly the ids it
   handles or forwards; any other id ends the packet (a `truncated_packet` rejection), as the
   reference engine does. The codec's registry (the full §6 catalogue) is for decoding anything.
-- **Acknowledgements** (`engine/wire.rs` `AckWindow`) wrap packet ids at 2^16 with no drop
-  window, as the reference engine and the vectors do; the codec's `reliable::ReceiveState`
-  follows §2.3 (modulo 0xffff, the 0x3fff window). The vectors pass with the engine's window;
-  whether the game needs §2.3's window is a question for the spec, not settled here.
+- **Acknowledgements** (`engine/wire.rs` `AckWindow`, MACBOOK's ruling in step 3): the game's
+  rule, the codec's `reliable::ReceiveState` (ids modulo 0xffff; an id equal to the newest is a
+  duplicate; one 0x3fff or more away is dropped silently). The C# engine wraps at 2^16; no vector
+  of the corpus crosses the wrap, so none disagrees today.
+
+## Decisions taken in step 3
+
+- **Size at ingest** (WINDOWS' review): a datagram over 1,372 bytes is refused on arrival; an
+  object whose relayed form (relay key, the server variables a snapshot adds) or an options
+  fragment whose grant/update copy cannot fit one datagram is refused before it takes a sequence
+  or enters a history or the journal, so nothing is dropped for size after its sequence was used.
+- **Signatures:** `verify_strict`, keys refused at `keys.set` when they do not decompress or are
+  of small order; claims strict (no unknown or duplicate member, depth 4), verified on the exact
+  bytes. A punch that does not have the wire's shape is skipped (fail closed for that punch).
+- **Engine `now` and admission:** the engines ask with the world's monotonic ms; the gate turns it
+  into the trusted clock (`max(serverTimeMs-derived, monotonic)`, never back).
+- **`world.empty`/`world.occupied`:** transitions only (a new world starts empty, no event); the
+  host's own game, synced or handshaking, is not an occupant.
+- **Not yet:** the C# `RelayNetworkNat` 5 s keepalive between STUN rounds; engine routing by lobby
+  type (only free roam exists, so `AdmittedLate` moves nothing); voice blocks are stored per source
+  for the voice port.
 - **Datagram limit (WINDOWS' rule, 2026-11-02):** packets split only between messages (at most 8
   messages, a 1,189-byte body); a single message over `(1372 - 11) × 8` bits is dropped, never
   sent (`send.oversize_dropped`); a late joiner's catch-up create folds updates only up to

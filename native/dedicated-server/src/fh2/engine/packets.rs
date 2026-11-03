@@ -30,6 +30,10 @@ const ROAD_TRIP_PLAYER_MAX_BITS: usize = 256;
 pub(super) const BUCKET_LIST_ROUTER: u8 = 12;
 const BUCKET_LIST_PLAYER_TYPE: u8 = 0;
 pub(super) const BUCKET_LIST_SLOTS_TYPE: u8 = 1;
+/// What a snapshot adds to a player object (PrivateUniverseId 8+5, TeamId 8+1) and to a
+/// console (nine server flags, 4+1 each).
+const SERVER_PLAYER_BITS: usize = 13 + 9;
+const SERVER_CONSOLE_BITS: usize = 9 * 5;
 /// The time stamp's offset in a car prediction's body (its last 32 bits).
 pub(super) const CAR_STAMP_OFFSET: usize = CAR_BODY_BITS - 32;
 
@@ -123,8 +127,11 @@ impl Engine {
             }
             return Ok(());
         }
-        let fresh = p.acks.accept(header.id);
-        if !fresh {
+        let verdict = p.acks.accept(header.id);
+        if verdict == wire::Verdict::Dropped {
+            return Ok(()); // 0x3fff or more from the newest id: the game drops it silently
+        }
+        if verdict == wire::Verdict::Duplicate {
             if let Some(Msg::OpenResponse {
                 reason: 6, attempt, ..
             }) = &first
@@ -492,6 +499,30 @@ impl Engine {
                     return None;
                 }
             }
+        }
+        // ingest-size rule: a message whose relayed form (relay key, and the server variables a
+        // snapshot adds) cannot fit one datagram is refused here, before it takes a sequence or
+        // enters a history, never dropped later at send
+        let server_bits = match obj.router {
+            1 => SERVER_PLAYER_BITS,
+            3 => SERVER_CONSOLE_BITS,
+            _ => 0,
+        };
+        if obj.payload.len() + server_bits > wire::MAX_DATAGRAM_PAYLOAD_BITS {
+            let message = if obj.create { 7 } else { 8 };
+            let bits = obj.payload.len() as u32;
+            self.rejected(
+                xuid,
+                "invalid_payload",
+                Some(message),
+                Some(u32::from(obj.router)),
+                Some(bits),
+            );
+            self.note(
+                "object.oversize_refused",
+                vec![json!(index), json!(obj.router), json!(bits)],
+            );
+            return None;
         }
         let key = (obj.router, obj.handle.id);
         let mut guard_notes = Vec::new();

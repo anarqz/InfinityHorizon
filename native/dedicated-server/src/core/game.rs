@@ -6,7 +6,7 @@
 //! finds its `Game` and asks it for the world's `GameWorld`, then drives that through this trait
 //! only. A new game is a new module registered with the server; the core does not change.
 
-use std::net::SocketAddr;
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use serde_json::{Map, Value};
 
@@ -28,6 +28,41 @@ pub struct Notice {
     pub args: Option<Value>,
 }
 
+/// The world's admission as a game's engines ask it per packet (contract §6.2): the core owns
+/// it (grants, lease, FIUP); `mono` is the world's monotonic ms the engine runs on.
+pub trait Admit: std::marker::Send + Sync {
+    /// The decision for `xuid` at `from`: `kind` 0 the game socket, 1 the hook's.
+    fn allowed(&self, xuid: u64, from: SocketAddr, kind: u8, mono: u64) -> bool;
+    /// `xuid` holds a live grant its endpoint can still prove (a held OpenConnection waits).
+    fn proof_expected(&self, xuid: u64, mono: u64) -> bool;
+}
+
+/// What a game world tells the core (control events, contract §4.5).
+#[derive(Debug, Clone, PartialEq)]
+pub enum GameEvent {
+    /// A peer finished its join in an engine.
+    PeerSynced {
+        xuid: u64,
+        engine: &'static str,
+        peer: u8,
+    },
+    /// A synced peer left an engine; `reason` is the contract's.
+    PeerLeft {
+        xuid: u64,
+        engine: &'static str,
+        peer: u8,
+        reason: &'static str,
+    },
+    /// A validation refusal (`peer.rejected`; the core throttles it).
+    Rejected {
+        xuid: u64,
+        kind: &'static str,
+        message: Option<u32>,
+        router: Option<u32>,
+        value: Option<u32>,
+    },
+}
+
 /// What `world.open` tells the game besides its own fields.
 pub struct OpenInfo<'a> {
     /// The whole `world.open` request: the game reads its game-scoped fields from it.
@@ -38,6 +73,8 @@ pub struct OpenInfo<'a> {
     pub max_players: u8,
     /// The world's random source (seeds the game draws at creation).
     pub rng: &'a mut Rng,
+    /// The world's admission, installed in every engine the world makes.
+    pub admit: Arc<dyn Admit>,
 }
 
 /// What a game world command may use.
@@ -99,4 +136,18 @@ pub trait GameWorld: std::marker::Send {
 
     /// Datagrams the game dropped so far (stats).
     fn dropped(&self) -> u64;
+
+    /// Peers (synced or handshaking) of any XUID but `except` (0: everybody).
+    fn occupants(&self, except: u64) -> usize {
+        let _ = except;
+        self.synced() + self.handshaking()
+    }
+
+    /// The events since the last call, in order.
+    fn take_events(&mut self) -> Vec<GameEvent> {
+        Vec::new()
+    }
+
+    /// CR-S67: the grant source of the voice blocks (each XUID's signed instant, Unix seconds).
+    fn set_grant_voice_blocks(&mut self, _blocks: &BTreeMap<u64, i64>) {}
 }

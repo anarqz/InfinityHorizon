@@ -87,7 +87,7 @@ pub trait Policy: std::marker::Send {
     fn authorize(&mut self, xuid: u64, from: SocketAddr, now: i64) -> bool;
     fn authorize_hook(&mut self, xuid: u64, from: SocketAddr, now: i64) -> bool;
     /// `None`: not installed.
-    fn awaits_proof(&mut self, xuid: u64) -> Option<bool>;
+    fn awaits_proof(&mut self, xuid: u64, now: i64) -> Option<bool>;
 }
 
 /// Admits nobody: an engine before its world's first admission snapshot (fail closed).
@@ -107,7 +107,7 @@ impl Policy for DenyAll {
     fn authorize_hook(&mut self, _: u64, _: SocketAddr, _: i64) -> bool {
         false
     }
-    fn awaits_proof(&mut self, _: u64) -> Option<bool> {
+    fn awaits_proof(&mut self, _: u64, _: i64) -> Option<bool> {
         None
     }
 }
@@ -471,6 +471,8 @@ pub struct Engine {
     pub dropped: u64,
     /// Messages too large for any datagram, dropped instead of sent.
     pub oversize_dropped: u64,
+    /// Datagrams over 1,372 bytes, refused on arrival.
+    pub oversize_in: u64,
 }
 
 impl std::fmt::Debug for Engine {
@@ -550,6 +552,7 @@ impl Engine {
             events: Vec::new(),
             dropped: 0,
             oversize_dropped: 0,
+            oversize_in: 0,
         })
     }
 
@@ -600,6 +603,17 @@ impl Engine {
 
     pub fn handshaking(&self) -> usize {
         self.peers.iter().filter(|p| !p.synced).count() + self.held_opens.len()
+    }
+
+    /// Peers (synced or handshaking) and held opens of any XUID but `except` (the host's own
+    /// game is not an occupant: `world.empty`/`world.occupied`).
+    pub fn occupants(&self, except: u64) -> usize {
+        self.peers.iter().filter(|p| p.xuid != except).count()
+            + self
+                .held_opens
+                .iter()
+                .filter(|(_, h)| h.open.user != except)
+                .count()
     }
 
     /// No peer, no held open: nothing a tick could do.
@@ -941,7 +955,7 @@ impl Engine {
     /// An OpenConnection from an endpoint not proven yet, for an identity whose proof may still
     /// come: kept unanswered (the game takes refusal 4 as final) and taken in again once allowed.
     fn hold(&mut self, endpoint: SocketAddr, header: Header, open: &Open, data: &[u8]) -> bool {
-        if shared_xuid(open.user) || self.policy.awaits_proof(open.user) != Some(true) {
+        if shared_xuid(open.user) || self.policy.awaits_proof(open.user, self.now) != Some(true) {
             return false;
         }
         if let Some(held) = self.held_opens.get(&endpoint) {
@@ -1007,7 +1021,7 @@ impl Engine {
                 continue;
             }
             if self.now - held.at < HELD_OPEN_MS
-                && self.policy.awaits_proof(held.open.user) == Some(true)
+                && self.policy.awaits_proof(held.open.user, self.now) == Some(true)
             {
                 continue;
             }
@@ -1071,6 +1085,13 @@ impl Engine {
             return;
         }
         self.now = self.now.max(now_ms);
+        // no datagram over the game's 1,372-byte limit is read at all (nothing legitimate is
+        // larger; one that is could carry a message no copy of it fits)
+        if data.len() > wire::MAX_DATAGRAM {
+            self.dropped += 1;
+            self.oversize_in += 1;
+            return;
+        }
         let from = canonical(from);
         if crate::stun::is_stun(data) {
             self.receive_side_channel(data, from);

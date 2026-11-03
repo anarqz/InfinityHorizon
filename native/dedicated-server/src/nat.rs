@@ -236,6 +236,11 @@ impl Nat {
         true
     }
 
+    /// A lookup or a UPnP mapping is still running in its thread (`tick` polls its result).
+    pub fn polling(&self) -> bool {
+        self.resolved.is_some() || self.upnp_rx.is_some()
+    }
+
     /// The next time `tick` has something to do, if any.
     pub fn next_deadline(&self) -> Option<u64> {
         let round = if self.servers.is_empty() {

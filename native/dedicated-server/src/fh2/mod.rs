@@ -6,15 +6,16 @@
 //!
 //! World-scoped FH2 fields of `world.open`: `races`, `voice`, `watch`, `settings`.
 //!
-//! Step 2: the free-roam engine is ported (contract §7); it runs behind a deny-all policy until
-//! the admission snapshot is wired to it, so a world admits nobody yet (README, PORT_STATUS).
+//! Step 3: the free-roam engine with its events and races (contract §7), behind the world's
+//! admission (core::admission, through [`AdmissionPolicy`]): nobody is admitted before the first
+//! `world.context`, and peers only by a verified grant (README, PORT_STATUS).
 
 pub mod carstate;
 pub mod codec;
 pub mod engine;
 pub mod settings;
 
-use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
+use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use serde_json::{Map, Value, json};
 
@@ -23,10 +24,10 @@ use crate::{
     core::{
         Profile,
         fields::{Obj, parse_xuid},
-        game::{Game, GameCtx, GameWorld, Notice, OpenInfo, Send},
+        game::{Admit, Game, GameCtx, GameEvent, GameWorld, Notice, OpenInfo, Send},
     },
 };
-use engine::{DenyAll, Engine, EngineKind, EngineSettings, Event, random::EngineRandom};
+use engine::{Engine, EngineKind, EngineSettings, Event, Policy, random::EngineRandom};
 pub use settings::RelaySettings;
 
 pub const GAME_ID: &str = "fh2";
@@ -60,6 +61,28 @@ pub struct Fh2 {
 impl Fh2 {
     pub fn new(catalog: Catalog) -> Fh2 {
         Fh2 { catalog }
+    }
+}
+
+/// The engines' policy: the world's admission, all three questions installed (the C#
+/// `SetAdmissionPolicyAsync` with a validator, a hook validator and `AwaitsProof`).
+pub struct AdmissionPolicy(pub Arc<dyn Admit>);
+
+impl Policy for AdmissionPolicy {
+    fn has_authorize(&self) -> bool {
+        true
+    }
+    fn has_authorize_hook(&self) -> bool {
+        true
+    }
+    fn authorize(&mut self, xuid: u64, from: SocketAddr, now: i64) -> bool {
+        self.0.allowed(xuid, from, 0, now.max(0) as u64)
+    }
+    fn authorize_hook(&mut self, xuid: u64, from: SocketAddr, now: i64) -> bool {
+        self.0.allowed(xuid, from, 1, now.max(0) as u64)
+    }
+    fn awaits_proof(&mut self, xuid: u64, now: i64) -> Option<bool> {
+        Some(self.0.proof_expected(xuid, now.max(0) as u64))
     }
 }
 
@@ -205,7 +228,7 @@ impl Game for Fh2 {
             EngineKind::FreeRoam,
             engine_settings,
             random,
-            Box::new(DenyAll),
+            Box::new(AdmissionPolicy(info.admit.clone())),
         )
         .ok_or_else(|| CmdError::bad("settings"))?;
         let mut engines = BTreeMap::new();
@@ -236,6 +259,8 @@ impl Game for Fh2 {
             roster_blocks: BTreeMap::new(),
             dropped: 0,
             host_seen: std::cell::Cell::new(false),
+            events: Vec::new(),
+            grant_blocks: BTreeMap::new(),
         };
         Ok((Box::new(world), notices))
     }
@@ -256,21 +281,78 @@ pub struct Fh2World {
     dropped: u64,
     /// The host's own game synced in an engine at least once (`activity` stays set after).
     host_seen: std::cell::Cell<bool>,
+    /// Events for the core (peer.synced, peer.left, peer.rejected).
+    events: Vec<GameEvent>,
+    /// CR-S67's grant source (merged with the roster's by the voice port, step 4).
+    grant_blocks: BTreeMap<u64, i64>,
 }
 
 impl Fh2World {
     /// The engines' world-log lines go to the process log (indexes and ids only, never an
     /// identity or an address); the other events feed `world.state`, which is read fresh.
     fn drain_events(&mut self) {
-        for e in self.engines.values_mut() {
+        for (kind, e) in self.engines.iter_mut() {
+            let engine = kind.as_str();
             for ev in e.take_events() {
-                if let Event::Note { id, args } = ev
-                    && crate::log::enabled(crate::log::Level::Debug)
-                {
-                    crate::log::debug("world.note")
-                        .field("note", id)
-                        .field("args", Value::Array(args))
-                        .emit();
+                match ev {
+                    Event::Note { id, args } => {
+                        if crate::log::enabled(crate::log::Level::Info) {
+                            crate::log::info(crate::log_ids::WORLD_NOTE)
+                                .field("engine", engine)
+                                .field("note", id)
+                                .field("args", Value::Array(args))
+                                .emit();
+                        }
+                    }
+                    Event::ConnectionOpened {
+                        index,
+                        a,
+                        b,
+                        refusal,
+                    } => {
+                        let mut l = crate::log::info(crate::log_ids::WORLD_OPEN_CONNECTION)
+                            .field("engine", engine)
+                            .field("peer", index)
+                            .field("a", a)
+                            .field("b", b);
+                        if let Some(r) = refusal {
+                            l = l.field("refusal", r);
+                        }
+                        l.emit();
+                    }
+                    Event::ValidationRejected {
+                        xuid,
+                        kind,
+                        message,
+                        router,
+                        value,
+                    } => self.events.push(GameEvent::Rejected {
+                        xuid,
+                        kind,
+                        message,
+                        router,
+                        value,
+                    }),
+                    Event::PeerSynced { xuid, peer } => {
+                        self.events
+                            .push(GameEvent::PeerSynced { xuid, engine, peer })
+                    }
+                    Event::PeerLeft {
+                        xuid,
+                        peer,
+                        why,
+                        synced,
+                    } => {
+                        if synced {
+                            self.events.push(GameEvent::PeerLeft {
+                                xuid,
+                                engine,
+                                peer,
+                                reason: why.left_reason(),
+                            });
+                        }
+                    }
+                    Event::AdmittedLate { .. } => {}
                 }
             }
         }
@@ -473,5 +555,17 @@ impl GameWorld for Fh2World {
 
     fn dropped(&self) -> u64 {
         self.dropped + self.engines.values().map(|e| e.dropped).sum::<u64>()
+    }
+
+    fn occupants(&self, except: u64) -> usize {
+        self.engines.values().map(|e| e.occupants(except)).sum()
+    }
+
+    fn take_events(&mut self) -> Vec<GameEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    fn set_grant_voice_blocks(&mut self, blocks: &BTreeMap<u64, i64>) {
+        self.grant_blocks = blocks.clone();
     }
 }
