@@ -261,6 +261,8 @@ impl Engine {
                 Msg::Car { handle, body } if handle.kind == Kind::Own => {
                     match payload::car_position(&body) {
                         Some(position) => {
+                            // voice proximity's jump counter, on the previous car
+                            self.car_accepted(serial, handle.id, position);
                             let Some(p) = self.peer_mut(serial) else {
                                 break;
                             };

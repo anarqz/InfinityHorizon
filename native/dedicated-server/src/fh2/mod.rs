@@ -15,12 +15,14 @@ pub mod catalog;
 pub mod codec;
 pub mod engine;
 pub mod settings;
+pub mod voice;
 
 use std::{
     collections::{BTreeMap, HashMap},
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::SystemTime,
 };
 
 use serde_json::{Map, Value, json};
@@ -37,6 +39,7 @@ use crate::{
 use catalog::CatalogStore;
 use engine::{Engine, EngineKind, EngineSettings, Event, Policy, random::EngineRandom};
 pub use settings::RelaySettings;
+pub use voice::VoiceMode;
 
 pub const GAME_ID: &str = "fh2";
 
@@ -82,8 +85,9 @@ fn lock(store: &Mutex<CatalogStore>) -> std::sync::MutexGuard<'_, CatalogStore> 
 }
 
 /// The engines' policy: the world's admission, all three questions installed (the C#
-/// `SetAdmissionPolicyAsync` with a validator, a hook validator and `AwaitsProof`).
-pub struct AdmissionPolicy(pub Arc<dyn Admit>);
+/// `SetAdmissionPolicyAsync` with a validator, a hook validator and `AwaitsProof`), and the
+/// world's voice blocks (compared with the wall clock, Unix seconds).
+pub struct AdmissionPolicy(pub Arc<dyn Admit>, pub Arc<Mutex<VoiceBlockTable>>);
 
 impl Policy for AdmissionPolicy {
     fn has_authorize(&self) -> bool {
@@ -101,6 +105,12 @@ impl Policy for AdmissionPolicy {
     fn awaits_proof(&mut self, xuid: u64, now: i64) -> Option<bool> {
         Some(self.0.proof_expected(xuid, now.max(0) as u64))
     }
+    fn voice_blocked(&mut self, xuid: u64, _now: i64) -> bool {
+        let unix = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        self.1.lock().is_ok_and(|t| t.blocked(xuid, unix))
+    }
     /// A world always has its controller (a controller that leaves closes its worlds); a
     /// dedicated world's controller answers `session: null` itself (contract §4.4).
     fn can_create_game_session(&self) -> bool {
@@ -108,29 +118,52 @@ impl Policy for AdmissionPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoiceMode {
-    Off,
-    Open,
-    Proximity,
+/// Where a voice block reached the world from (CR-S67).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VoiceBlockSource {
+    Grant,
+    Roster,
 }
 
-impl VoiceMode {
-    pub fn parse(s: &str) -> Option<VoiceMode> {
-        match s {
-            "off" => Some(VoiceMode::Off),
-            "open" => Some(VoiceMode::Open),
-            "proximity" => Some(VoiceMode::Proximity),
-            _ => None,
+/// The world's voice blocks by XUID (Unix seconds, 0: none), from two sources, "whichever the
+/// relay saw last" (contract §6.4): a value a source changed becomes the block; a source
+/// repeating itself never overrides the other's newer word; an XUID a source stops listing keeps
+/// its block (the other source or the instant ends it), but that source's next word about it
+/// counts as new.
+#[derive(Debug, Default)]
+pub struct VoiceBlockTable {
+    blocks: BTreeMap<u64, i64>,
+    seen: BTreeMap<(VoiceBlockSource, u64), i64>,
+}
+
+impl VoiceBlockTable {
+    /// What `source` says now of each XUID; true when a block changed.
+    pub fn apply(&mut self, source: VoiceBlockSource, blocks: &BTreeMap<u64, i64>) -> bool {
+        let mut changed = false;
+        for (&xuid, &until) in blocks {
+            let value = until.max(0);
+            if self.seen.get(&(source, xuid)) == Some(&value) {
+                continue;
+            }
+            self.seen.insert((source, xuid), value);
+            if self.blocks.get(&xuid).copied().unwrap_or(0) == value {
+                continue;
+            }
+            if value == 0 {
+                self.blocks.remove(&xuid);
+            } else {
+                self.blocks.insert(xuid, value);
+            }
+            changed = true;
         }
+        self.seen
+            .retain(|(s, x), _| *s != source || blocks.contains_key(x));
+        changed
     }
 
-    pub fn as_str(self) -> &'static str {
-        match self {
-            VoiceMode::Off => "off",
-            VoiceMode::Open => "open",
-            VoiceMode::Proximity => "proximity",
-        }
+    /// Whether `xuid`'s voice is blocked at `unix` (the block's instant still ahead).
+    pub fn blocked(&self, xuid: u64, unix: i64) -> bool {
+        self.blocks.get(&xuid).is_some_and(|until| *until > unix)
     }
 }
 
@@ -280,6 +313,7 @@ impl Game for Fh2 {
             settings,
             base,
             admit: info.admit.clone(),
+            voice_blocks: Arc::new(Mutex::new(VoiceBlockTable::default())),
             rng: Rng::new(info.rng.next_u64()),
             store: self.store.clone(),
             activity,
@@ -289,11 +323,9 @@ impl Game for Fh2 {
             sessions: BTreeMap::new(),
             next_rid: 1,
             now: 0,
-            roster_blocks: BTreeMap::new(),
             dropped: 0,
             last_activity: std::cell::Cell::new(None),
             events: Vec::new(),
-            grant_blocks: BTreeMap::new(),
         };
         let base_kind = world.base_kind();
         // the base engine exists from the open (a Road Trip one once a catalog is in)
@@ -341,16 +373,13 @@ pub struct Fh2World {
     sessions: BTreeMap<u32, (EngineKind, u32)>,
     next_rid: u32,
     now: u64,
-    /// `world.voiceBlocks` (the roster source of §6.4; the merge with the grant source comes
-    /// with the voice port).
-    roster_blocks: BTreeMap<u64, u64>,
+    /// The voice blocks of both sources (§6.4), shared with every engine's policy.
+    voice_blocks: Arc<Mutex<VoiceBlockTable>>,
     dropped: u64,
     /// OD-150: the activity the host's own game was last seen in.
     last_activity: std::cell::Cell<Option<&'static str>>,
     /// Events for the core (peer.synced, peer.left, peer.rejected, requests, notices).
     events: Vec<GameEvent>,
-    /// CR-S67's grant source (merged with the roster's by the voice port, step 4).
-    grant_blocks: BTreeMap<u64, i64>,
 }
 
 impl Fh2World {
@@ -382,12 +411,17 @@ impl Fh2World {
             }
             let rng = &mut self.rng;
             let random = EngineRandom::from_source(|| rng.next_u64());
-            let e = Engine::new(
+            let mut e = Engine::new(
                 kind,
                 s,
                 random,
-                Box::new(AdmissionPolicy(self.admit.clone())),
+                Box::new(AdmissionPolicy(
+                    self.admit.clone(),
+                    self.voice_blocks.clone(),
+                )),
             )?;
+            // the world's voice applies to every engine, made now or later
+            e.set_voice(self.voice.mode, &self.voice.lobby_muted);
             self.engines.insert(kind, e);
         }
         self.engines.get_mut(&kind)
@@ -643,13 +677,31 @@ impl Fh2World {
                 .as_u64()
                 .filter(|n| *n <= JSON_INT_MAX)
                 .ok_or_else(|| o.bad("blocks"))?;
-            next.insert(x, until);
+            next.insert(x, until as i64);
         }
-        let changed = next != self.roster_blocks;
-        self.roster_blocks = next;
+        let changed = self.apply_voice_blocks(VoiceBlockSource::Roster, &next);
         let mut m = Map::new();
         m.insert("changed".into(), Value::Bool(changed));
         Ok(m)
+    }
+
+    /// One source's word on the voice blocks; a change reaches every engine at once (their
+    /// state downs go out with the engine's next datagrams). True when a block changed.
+    fn apply_voice_blocks(
+        &mut self,
+        source: VoiceBlockSource,
+        blocks: &BTreeMap<u64, i64>,
+    ) -> bool {
+        let changed = self
+            .voice_blocks
+            .lock()
+            .is_ok_and(|mut t| t.apply(source, blocks));
+        if changed {
+            for e in self.engines.values_mut() {
+                e.voice_blocks_changed();
+            }
+        }
+        changed
     }
 
     fn watch_cmd(&mut self, o: Obj, ctx: &mut GameCtx) -> CmdResult {
@@ -718,6 +770,9 @@ impl GameWorld for Fh2World {
     fn command(&mut self, op: &str, o: Obj, ctx: &mut GameCtx) -> Option<CmdResult> {
         Some(match op {
             "world.voice" => parse_voice(o).map(|v| {
+                for e in self.engines.values_mut() {
+                    e.set_voice(v.mode, &v.lobby_muted);
+                }
                 self.voice = v;
                 Map::new()
             }),
@@ -846,6 +901,6 @@ impl GameWorld for Fh2World {
     }
 
     fn set_grant_voice_blocks(&mut self, blocks: &BTreeMap<u64, i64>) {
-        self.grant_blocks = blocks.clone();
+        self.apply_voice_blocks(VoiceBlockSource::Grant, blocks);
     }
 }
