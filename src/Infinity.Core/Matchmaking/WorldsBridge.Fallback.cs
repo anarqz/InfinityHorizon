@@ -79,6 +79,8 @@ public sealed partial class WorldsBridge
     private string? _relayBornGrant;
     private string? _directFallbackGrant;
     private int _directFallbackRunning;
+    // WORLDS_OFFICIAL §3 (OD-189): the grant of an official world's seat (host.official): direct only, never a leg or a relay renew
+    private string? _officialGrant;
 
     private async Task<RelayReport?> RelayReportAsync(CancellationToken cancellation)
     {
@@ -107,7 +109,7 @@ public sealed partial class WorldsBridge
         var grant = Guid.Parse(verified.Grant);
         // a seat given up after SeatGiveUp (or dropped unproven): a late renewal never pushes its leg again
         if (Volatile.Read(ref _givenUpGrant) == verified.Grant) { await ClearLegAsync("the seat was given up", cancellation).ConfigureAwait(false); return; }
-        if (verified.Relay is not { } named || !IPAddress.TryParse(named.Addr, out var address)
+        if (verified.Host.Official is not null || verified.Relay is not { } named || !IPAddress.TryParse(named.Addr, out var address)
             || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || named.Addr.Count(c => c == '.') != 3
             || address.GetAddressBytes()[0] is 0 or >= 224 || named.Port == 0
             || Volatile.Read(ref _refusedGrant) == verified.Grant) // the server refused this grant's relay: nothing for the hook to try
@@ -226,6 +228,7 @@ public sealed partial class WorldsBridge
         }
         if (refused) return null; // the server refused this grant's relay; the hook's leg was cleared
         if (Volatile.Read(ref _directFallbackGrant) == grantId) return null; // OD-160: it left an unreachable relay; never back to it
+        if (Volatile.Read(ref _officialGrant) == grantId) return null; // WORLDS_OFFICIAL §3: an official world is direct only, no relay renew
         Forget(ref _directGrant, grantId); // a new direct failure re-arms the relay
         Volatile.Write(ref _fallbackGrant, grantId);
         if (Interlocked.CompareExchange(ref _fallbackRunning, 1, 0) != 0) return null;
@@ -239,6 +242,17 @@ public sealed partial class WorldsBridge
             if (!renewed.Ok || renewed.Value is not { } answer)
             {
                 _log($"worlds: relay fallback renew refused: {renewed.Error?.Kind} {renewed.Error?.Reason}");
+                // WORLDS_OFFICIAL §3: an official world's seat is direct only: final for this grant, no toast, no relay retry
+                if (renewed.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.OfficialDirect })
+                {
+                    Volatile.Write(ref _officialGrant, grantId);
+                    Volatile.Write(ref _refusedGrant, grantId);
+                    Forget(ref _fallbackGrant, grantId);
+                    await _proofWrites.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                    try { if (_legGrant == frame.Grant) await ClearLegAsync("an official world is direct only", CancellationToken.None).ConfigureAwait(false); }
+                    finally { _proofWrites.Release(); }
+                    return null;
+                }
                 if (ConflictReasons.RelayKey(renewed.Error) is not { } key) return null;
                 // final for this grant: the toast once, and the hook's leg cleared so it stops trying the relay
                 if (Interlocked.Exchange(ref _refusedGrant, grantId) == grantId) return null;

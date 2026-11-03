@@ -29,15 +29,50 @@ public sealed record RelayGrantClaims
     [JsonPropertyName("voiceBlockedUntil"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? VoiceBlockedUntil { get; init; }
 }
 
-/// <summary>Exact fi_protocol::matchmaking::RelayGrantHost mirror.</summary>
+/// <summary>
+/// Exact fi_protocol::matchmaking::RelayGrantHost mirror (WORLDS_OFFICIAL.md §3): exactly one of <c>{xuid}</c> (player-hosted,
+/// unchanged bytes) or <c>{official: vmId}</c> (a Worlds host); both or neither is refused by the verifier.
+/// </summary>
 public sealed record RelayGrantHost
 {
-    [JsonPropertyName("xuid")] public required string Xuid { get; init; }
+    [JsonPropertyName("xuid"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Xuid { get; init; }
+    [JsonPropertyName("official"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Official { get; init; }
 }
 
-/// <summary>Known world and peer identity from the authenticated control plane, never from the UDP sender.</summary>
-public sealed record RelayGrantContext(string WorldId, string HostXuid, string PeerXuid, string Role,
-    string? GrantId = null, string? ProfileId = null);
+/// <summary>
+/// Known world and peer identity from the authenticated control plane, never from the UDP sender. The host is
+/// <paramref name="HostXuid"/> for a player-hosted world, or <paramref name="HostOfficial"/> (with a null xuid) for an official one.
+/// </summary>
+public sealed record RelayGrantContext(string WorldId, string? HostXuid, string PeerXuid, string Role,
+    string? GrantId = null, string? ProfileId = null, string? HostOfficial = null);
+
+/// <summary>WORLDS_OFFICIAL.md §3: an official Worlds host's <c>vmId</c> and the FIUP host tag the launcher and the engine derive from it.</summary>
+public static class OfficialHost
+{
+    public static ReadOnlySpan<byte> TagPrefix => "fi-official-host-v1\n"u8;
+
+    /// <summary><c>[a-z0-9-]{1,32}</c>, the <c>FI_WORLDS</c> entry's id.</summary>
+    public static bool ValidVmId(string? vmId) => RelayGrantVerifyKeys.ValidKid(vmId);
+
+    /// <summary>
+    /// <c>0x8000000000000000 | BE64(SHA-256("fi-official-host-v1\n" ‖ vmId)[0..8])</c>: nonzero, top bit set (outside every real
+    /// XUID). Only the FIUP header's host field carries it, never a claim, row or log as a player identity.
+    /// </summary>
+    public static ulong Tag(string vmId)
+    {
+        if (!ValidVmId(vmId)) throw new ArgumentException("Invalid official host id", nameof(vmId));
+        Span<byte> digest = stackalloc byte[32];
+        System.Security.Cryptography.SHA256.HashData([.. TagPrefix, .. System.Text.Encoding.UTF8.GetBytes(vmId)], digest);
+        return 0x8000000000000000UL | System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(digest);
+    }
+
+    /// <summary>The FIUP host field of a verified grant's host: the XUID, or the official tag.</summary>
+    public static ulong HostField(RelayGrantHost host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        return host.Official is { } vmId ? Tag(vmId) : ulong.Parse(host.Xuid ?? throw new InvalidDataException(), NumberStyles.None, CultureInfo.InvariantCulture);
+    }
+}
 
 public enum RelayGrantFailure { Invalid, Expired, ContextMismatch }
 
@@ -173,11 +208,12 @@ public static class RelayGrantVerifier
             || verified.Exp <= verified.Iat || (Int128)verified.Exp - verified.Iat > MaxLifetimeSeconds
             || (Int128)verified.Iat - nowUnix > FutureSkewSeconds
             || !Uuid(verified.Grant) || !Uuid(verified.World) || !Uuid(verified.Sub)
-            || !Xuid(verified.Xuid) || !Xuid(verified.Host.Xuid)
+            || !Xuid(verified.Xuid) || !ValidHost(verified)
             || verified.Relay is { } relay && !ValidRelay(relay) || verified.VoiceBlockedUntil is < 0) throw Invalid();
         if (verified.Exp <= nowUnix) throw new RelayGrantException(RelayGrantFailure.Expired);
         if (!string.Equals(verified.World, context.WorldId, StringComparison.Ordinal)
             || !string.Equals(verified.Host.Xuid, context.HostXuid, StringComparison.Ordinal)
+            || !string.Equals(verified.Host.Official, context.HostOfficial, StringComparison.Ordinal)
             || !string.Equals(verified.Xuid, context.PeerXuid, StringComparison.Ordinal)
             || !string.Equals(verified.Role, context.Role, StringComparison.Ordinal)
             || context.GrantId is { } grantId && !string.Equals(verified.Grant, grantId, StringComparison.Ordinal)
@@ -212,6 +248,17 @@ public static class RelayGrantVerifier
         return addr.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '-')
             && addr.Split('.').All(label => label.Length is >= 1 and <= 63 && label[0] != '-' && label[^1] != '-');
     }
+
+    /// <summary>
+    /// WORLDS_OFFICIAL.md §3: exactly one host member. An official host's grant is a joiner's (the engine is the host) and carries no
+    /// <c>relay</c> claim (official worlds are direct, OD-189).
+    /// </summary>
+    private static bool ValidHost(RelayGrantClaims claims) => claims.Host switch
+    {
+        { Xuid: { } xuid, Official: null } => Xuid(xuid),
+        { Xuid: null, Official: { } vmId } => OfficialHost.ValidVmId(vmId) && claims.Role == "joiner" && claims.Relay is null,
+        _ => false,
+    };
 
     private static bool Uuid(string value) => Guid.TryParseExact(value, "D", out var id) && id != Guid.Empty
         && string.Equals(id.ToString("D"), value, StringComparison.Ordinal);
