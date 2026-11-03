@@ -291,13 +291,11 @@ impl Engine {
                 }
                 Msg::Other { kind, body } if self.other_seam(serial, kind, &body) => {}
                 Msg::Other { kind, body } if races => {
-                    if kind == 41
-                        && let Some(true) = super::seams::ready_request(&body)
-                        && self.holding.contains_key(&serial)
-                    {
-                        ready_release = true;
-                    }
-                    reliable.extend(self.race_message_seam(serial, kind, &body));
+                    // a Ready ends the join's hold after this packet's own answers (an ownership
+                    // refusal's sequence precedes the options replay), before any race step
+                    let (answers_of, release) = self.race_message(serial, kind, &body);
+                    reliable.extend(answers_of);
+                    ready_release |= release;
                 }
                 Msg::TagCollision { .. } if races => {}
                 Msg::Finalise => {
@@ -310,6 +308,8 @@ impl Engine {
                 _ => {}
             }
         }
+        // T38: a RaceInProgress 1 -> 0 is decided after the packet's own 45
+        self.resolve_race_exits();
         let max_bits = self.settings.relay.history_max_bits as usize;
         let max_entries = self.settings.relay.history_max_entries as usize;
         let Some(p) = self.peer(serial) else {
@@ -347,6 +347,7 @@ impl Engine {
         if ready_release {
             self.release_joiner(serial, super::join::Release::Ready);
         }
+        self.race_step();
         if !answers.is_empty() || header.id != NO_SEQUENCE {
             self.send_ack(serial, answers);
         }
@@ -417,7 +418,8 @@ impl Engine {
     fn on_object(&mut self, serial: u64, mut obj: Obj) -> Option<M> {
         let (xuid, index) = self.peer(serial).map(|p| (p.xuid, p.index))?;
         if self.settings.races && obj.router == 6 && obj.handle.kind == Kind::Transfer {
-            // the event options journal (a later step): not relayed
+            // the event options journal: published by races.rs, never relayed as it came
+            self.on_game_options(serial, &obj);
             return None;
         }
         let has = |e: &Engine, key: (u8, u32)| {
@@ -472,7 +474,12 @@ impl Engine {
                 return None;
             }
             match payload::sanitize(obj.router, &obj.payload) {
-                Ok(clean) => obj.payload = clean,
+                Ok(clean) => {
+                    obj.payload = clean;
+                    if obj.router == 1 {
+                        self.observe_car_choice(serial, &obj.payload);
+                    }
+                }
                 Err(fault) => {
                     let message = if obj.create { 7 } else { 8 };
                     self.rejected(
@@ -555,11 +562,16 @@ impl Engine {
                     observations.push((var, value));
                 }
             }
-            for (var, value) in observations {
-                if let Some(slot) = p.console_values.get_mut(usize::from(var)) {
-                    *slot = value;
-                }
+            let injected = p.objects.get(&key).map_or(0, |o| o.injected);
+            for d in guard_notes.drain(..) {
+                self.guard_note(index, key, d);
             }
+            self.observe_console(serial, &observations);
+            return Some(Arc::new(wire::write(&Msg::Object(Obj {
+                handle: Handle::relay(obj.handle.id, index),
+                seq: seq_add(obj.seq, injected),
+                ..obj
+            }))));
         }
         let injected = p.objects.get(&key).map_or(0, |o| o.injected);
         for d in guard_notes {
@@ -727,6 +739,10 @@ impl Engine {
             if !self.queue_reliable(serial, Arc::new(m)) {
                 break;
             }
+        }
+        // during an event a newcomer needs a private universe of its own too (free-roam side)
+        if self.ev.phasing {
+            self.assign_universe(serial);
         }
         self.pace(serial);
     }
