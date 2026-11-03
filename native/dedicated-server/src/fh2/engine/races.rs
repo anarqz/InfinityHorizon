@@ -428,12 +428,12 @@ impl Engine {
             return;
         };
         if self.is_road_trip() {
-            self.note("race.ignored_roadtrip", vec![json!(index)]);
+            self.peer_noted(serial, "race.ignored_roadtrip", vec![json!(index)]);
             return;
         }
         if let Some(r) = &self.ev.race {
             let (owner, stage) = (r.owner, r.stage.describe());
-            self.note(
+            self.peer_noted(serial,
                 "race.ignored_running",
                 vec![json!(index), json!(owner), json!(stage)],
             );
@@ -441,8 +441,8 @@ impl Engine {
         }
         if !self.is_event_owner(serial) {
             match self.ev.event_owner {
-                Some(o) => self.note("race.ignored_not_owner", vec![json!(index), json!(o)]),
-                None => self.note("race.ignored_no_options", vec![json!(index)]),
+                Some(o) => self.peer_noted(serial, "race.ignored_not_owner", vec![json!(index), json!(o)]),
+                None => self.peer_noted(serial, "race.ignored_no_options", vec![json!(index)]),
             }
             return;
         }
@@ -610,7 +610,7 @@ impl Engine {
                 self.note("event.all_accepted", Vec::new());
             }
         } else {
-            self.note("ready.outside", vec![json!(index), json!(u8::from(ready))]);
+            self.peer_noted(serial, "ready.outside", vec![json!(index), json!(u8::from(ready))]);
         }
         let same = self.peer(serial).is_some_and(|p| {
             p.console_values[4] == u64::from(ready) && p.console_sequence.is_some()
