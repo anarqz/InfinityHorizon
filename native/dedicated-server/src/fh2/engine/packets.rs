@@ -304,7 +304,9 @@ impl Engine {
                     reliable.extend(answers_of);
                     ready_release |= release;
                 }
-                Msg::TagCollision { .. } if races => {}
+                Msg::TagCollision { a, b, values } if races => {
+                    self.tag_collision(serial, a, b, values)
+                }
                 Msg::Finalise => {
                     if let Some(p) = self.peer_mut(serial) {
                         p.completion_confirmed = true;
