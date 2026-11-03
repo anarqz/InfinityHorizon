@@ -12,6 +12,8 @@ use super::{
 /// Header length in bits: 16 + 16 + 32 + 8 + 16 = 88, an 11-byte header (§2.1's table, the C#
 /// engine, fh2-mods and every D2 vector; §2.1/§2.2's prose "80-bit" is a slip, reported back).
 pub const HEADER_BITS: usize = 88;
+/// The header in bytes.
+pub const HEADER_BYTES: usize = HEADER_BITS / 8;
 /// Largest packet a receiver accepts, header included (§2.3).
 pub const MAX_PACKET_BYTES: u16 = 0x55c;
 /// The id of an unsequenced packet (§2.1).
@@ -60,6 +62,21 @@ impl PacketHeader {
             return Err(CodecError::Size(h.size));
         }
         Ok(h)
+    }
+
+    /// Reads a datagram's header fields without the `size` checks of [`Self::parse`] (`None`
+    /// only when the datagram is shorter than the header), for a caller that applies its own
+    /// limits.
+    pub fn peek(data: &[u8]) -> Option<PacketHeader> {
+        PacketHeader::read(&mut BitReader::new(data)).ok()
+    }
+
+    /// The header as its [`HEADER_BYTES`] bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        // every field is written at its own width, so the write cannot fail
+        let _ = self.write(&mut w);
+        w.into_bytes()
     }
 
     pub fn is_sequenced(&self) -> bool {
