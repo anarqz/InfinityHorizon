@@ -11,14 +11,27 @@ namespace Infinity.Core.Matchmaking;
 // `required` members must be in every answer (System.Text.Json refuses a body without them);
 // optional ones are nullable and, on request bodies, left out when null (the contract's "absent").
 
-/// <summary>The host of a world, as the list shows it (<c>tier</c>: <c>free</c> | <c>vip</c>).</summary>
+/// <summary>
+/// The host of a world, as the list shows it: TypeScript <c>WorldHost | OfficialWorldHost</c>, flattened. A player host is
+/// <c>{xuid, gamertag, tier}</c> (<c>tier</c>: <c>free</c> | <c>vip</c>); an official world's (§2.9, OD-188/189) is <c>{official: vmId,
+/// name}</c>, with no xuid, gamertag or tier. Members absent from the body stay null and are never written.
+/// </summary>
 public sealed record WorldHost
 {
-    public required string Xuid { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Xuid { get; init; }
 
-    public required string Gamertag { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Gamertag { get; init; }
 
-    public required string Tier { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Tier { get; init; }
+
+    /// <summary>§2.9: an official world's Worlds host (its <c>FI_WORLDS</c> vmId); null for a player host.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Official { get; init; }
+
+    /// <summary>§2.9: an official host's display name (the <c>FI_WORLDS</c> name).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Name { get; init; }
+
+    /// <summary>The name shown as the host: an official host's name (or vmId), else the player's gamertag.</summary>
+    [JsonIgnore] public string DisplayName => Official is not null ? Name ?? Official : Gamertag ?? string.Empty;
 }
 
 /// <summary>A world's common fields (TypeScript <c>World</c>); never an IP address.</summary>
@@ -109,6 +122,9 @@ public record WorldView : World
     /// Omitted when false; null here reads as false.
     /// </summary>
     public bool? HostAway { get; init; }
+
+    /// <summary>§2.9 (OD-188/189): hosted by a Worlds host of <c>FI_WORLDS</c>, not a player (its <see cref="World.Host"/> is official). Omitted when false.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Official { get; init; }
 
     public required bool Invited { get; init; }
 

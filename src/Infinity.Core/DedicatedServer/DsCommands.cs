@@ -35,7 +35,8 @@ public static class DsCommands
         {
             WorldId = world.Id,
             ServerTimeMs = serverTime.ToUnixTimeMilliseconds(),
-            WorldInfo = new DsContextWorld { Id = world.Id, Game = world.Game, Host = new DsContextHost { Xuid = world.Host.Xuid } },
+            WorldInfo = new DsContextWorld { Id = world.Id, Game = world.Game, Host = new DsContextHost { Xuid = world.Host.Xuid
+                ?? throw new ArgumentException("An official world is never hosted by this launcher", nameof(world)) } },
         };
     }
 

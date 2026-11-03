@@ -181,6 +181,7 @@
   "error.MM.NOT_HOST": "Only the host can do this.",
   "error.MM.ALREADY_HOSTING": "You are already hosting a world.",
   "error.MM.GRANT_INVALID": "The connection to this world expired. Join again.",
+  "error.MM.AGENT_UNAUTHORIZED": "This Worlds host is not trusted by the server.",
   "error.SESSIONS.KICKED": "A moderator removed you from online play. You can play online again when the wait ends.",
   "error.VOICE.NOT_SHARED": "That player was not in a lobby with you in the last 30 minutes, so the mute was not counted.",
   "error.VOICE.RATE_LIMITED": "Too many voice mutes in the last hour. Try again later.",
