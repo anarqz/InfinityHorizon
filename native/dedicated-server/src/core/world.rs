@@ -257,6 +257,9 @@ pub struct World {
     rejected_seen: Vec<(u64, &'static str, u64)>,
     /// Granted punches already sent per grant: (revision, window start, sent, last seen).
     granted_punches: Vec<([u8; 16], u32, u64, u32, u64)>,
+    /// test-hooks `debug.fault {where: "after"}`: the next follow-up (events, state) panics.
+    #[cfg(feature = "test-hooks")]
+    pub fault_after: bool,
 }
 
 impl World {
@@ -294,6 +297,8 @@ impl World {
             rejected: (now, 0),
             rejected_seen: Vec::new(),
             granted_punches: Vec::new(),
+            #[cfg(feature = "test-hooks")]
+            fault_after: false,
         }
     }
 
@@ -617,6 +622,10 @@ impl World {
     /// The game's events (peer.synced, peer.left, peer.rejected), the empty/occupied hints and
     /// `world.network`, after anything the world did.
     pub fn emit_events(&mut self, ctx: &mut Ctx) {
+        #[cfg(feature = "test-hooks")]
+        if self.fault_after {
+            panic!("debug.fault after");
+        }
         for e in self.game.take_events() {
             match e {
                 GameEvent::PeerSynced { xuid, engine, peer } => {
