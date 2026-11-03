@@ -128,8 +128,8 @@ public sealed partial class WorldsBridge
     // Live 2026-11-03 18:54:51: the server reserved the group seat around SessionReady while the game still played in the car meet;
     // the regular seat read took it over and pushed its context, the hook's live car meet leg failed at once (direct_failed) and the
     // game never got the invitation. Such a seat is staged instead: the hook keeps its context and leg, the staged seat is kept alive
-    // (renewed every 20 s), and it is installed when the game leaves its world (Event 4), joins another (Event 3 join), or once the
-    // server's moving window (60 s) ends. The old seat is never left or renewed on purpose meanwhile (it is seated: no renewal runs).
+    // (renewed every 20 s), and it is installed when the game leaves its world (Event 4) or joins another (Event 3 join), however long
+    // the game plays (W-7, MACBOOK's ruling: never by the server's 60 s moving window alone). The old seat is never left or renewed on purpose meanwhile (it is seated: no renewal runs).
 
     /// <summary>How often a staged seat is renewed (MATCHMAKING_API §3.2's cadence for a reserved seat).</summary>
     public static readonly TimeSpan StagedRenewEvery = TimeSpan.FromSeconds(20);
@@ -150,7 +150,7 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// A seat read whose seat is a new grant in another world while the game plays in the held seat's world: staged, true (the read
-    /// changes nothing else). Past the moving window it is not staged again: the read takes it over as usual.
+    /// changes nothing else), for as long as the game plays there (W-7: the server's 60 s moving window never installs it).
     /// </summary>
     private bool StageSeat(SeatAnswer value)
     {
@@ -159,7 +159,6 @@ public sealed partial class WorldsBridge
         if (Volatile.Read(ref _seatWorld) is not { } playing || playing == seat.WorldId) return false;
         var before = Volatile.Read(ref _staged);
         var same = before is not null && before.Grant == grant;
-        if (same && Now - before!.Since >= GroupSeatHold) return false;
         Volatile.Write(ref _staged, new StagedSeat(value, grant, seat.WorldId, same ? before!.Since : Now, same ? before!.RenewAt : Now + StagedRenewEvery));
         if (!same) _log($"worlds: a seat in {seat.WorldId} arrived while the game plays in {playing}; staged (the hook keeps its context and leg)");
         lock (_mineState) { _mineReconciled = true; _mineUncertain = false; }
