@@ -72,6 +72,16 @@ pub fn bind_loopback(addr: SocketAddr) -> io::Result<UdpSocket> {
     UdpSocket::bind(addr)
 }
 
+/// Windows: switches off SIO_UDP_CONNRESET, so an ICMP port unreachable for an earlier send
+/// does not surface as WSAECONNRESET on the next receive (best effort; the reader drops that
+/// error anyway). Elsewhere a no-op.
+pub fn quiet_connreset(socket: &UdpSocket) {
+    #[cfg(windows)]
+    sys::udp_connreset_off(socket);
+    #[cfg(not(windows))]
+    let _ = socket;
+}
+
 /// IPv4-mapped IPv6 addresses as their IPv4 form.
 pub fn norm_ip(ip: IpAddr) -> IpAddr {
     match ip {
@@ -235,6 +245,44 @@ mod sys {
         fn bind(s: usize, name: *const u8, len: i32) -> i32;
         fn closesocket(s: usize) -> i32;
         fn WSAGetLastError() -> i32;
+        fn WSAIoctl(
+            s: usize,
+            code: u32,
+            input: *const u8,
+            input_len: u32,
+            output: *mut u8,
+            output_len: u32,
+            returned: *mut u32,
+            overlapped: *mut u8,
+            completion: *mut u8,
+        ) -> i32;
+    }
+
+    /// `_WSAIOW(IOC_VENDOR, 12)`.
+    const SIO_UDP_CONNRESET: u32 = 0x9800_000C;
+
+    #[allow(unsafe_code)]
+    pub fn udp_connreset_off(socket: &UdpSocket) {
+        use std::os::windows::io::AsRawSocket;
+        let off: u32 = 0; // BOOL FALSE
+        let mut returned: u32 = 0;
+        // SAFETY: a synchronous ioctl on the live socket `socket` owns (borrowed for the call);
+        // the input is a local 4-byte BOOL, no output buffer, `returned` a live local (required
+        // when not overlapped), no overlapped structure or completion routine. The result is
+        // ignored: on failure the socket keeps the default and the reader drops the error.
+        unsafe {
+            WSAIoctl(
+                socket.as_raw_socket() as usize,
+                SIO_UDP_CONNRESET,
+                &off as *const u32 as *const u8,
+                4,
+                std::ptr::null_mut(),
+                0,
+                &mut returned,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
     }
 
     #[allow(unsafe_code)]

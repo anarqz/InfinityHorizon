@@ -61,7 +61,14 @@ pub const HUB_QUEUE: usize = 8192;
 /// contract §4.6).
 const TURN_MESSAGES: usize = 256;
 const TURN_COMMANDS: usize = 64;
+/// Datagrams longer than this are dropped in the reader (nothing legitimate is: the game's limit
+/// is 1,372 bytes and the engine refuses the rest whole). The read buffer itself holds any UDP
+/// payload, so a long datagram is never truncated into something else, and Windows never
+/// reports it as WSAEMSGSIZE.
 const DATAGRAM_MAX: usize = 2048;
+const RECV_BUFFER: usize = 64 * 1024;
+/// WSAEMSGSIZE: a datagram longer than the buffer (Windows; no `ErrorKind` of its own).
+const WSAEMSGSIZE: i32 = 10040;
 /// A controller that does not read for this long while its queue is full is disconnected.
 const STALL: Duration = Duration::from_secs(30);
 /// How long the loop keeps flushing replies after deciding to exit.
@@ -93,6 +100,7 @@ impl RtIo {
         dual: bool,
         timeout: bool,
     ) -> std::io::Result<()> {
+        net::quiet_connreset(&socket);
         let reader = socket.try_clone()?;
         let stop = Arc::new(AtomicBool::new(false));
         if timeout {
@@ -117,10 +125,11 @@ impl RtIo {
 }
 
 fn read_socket(socket: UdpSocket, sock: SockId, hub: HubTx, stop: Arc<AtomicBool>) {
-    let mut buf = vec![0u8; DATAGRAM_MAX];
+    let mut buf = vec![0u8; RECV_BUFFER];
     let mut errors = 0u32;
     while !stop.load(Ordering::Acquire) {
         match socket.recv_from(&mut buf) {
+            Ok((n, _)) if n > DATAGRAM_MAX => errors = 0,
             Ok((n, from)) => {
                 errors = 0;
                 let msg = Hub::Datagram {
@@ -137,9 +146,15 @@ fn read_socket(socket: UdpSocket, sock: SockId, hub: HubTx, stop: Arc<AtomicBool
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
+            // one datagram lost, never the socket: an oversize datagram (WSAEMSGSIZE) or an
+            // earlier send's ICMP port unreachable (WSAECONNRESET, also switched off with
+            // SIO_UDP_CONNRESET) is dropped and the next read follows at once, as the C#
+            // reference's drain loop does; neither counts toward the error back-off
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.raw_os_error() == Some(WSAEMSGSIZE) => {}
             Err(_) => {
-                // Windows reports an earlier send's ICMP unreachable as WSAECONNRESET on recv;
-                // never fatal, but never a busy spin either
+                // anything else is unexpected: never fatal, but never a busy spin either
                 errors = errors.saturating_add(1);
                 if errors > 8 {
                     std::thread::sleep(Duration::from_millis(5));
@@ -609,5 +624,35 @@ mod signals {
                 }
             })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_reader_drops_an_oversize_datagram_and_keeps_reading() {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let to = socket.local_addr().unwrap();
+        let (hub, rx) = mpsc::sync_channel::<Hub>(16);
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let reader = std::thread::spawn(move || read_socket(socket, 7, hub, flag));
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(&[1u8; 3000], to).unwrap();
+        sender.send_to(&[2u8; 10], to).unwrap();
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Hub::Datagram { sock, data, .. }) => {
+                assert_eq!(sock, 7);
+                assert_eq!(data, vec![2u8; 10], "the oversize one never reaches the loop");
+            }
+            _ => panic!("no datagram"),
+        }
+        stop.store(true, Ordering::Release);
+        reader.join().unwrap();
     }
 }
