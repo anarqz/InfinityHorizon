@@ -57,13 +57,15 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// test.11: a seat that never played and was taken for another lobby ask than <paramref name="kind"/> (its grant and
-    /// kind), or null: no seat, hosting, a seat that played, or one taken for this kind.
+    /// kind), or null: no seat, hosting, a seat that played, one taken for this kind, or one this launcher did not take.
     /// </summary>
     private SeatTaken? UnprovenOtherSeat(byte kind)
     {
         if (Hosting || _seat.GrantId is not { } grant || Played(grant)) return null;
-        var taken = Volatile.Read(ref _seatTaken) is { } seat && seat.Grant == grant ? seat.Kind : FreeRoamKind.FreeRoam;
-        return taken == kind ? null : new SeatTaken(grant, taken);
+        // OD-191: a grant this launcher did not take (a seat read's: an OD-191 group seat, an accepted request) was taken for no ask
+        // of its own; its world's activity decides
+        if (Volatile.Read(ref _seatTaken) is not { } seat || seat.Grant != grant) return null;
+        return seat.Kind == kind ? null : seat;
     }
 
     /// <summary>

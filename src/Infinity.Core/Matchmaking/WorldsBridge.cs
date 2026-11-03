@@ -488,7 +488,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>A join by id or code. One live seat per profile: a seat elsewhere is left first (the player chose this world).</summary>
     private int _joinAttempt;
-    public Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation) => JoinAsync(request, null, cancellation);
+    public Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation)
+    {
+        Volatile.Write(ref _hostLeft, null); // OD-190: the player's own join is no placement to explain
+        return JoinAsync(request, null, cancellation);
+    }
 
     /// <summary>As <see cref="JoinAsync(UiFrame.JoinWorld, CancellationToken)"/>, asking for <paramref name="activity"/> (OD-150; null: any).</summary>
     /// <paramref name="kind"/>: the lobby ask the seat is taken for (<see cref="FreeRoamKind"/>; the overlay's join is free roam).
@@ -615,7 +619,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             if (OnlineOpen && !cancellation.IsCancellationRequested && GameReadiness.Matches(generation) && joinEpoch==Volatile.Read(ref _mineEpoch))
                             {
                                 _seat.Granted(grant, Now);
-            Volatile.Write(ref _seatWorld, grant.WorldId);
+                                SeatWorldIs(grant.WorldId); // OD-190: a new seat forgets the last one's host notices
                                 SeatTakenFor(grant.Id, kind);
                                 InvalidateMine(reset: true);
                                 accepted = OnlineOpen && !cancellation.IsCancellationRequested;
@@ -731,6 +735,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return null;
                 }
                 var after = _seat.Observe(seat, Now);
+                // OD-191: the renewed seat's world (a grant taken over from it too)
+                if (seat.Seat is { State: not SeatStates.Hosting, GrantId: { } renewedGrant } renewedWorld && _seat.GrantId == renewedGrant) SeatWorldIs(renewedWorld.WorldId);
                 if (seat.Seat is { } renewedSeat) ObserveActivity(renewedSeat);
                 ObservePool(seat.Pool);
                 // A successful renew is authoritative too: an older in-flight GET cannot undo it.
@@ -918,6 +924,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 ObserveRequest(value.Request);
                 if (seat.State != SeatStates.Reserved || seat.GrantId is not null && seat.ExpiresAt is not null
                     && seat.HoldUntil is not null && _seat.GrantId != seat.GrantId) _seat.Observe(value, Now);
+                // OD-191 (W-4 review): a grant taken over from the read (a group seat, an accepted request, a restart) names its world
+                if (seat.State != SeatStates.Hosting && seat.GrantId is { } readGrant && _seat.GrantId == readGrant) SeatWorldIs(seat.WorldId);
                 if (_mineId != seat.WorldId) { _lastRosterAt = null; _roster.Reset(); }
                 if (_mineId != seat.WorldId || _mineRole != role) Interlocked.Increment(ref _mineEpoch);
                 (_mineId, _mineRole) = (seat.WorldId, role);

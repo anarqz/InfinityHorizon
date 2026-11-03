@@ -349,6 +349,7 @@
   "worlds.moved_host_left": "O host saiu; você foi levado para um lobby Infinity",
   "worlds.moved_cannot_follow": "Não foi possível seguir o host; você foi levado para um lobby Infinity",
   "worlds.lobbies_full": "Todos os lobbies Infinity estão cheios, tente novamente em instantes",
+  "worlds.placement_failed": "Não foi possível entrar em um lobby Infinity, tente novamente em instantes",
   "supervisor.hosting_away": "O jogo fechou. Seu mundo continua aberto para os jogadores que ainda estão nele; ele fecha quando o último sair ou quando o launcher fechar. Jogue de novo para fechá-lo e começar uma nova sessão.",
   "supervisor.hosting_away_ending": "Fechando seu mundo para uma nova sessão…",
   "worlds.activity_freeroam": "ONLINE FREE ROAM",

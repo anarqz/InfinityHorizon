@@ -36,12 +36,17 @@ public sealed partial class WorldsBridge
     /// <summary>OD-190 (§11.3 item 3): how long a quick join answered <c>lobbies_full</c> keeps retrying before it says so.</summary>
     public static readonly TimeSpan LobbiesFullBudget = TimeSpan.FromSeconds(10);
 
+    /// <summary>The longest one ask may take, reads included: inside the hook's 18 s (PlaySupervisor.FreeRoamBudget), so its notice shows.</summary>
+    public static readonly TimeSpan FreeRoamAskBudget = TimeSpan.FromSeconds(15);
+
     // OD-190: the Retry-After of the last quick join answered lobbies_full, as ticks; -1: the last join was not one
     private long _lobbiesFullAfter = -1;
     // OD-190: the seat's world when it is an official one (a quick join's, or a seat read or world read said so)
     private string? _seatOfficial;
-    // OD-190: the seat's world whose host changed activity while this guest held it (a later other ask "couldn't follow")
-    private string? _hostMovedWorld;
+    // OD-190: the seat's world whose host changed activity while this guest held it, and what it ran before (a later other ask
+    // "couldn't follow"); cleared when the seat changes, the host comes back to that activity, or the guest is with its host again
+    private HostMoved? _hostMoved;
+    private sealed record HostMoved(string World, string From);
     // OD-190: the held seat ended because its world closed (the host quit or closed it): the next placement says so
     private RecentWorld? _hostLeft;
 
@@ -64,6 +69,7 @@ public sealed partial class WorldsBridge
     private void LeftOnPurpose()
     {
         Volatile.Write(ref _recentlyLeft, null);
+        Volatile.Write(ref _hostLeft, null);
         if (Interlocked.Exchange(ref _seatWorld, null) is { } world) Volatile.Write(ref _leftOnPurpose, new RecentWorld(world, Now));
     }
     private readonly object _freeRoamState = new();
@@ -315,8 +321,9 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// OD-190 (§11.3): whether the seat's world runs this ask now, read from the server when the seat reads do not say: (stays, why for
-    /// the log, the notice of a move). A world that is gone or whose host is away is the host leaving; one whose host changed activity
-    /// while this guest held it, a guest that could not follow. Anything unknown (a failed read) keeps the seat.
+    /// the log, the notice of a move). A player world that is gone or whose host is away is the host leaving; one whose host changed
+    /// activity while this guest held it, a guest that could not follow. An official world has no host: its end says nothing. Anything
+    /// unknown (a failed read) keeps the seat.
     /// </summary>
     private async Task<(bool Stays, string Why, string? Moved)> SeatRunsAsync(byte kind, CancellationToken cancellation)
     {
@@ -331,15 +338,21 @@ public sealed partial class WorldsBridge
         MmResult<WorldView>? view = null;
         try { view = await _mm.GetAsync(world, cancellation).ConfigureAwait(false); }
         catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
-        if (view is { Error.Kind: MmErrorKind.WorldNotFound }) return (false, $"{world} closed", "worlds.moved_host_left");
+        var official = Volatile.Read(ref _seatOfficial) == world || view?.Value?.Official == true;
+        if (view is { Error.Kind: MmErrorKind.WorldNotFound }) return (false, $"{world} closed", official ? null : "worlds.moved_host_left");
         if (view is not { Ok: true, Value: { } seated }) return (true, "its world could not be read", null);
-        if (seated.HostAway == true) return (false, $"the host of {world} is away", "worlds.moved_host_left");
-        if (seated.Official == true) Volatile.Write(ref _seatOfficial, world);
-        var runs = seated.Official == true ? seated.Activity == placement
+        if (seated.HostAway == true && !official) return (false, $"the host of {world} is away", "worlds.moved_host_left");
+        if (official) Volatile.Write(ref _seatOfficial, world);
+        // an official world by its one activity only (never its lobbies); a player world by its host's activity, a car meet by its lobby
+        var runs = official ? seated.Activity == placement
             : kind == FreeRoamKind.CarMeet ? seated.Lobbies.Contains(LobbyKinds.CarMeet) : seated.Activity == ActivityOf(kind);
-        if (runs) return (true, $"it runs {placement}", null);
-        return (false, $"{world} runs {(kind == FreeRoamKind.CarMeet && seated.Official != true ? "no car meet" : seated.Activity)}, not {placement}",
-            seated.Official != true && Volatile.Read(ref _hostMovedWorld) == world ? "worlds.moved_cannot_follow" : null);
+        if (runs)
+        {
+            if (!official) Volatile.Write(ref _hostMoved, null); // the guest is with its host again
+            return (true, $"it runs {placement}", null);
+        }
+        return (false, $"{world} runs {(kind == FreeRoamKind.CarMeet && !official ? "no car meet" : seated.Activity)}, not {placement}",
+            !official && Volatile.Read(ref _hostMoved)?.World == world ? "worlds.moved_cannot_follow" : null);
     }
 
     /// <summary>OD-190: the held seat ended because its world closed (its host quit or closed it); the next placement says so.</summary>
@@ -350,15 +363,43 @@ public sealed partial class WorldsBridge
         Volatile.Write(ref _hostLeft, new RecentWorld(ended.WorldId, Now));
     }
 
+    /// <summary>
+    /// OD-190/191: the seat's world, as a grant, a seat read or a renewal names it (a grant taken over from a read too: an OD-191
+    /// group seat, an accepted request, a restart). A new world forgets the last one's host notices.
+    /// </summary>
+    private void SeatWorldIs(string world)
+    {
+        if (Interlocked.Exchange(ref _seatWorld, world) == world) return;
+        Volatile.Write(ref _hostMoved, null);
+        Volatile.Write(ref _hostLeft, null);
+    }
+
+    /// <summary>
+    /// OD-191 (§11.4): before a seat moves (or a quick join takes one), the seat is read again (<c>GET /mm/v1/seat</c>, the overlay's
+    /// path): a group world's seat issued moments ago for the car meet's session replaces the car meet seat, and is kept.
+    /// </summary>
+    private async Task RefreshSeatAsync(CancellationToken cancellation)
+    {
+        RequestReconcile();
+        await MineAsync(background: false, cancellation).WaitAsync(cancellation).ConfigureAwait(false);
+    }
+
     private async Task<byte> FreeRoamCoreAsync(byte kind, CancellationToken cancellation)
     {
         var lobby = LobbyOf(kind);
         var activity = ActivityOf(kind);
         var placement = PlacementOf(kind);
         if (StaysAtOnce(kind)) return Decided(kind, FreeRoamResult.Ready, Staying());
+        // the whole ask, reads included, ends inside the hook's wait, so its notice is still shown
+        var started = _clock.GetTimestamp();
+        using var budget = new CancellationTokenSource(FreeRoamAskBudget, _clock);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation, budget.Token);
+        var token = bounded.Token;
         try
         {
-            if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false })
+            await RefreshSeatAsync(token).ConfigureAwait(false);
+            if (StaysAtOnce(kind)) return Decided(kind, FreeRoamResult.Ready, Staying("its seat as read now"));
+            if (await AccessAsync(token).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no world (online lobbies are not allowed now)");
             if (WireMods().Refusal is { } refusal) return Decided(kind, FreeRoamResult.None, $"no world (mods: {refusal})");
             // test.11: a seat taken for another kind that never played is not this ask's world ("stay" left the game on FINDING
@@ -374,10 +415,10 @@ public sealed partial class WorldsBridge
             string? moved = null;
             if (_seat.GrantId is not null)
             {
-                // OD-190 (§11.3 item 1): a seat whose world runs this ask stays; otherwise the quick join below moves it (the server
-                // ends the old seat in the same transaction; with no free official world the seat is kept)
+                // OD-190 (§11.3 item 1), OD-191: any held seat (reserved or seated) whose world runs this ask stays; otherwise the quick
+                // join below moves it (the server ends the old seat in the same transaction; with no free official world it is kept)
                 var seatWorld = Volatile.Read(ref _seatWorld) ?? "its seat";
-                var (stays, why, notice) = await SeatRunsAsync(kind, cancellation).ConfigureAwait(false);
+                var (stays, why, notice) = await SeatRunsAsync(kind, token).ConfigureAwait(false);
                 if (stays) return Decided(kind, FreeRoamResult.Ready, Staying(why));
                 moved = notice;
                 _log($"worlds: {KindName(kind)}: leaving {seatWorld}: {why}; quick join {placement}");
@@ -388,8 +429,8 @@ public sealed partial class WorldsBridge
             if (Interlocked.Exchange(ref _recentlyLeft, null) is { } recent && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld
                 && lobby is null && !Isolated && moved is null && Volatile.Read(ref _seatOfficial) != recent.WorldId)
             {
-                cancellation.ThrowIfCancellationRequested();
-                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, cancellation, kind).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, token, kind).ConfigureAwait(false);
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
                 _log($"worlds: {KindName(kind)}: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
@@ -397,9 +438,14 @@ public sealed partial class WorldsBridge
             // OD-149: an isolated player (or one the anti-cheat move is moving) plays in pineapple player worlds only, and an official
             // world never is one (§2.9)
             if (Isolated || Volatile.Read(ref _poolMoving) != 0)
-                return await PoolJoinAsync(kind, lobby, activity, cancellation).ConfigureAwait(false)
+                return await PoolJoinAsync(kind, lobby, activity, token).ConfigureAwait(false)
                     ?? Decided(kind, FreeRoamResult.None, "no world (isolated: no pineapple lobby to join)");
-            return await QuickJoinAsync(kind, moved, cancellation).ConfigureAwait(false);
+            return await QuickJoinAsync(kind, moved, started, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (budget.IsCancellationRequested && !cancellation.IsCancellationRequested && OnlineOpen)
+        {
+            PlacementFailedToast();
+            return Decided(kind, FreeRoamResult.None, $"no world (no lobby within {(int)FreeRoamAskBudget.TotalSeconds} s)");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested || !OnlineOpen)
         {
@@ -407,21 +453,28 @@ public sealed partial class WorldsBridge
         }
     }
 
+    // OD-190 (W-4 review): a placement that failed for anything but full lobbies says so
+    private void PlacementFailedToast() =>
+        _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.placement_failed")));
+
     /// <summary>
     /// OD-190 (§11.2, §11.3): <c>POST /mm/v1/join {activity}</c> through the overlay's own join (its grant, socket proof context and
     /// relay leg, so the game's ticket lands in the new world). <c>lobbies_full</c> waits its <c>Retry-After</c> (1-5 s) and asks again
-    /// for <see cref="LobbiesFullBudget"/>, then says "All Infinity lobbies are full". <paramref name="moved"/>: the notice of a move.
+    /// until <see cref="LobbiesFullBudget"/> has passed on the clock since the first ask (each ask's own time counts), then says "All
+    /// Infinity lobbies are full"; never past <see cref="FreeRoamAskBudget"/> from <paramref name="started"/>. Any other refusal says
+    /// "Couldn't join an Infinity lobby". <paramref name="moved"/>: the notice of a move.
     /// </summary>
-    private async Task<byte> QuickJoinAsync(byte kind, string? moved, CancellationToken cancellation)
+    private async Task<byte> QuickJoinAsync(byte kind, string? moved, long started, CancellationToken cancellation)
     {
         var placement = PlacementOf(kind);
-        var waited = TimeSpan.Zero;
+        TimeSpan? firstAsk = null;
         while (true)
         {
             if (OwnWorld) return Decided(kind, FreeRoamResult.Ready, Staying()); // the player opened a world meanwhile
             if (Volatile.Read(ref _joinAttempt) != 0) return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
             if (!OnlineOpen) return Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)");
             cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join past it
+            firstAsk ??= _clock.GetElapsedTime(started);
             Volatile.Write(ref _lobbiesFullAfter, -1);
             var joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty, string.Empty), placement, cancellation, kind).ConfigureAwait(false);
             if (joined.Result == UiJoin.Reserved)
@@ -438,16 +491,19 @@ public sealed partial class WorldsBridge
             if (Interlocked.Exchange(ref _lobbiesFullAfter, -1) is var ticks and >= 0)
             {
                 var after = TimeSpan.FromTicks(Math.Clamp(ticks, TimeSpan.TicksPerSecond, 5 * TimeSpan.TicksPerSecond));
-                if (waited + after > LobbiesFullBudget)
+                var now = _clock.GetElapsedTime(started);
+                if (now + after - firstAsk.Value > LobbiesFullBudget || now + after > FreeRoamAskBudget)
                 {
                     _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.lobbies_full")));
-                    return Decided(kind, FreeRoamResult.None, $"no world (every official {placement} world was full for {(int)waited.TotalSeconds} s)");
+                    return Decided(kind, FreeRoamResult.None, $"no world (every official {placement} world was full for {(int)(now - firstAsk.Value).TotalSeconds} s)");
                 }
                 _log($"worlds: {KindName(kind)}: every official {placement} world is full; asking again in {(int)after.TotalSeconds} s");
                 await Task.Delay(after, _clock, cancellation).ConfigureAwait(false);
-                waited += after;
                 continue;
             }
+            if (joined.Result == UiJoin.SlowDown && Volatile.Read(ref _joinAttempt) != 0)
+                return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
+            if (OnlineOpen) PlacementFailedToast();
             return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no world (quick join {placement} refused: {joined.Result})");
         }
     }
@@ -532,7 +588,9 @@ public sealed partial class WorldsBridge
             && WorldActivities.All.Contains(last.Activity) && WorldActivities.All.Contains(activity))
         {
             _log($"worlds: activity {last.Activity} -> {activity} in {seat.WorldId} (the host's)");
-            Volatile.Write(ref _hostMovedWorld, seat.WorldId); // OD-190: a later ask for another activity could not follow the host
+            // OD-190: a later ask for another activity could not follow the host; back in the activity it ran before, it can again
+            Volatile.Write(ref _hostMoved, Volatile.Read(ref _hostMoved) is { } moved && moved.World == seat.WorldId
+                ? activity == moved.From ? null : moved : new HostMoved(seat.WorldId, last.Activity));
             _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60,
                 _text("worlds.host_activity").Replace("{mode}", ActivityName(activity), StringComparison.Ordinal)));
             // OD-151 follow-up: the guest's game starts its own matchmaking for the host's activity (the player confirms with (X))
