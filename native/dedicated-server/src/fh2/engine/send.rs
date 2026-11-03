@@ -67,7 +67,7 @@ impl Engine {
         let mut chunk: Vec<M> = Vec::new();
         let mut bits = 0usize;
         for m in messages {
-            if m.len() > wire::MAX_MESSAGE_BITS {
+            if m.len() > wire::MAX_MESSAGE_BITS && !super::send_cap_off() {
                 // a message that alone cannot fit a datagram is dropped, never sent
                 self.oversize_dropped += 1;
                 let index = self.peer(serial).map_or(0, |p| p.index);
