@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 namespace Infinity.Core.WorldServer;
 
-internal enum GameOptionsUpdateResult { Ignored, Empty, Stored, Buffered, Overflow }
+internal enum GameOptionsUpdateResult { Ignored, Empty, Stored, Buffered, Overflow, TooLong }
 
 /// <summary>
 /// A bounded journal of original GameOptions updates, replayed individually. After the first arbitrary source sequence, gaps
@@ -14,6 +14,13 @@ internal sealed class RelayGameOptionsState
     internal const int MaxBits = 64 * 1024;
     // A replay spans less than the modulo-255 sequence half-window, including its grant.
     internal const int MaxRecords = 127;
+    /// <summary>
+    /// The relayed prefix of a record, as an update (8) or a grant (11) alike: 7 id + 4 router + 2 kind + 2 id (router 6's key, a
+    /// transfer key: no owner byte) + 8 sequence + 14 length.
+    /// </summary>
+    internal const int RelayedPrefixBits = 37;
+    /// <summary>The longest record kept: one whose relayed update or grant fits one datagram (and so whatever the game itself can send).</summary>
+    internal const int MaxRecordBits = NerdCodec.MaxMessageBits - RelayedPrefixBits;
     private readonly List<BitBuffer> _records = [];
     private readonly Dictionary<byte, (BitBuffer Payload, long At)> _pending = [];
     internal uint? ObjectId { get; private set; }
@@ -62,6 +69,9 @@ internal sealed class RelayGameOptionsState
         }
         if (_pending.ContainsKey(sequence) || SourceSequence is { } last && !AckWindow.SequenceNewer(sequence, last))
             return GameOptionsUpdateResult.Ignored;
+        // a record must fit one datagram once relayed (as an update or a grant, under any key): refused before it is stored, so no
+        // receiver's sequence is ever spent on a message that cannot go out (NERDCORE_WIRE.md §2.3)
+        if (payload.Length > MaxRecordBits) return GameOptionsUpdateResult.TooLong;
         var future = SourceSequence is { } previous && sequence != AckWindow.SequenceNext(previous);
         if (payload.Length > NerdCodec.MaxPayloadBits || payload.Length > MaxBits - Bits - PendingBits
             || (future || payload.Length != 0) && _records.Count + _pending.Count >= MaxRecords)

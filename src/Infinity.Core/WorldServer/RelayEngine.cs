@@ -441,10 +441,60 @@ internal sealed partial class RelayEngine
         }
         foreach (var message in messages)
         {
-            if (chunks.Count != 0 && (chunks.Count >= 8 || (bits + message.Length + 7) / 8 > 1189)) Flush();
+            // split only between messages (NerdCore has no fragments); one that cannot fit a datagram even alone never goes out
+            if (!FitsDatagram(peer, message)) continue;
+            if (chunks.Count != 0 && (chunks.Count >= PackMessages || (bits + message.Length + 7) / 8 > PackBodyBytes)) Flush();
             chunks.Add(message); bits += message.Length;
         }
         Flush();
+    }
+
+    /// <summary>The packing target of one datagram's messages (bytes after the header, 1200 in all), below
+    /// <see cref="NerdCodec.MaxDatagramBytes"/>; a longer message that still fits goes alone.</summary>
+    private const int PackBodyBytes = 1189;
+    private const int PackMessages = 8;
+
+    /// <summary>
+    /// Sequenced object messages (create, update, delete, grant, transfer: 7, 8, 9, 11, 12) <see cref="FitsDatagram"/> dropped. Never
+    /// expected: a drop after the per-object sequence was used would stall that object at its receiver. The tests' recorder fails on any.
+    /// </summary>
+    internal int SequencedObjectsDropped { get; private set; }
+
+    /// <summary>
+    /// Whether the message fits one datagram with its header (<see cref="NerdCodec.MaxDatagramBytes"/>; the game closes the
+    /// connection on a larger one). One that does not is dropped and logged, bounded per peer: the message id and length only.
+    /// </summary>
+    /// <remarks>
+    /// No relayed object message reaches the drop, so no per-object sequence is ever spent on one: an inbound datagram over the
+    /// limit is refused whole (ReceivePacket); relayed payloads are capped by their routers, far under
+    /// <see cref="NerdCodec.MaxDatagramPayloadBits"/> (player 8192 bits, car 787, console 47, road-trip player 256, bucket-list
+    /// PlayerState 128; a relayed key adds at most 8 bits to the sender's prefix); a catch-up create folds only up to
+    /// <see cref="RelayObject.FoldMaxBits"/> plus its server-set variables, and its tail entries are payloads as they came; game
+    /// options records are refused past <see cref="RelayGameOptionsState.MaxRecordBits"/> before they are stored, and their compaction
+    /// never writes a record longer than the longest one; the server's own objects (session host, weather, car meet, Road Trip,
+    /// the bucket-list slot array of 12 × 114 bits) are a few hundred bits at most.
+    /// </remarks>
+    private bool FitsDatagram(RelayPeer peer, BitBuffer message)
+    {
+        if (message.Length <= NerdCodec.MaxMessageBits) return true;
+        var id = message.Length >= 7 ? new BitReader(message.Bytes, message.Length).Read(7) : 0;
+        if (id is 7 or 8 or 9 or 11 or 12) SequencedObjectsDropped++;
+        var dropped = ++peer.OversizeDropped;
+        if (PeerNote(peer, "oversize"))
+            Note(string.Create(CultureInfo.InvariantCulture,
+                $"peer {peer.Index}: message {id} of {message.Length} bits does not fit one datagram ({NerdCodec.MaxDatagramBytes} bytes with its header), dropped ({dropped} so far)"));
+        return false;
+    }
+
+    /// <summary>Per-peer budget of each kind of note a peer's own traffic can repeat (dropped or refused messages): the first few only.</summary>
+    internal const int PeerNotesPerKind = 4;
+
+    private static bool PeerNote(RelayPeer peer, string kind)
+    {
+        var used = peer.NotesUsed.GetValueOrDefault(kind);
+        if (used >= PeerNotesPerKind) return false;
+        peer.NotesUsed[kind] = used + 1;
+        return true;
     }
 
     private void SendAck(RelayPeer peer, List<BitBuffer> messages)
@@ -484,9 +534,9 @@ internal sealed partial class RelayEngine
         while (peer.InFlight.Count < _settings.ReliableWindow && peer.Queue.Count != 0 && budget > 0)
         {
             var batch = new List<BitBuffer>(); var bits = 0;
-            while (batch.Count < 8 && peer.Queue.TryPeek(out var message))
+            while (batch.Count < PackMessages && peer.Queue.TryPeek(out var message))
             {
-                if (batch.Count != 0 && (bits + message.Length + 7) / 8 > 1189) break;
+                if (batch.Count != 0 && (bits + message.Length + 7) / 8 > PackBodyBytes) break;
                 bits += message.Length; peer.QueueBits -= message.Length; batch.Add(peer.Queue.Dequeue());
             }
             budget -= (bits + 7) / 8;
