@@ -4,7 +4,7 @@ namespace Infinity.Core.Diagnostics;
 using System.Collections.Immutable;
 
 public sealed record CrashParticipant(string Xuid, string Gamertag, string Role);
-public sealed record CrashObservation(DateTimeOffset At, string SenderXuid, string Kind, int? Message, int? Router, int? Value);
+public sealed record CrashObservation(DateTimeOffset At, string SenderXuid, string Kind, int? Message, int? Router, long? Value);
 public sealed record CrashWorld(string WorldId, string Audience, DateTimeOffset ObservedAt, bool RosterComplete,
     IReadOnlyList<CrashParticipant> Participants);
 public sealed record CrashContextSnapshot(CrashWorld? World, IReadOnlyList<CrashObservation> Observations);
@@ -39,7 +39,8 @@ public sealed class CrashContext(TimeProvider? clock = null)
         }
     }
 
-    public void Rejected(ulong sender, string kind, int? message = null, int? router = null, int? value = null)
+    /// <summary>A validation refusal; <paramref name="value"/> is the field's value (a u32 from the dedicated engine, CR-L50).</summary>
+    public void Rejected(ulong sender, string kind, int? message = null, int? router = null, long? value = null)
     {
         if (sender == 0 || kind is not ("truncated_packet" or "invalid_payload" or "invalid_car" or "invalid_car_event" or "invalid_livery" or "game_options_overflow")) return;
         lock (_sync)

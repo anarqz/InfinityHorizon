@@ -75,6 +75,9 @@ public sealed partial class ShellViewModel
         var devLan = DevLanAdmission(mm);
         var relayReports = RelayReports;
         var gamertag = _gate.ProfileTag; // CR-L40 §4: the name of a lobby FREE ROAM ONLINE opens
+        // CR-L50: the dedicated engine only when a development build selects it (WorldEngine); one health for the session
+        var dedicatedWorlds = DedicatedWorlds(xuid, relayKeys, devLan, ProofClock(session), isPlayer: true,
+            key => _commands?.Writer.TryWrite(new SupervisorCommand.OverlayToast(new UiFrame.Toast(UiLevel.Warn, 2, 50, S[key]))));
         return ticket =>
         {
             var matchmaking = new Infinity.Core.Matchmaking.MatchmakingClient(
@@ -89,15 +92,17 @@ public sealed partial class ShellViewModel
             return _playWorlds = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], ProofClock(session), mode,
                 players => StartRelay(players, xuid, relayKeys, devLan, ProofClock(session)), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
-                updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
-                    ? integrated.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
-                refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IntegratedWorldRelay integrated
-                    ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
+                updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IWorldHostRelay hosted
+                    ? hosted.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
+                refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IWorldHostRelay hosted
+                    ? hosted.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
                 // OD-109: while this launcher hosts a dedicated lobby, the overlay offers no lobby actions.
                 checkWorldAccess: Infinity.Core.Supervisor.DedicatedHost.GuardPlayWorlds(() => DedicatedActive, ct => CheckWorldAccessAsync(integrityApplies, integrity, ct)),
                 // CR-S69: invites and requests to join reach every ticket, so no tier skips the background seat read
                 onlineActivity: onlineActivity, idleWhenNoWorld: false)
             {
+                StartRelayAsync = dedicatedWorlds is null ? null : dedicatedWorlds.StartAsync,
+                RelayFailureKey = dedicatedWorlds is null ? null : () => dedicatedWorlds.FailureKey,
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 ModSet = mods,
                 ModName = LobbyModName, // OD-181: the catalog's names of the mods players declare
@@ -160,6 +165,37 @@ public sealed partial class ShellViewModel
     /// loopback plain-http server and matchmaking, never a release origin.
     /// </summary>
     private bool DevLanAdmission(Uri matchmaking) => DevServer && Infinity.Core.DevNet.PlainHttpUrl(matchmaking.OriginalString);
+
+    /// <summary>
+    /// CR-L50 stage 2: the session's dedicated-engine hosting, only when <see cref="Infinity.Core.Matchmaking.WorldEngine"/>
+    /// selects it (a development build's switch; a production build always runs the in-process engine until the D6 cutover).
+    /// Null: the in-process engine. Never a fallback: in dedicated mode a missing or failed engine is "hosting unavailable".
+    /// </summary>
+    private Infinity.Core.DedicatedServer.DedicatedWorldHosting? DedicatedWorlds(string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys,
+        bool devLan, TimeProvider? clock, bool isPlayer, Action<string>? firewallNotice)
+    {
+        if (Infinity.Core.Matchmaking.WorldEngine.Selected(Log) != Infinity.Core.Matchmaking.WorldEngineKind.Dedicated) return null;
+        return new Infinity.Core.DedicatedServer.DedicatedWorldHosting(new Infinity.Core.DedicatedServer.DedicatedWorldHostingOptions
+        {
+            Executable = Infinity.Core.DedicatedServer.DedicatedServerProcess.ResolveExecutable(),
+            ControllerVersion = Version,
+            HostXuid = xuid,
+            IsPlayer = isPlayer,
+            Keys = keys,
+            RequireProof = SocketProofRequired,
+            DevLanPeers = devLan,
+            GameDatabase = ContentLocation?.Mount is { } mount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(mount) : null,
+            Clock = clock,
+            // §2.4: the bind probe only while no game runs (the OD-109 dedicated host)
+            ProbeBeforeFirstWorld = !isPlayer,
+            FirewallNotice = firewallNotice,
+            Log = Log,
+            // the release key, as infinity-updater.exe before it runs; a development server's key too, as the overlay and the hook
+            Signature = DevHookKey is { } developmentKey
+                ? new Infinity.Core.DedicatedServer.DsSignaturePolicy { OfficialOnly = false, DevelopmentKey = developmentKey }
+                : Infinity.Core.DedicatedServer.DsSignaturePolicy.Official,
+        });
+    }
 
     /// <summary>The world's relay, inside the launcher (the Rust infinity-relay.exe was retired on 2026-10-20).</summary>
     private Infinity.Core.Matchmaking.IntegratedWorldRelay? StartRelay(uint players, string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys, bool devLan, TimeProvider? clock=null,

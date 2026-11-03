@@ -41,6 +41,9 @@ public sealed record DsLaunchOptions
     /// <summary>The launcher log (scrubbed lines only). A throwing sink is ignored.</summary>
     public Action<string>? Log { get; init; }
 
+    /// <summary>The signature the exe must carry, checked right before it starts; null: the caller checked it (<see cref="DedicatedWorldHosting"/> does both).</summary>
+    public DsSignaturePolicy? Signature { get; init; }
+
     public DsClientOptions? Client { get; init; }
 
     /// <summary>TEST ONLY: extra arguments after the contract's (the fake engine's mode).</summary>
@@ -51,9 +54,6 @@ public sealed record DsLaunchOptions
 
     /// <summary>TEST ONLY: a different secret in <c>hello</c> than in the child's environment.</summary>
     internal string? TestOnlyHelloSecret { get; init; }
-
-    /// <summary>TEST ONLY: <c>hello.proto</c> in the older <c>[1, 1]</c> form (a smoke against an engine build that has not caught up).</summary>
-    internal bool TestOnlyLegacyHelloProtoRange { get; init; }
 
     /// <summary>TEST ONLY: this pipe name instead of a fresh random one (the squatted-name check).</summary>
     internal string? TestOnlyPipeName { get; init; }
@@ -111,7 +111,8 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
     private readonly DsLogScrubber _scrubber;
     private readonly ManualResetEvent _exitedHandle;
     private readonly TaskCompletionSource<DsExit> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly Channel<string> _log = Channel.CreateBounded<string>(new BoundedChannelOptions(LogQueueSize) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    // lines, and the flush markers the supervisor waits on (a TaskCompletionSource) so no line is lost at exit
+    private readonly Channel<object> _log = Channel.CreateBounded<object>(new BoundedChannelOptions(LogQueueSize) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     private DsExit? _launcherReason;
     private int _jobClosed;
     private long _logDropped;
@@ -224,6 +225,13 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
         {
             throw new DedicatedServerStartException(new DsExit(DsExitKind.ConfigInvalid, null, "dedicated-server.exe is missing"));
         }
+        // the exe and its .sig stay open (no write, delete or rename) from the check until Process.Start returns
+        DsVerifiedExecutable? verified = null;
+        if (options.Signature is { } signature && (verified = DsSignature.Open(options.Executable, signature)) is null)
+        {
+            throw new DedicatedServerStartException(new DsExit(DsExitKind.ConfigInvalid, null, "dedicated-server.exe signature"));
+        }
+        using var held = verified;
         var name = options.TestOnlyPipeName ?? NewPipeName();
         PipeServer pipe;
         try
@@ -302,7 +310,7 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
         DsResult<DsHelloResult> hello;
         try
         {
-            hello = await Client.HelloAsync(secret, options.ControllerVersion, options.TestOnlyLegacyHelloProtoRange, cancellation).ConfigureAwait(false);
+            hello = await Client.HelloAsync(secret, options.ControllerVersion, cancellation).ConfigureAwait(false);
         }
         catch (Exception e) when (e is not OperationCanceledException || !cancellation.IsCancellationRequested)
         {
@@ -407,7 +415,25 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
         var worlds = Client.OpenWorlds.ToArray();
         LogLine(string.Create(CultureInfo.InvariantCulture, $"ds ended: pid={Pid} kind={exit.Kind} code={exit.Code?.ToString(CultureInfo.InvariantCulture) ?? "-"} worlds={worlds.Length}"));
         Client.Finish(new DsGone { Exit = exit, Worlds = worlds, Seq = 0 });
+        // every line queued so far (the child's last ones, "ds ended") reaches the sink before Exited completes
+        await FlushLogAsync().ConfigureAwait(false);
         _exited.TrySetResult(exit);
+    }
+
+    /// <summary>Waits (≤ <see cref="EofGrace"/>) until the log pump has forwarded every line queued before this call.</summary>
+    private async Task FlushLogAsync()
+    {
+        var flushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            using var bound = new CancellationTokenSource(EofGrace);
+            await _log.Writer.WriteAsync(flushed, bound.Token).ConfigureAwait(false);
+            await flushed.Task.WaitAsync(bound.Token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is OperationCanceledException or ChannelClosedException)
+        {
+            // a stuck sink or a closed queue: Exited still completes
+        }
     }
 
     /// <summary>Asks for a clean stop (<c>shutdown</c>, §4.2) and waits up to <paramref name="grace"/>; then kills.</summary>
@@ -601,8 +627,14 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
 
     private async Task PumpLogAsync()
     {
-        await foreach (var line in _log.Reader.ReadAllAsync().ConfigureAwait(false))
+        await foreach (var item in _log.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            if (item is TaskCompletionSource flushed)
+            {
+                flushed.TrySetResult();
+                continue;
+            }
+            var line = (string)item;
 #pragma warning disable CA1031 // a throwing sink drops its line and the pump goes on
             try
             {
@@ -670,6 +702,7 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
             // never watched (a failed start): end the event stream here
             var exit = await ExitAsync().ConfigureAwait(false);
             Client.Finish(new DsGone { Exit = exit, Worlds = Client.OpenWorlds.ToArray() });
+            await FlushLogAsync().ConfigureAwait(false);
             _exited.TrySetResult(exit);
         }
         else

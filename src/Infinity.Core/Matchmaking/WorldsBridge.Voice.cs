@@ -45,7 +45,7 @@ public sealed partial class WorldsBridge
     {
         IHostRelay? relay;
         lock (_hostState) relay = _relay;
-        if (relay is IntegratedWorldRelay integrated && voice.RelayRules() is { } rules) integrated.SetVoice(rules.Mode, rules.MutedForLobby);
+        if (relay is IWorldHostRelay hosted && voice.RelayRules() is { } rules) hosted.SetVoice(rules.Mode, rules.MutedForLobby);
     }
 
     /// <summary>An overlay's voice command, then the state to show (also when the command was not the player's to make).</summary>
@@ -94,7 +94,7 @@ public sealed partial class WorldsBridge
         {
             IHostRelay? relay;
             lock (_hostState) relay = _relay;
-            if (relay is IntegratedWorldRelay integrated) integrated.SetRosterVoiceBlocks(roster.Items);
+            if (relay is IWorldHostRelay hosted) hosted.SetRosterVoiceBlocks(roster.Items);
         }
         var self = roster.Items.FirstOrDefault(m => m.Friend == "self" || _ownXuid is not null && m.Xuid == _ownXuid);
         if (self is null) return;

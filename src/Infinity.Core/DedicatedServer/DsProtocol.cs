@@ -38,6 +38,8 @@ public static class DsOps
 {
     public const string Hello = "hello";
     public const string KeysSet = "keys.set";
+    public const string CatalogSet = "catalog.set";
+    public const string CatalogParts = "catalog.parts";
     public const string Capacity = "capacity";
     public const string Health = "health";
     public const string Stats = "stats";
@@ -96,6 +98,7 @@ public static class DsEventNames
     public const string Notice = "notice";
     public const string Draining = "ds.draining";
     public const string EventsDropped = "events.dropped";
+    public const string CatalogNeed = "catalog.need";
 }
 
 /// <summary>Stable notice ids (§4.7) the launcher maps to toasts or log lines.</summary>
@@ -155,10 +158,6 @@ public sealed record DsHello : IDsRequest
 
     /// <summary>The protocol version asked for (an integer, §10); the engine answers it or <c>proto_unsupported</c>.</summary>
     public required int Proto { get; init; }
-
-    /// <summary>TEST ONLY: the older <c>[min, max]</c> form, for a smoke against an engine build that has not caught up.</summary>
-    [JsonIgnore]
-    internal bool TestOnlyLegacyProtoRange { get; init; }
 
     /// <summary>64 lowercase hex; pipe only. Never logged (<see cref="ToString"/> redacts it).</summary>
     public string? Secret { get; init; }
@@ -598,6 +597,76 @@ public sealed record DsGameSessionAnswer : IDsRequest
     public string? Error { get; init; }
 }
 
+// ---- game-data catalogs (§9, CR-L51) ----
+
+/// <summary>One Road Trip event as the reference reads it (<c>RoadTripCatalog.Load</c>): the event, its location, mode, players and classes.</summary>
+public sealed record DsRoadTripEvent
+{
+    public required int Id { get; init; }
+
+    public required int Location { get; init; }
+
+    public required int Mode { get; init; }
+
+    public required int MinPlayers { get; init; }
+
+    /// <summary>CarClassId 0-7, at most 8.</summary>
+    public required IReadOnlyList<int> Classes { get; init; }
+}
+
+public sealed record DsRoadTrip
+{
+    /// <summary>At most <see cref="DsCatalogs.MaxEvents"/>, in database order.</summary>
+    public required IReadOnlyList<DsRoadTripEvent> Events { get; init; }
+}
+
+/// <summary><c>catalog.set</c> (§4.2, §9): process-wide, latest-wins, idempotent for the same version and rows.</summary>
+public sealed record DsCatalogSet : IDsRequest
+{
+    public string Op => DsOps.CatalogSet;
+
+    public string Game { get; init; } = DsProto.GameFh2;
+
+    /// <summary>1-64 printable ASCII; the same rows give the same version.</summary>
+    public required string Version { get; init; }
+
+    public required DsRoadTrip RoadTrip { get; init; }
+
+    public override string ToString() => $"DsCatalogSet {{ version = {Version}, events = {RoadTrip.Events.Count} }}";
+}
+
+public sealed record DsCatalogSetResult
+{
+    public bool Changed { get; init; }
+
+    public int Events { get; init; }
+}
+
+/// <summary><c>catalog.parts</c> (§9): a model's rows per slot table; no entry at all is a model this database does not have.</summary>
+public sealed record DsCatalogParts : IDsRequest
+{
+    public string Op => DsOps.CatalogParts;
+
+    public string Game { get; init; } = DsProto.GameFh2;
+
+    public required uint Model { get; init; }
+
+    /// <summary>Table name (§9's 43) → row ids; ≤ 1024 per table, ≤ 4096 in all.</summary>
+    public required IReadOnlyDictionary<string, IReadOnlyList<uint>> Slots { get; init; }
+
+    public override string ToString() => $"DsCatalogParts {{ model = {Model}, tables = {Slots.Count} }}";
+}
+
+/// <summary><c>catalog.need</c> (§4.5): the parts rule needs a model's rows (process-level, no world).</summary>
+public sealed record DsCatalogNeed : DsEvent
+{
+    public required string Game { get; init; }
+
+    public required string Kind { get; init; }
+
+    public required uint Model { get; init; }
+}
+
 // ---- events (§4.5) ----
 
 /// <summary>An event from the engine; <see cref="Seq"/> grows by 1 per event on one connection.</summary>
@@ -852,5 +921,9 @@ public sealed record DsGone : DsEvent
 [JsonSerializable(typeof(DsNotice))]
 [JsonSerializable(typeof(DsDraining))]
 [JsonSerializable(typeof(DsEventsDropped))]
+[JsonSerializable(typeof(DsCatalogSet))]
+[JsonSerializable(typeof(DsCatalogSetResult))]
+[JsonSerializable(typeof(DsCatalogParts))]
+[JsonSerializable(typeof(DsCatalogNeed))]
 [JsonSerializable(typeof(JsonElement))]
 internal sealed partial class DsJson : JsonSerializerContext;

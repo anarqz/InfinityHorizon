@@ -18,7 +18,11 @@ public static class DsProbeRunner
     public static IReadOnlyList<string> Arguments(int port) =>
         port is > 0 and <= 65535 ? ["--probe-bind", port.ToString(CultureInfo.InvariantCulture)] : throw new ArgumentOutOfRangeException(nameof(port));
 
-    public static async Task<DsProbeResult> RunAsync(string executable, int port, TimeSpan? timeout = null, CancellationToken cancellation = default)
+    public static Task<DsProbeResult> RunAsync(string executable, int port, TimeSpan? timeout = null, CancellationToken cancellation = default) =>
+        RunAsync(executable, port, null, timeout, cancellation);
+
+    /// <summary>As above; with <paramref name="signature"/>, the exe runs only when it verifies, held open until it has started (<see cref="DsSignature.Open"/>).</summary>
+    public static async Task<DsProbeResult> RunAsync(string executable, int port, DsSignaturePolicy? signature, TimeSpan? timeout = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(executable);
         var args = Arguments(port);
@@ -26,6 +30,12 @@ public static class DsProbeRunner
         {
             return DsProbeResult.NotStarted;
         }
+        DsVerifiedExecutable? verified = null;
+        if (signature is not null && (verified = DsSignature.Open(executable, signature)) is null)
+        {
+            return DsProbeResult.NotStarted;
+        }
+        using var held = verified;
         var start = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,

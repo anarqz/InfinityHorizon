@@ -147,7 +147,10 @@ public sealed partial class WorldsBridge
             if (relay is null || HostedWorldId != key.WorldId) return; // the world server is not this world's yet
             var self = ulong.TryParse(_ownXuid, NumberStyles.None, CultureInfo.InvariantCulture, out var own) ? own : 0;
             var world = key.WorldId;
-            relay.Watch(PeerWatchRules.From(rules, force) with { Parts = Parts() }, self, report => Observed(world, report));
+            // CR-L50: the dedicated engine takes the wire rules and loads its own parts catalog (parts: this PC has one)
+            if (relay is IWireWatchRelay wire)
+                wire.WatchWire(rules, force, GameDatabase is { Length: > 0 } database && File.Exists(database), self, (report, id) => Observed(world, report, id));
+            else relay.Watch(PeerWatchRules.From(rules, force) with { Parts = Parts() }, self, report => Observed(world, report));
             _watchRelay = relay;
             _watchApplied = true;
             _log($"worlds: watch: the world server measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)})");
@@ -180,7 +183,8 @@ public sealed partial class WorldsBridge
         if (_watchRelay is { } relay)
         {
             _watchRelay = null;
-            relay.Watch(null, 0, null);
+            if (relay is IWireWatchRelay wire) wire.WatchWire(null, false, false, 0, null);
+            else relay.Watch(null, 0, null);
         }
         if (_hookWatching)
         {
@@ -231,12 +235,13 @@ public sealed partial class WorldsBridge
     }
 
     // any thread: an ended episode, queued for the seat loop (never the reporter itself)
-    private void Observed(string worldId, PeerWatchReport report)
+    /// <summary>An ended episode; <paramref name="id"/> is the engine's own (the dedicated engine mints it, §4.5), else a new one.</summary>
+    private void Observed(string worldId, PeerWatchReport report, string? id = null)
     {
         if (report.Xuid == 0 || string.Equals(report.Xuid.ToString(CultureInfo.InvariantCulture), _ownXuid, StringComparison.Ordinal)) return;
         _observed.Enqueue(new(worldId, new PeerObservation
         {
-            Id = Guid.NewGuid().ToString(),
+            Id = id ?? Guid.NewGuid().ToString(),
             Xuid = report.Xuid.ToString(CultureInfo.InvariantCulture),
             Kind = report.Kind,
             Value = report.Value,
