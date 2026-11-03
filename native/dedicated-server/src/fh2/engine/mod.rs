@@ -373,6 +373,15 @@ impl Peer {
     }
 }
 
+/// What `hold` did with an OpenConnection.
+enum Hold {
+    Held,
+    /// Eligible, but past a cap: dropped unanswered.
+    Full,
+    /// Not eligible: the normal path decides.
+    No,
+}
+
 #[derive(Debug, Clone)]
 struct HeldOpen {
     data: Vec<u8>,
@@ -434,6 +443,9 @@ pub const PEER_NOTES_PER_KIND: u32 = 4;
 const NOTE_WINDOW_MS: i64 = 10_000;
 pub const HELD_OPEN_MS: i64 = 20_000;
 const MAX_HELD_OPENS: usize = 32;
+/// Held opens naming one XUID (from any address): one address cannot take every hold of a
+/// player whose proof is pending, nor can a few.
+const MAX_HELD_PER_XUID: usize = 4;
 /// SessionHostSynced var 0 (LobbyType) of a Road Trip world.
 pub const ROAD_TRIP_LOBBY: u64 = 1;
 
@@ -941,9 +953,14 @@ impl Engine {
         if !self.handshake_allowed(endpoint, open.user) {
             return None;
         }
-        // a seat whose endpoint proof may still come: no final refusal, the open waits for it
-        if !self.allowed(open.user, endpoint) && self.hold(endpoint, header, open, data) {
-            return None;
+        // a seat whose endpoint proof may still come: no final refusal, the open waits for it;
+        // past the holds' caps it gets no answer at all (the game retries), so opens claiming
+        // someone else's XUID can never push that player into the final refusal
+        if !self.allowed(open.user, endpoint) {
+            match self.hold(endpoint, header, open, data) {
+                Hold::Held | Hold::Full => return None,
+                Hold::No => {}
+            }
         }
         let s = self.settings.clone();
         let reason = if !self.allowed(open.user, endpoint) {
@@ -1093,13 +1110,13 @@ impl Engine {
 
     /// An OpenConnection from an endpoint not proven yet, for an identity whose proof may still
     /// come: kept unanswered (the game takes refusal 4 as final) and taken in again once allowed.
-    fn hold(&mut self, endpoint: SocketAddr, header: Header, open: &Open, data: &[u8]) -> bool {
+    fn hold(&mut self, endpoint: SocketAddr, header: Header, open: &Open, data: &[u8]) -> Hold {
         if shared_xuid(open.user) || self.policy.awaits_proof(open.user, self.now) != Some(true) {
-            return false;
+            return Hold::No;
         }
         if let Some(held) = self.held_opens.get(&endpoint) {
             if held.open.user != open.user {
-                return false;
+                return Hold::No;
             }
             // the latest attempt; the wait is not extended
             let at = held.at;
@@ -1112,10 +1129,19 @@ impl Engine {
                     at,
                 },
             );
-            return true;
+            return Hold::Held;
         }
-        if self.held_opens.len() >= MAX_HELD_OPENS {
-            return false;
+        let ip = crate::net::ip_key(endpoint);
+        let (mut from_ip, mut for_xuid) = (0u64, 0usize);
+        for (e, h) in self.held_opens.iter() {
+            from_ip += u64::from(crate::net::ip_key(*e) == ip);
+            for_xuid += usize::from(h.open.user == open.user);
+        }
+        if self.held_opens.len() >= MAX_HELD_OPENS
+            || from_ip >= self.settings.relay.max_peers_per_ip
+            || for_xuid >= MAX_HELD_PER_XUID
+        {
+            return Hold::Full;
         }
         self.held_opens.insert(
             endpoint,
@@ -1127,7 +1153,7 @@ impl Engine {
             },
         );
         self.note("open.held", vec![json!(open.a)]);
-        true
+        Hold::Held
     }
 
     fn tick_held_opens(&mut self) {
