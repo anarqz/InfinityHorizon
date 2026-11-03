@@ -1,64 +1,73 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! What the host's network looks like from the Internet, and the punches (contract §5.1, private
-//! worlds only): STUN rounds on the world socket (stun.rs), the router's port mapping (upnp.rs,
-//! its own thread) and the joining players' punches. The world owns one Nat and feeds it every
-//! STUN packet and its timer; what it learns is read with `facts()` (the `world.network`
-//! event's NetworkFacts) and `take_news()`. Nothing here writes a file or a log line: addresses
-//! never reach stdout (contract §2.3).
-//!
-//! Sans-I/O: every send goes through the caller's `send` closure, every time is the caller's
-//! monotonic milliseconds. Only the STUN servers' name lookup and UPnP run in threads (off the
-//! loop), and post their results back through channels.
-//!
-//! Nothing here sends anything but STUN Binding requests (to the STUN servers and, for a punch,
-//! to the player) and Binding successes (to whoever sent us a request).
-//!
-//! Between full STUN rounds one IPv4 server per `keepalive_ms` (5 s) refreshes the mapping
-//! (`W/RelayNetworkNat.cs`): a router whose UDP idle timeout is shorter than the round would
-//! otherwise hand the world a new external port while it waits for players, leaving the
-//! announced one stale.
+// Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
+//! A private world's view of its own NAT (contract §5.1), driven by the world loop on the world
+//! socket: STUN rounds to the configured servers (RFC 8489 Binding) that tell the public mapping
+//! and whether it is the same for every server (cone) or not (symmetric), a keepalive to one IPv4
+//! server between rounds so short router timeouts do not move the announced port, Binding answers
+//! to the joiners' probes (under a global and a per-address budget, so the socket is no useful
+//! reflector), bounded punches towards peers, and the facts the controller reads (`NetworkFacts`).
+//! Name lookups and the UPnP mapping (`crate::upnp`) run on their own threads and post back
+//! through channels the world's network tick drains; the loop itself never blocks.
 
-use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::mpsc::{self, Receiver},
-};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::{
-    stun::{self, TxId},
-    upnp,
-};
+use crate::{stun, upnp};
 
-/// Public STUN servers (no server of ours). Two, for the NAT's kind (`W/RelayNetwork.cs:23`).
+/// The servers asked when the controller names none.
 pub const STUN_SERVERS: [&str; 2] = ["stun.l.google.com:19302", "stun.cloudflare.com:3478"];
-/// A punch: this many Binding requests, this far apart (ms).
-const PUNCH_SENDS: u8 = 10;
-const PUNCH_GAP_MS: u64 = 200;
-const PUNCHES_MAX: usize = 32;
-const PENDING_MAX: usize = 16;
-const PENDING_TTL_MS: u64 = 10_000;
-/// Binding requests answered per second (a flood of them gets no answers).
-const ANSWERS_PER_SECOND: u32 = 50;
-/// One IPv4 STUN server this often between rounds keeps the NAT's mapping (0: off).
+/// One IPv4 server is asked this often between rounds (0: never).
 pub const KEEPALIVE_MS: u64 = 5_000;
-/// At most this many STUN servers are used.
-const SERVERS_MAX: usize = 16;
 
-#[derive(Debug, Clone)]
+/// Time between full rounds unless configured.
+const ROUND_EVERY_MS: u64 = 25_000;
+/// A request without an answer after this long is forgotten.
+const REQUEST_LIFETIME_MS: u64 = 10_000;
+/// An observation is kept at least this long (and at least three rounds).
+const OBSERVATION_MIN_MS: u64 = 60_000;
+/// A changed mapping triggers a new round only if the last one is at least this old.
+const REMEASURE_GAP_MS: u64 = 1_000;
+const REQUESTS_IN_FLIGHT: usize = 16;
+const SERVERS_KEPT: usize = 16;
+const NAMES_RESOLVED: usize = 8;
+/// A punch is a Binding request every 200 ms, ten times, to at most 32 endpoints at once.
+const PUNCH_REPEATS: u8 = 10;
+const PUNCH_SPACING_MS: u64 = 200;
+const PUNCH_TARGETS: usize = 32;
+/// How often a live UPnP thread's channel is looked at once the first outcome is in.
+const MAPPING_CHECK_MS: u64 = 1_000;
+
+/// Binding answers per second, all sources together.
+const ANSWERS_PER_WINDOW: u32 = 50;
+/// Binding answers per second to one IP address. A joining hook probes each of its (at most 8)
+/// candidates every 250 ms (`proxy.c`), and two or three of them (STUN, UPnP and host addresses)
+/// can land on this socket: about 12 per second per joiner, so 24 covers two joiners behind one
+/// NAT; at 44 bytes an answer that is about 1 KiB/s towards a spoofed victim at most.
+const ANSWERS_PER_ADDRESS: u32 = 24;
+const ANSWER_WINDOW_MS: u64 = 1_000;
+
+/// What a private world's NAT handling is told by `world.open`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NatSettings {
+    /// `host:port` names, resolved off the loop when `discovery` is on.
     pub stun_servers: Vec<String>,
     pub stun_every_ms: u64,
-    /// The keepalive between rounds (0: none).
     pub keepalive_ms: u64,
+    /// Resolve the STUN servers (a world without it measures only servers set directly).
     pub discovery: bool,
+    /// Map the port on the router.
     pub upnp: bool,
+    /// The world socket's port (the UPnP internal port).
     pub port: u16,
 }
 
 impl NatSettings {
     pub fn new(port: u16, discovery: bool, upnp: bool) -> NatSettings {
-        NatSettings {
-            stun_servers: STUN_SERVERS.iter().map(|s| s.to_string()).collect(),
-            stun_every_ms: 25_000,
+        Self {
+            stun_servers: STUN_SERVERS.iter().map(|s| (*s).to_string()).collect(),
+            stun_every_ms: ROUND_EVERY_MS,
             keepalive_ms: KEEPALIVE_MS,
             discovery,
             upnp,
@@ -67,8 +76,10 @@ impl NatSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The NAT kind as two IPv4 servers see the world socket.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NatKind {
+    #[default]
     Unknown,
     Cone,
     Symmetric,
@@ -77,127 +88,282 @@ pub enum NatKind {
 impl NatKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            NatKind::Unknown => "unknown",
-            NatKind::Cone => "cone",
-            NatKind::Symmetric => "symmetric",
+            Self::Unknown => "unknown",
+            Self::Cone => "cone",
+            Self::Symmetric => "symmetric",
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Where the UPnP mapping stands.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Upnp {
+    #[default]
     Off,
     Pending,
-    Done(upnp::Outcome),
+    NotFound,
+    Mapped,
+    Failed,
 }
 
 impl Upnp {
-    /// NetworkFacts' `upnp`.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Upnp::Off => "off",
-            Upnp::Pending => "pending",
-            Upnp::Done(upnp::Outcome::NotFound) => "not_found",
-            Upnp::Done(upnp::Outcome::Mapped { .. }) => "mapped",
-            Upnp::Done(upnp::Outcome::Failed(_)) => "failed",
+            Self::Off => "off",
+            Self::Pending => "pending",
+            Self::NotFound => "not_found",
+            Self::Mapped => "mapped",
+            Self::Failed => "failed",
         }
     }
 }
 
-/// What changed since the last `take_news` (the world turns it into notices and
-/// `world.network`; never a log line with an address).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What changed off the loop since the last [`Nat::take_news`].
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NatNews {
-    NoStunServers,
-    PunchAnswered,
-    Upnp(upnp::Outcome),
-    FactsChanged,
+    /// The STUN names resolved to these servers (already applied).
+    Servers(Vec<SocketAddr>),
+    /// A UPnP attempt ended (already applied).
+    Upnp(crate::upnp::Outcome),
 }
 
-/// The raw facts (NetworkFacts without the world id and the bound port).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The facts `NetworkFacts` and `diag` report.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NatFacts {
     pub kind: NatKind,
+    /// The first public endpoint seen per address family.
     pub public: Vec<SocketAddr>,
     pub upnp: Upnp,
     pub upnp_address: Option<SocketAddr>,
+    /// The router's external address is itself private or shared (double NAT, CGNAT).
     pub behind_another_nat: bool,
 }
 
+/// A request to a server awaiting its answer.
+struct Asked {
+    server: SocketAddr,
+    txid: stun::TxId,
+    at: u64,
+}
+
+/// What one server last said the world socket looks like from outside.
+struct Seen {
+    server: SocketAddr,
+    public: SocketAddr,
+    at: u64,
+}
+
+struct PunchTarget {
+    to: SocketAddr,
+    txid: stun::TxId,
+    sends_left: u8,
+    due: u64,
+}
+
+/// The per-second Binding answer allowance: a fixed one-second window with a total and a count
+/// per source IP (at most [`ANSWERS_PER_WINDOW`] entries, since every entry took an answer).
+struct AnswerBudget {
+    window: u64,
+    total: u32,
+    by_address: Vec<(IpAddr, u32)>,
+}
+
+impl AnswerBudget {
+    fn new(now: u64) -> AnswerBudget {
+        AnswerBudget {
+            window: now,
+            total: 0,
+            by_address: Vec::new(),
+        }
+    }
+
+    fn allow(&mut self, ip: IpAddr, now: u64) -> bool {
+        if now.saturating_sub(self.window) >= ANSWER_WINDOW_MS {
+            *self = AnswerBudget::new(now);
+        }
+        if self.total >= ANSWERS_PER_WINDOW {
+            return false;
+        }
+        match self.by_address.iter_mut().find(|(a, _)| *a == ip) {
+            Some((_, n)) if *n >= ANSWERS_PER_ADDRESS => return false,
+            Some((_, n)) => *n += 1,
+            None => self.by_address.push((ip, 1)),
+        }
+        self.total += 1;
+        true
+    }
+}
+
+/// An address a datagram may be sent to at all: a real port, not unspecified, not multicast or
+/// broadcast.
+fn reachable(a: SocketAddr) -> bool {
+    a.port() != 0
+        && match a.ip() {
+            IpAddr::V4(v4) => !v4.is_unspecified() && v4.octets()[0] < 224,
+            IpAddr::V6(v6) => !v6.is_unspecified() && !v6.is_multicast(),
+        }
+}
+
+/// The first IPv4 and the first IPv6 address of every name, in order.
+fn resolve(names: &[String]) -> Vec<SocketAddr> {
+    let mut found = Vec::new();
+    for name in names.iter().take(NAMES_RESOLVED) {
+        let Ok(all) = name.as_str().to_socket_addrs() else {
+            continue;
+        };
+        let all: Vec<SocketAddr> = all.filter(|a| a.port() != 0).collect();
+        let v4 = all.iter().find(|a| a.is_ipv4());
+        let v6 = all.iter().find(|a| a.is_ipv6());
+        found.extend(v4.into_iter().chain(v6).copied());
+    }
+    found
+}
+
+/// One world's NAT state; see the module comment.
 pub struct Nat {
-    settings: NatSettings,
-    socket_is_v6: bool,
-    resolved: Option<Receiver<Vec<SocketAddr>>>,
-    servers: Vec<SocketAddr>,
-    last_round: Option<u64>,
-    /// The last round or keepalive, and the IPv4 server the last keepalive went to.
+    config: NatSettings,
+    dual: bool,
+    stun_targets: Vec<SocketAddr>,
+    round_at: Option<u64>,
     last_keepalive: Option<u64>,
-    keepalive_server: usize,
-    /// (transaction, server, sent)
-    pending: Vec<(TxId, SocketAddr, u64)>,
-    /// (server, our address as it saw it): the last answer of each server.
-    seen: Vec<(SocketAddr, SocketAddr)>,
-    /// (player, sends left, next send, transaction)
-    punches: Vec<(SocketAddr, u8, u64, TxId)>,
-    upnp_rx: Option<Receiver<upnp::Outcome>>,
+    keepalive_turn: usize,
+    asked: Vec<Asked>,
+    sightings: Vec<Seen>,
+    punch_list: Vec<PunchTarget>,
+    budget: AnswerBudget,
     upnp: Upnp,
-    answers: (u64, u32),
-    last_facts: Option<NatFacts>,
-    news: Vec<NatNews>,
+    upnp_at: Option<SocketAddr>,
+    pending_news: Vec<NatNews>,
+    lookup: Option<Receiver<Vec<SocketAddr>>>,
+    mapping: Option<Receiver<upnp::Outcome>>,
+    last_tick: u64,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Nat {
+    fn drop(&mut self) {
+        // the UPnP thread sees it within a quarter second and removes its mapping
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Nat {
-    /// Starts the STUN servers' lookup and the router's mapping (each in a thread), as asked.
+    /// Starts the lookup thread (`discovery`) and the UPnP thread (`upnp`) as configured.
     pub fn new(settings: NatSettings, socket_is_v6: bool, now_ms: u64) -> Nat {
-        let resolved = if settings.discovery {
-            let (tx, rx) = mpsc::channel();
-            let names = settings.stun_servers.clone();
-            std::thread::spawn(move || {
-                let mut out = Vec::new();
-                for n in names {
-                    // one IPv4 address per server (the NAT's kind compares IPv4 ports), plus one IPv6
-                    if let Ok(addrs) = n.to_socket_addrs() {
-                        let addrs: Vec<SocketAddr> = addrs.collect();
-                        out.extend(addrs.iter().find(|a| a.is_ipv4()).copied());
-                        out.extend(addrs.iter().find(|a| a.is_ipv6()).copied());
-                    }
-                }
-                let _ = tx.send(out);
-            });
-            Some(rx)
-        } else {
-            None
-        };
-        let (upnp_rx, state) = if settings.upnp {
-            let (tx, rx) = mpsc::channel();
-            let port = settings.port;
-            std::thread::spawn(move || upnp::run(port, |o| drop(tx.send(o))));
-            (Some(rx), Upnp::Pending)
-        } else {
-            (None, Upnp::Off)
-        };
-        let mut nat = Nat {
-            settings,
-            socket_is_v6,
-            resolved,
-            servers: Vec::new(),
-            last_round: None,
+        let mut me = Self {
+            dual: socket_is_v6,
+            stun_targets: Vec::new(),
+            round_at: None,
             last_keepalive: None,
-            keepalive_server: 0,
-            pending: Vec::new(),
-            seen: Vec::new(),
-            punches: Vec::new(),
-            upnp_rx,
-            upnp: state,
-            answers: (now_ms, 0),
-            last_facts: None,
-            news: Vec::new(),
+            keepalive_turn: 0,
+            asked: Vec::new(),
+            sightings: Vec::new(),
+            punch_list: Vec::new(),
+            budget: AnswerBudget::new(now_ms),
+            upnp: Upnp::Off,
+            upnp_at: None,
+            pending_news: Vec::new(),
+            lookup: None,
+            mapping: None,
+            last_tick: now_ms,
+            stop: Arc::new(AtomicBool::new(false)),
+            config: settings,
         };
-        nat.last_facts = Some(nat.facts());
-        nat
+        if me.config.discovery {
+            me.start_lookup();
+        }
+        if me.config.upnp {
+            me.upnp = Upnp::Pending;
+            me.start_mapping();
+        }
+        me
     }
 
-    /// A datagram the world received. True when it was STUN (handled here; never NerdCore).
+    fn start_lookup(&mut self) {
+        let (post, inbox) = mpsc::channel();
+        let names = self.config.stun_servers.clone();
+        let spawned = std::thread::Builder::new()
+            .name("ds-stun-lookup".into())
+            .spawn(move || {
+                let _ = post.send(resolve(&names));
+            });
+        if spawned.is_ok() {
+            self.lookup = Some(inbox);
+        }
+    }
+
+    fn start_mapping(&mut self) {
+        let (post, inbox) = mpsc::channel();
+        let port = self.config.port;
+        let stop = Arc::clone(&self.stop);
+        let spawned = std::thread::Builder::new()
+            .name("ds-upnp".into())
+            .spawn(move || {
+                upnp::run_while(
+                    port,
+                    move |o| {
+                        let _ = post.send(o);
+                    },
+                    move || !stop.load(Ordering::Relaxed),
+                );
+            });
+        match spawned {
+            Ok(_) => self.mapping = Some(inbox),
+            Err(_) => self.upnp = Upnp::Failed,
+        }
+    }
+
+    /// The threads' results, applied and queued as news.
+    fn collect(&mut self) {
+        if let Some(rx) = &self.lookup {
+            match rx.try_recv() {
+                Ok(found) => {
+                    self.lookup = None;
+                    self.set_servers(&found);
+                    self.pending_news
+                        .push(NatNews::Servers(self.stun_targets.clone()));
+                }
+                Err(TryRecvError::Disconnected) => self.lookup = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        let mut outcomes = Vec::new();
+        if let Some(rx) = &self.mapping {
+            loop {
+                match rx.try_recv() {
+                    Ok(o) => outcomes.push(o),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.mapping = None;
+                        if self.upnp == Upnp::Pending {
+                            outcomes.push(upnp::Outcome::Failed);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        for o in outcomes {
+            self.apply_mapping(o);
+        }
+    }
+
+    fn apply_mapping(&mut self, o: upnp::Outcome) {
+        (self.upnp, self.upnp_at) = match &o {
+            upnp::Outcome::Mapped {
+                external_ip: ip,
+                external_port: port,
+                ..
+            } => (Upnp::Mapped, Some(SocketAddr::new(*ip, *port))),
+            upnp::Outcome::NotFound => (Upnp::NotFound, None),
+            upnp::Outcome::Failed => (Upnp::Failed, None),
+        };
+        self.pending_news.push(NatNews::Upnp(o));
+    }
+
+    /// A datagram from the world socket. `true` when it was STUN (handled here or not: the side
+    /// channels are STUN-framed and still go on to the engine); Binding requests are answered,
+    /// Binding successes complete a server request or end a punch.
     pub fn on_packet(
         &mut self,
         send: &mut dyn FnMut(SocketAddr, Vec<u8>),
@@ -205,248 +371,509 @@ impl Nat {
         from: SocketAddr,
         now_ms: u64,
     ) -> bool {
-        if !stun::is_stun(data) {
-            return false;
-        }
-        let Some(m) = stun::parse(data) else {
-            return true;
-        };
-        match m.kind {
-            stun::BINDING_SUCCESS => {
-                let from = stun::canonical(from);
-                if let Some(i) = self
-                    .pending
-                    .iter()
-                    .position(|(t, s, _)| *t == m.txid && *s == from)
-                {
-                    self.pending.swap_remove(i);
-                    if let Some(mapped) = m.mapped {
-                        self.seen.retain(|(s, _)| *s != from);
-                        self.seen.push((from, stun::canonical(mapped)));
-                        self.check_facts();
-                    }
-                } else if let Some(p) = self
-                    .punches
-                    .iter_mut()
-                    .find(|p| p.3 == m.txid && stun::canonical(p.0) == from)
-                {
-                    // the player's proxy answered our punch: the path is open both ways
-                    p.1 = 0;
-                    self.news.push(NatNews::PunchAnswered);
+        let framed = stun::is_stun(data);
+        let source = stun::canonical(from);
+        if let Some(message) = stun::parse(data).filter(|_| framed) {
+            if message.kind == stun::BINDING_REQUEST {
+                if reachable(source) && self.budget.allow(source.ip(), now_ms) {
+                    send(source, stun::binding_success(&message.txid, source));
                 }
+            } else if message.kind == stun::BINDING_SUCCESS {
+                self.on_answer(&message, source, now_ms);
             }
-            stun::BINDING_REQUEST => {
-                if now_ms.saturating_sub(self.answers.0) >= 1000 {
-                    self.answers = (now_ms, 0);
-                }
-                if self.answers.1 < ANSWERS_PER_SECOND {
-                    self.answers.1 += 1;
-                    send(from, stun::binding_success(&m.txid, from));
-                }
-            }
-            _ => {}
         }
-        true
+        framed
     }
 
-    /// A lookup or a UPnP mapping is still running in its thread (`tick` polls its result).
+    fn on_answer(&mut self, message: &stun::Message, from: SocketAddr, now: u64) {
+        let ours = self.asked.iter().position(|q| {
+            q.server == from
+                && q.txid == message.txid
+                && now.saturating_sub(q.at) < REQUEST_LIFETIME_MS
+        });
+        let Some(i) = ours else {
+            self.punch_list
+                .retain(|p| p.to != from || p.txid != message.txid);
+            return;
+        };
+        self.asked.remove(i);
+        let Some(public) = message
+            .mapped
+            .map(stun::canonical)
+            .filter(|m| m.port() != 0)
+        else {
+            return;
+        };
+        let moved = self
+            .sightings
+            .iter()
+            .any(|s| s.server == from && s.public != public);
+        if moved
+            && self
+                .round_at
+                .is_none_or(|r| now.saturating_sub(r) >= REMEASURE_GAP_MS)
+        {
+            // measure every server again now, so the kind never mixes two mappings
+            self.round_at = None;
+        }
+        self.sightings.retain(|s| s.server != from);
+        self.sightings.push(Seen {
+            server: from,
+            public,
+            at: now,
+        });
+    }
+
+    /// Whether a result from a thread is awaited soon (the world then polls its tick).
     pub fn polling(&self) -> bool {
-        self.resolved.is_some() || self.upnp_rx.is_some()
+        self.lookup.is_some() || (self.mapping.is_some() && self.upnp == Upnp::Pending)
     }
 
-    /// The next time `tick` has something to do, if any.
+    fn round_every(&self) -> u64 {
+        self.config.stun_every_ms.max(1)
+    }
+
+    fn has_ipv4_server(&self) -> bool {
+        self.stun_targets.iter().any(SocketAddr::is_ipv4)
+    }
+
+    /// The next instant [`Nat::tick`] has work: a round, a keepalive, a punch, or a look at the
+    /// UPnP thread; `None`: nothing until a datagram or a command.
     pub fn next_deadline(&self) -> Option<u64> {
-        let round = if self.servers.is_empty() {
-            None
-        } else {
-            Some(
-                self.last_round
-                    .map_or(0, |t| t + self.settings.stun_every_ms),
-            )
-        };
-        let keepalive = self
-            .last_keepalive
-            .filter(|_| self.settings.keepalive_ms > 0 && self.servers.iter().any(|s| s.is_ipv4()))
-            .map(|t| t + self.settings.keepalive_ms);
-        let punch = self.punches.iter().filter(|p| p.1 > 0).map(|p| p.2).min();
-        [round, keepalive, punch].into_iter().flatten().min()
+        let mut times: Vec<u64> = Vec::new();
+        if !self.stun_targets.is_empty() {
+            times.push(self.round_at.map_or(0, |r| r + self.round_every()));
+            if self.config.keepalive_ms > 0
+                && self.has_ipv4_server()
+                && let Some(k) = self.last_keepalive
+            {
+                times.push(k + self.config.keepalive_ms);
+            }
+        }
+        times.extend(self.punch_list.iter().map(|p| p.due));
+        if self.mapping.is_some() {
+            times.push(self.last_tick + MAPPING_CHECK_MS);
+        }
+        times.into_iter().min()
     }
 
-    /// The STUN servers (the lookup's result; tests set them directly): at most 16, canonical,
-    /// each once.
+    /// The STUN servers to measure with (at most 16, IPv6 ones only on a dual-stack socket,
+    /// canonical, no repeats).
     pub fn set_servers(&mut self, servers: &[SocketAddr]) {
-        let mut out: Vec<SocketAddr> = Vec::new();
+        let mut kept: Vec<SocketAddr> = Vec::new();
         for s in servers
             .iter()
-            .take(SERVERS_MAX)
+            .take(SERVERS_KEPT)
             .map(|s| stun::canonical(*s))
         {
-            if !out.contains(&s) {
-                out.push(s);
+            if (s.is_ipv4() || self.dual) && !kept.contains(&s) {
+                kept.push(s);
             }
         }
-        self.servers = out;
+        self.stun_targets = kept;
     }
 
-    /// The timer: STUN rounds, punches, the router's news. Lookup and UPnP results are polled
-    /// here too, so the caller ticks it at least every second while the world is open.
+    fn ask(&mut self, server: SocketAddr, now: u64, send: &mut dyn FnMut(SocketAddr, Vec<u8>)) {
+        let txid = stun::new_txid();
+        self.asked.push(Asked {
+            server,
+            txid,
+            at: now,
+        });
+        send(server, stun::binding_request(&txid).to_vec());
+    }
+
+    /// Thread results, expiries, the round or the keepalive when due, and due punches.
     pub fn tick(&mut self, send: &mut dyn FnMut(SocketAddr, Vec<u8>), now_ms: u64) {
-        if let Some(rx) = &self.resolved
-            && let Ok(servers) = rx.try_recv()
-        {
-            if servers.is_empty() {
-                self.news.push(NatNews::NoStunServers);
-            }
-            self.set_servers(&servers);
-            self.resolved = None;
-        }
-        self.pending
-            .retain(|(_, _, sent)| now_ms.saturating_sub(*sent) < PENDING_TTL_MS);
-        if !self.servers.is_empty()
-            && self
-                .last_round
-                .is_none_or(|t| now_ms.saturating_sub(t) >= self.settings.stun_every_ms)
-        {
-            self.last_round = Some(now_ms);
-            self.last_keepalive = Some(now_ms);
-            for &server in &self.servers {
-                if server.is_ipv6() && !self.socket_is_v6 {
-                    continue;
+        let now = now_ms;
+        self.last_tick = now;
+        self.collect();
+        self.asked
+            .retain(|q| now.saturating_sub(q.at) < REQUEST_LIFETIME_MS);
+        let keep_seen = OBSERVATION_MIN_MS.max(self.round_every().saturating_mul(3));
+        self.sightings
+            .retain(|s| now.saturating_sub(s.at) < keep_seen);
+
+        let round_due = self
+            .round_at
+            .is_none_or(|r| now.saturating_sub(r) >= self.round_every());
+        if !self.stun_targets.is_empty() && round_due {
+            self.round_at = Some(now);
+            self.last_keepalive = Some(now);
+            for server in self.stun_targets.clone() {
+                if self.asked.len() >= REQUESTS_IN_FLIGHT {
+                    break;
                 }
-                let t = stun::new_txid();
-                if self.pending.len() < PENDING_MAX {
-                    self.pending.push((t, server, now_ms));
-                }
-                send(
-                    stun::for_socket(server, self.socket_is_v6),
-                    stun::binding_request(&t).to_vec(),
-                );
+                self.ask(server, now, send);
             }
-        } else if self.settings.keepalive_ms > 0
+        } else if self.config.keepalive_ms > 0
+            && self.asked.len() < REQUESTS_IN_FLIGHT
             && self
                 .last_keepalive
-                .is_some_and(|t| now_ms.saturating_sub(t) >= self.settings.keepalive_ms)
-            && self.pending.len() < PENDING_MAX
+                .is_none_or(|k| now.saturating_sub(k) >= self.config.keepalive_ms)
         {
-            // between rounds, one IPv4 server in turn keeps the mapping open
             let v4: Vec<SocketAddr> = self
-                .servers
+                .stun_targets
                 .iter()
                 .copied()
-                .filter(|s| s.is_ipv4())
+                .filter(SocketAddr::is_ipv4)
                 .collect();
             if !v4.is_empty() {
-                self.last_keepalive = Some(now_ms);
-                self.keepalive_server = (self.keepalive_server + 1) % v4.len();
-                let server = v4[self.keepalive_server];
-                let t = stun::new_txid();
-                self.pending.push((t, server, now_ms));
-                send(
-                    stun::for_socket(server, self.socket_is_v6),
-                    stun::binding_request(&t).to_vec(),
-                );
+                self.last_keepalive = Some(now);
+                self.keepalive_turn = (self.keepalive_turn + 1) % v4.len();
+                self.ask(v4[self.keepalive_turn], now, send);
             }
         }
-        for p in self.punches.iter_mut() {
-            if p.1 > 0 && now_ms >= p.2 {
-                send(
-                    stun::for_socket(p.0, self.socket_is_v6),
-                    stun::binding_request(&p.3).to_vec(),
-                );
-                p.1 -= 1;
-                p.2 = now_ms + PUNCH_GAP_MS;
-            }
+
+        for p in self.punch_list.iter_mut().filter(|p| p.due <= now) {
+            send(p.to, stun::binding_request(&p.txid).to_vec());
+            p.sends_left -= 1;
+            p.due = now + PUNCH_SPACING_MS;
         }
-        self.punches.retain(|p| p.1 > 0);
-        if let Some(rx) = &self.upnp_rx {
-            let mut latest = None;
-            while let Ok(o) = rx.try_recv() {
-                latest = Some(o);
-            }
-            if let Some(o) = latest
-                && self.upnp != Upnp::Done(o.clone())
-            {
-                self.news.push(NatNews::Upnp(o.clone()));
-                self.upnp = Upnp::Done(o);
-                self.check_facts();
-            }
-        }
+        self.punch_list.retain(|p| p.sends_left > 0);
     }
 
-    /// A burst of Binding requests to a joining player for a couple of seconds.
+    /// Opens the NAT towards `to`: ten Binding requests 200 ms apart from now; asking again for
+    /// the same endpoint restarts its count; the oldest of 32 targets gives way.
     pub fn punch(&mut self, to: SocketAddr, now_ms: u64) {
-        let to = stun::canonical(to);
-        if to.port() == 0 || to.ip().is_unspecified() || to.ip().is_multicast() {
+        let target = stun::canonical(to);
+        if !reachable(target) || (target.is_ipv6() && !self.dual) {
             return;
         }
-        if let Some(p) = self.punches.iter_mut().find(|p| p.0 == to) {
-            p.1 = PUNCH_SENDS;
+        if let Some(p) = self.punch_list.iter_mut().find(|p| p.to == target) {
+            p.sends_left = PUNCH_REPEATS;
+            p.due = now_ms;
             return;
         }
-        if self.punches.len() >= PUNCHES_MAX {
-            self.punches.remove(0);
+        if self.punch_list.len() >= PUNCH_TARGETS {
+            let _evicted = self.punch_list.remove(0);
         }
-        self.punches
-            .push((to, PUNCH_SENDS, now_ms, stun::new_txid()));
+        self.punch_list.push(PunchTarget {
+            to: target,
+            txid: stun::new_txid(),
+            sends_left: PUNCH_REPEATS,
+            due: now_ms,
+        });
     }
 
+    /// Cone when the first two IPv4 servers saw the same endpoint, symmetric when not.
     pub fn kind(&self) -> NatKind {
-        let v4: Vec<&SocketAddr> = self
-            .seen
+        let mut v4 = self
+            .sightings
             .iter()
-            .filter(|(s, _)| s.is_ipv4())
-            .map(|(_, m)| m)
-            .collect();
-        match v4.as_slice() {
-            [a, b, ..] if a.port() == b.port() && a.ip() == b.ip() => NatKind::Cone,
-            [_, _, ..] => NatKind::Symmetric,
-            _ => NatKind::Unknown,
+            .filter(|s| s.server.is_ipv4())
+            .map(|s| s.public);
+        let (Some(first), Some(second)) = (v4.next(), v4.next()) else {
+            return NatKind::Unknown;
+        };
+        if first == second {
+            NatKind::Cone
+        } else {
+            NatKind::Symmetric
         }
     }
 
-    /// The public addresses STUN saw (one per family).
+    /// The first public endpoint seen in each address family.
     pub fn public(&self) -> Vec<SocketAddr> {
-        let mut out: Vec<SocketAddr> = Vec::new();
-        for (_, m) in &self.seen {
-            if !out.iter().any(|o| o.is_ipv4() == m.is_ipv4()) {
-                out.push(*m);
+        let mut firsts: Vec<SocketAddr> = Vec::with_capacity(2);
+        for s in &self.sightings {
+            if !firsts.iter().any(|o| o.is_ipv4() == s.public.is_ipv4()) {
+                firsts.push(s.public);
             }
         }
-        out
+        firsts
     }
 
     pub fn facts(&self) -> NatFacts {
-        let upnp_address = match &self.upnp {
-            Upnp::Done(upnp::Outcome::Mapped {
-                external_ip,
-                external_port,
-                ..
-            }) => Some(SocketAddr::new(*external_ip, *external_port)),
-            _ => None,
-        };
+        let (kind, public) = (self.kind(), self.public());
         NatFacts {
-            kind: self.kind(),
-            public: self.public(),
-            upnp: self.upnp.clone(),
-            behind_another_nat: upnp_address.is_some_and(|a| upnp::behind_another_nat(a.ip())),
-            upnp_address,
-        }
-    }
-
-    fn check_facts(&mut self) {
-        let facts = self.facts();
-        if self.last_facts.as_ref() != Some(&facts) {
-            self.last_facts = Some(facts);
-            self.news.push(NatNews::FactsChanged);
+            kind,
+            public,
+            upnp: self.upnp,
+            upnp_address: self.upnp_at,
+            behind_another_nat: self
+                .upnp_at
+                .is_some_and(|a| upnp::behind_another_nat(a.ip())),
         }
     }
 
     pub fn take_news(&mut self) -> Vec<NatNews> {
-        std::mem::take(&mut self.news)
+        std::mem::take(&mut self.pending_news)
     }
 
-    /// The router's external address, when it forwarded the world.
+    /// The router's external address while mapped.
     pub fn upnp_address(&self) -> Option<IpAddr> {
-        self.facts().upnp_address.map(|a| a.ip())
+        self.upnp_at.map(|a| a.ip())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quiet(dual: bool) -> Nat {
+        Nat::new(NatSettings::new(5101, false, false), dual, 0)
+    }
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    fn collect_sends(n: &mut Nat, now: u64) -> Vec<(SocketAddr, Vec<u8>)> {
+        let mut got = Vec::new();
+        n.tick(&mut |to, d| got.push((to, d)), now);
+        got
+    }
+
+    fn deliver(n: &mut Nat, data: &[u8], from: SocketAddr, now: u64) -> Vec<(SocketAddr, Vec<u8>)> {
+        let mut got = Vec::new();
+        n.on_packet(&mut |to, d| got.push((to, d)), data, from, now);
+        got
+    }
+
+    /// Answers every request of a round as servers seeing `public[i]` would.
+    fn answer_round(n: &mut Nat, sent: &[(SocketAddr, Vec<u8>)], public: &[&str], now: u64) {
+        for ((server, req), seen) in sent.iter().zip(public) {
+            let txid = stun::parse(req).unwrap().txid;
+            deliver(n, &stun::binding_success(&txid, addr(seen)), *server, now);
+        }
+    }
+
+    #[test]
+    fn the_answer_budget_caps_one_address_and_the_whole_socket() {
+        let mut n = quiet(false);
+        let req = stun::binding_request(&stun::new_txid());
+        let victim = addr("198.51.100.20:4000");
+        let mut answers = 0;
+        for i in 0..100u64 {
+            answers += deliver(&mut n, &req, victim, 1000 + i).len();
+        }
+        assert_eq!(
+            answers as u32, ANSWERS_PER_ADDRESS,
+            "one address, one second"
+        );
+        // many addresses share the global allowance (the victim's 10 already count)
+        let mut others = 0;
+        for i in 0..200u16 {
+            let from = SocketAddr::new(IpAddr::V4([203, 0, 113, (i % 250) as u8].into()), 1000 + i);
+            others += deliver(&mut n, &req, from, 1500).len();
+        }
+        assert_eq!(others as u32 + ANSWERS_PER_ADDRESS, ANSWERS_PER_WINDOW);
+        // the next window refills both
+        let a = deliver(&mut n, &req, victim, 2000);
+        assert_eq!(a.len(), 1);
+        let answer = stun::parse(&a[0].1).unwrap();
+        assert_eq!(
+            (answer.kind, answer.mapped),
+            (stun::BINDING_SUCCESS, Some(victim))
+        );
+    }
+
+    #[test]
+    fn unreachable_sources_get_no_answer_and_take_no_budget() {
+        let mut n = quiet(true);
+        let req = stun::binding_request(&stun::new_txid());
+        for from in [
+            "0.0.0.0:5",
+            "192.0.2.1:0",
+            "224.0.0.1:5",
+            "255.255.255.255:5",
+            "[ff02::1]:5",
+            "[::]:5",
+        ] {
+            assert!(deliver(&mut n, &req, addr(from), 0).is_empty(), "{from}");
+        }
+        assert_eq!(n.budget.total, 0);
+        // a v4-mapped source is answered at its IPv4 form
+        let a = deliver(&mut n, &req, addr("[::ffff:192.0.2.9]:77"), 0);
+        assert_eq!(a[0].0, addr("192.0.2.9:77"));
+    }
+
+    #[test]
+    fn non_binding_stun_passes_through_untouched() {
+        let mut n = quiet(false);
+        let side = stun::indication(0x3e91, &stun::new_txid(), &[(0xc0f1, &[0u8; 16][..])]);
+        let mut sent = 0;
+        assert!(n.on_packet(&mut |_, _| sent += 1, &side, addr("192.0.2.1:9"), 0));
+        assert!(!n.on_packet(&mut |_, _| sent += 1, b"not stun", addr("192.0.2.1:9"), 0));
+        assert_eq!(sent, 0);
+    }
+
+    #[test]
+    fn kind_and_public_endpoints_from_two_servers() {
+        let mut n = quiet(true);
+        n.set_servers(&[
+            addr("192.0.2.1:3478"),
+            addr("192.0.2.2:3478"),
+            addr("[2001:db8::1]:3478"),
+        ]);
+        let sent = collect_sends(&mut n, 0);
+        assert_eq!(sent.len(), 3);
+        assert_eq!(n.kind(), NatKind::Unknown);
+        answer_round(
+            &mut n,
+            &sent,
+            &[
+                "203.0.113.1:6000",
+                "203.0.113.1:6000",
+                "[2001:db8::99]:6000",
+            ],
+            10,
+        );
+        assert_eq!(n.kind(), NatKind::Cone);
+        assert_eq!(
+            n.public(),
+            vec![addr("203.0.113.1:6000"), addr("[2001:db8::99]:6000")]
+        );
+        // a forged answer (wrong transaction or wrong source) changes nothing
+        deliver(
+            &mut n,
+            &stun::binding_success(&[7; 12], addr("1.2.3.4:5")),
+            addr("192.0.2.1:3478"),
+            20,
+        );
+        let txid = stun::parse(&sent[0].1).unwrap().txid;
+        deliver(
+            &mut n,
+            &stun::binding_success(&txid, addr("1.2.3.4:5")),
+            addr("192.0.2.9:3478"),
+            20,
+        );
+        assert_eq!(n.kind(), NatKind::Cone);
+    }
+
+    #[test]
+    fn a_moved_mapping_measures_again_and_can_turn_symmetric() {
+        let mut n = quiet(false);
+        n.set_servers(&[addr("192.0.2.1:3478"), addr("192.0.2.2:3478")]);
+        let first = collect_sends(&mut n, 0);
+        answer_round(&mut n, &first, &["203.0.113.1:6000", "203.0.113.1:6000"], 5);
+        let keep = collect_sends(&mut n, 5000);
+        assert_eq!(keep.len(), 1);
+        answer_round(&mut n, &keep, &["203.0.113.1:6001"], 5005);
+        // the changed answer forces a full round on the next tick
+        assert_eq!(n.next_deadline(), Some(0));
+        let again = collect_sends(&mut n, 5010);
+        assert_eq!(again.len(), 2);
+        answer_round(
+            &mut n,
+            &again,
+            &["203.0.113.1:6002", "203.0.113.1:6003"],
+            5020,
+        );
+        assert_eq!(n.kind(), NatKind::Symmetric);
+        // observations age out
+        collect_sends(&mut n, 5020 + OBSERVATION_MIN_MS + 80_000);
+        assert!(n.public().is_empty());
+    }
+
+    #[test]
+    fn servers_are_filtered_and_unanswered_requests_expire() {
+        let mut n = quiet(false);
+        n.config.keepalive_ms = 0;
+        let many: Vec<SocketAddr> = (1..=20u8)
+            .map(|i| SocketAddr::new(IpAddr::V4([192, 0, 2, i].into()), 3478))
+            .collect();
+        let mut list = vec![addr("[::ffff:192.0.2.1]:3478"), addr("[2001:db8::1]:3478")];
+        list.extend(&many);
+        n.set_servers(&list);
+        assert_eq!(
+            n.stun_targets.len(),
+            14,
+            "16 taken, the IPv6 one dropped, the mapped one repeated"
+        );
+        assert_eq!(collect_sends(&mut n, 0).len(), 14);
+        assert_eq!(n.asked.len(), 14);
+        collect_sends(&mut n, REQUEST_LIFETIME_MS);
+        assert_eq!(n.asked.len(), 0);
+    }
+
+    #[test]
+    fn punches_repeat_then_stop_or_end_on_an_answer() {
+        let mut n = quiet(false);
+        n.punch(addr("[2001:db8::5]:7000"), 0);
+        n.punch(addr("239.1.1.1:7000"), 0);
+        assert!(n.punch_list.is_empty());
+        let peer = addr("198.51.100.7:7000");
+        n.punch(peer, 100);
+        assert_eq!(n.next_deadline(), Some(100));
+        let mut count = 0;
+        for t in (100..3000).step_by(100) {
+            count += collect_sends(&mut n, t)
+                .iter()
+                .filter(|s| s.0 == peer)
+                .count();
+        }
+        assert_eq!(count, usize::from(PUNCH_REPEATS));
+        assert!(n.punch_list.is_empty());
+        n.punch(peer, 5000);
+        let first = collect_sends(&mut n, 5000);
+        let txid = stun::parse(&first[0].1).unwrap().txid;
+        deliver(
+            &mut n,
+            &stun::binding_success(&txid, addr("192.0.2.50:5101")),
+            peer,
+            5050,
+        );
+        assert!(n.punch_list.is_empty());
+        for i in 0..40u8 {
+            n.punch(
+                SocketAddr::new(IpAddr::V4([198, 51, 100, i + 1].into()), 1),
+                6000,
+            );
+        }
+        assert_eq!(n.punch_list.len(), PUNCH_TARGETS);
+        assert_eq!(
+            n.punch_list[0].to.ip(),
+            IpAddr::V4([198, 51, 100, 9].into())
+        );
+    }
+
+    #[test]
+    fn upnp_outcomes_become_facts_and_news() {
+        let mut n = quiet(false);
+        assert_eq!(n.facts().upnp, Upnp::Off);
+        let (post, inbox) = mpsc::channel();
+        n.mapping = Some(inbox);
+        n.upnp = Upnp::Pending;
+        assert!(n.polling());
+        post.send(upnp::Outcome::Mapped {
+            external_ip: "100.64.1.2".parse().unwrap(),
+            external_port: 5102,
+            lease: upnp::LEASE_SECS,
+        })
+        .unwrap();
+        collect_sends(&mut n, 40);
+        let f = n.facts();
+        assert_eq!(
+            (f.upnp, f.upnp_address),
+            (Upnp::Mapped, Some(addr("100.64.1.2:5102")))
+        );
+        assert!(f.behind_another_nat);
+        assert_eq!(n.upnp_address(), Some("100.64.1.2".parse().unwrap()));
+        assert!(!n.polling());
+        assert_eq!(n.next_deadline(), Some(40 + MAPPING_CHECK_MS));
+        assert!(matches!(
+            n.take_news()[..],
+            [NatNews::Upnp(upnp::Outcome::Mapped { .. })]
+        ));
+        drop(post);
+        collect_sends(&mut n, 50);
+        assert_eq!(
+            n.facts().upnp,
+            Upnp::Mapped,
+            "a finished thread keeps the last outcome"
+        );
+        assert_eq!(n.next_deadline(), None);
+        for (u, s) in [
+            (Upnp::Off, "off"),
+            (Upnp::Pending, "pending"),
+            (Upnp::NotFound, "not_found"),
+            (Upnp::Mapped, "mapped"),
+            (Upnp::Failed, "failed"),
+        ] {
+            assert_eq!(u.as_str(), s);
+        }
+        assert_eq!(NatKind::Symmetric.as_str(), "symmetric");
     }
 }
