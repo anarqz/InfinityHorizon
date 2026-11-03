@@ -234,6 +234,7 @@ impl Game for Fh2 {
             catalog: self.catalog.clone(),
             roster_blocks: BTreeMap::new(),
             dropped: 0,
+            host_seen: std::cell::Cell::new(false),
         };
         Ok((Box::new(world), notices))
     }
@@ -252,6 +253,8 @@ pub struct Fh2World {
     /// with the voice port).
     roster_blocks: BTreeMap<u64, u64>,
     dropped: u64,
+    /// The host's own game synced in an engine at least once (`activity` stays set after).
+    host_seen: std::cell::Cell<bool>,
 }
 
 impl Fh2World {
@@ -444,9 +447,26 @@ impl GameWorld for Fh2World {
         let mut m = Map::new();
         m.insert("peers".into(), json!(peers));
         m.insert("lobbyPlayers".into(), json!(lobby));
-        m.insert("activity".into(), Value::Null);
+        // OD-150: the engine the host's own (loopback) game synced in last; free roam is the only
+        // engine so far, so it is "freeroam" once the host's game is in, null before
+        let host_in = self.is_player
+            && self
+                .engines
+                .get(&EngineKind::FreeRoam)
+                .is_some_and(|e| e.loopback_synced_at().is_some());
+        if host_in {
+            self.host_seen.set(true);
+        }
+        m.insert(
+            "activity".into(),
+            if self.host_seen.get() {
+                json!("freeroam")
+            } else {
+                Value::Null
+            },
+        );
         m.insert("engines".into(), Value::Object(engines));
-        m.insert("hostInWorld".into(), Value::Bool(false));
+        m.insert("hostInWorld".into(), Value::Bool(host_in));
         m
     }
 

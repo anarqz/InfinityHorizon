@@ -141,7 +141,8 @@ engine, in this recommended order:
   reference engine does. The codec's registry (the full §6 catalogue) is for decoding anything.
 - **Acknowledgements** (`engine/wire.rs` `AckWindow`) wrap packet ids at 2^16 with no drop
   window, as the reference engine and the vectors do; the codec's `reliable::ReceiveState`
-  follows §2.3 (modulo 0xffff, the 0x3fff window). The two agree for every id the corpus uses.
+  follows §2.3 (modulo 0xffff, the 0x3fff window). The vectors pass with the engine's window;
+  whether the game needs §2.3's window is a question for the spec, not settled here.
 - **Datagram limit (WINDOWS' rule, 2026-11-02):** packets split only between messages (at most 8
   messages, a 1,189-byte body); a single message over `(1372 - 11) × 8` bits is dropped, never
   sent (`send.oversize_dropped`); a late joiner's catch-up create folds updates only up to
