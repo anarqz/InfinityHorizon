@@ -70,6 +70,12 @@ public static class ConflictReasons
     /// </summary>
     public const string OfficialDirect = "official_direct";
 
+    /// <summary>
+    /// OD-190 (WORLDS_OFFICIAL §11.2): a quick join found no official world of its activity with a free seat (<c>Retry-After: 2</c>).
+    /// Not in <see cref="All"/> until MATCHMAKING_API.md §8 lists it.
+    /// </summary>
+    public const string LobbiesFull = "lobbies_full";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
         Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect];
 

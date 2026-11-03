@@ -28,8 +28,8 @@ public static class AntiCheatPool
 // OD-149 (§3.9): the pineapple pool. Every list marks pineapple worlds (Row: kind bit 1, lock 9 for a clean player); a clean
 // player's join of one is refused with a clear text; an isolated player sees the red notice with the time left and, when its
 // seat in a clean world ends or its clean world closes for the pool, is moved to the first pineapple world it can join, or
-// hosts one (a world an isolated host opens is a pineapple world by the server's rule). Hardcore only: a Noob session never
-// reads or acts on a pool.
+// hosts one (a world an isolated host opens is a pineapple world by the server's rule; OD-190: only this move opens one, never a
+// game's ask). Hardcore only: a Noob session never reads or acts on a pool.
 public sealed partial class WorldsBridge
 {
     /// <summary>How long the automatic move to a pineapple world looks for one (the free roam ask's own budget).</summary>
@@ -122,8 +122,8 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// The move (§3.9 "on the flag"): the free roam ask's own path joins the first pineapple world this player may join (the
-    /// candidates of an isolated player are pineapple worlds only) or opens one, then asks the game to look for free roam
-    /// (<see cref="Session.Frame.FollowHost"/>, which lands it in the new seat or world). One move at a time.
+    /// candidates of an isolated player are pineapple worlds only) or opens one (<see cref="OpenPoolWorldAsync"/>), then asks the game to
+    /// look for free roam (<see cref="Session.Frame.FollowHost"/>, which lands it in the new seat or world). One move at a time.
     /// </summary>
     private void StartPoolMove(string why)
     {
@@ -145,6 +145,10 @@ public sealed partial class WorldsBridge
             using var deadline = new CancellationTokenSource(PoolMoveBudget, _clock);
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_onlineStop.Token, deadline.Token);
             var result = await EnsureFreeRoamWorldAsync(FreeRoamKind.FreeRoam, budget.Token).ConfigureAwait(false);
+            // with no pineapple world to join the move opens one (an isolated host's world is one by the server's rule); OD-190 keeps
+            // this the move's own step, never a game's ask
+            if (result != FreeRoamResult.Ready && OnlineOpen && !HasFreeRoamWorld && Volatile.Read(ref _joinAttempt) == 0)
+                result = await OpenPoolWorldAsync(budget.Token).ConfigureAwait(false);
             if (result == FreeRoamResult.Ready)
                 Volatile.Write(ref _followHost, new Session.Frame.FollowHost(Session.FollowHostLobby.FreeRoam, Public: true));
             else _log($"worlds: no pineapple lobby joined or opened ({result})");
@@ -154,5 +158,15 @@ public sealed partial class WorldsBridge
             _log($"worlds: the move to a pineapple lobby failed ({error.GetType().Name})");
         }
         finally { Volatile.Write(ref _poolMoving, 0); }
+    }
+
+    /// <summary>OD-149: the move's own pineapple lobby, open to everyone with the default name (the CR-L40 lobby of before OD-190).</summary>
+    private async Task<byte> OpenPoolWorldAsync(CancellationToken cancellation)
+    {
+        var name = DefaultLobbyName(_text("worlds.default_name"), Gamertag);
+        var hosted = await CreateAsync(new UiFrame.CreateWorld(name, 0, FreeRoamPlayers, 0), WorldActivities.FreeRoam, cancellation).ConfigureAwait(false);
+        if (hosted.Result != 0) return Decided(FreeRoamKind.FreeRoam, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no pineapple lobby opened: {hosted.Result}");
+        FreeRoamToast("worlds.free_roam_opened", name);
+        return Decided(FreeRoamKind.FreeRoam, FreeRoamResult.Ready, $"opened {HostedWorldId ?? name} (a pineapple lobby for the anti-cheat move)");
     }
 }

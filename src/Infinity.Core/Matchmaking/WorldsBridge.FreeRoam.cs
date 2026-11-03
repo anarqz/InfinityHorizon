@@ -21,16 +21,29 @@ public static class FreeRoamKind
     public const byte RoadTrip = 2;
 }
 
-// CR-L40 §3.2: FREE ROAM ONLINE never lands alone when a lobby is open. Before the game's FreeRoam
-// hopper request the hook asks; the launcher joins the closest matching lobby (the overlay's own join,
-// with its access, game-readiness and mods checks) or opens one for everyone, and says so in a toast.
+// CR-L40 §3.2, OD-190 (WORLDS_OFFICIAL §11.3): before the game's FreeRoam, car meet or Road Trip hopper request the hook asks;
+// a world of its own, or a seat in a world whose host runs that activity now, stays; otherwise the launcher quick joins an
+// official world of the activity (the overlay's own join, with its access, game-readiness and mods checks). It never opens a
+// world for a ticket: a player world exists only when the player creates one.
 public sealed partial class WorldsBridge
 {
-    /// <summary>How many matching lobbies a FREE ROAM ONLINE request tries before it opens one (full or closed answers move on).</summary>
+    /// <summary>How many pineapple lobbies an isolated player's ask tries from the list (OD-149; full or closed answers move on).</summary>
     public const int FreeRoamJoinAttempts = 3;
 
-    /// <summary>The players and latency limit of the lobby FREE ROAM ONLINE opens (any latency).</summary>
+    /// <summary>The players of the pineapple lobby an anti-cheat move opens (OD-149; since OD-190 no game's ask opens one).</summary>
     public const byte FreeRoamPlayers = 8;
+
+    /// <summary>OD-190 (§11.3 item 3): how long a quick join answered <c>lobbies_full</c> keeps retrying before it says so.</summary>
+    public static readonly TimeSpan LobbiesFullBudget = TimeSpan.FromSeconds(10);
+
+    // OD-190: the Retry-After of the last quick join answered lobbies_full, as ticks; -1: the last join was not one
+    private long _lobbiesFullAfter = -1;
+    // OD-190: the seat's world when it is an official one (a quick join's, or a seat read or world read said so)
+    private string? _seatOfficial;
+    // OD-190: the seat's world whose host changed activity while this guest held it (a later other ask "couldn't follow")
+    private string? _hostMovedWorld;
+    // OD-190: the held seat ended because its world closed (the host quit or closed it): the next placement says so
+    private RecentWorld? _hostLeft;
 
     /// <summary>The longest lobby name the server keeps (the Create screen and the dedicated lobby cut there too).</summary>
     public const int MaxLobbyName = 48;
@@ -213,25 +226,26 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>
-    /// FREE ROAM ONLINE is about to ask for its world (the hook's <c>FreeRoamNeed</c>, CR-L40 §3.2): a seat or a
-    /// hosted world answers at once; else the closest matching lobby is joined, else an <c>everyone</c> lobby is opened.
+    /// FREE ROAM ONLINE is about to ask for its world (the hook's <c>FreeRoamNeed</c>, CR-L40 §3.2): a hosted world, or a seat
+    /// whose world runs free roam now, answers at once; else an official free roam world is quick joined (OD-190).
     /// Concurrent asks share one run.
     /// </summary>
     public Task<byte> EnsureFreeRoamWorldAsync(CancellationToken cancellation) => EnsureFreeRoamWorldAsync(FreeRoamKind.FreeRoam, cancellation);
 
     /// <summary>
-    /// As <see cref="EnsureFreeRoamWorldAsync(CancellationToken)"/> for a car meet or an online Road Trip (<see cref="FreeRoamKind"/>):
-    /// the world must run that lobby (its <see cref="WorldView.Lobbies"/>), so a seat in one that does not is left first and
-    /// only such worlds are joined; a world of its own runs both. Asks of one kind share a run; another kind waits for it.
-    /// OD-150: a free roam or Road Trip ask joins only worlds running that activity now (and says so in its join), else opens
-    /// one with it; a car meet ask any activity. A seat is kept whatever its world runs now: the host decides (OD-151).
+    /// As <see cref="EnsureFreeRoamWorldAsync(CancellationToken)"/> for a car meet or an online Road Trip (<see cref="FreeRoamKind"/>).
+    /// OD-190 (WORLDS_OFFICIAL §11.3): a world of its own stays (it changes activity with its host, OD-150); a seat stays while its
+    /// world runs the asked activity now (a player world: its host's activity, or the car meet lobby; an official world: its one
+    /// activity). Otherwise (the player started another activity, the host quit or closed, the guest could not follow the host, or
+    /// no world at all) <c>POST /mm/v1/join {activity}</c> places it in an official world, the server ending the old seat, and the
+    /// game's ticket lands there through the seat. <c>lobbies_full</c> is retried for <see cref="LobbiesFullBudget"/>. No world is
+    /// ever opened for an ask. Asks of one kind share a run; another kind waits for it.
     /// </summary>
     public Task<byte> EnsureFreeRoamWorldAsync(byte kind, CancellationToken cancellation)
     {
         CancelFreeRoamLeave(); // the game left free roam for this ask: its world stays and is weighed here
         if (!OnlineOpen) return Task.FromResult(Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)"));
-        if (HasFreeRoamWorld && (kind == FreeRoamKind.FreeRoam || HostsOrOpensWorld) && UnprovenOtherSeat(kind) is null)
-            return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
+        if (StaysAtOnce(kind)) return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
         lock (_freeRoamState)
         {
             if (_freeRoamRun is { IsCompleted: false } running)
@@ -262,18 +276,93 @@ public sealed partial class WorldsBridge
     // a seat (reserved or seated) or a world of its own, as this bridge last knew them; no request
     private bool HasFreeRoamWorld => _seat.GrantId is not null || HostsOrOpensWorld || Volatile.Read(ref _mineSnapshot).Role != UiWorldRole.None;
 
+    // a world of its own (hosting or opening one): it runs whatever its host's game does (OD-150)
+    private bool OwnWorld => HostsOrOpensWorld || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting;
+
+    // OD-190: the activity a quick join asks for (WorldActivities.Placement)
+    private static string PlacementOf(byte kind) => kind switch
+    {
+        FreeRoamKind.CarMeet => WorldActivities.CarMeet,
+        FreeRoamKind.RoadTrip => WorldActivities.RoadTrip,
+        _ => WorldActivities.FreeRoam,
+    };
+
+    /// <summary>
+    /// OD-190 (§11.3 item 1) with no request: a world of its own, or a seat whose world runs this ask now as the last seat read,
+    /// renewal or quick join said (a free roam ask in a player world not read yet stays too, as before). An unproven seat taken for
+    /// another kind never does (test.11).
+    /// </summary>
+    private bool StaysAtOnce(byte kind) => UnprovenOtherSeat(kind) is null
+        && (OwnWorld || HasFreeRoamWorld && !HostGone(Volatile.Read(ref _seatWorld)) && SeatRunsCached(kind) == true);
+
+    // the seat's world as last read: its host is away (CR-L49: its game quit or left the session)
+    private bool HostGone(string? world)
+    {
+        lock (_mineState) return world is not null && _seatHostAway is { } away && away.WorldId == world && away.Away;
+    }
+
+    /// <summary>Whether the seat's world runs this ask, from the seat reads alone: true, false (an official world), or null (read it).</summary>
+    private bool? SeatRunsCached(byte kind)
+    {
+        if (Volatile.Read(ref _seatWorld) is not { } world) return true; // a seat whose world is not known here stays (as before)
+        string? cached;
+        lock (_mineState) cached = _seatActivity is { } seen && seen.WorldId == world ? seen.Activity : null;
+        if (Volatile.Read(ref _seatOfficial) == world) return cached is null ? null : cached == PlacementOf(kind); // one activity for life
+        if (cached is null) return kind == FreeRoamKind.FreeRoam ? true : null;
+        // a player world: its host's activity now (a car meet runs on its lobby, read); a mismatch is read again before it moves the seat
+        return kind != FreeRoamKind.CarMeet && cached == ActivityOf(kind) ? true : null;
+    }
+
+    /// <summary>
+    /// OD-190 (§11.3): whether the seat's world runs this ask now, read from the server when the seat reads do not say: (stays, why for
+    /// the log, the notice of a move). A world that is gone or whose host is away is the host leaving; one whose host changed activity
+    /// while this guest held it, a guest that could not follow. Anything unknown (a failed read) keeps the seat.
+    /// </summary>
+    private async Task<(bool Stays, string Why, string? Moved)> SeatRunsAsync(byte kind, CancellationToken cancellation)
+    {
+        var placement = PlacementOf(kind);
+        if (Volatile.Read(ref _seatWorld) is not { } world) return (true, "its world is not known here", null);
+        if (HostGone(world)) return (false, $"the host of {world} is away", "worlds.moved_host_left");
+        switch (SeatRunsCached(kind))
+        {
+            case true: return (true, $"it runs {placement}", null);
+            case false: return (false, $"official {world} does not run {placement}", null);
+        }
+        MmResult<WorldView>? view = null;
+        try { view = await _mm.GetAsync(world, cancellation).ConfigureAwait(false); }
+        catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
+        if (view is { Error.Kind: MmErrorKind.WorldNotFound }) return (false, $"{world} closed", "worlds.moved_host_left");
+        if (view is not { Ok: true, Value: { } seated }) return (true, "its world could not be read", null);
+        if (seated.HostAway == true) return (false, $"the host of {world} is away", "worlds.moved_host_left");
+        if (seated.Official == true) Volatile.Write(ref _seatOfficial, world);
+        var runs = seated.Official == true ? seated.Activity == placement
+            : kind == FreeRoamKind.CarMeet ? seated.Lobbies.Contains(LobbyKinds.CarMeet) : seated.Activity == ActivityOf(kind);
+        if (runs) return (true, $"it runs {placement}", null);
+        return (false, $"{world} runs {(kind == FreeRoamKind.CarMeet && seated.Official != true ? "no car meet" : seated.Activity)}, not {placement}",
+            seated.Official != true && Volatile.Read(ref _hostMovedWorld) == world ? "worlds.moved_cannot_follow" : null);
+    }
+
+    /// <summary>OD-190: the held seat ended because its world closed (its host quit or closed it); the next placement says so.</summary>
+    private void ObserveHostLeft(SeatEnded? ended, string? heldGrant)
+    {
+        if (heldGrant is null || ended is not { Reason: SeatEnds.WorldClosed } || ended.GrantId != heldGrant) return;
+        if (Volatile.Read(ref _seatOfficial) == ended.WorldId) return; // an official world closing is not a host leaving
+        Volatile.Write(ref _hostLeft, new RecentWorld(ended.WorldId, Now));
+    }
+
     private async Task<byte> FreeRoamCoreAsync(byte kind, CancellationToken cancellation)
     {
         var lobby = LobbyOf(kind);
         var activity = ActivityOf(kind);
-        if (HasFreeRoamWorld && (lobby is null || HostsOrOpensWorld) && UnprovenOtherSeat(kind) is null) return Decided(kind, FreeRoamResult.Ready, Staying());
+        var placement = PlacementOf(kind);
+        if (StaysAtOnce(kind)) return Decided(kind, FreeRoamResult.Ready, Staying());
         try
         {
             if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no world (online lobbies are not allowed now)");
             if (WireMods().Refusal is { } refusal) return Decided(kind, FreeRoamResult.None, $"no world (mods: {refusal})");
             // test.11: a seat taken for another kind that never played is not this ask's world ("stay" left the game on FINDING
-            // SESSION): it is let go (not on purpose) and this kind joins or opens as usual. No CancelMatchmaking: this ask is
+            // SESSION): it is let go (not on purpose) and this kind is placed as usual. No CancelMatchmaking: this ask is
             // the game's live matchmaking now.
             if (UnprovenOtherSeat(kind) is { } stale)
             {
@@ -281,91 +370,131 @@ public sealed partial class WorldsBridge
                 if (await ReleaseUnprovenSeatAsync(stale.Grant, $"an unproven {KindName(stale.Kind)} seat dropped for a {KindName(kind)} ask").ConfigureAwait(false))
                     _log($"worlds: {KindName(kind)}: dropped the unproven {KindName(stale.Kind)} seat in {staleWorld}; joining again");
             }
-            if (lobby is not null && _seat.GrantId is not null)
+            if (OwnWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
+            string? moved = null;
+            if (_seat.GrantId is not null)
             {
-                // seated in a world whose server does not run this lobby: its ticket would land nowhere, so the seat is let go
-                // and a world that runs it is joined or opened. Only a read that shows it: anything unknown keeps the seat.
-                if (Volatile.Read(ref _seatWorld) is not { } seatWorld) return Decided(kind, FreeRoamResult.Ready, Staying("its world is not known here"));
-                MmResult<WorldView>? view = null;
-                try { view = await _mm.GetAsync(seatWorld, cancellation).ConfigureAwait(false); }
-                catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
-                if (view is not { Ok: true, Value: { } seated }) return Decided(kind, FreeRoamResult.Ready, Staying("its world could not be read"));
-                if (seated.Lobbies.Contains(lobby)) return Decided(kind, FreeRoamResult.Ready, Staying($"it runs {lobby}"));
-                await LeaveForLobbyAsync($"the seat's world does not run {lobby}", cancellation).ConfigureAwait(false);
-                _log($"worlds: {KindName(kind)}: left {seatWorld}: it does not run {lobby}; finding a world that does");
+                // OD-190 (§11.3 item 1): a seat whose world runs this ask stays; otherwise the quick join below moves it (the server
+                // ends the old seat in the same transaction; with no free official world the seat is kept)
+                var seatWorld = Volatile.Read(ref _seatWorld) ?? "its seat";
+                var (stays, why, notice) = await SeatRunsAsync(kind, cancellation).ConfigureAwait(false);
+                if (stays) return Decided(kind, FreeRoamResult.Ready, Staying(why));
+                moved = notice;
+                _log($"worlds: {KindName(kind)}: leaving {seatWorld}: {why}; quick join {placement}");
             }
-            List<(WorldView World, LobbyRow Row)> candidates = [];
-            try
-            {
-                var read = await ReadLobbiesAsync(WorldFilters.Every, notFull: true, cancellation).ConfigureAwait(false);
-                // open lobbies may exist: a transient failure never splits players into a new one
-                if (read.FailureKey is { } failure) return Decided(kind, FreeRoamResult.None, $"no world (the lobby list failed: {failure})");
-                // matching rows the player enters without a code: everyone's or Supporters' (the server's canJoin; OD-129 opens both to every ticket;
-                // OD-181: whatever their mods)
-                candidates = OrderLobbies(read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked))))
-                    .Where(r => Matching(r.Row) && !r.World.NeedsCode
-                        && r.World.Audience is WorldAudiences.Everyone or WorldAudiences.Supporters
-                        && (lobby is null || r.World.Lobbies.Contains(lobby))
-                        // OD-150: a free roam or Road Trip ask joins a world running that now; a car meet ask any world that runs one
-                        && (activity is null || r.World.Activity == activity)
-                        // OD-149: a player the anti-cheat system isolated plays only in pineapple worlds (the server refuses the rest)
-                        && (!Isolated || r.World.Pool))
-                    .Take(FreeRoamJoinAttempts).ToList();
-            }
-            catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested)
-            {
-                return Decided(kind, FreeRoamResult.None, $"no world (the lobby list failed: {error.GetType().Name})");
-            }
-            // the world the game left moments ago comes first (whatever its audience), so a retry never splits the players into a new lobby
+            else if (Interlocked.Exchange(ref _hostLeft, null) is { } left && Now - left.LeftAt <= RejoinWindow) moved = "worlds.moved_host_left";
+            // the player world the game left moments ago comes first (a failed car meet step retries at once), so a retry never
+            // splits its players; an official one is placed again by activity
             if (Interlocked.Exchange(ref _recentlyLeft, null) is { } recent && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld
-                && (lobby is null && !Isolated || candidates.Any(c => c.World.Id == recent.WorldId)))
+                && lobby is null && !Isolated && moved is null && Volatile.Read(ref _seatOfficial) != recent.WorldId)
             {
                 cancellation.ThrowIfCancellationRequested();
                 var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, cancellation, kind).ConfigureAwait(false);
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
                 _log($"worlds: {KindName(kind)}: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
-                candidates = [.. candidates.Where(c => c.World.Id != recent.WorldId)];
             }
-            // a world the player left on purpose is not where its next lobby search sends it
-            if (Volatile.Read(ref _leftOnPurpose) is { } avoided && Now - avoided.LeftAt <= RejoinWindow)
-                candidates = [.. candidates.Where(c => c.World.Id != avoided.WorldId)];
-            foreach (var (world, _) in candidates)
-            {
-                if (HasFreeRoamWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
-                cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join or open past it
-                var joined = await JoinAsync(new UiFrame.JoinWorld(world.Id, string.Empty), activity, cancellation, kind).ConfigureAwait(false);
-                if (joined.Result == UiJoin.Reserved)
-                {
-                    FreeRoamToast("worlds.free_roam_joined", world.Name);
-                    return Decided(kind, FreeRoamResult.Ready, $"joined {world.Id}");
-                }
-                if (joined.Result is not (UiJoin.Full or UiJoin.Closed))
-                {
-                    // the player's own join in flight (SlowDown), a seat this bridge does not know (already in a
-                    // lobby), access or mods: opening a lobby now could leave the profile both seated and hosting
-                    return HasFreeRoamWorld ? Decided(kind, FreeRoamResult.Ready, Staying($"join of {world.Id} refused ({joined.Result})"))
-                        : Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no world (join of {world.Id} refused: {joined.Result})");
-                }
-                _log($"worlds: {KindName(kind)}: {world.Id} refused ({joined.Result}); trying the next lobby");
-            }
-            if (HasFreeRoamWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
-            if (Volatile.Read(ref _joinAttempt) != 0) return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
-            if (!OnlineOpen) return Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)");
-            cancellation.ThrowIfCancellationRequested();
-            var name = DefaultLobbyName(_text("worlds.default_name"), Gamertag);
-            var hosted = await CreateAsync(new UiFrame.CreateWorld(name, 0, FreeRoamPlayers, 0), activity, cancellation).ConfigureAwait(false);
-            if (hosted.Result == 0)
-            {
-                FreeRoamToast("worlds.free_roam_opened", name);
-                return Decided(kind, FreeRoamResult.Ready, $"opened {HostedWorldId ?? name}{(candidates.Count == 0 ? " (no matching lobby)" : " (every matching lobby refused)")}");
-            }
-            return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no world (no lobby opened: {hosted.Result})");
+            // OD-149: an isolated player (or one the anti-cheat move is moving) plays in pineapple player worlds only, and an official
+            // world never is one (§2.9)
+            if (Isolated || Volatile.Read(ref _poolMoving) != 0)
+                return await PoolJoinAsync(kind, lobby, activity, cancellation).ConfigureAwait(false)
+                    ?? Decided(kind, FreeRoamResult.None, "no world (isolated: no pineapple lobby to join)");
+            return await QuickJoinAsync(kind, moved, cancellation).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested || !OnlineOpen)
         {
             return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, OnlineOpen ? "no world (the game stopped waiting)" : "no world (online is closed)");
         }
+    }
+
+    /// <summary>
+    /// OD-190 (§11.2, §11.3): <c>POST /mm/v1/join {activity}</c> through the overlay's own join (its grant, socket proof context and
+    /// relay leg, so the game's ticket lands in the new world). <c>lobbies_full</c> waits its <c>Retry-After</c> (1-5 s) and asks again
+    /// for <see cref="LobbiesFullBudget"/>, then says "All Infinity lobbies are full". <paramref name="moved"/>: the notice of a move.
+    /// </summary>
+    private async Task<byte> QuickJoinAsync(byte kind, string? moved, CancellationToken cancellation)
+    {
+        var placement = PlacementOf(kind);
+        var waited = TimeSpan.Zero;
+        while (true)
+        {
+            if (OwnWorld) return Decided(kind, FreeRoamResult.Ready, Staying()); // the player opened a world meanwhile
+            if (Volatile.Read(ref _joinAttempt) != 0) return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
+            if (!OnlineOpen) return Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)");
+            cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join past it
+            Volatile.Write(ref _lobbiesFullAfter, -1);
+            var joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty, string.Empty), placement, cancellation, kind).ConfigureAwait(false);
+            if (joined.Result == UiJoin.Reserved)
+            {
+                var world = Volatile.Read(ref _seatWorld);
+                if (world is not null)
+                {
+                    Volatile.Write(ref _seatOfficial, world);
+                    lock (_mineState) _seatActivity = (world, placement);
+                }
+                if (moved is not null) _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60, _text(moved)));
+                return Decided(kind, FreeRoamResult.Ready, $"joined {world ?? "an official world"} (quick join {placement}{(moved is null ? string.Empty : ", " + moved)})");
+            }
+            if (Interlocked.Exchange(ref _lobbiesFullAfter, -1) is var ticks and >= 0)
+            {
+                var after = TimeSpan.FromTicks(Math.Clamp(ticks, TimeSpan.TicksPerSecond, 5 * TimeSpan.TicksPerSecond));
+                if (waited + after > LobbiesFullBudget)
+                {
+                    _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.lobbies_full")));
+                    return Decided(kind, FreeRoamResult.None, $"no world (every official {placement} world was full for {(int)waited.TotalSeconds} s)");
+                }
+                _log($"worlds: {KindName(kind)}: every official {placement} world is full; asking again in {(int)after.TotalSeconds} s");
+                await Task.Delay(after, _clock, cancellation).ConfigureAwait(false);
+                waited += after;
+                continue;
+            }
+            return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no world (quick join {placement} refused: {joined.Result})");
+        }
+    }
+
+    /// <summary>
+    /// OD-149: an isolated player's ask joins the closest pineapple player world from the list that runs it (at most
+    /// <see cref="FreeRoamJoinAttempts"/>; full or closed answers move on). Null: none joined.
+    /// </summary>
+    private async Task<byte?> PoolJoinAsync(byte kind, string? lobby, string? activity, CancellationToken cancellation)
+    {
+        List<(WorldView World, LobbyRow Row)> candidates;
+        try
+        {
+            var read = await ReadLobbiesAsync(WorldFilters.Every, notFull: true, cancellation).ConfigureAwait(false);
+            if (read.FailureKey is { } failure) { _log($"worlds: {KindName(kind)}: no pineapple lobby read ({failure})"); return null; }
+            candidates = OrderLobbies(read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked))))
+                .Where(r => Matching(r.Row) && !r.World.NeedsCode && r.World.Pool
+                    && r.World.Audience is WorldAudiences.Everyone or WorldAudiences.Supporters
+                    && (lobby is null || r.World.Lobbies.Contains(lobby))
+                    // OD-150: a free roam or Road Trip ask joins a world running that now; a car meet ask any world that runs one
+                    && (activity is null || r.World.Activity == activity))
+                .Take(FreeRoamJoinAttempts).ToList();
+        }
+        catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested)
+        {
+            _log($"worlds: {KindName(kind)}: no pineapple lobby read ({error.GetType().Name})");
+            return null;
+        }
+        // a world the player left on purpose is not where its next lobby search sends it
+        if (Volatile.Read(ref _leftOnPurpose) is { } avoided && Now - avoided.LeftAt <= RejoinWindow)
+            candidates = [.. candidates.Where(c => c.World.Id != avoided.WorldId)];
+        foreach (var (world, _) in candidates)
+        {
+            if (HasFreeRoamWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
+            cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join past it
+            var joined = await JoinAsync(new UiFrame.JoinWorld(world.Id, string.Empty), activity, cancellation, kind).ConfigureAwait(false);
+            if (joined.Result == UiJoin.Reserved)
+            {
+                FreeRoamToast("worlds.free_roam_joined", world.Name);
+                return Decided(kind, FreeRoamResult.Ready, $"joined {world.Id}");
+            }
+            if (joined.Result is not (UiJoin.Full or UiJoin.Closed))
+                return HasFreeRoamWorld ? Decided(kind, FreeRoamResult.Ready, Staying($"join of {world.Id} refused ({joined.Result})"))
+                    : Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no world (join of {world.Id} refused: {joined.Result})");
+            _log($"worlds: {KindName(kind)}: {world.Id} refused ({joined.Result}); trying the next lobby");
+        }
+        return HasFreeRoamWorld ? Decided(kind, FreeRoamResult.Ready, Staying()) : null;
     }
 
     /// <summary>The seat is let go to find a world that runs the asked lobby (not "on purpose": that world may come back later).</summary>
@@ -388,17 +517,22 @@ public sealed partial class WorldsBridge
     /// <summary>
     /// OD-151: a seat's world changed activity (its host's game went into a Road Trip or back to free roam): the guest follows
     /// the host, so the seat stays and a toast says what the host runs now. The first read of a seat only records it; the
-    /// host's own world never toasts. Called under <c>_mineState</c> with each seat read and renewal.
+    /// host's own world never toasts. Called under <c>_mineState</c> with each seat read and renewal. OD-190: an official world's
+    /// one activity is recorded (a later ask for another moves the seat) and never toasts.
     /// </summary>
     private void ObserveActivity(Seat seat)
     {
         ObserveHostAway(seat); // CR-L49: a guest is told once when its host goes away
         if (seat.State == SeatStates.Hosting || seat.World.Id != seat.WorldId) { _seatActivity = null; return; }
+        var official = seat.World.Official == true;
+        if (official) Volatile.Write(ref _seatOfficial, seat.WorldId);
         var activity = seat.World.Activity;
-        if (activity is not (WorldActivities.FreeRoam or WorldActivities.RoadTrip)) return; // a value this launcher does not know
-        if (_seatActivity is { } last && last.WorldId == seat.WorldId && last.Activity != activity)
+        if (!WorldActivities.Placement.Contains(activity)) return; // a value this launcher does not know
+        if (_seatActivity is { } last && last.WorldId == seat.WorldId && last.Activity != activity && !official
+            && WorldActivities.All.Contains(last.Activity) && WorldActivities.All.Contains(activity))
         {
             _log($"worlds: activity {last.Activity} -> {activity} in {seat.WorldId} (the host's)");
+            Volatile.Write(ref _hostMovedWorld, seat.WorldId); // OD-190: a later ask for another activity could not follow the host
             _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60,
                 _text("worlds.host_activity").Replace("{mode}", ActivityName(activity), StringComparison.Ordinal)));
             // OD-151 follow-up: the guest's game starts its own matchmaking for the host's activity (the player confirms with (X))
