@@ -56,6 +56,8 @@ type Log = Arc<Mutex<Vec<(String, String)>>>;
 /// How the fake answers `POST …/game-sessions`: a status (201 with a `GameModeSession`, anything
 /// else a refusal), or `HANG` (no answer for 16 s, past the agent's 14 s budget).
 const HANG: u16 = 0;
+/// The group world the fake server opens for a car meet session (WORLDS_OFFICIAL.md §11.4).
+const GROUP_WORLD: &str = "01900000-0000-7000-8000-0000000000a1";
 
 /// The fake server: answers until the test ends; records (method, target) of verified calls.
 fn fake(listener: TcpListener, log: Log, sessions: u16) {
@@ -162,7 +164,12 @@ fn serve(stream: TcpStream, log: Log, sessions: u16) {
                             json!({"kind": "freeroam", "scid": "788f0100-a4bc-46c3-b19b-d1001a96545b",
                                 "templateName": "defaulttemplate",
                                 "name": format!("fh2inf-invite-{}-{}", w.replace('-', ""), "0".repeat(32)),
-                                "members": [XUID]}),
+                                "members": [XUID],
+                                "world": {"worldId": GROUP_WORLD, "activity": "freeroam"}}),
+                        ),
+                        409 => (
+                            409,
+                            json!({"code": "PORTAL.CONFLICT", "message": "no", "details": {"reason": "max_worlds"}}),
                         ),
                         status => (
                             status,
@@ -337,19 +344,27 @@ fn an_invalid_setting_refuses_the_start_with_a_stable_id() {
     assert!(!String::from_utf8_lossy(&out.stdout).contains("198.51.100.7"));
 }
 
-/// OD-190: an official car meet lobby (`carmeet`, both modes) opens, and the §4.4 game session
-/// goes engine → agent → `POST …/game-sessions` → `world.gameSession.answer` → engine; a refusal
+/// OD-190/OD-191: an official car meet lobby (`carmeet`, both modes) opens, and the §4.4 game
+/// session goes engine → agent → `POST …/game-sessions` → the group world opened on the engine
+/// (then announced) → `world.gameSession.answer` → engine; Road Trip without a catalog, a refusal
 /// and a call past the 14 s budget answer `session: null`. The engine's request is the
 /// test-hooks synthetic one (`FI_DS_TEST_GAME_SESSION_XUIDS`): a real one needs a game.
 #[cfg(feature = "test-hooks")]
 #[test]
 fn a_car_meet_lobby_opens_and_answers_its_game_session_end_to_end() {
-    for (status, outcome, given) in [
-        (201, "created", true),
-        (400, "refused", false),
-        (HANG, "timeout", false),
+    // (the fake's answer, the request's kind, the agent's outcome, a session given, calls made);
+    // Road Trip without a catalog is never asked for (OD-191)
+    for (status, kind, outcome, given, posts) in [
+        (201, "freeroam", "created", true, 1),
+        (201, "roadtrip", "not_served", false, 0),
+        (400, "freeroam", "refused", false, 1),
+        (409, "freeroam", "not_served", false, 1),
+        (HANG, "freeroam", "timeout", false, 1),
     ] {
-        let dir = std::env::temp_dir().join(format!("fi-agent-cm-{}-{status}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "fi-agent-cm-{}-{status}-{kind}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let key = dir.join("agent.key");
@@ -373,6 +388,7 @@ fn a_car_meet_lobby_opens_and_answers_its_game_session_end_to_end() {
             .env("FI_WORLDS_MODES", "noob")
             .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
             .env("FI_DS_TEST_GAME_SESSION_XUIDS", XUID)
+            .env("FI_DS_TEST_GAME_SESSION_KIND", kind)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -396,17 +412,37 @@ fn a_car_meet_lobby_opens_and_answers_its_game_session_end_to_end() {
         assert_eq!(opened["mode"], "noob", "{opened}");
         let world = opened["world"].as_str().unwrap().to_string();
         // the engine's note and the agent's line come from two processes: either order
-        let (mut answered, mut note) = (None, None);
+        let (mut answered, mut note, mut group) = (None, None, None);
         while answered.is_none() || note.is_none() {
             let v = wait_line(&rx, "agent.game_session and debug.game_session", |v| {
                 v["ev"] == "agent.game_session"
                     || (v["ev"] == "world.note" && v["note"] == "debug.game_session")
+                    || (v["ev"] == "agent.world.opened" && v["group"] == true)
             });
             if v["ev"] == "agent.game_session" {
                 answered = Some(v);
+            } else if v["ev"] == "agent.world.opened" {
+                assert!(
+                    answered.is_none(),
+                    "the group world opens before the answer"
+                );
+                group = Some(v);
             } else {
                 note = Some(v);
             }
+        }
+        // §11.4: a made session's group world is open on the engine before the answer
+        assert_eq!(
+            group.as_ref().map(|g| g["world"].clone()),
+            given.then(|| json!(GROUP_WORLD)),
+            "{group:?}"
+        );
+        if given {
+            assert_eq!(group.as_ref().unwrap()["activity"], "freeroam");
+            // and is announced like the others (its punches admit its players)
+            wait_line(&rx, "the group world's admission", |v| {
+                v["ev"] == "agent.world.admission" && v["world"] == GROUP_WORLD
+            });
         }
         let (answered, note) = (answered.unwrap(), note.unwrap());
         assert_eq!(answered["world"], world.as_str(), "{answered}");
@@ -439,9 +475,18 @@ fn a_car_meet_lobby_opens_and_answers_its_game_session_end_to_end() {
                 .iter()
                 .filter(|(m, t)| m == "POST" && *t == sessions)
                 .count(),
-            1,
+            posts,
             "{calls:?}"
         );
+        if given {
+            let group = format!("/mm/v1/official/worlds/{GROUP_WORLD}");
+            let at = |m: &str, t: &str| calls.iter().position(|(cm, ct)| cm == m && ct == t);
+            let posted = at("POST", &sessions).unwrap();
+            let announced = at("POST", &format!("{group}/announce")).expect("group announce");
+            assert!(posted < announced, "{calls:?}");
+            assert!(at("PUT", &group).is_none(), "the server opened it: no PUT");
+            assert!(at("DELETE", &group).is_some(), "closed with the agent");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

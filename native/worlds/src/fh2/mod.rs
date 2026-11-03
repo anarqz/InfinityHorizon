@@ -519,6 +519,10 @@ impl Fh2World {
                     self.voice_blocks.clone(),
                 )),
             )?;
+            // OD-191: the official car meet lobby asks for Road Trip sessions too
+            if self.activity == Some(Activity::CarMeet) {
+                e.serve_road_trip_invites(true);
+            }
             // the world's voice and watch apply to every engine, made now or later
             e.set_voice(self.voice.mode, &self.voice.lobby_muted);
             if self.watch.is_some() {
@@ -735,7 +739,7 @@ impl Fh2World {
         }
         for (kind, request, why) in requests {
             match request {
-                Some((id, _invite, xuids)) => {
+                Some((id, invite, xuids)) => {
                     let rid = self.next_rid;
                     self.next_rid = self.next_rid.wrapping_add(1).max(1);
                     if self.sessions.len() >= MAX_SESSIONS
@@ -747,7 +751,13 @@ impl Fh2World {
                     let xuids: Vec<String> = xuids.iter().map(u64::to_string).collect();
                     let mut body = Map::new();
                     body.insert("rid".into(), json!(rid));
-                    body.insert("kind".into(), json!("freeroam"));
+                    // only served invitation types reach here (carmeet.rs): 1 free roam, 2 Road Trip
+                    let kind = if invite == engine::INVITE_ROAD_TRIP {
+                        "roadtrip"
+                    } else {
+                        "freeroam"
+                    };
+                    body.insert("kind".into(), json!(kind));
                     body.insert("xuids".into(), json!(xuids));
                     self.events.push(GameEvent::Custom {
                         ev: events::GAME_SESSION_REQUEST,
@@ -889,7 +899,7 @@ impl Fh2World {
         self.debug_session.rids.push(rid);
         let mut body = Map::new();
         body.insert("rid".into(), json!(rid));
-        body.insert("kind".into(), json!("freeroam"));
+        body.insert("kind".into(), json!(self.debug_session.kind));
         body.insert("xuids".into(), json!(xuids));
         self.events.push(GameEvent::Custom {
             ev: events::GAME_SESSION_REQUEST,
@@ -1119,7 +1129,8 @@ impl GameWorld for Fh2World {
 
 /// test-hooks only (never in a release build): a public car meet lobby raises one synthetic
 /// `world.gameSession.request` a few seconds after it opens, for the XUIDs in
-/// `FI_DS_TEST_GAME_SESSION_XUIDS`, and takes its answer with a `world.note`
+/// `FI_DS_TEST_GAME_SESSION_XUIDS` (its `kind` from `FI_DS_TEST_GAME_SESSION_KIND`, default
+/// `freeroam`), and takes its answer with a `world.note`
 /// (`debug.game_session`, `[session given]`). The agent's end-to-end test drives the §4.4 round
 /// trip with it without a game.
 #[cfg(feature = "test-hooks")]
@@ -1127,12 +1138,14 @@ mod debug {
     use super::Activity;
 
     pub const ENV: &str = "FI_DS_TEST_GAME_SESSION_XUIDS";
+    pub const KIND_ENV: &str = "FI_DS_TEST_GAME_SESSION_KIND";
     pub const NOTE: &str = "debug.game_session";
     const DELAY_MS: u64 = 3000;
 
     #[derive(Debug, Default)]
     pub struct DebugSession {
         pub xuids: Option<Vec<String>>,
+        pub kind: String,
         due: std::cell::Cell<Option<u64>>,
         pub rids: Vec<u32>,
     }
@@ -1152,6 +1165,7 @@ mod debug {
                 .filter(|v| !v.is_empty());
             DebugSession {
                 xuids,
+                kind: std::env::var(KIND_ENV).unwrap_or_else(|_| "freeroam".into()),
                 ..DebugSession::default()
             }
         }

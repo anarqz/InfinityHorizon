@@ -37,12 +37,22 @@ pub enum Input {
     GameSession(u64, SessionAnswer),
 }
 
+/// A `GameModeSession` answer of the agent's route (WORLDS_OFFICIAL.md §11.4): the MPSD session's
+/// `name`/`templateName` and the new group world the server opened for its players.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MadeSession {
+    pub name: String,
+    pub template: String,
+    pub world: String,
+    pub activity: &'static str,
+}
+
 /// What the game-session call came back with, for `world.gameSession.answer`.
 pub struct SessionAnswer {
     pub world: String,
     pub rid: u64,
-    /// `{name, templateName}`, or the refusal's code (`refused`, `network`, `body`).
-    pub session: Result<(String, String), &'static str>,
+    /// The session and its group world, or the refusal's code (`refused`, `network`, `body`).
+    pub session: Result<MadeSession, &'static str>,
     pub status: Option<u16>,
 }
 
