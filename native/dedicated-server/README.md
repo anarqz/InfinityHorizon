@@ -31,12 +31,16 @@ FIUP challenge nonce).
 
 ```sh
 cargo build --release                                    # Linux (the VM: add --target x86_64-unknown-linux-musl)
+cargo build --release --target x86_64-pc-windows-msvc    # Windows (the launcher's build; MSVC linker)
 cargo build --release --target x86_64-pc-windows-gnu     # Windows, from Linux (needs a MinGW or zig linker)
 ```
 
 Set `DS_COMMIT=<40 lowercase hex>` when building to stamp the commit that `--version` and
-`hello.build.commit` report (40 zeros otherwise). The Windows executable's VERSIONINFO
-(`FileDescription` "Infinity world server") is added by the launcher's build.
+`hello.build.commit` report (40 zeros otherwise). On `x86_64-pc-windows-msvc`, `build.rs` writes the
+executable's VERSIONINFO (`FileDescription` "Infinity world server", contract §2.4) as a compiled
+`.res` that the MSVC linker takes directly: no resource compiler and no extra dependency.
+`DS_PRODUCT_VERSION` (the launcher's version, e.g. `2.0.5`) sets its product and file versions
+(the crate version otherwise). Other targets carry no VERSIONINFO.
 
 ## Run
 
