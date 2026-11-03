@@ -340,6 +340,10 @@ impl Engine {
             self.doom(serial, Why::HistoryEntries);
             return Ok(());
         }
+        // AC-2: a watching host measures the other players' cars
+        if let Some((_, body)) = &car_now {
+            self.watch_car(serial, body);
+        }
         self.forward(serial, forward, true);
         self.forward_cars(serial, car_now, cars);
         // after the relayed objects: a PlayerState create precedes the 65 that names it
@@ -505,6 +509,8 @@ impl Engine {
                     }
                     if obj.router == 1 {
                         self.observe_car_choice(serial, &obj.payload);
+                        // NR-6: a watching host checks the others' parts
+                        self.watch_player_object(serial, obj.create, &obj.payload);
                     }
                 }
                 Err(fault) => {
