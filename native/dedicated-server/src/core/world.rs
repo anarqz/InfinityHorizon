@@ -58,7 +58,10 @@ impl Default for NetworkSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenSpec {
     pub game: String,
+    /// A `player` host's XUID; 0 for an `official` host (no player XUID, contract §6.3).
     pub host_xuid: u64,
+    /// An `official` host's VM id (`official:<vmId>`); `None` for a `player` host.
+    pub official: Option<String>,
     pub is_player: bool,
     pub max_players: u8,
     pub require_proof: bool,
@@ -77,15 +80,35 @@ pub fn game_of<'a>(o: Obj<'a>) -> Result<&'a str, CmdError> {
 
 pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
     let game = game_of(o)?.to_string();
+    // OD-186 item 7: a tagged host; private worlds take only `player`, public only `official`
     let host = Obj::new(o.obj("host")?, "host");
-    let host_xuid = host.xuid("xuid")?;
-    if host_xuid == 0 {
-        return Err(host.bad("xuid"));
+    match (host.str("kind")?, profile) {
+        ("player", Profile::Private) => {}
+        ("official", Profile::Public) => {}
+        _ => return Err(host.bad("kind")),
     }
-    let is_player = host.bool("isPlayer")?;
-    if is_player && profile == Profile::Public {
-        return Err(host.bad("isPlayer"));
-    }
+    let (host_xuid, official, is_player) = if profile == Profile::Public {
+        let vm = host.str("vmId")?;
+        if !(1..=64).contains(&vm.len())
+            || !vm
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(host.bad("vmId"));
+        }
+        // how grants name `official:<vmId>` is S34's (contract §6.3, §15 Q1): until then an
+        // official world is refused; the private tests' build opens it to exercise the caps
+        if !cfg!(feature = "test-hooks") {
+            return Err(host.bad("kind").reason("grant_form_pending"));
+        }
+        (0, Some(vm.to_string()), false)
+    } else {
+        let xuid = host.xuid("xuid")?;
+        if xuid == 0 {
+            return Err(host.bad("xuid"));
+        }
+        (xuid, None, host.bool("isPlayer")?)
+    };
     let max_players = o.int("maxPlayers", 1, 12)? as u8;
     // public worlds: proof forced (contract §4.3)
     let require_proof = o.bool("requireProof")? || profile == Profile::Public;
@@ -129,6 +152,7 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
     Ok(OpenSpec {
         game,
         host_xuid,
+        official,
         is_player,
         max_players,
         require_proof,
@@ -287,10 +311,47 @@ impl World {
         }
     }
 
-    /// The common snapshot checks of `world.context` and `world.admission`.
-    fn snapshot(&mut self, o: Obj, ctx: &mut Ctx) -> Result<(u64, usize), CmdError> {
+    /// `world.context` (the context only, never punches; contract §4.3): the checks of §6.2, the
+    /// clock and the 45 s host lease (only this renews it). Any failure clears admission.
+    pub fn context(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
+        let server_ms = o.int("serverTimeMs", 0, JSON_INT_MAX)?;
+        let world = Obj::new(o.obj("world")?, "world");
+        let id = world.str("id")?;
+        let game = world.str("game")?;
+        let host = Obj::new(world.obj("host")?, "world.host");
+        let host_xuid = host.str("xuid")?;
+        if ctx.keys_empty {
+            self.clear_admission(ctx, "no_keys");
+            return Err(CmdError::code(proto::NO_KEYS));
+        }
+        let host_ok = match &self.spec.official {
+            Some(vm) => host_xuid.strip_prefix("official:") == Some(vm.as_str()),
+            None => parse_xuid(host_xuid).is_some_and(|x| x != 0 && x == self.spec.host_xuid),
+        };
+        if !host_ok || game != self.spec.game || id != self.id {
+            self.clear_admission(ctx, "context");
+            return Err(CmdError::code(proto::CONTEXT_INVALID).reason("context"));
+        }
+        self.clock.observe(server_ms, ctx.now);
+        let now = self.clock.now(ctx.now).unwrap_or(server_ms);
+        let until = now + HOST_LEASE_MS;
+        self.admission.has_context = true;
+        self.admission.lease_until = Some(until);
+        self.admission.lapse_noticed = false;
+        let mut m = Map::new();
+        m.insert("leaseUntilMs".into(), json!(until));
+        Ok(m)
+    }
+
+    /// `world.admission` (punches only): a new snapshot that never renews the lease; more than
+    /// 256 punches or no context yet clears admission (fail closed).
+    pub fn admission(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
         let server_ms = o.int("serverTimeMs", 0, JSON_INT_MAX)?;
         let punches = o.arr("punches")?;
+        if !self.admission.has_context {
+            self.clear_admission(ctx, "no_context");
+            return Err(CmdError::code(proto::CONTEXT_INVALID).reason("no_context"));
+        }
         if punches.len() > PUNCHES_MAX || punches.iter().any(|p| !p.is_object()) {
             self.clear_admission(ctx, "punches");
             return Err(CmdError::code(proto::CONTEXT_INVALID).reason("punches"));
@@ -299,57 +360,15 @@ impl World {
             self.clear_admission(ctx, "no_keys");
             return Err(CmdError::code(proto::NO_KEYS));
         }
-        Ok((server_ms, punches.len()))
-    }
-
-    fn snapshot_reply(&self) -> Map<String, Value> {
+        self.clock.observe(server_ms, ctx.now);
+        self.admission.punches = punches.len();
+        self.admission.grants = 0;
+        self.admission.legs = 0;
         let mut m = Map::new();
         m.insert("admitted".into(), json!(self.admission.grants));
         m.insert("legs".into(), json!(self.admission.legs));
         m.insert("proofGrants".into(), json!(0));
-        m
-    }
-
-    /// `world.context`: the checks of §6.2 (the game named by the context must be the world's),
-    /// the lease renewal, the snapshot (verification not ported: every punch is skipped).
-    pub fn context(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
-        let world = Obj::new(o.obj("world")?, "world");
-        let id = world.str("id")?;
-        let game = world.str("game")?;
-        let host = Obj::new(world.obj("host")?, "world.host");
-        let host_xuid = host.str("xuid")?;
-        let (server_ms, punches) = self.snapshot(o, ctx)?;
-        let host_ok = parse_xuid(host_xuid).is_some_and(|x| x != 0 && x == self.spec.host_xuid);
-        if !host_ok || game != self.spec.game || id != self.id {
-            self.clear_admission(ctx, "context");
-            return Err(CmdError::code(proto::CONTEXT_INVALID).reason("context"));
-        }
-        self.clock.observe(server_ms, ctx.now);
-        let now = self.clock.now(ctx.now).unwrap_or(server_ms);
-        self.admission.has_context = true;
-        self.admission.lease_until = Some(now + HOST_LEASE_MS);
-        self.admission.lapse_noticed = false;
-        self.admission.punches = punches;
-        self.admission.grants = 0;
-        self.admission.legs = 0;
-        Ok(self.snapshot_reply())
-    }
-
-    /// `world.admission`: a new snapshot without renewing the lease.
-    pub fn admission(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
-        if !self.admission.has_context {
-            // the shape first, so a malformed request stays bad_request
-            o.int("serverTimeMs", 0, JSON_INT_MAX)?;
-            o.arr("punches")?;
-            self.clear_admission(ctx, "no_context");
-            return Err(CmdError::code(proto::CONTEXT_INVALID).reason("no_context"));
-        }
-        let (server_ms, punches) = self.snapshot(o, ctx)?;
-        self.clock.observe(server_ms, ctx.now);
-        self.admission.punches = punches;
-        self.admission.grants = 0;
-        self.admission.legs = 0;
-        Ok(self.snapshot_reply())
+        Ok(m)
     }
 
     pub fn admission_end(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
