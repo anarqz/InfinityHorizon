@@ -519,9 +519,9 @@ impl Fh2World {
                     self.voice_blocks.clone(),
                 )),
             )?;
-            // OD-191: the official car meet lobby asks for Road Trip sessions too
+            // OD-190/OD-191: the official car meet lobby (Road Trip sessions, JoinTypes)
             if self.activity == Some(Activity::CarMeet) {
-                e.serve_road_trip_invites(true);
+                e.set_official_car_meet(true);
             }
             // the world's voice and watch apply to every engine, made now or later
             e.set_voice(self.voice.mode, &self.voice.lobby_muted);
