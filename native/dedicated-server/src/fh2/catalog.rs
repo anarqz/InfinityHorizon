@@ -318,14 +318,17 @@ impl CatalogStore {
             return PartsLookup::Unknown;
         }
         // the cheapest refusals first: the peer's, then the world's, then the process's
-        let open = |w: &(u64, usize), span: u64, cap: usize| {
-            now.saturating_sub(w.0) >= span || w.1 < cap
-        };
-        if self.peers.get(&who).is_some_and(|w| {
-            !open(w, PEER_NEED_WINDOW_MS, PEER_NEEDS_PER_WINDOW)
-        }) || self.worlds.get(&who.world).is_some_and(|w| {
-            !open(w, NEED_WINDOW_MS, WORLD_NEEDS_PER_WINDOW)
-        }) {
+        let open =
+            |w: &(u64, usize), span: u64, cap: usize| now.saturating_sub(w.0) >= span || w.1 < cap;
+        if self
+            .peers
+            .get(&who)
+            .is_some_and(|w| !open(w, PEER_NEED_WINDOW_MS, PEER_NEEDS_PER_WINDOW))
+            || self
+                .worlds
+                .get(&who.world)
+                .is_some_and(|w| !open(w, NEED_WINDOW_MS, WORLD_NEEDS_PER_WINDOW))
+        {
             return PartsLookup::Unknown;
         }
         if now.saturating_sub(self.window.0) >= NEED_WINDOW_MS {
@@ -354,8 +357,14 @@ impl CatalogStore {
             }
             w.1 += 1;
         };
-        charge(self.peers.entry(who).or_insert((now, 0)), PEER_NEED_WINDOW_MS);
-        charge(self.worlds.entry(who.world).or_insert((now, 0)), NEED_WINDOW_MS);
+        charge(
+            self.peers.entry(who).or_insert((now, 0)),
+            PEER_NEED_WINDOW_MS,
+        );
+        charge(
+            self.worlds.entry(who.world).or_insert((now, 0)),
+            NEED_WINDOW_MS,
+        );
         self.window.1 += 1;
         self.pending.insert(model, now);
         self.needs.push(model);
@@ -409,16 +418,18 @@ mod tests {
     #[test]
     fn road_trip_rows_outside_locations_3_to_9_are_dropped() {
         let mut s = CatalogStore::default();
-        let ev = |id: u32, location: u32| {
-            json!({"id": id, "location": location, "mode": 1, "minPlayers": 0, "classes": [1]})
-        };
+        let ev = |id: u32, location: u32| json!({"id": id, "location": location, "mode": 1, "minPlayers": 0, "classes": [1]});
         let body = json!({"version": "v1", "roadTrip": {"events": [
             ev(1, 2), ev(2, 3), ev(3, 9), ev(4, 10), ev(5, 0)]}});
         let Value::Object(m) = body else { panic!() };
         let r = s.set(Obj::new(&m, "")).unwrap();
         assert_eq!(r["events"], json!(2));
         let rt = s.road_trip().unwrap();
-        assert!(rt.events.iter().all(|e| (3..=9).contains(&e.location) && e.min_players >= 1));
+        assert!(
+            rt.events
+                .iter()
+                .all(|e| (3..=9).contains(&e.location) && e.min_players >= 1)
+        );
     }
 
     #[test]

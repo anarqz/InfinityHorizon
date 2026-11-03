@@ -1520,12 +1520,18 @@ mod tests {
     fn an_omitted_table_is_not_judged_but_a_sent_empty_one_is() {
         let store = store_with(&[]);
         // slot 5 (List_UpgradeSpringDamper) omitted: its part is not judged
-        answer(&store, json!({"model": 301, "slots": {
-            "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11], "List_UpgradeCarBody": [12]}}));
+        answer(
+            &store,
+            json!({"model": 301, "slots": {
+            "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11], "List_UpgradeCarBody": [12]}}),
+        );
         // slot 5 sent with no row: a part there belongs to none of the car's tables
-        answer(&store, json!({"model": 302, "slots": {
+        answer(
+            &store,
+            json!({"model": 302, "slots": {
             "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11], "List_UpgradeCarBody": [12],
-            "List_UpgradeSpringDamper": []}}));
+            "List_UpgradeSpringDamper": []}}),
+        );
         let mut w = watch(store);
         let mut out = Vec::new();
         w.observe(3, 42, Some(301), Some(rows(5000)), false, 0, &mut out);
@@ -1549,13 +1555,29 @@ mod tests {
         let mut out = Vec::new();
         // the same real model with a different impossible row each update: one report
         for (i, bogus) in (5000..6000).enumerate() {
-            w.observe(3, 42, Some(100), Some(rows(bogus)), false, i as i64, &mut out);
+            w.observe(
+                3,
+                42,
+                Some(100),
+                Some(rows(bogus)),
+                false,
+                i as i64,
+                &mut out,
+            );
         }
         assert_eq!(reports(&out), 1);
         // a different real model each update: at most the per-player cap
         out.clear();
         for (i, &m) in models.iter().enumerate() {
-            w.observe(3, 42, Some(m), Some(rows(7000 + i as u32)), false, 2000, &mut out);
+            w.observe(
+                3,
+                42,
+                Some(m),
+                Some(rows(7000 + i as u32)),
+                false,
+                2000,
+                &mut out,
+            );
         }
         assert_eq!(reports(&out), MAX_PART_REPORTS_PER_PLAYER - 1);
         assert!(w.reported.len() <= MAX_PART_REPORTS_PER_PLAYER);
