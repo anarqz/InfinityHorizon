@@ -27,6 +27,8 @@ pub const INVITE_ROAD_TRIP: u8 = 2;
 pub const CAR_MEET_JOIN_MS: i64 = 20_000;
 pub const CAR_MEET_CREATE_MS: i64 = 15_000;
 pub const CAR_MEET_READY_MS: i64 = 30_000;
+/// How long the official car meet waits after telling the starter before it tells the joiners.
+pub const CAR_MEET_JOINER_DELAY_MS: i64 = 8_000;
 /// A session or template name's longest form (CarMeetSynced 16/17, 32).
 pub const CAR_MEET_NAME_MAX: usize = 64;
 const PENDING_NONE: u64 = 0;
@@ -71,6 +73,12 @@ pub(super) struct CarMeet {
     official: bool,
     /// The JoinTypes slots last sent as GameMode (bit k: JoinTypes[k], CarMeetSynced var 4+k).
     join_slots: u16,
+    /// Official lobby: the joiners told of the session only once the starter had time to join it
+    /// first (`late_at`), as in the game's own flow where the starter makes the session and is in
+    /// it before the others hear of it (live test 2026-11-03: joiners that read it before the
+    /// starter was in left it).
+    late: Vec<u64>,
+    late_at: i64,
 }
 
 /// JoinTypes (CarMeetSynced vars 4-15, `CarMeetJoinType`: 0 None, 1 WagerRace, 2 GameMode).
@@ -290,6 +298,7 @@ impl Engine {
         m.until = self.now + CAR_MEET_JOIN_MS;
         m.mode32 = mode32;
         m.session = None;
+        m.late.clear();
         let mut vars = Bits::new();
         vars.push(0, 5)
             .push(u64::from(kind), 2)
@@ -340,6 +349,19 @@ impl Engine {
 
     pub(super) fn tick_car_meet(&mut self) {
         let now = self.now;
+        if !self.car_meet.late.is_empty()
+            && now >= self.car_meet.late_at
+            && let Some(session) = self.car_meet.session.clone()
+        {
+            let late = std::mem::take(&mut self.car_meet.late);
+            self.car_meet_update(car_meet_vars(Some(&session), CAR_MEET_JOIN_MS));
+            let ready = session_ready(&session.0, &session.1);
+            let alive: Vec<u64> = late.into_iter().filter(|s| self.alive(*s)).collect();
+            for s in &alive {
+                self.send_sequenced(*s, vec![ready.clone()]);
+            }
+            self.note("carmeet.session_ready_joiners", vec![json!(alive.len())]);
+        }
         match self.car_meet.stage {
             InviteStage::Joining if self.car_meet.starter.is_none_or(|s| !self.alive(s)) => {
                 self.cancel_invite("its starter left");
@@ -421,7 +443,6 @@ impl Engine {
         m.stage = InviteStage::Ready;
         m.until = self.now + CAR_MEET_READY_MS;
         m.session = Some(session.clone());
-        self.car_meet_update(car_meet_vars(Some(&session), CAR_MEET_JOIN_MS));
         let ready = session_ready(name, template);
         let joined: Vec<u64> = self
             .car_meet
@@ -430,8 +451,23 @@ impl Engine {
             .copied()
             .filter(|s| self.alive(*s))
             .collect();
-        for s in &joined {
-            self.send_sequenced(*s, vec![ready.clone()]);
+        if self.car_meet.official {
+            // the starter first; the others (and the session vars) once it is in the session
+            let starter = self.car_meet.starter;
+            for s in joined.iter().filter(|s| Some(**s) == starter) {
+                self.send_sequenced(*s, vec![ready.clone()]);
+            }
+            self.car_meet.late = joined
+                .iter()
+                .copied()
+                .filter(|s| Some(*s) != starter)
+                .collect();
+            self.car_meet.late_at = self.now + CAR_MEET_JOINER_DELAY_MS;
+        } else {
+            self.car_meet_update(car_meet_vars(Some(&session), CAR_MEET_JOIN_MS));
+            for s in &joined {
+                self.send_sequenced(*s, vec![ready.clone()]);
+            }
         }
         self.note("carmeet.ready", vec![json!(joined.len())]);
         if self.car_meet.official {
@@ -465,6 +501,7 @@ impl Engine {
         m.starter = None;
         m.joined.clear();
         m.session = None;
+        m.late.clear();
         self.car_meet_update(self.invite_end_update());
         self.note("carmeet.cancelled", vec![json!(why)]);
         self.update_join_types();
@@ -629,11 +666,18 @@ mod tests {
         let (name, template) = ("fh2inf-invite-a-b", "defaulttemplate");
         assert!(e.game_session_created(id, Some(name), Some(template), e.now));
         let ready = (*session_ready(name, template)).clone();
-        for s in [starter, joiner] {
-            assert!(reliable(&e, s).contains(&ready), "32 queued reliably");
-        }
-        assert!(!reliable(&e, bystander).contains(&ready));
+        // the starter hears of the session first; the joiner once the starter had time to join it
+        assert!(reliable(&e, starter).contains(&ready), "32 queued reliably");
+        assert!(!reliable(&e, joiner).contains(&ready));
         assert_eq!(notes(&mut e, "carmeet.session_ready"), vec![vec![json!(2)]]);
+        e.now += CAR_MEET_JOINER_DELAY_MS;
+        e.tick_car_meet();
+        assert!(reliable(&e, joiner).contains(&ready), "32 queued reliably");
+        assert!(!reliable(&e, bystander).contains(&ready));
+        assert_eq!(
+            notes(&mut e, "carmeet.session_ready_joiners"),
+            vec![vec![json!(1)]]
+        );
         // the ready window ends: JoinTypes cleared for everybody
         e.now += CAR_MEET_READY_MS + 1;
         e.tick_car_meet();
