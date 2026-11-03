@@ -56,7 +56,7 @@ dedicated-server --probe-bind <port>
 | `--profile` | `FI_DS_PROFILE` | required |
 | `--control` | `FI_DS_CONTROL` | required: `unix:<absolute path>` (Linux) or `pipe:\\.\pipe\fi-ds-<32 hex>` (Windows) |
 | (none) | `FI_DS_CONTROL_SECRET` | required with `pipe:`; read once, then removed from the environment |
-| `--game-db` | `FI_DS_GAME_DB` | none |
+| `--game-db` | `FI_DS_GAME_DB` | none; deprecated and ignored (the catalogs come by `catalog.set` / `catalog.parts`) |
 | `--grant-keys` | `FI_DS_GRANT_VERIFY_KEYS` | none (`keys.set` replaces it) |
 | `--relay` / `--bind` | `FI_DS_RELAY` / `FI_DS_BIND` | `127.0.0.1:5101` / `127.0.0.1:0` (public only) |
 | `--max-worlds` | `FI_DS_MAX_WORLDS` | private 1, public 4 (1-8) |
@@ -136,11 +136,11 @@ engine, in this recommended order:
 | 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | **done**: wired, granted punches (2 per candidate, 10 per 15 s per grant), the 5 s STUN keepalive between rounds (one IPv4 server in turn) |
 | 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | **done** for private worlds; the public multiplex routes by grant id but no official world opens until S34 fixes the grant form |
 | 5 | Side channels: car state, control/state, their authorisation and rates | fh2 | livery is retired and dropped |
-| 6 | Engine routing by lobby type, car meet engines 3 and 6, moves between engines, weather, quiet joins, the 30 s seat behaviour | fh2 | |
+| 6 | Engine routing by lobby type, car meet engines 3 and 6, moves between engines, weather, quiet joins, the 30 s seat behaviour | fh2 | **done** (`fh2/mod.rs`): each OpenConnection goes to its lobby's engine (made on first use), a seat follows its endpoint (AdmittedLate included), a public world runs its one `activity` (refusal 4 for the others) |
 | 7 | Races: grid, start, scores, departures, deadlines; two players for everything; event progress HUD (43/44, start line); race-end split and finishers staying participants | fh2 | **done** (RaceLifecycle, GameOptions, EventProgress suites) |
-| 8 | Event phasing and universes; tag modes (Infected, King) and teams | fh2 | phasing **done**; tag and teams are seams (`seams.rs`) for step 4 |
-| 9 | Car meet invitations and the game-session request/answer | fh2 + core | |
-| 10 | Road Trip (vote, events, alone/wait/drop) with the catalog reader | fh2 | needs a read-only SQLite reader of the catalog; `RoadTripServerState` includes Solo = 3 |
+| 8 | Event phasing and universes; tag modes (Infected, King) and teams | fh2 | **done** (`races.rs`, `tag.rs`, `teams.rs`) |
+| 9 | Car meet invitations and the game-session request/answer | fh2 + core | **done** (`carmeet.rs`; `world.gameSession.request`/`answer` by `rid`) |
+| 10 | Road Trip (vote, events, alone/wait/drop) | fh2 | **done** (`roadtrip.rs`): the catalog rows arrive by `catalog.set` (no game file is read); `RoadTripServerState` carries Solo = 3 |
 | 11 | Bucket-list co-op: pairing, 61 gating and fallback, message 65's universe per pair | fh2 | **done** (`fh2/engine/bucket.rs`): the universe is BucketList1..6 (18..23), one per pair, at most 6 per world; 66-68 carry the receiver-relative keys first |
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | **done** (`fh2/voice.rs` codec, `fh2/engine/voice.rs`): the RelayVoice suite and every proximity, team and moderation vector replay exactly; team voice reads the teams (`teams.rs`) |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | **done** (`fh2/engine/watch.rs`): the six watch vectors replay exactly; the parts rows come from the controller on demand (`catalog.need`/`catalog.parts`), and until a model's rows arrive the parts rule says nothing about it |
@@ -219,6 +219,29 @@ engine, in this recommended order:
   later. Each `watch.report` gets its `id` from the world's random source.
 - **Note numbers** are written as the reference's invariant-culture custom formats: 15
   significant digits for a double (7 for a single), rounded half away from zero.
+
+## Decisions taken in step 4
+
+- **Reference:** the frozen C# engine at client `b43618a` and WINDOWS' corpus re-recorded from it
+  (monorepo `f3c46f01`): all 342 replayable vectors pass, none pinned as a deviation.
+- **Catalogs** (MACBOOK decision 1): the engine reads no game file. `catalog.set {game, version,
+  roadTrip: {events}}` carries the Road Trip rows the reference reads (event id, location, race mode,
+  the mode's minimum players, the allowed classes; ≤ 1024 events, latest-wins, idempotent);
+  `catalog.parts` answers the parts rule's `catalog.need` per model (64-model LRU). A Road Trip
+  OpenConnection with no catalog: `ds.world.no_roadtrip` once, and free roam takes it (private) or
+  refusal 4 (a public Road Trip world). `--game-db` is accepted and ignored.
+- **Keys** (decision 2): `keys.set` refuses a key that does not decode canonically, is of small
+  order or lies outside the prime-order subgroup (`is_torsion_free`), as the reference's
+  `ValidatePublicKeyFull`.
+- **Packet ids** (decision 3): until its handshake completed a peer's id may not jump more than
+  0x1000 forward (dropped, no ack, `receive.id_jump_dropped`, 4 notes per peer); a synced peer
+  gets the game's window (a dropped or stale id is answered with the acknowledgement, as the
+  reference answers it).
+- **Corrections where no vector depends on the C#** (decision 4): `Clear()` also forgets the event
+  and its owner; an unknown engine-level voice mode is off. The vectors settle ReleaseJoiner's
+  journal targets and AssignTeams as the reference does them.
+- **Public worlds:** `world.open.activity` (and `carMeetLobby`) is required in the public profile and
+  refused in the private one; `lobbies` lists only that activity's lobby.
 
 ## Acknowledgements
 
