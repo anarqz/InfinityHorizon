@@ -1,0 +1,55 @@
+[package]
+name = "dedicated-server"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Infinity world server: the world engine for private (launcher) and public (relay VM) worlds"
+publish = false
+
+# A standalone crate with its own workspace (not part of any other workspace).
+[workspace]
+
+[lib]
+name = "dedicated_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dedicated-server"
+path = "src/main.rs"
+
+[features]
+default = []
+# Adds the `debug.fault` control op that panics inside a world on purpose, for the fault-isolation
+# checks. Never enabled in a release build.
+test-hooks = []
+
+# Exact pins; no C code, so the Windows build needs no C toolchain. serde/serde_json: the control
+# channel's JSON and the strict grant claims. The crypto is the platform's own crates at the same
+# versions (fi-relay, fi-auth, matchmaking): ed25519-dalek verifies relay grants (contract §6.2),
+# hmac + sha2 are FIUP v1's HMAC-SHA256 (UDP_SOCKET_PROOF.md), getrandom the FIUP challenge nonce.
+[dependencies]
+# keys.set's full point check (prime order, torsion-free); already ed25519-dalek's own pin
+curve25519-dalek = "=5.0.0"
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.4.3"
+hmac = "=0.13.0"
+serde = "=1.0.229"
+serde_json = "=1.0.154"
+sha2 = "=0.11.1"
+
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+# panic = "unwind" (the default) is required: a world's fault boundary catches its panics.
+panic = "unwind"
