@@ -210,7 +210,7 @@ fn write_payload(w: &mut BitWriter, p: &BitRun) -> Result<(), CodecError> {
 
 fn read_router(r: &mut BitReader<'_>) -> Result<&'static RouterSpec, CodecError> {
     let rid = r.read(ROUTER_ID_BITS)? as u8;
-    router(rid).ok_or(CodecError::Router(rid))
+    router(rid).ok_or(CodecError::UnregisteredRouter(rid))
 }
 
 fn read_type(r: &mut BitReader<'_>, spec: &RouterSpec) -> Result<u32, CodecError> {
@@ -303,7 +303,7 @@ impl ObjectMessage {
             });
         }
         if id == MSG_NEEDS_UPDATES && router != NEEDS_UPDATES_ROUTER {
-            return Err(CodecError::Router(router));
+            return Err(CodecError::UnregisteredRouter(router));
         }
         let key = ObjectKey::read(r, spec.id_bits())?;
         Ok(match id {
@@ -369,13 +369,13 @@ impl ObjectMessage {
     /// codec is lossless); `SeqCounter` never produces it and `ObjectSequencer` refuses it.
     pub fn write(&self, w: &mut BitWriter) -> Result<(), CodecError> {
         let rid = self.router();
-        let spec = router(rid).ok_or(CodecError::Router(rid))?;
+        let spec = router(rid).ok_or(CodecError::UnregisteredRouter(rid))?;
         w.write(u32::from(rid), ROUTER_ID_BITS)?;
         if let ObjectMessage::RequestOwnership { type_index, .. } = self {
             write_type(w, spec, *type_index)?;
         }
         if matches!(self, ObjectMessage::NeedsUpdates { .. }) && rid != NEEDS_UPDATES_ROUTER {
-            return Err(CodecError::Router(rid));
+            return Err(CodecError::UnregisteredRouter(rid));
         }
         self.key().write(w, spec.id_bits())?;
         match self {

@@ -491,7 +491,7 @@ fn run_loop(
             let Some((socket, dual)) = io.sockets.get(&d.sock) else {
                 continue;
             };
-            let to = crate::stun::for_socket(d.to, *dual);
+            let to = crate::stun::endpoint_for_socket(d.to, *dual);
             match socket.send_to(&d.data, to) {
                 Ok(_) => server.note_sent(1),
                 Err(_) => server.note_send_error(),

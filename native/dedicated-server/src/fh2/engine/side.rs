@@ -20,8 +20,8 @@ const CAR_STATE_REFRESH_MS: i64 = 1000;
 /// A separate hook socket may speak for a peer only from the same private IP; a public address can
 /// stand for unrelated players, so it needs the exact endpoint.
 pub fn may_speak_for(peer: SocketAddr, from: SocketAddr) -> bool {
-    let peer = crate::stun::canonical(peer);
-    let from = crate::stun::canonical(from);
+    let peer = crate::stun::plain_endpoint(peer);
+    let from = crate::stun::plain_endpoint(from);
     peer == from || is_private(peer.ip()) && peer.ip() == from.ip()
 }
 
@@ -48,7 +48,7 @@ pub fn is_private(ip: IpAddr) -> bool {
 impl Engine {
     pub(super) fn receive_side_channel(&mut self, data: &[u8], endpoint: SocketAddr) {
         match u16::from_be_bytes([data[0], data[1]]) {
-            carstate::KIND => self.receive_car_state(data, endpoint),
+            carstate::MESSAGE_TYPE => self.receive_car_state(data, endpoint),
             voice::VOICE_KIND => self.receive_voice(data, endpoint),
             voice::CONTROL_KIND => self.receive_voice_control(data, endpoint),
             _ => {}
@@ -92,7 +92,7 @@ impl Engine {
     }
 
     fn receive_car_state(&mut self, data: &[u8], endpoint: SocketAddr) {
-        let Some(up) = carstate::parse_up(data) else {
+        let Some(up) = carstate::read_report(data) else {
             return;
         };
         let by_endpoint = self
@@ -142,8 +142,8 @@ impl Engine {
         p.car_hook = Some(endpoint);
         let changed = p
             .car_state
-            .is_none_or(|s| s.lights != up.state.lights || s.roof != up.state.roof);
-        p.car_state = Some(up.state);
+            .is_none_or(|s| s.headlights != up.look.headlights || s.roof_mode != up.look.roof_mode);
+        p.car_state = Some(up.look);
         if changed {
             self.pass_car_state(serial);
         }
@@ -168,12 +168,12 @@ impl Engine {
             return;
         }
         let txid = self.random.transaction();
-        let packet = carstate::down_with_txid(
-            &carstate::Down {
-                state,
-                index,
+        let packet = carstate::encode_peer_look_with(
+            &carstate::PeerLook {
+                look: state,
+                peer_index: index,
                 xuid,
-                position,
+                world_position: position,
             },
             &txid,
         );

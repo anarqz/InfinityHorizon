@@ -19,7 +19,7 @@ use std::{
 };
 
 use super::{Engine, dict::DotMap};
-use crate::fh2::voice::{self as codec, Header, Pose, PoseSide, Seat, State, VoiceMode};
+use crate::fh2::voice::{self as codec, Pose, PoseSide, Seat, VoiceMode, VoiceStatus, VoiceTag};
 
 pub const VOICE_PACKETS_PER_SECOND: f64 = 20.0;
 pub const VOICE_BYTES_PER_SECOND: f64 = 2048.0;
@@ -373,7 +373,7 @@ impl Engine {
     }
 
     pub(super) fn receive_voice(&mut self, data: &[u8], endpoint: SocketAddr) {
-        let Some(up) = codec::parse_up(data) else {
+        let Some(up) = codec::read_voice(data) else {
             self.drop_voice("malformed");
             return;
         };
@@ -444,8 +444,8 @@ impl Engine {
             self.drop_voice("no seat");
             return;
         };
-        self.start_packet(serial, up.header);
-        let packet = codec::write_down(up.header, seat, &up.opus, None, self.voice_tail());
+        self.start_packet(serial, up.tag);
+        let packet = codec::write_down(up.tag, seat, &up.opus, None, self.voice_tail());
         for listener in self.voice.peers.keys() {
             if listener == serial || !self.listening(listener, serial) {
                 continue;
@@ -491,14 +491,14 @@ impl Engine {
                 .is_some_and(|v| talker_xuid.is_some_and(|x| v.mutes.contains(&x)))
     }
 
-    fn start_packet(&mut self, serial: u64, header: Header) {
+    fn start_packet(&mut self, serial: u64, header: VoiceTag) {
         let started = !self.serial_talking(serial);
         let now = self.now;
         let Some(v) = self.voice.peers.get_mut(&serial) else {
             return;
         };
         v.last_voice_at = Some(now);
-        v.spurt_ended = header.flags & codec::END_OF_SPURT != 0;
+        v.spurt_ended = header.marks & codec::END_OF_SPURT != 0;
         if started || v.spurt_ended {
             self.voice.changed = true;
         }
@@ -506,12 +506,12 @@ impl Engine {
 
     /// §5c "The relay's rules in proximity": per listener, side, range with hysteresis, the 4
     /// nearest, then the pose.
-    fn receive_proximity(&mut self, serial: u64, up: &codec::Up) {
+    fn receive_proximity(&mut self, serial: u64, up: &codec::VoicePacket) {
         let Some(seat) = self.voice_seat_of(serial) else {
             self.drop_voice("no seat");
             return;
         };
-        self.start_packet(serial, up.header);
+        self.start_packet(serial, up.tag);
         let talker = self.sample_car(serial);
         let range = f64::from(PROXIMITY_RANGE);
         for listener in self.voice.peers.keys() {
@@ -596,7 +596,7 @@ impl Engine {
                 continue;
             };
             let tail = self.voice_tail();
-            let packet = codec::write_down(up.header, seat, &up.opus, Some(&pose), tail);
+            let packet = codec::write_down(up.tag, seat, &up.opus, Some(&pose), tail);
             self.emit(hook, packet);
             self.voice.forwarded += 1;
         }
@@ -752,7 +752,7 @@ impl Engine {
         self.voice.mode == VoiceMode::Proximity || self.team_event_active()
     }
 
-    fn voice_state_for(&mut self, listener: Option<u64>) -> State {
+    fn voice_state_for(&mut self, listener: Option<u64>) -> VoiceStatus {
         let synced: Vec<(u64, u64)> = self
             .peers
             .iter()
@@ -790,7 +790,7 @@ impl Engine {
             seats.push(Seat { seat, xuid, state });
         }
         let mode = self.voice.mode;
-        State {
+        VoiceStatus {
             lobby: u8::from(mode != VoiceMode::Off),
             bundle: 3,
             seats,

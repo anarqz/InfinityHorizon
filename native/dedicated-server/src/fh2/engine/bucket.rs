@@ -33,7 +33,7 @@ use super::{
     key::ObjKey,
     message::{self, Message, ObjectChange},
     packets::{BUCKET_LIST_ROUTER, BUCKET_LIST_SLOTS_TYPE},
-    payload::{self, Fault},
+    payload::{self, Refusal},
     seams::CAR_UNIVERSE_OFFSET,
 };
 use crate::fh2::codec::object::{seq_is_newer, seq_next};
@@ -190,19 +190,6 @@ fn entry_variables(slots: &[Entry; ENTRIES], i: usize) -> [(u8, i32); 3] {
         (3 * i8 + 1, slots[i].1),
         (3 * i8 + 2, slots[i].2),
     ]
-}
-
-fn fault_name(f: &Fault) -> &'static str {
-    match f {
-        Fault::Router(_) => "Router",
-        Fault::Index(_) => "Index",
-        Fault::Duplicate(_) => "Duplicate",
-        Fault::NotFinite(_) => "NotFinite",
-        Fault::NameTooLong(_) => "NameTooLong",
-        Fault::Truncated => "Truncated",
-        Fault::TooBig(_) => "TooBig",
-        Fault::OutOfRange(_) => "OutOfRange",
-    }
 }
 
 fn ready_state(state: u64) -> bool {
@@ -520,7 +507,7 @@ impl Engine {
         &mut self,
         serial: u64,
         obj: &ObjectChange,
-        fault: Fault,
+        refusal: Refusal,
     ) -> Option<Bits> {
         let prefix = if obj.vars.len() <= payload::BUCKET_LIST_PLAYER_MAX_BITS {
             let clean = payload::bucket_list_player_of(&obj.vars);
@@ -537,8 +524,8 @@ impl Engine {
                 json!(index),
                 json!(if obj.is_create { "create" } else { "update" }),
                 json!(obj.sequence),
-                json!(fault_name(&fault)),
-                json!(fault.value()),
+                json!(refusal.cause.label()),
+                json!(refusal.detail),
                 json!(obj.vars.len()),
             ];
             match &prefix {

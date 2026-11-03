@@ -22,7 +22,7 @@ use super::{
     timers::{Timer, Timers},
 };
 use crate::control::proto::{self, CmdError, CmdResult};
-use crate::nat::{Nat, NatNews};
+use crate::nat::NatProbe;
 
 /// Punches per snapshot (contract §6.2: more is `context_invalid`).
 pub const PUNCHES_MAX: usize = 256;
@@ -35,9 +35,10 @@ pub const JSON_INT_MAX: u64 = (1 << 53) - 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkSpec {
     pub port: u16,
-    pub discovery: bool,
-    pub upnp: bool,
-    pub stun_servers: Vec<String>,
+    /// `discovery`, `upnp` and `stunServers` of the contract's `network` object.
+    pub resolve_stun: bool,
+    pub map_port: bool,
+    pub stun_names: Vec<String>,
     pub stun_interval_ms: u64,
 }
 
@@ -45,12 +46,9 @@ impl Default for NetworkSpec {
     fn default() -> NetworkSpec {
         NetworkSpec {
             port: 5101,
-            discovery: true,
-            upnp: true,
-            stun_servers: crate::nat::STUN_SERVERS
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            resolve_stun: true,
+            map_port: true,
+            stun_names: crate::nat::DEFAULT_STUN_NAMES.map(String::from).to_vec(),
             stun_interval_ms: 25_000,
         }
     }
@@ -125,7 +123,7 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
         (Profile::Private, true) => {
             let n = Obj::new(o.obj("network")?, "network");
             let d = NetworkSpec::default();
-            let stun_servers = if n.has("stunServers") {
+            let stun_names = if n.has("stunServers") {
                 let list = n.arr("stunServers")?;
                 if list.len() > 8 {
                     return Err(n.bad("stunServers"));
@@ -140,13 +138,13 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
                 }
                 out
             } else {
-                d.stun_servers
+                d.stun_names
             };
             Some(NetworkSpec {
                 port: n.opt_int("port", 1, 65_535, d.port as u64)? as u16,
-                discovery: n.opt_bool("discovery", d.discovery)?,
-                upnp: n.opt_bool("upnp", d.upnp)?,
-                stun_servers,
+                resolve_stun: n.opt_bool("discovery", d.resolve_stun)?,
+                map_port: n.opt_bool("upnp", d.map_port)?,
+                stun_names,
                 stun_interval_ms: n.opt_int("stunIntervalMs", 50, 3_600_000, d.stun_interval_ms)?,
             })
         }
@@ -240,7 +238,7 @@ pub struct World {
     /// The relay legs (CR-S57).
     pub legs: Legs,
     /// STUN, UPnP and punches (private worlds).
-    pub nat: Option<Nat>,
+    pub nat: Option<NatProbe>,
     pub punch_hints: u32,
     pub punches_sent: u32,
     pub send_errors: u32,
@@ -460,10 +458,10 @@ impl World {
                 continue;
             }
             for _ in 0..2 {
-                let t = crate::stun::new_txid();
+                let t = crate::stun::random_txid();
                 out.push(Send {
-                    to: crate::stun::canonical(*e),
-                    data: crate::stun::binding_request(&t).to_vec(),
+                    to: crate::stun::plain_endpoint(*e),
+                    data: crate::stun::request_binding(&t).to_vec(),
                 });
             }
             sent += 2;
@@ -521,9 +519,9 @@ impl World {
     /// NetworkFacts (private worlds, contract §4.5).
     pub fn network_facts(&self) -> Option<Value> {
         self.spec.network.as_ref()?;
-        let facts = self.nat.as_ref().map(Nat::facts);
+        let facts = self.nat.as_ref().map(NatProbe::exposure);
         let public: Vec<Value> = facts.as_ref().map_or_else(Vec::new, |f| {
-            f.public
+            f.endpoints
                 .iter()
                 .map(|a| json!({"address": a.ip().to_string(), "port": a.port()}))
                 .collect()
@@ -533,14 +531,14 @@ impl World {
         m.insert("port".into(), json!(self.port));
         m.insert(
             "nat".into(),
-            json!(facts.as_ref().map_or("unknown", |f| f.kind.as_str())),
+            json!(facts.as_ref().map_or("unknown", |f| f.mapping.label())),
         );
         m.insert("publicAddresses".into(), Value::Array(public));
         m.insert(
             "upnp".into(),
-            json!(facts.as_ref().map_or("off", |f| f.upnp.as_str())),
+            json!(facts.as_ref().map_or("off", |f| f.port_map.label())),
         );
-        if let Some(a) = facts.as_ref().and_then(|f| f.upnp_address) {
+        if let Some(a) = facts.as_ref().and_then(|f| f.mapped_endpoint) {
             m.insert(
                 "upnpAddress".into(),
                 json!({"address": a.ip().to_string(), "port": a.port()}),
@@ -548,7 +546,7 @@ impl World {
         }
         m.insert(
             "behindAnotherNat".into(),
-            json!(facts.as_ref().is_some_and(|f| f.behind_another_nat)),
+            json!(facts.as_ref().is_some_and(|f| f.double_nat)),
         );
         m.insert("dualStack".into(), json!(self.dual));
         m.insert("punchHints".into(), json!(self.punch_hints));
@@ -749,7 +747,7 @@ impl World {
         self.diag_at = Some(ctx.now);
         self.diag_count += 1;
         let c = self.gate.lock().fiup_counters();
-        let facts = self.nat.as_ref().map(Nat::facts);
+        let facts = self.nat.as_ref().map(NatProbe::exposure);
         let body = obj(json!({
             "worldId": self.id,
             "fiup": {
@@ -758,9 +756,9 @@ impl World {
                 "challengeGame": c.challenge_game, "challengeHook": c.challenge_hook,
                 "ackGame": c.ack_game, "ackHook": c.ack_hook, "rejected": c.rejected,
             },
-            "nat": facts.as_ref().map_or("unknown", |f| f.kind.as_str()),
-            "observations": facts.as_ref().map_or(0, |f| f.public.len()),
-            "upnp": facts.as_ref().map_or("off", |f| f.upnp.as_str()),
+            "nat": facts.as_ref().map_or("unknown", |f| f.mapping.label()),
+            "observations": facts.as_ref().map_or(0, |f| f.endpoints.len()),
+            "upnp": facts.as_ref().map_or("off", |f| f.port_map.label()),
             "punchHints": self.punch_hints,
             "punchesSent": self.punches_sent,
             "sendErrors": self.send_errors,
@@ -810,12 +808,9 @@ impl World {
             && let Some(nat) = self.nat.as_mut()
         {
             let mut stun_out = Vec::new();
-            nat.on_packet(
-                &mut |to, data| stun_out.push(Send { to, data }),
-                &payload,
-                from,
-                now,
-            );
+            nat.handle_datagram(&payload, from, now, &mut |to, data| {
+                stun_out.push(Send { to, data })
+            });
             out.extend(stun_out);
         }
         let mut game_out = Vec::new();
@@ -830,16 +825,14 @@ impl World {
         self.legs.tick(now, &mut sends);
         out.extend(sends);
         if let Some(nat) = self.nat.as_mut() {
-            nat.tick(&mut |to, data| out.push(Send { to, data }), now);
-            for news in nat.take_news() {
-                if let NatNews::Upnp(o) = news {
-                    let (id, level) = match o {
-                        crate::upnp::Outcome::Mapped { .. } => (events::N_UPNP_MAPPED, "info"),
-                        _ => (events::N_UPNP_FAILED, "warn"),
-                    };
-                    let wid = self.id.clone();
-                    ctx.notice(id, level, Some(&wid), None);
-                }
+            let results = nat.service(now, &mut |to, data| out.push(Send { to, data }));
+            for result in results {
+                let (id, level) = match result {
+                    crate::upnp::MapResult::Mapped { .. } => (events::N_UPNP_MAPPED, "info"),
+                    _ => (events::N_UPNP_FAILED, "warn"),
+                };
+                let wid = self.id.clone();
+                ctx.notice(id, level, Some(&wid), None);
             }
         }
         self.diag(ctx, false);
@@ -855,8 +848,8 @@ impl World {
     pub fn net_deadline(&self, now: u64) -> Option<u64> {
         let legs = self.legs.next_deadline(now);
         let nat = self.nat.as_ref().and_then(|n| {
-            let poll = n.polling().then_some(now + NET_TICK_MS);
-            match (n.next_deadline(), poll) {
+            let poll = n.awaiting_thread().then_some(now + NET_TICK_MS);
+            match (n.wake_at(), poll) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
             }

@@ -552,9 +552,9 @@ impl Fh2World {
     }
 
     fn route(&mut self, data: &[u8], from: SocketAddr, now: u64, out: &mut Vec<Send>) {
-        let from = crate::stun::canonical(from);
+        let from = crate::stun::plain_endpoint(from);
         let base = self.base_kind();
-        if crate::stun::is_stun(data) {
+        if crate::stun::is_framed(data) {
             // hook side channels name their player: the engine holding the endpoint, else every
             // engine (only the one seating it acts)
             let kinds: Vec<EngineKind> = match self.routes.get(&from) {
@@ -896,7 +896,7 @@ impl GameWorld for Fh2World {
     }
 
     fn receive(&mut self, data: &[u8], from: SocketAddr, now: u64, out: &mut Vec<Send>) {
-        if crate::stun::is_stun(data) && u16::from_be_bytes([data[0], data[1]]) == LIVERY_KIND {
+        if crate::stun::is_framed(data) && u16::from_be_bytes([data[0], data[1]]) == LIVERY_KIND {
             self.dropped += 1;
             return;
         }

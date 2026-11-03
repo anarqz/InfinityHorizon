@@ -53,7 +53,7 @@ impl BitRun {
         r.read_run(len)
     }
 
-    /// Length in bits.
+    /// The run's length, in bits.
     pub fn len(&self) -> usize {
         self.len
     }
@@ -146,18 +146,19 @@ impl<'a> BitReader<'a> {
         if n_us > self.remaining() {
             return Err(CodecError::Truncated);
         }
-        let mut v: u64 = 0;
-        let mut got = 0usize;
-        while got < n_us {
-            let p = self.pos + got;
-            let shift = p & 7;
-            let take = (8 - shift).min(n_us - got);
-            let byte = u64::from(self.data[p >> 3] >> shift) & ((1u64 << take) - 1);
-            v |= byte << got;
-            got += take;
+        // LSB first: each step takes what is left of the current byte, up to the bits still due
+        let mut value: u64 = 0;
+        let mut filled = 0usize;
+        while filled < n_us {
+            let bit = self.pos + filled;
+            let offset = bit % 8;
+            let width = (8 - offset).min(n_us - filled);
+            let chunk = u64::from(self.data[bit / 8] >> offset) & ((1u64 << width) - 1);
+            value |= chunk << filled;
+            filled += width;
         }
         self.pos += n_us;
-        Ok(v as u32)
+        Ok(value as u32)
     }
 
     /// One bit (`FUN_141767100`).

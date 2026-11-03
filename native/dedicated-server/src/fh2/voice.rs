@@ -26,7 +26,7 @@ const STATE_DOWN: u16 = 0xC0F6;
 const POSE: u16 = 0xC0F8;
 const MODE: u16 = 0xC0F9;
 const TEAM: u16 = 0xC0FA;
-pub const VERSION: u8 = 1;
+pub const LAYOUT_VERSION: u8 = 1;
 pub const MAX_OPUS: usize = 400;
 pub const MAX_SEATS: usize = 12;
 const POSE_LEN: usize = 48;
@@ -94,15 +94,15 @@ impl VoiceMode {
 
 /// A voice datagram's header (the transaction id's first 8 bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Header {
-    pub flags: u8,
-    pub seq: u16,
-    pub ts: u32,
+pub struct VoiceTag {
+    pub marks: u8,
+    pub sequence: u16,
+    pub stamp: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Up {
-    pub header: Header,
+pub struct VoicePacket {
+    pub tag: VoiceTag,
     pub opus: Vec<u8>,
 }
 
@@ -153,7 +153,7 @@ pub struct Seat {
 /// The relay's voice state for one subscriber: `lobby` bit 0 voice on, `bundle` 3 or 6, the
 /// seats; the mode with its range (0xC0F9); the team (0xC0FA) for a team event's participant.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct State {
+pub struct VoiceStatus {
     pub lobby: u8,
     pub bundle: u8,
     pub seats: Vec<Seat>,
@@ -172,68 +172,33 @@ fn be64(d: &[u8], at: usize) -> u64 {
     u64::from_be_bytes(b)
 }
 
-/// A well-formed STUN datagram of `kind` whose every attribute lies within it, and the value of
-/// its first `attribute`.
-fn attribute(data: &[u8], kind: u16, attribute: u16) -> Option<&[u8]> {
-    if !stun::is_stun(data) || be16(data, 0) != kind {
-        return None;
-    }
-    let mut found = None;
-    let mut at = 20;
-    while at + 4 <= data.len() {
-        let tag = be16(data, at);
-        let n = be16(data, at + 2) as usize;
-        let value = data.get(at + 4..at + 4 + n)?;
-        if tag == attribute && found.is_none() {
-            found = Some(value);
-        }
-        at += 4 + n.div_ceil(4) * 4;
-    }
-    found
+/// The first `wanted` attribute of a side-channel datagram of `kind` that walks whole.
+fn attribute(data: &[u8], kind: u16, wanted: u16) -> Option<&[u8]> {
+    stun::attribute_strict(data, kind, wanted)
 }
 
-fn header(data: &[u8]) -> Header {
-    Header {
-        flags: data[9],
-        seq: be16(data, 10),
-        ts: u32::from_be_bytes([data[12], data[13], data[14], data[15]]),
+fn tag_of(data: &[u8]) -> VoiceTag {
+    VoiceTag {
+        marks: data[9],
+        sequence: be16(data, 10),
+        stamp: u32::from_be_bytes([data[12], data[13], data[14], data[15]]),
     }
 }
 
-/// An indication: the attributes in this order, each padded to 4 bytes.
-pub(crate) fn indication(kind: u16, txid: &[u8; 12], attributes: &[(u16, &[u8])]) -> Vec<u8> {
-    let body: usize = attributes
-        .iter()
-        .map(|(_, v)| 4 + v.len().div_ceil(4) * 4)
-        .sum();
-    let mut m = Vec::with_capacity(20 + body);
-    m.extend_from_slice(&kind.to_be_bytes());
-    m.extend_from_slice(&(body as u16).to_be_bytes());
-    m.extend_from_slice(&stun::MAGIC.to_be_bytes());
-    m.extend_from_slice(txid);
-    for (tag, value) in attributes {
-        m.extend_from_slice(&tag.to_be_bytes());
-        m.extend_from_slice(&(value.len() as u16).to_be_bytes());
-        m.extend_from_slice(value);
-        m.resize(m.len().next_multiple_of(4), 0);
-    }
-    m
-}
-
-pub fn parse_up(data: &[u8]) -> Option<Up> {
+pub fn read_voice(data: &[u8]) -> Option<VoicePacket> {
     let opus = attribute(data, VOICE_KIND, VOICE_UP)?;
-    if opus.is_empty() || opus.len() > MAX_OPUS || data[8] != VERSION {
+    if opus.is_empty() || opus.len() > MAX_OPUS || data[8] != LAYOUT_VERSION {
         return None;
     }
-    Some(Up {
-        header: header(data),
+    Some(VoicePacket {
+        tag: tag_of(data),
         opus: opus.to_vec(),
     })
 }
 
 pub fn parse_control(data: &[u8]) -> Option<Control> {
     let v = attribute(data, CONTROL_KIND, CONTROL_UP)?;
-    if v.len() < 12 || v[0] != VERSION {
+    if v.len() < 12 || v[0] != LAYOUT_VERSION {
         return None;
     }
     let (op, self_flags, count) = (v[1], v[10], v[11] as usize);
@@ -253,13 +218,13 @@ pub fn parse_control(data: &[u8]) -> Option<Control> {
 }
 
 /// A hook's voice packet (tests and tools): `random` is the transaction id's 4-byte tail.
-pub fn write_up(up: &Up, random: [u8; 4]) -> Option<Vec<u8>> {
+pub fn write_voice(up: &VoicePacket, random: [u8; 4]) -> Option<Vec<u8>> {
     if up.opus.is_empty() || up.opus.len() > MAX_OPUS {
         return None;
     }
-    let mut t = voice_txid(up.header);
+    let mut t = voice_txid(up.tag);
     t[8..].copy_from_slice(&random);
-    Some(indication(VOICE_KIND, &t, &[(VOICE_UP, &up.opus)]))
+    Some(stun::indication(VOICE_KIND, &t, &[(VOICE_UP, &up.opus)]))
 }
 
 /// A hook's control (tests and tools).
@@ -267,29 +232,29 @@ pub fn write_control(c: &Control, txid: &[u8; 12]) -> Option<Vec<u8>> {
     if c.mutes.len() > MAX_SEATS || !(SUBSCRIBE..=LEAVE).contains(&c.op) || c.self_flags > 3 {
         return None;
     }
-    let mut v = vec![VERSION, c.op];
+    let mut v = vec![LAYOUT_VERSION, c.op];
     v.extend_from_slice(&c.xuid.to_be_bytes());
     v.push(c.self_flags);
     v.push(c.mutes.len() as u8);
     for m in &c.mutes {
         v.extend_from_slice(&m.to_be_bytes());
     }
-    Some(indication(CONTROL_KIND, txid, &[(CONTROL_UP, &v)]))
+    Some(stun::indication(CONTROL_KIND, txid, &[(CONTROL_UP, &v)]))
 }
 
-fn voice_txid(h: Header) -> [u8; 12] {
+fn voice_txid(h: VoiceTag) -> [u8; 12] {
     let mut t = [0u8; 12];
-    t[0] = VERSION;
-    t[1] = h.flags;
-    t[2..4].copy_from_slice(&h.seq.to_be_bytes());
-    t[4..8].copy_from_slice(&h.ts.to_be_bytes());
+    t[0] = LAYOUT_VERSION;
+    t[1] = h.marks;
+    t[2..4].copy_from_slice(&h.sequence.to_be_bytes());
+    t[4..8].copy_from_slice(&h.stamp.to_be_bytes());
     t
 }
 
 /// A voice down: the talker's header and Opus stamped with its seat; `tail` is the transaction
 /// id's 3 random bytes after the seat.
 pub fn write_down(
-    header: Header,
+    header: VoiceTag,
     seat: u8,
     opus: &[u8],
     pose: Option<&Pose>,
@@ -299,17 +264,17 @@ pub fn write_down(
     t[8] = seat;
     t[9..].copy_from_slice(&tail);
     match pose {
-        None => indication(VOICE_KIND, &t, &[(VOICE_DOWN, opus)]),
+        None => stun::indication(VOICE_KIND, &t, &[(VOICE_DOWN, opus)]),
         Some(p) => {
             let pose = pose_value(p);
-            indication(VOICE_KIND, &t, &[(VOICE_DOWN, opus), (POSE, &pose)])
+            stun::indication(VOICE_KIND, &t, &[(VOICE_DOWN, opus), (POSE, &pose)])
         }
     }
 }
 
 fn pose_value(p: &Pose) -> [u8; POSE_LEN] {
     let mut v = [0u8; POSE_LEN];
-    v[0] = VERSION;
+    v[0] = LAYOUT_VERSION;
     v[1] = u8::from(p.talker.car)
         | u8::from(p.listener.car) << 1
         | u8::from(p.same_side) << 2
@@ -339,21 +304,21 @@ fn side_value(v: &mut [u8], s: &PoseSide) {
 }
 
 /// A state down. At most 12 seats (the engine never has more).
-pub fn write_state(s: &State, txid: &[u8; 12]) -> Vec<u8> {
+pub fn write_state(s: &VoiceStatus, txid: &[u8; 12]) -> Vec<u8> {
     let seats = &s.seats[..s.seats.len().min(MAX_SEATS)];
-    let mut v = vec![VERSION, s.lobby, s.bundle, seats.len() as u8];
+    let mut v = vec![LAYOUT_VERSION, s.lobby, s.bundle, seats.len() as u8];
     for seat in seats {
         v.push(seat.seat);
         v.extend_from_slice(&seat.xuid.to_be_bytes());
         v.push(seat.state);
     }
-    let mut mode = vec![VERSION, s.mode.byte()];
+    let mut mode = vec![LAYOUT_VERSION, s.mode.byte()];
     mode.extend_from_slice(&s.range.to_be_bytes());
     match s.team {
-        None => indication(CONTROL_KIND, txid, &[(STATE_DOWN, &v), (MODE, &mode)]),
+        None => stun::indication(CONTROL_KIND, txid, &[(STATE_DOWN, &v), (MODE, &mode)]),
         Some(team) => {
-            let team = [VERSION, 1, team, 0];
-            indication(
+            let team = [LAYOUT_VERSION, 1, team, 0];
+            stun::indication(
                 CONTROL_KIND,
                 txid,
                 &[(STATE_DOWN, &v), (MODE, &mode), (TEAM, &team)],
