@@ -336,6 +336,7 @@ impl Engine {
         self.tick_game_options();
         self.tick_phasing();
         self.tick_weather();
+        self.tick_bucket_list();
         self.tick_car_meet();
         self.tick_road_trip();
         let now = self.now;

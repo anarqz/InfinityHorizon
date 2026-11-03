@@ -17,10 +17,12 @@
 //! - [`voice`]: voice (off, open, proximity), its mute layers, seats and state down;
 //! - [`races`] and [`options`]: free-roam events, the options journal, event progress, the
 //!   race-end hold and phasing;
-//! - [`seams`]: the features of later steps (races, events, car meets, Road Trip, tag, bucket-list
-//!   pairing, voice, phasing, the watch), as the no-ops free roam needs until they are ported.
+//! - [`bucket`]: bucket-list co-op (pairing, the slot array, 61 and 65-68);
+//! - [`seams`]: the features of later steps (races, events, car meets, Road Trip, tag, voice,
+//!   phasing, the watch), as the no-ops free roam needs until they are ported.
 
 pub mod bits;
+mod bucket;
 mod carmeet;
 pub mod dict;
 pub mod history;
@@ -497,7 +499,8 @@ pub struct Engine {
     release_keep: HashMap<u64, Vec<M>>,
     side_rates: DotMap<u64, SideRate>,
     pub side_channel_rate_drops: u64,
-    bucket_slots_sequence: u8,
+    /// Bucket-list co-op (bucket.rs).
+    bucket: bucket::Bucket,
     /// Events, the options and phasing (races.rs).
     ev: races::Events,
     /// The running tag event (tag.rs) and its draws.
@@ -600,7 +603,7 @@ impl Engine {
             release_keep: HashMap::new(),
             side_rates: DotMap::new(),
             side_channel_rate_drops: 0,
-            bucket_slots_sequence: 0,
+            bucket: bucket::Bucket::default(),
             ev: races::Events::default(),
             tag: None,
             car_meet: carmeet::CarMeet::default(),
@@ -1191,6 +1194,8 @@ impl Engine {
         }
         // a malformed packet ends at the bad message; what it already did stands
         let _ = self.receive_packet(data, from);
+        // a packet that returned before its forwarding staged co-op output too
+        self.flush_bucket_list();
         self.check_cars_pending();
         self.drop_doomed();
     }
@@ -1246,6 +1251,7 @@ impl Engine {
         self.ev.options.clear();
         self.ev.options_outlived = false;
         self.event_progress_reset();
+        self.clear_bucket_list();
         self.ev.event_side.clear();
         self.ev.phasing = false;
         // the C# Clear keeps them; nothing reads them after the close, but a closed engine holds
