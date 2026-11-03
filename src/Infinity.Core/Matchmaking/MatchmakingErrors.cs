@@ -64,6 +64,12 @@ public static class ConflictReasons
     /// <summary>OD-160 (§5b "Relay by mode"): a renew <c>transport: "direct"</c> outside a Hardcore world (shown as "the host could not be reached").</summary>
     public const string NoDirect = "no_direct";
 
+    /// <summary>
+    /// WORLDS_OFFICIAL.md §3 (OD-189): a <c>transport: "relay"</c> join or renew for an official world (direct only). Not in
+    /// <see cref="All"/> until MATCHMAKING_API.md §8 lists it.
+    /// </summary>
+    public const string OfficialDirect = "official_direct";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
         Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect];
 

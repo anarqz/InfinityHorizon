@@ -45,9 +45,13 @@ public sealed partial class WorldsBridge
             key=relay.UdpProof?.Decode();
             if(key is null || SocketProofKeys is null || _ownXuid is null || relay.Claims is null || relay.Claims.Length>2048)throw new InvalidDataException();
             using var parsed=JsonDocument.Parse(Convert.FromBase64String(relay.Claims));
-            var host=parsed.RootElement.GetProperty("host").GetProperty("xuid").GetString() ?? throw new InvalidDataException();
-            verified=RelayGrantVerifier.Verify(relay,SocketProofKeys,Now.ToUnixTimeSeconds(),new(world,host,_ownXuid,"joiner",grant));
-            var header=UdpProofCodec.Header(Guid.Parse(verified.Grant),Guid.Parse(verified.World),ulong.Parse(verified.Host.Xuid,System.Globalization.CultureInfo.InvariantCulture),
+            // WORLDS_OFFICIAL §3: the host is a player's xuid or an official Worlds host's vmId (the verifier refuses both or neither)
+            var hostClaim=parsed.RootElement.GetProperty("host");
+            var official=hostClaim.TryGetProperty("official",out var vm) ? vm.GetString() ?? throw new InvalidDataException() : null;
+            var host=official is null ? hostClaim.GetProperty("xuid").GetString() ?? throw new InvalidDataException() : null;
+            verified=RelayGrantVerifier.Verify(relay,SocketProofKeys,Now.ToUnixTimeSeconds(),new(world,host,_ownXuid,"joiner",grant,HostOfficial:official));
+            // the FIUP host field: the host's XUID, or the official host tag (nonzero, top bit set)
+            var header=UdpProofCodec.Header(Guid.Parse(verified.Grant),Guid.Parse(verified.World),OfficialHost.HostField(verified.Host),
                 ulong.Parse(verified.Xuid,System.Globalization.CultureInfo.InvariantCulture));
             var payload=new byte[89];payload[0]=1;header.AsSpan(8,48).CopyTo(payload.AsSpan(1));
             BinaryPrimitives.WriteUInt64BigEndian(payload.AsSpan(49),(ulong)verified.Exp);key.CopyTo(payload,57);
@@ -63,7 +67,7 @@ public sealed partial class WorldsBridge
         if(!ProofFor(relay))return true;
         Frame.RelayContext frame;
         RelayGrantClaims verified;
-        try { frame=ProofFrame(relay,world,grant,out verified); }
+        try { frame=ProofFrame(relay,world,grant,out verified); if(verified.Host.Official is not null)Volatile.Write(ref _officialGrant,grant); }
         catch(InvalidDataException)
         {
             await ClearProofAsync("the seat's grant proof is unusable",CancellationToken.None,epoch).ConfigureAwait(false);
