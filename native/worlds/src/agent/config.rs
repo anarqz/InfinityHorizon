@@ -341,6 +341,8 @@ mod tests {
         parse(&args, &env)
     }
 
+    // The fixtures' key and catalog paths are Unix absolute paths (the role runs on Unix only).
+    #[cfg(unix)]
     #[test]
     fn the_defaults_and_the_precedence() {
         let c = with(&[], &[]).unwrap();
@@ -365,6 +367,8 @@ mod tests {
         assert_eq!(c.activities, Some(vec!["roadtrip", "freeroam"]));
     }
 
+    // The fixtures' key and catalog paths are Unix absolute paths (the role runs on Unix only).
+    #[cfg(unix)]
     #[test]
     fn every_invalid_setting_is_named() {
         for (var, bad) in [
