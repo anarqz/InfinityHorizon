@@ -141,7 +141,7 @@ engine, in this recommended order:
 | 8 | Event phasing and universes; tag modes (Infected, King) and teams | fh2 | phasing **done**; tag and teams are seams (`seams.rs`) for step 4 |
 | 9 | Car meet invitations and the game-session request/answer | fh2 + core | |
 | 10 | Road Trip (vote, events, alone/wait/drop) with the catalog reader | fh2 | needs a read-only SQLite reader of the catalog; `RoadTripServerState` includes Solo = 3 |
-| 11 | Bucket-list co-op: pairing, 61 gating and fallback, message 65's universe per pair | fh2 | **done** (`fh2/engine/bucket.rs`): the universe is BucketList1..6 (18..23), one per pair, at most 6 per world; 66-68 carry the receiver-relative keys first (vectors predate it) |
+| 11 | Bucket-list co-op: pairing, 61 gating and fallback, message 65's universe per pair | fh2 | **done** (`fh2/engine/bucket.rs`): the universe is BucketList1..6 (18..23), one per pair, at most 6 per world; 66-68 carry the receiver-relative keys first |
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | **done** (`fh2/voice.rs` codec, `fh2/engine/voice.rs`): the RelayVoice suite and every proximity, team and moderation vector replay exactly; team voice reads the teams (`teams.rs`) |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
 | 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | **done**: `diag` every 3 s (2048, one at close), `peer.rejected` (128 per 30 s, 1 s dedup), `peer.synced`/`peer.left`, `world.empty`/`world.occupied`, note lines at info |
@@ -197,13 +197,13 @@ engine, in this recommended order:
 
 ## Decisions taken in step 11 (bucket-list co-op)
 
-- **66-68 keys** (NERDCORE_WIRE.md §6.3, MACBOOK): each status message starts with the
-  receiver-relative PlayerState keys (7-bit ids; the receiver's own state is an own key, anyone
-  else's a relay key): 66 the waiter's, 67 and 68 the first waiter's then the requester's; then
-  the challenge (s32); 68 ends with its result flag, the ending 62's `completed` (false when a leave
-  or a new request ends the pair). 66 goes to every synced player but the waiter, 67 and 68 to every
-  synced player, partners included. The D2 vectors (C# `f81d09c`) predate this: they diverge at
-  their first 66-68, which the private runner checks as an expected deviation.
+- **66-68 keys** (NERDCORE_WIRE.md §6.3; the final C# `b43618a`): each status message starts with
+  the receiver-relative PlayerState keys (7-bit ids; the receiver's own state is an own key, anyone
+  else's a relay key): 66 the waiter's; 67 the joiner's who completed the pair, then the waiter's;
+  68 the ender's (its 62, new request or leave), then its partner's; then the challenge (s32); 68
+  ends with the ending 62's flag (false for a new request or a leave). 66 goes to every synced
+  player but the waiter, 67 and 68 to every synced player. When a key's PlayerState is missing (a
+  leaver's), nobody gets it: `bucket.status_skipped` notes the receivers once per message.
 - **New note** `bucket.not_paired` `[waiter, requester, 6]`: two players would pair but all six
   bucket-list universes are in use (a guard; 12 players make at most 6 pairs).
 - A pair's first car prediction after 61 is told from the one at 61 by value, not by identity.
