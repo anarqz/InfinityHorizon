@@ -93,20 +93,32 @@ pub fn serve(
     std::thread::Builder::new()
         .name("ds-control-accept".into())
         .spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { continue };
-                if open.load(Ordering::Acquire) >= CONNECTIONS_MAX {
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                    continue;
-                }
-                open.fetch_add(1, Ordering::AcqRel);
-                let conn = ids.fetch_add(1, Ordering::Relaxed);
-                if start_connection(stream, conn, hub.clone(), open.clone()).is_err() {
-                    open.fetch_sub(1, Ordering::AcqRel);
-                }
-            }
+            let fault = hub.clone();
+            super::guarded(&fault, "control accept", move || {
+                accept(listener, hub, ids, open)
+            });
         })?;
     Ok(())
+}
+
+fn accept(
+    listener: UnixListener,
+    hub: crate::runtime::HubTx,
+    ids: Arc<AtomicU64>,
+    open: Arc<AtomicUsize>,
+) {
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        if open.load(Ordering::Acquire) >= CONNECTIONS_MAX {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            continue;
+        }
+        open.fetch_add(1, Ordering::AcqRel);
+        let conn = ids.fetch_add(1, Ordering::Relaxed);
+        if start_connection(stream, conn, hub.clone(), open.clone()).is_err() {
+            open.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
 }
 
 fn start_connection(
@@ -119,15 +131,18 @@ fn start_connection(
     let closer_half = stream.try_clone()?;
     let (writer, lines) = mpsc::sync_channel::<String>(WRITER_QUEUE);
     let inflight = Arc::new(AtomicUsize::new(0));
+    let fault = hub.clone();
     std::thread::Builder::new()
         .name("ds-control-write".into())
         .spawn(move || {
-            for line in lines {
-                if write_half.write_all(line.as_bytes()).is_err() {
-                    break;
+            super::guarded(&fault, "control writer", move || {
+                for line in lines {
+                    if write_half.write_all(line.as_bytes()).is_err() {
+                        break;
+                    }
                 }
-            }
-            let _ = write_half.shutdown(std::net::Shutdown::Both);
+                let _ = write_half.shutdown(std::net::Shutdown::Both);
+            });
         })?;
     let closer: Box<dyn Fn() + Send> = Box::new(move || {
         let _ = closer_half.shutdown(std::net::Shutdown::Both);
@@ -141,6 +156,7 @@ fn start_connection(
     .map_err(|_| io::Error::other("loop gone"))?;
     hub.send(Hub::Closer { conn, closer })
         .map_err(|_| io::Error::other("loop gone"))?;
+    let fault = hub.clone();
     let feeder = Feeder {
         conn,
         writer,
@@ -150,9 +166,11 @@ fn start_connection(
     std::thread::Builder::new()
         .name("ds-control-read".into())
         .spawn(move || {
-            let _ = framing::read_frames(&stream, |f| feeder.frame(f));
-            feeder.closed();
-            open.fetch_sub(1, Ordering::AcqRel);
+            super::guarded(&fault, "control reader", move || {
+                let _ = framing::read_frames(&stream, |f| feeder.frame(f));
+                feeder.closed();
+                open.fetch_sub(1, Ordering::AcqRel);
+            });
         })?;
     Ok(())
 }
