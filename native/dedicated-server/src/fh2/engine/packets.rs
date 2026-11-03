@@ -245,6 +245,9 @@ impl Engine {
                             && handle.id == 0
                             && self.bucket_list_world()) =>
                 {
+                    if router == BUCKET_LIST_ROUTER {
+                        self.bucket_list_player_deleted(serial);
+                    }
                     let Some(p) = self.peer_mut(serial) else {
                         break;
                     };
@@ -335,6 +338,8 @@ impl Engine {
         }
         self.forward(serial, forward, true);
         self.forward_cars(serial, car_now, cars);
+        // after the relayed objects: a PlayerState create precedes the 65 that names it
+        self.flush_bucket_list();
         if let Some(p) = self.peer_mut(serial)
             && p.universe_due
         {
@@ -469,8 +474,12 @@ impl Engine {
                         ],
                     );
                 }
+                if obj.router == BUCKET_LIST_ROUTER {
+                    self.bucket_list_refused(serial, &obj);
+                }
                 return None;
             }
+            // a PlayerState the object store cannot keep is not relayed either
             if bucket_player
                 && obj.create
                 && !has(self, (BUCKET_LIST_ROUTER, 0))
@@ -478,6 +487,7 @@ impl Engine {
                     .peer(serial)
                     .is_some_and(|p| p.objects.len() >= MAX_OBJECTS)
             {
+                self.bucket_list_capped(serial);
                 return None;
             }
             match payload::sanitize(obj.router, &obj.payload) {
@@ -496,7 +506,10 @@ impl Engine {
                         Some(u32::from(obj.router)),
                         Some(fault.value()),
                     );
-                    return None;
+                    // a bucket-list PlayerState fails open: its clean prefix, re-encoded
+                    obj.payload = bucket_player
+                        .then(|| self.bucket_list_sanitize_refused(serial, &obj, fault))
+                        .flatten()?;
                 }
             }
         }
@@ -604,10 +617,19 @@ impl Engine {
                 ..obj
             }))));
         }
-        let injected = p.objects.get(&key).map_or(0, |o| o.injected);
         for d in guard_notes {
             self.guard_note(index, key, d);
         }
+        if bucket_player {
+            self.bucket_list_player_update(serial, obj.create, obj.seq, &obj.payload);
+        }
+        if obj.router == 1 {
+            self.bucket_list_player_object(serial, &obj.payload); // the name 65 gives a partner
+        }
+        let injected = self
+            .peer(serial)
+            .and_then(|p| p.objects.get(&key))
+            .map_or(0, |o| o.injected);
         Some(Arc::new(wire::write(&Msg::Object(Obj {
             handle: Handle::relay(obj.handle.id, index),
             seq: seq_add(obj.seq, injected),

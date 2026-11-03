@@ -316,3 +316,79 @@ pub fn bucket_list_slots(vars: &[(u8, i32)]) -> Bits {
     }
     b
 }
+
+/// BucketListPlayerStateSynced's CurrentSlotId, CurrentChallengeId and RequestingPartner.
+pub const BUCKET_LIST_SLOT_VARIABLE: u8 = 1;
+pub const BUCKET_LIST_CHALLENGE_VARIABLE: u8 = 2;
+pub const BUCKET_LIST_REQUESTING_VARIABLE: u8 = 3;
+
+/// A BucketListPlayerStateSynced payload's variables, in order. A payload that does not read
+/// fully gives its clean prefix: the variables before the first unknown or repeated id, cut value
+/// or State past the enum.
+pub fn bucket_list_player_of(payload: &Bits) -> Vec<(u8, u64)> {
+    let mut out = Vec::new();
+    let mut r = payload.reader();
+    let mut seen = 0u32;
+    while r.left() > 0 {
+        let Ok(index) = r.read(3) else { break };
+        let index = index as usize;
+        if index >= BUCKET_LIST_PLAYER_VARIABLES.len() || seen & (1 << index) != 0 {
+            break;
+        }
+        let Ok(value) = r.read(BUCKET_LIST_PLAYER_VARIABLES[index] as u32) else {
+            break;
+        };
+        if index == BUCKET_LIST_STATE_VARIABLE && value > BUCKET_LIST_STATE_MAX {
+            break;
+        }
+        seen |= 1 << index;
+        out.push((index as u8, value));
+    }
+    out
+}
+
+/// BucketListPlayerStateSynced variables re-encoded in the game's layout (3-bit ids, the pinned
+/// widths).
+pub fn bucket_list_player(vars: &[(u8, u64)]) -> Bits {
+    let mut b = Bits::new();
+    for (var, value) in vars {
+        b.push(u64::from(*var), 3)
+            .push(*value, BUCKET_LIST_PLAYER_VARIABLES[*var as usize] as u32);
+    }
+    b
+}
+
+/// The player object's NetworkName (var 3) in one relayed payload, the last one it carries (UTF-16
+/// units), read from the payload's start while the variables' widths are known; `None`: none.
+pub fn player_name(payload: &Bits) -> Option<Vec<u16>> {
+    let mut r = payload.reader();
+    let mut name = None;
+    while r.left() >= 8 {
+        let Ok(index) = r.read(8) else { break };
+        let index = index as u32;
+        let i = index as usize;
+        if i >= PLAYER_VARIABLES.len() {
+            let width = player_single_width(index);
+            if width == 0 || r.skip(width as usize).is_err() {
+                return name;
+            }
+            continue;
+        }
+        let width = PLAYER_VARIABLES[i];
+        if width != -2 {
+            // the mapped twelve have fixed widths but the name (no float among them)
+            if r.skip(width as usize).is_err() {
+                return name;
+            }
+            continue;
+        }
+        let Ok(count) = r.read(5) else { return name };
+        let mut units = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let Ok(u) = r.read(16) else { return name };
+            units.push(u as u16);
+        }
+        name = Some(units);
+    }
+    name
+}

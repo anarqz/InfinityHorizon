@@ -1720,7 +1720,7 @@ impl Engine {
     }
 
     /// The first private universe (1..17) nobody holds.
-    fn free_universe(&self) -> Option<u8> {
+    pub(super) fn free_universe(&self) -> Option<u8> {
         (FIRST_PRIVATE_UNIVERSE..=LAST_PRIVATE_UNIVERSE).find(|u| {
             self.peers.iter().all(|p| p.universe != *u) && !self.bucket_list_universe_held(*u)
         })
