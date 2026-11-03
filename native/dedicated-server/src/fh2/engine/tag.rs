@@ -380,7 +380,7 @@ impl Engine {
             _ => None,
         };
         let Some((x, y, bx, by)) = pair else {
-            self.note("tag.hit_ignored_outside", vec![json!(index)]);
+            self.peer_noted(serial, "tag.hit_ignored_outside", vec![json!(index)]);
             return;
         };
         // the other car's game reports the same hit too: once applied, its "before" no longer
@@ -389,7 +389,7 @@ impl Engine {
             return;
         }
         if tag.is_it(x) == tag.is_it(y) {
-            self.note("tag.hit_ignored_pair", vec![json!(index)]);
+            self.peer_noted(serial, "tag.hit_ignored_pair", vec![json!(index)]);
             return;
         }
         let now = self.now;
@@ -399,15 +399,11 @@ impl Engine {
             .get(&pair_key)
             .is_some_and(|at| now - at < TAG_SWAP_COOLDOWN_MS)
         {
-            if self.peer_note(serial, "tag.hit_ignored_soon") {
-                self.note("tag.hit_ignored_soon", vec![json!(index)]);
-            }
+            self.peer_noted(serial, "tag.hit_ignored_soon", vec![json!(index)]);
             return;
         }
         if !self.tag_cars_close(x, y) {
-            if self.peer_note(serial, "tag.hit_ignored_far") {
-                self.note("tag.hit_ignored_far", vec![json!(index)]);
-            }
+            self.peer_noted(serial, "tag.hit_ignored_far", vec![json!(index)]);
             return;
         }
         let (it, other) = if tag.is_it(x) { (x, y) } else { (y, x) };

@@ -800,6 +800,14 @@ impl Engine {
         self.events.push(Event::Note { id, args });
     }
 
+    /// A note the peer's own traffic can repeat at message rate: within its per-peer budget only,
+    /// so one peer can't spend the world's shared note window.
+    pub(super) fn peer_noted(&mut self, serial: u64, id: &'static str, args: Vec<Value>) {
+        if self.peer_note(serial, id) {
+            self.note(id, args);
+        }
+    }
+
     /// A per-peer budget of each kind of note its own traffic can repeat: the first few only.
     pub(super) fn peer_note(&mut self, serial: u64, kind: &'static str) -> bool {
         let Some(p) = self.peer_mut(serial) else {
