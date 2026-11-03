@@ -32,6 +32,14 @@ const TAG_LATE_CLOSE_MS: i64 = 15_000;
 const TAG_ALONE_CLOSE_MS: i64 = 3000;
 /// 37's car slots.
 const TAG_SLOTS: usize = 12;
+/// A hit counts only between cars this close (metres) by their last accepted predictions, both
+/// fresher than `TAG_CAR_FRESH_MS`: generous for latency (two cars at 100 m/s and a quarter
+/// second each), yet no participant can tag a car across the map.
+const TAG_HIT_RADIUS_M: f32 = 60.0;
+const TAG_CAR_FRESH_MS: i64 = 1500;
+/// The same two cars can't swap again this soon (no tag-back at message rate; a chain of
+/// different cars, as Infected spreads, is not slowed).
+const TAG_SWAP_COOLDOWN_MS: i64 = 1000;
 
 #[derive(Debug, Clone)]
 pub(super) struct TagGame {
@@ -41,6 +49,8 @@ pub(super) struct TagGame {
     assigned: bool,
     /// Each car's bucket by its player's peer index.
     buckets: BTreeMap<u8, u8>,
+    /// When each pair of cars (lower index first) last swapped through a hit.
+    swapped_at: BTreeMap<(u8, u8), i64>,
     repeats: Vec<i64>,
     go_at: Option<i64>,
     marked: i64,
@@ -103,6 +113,7 @@ impl Engine {
             assign_at: self.now + TAG_ASSIGN_DELAY_MS,
             assigned: false,
             buckets: BTreeMap::new(),
+            swapped_at: BTreeMap::new(),
             repeats: Vec::new(),
             go_at: None,
             marked: 0,
@@ -321,6 +332,27 @@ impl Engine {
         }
     }
 
+    /// Whether two participants' cars may have touched: when both cars' last accepted
+    /// predictions are fresh, they must be within `TAG_HIT_RADIUS_M`; without both positions the
+    /// hit stands, as in the reference (the swap cooldown still bounds the rate).
+    fn tag_cars_close(&self, x: u8, y: u8) -> bool {
+        let now = self.now;
+        let at = |index: u8| {
+            self.peers
+                .iter()
+                .find(|p| p.index == index)
+                .filter(|p| p.last_car_at.is_some_and(|t| now - t <= TAG_CAR_FRESH_MS))
+                .and_then(|p| p.car_position)
+        };
+        match (at(x), at(y)) {
+            (Some(a), Some(b)) => {
+                let (dx, dy, dz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+                (dx * dx + dy * dy + dz * dz).sqrt() <= TAG_HIT_RADIUS_M
+            }
+            _ => true,
+        }
+    }
+
     /// A game's hit report (36): applied once, when the buckets it saw are the server's and
     /// exactly one car is It.
     pub(super) fn tag_collision(&mut self, serial: u64, a: Handle, b: Handle, values: [u8; 4]) {
@@ -360,9 +392,29 @@ impl Engine {
             self.note("tag.hit_ignored_pair", vec![json!(index)]);
             return;
         }
+        let now = self.now;
+        let pair_key = (x.min(y), x.max(y));
+        if tag
+            .swapped_at
+            .get(&pair_key)
+            .is_some_and(|at| now - at < TAG_SWAP_COOLDOWN_MS)
+        {
+            if self.peer_note(serial, "tag.hit_ignored_soon") {
+                self.note("tag.hit_ignored_soon", vec![json!(index)]);
+            }
+            return;
+        }
+        if !self.tag_cars_close(x, y) {
+            if self.peer_note(serial, "tag.hit_ignored_far") {
+                self.note("tag.hit_ignored_far", vec![json!(index)]);
+            }
+            return;
+        }
         let (it, other) = if tag.is_it(x) { (x, y) } else { (y, x) };
         self.account_tag();
         let Some(tag) = self.tag.as_mut() else { return };
+        tag.swapped_at.retain(|_, at| now - *at < TAG_SWAP_COOLDOWN_MS);
+        tag.swapped_at.insert(pair_key, now);
         tag.buckets.insert(it, tag.rules.it_becomes as u8);
         tag.buckets.insert(other, tag.rules.not_it_becomes as u8);
         let scorer = if tag.rules.mode == TagMode::King {
