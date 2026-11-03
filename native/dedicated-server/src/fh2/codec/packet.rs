@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Written from docs/launcher/NERDCORE_WIRE.md (OD-187); no other codec source used.
+// Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! One datagram = one packet (§2): an 88-bit header (see [`HEADER_BITS`]), `count` messages back to back with no
 //! length and no alignment, then an optional voice trailer passed through as raw bits.
 
@@ -9,9 +9,8 @@ use super::{
     registry::{Body, MAX_CONNECT_ONLY_ID, MAX_MESSAGE_ID, MESSAGE_ID_BITS, Registry},
 };
 
-/// Header length in bits: 16 + 16 + 32 + 8 + 16 (§2.1's table).
-// SPEC: §2.1/§2.2 call the header "80-bit" and append messages "after bit 80", but the table's
-// fields (offset 72, width 16 for `size`) end at bit 88; the table is followed.
+/// Header length in bits: 16 + 16 + 32 + 8 + 16 = 88, an 11-byte header (§2.1's table, the C#
+/// engine, fh2-mods and every D2 vector; §2.1/§2.2's prose "80-bit" is a slip, reported back).
 pub const HEADER_BITS: usize = 88;
 /// Largest packet a receiver accepts, header included (§2.3).
 pub const MAX_PACKET_BYTES: u16 = 0x55c;

@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Written from docs/launcher/NERDCORE_WIRE.md (OD-187); no other codec source used.
+// Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! Object keys (§1.7), routers (§4.1), the object messages create/update/delete (§4.2-§4.5) and
 //! the per-object sequence (§4.3).
 
@@ -131,6 +131,9 @@ impl ObjectKey {
 
 /// An object message after its 7-bit id (§4.2, §4.4). Payloads are kept as their raw `L` bits
 /// (§4.5); [`super::synced::ObjectSchema`] decodes them once a type's variable list is known.
+///
+/// The ownership and needs-updates bodies (10-13) follow the Infinity C# engine, which the D2
+/// vectors confirm; NERDCORE_WIRE.md §4.4 leaves them undecoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectMessage {
     Create {
@@ -152,7 +155,45 @@ pub enum ObjectMessage {
         key: ObjectKey,
         seq: u8,
     },
+    /// 10: router, the type (only on routers with more than one type) *before* the key, then
+    /// the key.
+    RequestOwnership {
+        router: u8,
+        type_index: u32,
+        key: ObjectKey,
+    },
+    /// 11: router, key, sequence, then a payload like an update's.
+    GrantOwnership {
+        router: u8,
+        key: ObjectKey,
+        seq: u8,
+        payload: BitRun,
+    },
+    /// 12: router, key, sequence.
+    TransferOwnership {
+        router: u8,
+        key: ObjectKey,
+        seq: u8,
+    },
+    /// 13: ConsoleManager router (3) only: router, key, a 16-bit count, then that many 6-bit
+    /// entries.
+    NeedsUpdates {
+        router: u8,
+        key: ObjectKey,
+        entries: Vec<u8>,
+    },
 }
+
+/// Message ids of the ownership and needs-updates messages.
+pub const MSG_REQUEST_OWNERSHIP: u8 = 10;
+pub const MSG_GRANT_OWNERSHIP: u8 = 11;
+pub const MSG_TRANSFER_OWNERSHIP: u8 = 12;
+pub const MSG_NEEDS_UPDATES: u8 = 13;
+/// The only router a NeedsUpdates may name.
+pub const NEEDS_UPDATES_ROUTER: u8 = 3;
+/// Width of a NeedsUpdates count and entry.
+pub const NEEDS_UPDATES_COUNT_BITS: u8 = 16;
+pub const NEEDS_UPDATES_ENTRY_BITS: u8 = 6;
 
 fn read_payload(r: &mut BitReader<'_>) -> Result<BitRun, CodecError> {
     let len = r.read(PAYLOAD_LEN_BITS)? as usize;
@@ -167,20 +208,48 @@ fn write_payload(w: &mut BitWriter, p: &BitRun) -> Result<(), CodecError> {
     w.write_run(p)
 }
 
-fn read_prefix(r: &mut BitReader<'_>) -> Result<(&'static RouterSpec, ObjectKey), CodecError> {
+fn read_router(r: &mut BitReader<'_>) -> Result<&'static RouterSpec, CodecError> {
     let rid = r.read(ROUTER_ID_BITS)? as u8;
-    let spec = router(rid).ok_or(CodecError::Router(rid))?;
-    let key = ObjectKey::read(r, spec.id_bits())?;
-    Ok((spec, key))
+    router(rid).ok_or(CodecError::Router(rid))
+}
+
+fn read_type(r: &mut BitReader<'_>, spec: &RouterSpec) -> Result<u32, CodecError> {
+    if !spec.has_type_field() {
+        return Ok(0);
+    }
+    let t = r.read(spec.type_bits())?;
+    // SPEC: unverified (§4.4): a type index beyond the router's factories is treated as
+    // invalid; neither the spec nor the references say what the game does with one.
+    if t >= spec.types {
+        return Err(CodecError::Range);
+    }
+    Ok(t)
+}
+
+fn write_type(w: &mut BitWriter, spec: &RouterSpec, t: u32) -> Result<(), CodecError> {
+    if spec.has_type_field() {
+        if t >= spec.types {
+            return Err(CodecError::Range);
+        }
+        w.write(t, spec.type_bits())
+    } else if t != 0 {
+        Err(CodecError::Range)
+    } else {
+        Ok(())
+    }
 }
 
 impl ObjectMessage {
-    /// The message id (7, 8 or 9).
+    /// The message id (7 to 13).
     pub fn message_id(&self) -> u8 {
         match self {
             ObjectMessage::Create { .. } => MSG_OBJECT_CREATE,
             ObjectMessage::Update { .. } => MSG_OBJECT_UPDATE,
             ObjectMessage::Delete { .. } => MSG_OBJECT_DELETE,
+            ObjectMessage::RequestOwnership { .. } => MSG_REQUEST_OWNERSHIP,
+            ObjectMessage::GrantOwnership { .. } => MSG_GRANT_OWNERSHIP,
+            ObjectMessage::TransferOwnership { .. } => MSG_TRANSFER_OWNERSHIP,
+            ObjectMessage::NeedsUpdates { .. } => MSG_NEEDS_UPDATES,
         }
     }
 
@@ -188,7 +257,11 @@ impl ObjectMessage {
         match self {
             ObjectMessage::Create { router, .. }
             | ObjectMessage::Update { router, .. }
-            | ObjectMessage::Delete { router, .. } => *router,
+            | ObjectMessage::Delete { router, .. }
+            | ObjectMessage::RequestOwnership { router, .. }
+            | ObjectMessage::GrantOwnership { router, .. }
+            | ObjectMessage::TransferOwnership { router, .. }
+            | ObjectMessage::NeedsUpdates { router, .. } => *router,
         }
     }
 
@@ -196,76 +269,115 @@ impl ObjectMessage {
         match self {
             ObjectMessage::Create { key, .. }
             | ObjectMessage::Update { key, .. }
-            | ObjectMessage::Delete { key, .. } => *key,
+            | ObjectMessage::Delete { key, .. }
+            | ObjectMessage::RequestOwnership { key, .. }
+            | ObjectMessage::GrantOwnership { key, .. }
+            | ObjectMessage::TransferOwnership { key, .. }
+            | ObjectMessage::NeedsUpdates { key, .. } => *key,
         }
     }
 
-    pub fn seq(&self) -> u8 {
+    /// The per-object sequence number, for the messages that carry one.
+    pub fn seq(&self) -> Option<u8> {
         match self {
             ObjectMessage::Create { seq, .. }
             | ObjectMessage::Update { seq, .. }
-            | ObjectMessage::Delete { seq, .. } => *seq,
+            | ObjectMessage::Delete { seq, .. }
+            | ObjectMessage::GrantOwnership { seq, .. }
+            | ObjectMessage::TransferOwnership { seq, .. } => Some(*seq),
+            ObjectMessage::RequestOwnership { .. } | ObjectMessage::NeedsUpdates { .. } => None,
         }
     }
 
-    /// Reads the body of message `id` (7, 8 or 9) after its 7-bit id.
+    /// Reads the body of message `id` (7 to 13) after its 7-bit id.
     pub fn read(id: u8, r: &mut BitReader<'_>) -> Result<ObjectMessage, CodecError> {
-        match id {
+        let spec = read_router(r)?;
+        let router = spec.id;
+        if id == MSG_REQUEST_OWNERSHIP {
+            let type_index = read_type(r, spec)?;
+            let key = ObjectKey::read(r, spec.id_bits())?;
+            return Ok(ObjectMessage::RequestOwnership {
+                router,
+                type_index,
+                key,
+            });
+        }
+        if id == MSG_NEEDS_UPDATES && router != NEEDS_UPDATES_ROUTER {
+            return Err(CodecError::Router(router));
+        }
+        let key = ObjectKey::read(r, spec.id_bits())?;
+        Ok(match id {
             MSG_OBJECT_CREATE => {
-                let (spec, key) = read_prefix(r)?;
-                let type_index = if spec.has_type_field() {
-                    let t = r.read(spec.type_bits())?;
-                    // SPEC: unverified (§4.4): a type index beyond the router's factories is
-                    // treated as invalid; the spec does not say what the game does with one.
-                    if t >= spec.types {
-                        return Err(CodecError::Range);
-                    }
-                    t
-                } else {
-                    0
-                };
+                let type_index = read_type(r, spec)?;
                 let seq = r.read(SEQ_BITS)? as u8;
                 let payload = read_payload(r)?;
-                Ok(ObjectMessage::Create {
-                    router: spec.id,
+                ObjectMessage::Create {
+                    router,
                     key,
                     type_index,
                     seq,
                     payload,
-                })
+                }
             }
-            MSG_OBJECT_UPDATE => {
-                let (spec, key) = read_prefix(r)?;
+            MSG_OBJECT_UPDATE | MSG_GRANT_OWNERSHIP => {
                 let seq = r.read(SEQ_BITS)? as u8;
                 let payload = read_payload(r)?;
-                Ok(ObjectMessage::Update {
-                    router: spec.id,
-                    key,
-                    seq,
-                    payload,
-                })
+                if id == MSG_OBJECT_UPDATE {
+                    ObjectMessage::Update {
+                        router,
+                        key,
+                        seq,
+                        payload,
+                    }
+                } else {
+                    ObjectMessage::GrantOwnership {
+                        router,
+                        key,
+                        seq,
+                        payload,
+                    }
+                }
             }
-            MSG_OBJECT_DELETE => {
-                let (spec, key) = read_prefix(r)?;
+            MSG_OBJECT_DELETE | MSG_TRANSFER_OWNERSHIP => {
                 let seq = r.read(SEQ_BITS)? as u8;
-                Ok(ObjectMessage::Delete {
-                    router: spec.id,
-                    key,
-                    seq,
-                })
+                if id == MSG_OBJECT_DELETE {
+                    ObjectMessage::Delete { router, key, seq }
+                } else {
+                    ObjectMessage::TransferOwnership { router, key, seq }
+                }
             }
-            other => Err(CodecError::Unparsed(other)),
-        }
+            MSG_NEEDS_UPDATES => {
+                let count = r.read(NEEDS_UPDATES_COUNT_BITS)? as usize;
+                if count * usize::from(NEEDS_UPDATES_ENTRY_BITS) > r.remaining() {
+                    return Err(CodecError::Truncated);
+                }
+                let mut entries = Vec::with_capacity(count);
+                for _ in 0..count {
+                    entries.push(r.read(NEEDS_UPDATES_ENTRY_BITS)? as u8);
+                }
+                ObjectMessage::NeedsUpdates {
+                    router,
+                    key,
+                    entries,
+                }
+            }
+            other => return Err(CodecError::Unparsed(other)),
+        })
     }
 
-    /// Writes the body (without the 7-bit message id).
+    /// Writes the body (without the 7-bit message id). Sequence 255 is written as given (the
+    /// codec is lossless); `SeqCounter` never produces it and `ObjectSequencer` refuses it.
     pub fn write(&self, w: &mut BitWriter) -> Result<(), CodecError> {
         let rid = self.router();
         let spec = router(rid).ok_or(CodecError::Router(rid))?;
         w.write(u32::from(rid), ROUTER_ID_BITS)?;
+        if let ObjectMessage::RequestOwnership { type_index, .. } = self {
+            write_type(w, spec, *type_index)?;
+        }
+        if matches!(self, ObjectMessage::NeedsUpdates { .. }) && rid != NEEDS_UPDATES_ROUTER {
+            return Err(CodecError::Router(rid));
+        }
         self.key().write(w, spec.id_bits())?;
-        // Sequence 255 is written as given (the codec is lossless); `SeqCounter` never produces it
-        // and `ObjectSequencer` refuses it.
         match self {
             ObjectMessage::Create {
                 type_index,
@@ -273,22 +385,26 @@ impl ObjectMessage {
                 payload,
                 ..
             } => {
-                if spec.has_type_field() {
-                    if *type_index >= spec.types {
-                        return Err(CodecError::Range);
-                    }
-                    w.write(*type_index, spec.type_bits())?;
-                } else if *type_index != 0 {
-                    return Err(CodecError::Range);
-                }
+                write_type(w, spec, *type_index)?;
                 w.write(u32::from(*seq), SEQ_BITS)?;
                 write_payload(w, payload)
             }
-            ObjectMessage::Update { seq, payload, .. } => {
+            ObjectMessage::Update { seq, payload, .. }
+            | ObjectMessage::GrantOwnership { seq, payload, .. } => {
                 w.write(u32::from(*seq), SEQ_BITS)?;
                 write_payload(w, payload)
             }
-            ObjectMessage::Delete { seq, .. } => w.write(u32::from(*seq), SEQ_BITS),
+            ObjectMessage::Delete { seq, .. } | ObjectMessage::TransferOwnership { seq, .. } => {
+                w.write(u32::from(*seq), SEQ_BITS)
+            }
+            ObjectMessage::RequestOwnership { .. } => Ok(()),
+            ObjectMessage::NeedsUpdates { entries, .. } => {
+                let count = u32::try_from(entries.len()).map_err(|_| CodecError::Range)?;
+                w.write(count, NEEDS_UPDATES_COUNT_BITS)?;
+                entries
+                    .iter()
+                    .try_for_each(|e| w.write(u32::from(*e), NEEDS_UPDATES_ENTRY_BITS))
+            }
         }
     }
 }

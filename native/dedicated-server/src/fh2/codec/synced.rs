@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Written from docs/launcher/NERDCORE_WIRE.md (OD-187); no other codec source used.
+// Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! Synced-variable encodings (§5) and object payload variables (§4.5).
 //!
 //! An [`ObjectSchema`] is one object type's variable list (spec §7): it decodes and encodes a
