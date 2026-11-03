@@ -9,14 +9,17 @@
 //! comes from the caller. Logs carry peer indexes, models and counts only.
 
 use std::{
-    collections::{BTreeMap, HashSet},
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde_json::{Value, json};
 
 use super::{Engine, Event, bits::Bits, dict::DotMap, payload::PRIVATE_UNIVERSE_BITS};
-use crate::fh2::catalog::{CatalogStore, ModelParts, PartsLookup};
+use crate::fh2::catalog::{CatalogStore, ModelParts, PartsLookup, Requester};
 
 /// The rules (the reference's `PeerWatchRules.From(rules, forceSpeed)`).
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +72,13 @@ const GAP_MS: i64 = 1500;
 const QUIET_MS: i64 = 2000;
 const CLOCK_MIN_MS: i64 = 30_000;
 const MAX_CARS: usize = 32;
+/// The parts rule reports a player at most once per car model, for at most this many models per
+/// player and this many (player, model) pairs per world: a watched peer cycling impossible rows
+/// or models can't grow the set or the report stream without bound.
+const MAX_PART_REPORTS_PER_PLAYER: usize = 4;
+const MAX_PART_REPORTS: usize = 1024;
+/// A process-unique id per parts watch: the catalog's per-world need budget.
+static NEXT_PARTS_WATCH: AtomicU64 = AtomicU64::new(1);
 /// CarPredictionFull: velocity s16 × 3 at bit 96; the universe (5 bits) at 395; the stamp last.
 const VELOCITY_OFFSET: usize = 96;
 const CAR_UNIVERSE_OFFSET: usize = 395;
@@ -919,7 +929,11 @@ struct PartsWatch {
     store: Arc<Mutex<CatalogStore>>,
     rules_version: u32,
     cars: DotMap<u8, PartsCar>,
-    reported: HashSet<(u64, u32, u32)>,
+    /// (player, model) pairs reported, and models reported per player (both capped).
+    reported: HashSet<(u64, u32)>,
+    per_player: HashMap<u64, usize>,
+    /// This watch's world in the catalog's need budget.
+    world: u64,
 }
 
 fn is_part(p: u32) -> bool {
@@ -927,10 +941,28 @@ fn is_part(p: u32) -> bool {
 }
 
 impl PartsWatch {
-    fn lookup(&self, model: u32, now: i64) -> PartsLookup {
+    fn lookup(&self, model: u32, xuid: u64, now: i64) -> PartsLookup {
+        let who = Requester {
+            world: self.world,
+            peer: xuid,
+        };
         self.store.lock().map_or(PartsLookup::Unknown, |mut s| {
-            s.parts(model, now.max(0) as u64)
+            s.parts_for(model, now.max(0) as u64, who)
         })
+    }
+
+    /// Whether `(xuid, model)` may be reported now (and record it): once per pair, within the
+    /// per-player and per-world caps.
+    fn may_report(&mut self, xuid: u64, model: u32) -> bool {
+        if self.reported.contains(&(xuid, model))
+            || self.reported.len() >= MAX_PART_REPORTS
+            || self.per_player.get(&xuid).copied().unwrap_or(0) >= MAX_PART_REPORTS_PER_PLAYER
+        {
+            return false;
+        }
+        self.reported.insert((xuid, model));
+        *self.per_player.entry(xuid).or_insert(0) += 1;
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1001,7 +1033,7 @@ impl PartsWatch {
             return; // the same car again: nothing new to judge
         }
         // the rows come from the controller: until they do, nothing is judged (never a flag)
-        let rows: Arc<ModelParts> = match self.lookup(model, now) {
+        let rows: Arc<ModelParts> = match self.lookup(model, car.xuid, now) {
             PartsLookup::Known(rows) => rows,
             PartsLookup::Unknown => {
                 if let Some(car) = self.cars.get_mut(&index) {
@@ -1117,7 +1149,7 @@ impl PartsWatch {
         }
         car.episode = Some((model, first));
         let xuid = car.xuid;
-        if !self.reported.insert((xuid, model, first)) {
+        if !self.may_report(xuid, model) {
             out.push(Out::Note(
                 "parts.already",
                 vec![json!(index), json!(model), json!(first), json!(version)],
@@ -1226,6 +1258,8 @@ impl Engine {
                 rules_version: r.version,
                 cars: DotMap::new(),
                 reported: HashSet::new(),
+                per_player: HashMap::new(),
+                world: NEXT_PARTS_WATCH.fetch_add(1, Ordering::Relaxed),
             }),
             _ => None,
         };
@@ -1418,5 +1452,59 @@ impl Engine {
             let txid = self.random.transaction();
             self.emit(endpoint, roster(&others, &txid));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::fields::Obj;
+
+    fn store_with(models: &[u32]) -> Arc<Mutex<CatalogStore>> {
+        let mut s = CatalogStore::default();
+        for &m in models {
+            let body = json!({"model": m, "slots": {
+                "List_UpgradeEngine": [10], "List_UpgradeDrivetrain": [11],
+                "List_UpgradeCarBody": [12]}});
+            let Value::Object(o) = body else { panic!() };
+            s.set_parts(Obj::new(&o, "")).unwrap();
+        }
+        Arc::new(Mutex::new(s))
+    }
+
+    fn rows(bogus: u32) -> Vec<u32> {
+        let mut p = vec![NO_PART; PART_SLOTS];
+        (p[0], p[1], p[2], p[5]) = (10, 11, 12, bogus);
+        p
+    }
+
+    fn reports(out: &[Out]) -> usize {
+        out.iter().filter(|o| matches!(o, Out::Report(_))).count()
+    }
+
+    #[test]
+    fn parts_reports_are_once_per_player_and_model_and_capped() {
+        let models: Vec<u32> = (100..120).collect();
+        let mut w = PartsWatch {
+            store: store_with(&models),
+            rules_version: 1,
+            cars: DotMap::new(),
+            reported: HashSet::new(),
+            per_player: HashMap::new(),
+            world: 1,
+        };
+        let mut out = Vec::new();
+        // the same real model with a different impossible row each update: one report
+        for (i, bogus) in (5000..6000).enumerate() {
+            w.observe(3, 42, Some(100), Some(rows(bogus)), false, i as i64, &mut out);
+        }
+        assert_eq!(reports(&out), 1);
+        // a different real model each update: at most the per-player cap
+        out.clear();
+        for (i, &m) in models.iter().enumerate() {
+            w.observe(3, 42, Some(m), Some(rows(7000 + i as u32)), false, 2000, &mut out);
+        }
+        assert_eq!(reports(&out), MAX_PART_REPORTS_PER_PLAYER - 1);
+        assert!(w.reported.len() <= MAX_PART_REPORTS_PER_PLAYER);
     }
 }

@@ -8,12 +8,13 @@
 //!   classes}]}}`: the Road Trip catalog, latest-wins, idempotent, at most 1024 events;
 //! - `catalog.parts {game, model, slots: {<table>: [row ids]}}`: one car model's upgrade rows
 //!   for the watch's parts rule, answered on demand: when the watch first needs a model the
-//!   engine emits `catalog.need {game, kind: "parts", model}` (deduplicated, rate-limited); a
-//!   64-model LRU keeps the answers; until one arrives that model's parts are unknown (never a
-//!   flag).
+//!   engine emits `catalog.need {game, kind: "parts", model}` (deduplicated, rate-limited per
+//!   peer, per world and process-wide); a 64-model LRU keeps the known answers and a separate
+//!   negative cache the models the game database does not have, so unknown-model answers never
+//!   evict known ones; until an answer arrives that model's parts are unknown (never a flag).
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     sync::Arc,
 };
 
@@ -34,9 +35,22 @@ pub const MAX_PART_ROWS: usize = 4096;
 pub const MAX_SLOT_ROWS: usize = 1024;
 /// A model asked for is not asked again for this long while no answer came.
 pub const NEED_RETRY_MS: u64 = 60_000;
-/// At most this many `catalog.need` per window (process-wide).
-pub const NEEDS_PER_WINDOW: usize = 16;
+/// At most this many `catalog.need` per window, process-wide: only a backstop, sized so every
+/// world spending its own budget (`WORLD_NEEDS_PER_WINDOW` x the public profile's 8 worlds)
+/// still fits, so one world can never starve the others.
+pub const NEEDS_PER_WINDOW: usize = 64;
 pub const NEED_WINDOW_MS: u64 = 10_000;
+/// At most this many `catalog.need` per window for one world (requester `world`).
+pub const WORLD_NEEDS_PER_WINDOW: usize = 8;
+/// At most this many new models asked for one peer per `PEER_NEED_WINDOW_MS` (a player who
+/// changes car often still gets an answer within the minute; one writing bogus models cannot
+/// spend the world's budget).
+pub const PEER_NEEDS_PER_WINDOW: usize = 2;
+pub const PEER_NEED_WINDOW_MS: u64 = 60_000;
+/// Requesters (world, peer) remembered for their budgets, at most (oldest windows go first).
+pub const MAX_REQUESTERS: usize = 1024;
+/// Models the game database does not have, remembered apart from the known LRU.
+pub const MAX_UNKNOWN_MODELS: usize = 256;
 /// Models waiting for an answer, at most.
 pub const MAX_PENDING_NEEDS: usize = 256;
 
@@ -96,13 +110,33 @@ pub struct ModelParts {
     pub by_slot: Vec<BTreeSet<u32>>,
     /// The controller found the model (false: a car pack or a placeholder, not judged).
     pub known: bool,
+    /// Every slot's rows together, built once when the answer is stored (never per check).
+    all: BTreeSet<u32>,
 }
 
 impl ModelParts {
-    /// Every row of any slot's table that belongs to this model.
-    pub fn all(&self) -> BTreeSet<u32> {
-        self.by_slot.iter().flatten().copied().collect()
+    /// One model's rows; `all` is derived here.
+    pub fn new(model: u32, by_slot: Vec<BTreeSet<u32>>, known: bool) -> ModelParts {
+        let all = by_slot.iter().flatten().copied().collect();
+        ModelParts {
+            model,
+            by_slot,
+            known,
+            all,
+        }
     }
+
+    /// Every row of any slot's table that belongs to this model.
+    pub fn all(&self) -> &BTreeSet<u32> {
+        &self.all
+    }
+}
+
+/// Who asks for a model: the world (a process-unique id per watch) and the peer's XUID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Requester {
+    pub world: u64,
+    pub peer: u64,
 }
 
 /// What the parts rule gets for a model.
@@ -118,11 +152,16 @@ pub enum PartsLookup {
 #[derive(Debug, Default)]
 pub struct CatalogStore {
     road_trip: Option<(String, Arc<RoadTripCatalog>)>,
-    /// LRU: the front is the least recently used.
+    /// LRU of known models: the front is the least recently used.
     parts: VecDeque<Arc<ModelParts>>,
+    /// Negative cache: models the controller answered as absent (front: oldest).
+    unknown: VecDeque<Arc<ModelParts>>,
     /// Models asked for and when.
     pending: BTreeMap<u32, u64>,
     window: (u64, usize),
+    /// Per world and per (world, peer) need windows: (start, count).
+    worlds: HashMap<u64, (u64, usize)>,
+    peers: HashMap<Requester, (u64, usize)>,
     /// `catalog.need` events to emit (models).
     needs: Vec<u32>,
 }
@@ -223,30 +262,54 @@ impl CatalogStore {
         let known = !slots.is_empty();
         self.pending.remove(&model);
         self.parts.retain(|p| p.model != model);
-        if self.parts.len() >= MAX_CACHED_MODELS {
-            self.parts.pop_front();
+        self.unknown.retain(|p| p.model != model);
+        let entry = Arc::new(ModelParts::new(model, by_slot, known));
+        // an absent model goes to the negative cache: it never evicts a known one
+        let (cache, cap) = if known {
+            (&mut self.parts, MAX_CACHED_MODELS)
+        } else {
+            (&mut self.unknown, MAX_UNKNOWN_MODELS)
+        };
+        if cache.len() >= cap {
+            cache.pop_front();
         }
-        self.parts.push_back(Arc::new(ModelParts {
-            model,
-            by_slot,
-            known,
-        }));
+        cache.push_back(entry);
         Ok(Map::new())
     }
 
-    /// The parts rule's rows for a model at `now` (the process's monotonic ms): known, or
-    /// unknown with a `catalog.need` queued (deduplicated, rate-limited).
+    /// The parts rule's rows for a model at `now` (the process's monotonic ms), asked by no
+    /// particular world or peer (tests, tools): see [`CatalogStore::parts_for`].
     pub fn parts(&mut self, model: u32, now: u64) -> PartsLookup {
+        self.parts_for(model, now, Requester::default())
+    }
+
+    /// The parts rule's rows for a model at `now`: known, or unknown with a `catalog.need`
+    /// queued (deduplicated; rate-limited per peer, per world, then process-wide).
+    pub fn parts_for(&mut self, model: u32, now: u64, who: Requester) -> PartsLookup {
         if let Some(i) = self.parts.iter().position(|p| p.model == model) {
             let p = self.parts.remove(i).expect("found");
             self.parts.push_back(p.clone());
             return PartsLookup::Known(p);
+        }
+        if let Some(p) = self.unknown.iter().find(|p| p.model == model) {
+            return PartsLookup::Known(p.clone());
         }
         if self
             .pending
             .get(&model)
             .is_some_and(|at| now.saturating_sub(*at) < NEED_RETRY_MS)
         {
+            return PartsLookup::Unknown;
+        }
+        // the cheapest refusals first: the peer's, then the world's, then the process's
+        let open = |w: &(u64, usize), span: u64, cap: usize| {
+            now.saturating_sub(w.0) >= span || w.1 < cap
+        };
+        if self.peers.get(&who).is_some_and(|w| {
+            !open(w, PEER_NEED_WINDOW_MS, PEER_NEEDS_PER_WINDOW)
+        }) || self.worlds.get(&who.world).is_some_and(|w| {
+            !open(w, NEED_WINDOW_MS, WORLD_NEEDS_PER_WINDOW)
+        }) {
             return PartsLookup::Unknown;
         }
         if now.saturating_sub(self.window.0) >= NEED_WINDOW_MS {
@@ -260,6 +323,23 @@ impl CatalogStore {
         if self.pending.len() >= MAX_PENDING_NEEDS {
             return PartsLookup::Unknown;
         }
+        if self.peers.len() >= MAX_REQUESTERS || self.worlds.len() >= MAX_REQUESTERS {
+            self.peers
+                .retain(|_, w| now.saturating_sub(w.0) < PEER_NEED_WINDOW_MS);
+            self.worlds
+                .retain(|_, w| now.saturating_sub(w.0) < NEED_WINDOW_MS);
+            if self.peers.len() >= MAX_REQUESTERS || self.worlds.len() >= MAX_REQUESTERS {
+                return PartsLookup::Unknown;
+            }
+        }
+        let charge = |w: &mut (u64, usize), span: u64| {
+            if now.saturating_sub(w.0) >= span {
+                *w = (now, 0);
+            }
+            w.1 += 1;
+        };
+        charge(self.peers.entry(who).or_insert((now, 0)), PEER_NEED_WINDOW_MS);
+        charge(self.worlds.entry(who.world).or_insert((now, 0)), NEED_WINDOW_MS);
         self.window.1 += 1;
         self.pending.insert(model, now);
         self.needs.push(model);
@@ -294,18 +374,47 @@ mod tests {
             let Value::Object(m) = b else { panic!() };
             s.set_parts(Obj::new(&m, "")).unwrap();
         }
+        // absent models live in the negative cache: the known model 7 is still kept
+        assert_eq!(s.parts.len(), 1);
+        assert!(matches!(s.parts(7, 30), PartsLookup::Known(_)));
+        for model in 200..270 {
+            let b = json!({"model": model, "slots": {"List_UpgradeBrakes": [1]}});
+            let Value::Object(m) = b else { panic!() };
+            s.set_parts(Obj::new(&m, "")).unwrap();
+        }
         assert_eq!(s.parts.len(), MAX_CACHED_MODELS);
-        assert_eq!(s.parts(7, 30), PartsLookup::Unknown);
+        assert_eq!(s.parts(7, 40), PartsLookup::Unknown);
+        let PartsLookup::Known(absent) = s.parts(150, 50) else {
+            panic!()
+        };
+        assert!(!absent.known);
     }
 
     #[test]
     fn needs_are_rate_limited() {
         let mut s = CatalogStore::default();
-        for m in 0..40 {
-            s.parts(m, 0);
+        for m in 0..200 {
+            let who = Requester {
+                world: u64::from(m / 10),
+                peer: u64::from(m),
+            };
+            s.parts_for(m, 0, who);
         }
         assert_eq!(s.take_needs().len(), NEEDS_PER_WINDOW);
-        s.parts(99, NEED_WINDOW_MS);
-        assert_eq!(s.take_needs(), vec![99]);
+        s.parts_for(999, NEED_WINDOW_MS, Requester { world: 77, peer: 1 });
+        assert_eq!(s.take_needs(), vec![999]);
+    }
+
+    #[test]
+    fn one_peer_cannot_starve_the_process_wide_parts_need_window() {
+        let mut s = CatalogStore::default();
+        let bad = Requester { world: 1, peer: 9 };
+        for m in 0..1000 {
+            s.parts_for(m, m.into(), bad);
+        }
+        assert_eq!(s.take_needs().len(), PEER_NEEDS_PER_WINDOW);
+        let good = Requester { world: 2, peer: 5 };
+        s.parts_for(5000, 1000, good);
+        assert_eq!(s.take_needs(), vec![5000]);
     }
 }
