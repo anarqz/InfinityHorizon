@@ -30,11 +30,13 @@ use super::{
     Engine, M, Peer,
     bits::Bits,
     dict::DotMap,
+    key::ObjKey,
+    message::{self, Message, ObjectChange},
     packets::{BUCKET_LIST_ROUTER, BUCKET_LIST_SLOTS_TYPE},
     payload::{self, Fault},
     seams::CAR_UNIVERSE_OFFSET,
-    wire::{self, Handle, Msg, Obj, seq_newer, seq_next},
 };
+use crate::fh2::codec::object::{seq_is_newer, seq_next};
 
 pub const ENTRIES: usize = 12;
 pub const WAIT_MS: i64 = 120_000;
@@ -52,7 +54,7 @@ pub const STATE_ACTIVE: u64 = 3;
 pub const START_FALLBACK_MS: i64 = 10_000;
 /// Decoded PlayerState lines per player and wait or pair, and sanitizer refusals per player.
 pub const TRACE_LINES: u32 = 12;
-pub const NAME_MAX: usize = wire::BUCKET_LIST_NAME_MAX;
+pub const NAME_MAX: usize = message::BUCKET_LIST_NAME_MAX;
 /// The game's BucketList1..6 universes.
 pub const FIRST_UNIVERSE: u8 = 18;
 pub const LAST_UNIVERSE: u8 = 23;
@@ -140,7 +142,7 @@ struct Pair {
     cancelled_at: Option<i64>,
     flag_fell: Vec<u64>,
     /// Each partner's last car prediction when 61 went; removed once a newer one is seen.
-    cars_at_start: Vec<(u64, Option<(Handle, Bits)>)>,
+    cars_at_start: Vec<(u64, Option<(ObjKey, Bits)>)>,
 }
 
 impl Pair {
@@ -208,7 +210,7 @@ fn ready_state(state: u64) -> bool {
 }
 
 /// The universe a car prediction says its car is in (bits 395-399); `None` without one.
-fn car_universe(car: Option<&(Handle, Bits)>) -> Option<u64> {
+fn car_universe(car: Option<&(ObjKey, Bits)>) -> Option<u64> {
     let (_, body) = car?;
     let width = payload::PRIVATE_UNIVERSE_BITS;
     if body.len() < CAR_UNIVERSE_OFFSET + width as usize {
@@ -228,7 +230,7 @@ fn opt_text(v: Option<u64>) -> String {
 fn partner_message(partner_index: u8, universe: u8, name: &[u16]) -> Bits {
     let mut b = Bits::new();
     b.push(65, 7);
-    Handle::relay(0, partner_index).write(&mut b, 7);
+    ObjKey::relay(0, partner_index).write(&mut b, 7);
     let text: Vec<u8> = name
         .iter()
         .take(NAME_MAX)
@@ -253,11 +255,11 @@ fn start_message(time: u32) -> Bits {
 }
 
 /// A PlayerState key as `receiver` knows it: its own as an own key, anyone else's as a relay key.
-fn key_for(receiver: u64, owner: u64, owner_index: u8) -> Handle {
+fn key_for(receiver: u64, owner: u64, owner_index: u8) -> ObjKey {
     if receiver == owner {
-        Handle::own(0)
+        ObjKey::own(0)
     } else {
-        Handle::relay(0, owner_index)
+        ObjKey::relay(0, owner_index)
     }
 }
 
@@ -318,13 +320,13 @@ impl Engine {
             .filter(|i| self.bucket.slots_sent[*i] != (0, 0, 0))
             .flat_map(|i| entry_variables(&self.bucket.slots_sent, i))
             .collect();
-        snapshot.push(wire::write(&Msg::Object(Obj {
-            create: true,
-            router: BUCKET_LIST_ROUTER,
-            handle: Handle::own(0),
+        snapshot.push(Message::encode(&Message::Object(ObjectChange {
+            is_create: true,
+            router_id: BUCKET_LIST_ROUTER,
+            key: ObjKey::own(0),
             ty: BUCKET_LIST_SLOTS_TYPE,
-            seq: self.bucket.slots_sequence,
-            payload: payload::bucket_list_slots(&vars),
+            sequence: self.bucket.slots_sequence,
+            vars: payload::bucket_list_slots(&vars),
         })));
     }
 
@@ -442,13 +444,13 @@ impl Engine {
         if !changed.is_empty() {
             self.bucket.slots_sent = self.bucket.slots;
             self.bucket.slots_sequence = seq_next(self.bucket.slots_sequence);
-            let update: M = Arc::new(wire::write(&Msg::Object(Obj {
-                create: false,
-                router: BUCKET_LIST_ROUTER,
-                handle: Handle::own(0),
+            let update: M = Arc::new(Message::encode(&Message::Object(ObjectChange {
+                is_create: false,
+                router_id: BUCKET_LIST_ROUTER,
+                key: ObjKey::own(0),
                 ty: 0,
-                seq: self.bucket.slots_sequence,
-                payload: payload::bucket_list_slots(&changed),
+                sequence: self.bucket.slots_sequence,
+                vars: payload::bucket_list_slots(&changed),
             })));
             for s in self.synced_serials_except(None) {
                 self.send_sequenced(s, vec![update.clone()]);
@@ -490,7 +492,7 @@ impl Engine {
 
     /// A router-12 object refused (any other shape, or any in a world without co-op): noted
     /// every time in free roam, once per peer outside it or after the object cap.
-    pub(super) fn bucket_list_refused(&mut self, serial: u64, obj: &Obj) {
+    pub(super) fn bucket_list_refused(&mut self, serial: u64, obj: &ObjectChange) {
         let world = self.bucket_list_world();
         let index = self.bucket_index(serial);
         let player = self.bucket_player(serial);
@@ -502,12 +504,12 @@ impl Engine {
             "bucket.object_refused",
             vec![
                 json!(index),
-                json!(obj.router),
-                json!(if obj.create { "True" } else { "False" }),
+                json!(obj.router_id),
+                json!(if obj.is_create { "True" } else { "False" }),
                 json!(obj.ty),
-                json!(format!("{:?}", obj.handle.kind)),
-                json!(obj.handle.id),
-                json!(obj.payload.len()),
+                json!(format!("{:?}", obj.key.kind)),
+                json!(obj.key.id),
+                json!(obj.vars.len()),
             ],
         );
     }
@@ -517,11 +519,11 @@ impl Engine {
     pub(super) fn bucket_list_sanitize_refused(
         &mut self,
         serial: u64,
-        obj: &Obj,
+        obj: &ObjectChange,
         fault: Fault,
     ) -> Option<Bits> {
-        let prefix = if obj.payload.len() <= payload::BUCKET_LIST_PLAYER_MAX_BITS {
-            let clean = payload::bucket_list_player_of(&obj.payload);
+        let prefix = if obj.vars.len() <= payload::BUCKET_LIST_PLAYER_MAX_BITS {
+            let clean = payload::bucket_list_player_of(&obj.vars);
             (!clean.is_empty()).then(|| payload::bucket_list_player(&clean))
         } else {
             None
@@ -533,11 +535,11 @@ impl Engine {
             // never the payload itself (contract §2.3): its length and the fault say enough
             let mut args: Vec<Value> = vec![
                 json!(index),
-                json!(if obj.create { "create" } else { "update" }),
-                json!(obj.seq),
+                json!(if obj.is_create { "create" } else { "update" }),
+                json!(obj.sequence),
                 json!(fault_name(&fault)),
                 json!(fault.value()),
-                json!(obj.payload.len()),
+                json!(obj.vars.len()),
             ];
             match &prefix {
                 Some(p) => {
@@ -610,7 +612,7 @@ impl Engine {
                 {
                     pair.set_floor(serial, Some(seq));
                 }
-            } else if player.latest.is_none_or(|l| seq_newer(seq, l)) {
+            } else if player.latest.is_none_or(|l| seq_is_newer(seq, l)) {
                 player.latest = Some(seq);
             }
             player.has_state = true;
@@ -640,7 +642,7 @@ impl Engine {
                 if player
                     .sequences
                     .get(var)
-                    .is_some_and(|last| !seq_newer(seq, *last))
+                    .is_some_and(|last| !seq_is_newer(seq, *last))
                 {
                     continue;
                 }
@@ -687,7 +689,7 @@ impl Engine {
         }
         if !create
             && let Some(floor) = pair.floor(serial)
-            && !seq_newer(seq, floor)
+            && !seq_is_newer(seq, floor)
         {
             return;
         }
@@ -1041,7 +1043,7 @@ impl Engine {
     }
 
     fn start_bucket_pair(&mut self, pid: u64, fallback: bool) {
-        let cars: Vec<(u64, Option<(Handle, Bits)>)> = {
+        let cars: Vec<(u64, Option<(ObjKey, Bits)>)> = {
             let Some(pair) = self.bucket.pairs.get(&pid) else {
                 return;
             };

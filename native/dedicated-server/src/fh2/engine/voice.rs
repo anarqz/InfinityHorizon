@@ -693,7 +693,7 @@ impl Engine {
         let (Some(at), Some(body)) = (p.last_car_at, &p.last_car_body) else {
             return unknown;
         };
-        if self.now - at > CAR_KNOWN_MS || body.len() != super::wire::CAR_BODY_BITS {
+        if self.now - at > CAR_KNOWN_MS || body.len() != super::message::CAR_BODY_BITS {
             return unknown;
         }
         let mut r = body.reader();

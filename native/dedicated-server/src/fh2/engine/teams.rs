@@ -15,10 +15,12 @@ use serde_json::json;
 use super::{
     Engine,
     bits::Bits,
+    key::ObjKey,
+    message::{Message, ObjectChange},
     options::Fields,
     random::{LegacyRandom, SeedPurpose},
-    wire::{self, Handle, Msg, Obj, seq_next},
 };
+use crate::fh2::codec::object::{seq_forward, seq_next};
 
 /// PlayerChoices TeamId on the player object, 1 bit: 0 red, 1 blue.
 pub const TEAM_VARIABLE: u8 = 90;
@@ -147,13 +149,13 @@ impl Engine {
             .push(u64::from(team), 1);
         let seq = p.player_sequence.map_or(0, seq_next);
         p.player_sequence = Some(seq);
-        let own = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 1,
-            handle: Handle::server(id),
+        let own = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 1,
+            key: ObjKey::server(id),
             ty: 0,
-            seq,
-            payload: payload.clone(),
+            sequence: seq,
+            vars: payload.clone(),
         })));
         self.send_sequenced(serial, vec![own]);
         let Some(obj) = self
@@ -164,14 +166,14 @@ impl Engine {
         };
         obj.injected = seq_next(obj.injected);
         obj.team = Some(team);
-        let seq = wire::seq_add(obj.last, obj.injected);
-        let m = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 1,
-            handle: Handle::relay(id, index),
+        let seq = seq_forward(obj.last, obj.injected);
+        let m = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 1,
+            key: ObjKey::relay(id, index),
             ty: 0,
-            seq,
-            payload,
+            sequence: seq,
+            vars: payload,
         })));
         self.forward(serial, vec![m], true);
         if let Some(p) = self.peer_mut(serial) {

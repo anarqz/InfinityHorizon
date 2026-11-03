@@ -8,7 +8,8 @@
 
 use super::{
     bits::{Bits, Rd},
-    wire::{CAR_BODY_BITS, Handle, Obj},
+    key::ObjKey,
+    message::{CAR_BODY_BITS, ObjectChange},
 };
 
 pub const NETWORK_NAME_MAX: u64 = 16;
@@ -295,7 +296,7 @@ pub fn car_position(body: &Bits) -> Option<[f32; 3]> {
 }
 
 pub fn car_event_ok(id: u8, body: &Bits) -> bool {
-    if super::wire::car_event_bits(id) != Some(body.len()) {
+    if super::message::car_event_body_bits(id) != Some(body.len()) {
         return false;
     }
     let mut r = body.reader();
@@ -324,18 +325,18 @@ pub fn group_sat_nav(node: i32) -> Bits {
 }
 
 /// The server's update of a console's flags (a server key).
-pub fn console_update(id: u32, seq: u8, entries: &[(u8, bool)]) -> Obj {
+pub fn console_update(id: u32, seq: u8, entries: &[(u8, bool)]) -> ObjectChange {
     let mut payload = Bits::new();
     for (var, value) in entries {
         payload.push(u64::from(*var), 4).boolean(*value);
     }
-    Obj {
-        create: false,
-        router: 3,
-        handle: Handle::server(id),
+    ObjectChange {
+        is_create: false,
+        router_id: 3,
+        key: ObjKey::server(id),
         ty: 0,
-        seq,
-        payload,
+        sequence: seq,
+        vars: payload,
     }
 }
 

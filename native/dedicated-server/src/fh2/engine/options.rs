@@ -11,10 +11,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::{
-    bits::{Bits, Rd},
-    wire::{MAX_PAYLOAD_BITS, seq_newer, seq_next},
-};
+use super::bits::{Bits, Rd};
+use crate::fh2::codec::object::{PAYLOAD_MAX_BITS, seq_is_newer, seq_next};
 
 /// The journal's bits (records and pending fragments together).
 pub const MAX_BITS: usize = 64 * 1024;
@@ -98,7 +96,7 @@ impl Journal {
         if self.pending.contains_key(&sequence)
             || self
                 .source_sequence
-                .is_some_and(|last| !seq_newer(sequence, last))
+                .is_some_and(|last| !seq_is_newer(sequence, last))
         {
             return Applied::Ignored;
         }
@@ -110,7 +108,7 @@ impl Journal {
         let future = self
             .source_sequence
             .is_some_and(|previous| sequence != seq_next(previous));
-        if payload.len() > MAX_PAYLOAD_BITS
+        if payload.len() > PAYLOAD_MAX_BITS
             || payload.len() > MAX_BITS.saturating_sub(self.bits + self.pending_bits)
             || ((future || !payload.is_empty())
                 && self.records.len() + self.pending.len() >= MAX_RECORDS)
@@ -247,7 +245,7 @@ pub const INFECTED_PRESET: u64 = 8;
 /// 8 sequence + 14 length.
 pub const RELAYED_PREFIX_BITS: usize = 37;
 /// The longest record kept: one whose relayed update or grant fits one datagram.
-pub const MAX_RECORD_BITS: usize = super::wire::MAX_MESSAGE_BITS - RELAYED_PREFIX_BITS;
+pub const MAX_RECORD_BITS: usize = super::datagram::MAX_MESSAGE_BITS - RELAYED_PREFIX_BITS;
 /// A bucket name: a 5-bit count of up to 24 UTF-16 units.
 const NAME: i32 = -24;
 
