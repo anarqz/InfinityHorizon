@@ -1073,6 +1073,15 @@ impl Engine {
         {
             return;
         }
+        // ingest-size rule: a fragment no grant or update copy of it fits is refused before it
+        // takes a source sequence or enters the journal (its gap then stalls the writer)
+        if obj.payload.len() > wire::MAX_DATAGRAM_PAYLOAD_BITS {
+            let (xuid, index) = self.peer(serial).map_or((0, 0), |p| (p.xuid, p.index));
+            let bits = obj.payload.len() as u32;
+            self.rejected(xuid, "invalid_payload", Some(8), Some(6), Some(bits));
+            self.note("options.oversize_refused", vec![json!(index), json!(bits)]);
+            return;
+        }
         let now = self.now;
         let mut ready = Vec::new();
         let mut result = self.ev.options.apply(

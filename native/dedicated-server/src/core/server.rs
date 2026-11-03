@@ -7,20 +7,23 @@ use std::{
     collections::{BTreeMap, VecDeque},
     net::SocketAddr,
     panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
 };
 
 use serde_json::{Map, Value, json};
 
 use super::{
     Config, Datagram, Io, PUBLIC_SOCKET, Profile, SockId,
+    admission::Shared,
     events::{self, EventQueue},
     fields::{Obj, text_id},
-    game::{OpenInfo, Send},
+    game::{Admit, OpenInfo, Send},
     keys::KeyRing,
     rng::Rng,
     timers::{Timer, Timers},
     world::{self, Ctx, World},
 };
+use crate::nat::{Nat, NatSettings};
 use crate::{
     control::{
         ConnId, Transport,
@@ -43,7 +46,7 @@ const LAG_UNHEALTHY_MS: u64 = 5000;
 const LAG_WINDOW_MS: u64 = 30_000;
 const LAG_SAMPLES: usize = 512;
 /// A private child closes within 2 s of EOF; the world lapses 45 s after open without context.
-const NO_CONTEXT_LAPSE_MS: u64 = world::HOST_LEASE_MS;
+const NO_CONTEXT_LAPSE_MS: u64 = super::admission::HOST_LEASE_MS;
 
 #[derive(Debug)]
 struct Session {
@@ -656,6 +659,9 @@ impl Server {
             return Err(CmdError::bad("game"));
         };
         let profile = self.cfg.profile;
+        let relay = (profile == Profile::Public).then_some(self.cfg.relay);
+        let gate = Shared::new(World::rules(&id, &spec, relay));
+        let admit: Arc<dyn Admit> = Arc::new(gate.clone());
         let info = |rng| OpenInfo {
             request: o,
             profile,
@@ -663,6 +669,7 @@ impl Server {
             is_player: spec.is_player,
             max_players: spec.max_players,
             rng,
+            admit: admit.clone(),
         };
         if let Some(w) = self.worlds.get(&id) {
             // the game side normalizes its own fields; a scratch RNG keeps the server's untouched
@@ -728,12 +735,20 @@ impl Server {
             },
             None => None,
         };
-        let mut w = World::new(&id, spec, game_world, self.now);
+        let mut w = World::new(&id, spec, game_world, gate, self.now);
         w.reserved_mb = reserve;
         if let Some(b) = bound {
             w.sock = Some(b.sock);
             w.port = b.port;
             w.dual = b.dual;
+            // STUN, UPnP and punches on the world socket (§5.1); their threads only resolve the
+            // STUN servers and talk to the router
+            if let Some(n) = &w.spec.network {
+                let mut settings = NatSettings::new(b.port, n.discovery, n.discovery && n.upnp);
+                settings.stun_servers = n.stun_servers.clone();
+                settings.stun_every_ms = n.stun_interval_ms;
+                w.nat = Some(Nat::new(settings, b.dual, self.now));
+            }
         }
         let mut reply = Map::new();
         reply.insert("worldId".into(), json!(id));
@@ -741,6 +756,7 @@ impl Server {
         if let Some(n) = w.network_facts() {
             reply.insert("network".into(), n);
         }
+        w.mark_network();
         w.open_reply = reply.clone();
         for n in game_notices {
             let mut body = obj(json!({"id": n.id, "level": n.level, "worldId": id}));
@@ -798,6 +814,7 @@ impl Server {
         let mut ctx = Ctx {
             profile: cfg.profile,
             keys_empty: keys.is_empty(),
+            keys,
             events,
             timers,
             now: *now,
@@ -806,7 +823,7 @@ impl Server {
         let result = catch_unwind(AssertUnwindSafe(|| -> CmdResult {
             match op {
                 "world.context" => w.context(o, &mut ctx),
-                "world.admission" => w.admission(o, &mut ctx),
+                "world.admission" => w.admission(o, &mut ctx, &mut sends),
                 "world.admission.end" => w.admission_end(o, &mut ctx),
                 "world.kick" => w.kick(o, &mut ctx, &mut sends),
                 "world.status" => match w.state(ctx.now) {
@@ -847,14 +864,20 @@ impl Server {
         let mut ctx = Ctx {
             profile: cfg.profile,
             keys_empty: keys.is_empty(),
+            keys,
             events,
             timers,
             now: *now,
         };
+        w.emit_events(&mut ctx);
         w.emit_state(&mut ctx, false);
         match w.game.next_tick(cfg.profile, *now) {
-            Some(at) => timers.schedule(Timer::EngineTick(id.to_string()), at),
-            None => timers.cancel(&Timer::EngineTick(id.to_string())),
+            Some(at) => ctx.timers.schedule(Timer::EngineTick(id.to_string()), at),
+            None => ctx.timers.cancel(&Timer::EngineTick(id.to_string())),
+        }
+        match w.net_deadline(*now) {
+            Some(at) => ctx.timers.reschedule(Timer::NetTick(id.to_string()), at),
+            None => ctx.timers.cancel(&Timer::NetTick(id.to_string())),
         }
     }
 
@@ -888,11 +911,24 @@ impl Server {
                 push_sends(&mut self.out, w.sock, sends);
             }
         }
+        {
+            let mut ctx = Ctx {
+                profile: self.cfg.profile,
+                keys_empty: self.keys.is_empty(),
+                keys: &self.keys,
+                events: &mut self.events,
+                timers: &mut self.timers,
+                now: self.now,
+            };
+            w.diag(&mut ctx, true);
+            w.gate.lock().clear();
+        }
         if let Some(sock) = w.sock {
             io.release_world(sock);
         }
         self.timers.cancel(&Timer::StateFlush(id.to_string()));
         self.timers.cancel(&Timer::EngineTick(id.to_string()));
+        self.timers.cancel(&Timer::NetTick(id.to_string()));
         let mut body = obj(json!({"worldId": id, "reason": reason}));
         if let Some(f) = fault {
             body.insert("fault".into(), json!(f));
@@ -933,14 +969,31 @@ impl Server {
                 self.stats.datagrams_dropped += 1;
                 return;
             }
-            // FIR1 HOST role, multiplexed by grant id: not ported yet (README, PORT_STATUS)
-            self.stats.datagrams_dropped += 1;
+            // FIR1 HOST role, multiplexed by grant id (§5.2): the world holding the grant's leg
+            let owner = (data.len() >= 21 && &data[..4] == crate::core::legs::MAGIC)
+                .then(|| {
+                    self.worlds
+                        .iter()
+                        .find(|(_, w)| w.legs.owns(&data[5..21], from))
+                        .map(|(k, _)| k.clone())
+                })
+                .flatten();
+            let Some(id) = owner else {
+                self.stats.datagrams_dropped += 1;
+                return;
+            };
+            self.world_datagram(io, &id, from, data);
             return;
         }
         let Some(id) = self.world_of_socket(sock).map(str::to_string) else {
             self.stats.datagrams_dropped += 1;
             return;
         };
+        self.world_datagram(io, &id, from, data);
+    }
+
+    fn world_datagram(&mut self, io: &mut dyn Io, id: &str, from: SocketAddr, data: &[u8]) {
+        let id = id.to_string();
         let Some(w) = self.worlds.get_mut(&id) else {
             return;
         };
@@ -970,6 +1023,7 @@ impl Server {
                 Timer::StateFlush(id) => self.after_world(&id),
                 Timer::EngineTick(id) => self.engine_tick(io, &id),
                 Timer::Drain => self.check_drain(io),
+                Timer::NetTick(id) => self.net_tick(io, &id),
             }
         }
     }
@@ -987,6 +1041,38 @@ impl Server {
                 self.after_world(id);
             }
             Err(_) => self.fault(io, id, "world.panic.tick"),
+        }
+    }
+
+    fn net_tick(&mut self, io: &mut dyn Io, id: &str) {
+        let Server {
+            worlds,
+            events,
+            timers,
+            cfg,
+            keys,
+            now,
+            ..
+        } = self;
+        let Some(w) = worlds.get_mut(id) else {
+            return;
+        };
+        let mut ctx = Ctx {
+            profile: cfg.profile,
+            keys_empty: keys.is_empty(),
+            keys,
+            events,
+            timers,
+            now: *now,
+        };
+        let mut sends = Vec::new();
+        match catch_unwind(AssertUnwindSafe(|| w.net_tick(&mut ctx, &mut sends))) {
+            Ok(()) => {
+                let sock = w.sock;
+                push_sends(&mut self.out, sock, sends);
+                self.after_world(id);
+            }
+            Err(_) => self.fault(io, id, "world.panic.net"),
         }
     }
 
@@ -1034,15 +1120,17 @@ impl Server {
             let mut ctx = Ctx {
                 profile: cfg.profile,
                 keys_empty: keys.is_empty(),
+                keys,
                 events,
                 timers,
                 now,
             };
-            let lapsed = match w.admission.lease_until {
+            let until = w.lease_until();
+            let lapsed = match until {
                 Some(_) => !w.lease_live(now),
                 None => now.saturating_sub(w.opened_at) >= NO_CONTEXT_LAPSE_MS,
             };
-            if lapsed && w.admission.lease_until.is_some() && !w.admission.lapse_noticed {
+            if lapsed && until.is_some() && !w.admission.lapse_noticed {
                 w.admission.lapse_noticed = true;
                 ctx.notice(events::N_ADMISSION_LAPSED, "warn", Some(&id), None);
                 log::warn(log_ids::WORLD_ADMISSION)

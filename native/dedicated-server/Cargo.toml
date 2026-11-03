@@ -23,10 +23,17 @@ default = []
 # checks. Never enabled in a release build.
 test-hooks = []
 
-# Exact pins. serde_json is the only dependency (the control channel's JSON); no C code, so the
-# Windows build needs no C toolchain.
+# Exact pins; no C code, so the Windows build needs no C toolchain. serde/serde_json: the control
+# channel's JSON and the strict grant claims. The crypto is the platform's own crates at the same
+# versions (fi-relay, fi-auth, matchmaking): ed25519-dalek verifies relay grants (contract §6.2),
+# hmac + sha2 are FIUP v1's HMAC-SHA256 (UDP_SOCKET_PROOF.md), getrandom the FIUP challenge nonce.
 [dependencies]
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.4.3"
+hmac = "=0.13.0"
+serde = "=1.0.229"
 serde_json = "=1.0.154"
+sha2 = "=0.11.1"
 
 [lints.rust]
 unsafe_code = "deny"

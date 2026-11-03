@@ -2,8 +2,8 @@
 //! The relay-grant public key ring (`--grant-keys`, `keys.set`): the `RelayGrantVerifyKeys` text
 //! form `kid:base64,...` (`M/RelayGrantVerifier.cs:79-100`): at most 1024 characters and 8 keys,
 //! kid 1-32 of `a-z0-9-`, standard canonical base64 of 32 bytes, no duplicate kid, at least one.
-//! Step 1 parses and stores the ring; signature verification (Ed25519) comes with the admission
-//! port, and with it the full public-key validation the C# does (`ValidatePublicKeyFull`).
+//! Each key must be a valid Ed25519 public key (it decompresses and is not of small order, as the
+//! C# `ValidatePublicKeyFull` asks); grant verification (grant.rs) uses the parsed key.
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyRing {
@@ -26,6 +26,9 @@ impl KeyRing {
             }
             let key = decode_base64(encoded).ok_or("not standard base64")?;
             let key: [u8; 32] = key.try_into().map_err(|_| "not 32 bytes")?;
+            if ed25519_dalek::VerifyingKey::from_bytes(&key).map_or(true, |k| k.is_weak()) {
+                return Err("not an Ed25519 public key");
+            }
             if keys.iter().any(|(k, _)| k == kid) {
                 return Err("duplicate kid");
             }
@@ -50,6 +53,12 @@ impl KeyRing {
 
     pub fn key(&self, kid: &str) -> Option<&[u8; 32]> {
         self.keys.iter().find(|(k, _)| k == kid).map(|(_, v)| v)
+    }
+
+    /// The Ed25519 key `kid` names (checked when the ring was parsed).
+    pub fn verifying_key(&self, kid: &str) -> Option<ed25519_dalek::VerifyingKey> {
+        self.key(kid)
+            .and_then(|k| ed25519_dalek::VerifyingKey::from_bytes(k).ok())
     }
 }
 

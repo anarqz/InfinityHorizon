@@ -665,69 +665,49 @@ pub fn packet<'a, I: IntoIterator<Item = &'a Bits>>(
     out
 }
 
-/// The receive window of sequenced packet ids: the newest and the 32 before it. Ids wrap at
-/// 2^16 here, as the engine has always counted them (the codec's `reliable::ReceiveState`
-/// follows §2.3's modulo-0xffff spec and its 0x3fff drop window; see the README's notes).
+/// The receive window of sequenced packet ids, as the game keeps it (NERDCORE_WIRE.md §2.3,
+/// §3.2; MACBOOK's ruling for step 3): ids run modulo 0xffff, an id equal to the newest or in
+/// the 32-bit window already is a duplicate (acknowledged, not applied again), and an id 0x3fff
+/// or more from the newest (the short way round) is dropped. The C# engine at f81d09c wraps at
+/// 2^16 instead; the vectors that cross the wrap are listed in the README.
 #[derive(Debug, Clone, Default)]
-pub struct AckWindow {
-    top: Option<u16>,
-    bits: u32,
+pub struct AckWindow(crate::fh2::codec::reliable::ReceiveState);
+
+/// What the receive window says of a packet id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// New (or unsequenced): apply its messages.
+    Fresh,
+    /// Seen already or older than the window: acknowledge, do not apply.
+    Duplicate,
+    /// 0x3fff or more away from the newest: dropped silently, not acknowledged.
+    Dropped,
 }
 
 impl AckWindow {
     pub fn header(&self) -> (u16, u32) {
-        (self.top.unwrap_or(NO_ACK), self.bits)
+        self.0.ack()
     }
 
-    /// Duplicate or stale sequenced packets are acknowledged without applying them again.
-    pub fn accept(&mut self, packet: u16) -> bool {
-        if packet == NO_SEQUENCE {
-            return true;
-        }
-        if let Some(top) = self.top
-            && !seq_after(packet, top)
-        {
-            let back = top.wrapping_sub(packet);
-            if back == 0 || back > 32 || self.bits & (1u32 << (back - 1)) != 0 {
-                return false;
-            }
-        }
-        self.add(packet);
-        true
-    }
-
-    fn add(&mut self, packet: u16) {
-        let Some(top) = self.top else {
-            self.top = Some(packet);
-            self.bits = 0;
-            return;
-        };
-        let ahead = packet.wrapping_sub(top);
-        if ahead == 0 {
-            return;
-        }
-        if ahead < 0x8000 {
-            self.bits = if ahead > 32 {
-                0
-            } else {
-                (if ahead == 32 { 0 } else { self.bits << ahead }) | (1u32 << (ahead - 1))
-            };
-            self.top = Some(packet);
-        } else {
-            let back = top.wrapping_sub(packet);
-            if (1..=32).contains(&back) {
-                self.bits |= 1u32 << (back - 1);
-            }
+    pub fn accept(&mut self, packet: u16) -> Verdict {
+        use crate::fh2::codec::reliable::RecvVerdict;
+        match self.0.accept(packet) {
+            RecvVerdict::Unsequenced | RecvVerdict::Accepted => Verdict::Fresh,
+            RecvVerdict::Duplicate => Verdict::Duplicate,
+            RecvVerdict::Dropped => Verdict::Dropped,
         }
     }
 }
 
-/// Whether `(ack, bits)` acknowledges `packet`.
+/// Whether `(ack, bits)` acknowledges `packet` (distances modulo 0xffff, §3.2).
 pub fn acknowledges(ack: u16, bits: u32, packet: u16) -> bool {
     if ack == packet {
         return ack != NO_ACK || bits != 0;
     }
-    let back = ack.wrapping_sub(packet);
+    if ack == NO_SEQUENCE || packet == NO_SEQUENCE {
+        return false;
+    }
+    let back = crate::fh2::codec::reliable::id_dist(ack, packet);
     (1..=32).contains(&back) && bits & (1u32 << (back - 1)) != 0
 }
 
