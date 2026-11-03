@@ -130,3 +130,9 @@ engine, in this recommended order:
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
 | 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | |
+
+## Acknowledgements
+
+The fh2-mods project's online research (https://github.com/conner-mcvay/fh2-mods, `tools/online`, by conner-mcvay and
+contributors) was an inspiration and a reference for this work. No code from it is used here: the game protocol layer is
+written from our own specification of the game's network format.
