@@ -39,6 +39,7 @@ mod side;
 mod tag;
 pub mod teams;
 mod voice;
+pub mod watch;
 pub mod weather;
 pub mod wire;
 
@@ -247,6 +248,8 @@ pub enum Event {
     /// A car meet invitation's §3.8 request: its id, the invite kind and the XUIDs (the starter
     /// first).
     CreateGameSession { id: u32, kind: u8, xuids: Vec<u64> },
+    /// An ended watch episode (`watch.report`).
+    WatchReport(watch::WatchReport),
     /// A peer synced (`peer.synced`).
     PeerSynced { xuid: u64, peer: u8 },
     /// A peer left (`peer.left` when it was synced).
@@ -525,6 +528,8 @@ pub struct Engine {
     team_random: Option<random::LegacyRandom>,
     /// Voice (voice.rs).
     voice: voice::Voice,
+    /// The anti-cheat watch (watch.rs).
+    watch: watch::Watch,
     out: Vec<Send>,
     events: Vec<Event>,
     /// Datagrams nobody could take (stats).
@@ -622,6 +627,7 @@ impl Engine {
             team_pending: HashSet::new(),
             team_random: None,
             voice: voice::Voice::default(),
+            watch: watch::Watch::default(),
             out: Vec::new(),
             events: Vec::new(),
             dropped: 0,
@@ -1292,6 +1298,7 @@ impl Engine {
         self.side_rates.clear();
         self.side_channel_rate_drops = 0;
         self.voice = voice::Voice::default();
+        self.watch = watch::Watch::default();
         self.ev.options.clear();
         self.ev.options_outlived = false;
         self.event_progress_reset();

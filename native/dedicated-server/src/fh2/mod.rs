@@ -37,7 +37,11 @@ use crate::{
     },
 };
 use catalog::CatalogStore;
-use engine::{Engine, EngineKind, EngineSettings, Event, Policy, random::EngineRandom};
+use engine::{
+    Engine, EngineKind, EngineSettings, Event, Policy,
+    random::EngineRandom,
+    watch::{WatchReport, WatchRules},
+};
 pub use settings::RelaySettings;
 pub use voice::VoiceMode;
 
@@ -182,10 +186,12 @@ impl Default for Voice {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Watch {
     /// MATCHMAKING_API §3.9 `WatchRules`, verbatim.
     pub rules: Value,
+    /// What the engines measure against (`PeerWatchRules.From(rules, forceSpeed)`).
+    pub engine_rules: WatchRules,
     pub self_xuid: Option<u64>,
     pub parts: bool,
     pub force_speed: bool,
@@ -235,12 +241,62 @@ pub fn parse_watch(o: Obj, profile: Profile, is_player: bool) -> Result<Option<W
     if force_speed && profile == Profile::Public {
         return Err(o.bad("forceSpeed"));
     }
-    Ok(rules.map(|rules| Watch {
+    let Some(rules) = rules else {
+        return Ok(None);
+    };
+    let engine_rules = watch_rules(&rules, force_speed).ok_or_else(|| o.bad("rules"))?;
+    Ok(Some(Watch {
         rules,
+        engine_rules,
         self_xuid,
         parts,
         force_speed,
     }))
+}
+
+/// MATCHMAKING_API §3.9 `WatchRules` → the engines' rules, as `PeerWatchRules.From`; `None`
+/// when a field is missing or the rules are not usable (`WatchRules.Valid`).
+pub fn watch_rules(rules: &Value, force_speed: bool) -> Option<WatchRules> {
+    let f = |v: &Value, k: &str| v.get(k).and_then(Value::as_f64);
+    let u = |v: &Value, k: &str| {
+        v.get(k)
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    let (speed, climb, jump) = (rules.get("speed")?, rules.get("climb")?, rules.get("jump")?);
+    let floor = match speed.get("perCarFloorKmh") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64()?),
+    };
+    let r = WatchRules {
+        version: u(rules, "version")?,
+        speed_max_kmh: f(speed, "maxKmh")?,
+        speed_sustain_ms: u(speed, "sustainMs")?,
+        climb_max_kmh: f(climb, "maxKmh")?,
+        climb_sustain_ms: u(climb, "sustainMs")?,
+        jump_max_meters: f(jump, "maxMeters")?,
+        force_speed,
+        speed_floor_kmh: floor,
+    };
+    let limit =
+        |kmh: f64, sustain: u32| kmh > 0.0 && kmh <= 5000.0 && (1..=3_600_000).contains(&sustain);
+    let valid = r.version > 0
+        && limit(r.speed_max_kmh, r.speed_sustain_ms)
+        && limit(r.climb_max_kmh, r.climb_sustain_ms)
+        && r.jump_max_meters > 0.0
+        && r.jump_max_meters <= 1_000_000.0
+        && r.speed_floor_kmh
+            .is_none_or(|fl| fl > 0.0 && fl <= 5000.0 && fl <= r.speed_max_kmh);
+    valid.then_some(r)
+}
+
+/// A report number as the reference's JSON writes it: an integral value without a fraction.
+fn number(v: f64) -> Value {
+    if v.fract() == 0.0 && v.abs() < 9.0e15 {
+        json!(v as i64)
+    } else {
+        json!(v)
+    }
 }
 
 impl Game for Fh2 {
@@ -420,8 +476,11 @@ impl Fh2World {
                     self.voice_blocks.clone(),
                 )),
             )?;
-            // the world's voice applies to every engine, made now or later
+            // the world's voice and watch apply to every engine, made now or later
             e.set_voice(self.voice.mode, &self.voice.lobby_muted);
+            if self.watch.is_some() {
+                self.apply_watch(&mut e);
+            }
             self.engines.insert(kind, e);
         }
         self.engines.get_mut(&kind)
@@ -544,6 +603,7 @@ impl Fh2World {
     fn drain_events(&mut self) {
         let mut moves = Vec::new();
         let mut requests = Vec::new();
+        let mut reports = Vec::new();
         for (kind, e) in self.engines.iter_mut() {
             let engine = kind.as_str();
             for ev in e.take_events() {
@@ -609,11 +669,15 @@ impl Fh2World {
                         }
                     }
                     Event::AdmittedLate { endpoint } => moves.push((*kind, endpoint)),
+                    Event::WatchReport(r) => reports.push(r),
                     Event::CreateGameSession { id, kind: k, xuids } => {
                         requests.push((*kind, Some((id, k, xuids)), None));
                     }
                 }
             }
+        }
+        for r in reports {
+            self.watch_report(r);
         }
         for (kind, request, why) in requests {
             match request {
@@ -707,7 +771,54 @@ impl Fh2World {
     fn watch_cmd(&mut self, o: Obj, ctx: &mut GameCtx) -> CmdResult {
         let w = parse_watch(o, ctx.profile, self.is_player)?;
         self.watch = w;
+        let mut engines = std::mem::take(&mut self.engines);
+        for e in engines.values_mut() {
+            self.apply_watch(e);
+        }
+        self.engines = engines;
+        self.drain_events();
         Ok(Map::new())
+    }
+
+    /// The world's watch on one engine: its rules, the host's own XUID, and the catalog store
+    /// for the parts rule when asked for (`None`: stop).
+    fn apply_watch(&self, e: &mut Engine) {
+        let now = self.now as i64;
+        match &self.watch {
+            Some(w) => e.set_watch(
+                Some(w.engine_rules.clone()),
+                w.self_xuid.unwrap_or(0),
+                true,
+                w.parts.then(|| self.store.clone()),
+                now,
+            ),
+            None => e.set_watch(None, 0, false, None, now),
+        }
+    }
+
+    /// `watch.report` (contract §4.5): an id minted here, the report's fields.
+    fn watch_report(&mut self, r: WatchReport) {
+        let mut body = Map::new();
+        body.insert("id".into(), json!(self.rng.uuid()));
+        body.insert("xuid".into(), json!(r.xuid.to_string()));
+        body.insert("kind".into(), json!(r.kind));
+        body.insert("value".into(), number(r.value));
+        if let Some(s) = r.sustain_ms {
+            body.insert("sustainMs".into(), json!(s));
+        }
+        body.insert("rulesVersion".into(), json!(r.rules_version));
+        body.insert("peer".into(), json!(r.peer));
+        if let Some(c) = r.car_id {
+            body.insert("carId".into(), json!(c));
+        }
+        if let Some(h) = r.held_kmh {
+            body.insert("heldKmh".into(), number(h));
+        }
+        self.events.push(GameEvent::Custom {
+            ev: events::WATCH_REPORT,
+            world: true,
+            body,
+        });
     }
 
     /// `world.gameSession.answer` (§4.4): the session goes to the invitation that asked;

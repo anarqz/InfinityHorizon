@@ -7,7 +7,7 @@
 //!   and team events and Road Trip events plug in here (step 4);
 //! - car meet invitations (step 9: 26, 27) and Road Trip (step 10: 47, 51): read, not acted on;
 //! - bucket-list co-op is in [`super::bucket`]; 62-64 reach it from here;
-//! - the watch (step 13): nothing to measure yet;
+//! - the watch is in [`super::watch`];
 //! - voice ([`super::voice`]) reads the teams through `team_event_active`, `team_of` and
 //!   `hearing_group`; the teams port calls `voice_groups_changed` when they change.
 
@@ -124,9 +124,4 @@ impl Engine {
         self.road_trip_peer_left(peer.serial, peer.index);
         self.bucket_list_peer_left(peer);
     }
-
-    // ---- step 4: Road Trip, tag events, teams, the watch ----
-
-    /// The watch's exclusion at an event boundary (step 4).
-    pub(super) fn watch_event_start(&mut self) {}
 }
