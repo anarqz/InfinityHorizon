@@ -1,11 +1,11 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Written from docs/launcher/NERDCORE_WIRE.md (OD-187); no other codec source used.
+// Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! The field notation of the message catalogue (§6.2): a message body is a list of [`Field`]s,
 //! decoded into the same number of [`FieldValue`]s.
 
 use super::{
     CodecError,
-    bits::{BitReader, BitWriter},
+    bits::{BitReader, BitRun, BitWriter},
     object::ObjectKey,
 };
 
@@ -24,8 +24,10 @@ pub enum Field {
     Vec3,
     /// `u64`: 8 bytes, least significant first.
     U64,
-    /// `blob64`: a byte run whose count is always 8, then 8 bytes.
+    /// `blob64`: a byte run of at most 8 bytes (a 64-bit value; the game writes 8).
     Blob64,
+    /// A fixed run of `N` bits kept raw (a block whose inner fields are not broken out).
+    Raw(u16),
     /// `str(N)`: a string of at most N bytes.
     Str(u8),
     /// `key(N)`: an object key with an N-bit id (§1.7).
@@ -46,13 +48,14 @@ pub enum FieldValue {
     F32(u32),
     Vec3([u32; 3]),
     U64(u64),
-    Blob64([u8; 8]),
+    Blob64(Vec<u8>),
+    Raw(BitRun),
     Str(Vec<u8>),
     Key(ObjectKey),
     Repeat(Vec<Vec<FieldValue>>),
 }
 
-/// The byte count of a `blob64` (§6.2: "count field (always 8)").
+/// The largest byte count of a `blob64` (§6.2: the game always writes 8).
 pub const BLOB64_LEN: usize = 8;
 
 impl Field {
@@ -66,13 +69,10 @@ impl Field {
                 FieldValue::Vec3([r.read_f32_bits()?, r.read_f32_bits()?, r.read_f32_bits()?])
             }
             Field::U64 => FieldValue::U64(r.read_u64()?),
-            Field::Blob64 => {
-                // SPEC: unverified (§6.2): only the count 8 is accepted; the spec says the count
-                // is always 8 and does not say how the game's reader treats a shorter run.
-                let b = r.read_byte_run(BLOB64_LEN)?;
-                let arr: [u8; 8] = b.try_into().map_err(|_| CodecError::Range)?;
-                FieldValue::Blob64(arr)
-            }
+            // The reader takes up to 8 bytes (the C# engine's reader, and its "lap score without
+            // the game's layout" vectors, accept shorter runs).
+            Field::Blob64 => FieldValue::Blob64(r.read_byte_run(BLOB64_LEN)?),
+            Field::Raw(n) => FieldValue::Raw(r.read_run(usize::from(n))?),
             Field::Str(max) => FieldValue::Str(r.read_string(usize::from(max))?),
             Field::Key(n) => FieldValue::Key(ObjectKey::read(r, n)?),
             Field::Repeat { count_bits, item } => {
@@ -95,6 +95,9 @@ impl Field {
             (Field::Vec3, FieldValue::Vec3(xs)) => xs.iter().try_for_each(|x| w.write_f32_bits(*x)),
             (Field::U64, FieldValue::U64(x)) => w.write_u64(*x),
             (Field::Blob64, FieldValue::Blob64(b)) => w.write_byte_run(b, BLOB64_LEN),
+            (Field::Raw(n), FieldValue::Raw(run)) if run.len() == usize::from(n) => {
+                w.write_run(run)
+            }
             (Field::Str(max), FieldValue::Str(s)) => w.write_string(s, usize::from(max)),
             (Field::Key(n), FieldValue::Key(k)) => k.write(w, n),
             (Field::Repeat { count_bits, item }, FieldValue::Repeat(rows)) => {

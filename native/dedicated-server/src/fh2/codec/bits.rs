@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Written from docs/launcher/NERDCORE_WIRE.md (OD-187); no other codec source used.
+// Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! The NerdCore bit stream (spec §1): one little-endian bit sequence, least significant bit first
 //! inside each byte, values written low bits first, at most 32 bits per call.
 //!
