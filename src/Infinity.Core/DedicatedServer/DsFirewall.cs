@@ -286,6 +286,27 @@ public sealed record DsFirewallRuleCommand(string Executable, bool IncludePublic
         return new DsFirewallRuleCommand(Path.GetFullPath(exe), includePublic);
     }
 
+    /// <summary>
+    /// As <see cref="TryParse(IReadOnlyList{string})"/>, and null unless the named exe carries a signature
+    /// <paramref name="signature"/> accepts: the elevated helper never writes a rule for a file the launcher would not run.
+    /// </summary>
+    public static DsFirewallRuleCommand? TryParse(IReadOnlyList<string> args, DsSignaturePolicy signature)
+    {
+        ArgumentNullException.ThrowIfNull(signature);
+        return TryParse(args) is { } command && DsSignature.Trusted(command.Executable, signature) ? command : null;
+    }
+
+    /// <summary>
+    /// The helper's apply step (stage 3) starts here: the command and its exe, verified and held open (no write, delete or
+    /// rename) until the rule is written (<paramref name="verified"/> is disposed after it). Null when either check fails.
+    /// </summary>
+    public static DsFirewallRuleCommand? TryOpen(IReadOnlyList<string> args, DsSignaturePolicy signature, out DsVerifiedExecutable? verified)
+    {
+        ArgumentNullException.ThrowIfNull(signature);
+        verified = TryParse(args) is { } command ? DsSignature.Open(command.Executable, signature) : null;
+        return verified is null ? null : TryParse(args);
+    }
+
     private const string DedicatedServerExe = "dedicated-server.exe";
 
     public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"firewall rule: allow inbound UDP, profiles {Profiles}");

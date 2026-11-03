@@ -326,6 +326,9 @@ public sealed partial class ShellViewModel
         var devLan = DevLanAdmission(mm);
         TimeProvider? trusted = ProofClock(session);
         var relayReports = RelayReports;
+        // CR-L50: the dedicated engine only when a development build selects it; one health for this lobby's run
+        var dedicatedWorlds = DedicatedWorlds(profile.Xuid, relayKeys, devLan, trusted, isPlayer: false,
+            key => _ui.Post(_ => Message = S[key], null));
         return CreateDedicatedHost(new GateClient(session.Api, session.Tokens), (ticket, activity) =>
         {
             var portInUse = false;
@@ -334,16 +337,17 @@ public sealed partial class ShellViewModel
                 players => StartRelay(players, profile.Xuid, relayKeys, devLan, trusted,
                     error => portInUse = error is System.Net.Sockets.SocketError.AddressAlreadyInUse or System.Net.Sockets.SocketError.AccessDenied),
                 () => HostRelay.LanAddresses(mm), profile.Xuid, Log,
-                updateRelayWorld: static (relay, world, cancellation) => relay is IntegratedWorldRelay integrated
-                    ? integrated.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
-                refreshRelayAdmissions: (relay, cancellation) => relay is IntegratedWorldRelay integrated
-                    ? integrated.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
+                updateRelayWorld: static (relay, world, cancellation) => relay is IWorldHostRelay hosted
+                    ? hosted.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
+                refreshRelayAdmissions: (relay, cancellation) => relay is IWorldHostRelay hosted
+                    ? hosted.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
                 checkWorldAccess: DedicatedWorldAccessAsync,
                 onlineActivity: activity, idleWhenNoWorld: false, requireGameReadiness: false, closeWhenAlone: false)
             {
                 SocketProofRequired = SocketProofRequired, SocketProofKeys = relayKeys,
                 TrustedServerNow = session.Api.TrustedServerNow,
-                RelayFailureKey = () => portInUse ? "lobby.port_in_use" : null,
+                StartRelayAsync = dedicatedWorlds is null ? null : dedicatedWorlds.StartAsync,
+                RelayFailureKey = () => dedicatedWorlds?.FailureKey ?? (portInUse ? "lobby.port_in_use" : null),
                 ModSet = mods,
                 RelayReports = relayReports.ReportAsync,
             };

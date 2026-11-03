@@ -66,6 +66,21 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// </summary>
     public Func<string?>? RelayFailureKey { get; init; }
 
+    /// <summary>
+    /// CR-L50: a world server started for a world id minted before it (the dedicated engine's <c>world.open</c> and every PUT
+    /// carry the same id, DEDICATED_SERVER.md §4.3); when set, it replaces the constructor's <c>startRelay</c>. Null: hosting
+    /// unavailable (<see cref="RelayFailureKey"/> then says why).
+    /// </summary>
+    public Func<HostRelayStart, CancellationToken, Task<IHostRelay?>>? StartRelayAsync { get; init; }
+
+    private int _hostEngineEnded;
+
+    /// <summary>
+    /// The last hosted world ended because its world server ended on its own (<see cref="IWorldHostRelay.EngineEnded"/>): the
+    /// world is gone and is never re-opened automatically (DEDICATED_SERVER.md §2.2).
+    /// </summary>
+    public bool HostEngineEnded => Volatile.Read(ref _hostEngineEnded) != 0;
+
     /// <summary>The hosted world's players as the last successful PUT or announce answered (no extra read).</summary>
     public uint HostedPlayers => HostedWorldId is null ? 0 : Volatile.Read(ref _hostedPlayers);
 
@@ -212,7 +227,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         WorldServer.RelayNetworkStatus? network;
         lock (_hostState) network = _relay switch
         {
-            IntegratedWorldRelay relay => relay.NetworkStatus,
+            IWorldHostRelay relay => relay.NetworkStatus,
             IntegratedHostRelay relay => relay.NetworkStatus,
             _ => null,
         };
@@ -1076,12 +1091,17 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } beforeRelay)
                 return new(1, string.Empty, string.Empty, DeniedMessage(beforeRelay, "create"));
             var players = (uint)Math.Clamp((int)request.MaxPlayers, 2, 12);
-            _relay = _startRelay?.Invoke(players);
+            // DEDICATED_SERVER.md §4.3: one id per world, minted before its world server, reused by every PUT attempt
+            var worldId = WorldHostScheduler.NewWorldId();
+            Volatile.Write(ref _hostEngineEnded, 0);
+            _relay = StartRelayAsync is { } startAsync
+                ? await startAsync(new HostRelayStart(players, worldId), stop.Token).ConfigureAwait(false)
+                : _startRelay?.Invoke(players);
             if (_relay is null) return new UiFrame.Hosted(2, string.Empty, string.Empty, _text(RelayFailureKey?.Invoke() ?? relayUnavailableKey));
-            if (_relay is IntegratedWorldRelay integrated)
+            if (_relay is IWorldHostRelay hostRelay)
             {
-                integrated.CrashContext = CrashContext; integrated.DiagnosticLog = _log;
-                integrated.GameSessions = GameModeSessionAsync;
+                hostRelay.CrashContext = CrashContext; hostRelay.DiagnosticLog = _log;
+                hostRelay.GameSessions = GameModeSessionAsync;
             }
             var relay = _relay;
             // CR-S57: the host's NAT test and relay round trips, read when the world opens (the host's relay legs already exist)
@@ -1113,7 +1133,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(stop.Token).ConfigureAwait(false) is { Allowed: false } beforePut)
                     return new(1, string.Empty, string.Empty, DeniedMessage(beforePut, "create"));
                 if (!GameStillReady()) return new(1, string.Empty, string.Empty, _text("worlds.load_game"));
-                openingId = WorldHostScheduler.NewWorldId();
+                openingId = worldId;
                 var minted = openingId;
                 var pending = OperationAsync(_createRetry, token => _mm.PutWorldAsync(minted, settings, token), stop.Token,
                     result => result.Ok ? CloseWorldAsync(minted, CancellationToken.None) : Task.CompletedTask);
@@ -1163,7 +1183,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id
-                if (opened?.Error is { Kind: MmErrorKind.AlreadyHosting, WorldId: { } old } && attempt == 0)
+                // the id is minted once per world: never close the very world this attempt is opening
+                if (opened?.Error is { Kind: MmErrorKind.AlreadyHosting, WorldId: { } old } && attempt == 0 && old != worldId)
                 {
                     await _mm.CloseAsync(old, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false);
                     continue;
@@ -1242,6 +1263,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             }
             if (!relay.Running)
             {
+                // CR-L50: a world server that ended on its own (its process, channel or world) is a host end, never a re-open
+                NoteEngineEnd(relay);
                 _log("worlds: the relay ended on its own");
                 await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                 return _text("worlds.host_ended");
@@ -1285,6 +1308,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 catch (InvalidOperationException)
                 {
+                    NoteEngineEnd(relay);
                     await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                     return _text("worlds.host_ended");
                 }
@@ -1342,6 +1366,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     try { await updateRelayWorld(relay, world, stop.Token).WaitAsync(stop.Token).ConfigureAwait(false); }
                     catch (Exception e) when (HostFailure(e))
                     {
+                        NoteEngineEnd(relay);
                         await CloseCurrentHostAsync(CancellationToken.None).ConfigureAwait(false);
                         return _text("worlds.host_ended");
                     }
@@ -1503,6 +1528,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private bool ExternalPortMoved(IHostRelay relay, DateTimeOffset now) => _announcedExternalPort is { } announced
         && now - _hostLastSuccess >= TimeSpan.FromSeconds(12) && Announcement(relay).External is { Port: var port } && port != announced;
 
+    private void NoteEngineEnd(IHostRelay relay)
+    {
+        if (relay is IWorldHostRelay { EngineEnded: true }) Volatile.Write(ref _hostEngineEnded, 1);
+    }
+
     // OD-150: the world's server runs a Road Trip (its lobbies), so the world may say it runs one
     private static bool RunsRoadTrip(IHostRelay relay) => relay.Lobbies?.Contains(LobbyKinds.RoadTrip) == true;
 
@@ -1520,7 +1550,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     }
 
     private AnnouncePort Announcement(IHostRelay relay)=>RelayAnnouncement.Build(relay.Port,_lan(),relay switch
-    { IntegratedWorldRelay integrated=>integrated.NetworkStatus,IntegratedHostRelay host=>host.NetworkStatus,_=>null });
+    { IWorldHostRelay hosted=>hosted.NetworkStatus,IntegratedHostRelay host=>host.NetworkStatus,_=>null });
 
     private sealed record HostOperation(long Generation, Task Previous, TaskCompletionSource Completion, CancellationToken Stop);
 

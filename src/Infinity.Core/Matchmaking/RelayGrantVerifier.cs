@@ -67,6 +67,9 @@ public sealed class RelayGrantVerifyKeys
 
     public int Count => _keys.Count;
 
+    /// <summary>The ring in <see cref="Parse"/>'s form, <c>kid:base64,…</c> (public keys only; the world server's <c>--grant-keys</c>).</summary>
+    public string Ring() => string.Join(",", _keys.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => k.Key + ":" + Convert.ToBase64String(k.Value)));
+
     /// <summary>
     /// The local stack's relay-grant PUBLIC ring (compose/matchmaking.yml's
     /// <c>FI_RELAY_GRANT_VERIFY_KEYS</c> default, the public half of its public dev seed). Only for

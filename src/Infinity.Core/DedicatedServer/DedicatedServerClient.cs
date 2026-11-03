@@ -168,26 +168,30 @@ public sealed class DedicatedServerClient : IAsyncDisposable
     public static DsBusyPolicy PolicyOf(string op) => op switch
     {
         DsOps.Hello => DsBusyPolicy.None,
-        DsOps.WorldContext or DsOps.WorldAdmission or DsOps.WorldVoice or DsOps.WorldVoiceBlocks or DsOps.WorldWatch => DsBusyPolicy.LatestWins,
+        DsOps.WorldContext or DsOps.WorldAdmission or DsOps.WorldVoice or DsOps.WorldVoiceBlocks or DsOps.WorldWatch or DsOps.CatalogSet => DsBusyPolicy.LatestWins,
         _ => DsBusyPolicy.Exact,
     };
 
     // ---- typed commands ----
 
     public Task<DsResult<DsHelloResult>> HelloAsync(string? secret, string controllerVersion, CancellationToken cancellation = default) =>
-        HelloAsync(secret, controllerVersion, testOnlyLegacyProtoRange: false, cancellation);
-
-    internal Task<DsResult<DsHelloResult>> HelloAsync(string? secret, string controllerVersion, bool testOnlyLegacyProtoRange, CancellationToken cancellation = default) =>
         SendAsync(new DsHello
         {
             Proto = DsProto.Version,
-            TestOnlyLegacyProtoRange = testOnlyLegacyProtoRange,
             Secret = secret,
             Controller = new DsControllerInfo { Kind = "launcher", Version = controllerVersion },
         }, DsJson.Default.DsHelloResult, cancellation);
 
     public Task<DsResult<DsKeysSetResult>> SetKeysAsync(string ring, CancellationToken cancellation = default) =>
         SendAsync(new DsKeysSet { Ring = ring }, DsJson.Default.DsKeysSetResult, cancellation);
+
+    /// <summary><c>catalog.set</c> (§9): the Road Trip rows; latest-wins.</summary>
+    public Task<DsResult<DsCatalogSetResult>> SetCatalogAsync(DsCatalogSet catalog, CancellationToken cancellation = default) =>
+        SendAsync(catalog, DsJson.Default.DsCatalogSetResult, cancellation);
+
+    /// <summary><c>catalog.parts</c> (§9): the answer to a <see cref="DsCatalogNeed"/>.</summary>
+    public Task<DsResult<DsEmpty>> SetCatalogPartsAsync(DsCatalogParts parts, CancellationToken cancellation = default) =>
+        SendAsync(parts, DsJson.Default.DsEmpty, cancellation);
 
     public Task<DsResult<DsCapacity>> CapacityAsync(CancellationToken cancellation = default) =>
         SendAsync(new DsBare(DsOps.Capacity), DsJson.Default.DsCapacity, cancellation);
@@ -410,24 +414,15 @@ public sealed class DedicatedServerClient : IAsyncDisposable
     internal static byte[] Encode(uint id, IDsRequest request)
     {
         var body = JsonSerializer.SerializeToElement(request, request.GetType(), DsJson.Default);
-        var legacy = request is DsHello { TestOnlyLegacyProtoRange: true };
         var buffer = new ArrayBufferWriter<byte>(256);
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
             writer.WriteNumber("id", id);
             writer.WriteString("op", request.Op);
-            if (legacy)
-            {
-                var proto = ((DsHello)request).Proto;
-                writer.WriteStartArray("proto");
-                writer.WriteNumberValue(proto);
-                writer.WriteNumberValue(proto);
-                writer.WriteEndArray();
-            }
             foreach (var property in body.EnumerateObject())
             {
-                if (property.NameEquals("id") || property.NameEquals("op") || (legacy && property.NameEquals("proto")))
+                if (property.NameEquals("id") || property.NameEquals("op"))
                 {
                     continue;
                 }
@@ -655,6 +650,7 @@ public sealed class DedicatedServerClient : IAsyncDisposable
                 DsEventNames.Notice => root.Deserialize(DsJson.Default.DsNotice),
                 DsEventNames.Draining => root.Deserialize(DsJson.Default.DsDraining),
                 DsEventNames.EventsDropped => root.Deserialize(DsJson.Default.DsEventsDropped),
+                DsEventNames.CatalogNeed => root.Deserialize(DsJson.Default.DsCatalogNeed),
                 _ => Unknown(),
             };
         }
@@ -711,6 +707,7 @@ public sealed class DedicatedServerClient : IAsyncDisposable
         DsPeerRejected s => s.WorldId is not null && s.Kind is not null && s.Valid,
         DsNotice s => s.Id is not null,
         DsEventsDropped s => s.Kinds is not null,
+        DsCatalogNeed s => s.Game == DsProto.GameFh2 && s.Kind == "parts",
         _ => true,
     };
 

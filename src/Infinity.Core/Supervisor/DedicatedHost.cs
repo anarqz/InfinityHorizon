@@ -497,6 +497,8 @@ public sealed class DedicatedHost : IAsyncDisposable
                 {
                     // A lost world or an expired ticket (WorldNotFound, AUTH.SESSION_EXPIRED, 45 s lapse): heal.
                     _log("lobby: world ended");
+                    // CR-L50 (DEDICATED_SERVER.md §2.2): a world server that ended on its own is never re-opened automatically
+                    if (bridge.HostEngineEnded) return new(EndKind.Final, ended ?? _text("worlds.host_ended"));
                     return new(EndKind.Lapsed, ended ?? _text("worlds.host_ended"));
                 }
                 lock (_sync) { _players = bridge.HostedPlayers; _code = bridge.HostedCode ?? _code; }

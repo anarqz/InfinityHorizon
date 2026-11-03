@@ -7,7 +7,7 @@ using Infinity.Core.WorldServer;
 namespace Infinity.Core.Matchmaking;
 
 /// <summary>Production adapter: the bound transport and verified world admission share one lifetime.</summary>
-public sealed class IntegratedWorldRelay : IHostRelay, IAsyncDisposable
+public sealed class IntegratedWorldRelay : IWorldHostRelay
 {
     private readonly IntegratedHostRelay _transport;
     private readonly WorldRelayAdmission _admission;
