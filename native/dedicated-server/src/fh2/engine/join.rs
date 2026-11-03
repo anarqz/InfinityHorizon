@@ -14,8 +14,9 @@ use serde_json::json;
 
 use super::{
     Engine, M,
+    key::{KeyOwner, ObjKey},
+    message::{Message, ObjectChange},
     packets::CAR_STAMP_OFFSET,
-    wire::{self, Handle, Kind, Msg},
 };
 
 /// A joiner with no FinaliseSessionEntry this long after its sync is released anyway.
@@ -34,23 +35,23 @@ pub(super) enum Release {
 /// Whether a message waits for its recipient's FinaliseSessionEntry.
 fn held_for_joiner(m: &M) -> bool {
     matches!(
-        wire::read_bits(m),
-        Some(Msg::Object(wire::Obj {
-            router: 2,
-            handle: Handle {
-                kind: Kind::Relay,
+        Message::from_bits(m),
+        Some(Message::Object(ObjectChange {
+            router_id: 2,
+            key: ObjKey {
+                kind: KeyOwner::Relay,
                 ..
             },
             ..
-        })) | Some(Msg::Delete {
-            router: 2,
-            handle: Handle {
-                kind: Kind::Relay,
+        })) | Some(Message::ObjectDelete {
+            router_id: 2,
+            key: ObjKey {
+                kind: KeyOwner::Relay,
                 ..
             },
             ..
-        }) | Some(Msg::Car { .. })
-            | Some(Msg::CarEvent { .. })
+        }) | Some(Message::CarState { .. })
+            | Some(Message::CarEvent { .. })
     )
 }
 
@@ -92,7 +93,7 @@ impl Engine {
                 }
                 let mut notes = Vec::new();
                 held.extend(
-                    obj.snapshot(key.0, Handle::relay(key.1, owner_index), &mut notes)
+                    obj.snapshot(key.0, ObjKey::relay(key.1, owner_index), &mut notes)
                         .into_iter()
                         .map(Arc::new),
                 );

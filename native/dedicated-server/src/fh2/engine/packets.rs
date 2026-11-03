@@ -12,13 +12,13 @@ use serde_json::json;
 use super::{
     Engine, Event, M, Open, Why,
     bits::{Rd, Rr},
+    datagram::{self, UNSEQUENCED},
     history::History,
+    key::{KeyOwner, ObjKey},
+    message::{self, CAR_BODY_BITS, Message, ObjectChange, SAT_NAV_NODE_MAX},
     payload,
-    wire::{
-        self, CAR_BODY_BITS, Handle, Header, Kind, Msg, NO_SEQUENCE, Obj, SAT_NAV_NODE_MAX,
-        seq_add, seq_newer, seq_next,
-    },
 };
+use crate::fh2::codec::object::{seq_forward, seq_is_newer, seq_next};
 
 /// Most objects a peer keeps (its creates past it are relayed but not kept for late joiners).
 const MAX_OBJECTS: usize = 256;
@@ -41,14 +41,14 @@ pub(super) const CAR_STAMP_OFFSET: usize = CAR_BODY_BITS - 32;
 
 impl Engine {
     pub(super) fn receive_packet(&mut self, data: &[u8], endpoint: std::net::SocketAddr) -> Rr<()> {
-        let Some(header) = Header::parse(data) else {
+        let Some(header) = datagram::header_of(data) else {
             return Ok(());
         };
-        let body = &data[wire::HEADER_LEN..];
+        let body = datagram::messages_of(data);
         let mut reader = Rd::new(body);
         let first = if header.count > 0 {
             let mut probe = reader;
-            wire::read(&mut probe).ok()
+            Message::decode(&mut probe).ok()
         } else {
             None
         };
@@ -68,8 +68,8 @@ impl Engine {
                 return Ok(());
             };
             if restart.user != p.xuid
-                || restart.version != wire::VERSION
-                || restart.game != wire::GAME
+                || restart.version != message::PROTOCOL_VERSION
+                || restart.game != message::GAME_TITLE
             {
                 return Ok(());
             }
@@ -111,7 +111,7 @@ impl Engine {
             p.received_bytes += data.len() as i64;
         }
         p.in_flight
-            .retain(|x| !wire::acknowledges(header.ack, header.ack_bits, x.id));
+            .retain(|x| !datagram::acknowledges(header.ack, header.ack_bits, x.id));
         if !admitted
             && header.id == 0
             && let Some(repeated) = &first_open
@@ -119,7 +119,7 @@ impl Engine {
         {
             let own = p.attempt;
             if self.handshake_allowed(endpoint, xuid) {
-                let m = Arc::new(wire::write(&Msg::OpenResponse {
+                let m = Arc::new(Message::encode(&Message::ConnectReply {
                     flags: repeated.flags,
                     reason: 0,
                     attempt: repeated.attempt,
@@ -133,7 +133,7 @@ impl Engine {
         // not jump more than 0x1000 forward (no ack, nothing applied); a synced peer, admitted by
         // the verified grant and endpoint binding, gets the game's own window
         if !p.synced
-            && header.id != wire::NO_SEQUENCE
+            && header.id != datagram::UNSEQUENCED
             && let Some(newest) = p.acks.newest()
         {
             let jump = crate::fh2::codec::reliable::id_dist(header.id, newest);
@@ -151,8 +151,8 @@ impl Engine {
         let verdict = p.acks.accept(header.id);
         // a dropped (0x3fff or more from the newest) or stale id is not recorded, never applied,
         // and answered with the acknowledgement as it stands, as the reference engine answers it
-        if verdict != wire::Verdict::Fresh {
-            if let Some(Msg::OpenResponse {
+        if verdict != datagram::Verdict::Fresh {
+            if let Some(Message::ConnectReply {
                 reason: 6, attempt, ..
             }) = &first
                 && p.synced
@@ -172,14 +172,14 @@ impl Engine {
         let mut synced_now = false;
         let mut early_finalise = false;
         let mut ready_release = false;
-        let mut car_now: Option<(Handle, crate::fh2::engine::bits::Bits)> = None;
+        let mut car_now: Option<(ObjKey, crate::fh2::engine::bits::Bits)> = None;
         let synced = p.synced;
         let (index, peer_attempt) = (p.index, p.attempt);
         let races = self.settings.races;
         let mut i = 0u32;
         while i < u32::from(header.count) && reader.left() >= 7 {
             i += 1;
-            let message = match wire::read(&mut reader) {
+            let message = match Message::decode(&mut reader) {
                 Ok(m) => m,
                 Err(_) => {
                     self.rejected(xuid, "truncated_packet", None, None, None);
@@ -187,7 +187,7 @@ impl Engine {
                 }
             };
             match message {
-                Msg::Open {
+                Message::Connect {
                     user,
                     flags,
                     attempt,
@@ -200,14 +200,14 @@ impl Engine {
                         continue;
                     }
                     admitted = false;
-                    answers.push(Arc::new(wire::write(&Msg::OpenResponse {
+                    answers.push(Arc::new(Message::encode(&Message::ConnectReply {
                         flags,
                         reason: 0,
                         attempt,
                         own_attempt: peer_attempt,
                     })));
                 }
-                Msg::OpenResponse {
+                Message::ConnectReply {
                     reason, attempt, ..
                 } => {
                     let resend = self.settings.relay.resend_after_ms as i64;
@@ -223,18 +223,21 @@ impl Engine {
                         self.send_completion(serial);
                     }
                 }
-                Msg::Close => {
+                Message::Disconnect => {
                     self.drop_peer(serial, Why::Closed);
                     return Ok(());
                 }
-                Msg::Ping { time } => {
+                Message::Ping { clock: time } => {
                     let wire_now = self.now_wire();
-                    answers.push(Arc::new(wire::write(&Msg::Pong {
-                        echo: time,
-                        time: wire_now,
+                    answers.push(Arc::new(Message::encode(&Message::Pong {
+                        echoed: time,
+                        clock: wire_now,
                     })));
                 }
-                Msg::Pong { echo, time } => {
+                Message::Pong {
+                    echoed: echo,
+                    clock: time,
+                } => {
                     let wire_now = self.now_wire();
                     if echo == 0
                         && time <= wire_now
@@ -245,9 +248,9 @@ impl Engine {
                     }
                 }
                 // a finalise in the packet that proves the address: applied once synced (below)
-                Msg::Finalise if !synced => early_finalise = true,
+                Message::Finalise if !synced => early_finalise = true,
                 _ if !synced => {}
-                Msg::Object(obj) => {
+                Message::Object(obj) => {
                     if let Some(relayed) = self.on_object(serial, obj) {
                         if let Some(p) = self.peer_mut(serial) {
                             p.completion_confirmed = true;
@@ -255,11 +258,11 @@ impl Engine {
                         forward.push(relayed);
                     }
                 }
-                Msg::Delete {
-                    router,
-                    handle,
-                    seq,
-                } if handle.kind == Kind::Own
+                Message::ObjectDelete {
+                    router_id: router,
+                    key: handle,
+                    sequence: seq,
+                } if handle.kind == KeyOwner::Own
                     && ((1..=3).contains(&router)
                         || router == BUCKET_LIST_ROUTER
                             && handle.id == 0
@@ -273,15 +276,15 @@ impl Engine {
                     };
                     let removed = p.objects.remove(&(router, handle.id));
                     p.orphans
-                        .retain(|o| o.router != router || o.handle.id != handle.id);
+                        .retain(|o| o.router_id != router || o.key.id != handle.id);
                     let injected = removed.map_or(0, |o| o.injected);
-                    forward.push(Arc::new(wire::write(&Msg::Delete {
-                        router,
-                        handle: Handle::relay(handle.id, index),
-                        seq: seq_add(seq, injected),
+                    forward.push(Arc::new(Message::encode(&Message::ObjectDelete {
+                        router_id: router,
+                        key: ObjKey::relay(handle.id, index),
+                        sequence: seq_forward(seq, injected),
                     })));
                 }
-                Msg::Car { handle, body } if handle.kind == Kind::Own => {
+                Message::CarState { car: handle, body } if handle.kind == KeyOwner::Own => {
                     match payload::car_position(&body) {
                         Some(position) => {
                             // voice proximity's jump counter, on the previous car
@@ -294,16 +297,20 @@ impl Engine {
                             p.last_car_body = Some(body.clone());
                             p.car_position = Some(position);
                             p.car_id = Some(handle.id);
-                            car_now = Some((Handle::relay(handle.id, index), body));
+                            car_now = Some((ObjKey::relay(handle.id, index), body));
                         }
                         None => self.rejected(xuid, "invalid_car", Some(15), None, None),
                     }
                 }
-                Msg::CarEvent { kind, handle, body } if handle.kind == Kind::Own => {
+                Message::CarEvent {
+                    id: kind,
+                    car: handle,
+                    body,
+                } if handle.kind == KeyOwner::Own => {
                     if payload::car_event_ok(kind, &body) {
-                        let change = Arc::new(wire::write(&Msg::CarEvent {
-                            kind,
-                            handle: Handle::relay(handle.id, index),
+                        let change = Arc::new(Message::encode(&Message::CarEvent {
+                            id: kind,
+                            car: ObjKey::relay(handle.id, index),
                             body,
                         }));
                         if kind == 35 {
@@ -315,24 +322,26 @@ impl Engine {
                         self.rejected(xuid, "invalid_car_event", Some(u32::from(kind)), None, None);
                     }
                 }
-                Msg::GroupSatNav { node, .. } if (0..=SAT_NAV_NODE_MAX).contains(&node) => {
+                Message::GroupSatNav { node, .. } if (0..=SAT_NAV_NODE_MAX).contains(&node) => {
                     if let Some(p) = self.peer_mut(serial) {
                         p.completion_confirmed = true;
                     }
                     self.set_group_node(node);
                 }
-                Msg::Other { kind, body } if self.other_seam(serial, kind, &body) => {}
-                Msg::Other { kind, body } if races => {
+                Message::Opaque { id: kind, body } if self.other_seam(serial, kind, &body) => {}
+                Message::Opaque { id: kind, body } if races => {
                     // a Ready ends the join's hold after this packet's own answers (an ownership
                     // refusal's sequence precedes the options replay), before any race step
                     let (answers_of, release) = self.race_message(serial, kind, &body);
                     reliable.extend(answers_of);
                     ready_release |= release;
                 }
-                Msg::TagCollision { a, b, values } if races => {
-                    self.tag_collision(serial, a, b, values)
-                }
-                Msg::Finalise => {
+                Message::TagCollision {
+                    first: a,
+                    second: b,
+                    values,
+                } if races => self.tag_collision(serial, a, b, values),
+                Message::Finalise => {
                     if let Some(p) = self.peer_mut(serial) {
                         p.completion_confirmed = true;
                         p.finalise_asked = true;
@@ -388,7 +397,7 @@ impl Engine {
             self.release_joiner(serial, super::join::Release::Ready);
         }
         self.race_step();
-        if !answers.is_empty() || header.id != NO_SEQUENCE {
+        if !answers.is_empty() || header.id != UNSEQUENCED {
             self.send_ack(serial, answers);
         }
         if !synced_now {
@@ -455,9 +464,9 @@ impl Engine {
     /// One object message from a synced peer: sanitized, kept in its history, and returned as the
     /// copy the others get (its relay key, its sequence past what the server injected); `None`
     /// when it is not relayed.
-    fn on_object(&mut self, serial: u64, mut obj: Obj) -> Option<M> {
+    fn on_object(&mut self, serial: u64, mut obj: ObjectChange) -> Option<M> {
         let (xuid, index) = self.peer(serial).map(|p| (p.xuid, p.index))?;
-        if self.settings.races && obj.router == 6 && obj.handle.kind == Kind::Transfer {
+        if self.settings.races && obj.router_id == 6 && obj.key.kind == KeyOwner::Transfer {
             // the event options journal: published by races.rs, never relayed as it came
             self.on_game_options(serial, &obj);
             return None;
@@ -466,49 +475,51 @@ impl Engine {
             e.peer(serial).is_some_and(|p| p.objects.contains_key(&key))
         };
         // the game makes its RoadTripPlayerSynced in every session type: relayed in every world
-        let road_trip_player = obj.router == 9
-            && obj.handle.kind == Kind::Own
-            && if obj.create {
+        let road_trip_player = obj.router_id == 9
+            && obj.key.kind == KeyOwner::Own
+            && if obj.is_create {
                 obj.ty == 2
             } else {
-                has(self, (9, obj.handle.id))
+                has(self, (9, obj.key.id))
             };
         // a player's own BucketListPlayerStateSynced (router 12, type 0, id 0) in free roam
-        let bucket_player = obj.router == BUCKET_LIST_ROUTER
+        let bucket_player = obj.router_id == BUCKET_LIST_ROUTER
             && self.bucket_list_world()
-            && obj.handle.kind == Kind::Own
-            && obj.handle.id == 0
-            && if obj.create {
+            && obj.key.kind == KeyOwner::Own
+            && obj.key.id == 0
+            && if obj.is_create {
                 obj.ty == BUCKET_LIST_PLAYER_TYPE
             } else {
                 has(self, (BUCKET_LIST_ROUTER, 0))
             };
         if !road_trip_player {
             if !bucket_player
-                && (obj.handle.kind != Kind::Own || !(1..=3).contains(&obj.router) || obj.ty != 0)
+                && (obj.key.kind != KeyOwner::Own
+                    || !(1..=3).contains(&obj.router_id)
+                    || obj.ty != 0)
             {
-                if obj.router == 9 {
+                if obj.router_id == 9 {
                     self.note(
                         "roadtrip.object_refused",
                         vec![
                             json!(index),
                             json!(9),
-                            json!(if obj.create { "True" } else { "False" }),
+                            json!(if obj.is_create { "True" } else { "False" }),
                             json!(obj.ty),
-                            json!(format!("{:?}", obj.handle.kind)),
-                            json!(obj.handle.id),
-                            json!(obj.payload.len()),
+                            json!(format!("{:?}", obj.key.kind)),
+                            json!(obj.key.id),
+                            json!(obj.vars.len()),
                         ],
                     );
                 }
-                if obj.router == BUCKET_LIST_ROUTER {
+                if obj.router_id == BUCKET_LIST_ROUTER {
                     self.bucket_list_refused(serial, &obj);
                 }
                 return None;
             }
             // a PlayerState the object store cannot keep is not relayed either
             if bucket_player
-                && obj.create
+                && obj.is_create
                 && !has(self, (BUCKET_LIST_ROUTER, 0))
                 && self
                     .peer(serial)
@@ -517,32 +528,32 @@ impl Engine {
                 self.bucket_list_capped(serial);
                 return None;
             }
-            match payload::sanitize(obj.router, &obj.payload) {
+            match payload::sanitize(obj.router_id, &obj.vars) {
                 Ok(clean) => {
-                    obj.payload = clean;
-                    if obj.router == 1
-                        && !obj.create
-                        && obj.payload.len() >= super::roadtrip::CAR_CHOICE_BITS
+                    obj.vars = clean;
+                    if obj.router_id == 1
+                        && !obj.is_create
+                        && obj.vars.len() >= super::roadtrip::CAR_CHOICE_BITS
                     {
                         self.road_trip_car_picked(serial);
                     }
-                    if obj.router == 1 {
-                        self.observe_car_choice(serial, &obj.payload);
+                    if obj.router_id == 1 {
+                        self.observe_car_choice(serial, &obj.vars);
                         // NR-6: a watching host checks the others' parts
-                        self.watch_player_object(serial, obj.create, &obj.payload);
+                        self.watch_player_object(serial, obj.is_create, &obj.vars);
                     }
                 }
                 Err(fault) => {
-                    let message = if obj.create { 7 } else { 8 };
+                    let message = if obj.is_create { 7 } else { 8 };
                     self.rejected(
                         xuid,
                         "invalid_payload",
                         Some(message),
-                        Some(u32::from(obj.router)),
+                        Some(u32::from(obj.router_id)),
                         Some(fault.value()),
                     );
                     // a bucket-list PlayerState fails open: its clean prefix, re-encoded
-                    obj.payload = bucket_player
+                    obj.vars = bucket_player
                         .then(|| self.bucket_list_sanitize_refused(serial, &obj, fault))
                         .flatten()?;
                 }
@@ -550,10 +561,10 @@ impl Engine {
         }
         if road_trip_player {
             // validated against its variable list (NERDCORE_WIRE.md §7.9), as routers 1-3 are
-            match payload::sanitize(9, &obj.payload) {
-                Ok(clean) => obj.payload = clean,
+            match payload::sanitize(9, &obj.vars) {
+                Ok(clean) => obj.vars = clean,
                 Err(fault) => {
-                    let message = if obj.create { 7 } else { 8 };
+                    let message = if obj.is_create { 7 } else { 8 };
                     self.rejected(
                         xuid,
                         "invalid_payload",
@@ -566,94 +577,94 @@ impl Engine {
                             "roadtrip.player_refused",
                             vec![
                                 json!(index),
-                                json!(if obj.create { "create" } else { "update" }),
-                                json!(obj.seq),
+                                json!(if obj.is_create { "create" } else { "update" }),
+                                json!(obj.sequence),
                                 json!(fault.name()),
                                 json!(fault.value()),
-                                json!(obj.payload.len()),
+                                json!(obj.vars.len()),
                             ],
                         );
                     }
                     return None;
                 }
             }
-            if obj.create && self.is_road_trip() {
+            if obj.is_create && self.is_road_trip() {
                 self.note(
                     "roadtrip.player_created",
-                    vec![json!(index), json!(9), json!(2), json!(obj.handle.id)],
+                    vec![json!(index), json!(9), json!(2), json!(obj.key.id)],
                 );
             }
-            self.road_trip_player_update(serial, &obj.payload);
+            self.road_trip_player_update(serial, &obj.vars);
         }
         // ingest-size rule: a message whose relayed form (relay key, and the server variables a
         // snapshot adds) cannot fit one datagram is refused here, before it takes a sequence or
         // enters a history, never dropped later at send
-        let server_bits = match obj.router {
+        let server_bits = match obj.router_id {
             1 => SERVER_PLAYER_BITS,
             3 => SERVER_CONSOLE_BITS,
             _ => 0,
         };
-        if obj.payload.len() + server_bits > wire::MAX_DATAGRAM_PAYLOAD_BITS {
-            let message = if obj.create { 7 } else { 8 };
-            let bits = obj.payload.len() as u32;
+        if obj.vars.len() + server_bits > datagram::MAX_DATAGRAM_PAYLOAD_BITS {
+            let message = if obj.is_create { 7 } else { 8 };
+            let bits = obj.vars.len() as u32;
             self.rejected(
                 xuid,
                 "invalid_payload",
                 Some(message),
-                Some(u32::from(obj.router)),
+                Some(u32::from(obj.router_id)),
                 Some(bits),
             );
             self.note(
                 "object.oversize_refused",
-                vec![json!(index), json!(obj.router), json!(bits)],
+                vec![json!(index), json!(obj.router_id), json!(bits)],
             );
             return None;
         }
-        let key = (obj.router, obj.handle.id);
+        let key = (obj.router_id, obj.key.id);
         let mut guard_notes = Vec::new();
         let p = self.peer_mut(serial)?;
-        if obj.create {
+        if obj.is_create {
             if let Some(prev) = p.objects.get(&key)
-                && !seq_newer(obj.seq, prev.last)
+                && !seq_is_newer(obj.sequence, prev.last)
             {
                 return None;
             }
             p.objects.remove(&key);
             if p.objects.len() < MAX_OBJECTS {
-                let mut history = History::new(obj.ty, obj.seq, obj.payload.clone(), obj.router);
-                let orphans: Vec<Obj> = p.orphans.drain(..).collect();
+                let mut history =
+                    History::new(obj.ty, obj.sequence, obj.vars.clone(), obj.router_id);
+                let orphans: Vec<ObjectChange> = p.orphans.drain(..).collect();
                 for orphan in orphans {
-                    if (orphan.router, orphan.handle.id) == key {
-                        history.update(orphan.seq, orphan.payload, &mut guard_notes);
+                    if (orphan.router_id, orphan.key.id) == key {
+                        history.update(orphan.sequence, orphan.vars, &mut guard_notes);
                     } else {
                         p.orphans.push_back(orphan);
                     }
                 }
                 p.objects.insert(key, history);
             }
-            if obj.router == 1 {
+            if obj.router_id == 1 {
                 p.universe_due = true;
             }
-            if obj.router == 3 && p.console_id != Some(obj.handle.id) {
-                p.console_id = Some(obj.handle.id);
+            if obj.router_id == 3 && p.console_id != Some(obj.key.id) {
+                p.console_id = Some(obj.key.id);
                 p.console_sequence = None;
             }
-            if obj.router == 3 {
+            if obj.router_id == 3 {
                 p.console_variable_sequences.clear();
-                p.console_latest_sequence = Some(obj.seq);
+                p.console_latest_sequence = Some(obj.sequence);
             }
         } else if let Some(prev) = p.objects.get_mut(&key) {
-            if !prev.update(obj.seq, obj.payload.clone(), &mut guard_notes) {
+            if !prev.update(obj.sequence, obj.vars.clone(), &mut guard_notes) {
                 for d in guard_notes {
                     self.guard_note(index, key, d);
                 }
                 return None;
             }
         } else {
-            if p.orphans
-                .iter()
-                .any(|o| o.router == obj.router && o.handle.id == obj.handle.id && o.seq == obj.seq)
-            {
+            if p.orphans.iter().any(|o| {
+                o.router_id == obj.router_id && o.key.id == obj.key.id && o.sequence == obj.sequence
+            }) {
                 return None;
             }
             if p.orphans.len() >= MAX_ORPHANS {
@@ -661,20 +672,20 @@ impl Engine {
             }
             p.orphans.push_back(obj.clone());
         }
-        if obj.router == 3 && p.console_id == Some(obj.handle.id) {
+        if obj.router_id == 3 && p.console_id == Some(obj.key.id) {
             if p.console_latest_sequence
-                .is_none_or(|l| seq_newer(obj.seq, l))
+                .is_none_or(|l| seq_is_newer(obj.sequence, l))
             {
-                p.console_latest_sequence = Some(obj.seq);
+                p.console_latest_sequence = Some(obj.sequence);
             }
             let mut observations = Vec::new();
-            for (var, value) in payload::console_variables(&obj.payload).unwrap_or_default() {
+            for (var, value) in payload::console_variables(&obj.vars).unwrap_or_default() {
                 let newer = p
                     .console_variable_sequences
                     .get(&var)
-                    .is_none_or(|last| seq_newer(obj.seq, *last));
+                    .is_none_or(|last| seq_is_newer(obj.sequence, *last));
                 if newer {
-                    p.console_variable_sequences.insert(var, obj.seq);
+                    p.console_variable_sequences.insert(var, obj.sequence);
                     observations.push((var, value));
                 }
             }
@@ -683,9 +694,9 @@ impl Engine {
                 self.guard_note(index, key, d);
             }
             self.observe_console(serial, &observations);
-            return Some(Arc::new(wire::write(&Msg::Object(Obj {
-                handle: Handle::relay(obj.handle.id, index),
-                seq: seq_add(obj.seq, injected),
+            return Some(Arc::new(Message::encode(&Message::Object(ObjectChange {
+                key: ObjKey::relay(obj.key.id, index),
+                sequence: seq_forward(obj.sequence, injected),
                 ..obj
             }))));
         }
@@ -693,18 +704,18 @@ impl Engine {
             self.guard_note(index, key, d);
         }
         if bucket_player {
-            self.bucket_list_player_update(serial, obj.create, obj.seq, &obj.payload);
+            self.bucket_list_player_update(serial, obj.is_create, obj.sequence, &obj.vars);
         }
-        if obj.router == 1 {
-            self.bucket_list_player_object(serial, &obj.payload); // the name 65 gives a partner
+        if obj.router_id == 1 {
+            self.bucket_list_player_object(serial, &obj.vars); // the name 65 gives a partner
         }
         let injected = self
             .peer(serial)
             .and_then(|p| p.objects.get(&key))
             .map_or(0, |o| o.injected);
-        Some(Arc::new(wire::write(&Msg::Object(Obj {
-            handle: Handle::relay(obj.handle.id, index),
-            seq: seq_add(obj.seq, injected),
+        Some(Arc::new(Message::encode(&Message::Object(ObjectChange {
+            key: ObjKey::relay(obj.key.id, index),
+            sequence: seq_forward(obj.sequence, injected),
             ..obj
         }))))
     }
@@ -719,7 +730,7 @@ impl Engine {
         p.finalised = true;
         let seq = p.console_sequence.map_or(0, seq_next);
         p.console_sequence = Some(seq);
-        Some(Arc::new(wire::write(&Msg::Object(
+        Some(Arc::new(Message::encode(&Message::Object(
             payload::console_update(id, seq, &[(1, true)]),
         ))))
     }
@@ -730,13 +741,13 @@ impl Engine {
         }
         self.group_node = node;
         self.host_sequence = seq_next(self.host_sequence);
-        let update = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 6,
-            handle: Handle::own(0),
+        let update = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 6,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.host_sequence,
-            payload: payload::group_sat_nav(node),
+            sequence: self.host_sequence,
+            vars: payload::group_sat_nav(node),
         })));
         for s in self.synced_serials_except(None) {
             self.send_sequenced(s, vec![update.clone()]);
@@ -752,13 +763,13 @@ impl Engine {
             return;
         }
         self.weather_sequence = seq_next(self.weather_sequence);
-        let update = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 10,
-            handle: Handle::own(0),
+        let update = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 10,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.weather_sequence,
-            payload: self.weather.payload(),
+            sequence: self.weather_sequence,
+            vars: self.weather.payload(),
         })));
         for s in self.synced_serials_except(None) {
             self.send_sequenced(s, vec![update.clone()]);
@@ -821,22 +832,22 @@ impl Engine {
             host_payload.append(&payload::group_sat_nav(self.group_node));
         }
         let mut snapshot: Vec<crate::fh2::engine::bits::Bits> = vec![
-            wire::write(&Msg::Object(Obj {
-                create: true,
-                router: 6,
-                handle: Handle::own(0),
+            Message::encode(&Message::Object(ObjectChange {
+                is_create: true,
+                router_id: 6,
+                key: ObjKey::own(0),
                 ty: 0,
-                seq: self.host_sequence,
-                payload: host_payload,
+                sequence: self.host_sequence,
+                vars: host_payload,
             })),
             // the world's shared weather at its current sequence
-            wire::write(&Msg::Object(Obj {
-                create: true,
-                router: 10,
-                handle: Handle::own(0),
+            Message::encode(&Message::Object(ObjectChange {
+                is_create: true,
+                router_id: 10,
+                key: ObjKey::own(0),
                 ty: 0,
-                seq: self.weather_sequence,
-                payload: self.weather.payload(),
+                sequence: self.weather_sequence,
+                vars: self.weather.payload(),
             })),
         ];
         self.append_car_meet_snapshot(&mut snapshot);
@@ -855,7 +866,7 @@ impl Engine {
                     continue;
                 }
                 let mut notes = Vec::new();
-                snapshot.extend(obj.snapshot(key.0, Handle::relay(key.1, owner_index), &mut notes));
+                snapshot.extend(obj.snapshot(key.0, ObjKey::relay(key.1, owner_index), &mut notes));
                 guard.extend(notes.into_iter().map(|d| (*key, d)));
             }
             for (key, d) in guard {

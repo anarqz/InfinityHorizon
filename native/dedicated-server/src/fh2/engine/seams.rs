@@ -13,12 +13,7 @@
 
 use std::sync::Arc;
 
-use super::{
-    Engine, M, Peer,
-    bits::Bits,
-    payload,
-    wire::{self, Handle, Msg},
-};
+use super::{Engine, M, Peer, bits::Bits, key::ObjKey, message::Message, payload};
 
 /// CarPredictionFull: the car's universe (5 bits) sits at this bit.
 pub(super) const CAR_UNIVERSE_OFFSET: usize = 395;
@@ -54,7 +49,7 @@ impl Engine {
 
     /// A car prediction for one receiver: across an event boundary it carries its owner's private
     /// universe; on the same side (or in universe 0) it goes as the game wrote it.
-    pub(super) fn car_for(&self, sender: u64, receiver: u64, handle: Handle, body: &Bits) -> M {
+    pub(super) fn car_for(&self, sender: u64, receiver: u64, handle: ObjKey, body: &Bits) -> M {
         let universe = self
             .bucket_list_pair_universe(sender)
             .unwrap_or_else(|| self.peer(sender).map_or(0, |p| p.universe));
@@ -68,14 +63,14 @@ impl Engine {
                 u64::from(universe),
             )
         };
-        Arc::new(wire::write(&Msg::Car { handle, body }))
+        Arc::new(Message::encode(&Message::CarState { car: handle, body }))
     }
 
     /// A packet's car prediction and car events to every other synced player.
     pub(super) fn forward_cars(
         &mut self,
         sender: u64,
-        car: Option<(Handle, Bits)>,
+        car: Option<(ObjKey, Bits)>,
         events: Vec<M>,
     ) {
         if car.is_none() && events.is_empty() {

@@ -12,10 +12,11 @@ use serde_json::json;
 
 use super::{
     Engine,
+    key::{KeyOwner, ObjKey},
+    message::Message,
     options::{Fields, TagMode, TagRules},
     races::Stage,
     random::{LegacyRandom, SeedPurpose},
-    wire::{self, Handle, Kind, Msg},
 };
 
 /// The first It car(s) are drawn this long after the starting grid.
@@ -287,14 +288,14 @@ impl Engine {
             for i in 0..TAG_SLOTS {
                 match cars.get(i) {
                     None => {
-                        keys.push(Handle::relay(127, 0));
+                        keys.push(ObjKey::relay(127, 0));
                         buckets.push(0);
                     }
                     Some(&(serial, index, car)) => {
                         keys.push(if serial == r {
-                            Handle::own(car)
+                            ObjKey::own(car)
                         } else {
-                            Handle::relay(car, index)
+                            ObjKey::relay(car, index)
                         });
                         buckets.push(tag.buckets.get(&index).copied().unwrap_or(tag.not_it()));
                     }
@@ -302,7 +303,7 @@ impl Engine {
             }
             sends.push((
                 r,
-                Arc::new(wire::write(&Msg::TagBuckets {
+                Arc::new(Message::encode(&Message::TagBuckets {
                     cars: keys,
                     buckets,
                 })),
@@ -320,10 +321,10 @@ impl Engine {
     }
 
     /// The peer index a key names, as the reporting game knows it.
-    fn tag_car(&self, reporter: u8, key: Handle) -> Option<u8> {
+    fn tag_car(&self, reporter: u8, key: ObjKey) -> Option<u8> {
         match key.kind {
-            Kind::Own => Some(reporter),
-            Kind::Relay => self
+            KeyOwner::Own => Some(reporter),
+            KeyOwner::Relay => self
                 .peers
                 .iter()
                 .find(|p| p.index == key.peer)
@@ -355,7 +356,7 @@ impl Engine {
 
     /// A game's hit report (36): applied once, when the buckets it saw are the server's and
     /// exactly one car is It.
-    pub(super) fn tag_collision(&mut self, serial: u64, a: Handle, b: Handle, values: [u8; 4]) {
+    pub(super) fn tag_collision(&mut self, serial: u64, a: ObjKey, b: ObjKey, values: [u8; 4]) {
         let Some(index) = self.peer(serial).map(|p| p.index) else {
             return;
         };

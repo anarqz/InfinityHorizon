@@ -23,9 +23,11 @@ use serde_json::{Value, json};
 use super::{
     Engine, M, Why,
     bits::Bits,
+    key::{KeyOwner, ObjKey},
+    message::{KeyLayout, Message, ObjectChange},
     options::{Applied, Fields, Journal},
-    wire::{self, Handle, Kind, Msg, Obj, seq_next},
 };
+use crate::fh2::codec::object::{PAYLOAD_MAX_BITS, seq_forward, seq_next};
 
 /// OD-183: the fewest participants an event starts with.
 pub const MIN_EVENT_PARTICIPANTS: usize = 2;
@@ -185,22 +187,22 @@ fn host_float(x: f32) -> u64 {
 /// MsgReadyRequest (41): the lobby's event key, then the ready flag.
 fn ready_request(body: &Bits) -> Option<bool> {
     let mut r = body.reader();
-    Handle::read(&mut r, 2).ok()?;
+    ObjKey::read(&mut r, 2).ok()?;
     r.boolean().ok()
 }
 
 /// MsgRequestOwnership (10): router 6, type 1, a transfer key.
-fn ownership_request(body: &Bits) -> Option<Handle> {
+fn ownership_request(body: &Bits) -> Option<ObjKey> {
     let mut r = body.reader();
     let router = r.read(4).ok()? as u8;
-    let (id_bits, type_bits) = wire::router_widths(router)?;
-    let ty = r.read(type_bits).ok()?;
-    let handle = Handle::read(&mut r, id_bits).ok()?;
-    (router == 6 && ty == 1 && handle.kind == Kind::Transfer).then_some(handle)
+    let layout = KeyLayout::of(router)?;
+    let ty = r.read(layout.type_bits).ok()?;
+    let handle = ObjKey::read(&mut r, layout.id_bits).ok()?;
+    (router == 6 && ty == 1 && handle.kind == KeyOwner::Transfer).then_some(handle)
 }
 
 /// MsgGrantOwnership (11): router, key, sequence, then the first fragment.
-fn grant_ownership(handle: Handle, sequence: u8, payload: &Bits) -> M {
+fn grant_ownership(handle: ObjKey, sequence: u8, payload: &Bits) -> M {
     let mut b = Bits::new();
     b.push(11, 7).push(6, 4);
     handle.write(&mut b, 2);
@@ -211,7 +213,7 @@ fn grant_ownership(handle: Handle, sequence: u8, payload: &Bits) -> M {
 }
 
 /// MsgTransferOwnership (12): ownership refused, the requester keeps waiting on the owner.
-fn transfer_ownership(handle: Handle, sequence: u8) -> M {
+fn transfer_ownership(handle: ObjKey, sequence: u8) -> M {
     let mut b = Bits::new();
     b.push(12, 7).push(6, 4);
     handle.write(&mut b, 2);
@@ -223,7 +225,7 @@ fn transfer_ownership(handle: Handle, sequence: u8) -> M {
 fn ready_response(code: u8) -> M {
     let mut b = Bits::new();
     b.push(42, 7);
-    Handle::own(0).write(&mut b, 2);
+    ObjKey::own(0).write(&mut b, 2);
     b.push(u64::from(code), 2);
     Arc::new(b)
 }
@@ -231,15 +233,15 @@ fn ready_response(code: u8) -> M {
 fn start_race(time: u32) -> M {
     let mut b = Bits::new();
     b.push(40, 7);
-    Handle::own(0).write(&mut b, 2);
+    ObjKey::own(0).write(&mut b, 2);
     b.push(u64::from(time), 32);
     Arc::new(b)
 }
 
-fn starting_grid(handles: &[Handle]) -> M {
+fn starting_grid(handles: &[ObjKey]) -> M {
     let mut b = Bits::new();
     b.push(39, 7);
-    Handle::own(0).write(&mut b, 2);
+    ObjKey::own(0).write(&mut b, 2);
     b.push(handles.len().min(12) as u64, 4);
     for h in handles.iter().take(12) {
         h.write(&mut b, 7);
@@ -250,12 +252,12 @@ fn starting_grid(handles: &[Handle]) -> M {
 /// A score message's body for the others: the sender's own key as its relay key.
 fn score_for_others(body: &Bits, sender: u8) -> Option<Bits> {
     let mut r = body.reader();
-    let own = Handle::read(&mut r, 7).ok()?;
-    if own.kind != Kind::Own {
+    let own = ObjKey::read(&mut r, 7).ok()?;
+    if own.kind != KeyOwner::Own {
         return None;
     }
     let mut out = Bits::new();
-    Handle::relay(own.id, sender).write(&mut out, 7);
+    ObjKey::relay(own.id, sender).write(&mut out, 7);
     let left = r.left();
     out.append(&r.take(left).ok()?);
     Some(out)
@@ -264,7 +266,7 @@ fn score_for_others(body: &Bits, sender: u8) -> Option<Bits> {
 /// MsgInProgressScoreUpdate (43): the sender's key, then the f32 score and a flag.
 fn in_progress_score(body: &Bits) -> Option<(f32, bool)> {
     let mut r = body.reader();
-    Handle::read(&mut r, 7).ok()?;
+    ObjKey::read(&mut r, 7).ok()?;
     if r.left() != 33 {
         return None;
     }
@@ -283,7 +285,7 @@ struct LapScore {
 /// then exactly 34 bits (a u32 and two flags).
 fn lap_score(body: &Bits) -> Option<LapScore> {
     let mut r = body.reader();
-    if Handle::read(&mut r, 7).ok()?.kind != Kind::Own {
+    if ObjKey::read(&mut r, 7).ok()?.kind != KeyOwner::Own {
         return None;
     }
     let mut values = [0f64; 3];
@@ -336,13 +338,13 @@ impl Engine {
             self.host_variables.insert(*k, (*v, *w));
         }
         self.host_sequence = seq_next(self.host_sequence);
-        let m = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 6,
-            handle: Handle::own(0),
+        let m = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 6,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.host_sequence,
-            payload: super::payload::session_host(vars),
+            sequence: self.host_sequence,
+            vars: super::payload::session_host(vars),
         })));
         for s in self.synced_serials_except(None) {
             self.send_sequenced(s, vec![m.clone()]);
@@ -367,9 +369,9 @@ impl Engine {
         let seq = p.console_sequence.map_or(0, seq_next);
         p.console_sequence = Some(seq);
         let index = p.index;
-        let own = Arc::new(wire::write(&Msg::Object(super::payload::console_update(
-            id, seq, vars,
-        ))));
+        let own = Arc::new(Message::encode(&Message::Object(
+            super::payload::console_update(id, seq, vars),
+        )));
         self.send_sequenced(serial, vec![own]);
         let Some(p) = self.peer_mut(serial) else {
             return;
@@ -383,14 +385,14 @@ impl Engine {
             obj.server_variables.insert(*k, *v);
             payload.push(u64::from(*k), 4).boolean(*v);
         }
-        let seq = wire::seq_add(obj.last, obj.injected);
-        let m = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 3,
-            handle: Handle::relay(id, index),
+        let seq = seq_forward(obj.last, obj.injected);
+        let m = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 3,
+            key: ObjKey::relay(id, index),
             ty: 0,
-            seq,
-            payload,
+            sequence: seq,
+            vars: payload,
         })));
         self.forward(serial, vec![m], true);
     }
@@ -488,8 +490,8 @@ impl Engine {
         if invited > 0 {
             let until = self.now_wire().wrapping_add(wait as u32);
             self.set_host_variables(&[(4, 1, 1), (6, 0, 1), (2, 1, 2), (3, u64::from(until), 32)]);
-            let m = Arc::new(wire::write(&Msg::Other {
-                kind: 38,
+            let m = Arc::new(Message::encode(&Message::Opaque {
+                id: 38,
                 body: Bits::new(),
             }));
             self.forward(serial, vec![m], true);
@@ -731,15 +733,15 @@ impl Engine {
             self.note("event.grid", vec![json!(participants.len())]);
             self.watch_event_start("event: starting grid");
             for receiver in &participants {
-                let grid: Vec<Handle> = order
+                let grid: Vec<ObjKey> = order
                     .iter()
                     .filter_map(|i| self.peers.iter().find(|p| p.index == *i))
                     .filter_map(|p| {
                         let id = p.console_id?;
                         Some(if p.index == *receiver {
-                            Handle::own(id)
+                            ObjKey::own(id)
                         } else {
-                            Handle::relay(id, p.index)
+                            ObjKey::relay(id, p.index)
                         })
                     })
                     .collect();
@@ -797,8 +799,8 @@ impl Engine {
             self.event_progress_ignored(index, kind, why);
             return false;
         };
-        let m = Arc::new(wire::write(&Msg::Other {
-            kind,
+        let m = Arc::new(Message::encode(&Message::Opaque {
+            id: kind,
             body: payload,
         }));
         let others: Vec<u64> = self
@@ -1082,28 +1084,26 @@ impl Engine {
 
     /// The owner's write of the options' object: published in order to the others (a held
     /// joiner gets it at its release).
-    pub(super) fn on_game_options(&mut self, serial: u64, obj: &Obj) {
+    pub(super) fn on_game_options(&mut self, serial: u64, obj: &ObjectChange) {
         self.tick_game_options();
-        if self.peer(serial).is_none_or(|p| p.doomed) || !self.is_event_owner(serial) || obj.create
+        if self.peer(serial).is_none_or(|p| p.doomed)
+            || !self.is_event_owner(serial)
+            || obj.is_create
         {
             return;
         }
         let now = self.now;
         let mut ready = Vec::new();
-        let mut result = self.ev.options.apply(
-            serial,
-            obj.handle.id,
-            obj.seq,
-            &obj.payload,
-            now,
-            &mut ready,
-        );
+        let mut result =
+            self.ev
+                .options
+                .apply(serial, obj.key.id, obj.sequence, &obj.vars, now, &mut ready);
         if result == Applied::TooLong {
             // not stored, not relayed; its writer's next fragment would wait on it forever, so
             // its session ends, as an overflow's does
             let (xuid, index) = self.peer(serial).map_or((0, 0), |p| (p.xuid, p.index));
-            let bits = obj.payload.len() as u32;
-            let id = if obj.create { 7 } else { 8 };
+            let bits = obj.vars.len() as u32;
+            let id = if obj.is_create { 7 } else { 8 };
             self.rejected(xuid, "game_options_too_long", Some(id), Some(6), Some(bits));
             if self.peer_note(serial, "options_too_long") {
                 self.note("options.too_long", vec![json!(index), json!(bits)]);
@@ -1113,21 +1113,17 @@ impl Engine {
         }
         // a long session of deltas fills the journal: its merged values take less
         if result == Applied::Overflow
-            && obj.payload.len() <= wire::MAX_PAYLOAD_BITS
+            && obj.vars.len() <= PAYLOAD_MAX_BITS
             && self.compact_game_options(false)
         {
-            result = self.ev.options.apply(
-                serial,
-                obj.handle.id,
-                obj.seq,
-                &obj.payload,
-                now,
-                &mut ready,
-            );
+            result =
+                self.ev
+                    .options
+                    .apply(serial, obj.key.id, obj.sequence, &obj.vars, now, &mut ready);
         }
         if result == Applied::Overflow {
             let xuid = self.peer(serial).map_or(0, |p| p.xuid);
-            let id = if obj.create { 7 } else { 8 };
+            let id = if obj.is_create { 7 } else { 8 };
             self.rejected(xuid, "game_options_overflow", Some(id), Some(6), None);
             // a live, incomplete object nobody could recover: end this writer's session
             self.doom(serial, Why::OptionsOverflow);
@@ -1145,7 +1141,7 @@ impl Engine {
         for o in others {
             let updates: Vec<M> = ready
                 .iter()
-                .map(|r| self.game_options_update(o, obj.handle.id, r))
+                .map(|r| self.game_options_update(o, obj.key.id, r))
                 .collect();
             self.send_sequenced(o, updates);
         }
@@ -1166,17 +1162,17 @@ impl Engine {
             }
             None => 0,
         };
-        Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 6,
-            handle: Handle {
-                kind: Kind::Transfer,
+        Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 6,
+            key: ObjKey {
+                kind: KeyOwner::Transfer,
                 id,
                 peer: 0,
             },
             ty: 0,
-            seq: next,
-            payload: payload.clone(),
+            sequence: next,
+            vars: payload.clone(),
         })))
     }
 
@@ -1764,13 +1760,13 @@ impl Engine {
             .push(u64::from(universe), super::payload::PRIVATE_UNIVERSE_BITS);
         let seq = p.player_sequence.map_or(0, seq_next);
         p.player_sequence = Some(seq);
-        let own = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 1,
-            handle: Handle::server(id),
+        let own = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 1,
+            key: ObjKey::server(id),
             ty: 0,
-            seq,
-            payload: payload.clone(),
+            sequence: seq,
+            vars: payload.clone(),
         })));
         self.send_sequenced(serial, vec![own]);
         let Some(obj) = self
@@ -1781,14 +1777,14 @@ impl Engine {
         };
         obj.injected = seq_next(obj.injected);
         obj.universe = (universe != 0).then_some(universe);
-        let seq = wire::seq_add(obj.last, obj.injected);
-        let m = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 1,
-            handle: Handle::relay(id, index),
+        let seq = seq_forward(obj.last, obj.injected);
+        let m = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 1,
+            key: ObjKey::relay(id, index),
             ty: 0,
-            seq,
-            payload,
+            sequence: seq,
+            vars: payload,
         })));
         self.forward(serial, vec![m], true);
     }

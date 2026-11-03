@@ -12,8 +12,11 @@ use serde_json::json;
 use super::{
     Engine, Event, M, Peer, Reliable, Why,
     bits::Bits,
-    wire::{self, Handle, Msg, NO_SEQUENCE, PACKET_BODY_SPLIT, seq_add, seq_next},
+    datagram::{self, PACKET_BODY_SPLIT, UNSEQUENCED},
+    key::ObjKey,
+    message::Message,
 };
+use crate::fh2::codec::object::{seq_forward, seq_next};
 
 /// The peer goes at the end of this receive or tick; the first reason is kept.
 pub(super) fn doom(p: &mut Peer, why: Why) {
@@ -76,7 +79,7 @@ impl Engine {
         let mut chunk: Vec<M> = Vec::new();
         let mut bits = 0usize;
         for m in messages {
-            if m.len() > wire::MAX_MESSAGE_BITS {
+            if m.len() > datagram::MAX_MESSAGE_BITS {
                 // a message that alone cannot fit a datagram is dropped, never sent
                 self.oversize_dropped += 1;
                 let id = m.reader().read(7).unwrap_or(0);
@@ -92,7 +95,7 @@ impl Engine {
                             json!(index),
                             json!(id),
                             json!(m.len()),
-                            json!(wire::MAX_DATAGRAM),
+                            json!(datagram::MAX_DATAGRAM),
                             json!(dropped),
                         ],
                     );
@@ -130,13 +133,13 @@ impl Engine {
         let Some(p) = self.peer_mut(serial) else {
             return;
         };
-        let (ack, ack_bits) = p.acks.header();
+        let (ack, ack_bits) = p.acks.ack_fields();
         let id = if sequenced {
             p.take_packet_id()
         } else {
-            NO_SEQUENCE
+            UNSEQUENCED
         };
-        let packet = wire::packet(chunk.iter().map(|m| m.as_ref()), id, ack, ack_bits);
+        let packet = datagram::assemble(chunk.iter().map(|m| m.as_ref()), id, ack, ack_bits);
         if p.synced || p.sent_bytes + packet.len() as i64 <= p.received_bytes {
             if !p.synced {
                 p.sent_bytes += packet.len() as i64;
@@ -166,8 +169,8 @@ impl Engine {
         let Some(p) = self.peer_mut(serial) else {
             return;
         };
-        let (ack, bits) = p.acks.header();
-        let packet = wire::packet(std::iter::empty::<&Bits>(), NO_SEQUENCE, ack, bits);
+        let (ack, bits) = p.acks.ack_fields();
+        let packet = datagram::assemble(std::iter::empty::<&Bits>(), UNSEQUENCED, ack, bits);
         if !p.synced && p.sent_bytes + packet.len() as i64 > p.received_bytes {
             return;
         }
@@ -298,10 +301,10 @@ impl Engine {
             .objects
             .iter()
             .map(|(key, obj)| {
-                Arc::new(wire::write(&Msg::Delete {
-                    router: key.0,
-                    handle: Handle::relay(key.1, p.index),
-                    seq: seq_add(seq_next(obj.last), obj.injected),
+                Arc::new(Message::encode(&Message::ObjectDelete {
+                    router_id: key.0,
+                    key: ObjKey::relay(key.1, p.index),
+                    sequence: seq_forward(seq_next(obj.last), obj.injected),
                 }))
             })
             .collect();
@@ -336,9 +339,12 @@ impl Engine {
             let (synced, xuid, endpoint) = (p.synced, p.xuid, p.endpoint);
             if synced && self.allowed(xuid, endpoint) {
                 let Some(p) = self.peer(s) else { continue };
-                let (ack, bits) = p.acks.header();
-                let close = wire::write(&Msg::Close);
-                self.emit(endpoint, wire::packet([&close], NO_SEQUENCE, ack, bits));
+                let (ack, bits) = p.acks.ack_fields();
+                let close = Message::encode(&Message::Disconnect);
+                self.emit(
+                    endpoint,
+                    datagram::assemble([&close], UNSEQUENCED, ack, bits),
+                );
             }
             let why = self
                 .peer(s)
@@ -361,11 +367,11 @@ impl Engine {
         p.sync_index = p.sync_index.wrapping_add(1);
         let attempt = p.attempt;
         let messages = vec![
-            Arc::new(wire::write(&Msg::TimeSync {
-                index,
-                time: wire_now,
+            Arc::new(Message::encode(&Message::ClockSync {
+                round: index,
+                clock: wire_now,
             })),
-            Arc::new(wire::write(&Msg::SyncDone { attempt })),
+            Arc::new(Message::encode(&Message::SyncComplete { attempt })),
         ];
         self.send(serial, messages, false, 0);
     }
@@ -451,15 +457,15 @@ impl Engine {
                     self.drop_peer(s, Why::NeverSynced);
                 } else if synced {
                     let wire_now = self.now_wire();
-                    let ping = Arc::new(wire::write(&Msg::Ping { time: wire_now }));
+                    let ping = Arc::new(Message::encode(&Message::Ping { clock: wire_now }));
                     if now - last_time_sync >= r.time_sync_ms as i64 {
                         let Some(p) = self.peer_mut(s) else { continue };
                         p.last_time_sync = now;
                         let index = p.sync_index;
                         p.sync_index = p.sync_index.wrapping_add(1);
-                        let ts = Arc::new(wire::write(&Msg::TimeSync {
-                            index,
-                            time: wire_now,
+                        let ts = Arc::new(Message::encode(&Message::ClockSync {
+                            round: index,
+                            clock: wire_now,
                         }));
                         self.send(s, vec![ping, ts], false, 0);
                     } else {

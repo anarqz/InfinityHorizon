@@ -25,11 +25,13 @@ use serde_json::json;
 use super::{
     Engine,
     bits::Bits,
+    key::ObjKey,
+    message::{Message, ObjectChange},
     races::{MIN_EVENT_PARTICIPANTS, Race, Stage},
     random::LegacyRandom,
     send,
-    wire::{self, Handle, Msg, Obj, seq_next},
 };
+use crate::fh2::codec::object::seq_next;
 
 /// One of the game's online events: its catalog id, location, race mode, the players its mode
 /// needs and the car classes it allows.
@@ -425,13 +427,13 @@ impl Engine {
 
     fn road_trip_broadcast(&mut self, vars: Bits) {
         self.road_trip_sequence = seq_next(self.road_trip_sequence);
-        let update = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 9,
-            handle: Handle::own(0),
+        let update = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 9,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.road_trip_sequence,
-            payload: vars,
+            sequence: self.road_trip_sequence,
+            vars,
         })));
         for s in self.synced_serials_except(None) {
             self.send_sequenced(s, vec![update.clone()]);
@@ -524,13 +526,13 @@ impl Engine {
             p.road_trip_selection_sequence = Some(seq);
             seq
         };
-        Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 9,
-            handle: Handle::transfer(0),
+        Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 9,
+            key: ObjKey::transfer(0),
             ty: 0,
-            seq,
-            payload,
+            sequence: seq,
+            vars: payload,
         })))
     }
 
@@ -559,13 +561,13 @@ impl Engine {
             trip.until = now + INITIALISING_MS;
         }
         let state = trip.state.name();
-        snapshot.push(wire::write(&Msg::Object(Obj {
-            create: true,
-            router: 9,
-            handle: Handle::own(0),
+        snapshot.push(Message::encode(&Message::Object(ObjectChange {
+            is_create: true,
+            router_id: 9,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.road_trip_sequence,
-            payload: variables(&[(8, RoadTripState::Initialising as i64), (9, 0)]),
+            sequence: self.road_trip_sequence,
+            vars: variables(&[(8, RoadTripState::Initialising as i64), (9, 0)]),
         })));
         let Some(p) = self.peer_mut(serial) else {
             return;
@@ -625,13 +627,13 @@ impl Engine {
                 .push(1, 1)
                 .push(LEADER_VARIABLE, 8)
                 .push(1, 1);
-            update = Some(Arc::new(wire::write(&Msg::Object(Obj {
-                create: false,
-                router: 1,
-                handle: Handle::server(id),
+            update = Some(Arc::new(Message::encode(&Message::Object(ObjectChange {
+                is_create: false,
+                router_id: 1,
+                key: ObjKey::server(id),
                 ty: 0,
-                seq,
-                payload,
+                sequence: seq,
+                vars: payload,
             }))));
         }
         self.trip().leader = Some(index);
@@ -685,7 +687,7 @@ impl Engine {
             return;
         };
         let mut r = body.reader();
-        if Handle::read(&mut r, 2).is_err() {
+        if ObjKey::read(&mut r, 2).is_err() {
             return;
         }
         let Ok(choice) = r.read(32) else { return };
@@ -773,7 +775,7 @@ impl Engine {
         self.ev.event_owner = Some(leader); // its GameOptions are the event's
         let mut body = Bits::new();
         body.push(u64::from(race as u32), 32).push(1, 32);
-        let m = Arc::new(wire::write(&Msg::Other { kind: 50, body }));
+        let m = Arc::new(Message::encode(&Message::Opaque { id: 50, body }));
         self.send_sequenced(serial, vec![m]);
         self.note("roadtrip.configures", vec![json!(leader), json!(race)]);
     }

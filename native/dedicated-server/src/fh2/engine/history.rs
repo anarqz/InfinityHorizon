@@ -13,10 +13,13 @@
 
 use super::{
     bits::Bits,
+    datagram::{self},
     dict::DotMap,
+    key::ObjKey,
+    message::{Message, ObjectChange},
     payload,
-    wire::{self, Handle, MAX_PAYLOAD_BITS, Msg, Obj, seq_add, seq_newer, seq_next},
 };
+use crate::fh2::codec::object::{PAYLOAD_MAX_BITS, seq_forward, seq_is_newer, seq_next};
 
 /// The kept updates are compacted at this count, then each time they double (at most half the
 /// guard further), or past these bits, likewise doubling.
@@ -28,7 +31,7 @@ pub const MAX_KEPT_BITS: usize = 512 * 1024;
 /// Updates fold into the catch-up create only up to this many bits, so the create (plus the
 /// server variables a snapshot adds: console flags, PrivateUniverseId, TeamId) always fits one
 /// datagram; later updates stay separate tail messages.
-pub const FOLD_MAX_BITS: usize = wire::MAX_DATAGRAM_PAYLOAD_BITS - 128;
+pub const FOLD_MAX_BITS: usize = datagram::MAX_DATAGRAM_PAYLOAD_BITS - 128;
 /// Out-of-order updates held past a gap.
 pub const MAX_PENDING: usize = 16;
 
@@ -101,7 +104,7 @@ impl History {
             }
             return true;
         }
-        if !seq_newer(next, self.last) || self.pending.iter().any(|p| p.0 == next) {
+        if !seq_is_newer(next, self.last) || self.pending.iter().any(|p| p.0 == next) {
             return false;
         }
         if self.pending.len() >= MAX_PENDING {
@@ -203,12 +206,12 @@ impl History {
 
     /// The messages a joiner gets for this object under `handle`: the create, then the kept
     /// updates in a contiguous run, then the pending ones at their own sequences.
-    pub fn snapshot(&mut self, router: u8, handle: Handle, notes: &mut Vec<usize>) -> Vec<Bits> {
+    pub fn snapshot(&mut self, router: u8, handle: ObjKey, notes: &mut Vec<usize>) -> Vec<Bits> {
         if !self.tail.is_empty() {
             self.compact(notes);
         }
         let mut payload = self.base.clone();
-        if router == 3 && payload.len() + self.server_variables.len() * 5 > MAX_PAYLOAD_BITS {
+        if router == 3 && payload.len() + self.server_variables.len() * 5 > PAYLOAD_MAX_BITS {
             // a console's history may repeat its variables thousands of times: its last values
             // are enough for a snapshot and leave room for the server-owned flags
             let mut latest = std::collections::BTreeMap::new();
@@ -239,35 +242,35 @@ impl History {
                 .push(u64::from(payload::TEAM_VARIABLE), 8)
                 .push(u64::from(t), payload::TEAM_BITS);
         }
-        let mut seq = seq_add(self.create_sequence(), self.injected);
+        let mut seq = seq_forward(self.create_sequence(), self.injected);
         let mut out = Vec::with_capacity(1 + self.tail.len() + self.pending.len());
-        out.push(wire::write(&Msg::Object(Obj {
-            create: true,
-            router,
-            handle,
+        out.push(Message::encode(&Message::Object(ObjectChange {
+            is_create: true,
+            router_id: router,
+            key: handle,
             ty: self.ty,
-            seq,
-            payload,
+            sequence: seq,
+            vars: payload,
         })));
         for (_, update) in &self.tail {
             seq = seq_next(seq);
-            out.push(wire::write(&Msg::Object(Obj {
-                create: false,
-                router,
-                handle,
+            out.push(Message::encode(&Message::Object(ObjectChange {
+                is_create: false,
+                router_id: router,
+                key: handle,
                 ty: 0,
-                seq,
-                payload: update.clone(),
+                sequence: seq,
+                vars: update.clone(),
             })));
         }
         for (s, update) in &self.pending {
-            out.push(wire::write(&Msg::Object(Obj {
-                create: false,
-                router,
-                handle,
+            out.push(Message::encode(&Message::Object(ObjectChange {
+                is_create: false,
+                router_id: router,
+                key: handle,
                 ty: 0,
-                seq: seq_add(*s, self.injected),
-                payload: update.clone(),
+                sequence: seq_forward(*s, self.injected),
+                vars: update.clone(),
             })));
         }
         out

@@ -15,8 +15,10 @@ use serde_json::json;
 use super::{
     Engine, Event,
     bits::Bits,
-    wire::{self, Handle, Msg, Obj, seq_next},
+    key::ObjKey,
+    message::{Message, ObjectChange},
 };
+use crate::fh2::codec::object::seq_next;
 
 pub const INVITE_FREE_ROAM: u8 = 1;
 pub const CAR_MEET_JOIN_MS: i64 = 20_000;
@@ -82,14 +84,14 @@ fn car_meet_vars(session: Option<&(String, String)>, countdown_ms: i64) -> Bits 
 fn notify_pending(action: u64) -> Arc<Bits> {
     let mut body = Bits::new();
     body.push(action, 2);
-    Arc::new(wire::write(&Msg::Other { kind: 29, body }))
+    Arc::new(Message::encode(&Message::Opaque { id: 29, body }))
 }
 
 fn session_ready(name: &str, template: &str) -> Arc<Bits> {
     let mut body = Bits::new();
     body.byte_string(name.as_bytes())
         .byte_string(template.as_bytes());
-    Arc::new(wire::write(&Msg::Other { kind: 32, body }))
+    Arc::new(Message::encode(&Message::Opaque { id: 32, body }))
 }
 
 fn printable(text: &str) -> bool {
@@ -117,25 +119,25 @@ impl Engine {
         if self.settings.car_meet_lobby.is_none() {
             return;
         }
-        snapshot.push(wire::write(&Msg::Object(Obj {
-            create: true,
-            router: 11,
-            handle: Handle::own(0),
+        snapshot.push(Message::encode(&Message::Object(ObjectChange {
+            is_create: true,
+            router_id: 11,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.car_meet.sequence,
-            payload: self.car_meet_state(),
+            sequence: self.car_meet.sequence,
+            vars: self.car_meet_state(),
         })));
     }
 
     fn car_meet_update(&mut self, variables: Bits) {
         self.car_meet.sequence = seq_next(self.car_meet.sequence);
-        let update = Arc::new(wire::write(&Msg::Object(Obj {
-            create: false,
-            router: 11,
-            handle: Handle::own(0),
+        let update = Arc::new(Message::encode(&Message::Object(ObjectChange {
+            is_create: false,
+            router_id: 11,
+            key: ObjKey::own(0),
             ty: 0,
-            seq: self.car_meet.sequence,
-            payload: variables,
+            sequence: self.car_meet.sequence,
+            vars: variables,
         })));
         for s in self.synced_serials_except(None) {
             self.send_sequenced(s, vec![update.clone()]);

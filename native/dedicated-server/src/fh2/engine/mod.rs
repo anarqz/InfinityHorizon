@@ -18,15 +18,20 @@
 //! - [`races`] and [`options`]: free-roam events, the options journal, event progress, the
 //!   race-end hold and phasing;
 //! - [`bucket`]: bucket-list co-op (pairing, the slot array, 61 and 65-68);
+//! - [`message`], [`key`] and [`datagram`]: the messages, object keys, datagram assembly and
+//!   receive window, over the codec's tables and arithmetic;
 //! - [`seams`]: the features of later steps (races, events, car meets, Road Trip, tag, voice,
 //!   phasing, the watch), as the no-ops free roam needs until they are ported.
 
 pub mod bits;
 mod bucket;
 mod carmeet;
+pub mod datagram;
 pub mod dict;
 pub mod history;
 mod join;
+pub mod key;
+pub mod message;
 pub mod options;
 mod packets;
 pub mod payload;
@@ -41,7 +46,6 @@ pub mod teams;
 mod voice;
 pub mod watch;
 pub mod weather;
-pub mod wire;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -53,14 +57,17 @@ use serde_json::{Value, json};
 
 use self::{
     bits::Bits,
+    datagram::AckWindow,
     dict::DotMap,
     history::History,
+    key::ObjKey,
+    message::{Message, ObjectChange},
     random::{EngineRandom, SeedPurpose},
     weather::Weather,
-    wire::{AckWindow, Header, Msg, Obj},
 };
 use super::settings::RelaySettings;
 use crate::core::game::Send;
+use crate::fh2::codec::packet::PacketHeader;
 
 /// A queued or in-flight message. Shared, so the quiet join can tell its own release messages by
 /// identity while they wait in a queue or a packet.
@@ -300,7 +307,7 @@ pub(crate) struct Peer {
     console_values: [u64; 9],
     console_variable_sequences: HashMap<u8, u8>,
     objects: DotMap<(u8, u32), History>,
-    orphans: VecDeque<Obj>,
+    orphans: VecDeque<ObjectChange>,
     last_seen: i64,
     joined_at: i64,
     rtt: Option<u32>,
@@ -318,7 +325,7 @@ pub(crate) struct Peer {
     car_position: Option<[f32; 3]>,
     car_id: Option<u32>,
     /// The last car prediction (its relay key and body), sent again with a newer time.
-    last_car: Option<(wire::Handle, Bits)>,
+    last_car: Option<(ObjKey, Bits)>,
     universe: u8,
     player_sequence: Option<u8>,
     last_time_sync: i64,
@@ -354,7 +361,7 @@ impl Peer {
             .iter()
             .map(|(_, o)| o.history_bits())
             .sum::<usize>()
-            + self.orphans.iter().map(|o| o.payload.len()).sum::<usize>()
+            + self.orphans.iter().map(|o| o.vars.len()).sum::<usize>()
     }
 
     fn history_entries(&self) -> usize {
@@ -385,7 +392,7 @@ enum Hold {
 #[derive(Debug, Clone)]
 struct HeldOpen {
     data: Vec<u8>,
-    header: Header,
+    header: PacketHeader,
     open: Open,
     at: i64,
 }
@@ -403,9 +410,9 @@ struct Open {
 }
 
 impl Open {
-    fn of(m: &Msg) -> Option<Open> {
+    fn of(m: &Message) -> Option<Open> {
         match m {
-            Msg::Open {
+            Message::Connect {
                 version,
                 game,
                 flags,
@@ -725,12 +732,12 @@ impl Engine {
         if crate::stun::is_stun(data) {
             return None;
         }
-        let h = Header::parse(data)?;
+        let h = datagram::header_of(data)?;
         if h.count == 0 {
             return None;
         }
-        match wire::read(&mut bits::Rd::new(&data[wire::HEADER_LEN..])).ok()? {
-            Msg::Open { a, .. } => Some(a),
+        match Message::decode(&mut bits::Rd::new(datagram::messages_of(data))).ok()? {
+            Message::Connect { a, .. } => Some(a),
             _ => None,
         }
     }
@@ -738,18 +745,18 @@ impl Engine {
     /// A world that does not serve this datagram's lobby type (a public world runs one
     /// activity): its OpenConnection gets refusal 4, past the handshake rate.
     pub fn refuse_open(&mut self, data: &[u8], from: SocketAddr, now_ms: i64) {
-        if self.closed || data.len() > wire::MAX_DATAGRAM || crate::stun::is_stun(data) {
+        if self.closed || data.len() > datagram::MAX_DATAGRAM || crate::stun::is_stun(data) {
             return;
         }
         self.now = self.now.max(now_ms);
         let from = canonical(from);
-        let Some(header) = Header::parse(data) else {
+        let Some(header) = datagram::header_of(data) else {
             return;
         };
         if header.count == 0 {
             return;
         }
-        let Ok(m) = wire::read(&mut bits::Rd::new(&data[wire::HEADER_LEN..])) else {
+        let Ok(m) = Message::decode(&mut bits::Rd::new(datagram::messages_of(data))) else {
             return;
         };
         let Some(open) = Open::of(&m) else { return };
@@ -946,7 +953,7 @@ impl Engine {
     fn admit(
         &mut self,
         endpoint: SocketAddr,
-        header: Header,
+        header: PacketHeader,
         open: &Open,
         data: &[u8],
     ) -> Option<u64> {
@@ -973,9 +980,9 @@ impl Engine {
             > self.now
         {
             Some(3)
-        } else if open.version != wire::VERSION {
+        } else if open.version != message::PROTOCOL_VERSION {
             Some(1)
-        } else if open.game != wire::GAME {
+        } else if open.game != message::GAME_TITLE {
             Some(2)
         } else {
             let ip = crate::net::ip_key(endpoint);
@@ -1085,7 +1092,7 @@ impl Engine {
     fn refuse(
         &mut self,
         endpoint: SocketAddr,
-        header: Header,
+        header: PacketHeader,
         open: &Open,
         bytes: usize,
         refusal: u8,
@@ -1096,18 +1103,18 @@ impl Engine {
             b: open.b,
             refusal: Some(refusal),
         });
-        let m = wire::write(&Msg::OpenResponse {
+        let m = Message::encode(&Message::ConnectReply {
             flags: open.flags,
             reason: refusal,
             attempt: open.attempt,
             own_attempt: 0,
         });
-        let ack = if header.id == wire::NO_SEQUENCE {
-            wire::NO_ACK
+        let ack = if header.id == datagram::UNSEQUENCED {
+            datagram::NO_ACK
         } else {
             header.id
         };
-        let response = wire::packet([&m], wire::NO_SEQUENCE, ack, 0);
+        let response = datagram::assemble([&m], datagram::UNSEQUENCED, ack, 0);
         // never more bytes back than came in (no amplification)
         if response.len() <= bytes {
             self.emit(endpoint, response);
@@ -1116,7 +1123,13 @@ impl Engine {
 
     /// An OpenConnection from an endpoint not proven yet, for an identity whose proof may still
     /// come: kept unanswered (the game takes refusal 4 as final) and taken in again once allowed.
-    fn hold(&mut self, endpoint: SocketAddr, header: Header, open: &Open, data: &[u8]) -> Hold {
+    fn hold(
+        &mut self,
+        endpoint: SocketAddr,
+        header: PacketHeader,
+        open: &Open,
+        data: &[u8],
+    ) -> Hold {
         if shared_xuid(open.user) || self.policy.awaits_proof(open.user, self.now) != Some(true) {
             return Hold::No;
         }
@@ -1201,7 +1214,7 @@ impl Engine {
         }
     }
 
-    fn take_rate(&mut self, serial: u64, header: Header, length: usize) -> bool {
+    fn take_rate(&mut self, serial: u64, header: PacketHeader, length: usize) -> bool {
         let now = self.now;
         let r = self.settings.relay.clone();
         let Some(p) = self.peer_mut(serial) else {
@@ -1265,7 +1278,7 @@ impl Engine {
         }
         // the game never sends a datagram over 1,372 bytes (its own receiver closes the
         // connection on one): refused whole, nothing in it read, acknowledged or relayed
-        if data.len() > wire::MAX_DATAGRAM {
+        if data.len() > datagram::MAX_DATAGRAM {
             self.dropped += 1;
             self.oversize_in += 1;
             if let Some((serial, xuid, index)) = self
@@ -1284,7 +1297,11 @@ impl Engine {
                 if self.peer_note(serial, "oversize_in") {
                     self.note(
                         "receive.oversize_refused",
-                        vec![json!(index), json!(data.len()), json!(wire::MAX_DATAGRAM)],
+                        vec![
+                            json!(index),
+                            json!(data.len()),
+                            json!(datagram::MAX_DATAGRAM),
+                        ],
                     );
                 }
             }
@@ -1366,12 +1383,12 @@ impl Engine {
             if let Some(p) = self.peer(s)
                 && p.synced
             {
-                let (ack, bits) = p.acks.header();
+                let (ack, bits) = p.acks.ack_fields();
                 let endpoint = p.endpoint;
-                let close = wire::write(&Msg::Close);
+                let close = Message::encode(&Message::Disconnect);
                 self.emit(
                     endpoint,
-                    wire::packet([&close], wire::NO_SEQUENCE, ack, bits),
+                    datagram::assemble([&close], datagram::UNSEQUENCED, ack, bits),
                 );
             }
         }
