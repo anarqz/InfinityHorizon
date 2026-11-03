@@ -891,8 +891,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             else
             {
                 if (_mineId == seat.WorldId && _mineSnapshot.Named) { _mineUncertain = true; return _mineSnapshot; }
-                members.Add(new MemberRow(world.Host.Xuid, world.Host.Gamertag, UiTier.Of(world.Host.Tier), 0,
-                    role == UiWorldRole.Hosting ? UiFriend.Self : UiFriend.None));
+                // §2.9: an official world's host is no player: no host row (its name is the world's host below)
+                if (world.Host.Xuid is { } hostXuid)
+                    members.Add(new MemberRow(hostXuid, world.Host.Gamertag ?? string.Empty, UiTier.Of(world.Host.Tier), 0,
+                        role == UiWorldRole.Hosting ? UiFriend.Self : UiFriend.None));
             }
             var row = Row(world, false);
             // CR-S67/S68: the world's voice mode for a joiner, the roster's voice blocks for the host's relay, this player's own block
@@ -924,8 +926,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 // OD-181 (CR-L48): every player's declared mods, for the overlay's roster and the player details
                 Volatile.Write(ref _rosterMods, RosterModsOf(seat.WorldId, named
                     ? boundedRoster!.Items.Select(i => (i.Xuid, i.Role == "host", i.Mods))
-                    : [(world.Host.Xuid, true, (IReadOnlyList<ModEntry>?)null)], world.Mods, ModName));
-                return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.Gamertag, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
+                    : world.Host.Xuid is { } host ? [(host, true, (IReadOnlyList<ModEntry>?)null)] : [], world.Mods, ModName));
+                return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.DisplayName, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
                     WorldModes.OpenToBoth(world));
             }
         }
@@ -1651,7 +1653,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             WorldAudiences.Private => 3,
             _ => 0,
         };
-        return new WorldRow(world.Id, world.Name, world.Host.Gamertag, (byte)Math.Min(world.Players, 255u), (byte)Math.Min(world.MaxPlayers, 255u),
+        return new WorldRow(world.Id, world.Name, world.Host.DisplayName,(byte)Math.Min(world.Players, 255u), (byte)Math.Min(world.MaxPlayers, 255u),
             (byte)((world.Kind == WorldKinds.Supporter ? UiLobby.KindSupporter : 0) | (world.Pool ? UiLobby.KindPineapple : 0)),
             audience, lockReason, ping, world.FriendHost);
     }

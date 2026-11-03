@@ -65,13 +65,13 @@ public static class ConflictReasons
     public const string NoDirect = "no_direct";
 
     /// <summary>
-    /// WORLDS_OFFICIAL.md §3 (OD-189): a <c>transport: "relay"</c> join or renew for an official world (direct only). Not in
-    /// <see cref="All"/> until MATCHMAKING_API.md §8 lists it.
+    /// WORLDS_OFFICIAL.md §3 (OD-189, MATCHMAKING_API.md §2.9): a <c>transport: "relay"</c> join or renew for an official world
+    /// (direct only).
     /// </summary>
     public const string OfficialDirect = "official_direct";
 
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

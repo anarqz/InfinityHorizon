@@ -181,6 +181,7 @@
   "error.MM.NOT_HOST": "Só o anfitrião pode fazer isto.",
   "error.MM.ALREADY_HOSTING": "Você já está hospedando um mundo.",
   "error.MM.GRANT_INVALID": "A conexão com este mundo expirou. Entre de novo.",
+  "error.MM.AGENT_UNAUTHORIZED": "O servidor não confia neste host do Worlds.",
   "error.SESSIONS.KICKED": "Um moderador removeu você do jogo online. Você pode voltar a jogar online quando a espera terminar.",
   "error.VOICE.NOT_SHARED": "Esse jogador não esteve em um lobby com você nos últimos 30 minutos, então o silenciamento não foi contado.",
   "error.VOICE.RATE_LIMITED": "Silenciamentos de voz demais na última hora. Tente de novo mais tarde.",
