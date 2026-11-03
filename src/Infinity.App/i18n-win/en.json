@@ -349,6 +349,7 @@
   "worlds.moved_host_left": "The host left; moved to an Infinity lobby",
   "worlds.moved_cannot_follow": "Couldn't follow the host; moved to an Infinity lobby",
   "worlds.lobbies_full": "All Infinity lobbies are full, try again shortly",
+  "worlds.placement_failed": "Couldn't join an Infinity lobby, try again shortly",
   "supervisor.hosting_away": "The game closed. Your world stays open for the players still in it; it closes when the last one leaves or the launcher closes. Play again to close it and start a new session.",
   "supervisor.hosting_away_ending": "Closing your world for a new session…",
   "worlds.activity_freeroam": "ONLINE FREE ROAM",
