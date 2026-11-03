@@ -23,6 +23,15 @@ pub(super) fn doom(p: &mut Peer, why: Why) {
     p.doomed = true;
 }
 
+/// A sender's reliable fan-out budget: messages its own traffic makes the server send reliably
+/// to the others (forwarded objects, Ready and score rebroadcasts, votes), counted once per
+/// message whatever the number of receivers. A burst of `FANOUT_BURST`, refilled at
+/// `FANOUT_PER_SECOND`; past it the SENDER is dropped (`peer.dropped.fan_out`) before its
+/// flood fills, and dooms, every receiver's reliable queue. A receiver that stops acknowledging
+/// is still dropped by its own full queue (the reference's rule).
+pub const FANOUT_BURST: f64 = 1024.0;
+pub const FANOUT_PER_SECOND: f64 = 256.0;
+
 /// At most this many messages share one packet.
 const MESSAGES_PER_PACKET: usize = 8;
 /// What one pacing turn sends per peer at most (bytes).
@@ -236,12 +245,33 @@ impl Engine {
         }
     }
 
+    /// Charges `n` reliable fan-out messages to `sender`; `false` (and the sender doomed) past
+    /// its budget.
+    pub(super) fn charge_fanout(&mut self, sender: u64, n: usize) -> bool {
+        let now = self.now;
+        let (tokens, at) = self.fanout.get(&sender).copied().unwrap_or((FANOUT_BURST, now));
+        let refilled =
+            (tokens + (now - at).max(0) as f64 * FANOUT_PER_SECOND / 1000.0).min(FANOUT_BURST);
+        let left = refilled - n as f64;
+        if left < 0.0 {
+            self.fanout.insert(sender, (0.0, now));
+            self.doom(sender, Why::FanOut);
+            return false;
+        }
+        self.fanout.insert(sender, (left, now));
+        true
+    }
+
     /// The same messages to every other synced peer.
     pub(super) fn forward(&mut self, from: u64, messages: Vec<M>, sequenced: bool) {
         if messages.is_empty() {
             return;
         }
-        for s in self.synced_serials_except(Some(from)) {
+        let receivers = self.synced_serials_except(Some(from));
+        if sequenced && !receivers.is_empty() && !self.charge_fanout(from, messages.len()) {
+            return;
+        }
+        for s in receivers {
             if sequenced {
                 self.send_sequenced(s, messages.clone());
             } else {
@@ -275,6 +305,7 @@ impl Engine {
             self.send_sequenced(s, deletes.clone());
         }
         self.side_rates.remove(&serial);
+        self.fanout.remove(&serial);
         self.voice_peer_left(serial);
         self.watch_peer_left(p.index);
         if self.peers.is_empty() {

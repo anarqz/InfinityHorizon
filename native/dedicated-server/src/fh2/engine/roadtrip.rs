@@ -693,8 +693,15 @@ impl Engine {
         if !(0..DESTINATIONS as i32).contains(&choice) {
             return;
         }
-        self.trip().votes.insert(index, choice);
-        for s in self.road_trip_shown() {
+        // the same vote again changes nothing: no reliable rebroadcast
+        if self.trip().votes.insert(index, choice) == Some(choice) {
+            return;
+        }
+        let shown = self.road_trip_shown();
+        if !shown.is_empty() && !self.charge_fanout(serial, 1) {
+            return;
+        }
+        for s in shown {
             let m = self.event_selection(s, true);
             self.send_sequenced(s, vec![m]);
         }

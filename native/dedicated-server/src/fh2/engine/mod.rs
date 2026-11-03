@@ -149,6 +149,8 @@ pub enum Why {
     NotAllowedAnyMore,
     NotAllowed,
     QueueFull,
+    /// Its own messages asked for more reliable fan-out than `send::FANOUT_*` allows.
+    FanOut,
     Reconnected,
     Closed,
     HistoryBits,
@@ -176,6 +178,7 @@ impl Why {
             Why::NotAllowedAnyMore => "peer.dropped.not_allowed_any_more",
             Why::NotAllowed => "peer.dropped.not_allowed",
             Why::QueueFull => "peer.dropped.queue_full",
+            Why::FanOut => "peer.dropped.fan_out",
             Why::Reconnected => "peer.dropped.reconnected",
             Why::Closed => "peer.dropped.closed",
             Why::HistoryBits => "peer.dropped.history_bits",
@@ -212,6 +215,7 @@ impl Why {
             Why::Doomed
             | Why::RateLimit
             | Why::QueueFull
+            | Why::FanOut
             | Why::HistoryBits
             | Why::HistoryEntries
             | Why::OptionsOverflow
@@ -509,6 +513,8 @@ pub struct Engine {
     release_keep: HashMap<u64, Vec<M>>,
     side_rates: DotMap<u64, SideRate>,
     pub side_channel_rate_drops: u64,
+    /// Each sender's reliable fan-out tokens and when they were last refilled (send.rs).
+    fanout: DotMap<u64, (f64, i64)>,
     /// Bucket-list co-op (bucket.rs).
     bucket: bucket::Bucket,
     /// Events, the options and phasing (races.rs).
@@ -615,6 +621,7 @@ impl Engine {
             release_keep: HashMap::new(),
             side_rates: DotMap::new(),
             side_channel_rate_drops: 0,
+            fanout: DotMap::new(),
             bucket: bucket::Bucket::default(),
             ev: races::Events::default(),
             tag: None,
