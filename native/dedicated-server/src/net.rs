@@ -80,6 +80,21 @@ pub fn norm_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// The key every per-IP limit counts under: an IPv4 address (IPv4-mapped IPv6 unmapped) as it
+/// is, an IPv6 address as its /64 (one subscriber's prefix: rotating addresses inside it share
+/// one budget). A relay leg's virtual peer keeps its whole address (its low bytes are its
+/// grant's, never one subscriber's).
+pub fn ip_key(endpoint: SocketAddr) -> IpAddr {
+    match norm_ip(endpoint.ip()) {
+        IpAddr::V6(v6) if !crate::core::legs::is_virtual(endpoint) => {
+            let mut o = v6.octets();
+            o[8..].fill(0);
+            IpAddr::V6(o.into())
+        }
+        ip => ip,
+    }
+}
+
 pub fn is_loopback(ip: IpAddr) -> bool {
     norm_ip(ip).is_loopback()
 }
