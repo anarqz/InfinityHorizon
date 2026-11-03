@@ -201,7 +201,7 @@ fn header(data: &[u8]) -> Header {
 }
 
 /// An indication: the attributes in this order, each padded to 4 bytes.
-fn indication(kind: u16, txid: &[u8; 12], attributes: &[(u16, &[u8])]) -> Vec<u8> {
+pub(crate) fn indication(kind: u16, txid: &[u8; 12], attributes: &[(u16, &[u8])]) -> Vec<u8> {
     let body: usize = attributes
         .iter()
         .map(|(_, v)| 4 + v.len().div_ceil(4) * 4)

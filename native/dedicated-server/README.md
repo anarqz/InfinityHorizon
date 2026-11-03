@@ -143,7 +143,7 @@ engine, in this recommended order:
 | 10 | Road Trip (vote, events, alone/wait/drop) with the catalog reader | fh2 | needs a read-only SQLite reader of the catalog; `RoadTripServerState` includes Solo = 3 |
 | 11 | Bucket-list co-op: pairing, 61 gating and fallback, message 65's universe per pair | fh2 | **done** (`fh2/engine/bucket.rs`): the universe is BucketList1..6 (18..23), one per pair, at most 6 per world; 66-68 carry the receiver-relative keys first (vectors predate it) |
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | **done** (`fh2/voice.rs` codec, `fh2/engine/voice.rs`): the RelayVoice suite and every proximity, team and moderation vector replay exactly; team voice reads the teams (`teams.rs`) |
-| 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
+| 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | **done** (`fh2/engine/watch.rs`): the six watch vectors replay exactly; the parts rows come from the controller on demand (`catalog.need`/`catalog.parts`), and until a model's rows arrive the parts rule says nothing about it |
 | 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | **done**: `diag` every 3 s (2048, one at close), `peer.rejected` (128 per 30 s, 1 s dedup), `peer.synced`/`peer.left`, `world.empty`/`world.occupied`, note lines at info |
 
 ## Decisions taken in step 2
@@ -207,6 +207,18 @@ engine, in this recommended order:
 - **New note** `bucket.not_paired` `[waiter, requester, 6]`: two players would pair but all six
   bucket-list universes are in use (a guard; 12 players make at most 6 pairs).
 - A pair's first car prediction after 61 is told from the one at 61 by value, not by identity.
+
+## Decisions taken in the watch port
+
+- **Parts rows on demand** (MACBOOK): the engine reads no game database. A model whose rows the
+  catalog store does not have yet is not judged and asks for them (`catalog.need`); the car is
+  checked again on the engine's tick once they come (the reference reads its database at once).
+  `known: false` (no slots) is the reference's "model not in this game database".
+- **`world.watch` rules** are read as `PeerWatchRules.From` and must pass `WatchRules.Valid`
+  (else `bad_request {field: "watch.rules"}` / `"rules"`); they apply to every engine, made now or
+  later. Each `watch.report` gets its `id` from the world's random source.
+- **Note numbers** are written as the reference's invariant-culture custom formats: 15
+  significant digits for a double (7 for a single), rounded half away from zero.
 
 ## Acknowledgements
 
