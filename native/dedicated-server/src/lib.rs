@@ -35,14 +35,20 @@ pub mod upnp;
 pub const PROTO_MIN: u32 = 1;
 pub const PROTO_MAX: u32 = 1;
 
-/// The build's version (Cargo) and commit (40 lowercase hex; set `DS_COMMIT` when building,
-/// else 40 zeros).
 /// The game modules this build hosts.
 pub fn registered_games(fh2_catalog: fh2::Catalog) -> Vec<std::sync::Arc<dyn core::game::Game>> {
     vec![std::sync::Arc::new(fh2::Fh2::new(fh2_catalog))]
 }
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The build's version (contract §10: `hello.build.version`, compared with the launcher's own
+/// version): `DS_PRODUCT_VERSION` when set at build time (the launcher's build sets it to its
+/// version), the crate version otherwise.
+pub const VERSION: &str = match option_env!("DS_PRODUCT_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
+/// The build's commit: 40 lowercase hex (set `DS_COMMIT` when building), else 40 zeros.
 pub fn commit() -> &'static str {
     match option_env!("DS_COMMIT") {
         Some(c)
