@@ -65,9 +65,18 @@ pub(super) struct CarMeet {
     request: u32,
     session: Option<(String, String)>,
     pub sequence: u8,
-    /// Road Trip invitations are asked for too (OD-191); off: only free roam, as the reference.
-    road_trip_invites: bool,
+    /// The official car meet lobby (OD-190/OD-191): Road Trip invitations are asked for too and
+    /// the invitation's players are shown in JoinTypes; off: the reference (free roam only,
+    /// JoinTypes never sent, as the D2 vectors pin).
+    official: bool,
+    /// The JoinTypes slots last sent as GameMode (bit k: JoinTypes[k], CarMeetSynced var 4+k).
+    join_slots: u16,
 }
+
+/// JoinTypes (CarMeetSynced vars 4-15, `CarMeetJoinType`: 0 None, 1 WagerRace, 2 GameMode).
+const JOIN_TYPE_FIRST_VAR: u64 = 4;
+const JOIN_TYPES: usize = 12;
+const JOIN_TYPE_GAME_MODE: u64 = 2;
 
 /// CarMeetSynced variables: 1 InviteCountDownTime and, when given, 16/17 the session's name and
 /// template (a 7-bit count of at most 64, then UTF-16 units).
@@ -116,6 +125,7 @@ impl Engine {
         out.push(0, 5).push(u64::from(m.kind), 2);
         out.append(&car_meet_vars(m.session.as_ref(), CAR_MEET_JOIN_MS));
         out.push(3, 5).push(u64::from(m.mode32), 32);
+        self.join_types_state(&mut out);
         out
     }
 
@@ -155,10 +165,76 @@ impl Engine {
         b
     }
 
-    /// OD-191: an official car meet lobby also asks for Road Trip sessions (the agent opens a
-    /// group world for them); Showdown and other types stay ignored.
-    pub fn serve_road_trip_invites(&mut self, on: bool) {
-        self.car_meet.road_trip_invites = on;
+    /// The official car meet lobby (OD-190/OD-191): Road Trip sessions are asked for too (the
+    /// agent opens a group world for them; Showdown and other types stay ignored), and the
+    /// invitation's players are shown in JoinTypes, so the games count the joiners.
+    pub fn set_official_car_meet(&mut self, on: bool) {
+        self.car_meet.official = on;
+    }
+
+    /// The JoinTypes slots that should read GameMode now: the invitation's players (the starter
+    /// and every joiner still here), each at its rank among the engine's synced players by index
+    /// (the game's player order; FH2MP's slot is the same rank, unproven), the first 12.
+    fn join_slots_now(&self) -> u16 {
+        if !self.car_meet.official || self.car_meet.stage == InviteStage::Idle {
+            return 0;
+        }
+        let mut order: Vec<u8> = self
+            .peers
+            .iter()
+            .filter(|p| p.synced)
+            .map(|p| p.index)
+            .collect();
+        order.sort_unstable();
+        let mut mask = 0u16;
+        for s in &self.car_meet.joined {
+            let Some(index) = self.peer(*s).filter(|p| p.synced).map(|p| p.index) else {
+                continue;
+            };
+            if let Some(rank) = order.iter().position(|i| *i == index)
+                && rank < JOIN_TYPES
+            {
+                mask |= 1 << rank;
+            }
+        }
+        mask
+    }
+
+    /// The official lobby's JoinTypes, sent reliably to every synced player when they change (a
+    /// join, a cancel, a player leaving or ranking differently, the invitation's end).
+    fn update_join_types(&mut self) {
+        if !self.car_meet.official {
+            return;
+        }
+        let now = self.join_slots_now();
+        let old = self.car_meet.join_slots;
+        if now == old {
+            return;
+        }
+        let mut vars = Bits::new();
+        for k in 0..JOIN_TYPES {
+            if (now ^ old) >> k & 1 == 1 {
+                let value = if now >> k & 1 == 1 {
+                    JOIN_TYPE_GAME_MODE
+                } else {
+                    0
+                };
+                vars.push(JOIN_TYPE_FIRST_VAR + k as u64, 5).push(value, 2);
+            }
+        }
+        self.car_meet.join_slots = now;
+        self.car_meet_update(vars);
+        self.note("carmeet.join_types", vec![json!(now.count_ones())]);
+    }
+
+    /// The JoinTypes last sent, for a late joiner's snapshot.
+    fn join_types_state(&self, out: &mut Bits) {
+        for k in 0..JOIN_TYPES {
+            if self.car_meet.join_slots >> k & 1 == 1 {
+                out.push(JOIN_TYPE_FIRST_VAR + k as u64, 5)
+                    .push(JOIN_TYPE_GAME_MODE, 2);
+            }
+        }
     }
 
     /// 26: a player starts an invitation.
@@ -173,8 +249,8 @@ impl Engine {
             return;
         };
         let kind = kind as u8;
-        let served = kind == INVITE_FREE_ROAM
-            || (kind == INVITE_ROAD_TRIP && self.car_meet.road_trip_invites);
+        let served =
+            kind == INVITE_FREE_ROAM || (kind == INVITE_ROAD_TRIP && self.car_meet.official);
         if !served {
             // Road Trip and Showdown invitations: their sessions do not exist on the platform yet
             self.peer_noted(
@@ -214,6 +290,7 @@ impl Engine {
             "carmeet.invite",
             vec![json!(index), json!(CAR_MEET_JOIN_MS)],
         );
+        self.update_join_types();
     }
 
     /// 27: a player joins or leaves the running invitation.
@@ -246,6 +323,7 @@ impl Engine {
             "carmeet.left"
         };
         self.peer_noted(serial, id, vec![json!(index), json!(n)]);
+        self.update_join_types();
     }
 
     pub(super) fn tick_car_meet(&mut self) {
@@ -301,6 +379,8 @@ impl Engine {
             }
             _ => {}
         }
+        // a player who left, or a rank that moved, shows at once
+        self.update_join_types();
     }
 
     /// The platform's answer for request `id` (`world.gameSession.answer`): the shared session,
@@ -342,6 +422,10 @@ impl Engine {
             self.send_sequenced(*s, vec![ready.clone()]);
         }
         self.note("carmeet.ready", vec![json!(joined.len())]);
+        if self.car_meet.official {
+            // the next live test reads this (counts only)
+            self.note("carmeet.session_ready", vec![json!(joined.len())]);
+        }
         true
     }
 
@@ -371,6 +455,7 @@ impl Engine {
         m.session = None;
         self.car_meet_update(Self::invite_cleared());
         self.note("carmeet.cancelled", vec![json!(why)]);
+        self.update_join_types();
     }
 
     pub(super) fn car_meet_peer_left(&mut self, serial: u64) {
@@ -434,7 +519,7 @@ mod tests {
     /// The kinds of the sessions asked for after one invitation of `kind` and its countdown.
     fn asked(road_trip: bool, kind: u8) -> Vec<u8> {
         let mut e = car_meet();
-        e.serve_road_trip_invites(road_trip);
+        e.set_official_car_meet(road_trip);
         let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_102);
         let mut body = Bits::new();
         body.push(u64::from(kind), 2).push(0, 32);
@@ -451,6 +536,111 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Every reliable message waiting for or in flight to `serial`.
+    fn reliable(e: &Engine, serial: u64) -> Vec<Bits> {
+        let p = e.peer(serial).expect("seated");
+        p.in_flight
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .chain(p.queue.iter())
+            .map(|m| (**m).clone())
+            .collect()
+    }
+
+    fn notes(e: &mut Engine, id: &str) -> Vec<Vec<serde_json::Value>> {
+        e.take_events()
+            .into_iter()
+            .filter_map(|ev| match ev {
+                Event::Note { id: n, args } if n == id => Some(args),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn join(e: &mut Engine, serial: u64, accept: bool) {
+        let mut body = Bits::new();
+        // a game-mode answer: accepting arrives as 0
+        body.push(u64::from(!accept), 1).push(2, 2);
+        e.join_or_cancel(serial, &body);
+    }
+
+    #[test]
+    fn the_official_lobby_shows_its_joiners_and_sends_the_session_to_each() {
+        let mut e = car_meet();
+        e.set_official_car_meet(true);
+        let starter = testkit::seat(&mut e, 3, 1_000_000_000_000_103);
+        let joiner = testkit::seat(&mut e, 1, 1_000_000_000_000_101);
+        let bystander = testkit::seat(&mut e, 7, 1_000_000_000_000_107);
+        let mut body = Bits::new();
+        body.push(u64::from(INVITE_FREE_ROAM), 2).push(0, 32);
+        e.invite_request(starter, &body);
+        // ranks by index: joiner (1) 0, starter (3) 1, bystander (7) 2
+        assert_eq!(e.car_meet.join_slots, 0b010);
+        assert_eq!(notes(&mut e, "carmeet.join_types"), vec![vec![json!(1)]]);
+        let before = reliable(&e, bystander).len();
+        join(&mut e, joiner, true);
+        assert_eq!(e.car_meet.join_slots, 0b011, "the count goes up at once");
+        assert_eq!(
+            reliable(&e, bystander).len(),
+            before + 1,
+            "everybody sees it"
+        );
+        assert_eq!(notes(&mut e, "carmeet.join_types"), vec![vec![json!(2)]]);
+        // a late snapshot carries the JoinTypes too
+        let mut want = Bits::new();
+        want.push(0, 5).push(u64::from(INVITE_FREE_ROAM), 2);
+        want.append(&car_meet_vars(None, CAR_MEET_JOIN_MS));
+        want.push(3, 5).push(u64::from(e.car_meet.mode32), 32);
+        want.push(4, 5).push(2, 2).push(5, 5).push(2, 2);
+        assert_eq!(e.car_meet_state(), want);
+        join(&mut e, joiner, false);
+        assert_eq!(e.car_meet.join_slots, 0b010, "a cancel takes it back");
+        join(&mut e, joiner, true);
+        assert_eq!(e.car_meet.join_slots, 0b011);
+        e.take_events();
+        // the countdown ends: one session for both, then 32 to each of them, not the bystander
+        e.now += CAR_MEET_JOIN_MS + 1;
+        e.tick_car_meet();
+        let id = e
+            .take_events()
+            .into_iter()
+            .find_map(|ev| match ev {
+                Event::CreateGameSession { id, xuids, .. } => {
+                    assert_eq!(xuids, vec![1_000_000_000_000_103, 1_000_000_000_000_101]);
+                    Some(id)
+                }
+                _ => None,
+            })
+            .expect("asked");
+        let (name, template) = ("fh2inf-invite-a-b", "defaulttemplate");
+        assert!(e.game_session_created(id, Some(name), Some(template), e.now));
+        let ready = (*session_ready(name, template)).clone();
+        for s in [starter, joiner] {
+            assert!(reliable(&e, s).contains(&ready), "32 queued reliably");
+        }
+        assert!(!reliable(&e, bystander).contains(&ready));
+        assert_eq!(notes(&mut e, "carmeet.session_ready"), vec![vec![json!(2)]]);
+        // the ready window ends: JoinTypes cleared for everybody
+        e.now += CAR_MEET_READY_MS + 1;
+        e.tick_car_meet();
+        assert_eq!(e.car_meet.join_slots, 0);
+    }
+
+    #[test]
+    fn a_player_hosted_car_meet_keeps_the_reference_and_sends_no_join_types() {
+        let mut e = car_meet();
+        let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_101);
+        let joiner = testkit::seat(&mut e, 2, 1_000_000_000_000_102);
+        let mut body = Bits::new();
+        body.push(u64::from(INVITE_FREE_ROAM), 2).push(0, 32);
+        e.invite_request(starter, &body);
+        let before = reliable(&e, joiner).len();
+        join(&mut e, joiner, true);
+        assert_eq!(e.car_meet.join_slots, 0);
+        assert_eq!(reliable(&e, joiner).len(), before);
+        assert!(notes(&mut e, "carmeet.join_types").is_empty());
     }
 
     #[test]
