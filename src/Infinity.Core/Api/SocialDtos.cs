@@ -37,6 +37,12 @@ public sealed record FriendPlaying
 
     /// <summary>Only with <c>?asXuid=</c>, only <c>in_world</c>: a join of that profile would be granted now, the code aside.</summary>
     public bool? Joinable { get; init; }
+
+    /// <summary>
+    /// OD-190 (CORE_API §4.1): only when <see cref="WorldId"/> is an official, non-group world the friend holds a live seat in, its
+    /// activity (<c>freeroam</c>, <c>carmeet</c>, <c>roadtrip</c>); "Join friend" is then <c>POST /mm/v1/join {worldId}</c>.
+    /// </summary>
+    public string? OfficialActivity { get; init; }
 }
 
 /// <summary>The friend's newest live invite to the caller.</summary>

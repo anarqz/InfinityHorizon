@@ -566,7 +566,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 if (answer.Value is not { } join)
                 {
-                    if (PoolRefusal(answer.Error) is { } poolRefusal) return poolRefusal;
+                    if (PoolRefusal(answer.Error) is { } poolRefusal)
+                    {
+                        Volatile.Write(ref _lastJoinRefusal, ConflictReasons.Pool); // OD-190: a quick join's pool answer starts the anti-cheat move
+                        return poolRefusal;
+                    }
                     if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.LobbiesFull } lobbiesFull)
                     {
                         // OD-190 (WORLDS_OFFICIAL §11.2): no official world of the activity has a free seat; the quick join waits Retry-After
