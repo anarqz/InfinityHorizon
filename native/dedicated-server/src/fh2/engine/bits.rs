@@ -33,7 +33,7 @@ impl Bits {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     /// `ceil(len / 8)` bytes.
@@ -44,7 +44,7 @@ impl Bits {
     pub fn reader(&self) -> Rd<'_> {
         Rd {
             bytes: &self.bytes,
-            end: self.len,
+            limit: self.len,
             pos: 0,
         }
     }
@@ -115,7 +115,7 @@ impl Bits {
 #[derive(Debug, Clone, Copy)]
 pub struct Rd<'a> {
     bytes: &'a [u8],
-    end: usize,
+    limit: usize,
     pos: usize,
 }
 
@@ -123,7 +123,7 @@ impl<'a> Rd<'a> {
     pub fn new(bytes: &'a [u8]) -> Rd<'a> {
         Rd {
             bytes,
-            end: bytes.len() * 8,
+            limit: bytes.len() * 8,
             pos: 0,
         }
     }
@@ -134,7 +134,7 @@ impl<'a> Rd<'a> {
         }
         Ok(Rd {
             bytes,
-            end: len,
+            limit: len,
             pos: 0,
         })
     }
@@ -144,7 +144,7 @@ impl<'a> Rd<'a> {
     }
 
     pub fn left(&self) -> usize {
-        self.end - self.pos
+        self.limit - self.pos
     }
 
     pub fn read(&mut self, width: u32) -> Rr<u64> {
@@ -153,14 +153,14 @@ impl<'a> Rd<'a> {
             return Err(Truncated);
         }
         let mut value = 0u64;
-        let mut got = 0usize;
-        while got < w {
-            let at = self.pos + got;
+        let mut filled = 0usize;
+        while filled < w {
+            let at = self.pos + filled;
             let offset = at & 7;
-            let count = (8 - offset).min(w - got);
+            let count = (8 - offset).min(w - filled);
             let part = (u64::from(self.bytes[at >> 3]) >> offset) & ((1u64 << count) - 1);
-            value |= part << got;
-            got += count;
+            value |= part << filled;
+            filled += count;
         }
         self.pos += w;
         Ok(value)
@@ -208,13 +208,13 @@ impl<'a> Rd<'a> {
         if width > self.left() {
             return Err(Truncated);
         }
-        let mut out = Bits::new();
-        let mut left = width;
-        while left > 0 {
-            let n = left.min(64);
-            out.push(self.read(n as u32)?, n as u32);
-            left -= n;
+        let mut run = Bits::new();
+        let mut remaining = width;
+        while remaining != 0 {
+            let n = remaining.min(64);
+            run.push(self.read(n as u32)?, n as u32);
+            remaining -= n;
         }
-        Ok(out)
+        Ok(run)
     }
 }
