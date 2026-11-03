@@ -44,7 +44,9 @@ Existing third-party copyright and permission notices remain applicable:
   GPL-3.0-or-later, with file-level attribution and details in native/hook/NOTICE.md.
 - The world protocol implementation follows the fh2-mods relay work by conner-mcvay and
   contributors (https://github.com/conner-mcvay/fh2-mods); its MIT notice is preserved in
-  licenses/fh2-mods-LICENSE.txt. The intermediate Rust port is not distributed here.
+  licenses/fh2-mods-LICENSE.txt. The world server native/dedicated-server (Rust) was written independently
+  from our own specification of the game's network format, with fh2-mods' online research as inspiration and
+  reference; it contains no fh2-mods code.
 - BouncyCastle.Cryptography 2.6.2: licenses/BouncyCastle-LICENSE.md.
 - Microsoft.Data.Sqlite 10.0.13 (MIT, .NET Foundation) with SQLitePCLRaw (Apache-2.0) and its bundled native SQLite
   (public domain), which read the game database for ExtraOptions database diffs.
