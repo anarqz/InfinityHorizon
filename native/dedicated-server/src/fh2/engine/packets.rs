@@ -620,7 +620,7 @@ impl Engine {
                                 json!(if obj.is_create { "create" } else { "update" }),
                                 json!(obj.sequence),
                                 json!(refusal.cause.label()),
-                                json!(refusal.detail),
+                                json!(refusal.at),
                                 json!(obj.vars.len()),
                             ],
                         );
@@ -1040,5 +1040,43 @@ mod tests {
         // another address, or no verified identity: the quiet rule (3 s) still holds
         assert!(!rebind(true, "198.51.100.9:4000"));
         assert!(!rebind(false, "192.0.2.1:4000"));
+    }
+
+    #[test]
+    fn a_refusal_note_names_the_variable_never_the_value_sent() {
+        use super::super::{Event, key::ObjKey, message::ObjectChange};
+        let mut e = engine();
+        let s = seat(&mut e, 1, 1001);
+        // RoadTripPlayerSynced State (var 0, 4 bits) = 13: past its range (8)
+        let mut vars = Bits::new();
+        vars.push(0, 3).push(13, 4);
+        let obj = ObjectChange {
+            is_create: true,
+            router_id: 9,
+            key: ObjKey::own(5),
+            ty: 2,
+            sequence: 1,
+            vars,
+        };
+        assert!(e.on_object(s, obj).is_none());
+        let events = e.take_events();
+        let note = events
+            .iter()
+            .find_map(|ev| match ev {
+                Event::Note { id, args } if *id == "roadtrip.player_refused" => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the refusal is noted");
+        assert_eq!(note[3], "OutOfRange");
+        assert_eq!(note[4], 0, "the variable id");
+        assert!(!note.iter().any(|a| a == 13), "{note:?}");
+        // the controller's peer.rejected still gets the value (contract §4.5, not a log)
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            Event::ValidationRejected {
+                value: Some(13),
+                ..
+            }
+        )));
     }
 }
