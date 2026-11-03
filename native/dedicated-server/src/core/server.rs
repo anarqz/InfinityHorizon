@@ -51,6 +51,8 @@ const NO_CONTEXT_LAPSE_MS: u64 = super::admission::HOST_LEASE_MS;
 #[derive(Debug)]
 struct Session {
     transport: Transport,
+    /// A request with an `op` was seen (the first one must be `hello`, §2.1).
+    seen: bool,
     hello: bool,
     controller: bool,
 }
@@ -240,6 +242,7 @@ impl Server {
             conn,
             Session {
                 transport,
+                seen: false,
                 hello: false,
                 controller: false,
             },
@@ -299,10 +302,22 @@ impl Server {
         let Ok(op) = o.str("op") else {
             return proto::reply_err(&id, &CmdError::bad("op"));
         };
-        let Some(session) = self.sessions.get(&conn) else {
+        let Some(session) = self.sessions.get_mut(&conn) else {
             return proto::reply_err(&id, &CmdError::code(proto::NOT_READY));
         };
+        let first = !std::mem::replace(&mut session.seen, true);
         if !session.hello {
+            if op != "hello" && first {
+                // §2.1: a first message that is not `hello` fails authentication; the
+                // connection closes, and the launcher's pipe (the only one) ends the process
+                let pipe = session.transport == Transport::Pipe;
+                log::error(log_ids::DS_CONTROL_UNAUTHORIZED).emit();
+                self.closes.push(conn);
+                if pipe {
+                    self.set_exit(4);
+                }
+                return proto::reply_err(&id, &CmdError::code(proto::UNAUTHORIZED));
+            }
             if op != "hello" {
                 return proto::reply_err(&id, &CmdError::code(proto::NOT_READY));
             }
@@ -393,6 +408,11 @@ impl Server {
         } else {
             false
         };
+        // a second controller while one is attached is only ever `busy`: nothing it sends (a bad
+        // proto included) may end the process the attached controller is using
+        if controller && self.controller.is_some_and(|c| c != conn) {
+            return Err(CmdError::busy(proto::BUSY_RETRY_MS));
+        }
         let lo = range.0.max(crate::PROTO_MIN as u64);
         let hi = range.1.min(crate::PROTO_MAX as u64);
         if lo > hi {
@@ -402,9 +422,6 @@ impl Server {
                 self.set_exit(5);
             }
             return Err(CmdError::code(proto::PROTO_UNSUPPORTED));
-        }
-        if controller && self.controller.is_some_and(|c| c != conn) {
-            return Err(CmdError::busy(1000));
         }
         if let Some(s) = self.sessions.get_mut(&conn) {
             s.hello = true;
