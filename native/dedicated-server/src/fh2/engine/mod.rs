@@ -900,7 +900,7 @@ impl Engine {
         // an installed policy has verified this identity and endpoint: people sharing a NAT do not
         // collapse into one bucket
         let keyed = self.policy.has_authorize() && self.allowed(xuid, endpoint);
-        let key = (endpoint.ip(), if keyed { xuid } else { 0 });
+        let key = (crate::net::ip_key(endpoint), if keyed { xuid } else { 0 });
         let hps = self.settings.relay.handshakes_per_second;
         if let Some(&(at, count)) = self.handshakes.get(&key) {
             let bucket = if self.now - at >= 1000 {
@@ -948,17 +948,18 @@ impl Engine {
         let s = self.settings.clone();
         let reason = if !self.allowed(open.user, endpoint) {
             Some(4)
-        } else if self.bans.get(&endpoint.ip()).copied().unwrap_or(0) > self.now {
+        } else if self.bans.get(&crate::net::ip_key(endpoint)).copied().unwrap_or(0) > self.now {
             Some(3)
         } else if open.version != wire::VERSION {
             Some(1)
         } else if open.game != wire::GAME {
             Some(2)
         } else {
+            let ip = crate::net::ip_key(endpoint);
             let unsynced_here = self
                 .peers
                 .iter()
-                .filter(|p| !p.synced && p.endpoint.ip() == endpoint.ip())
+                .filter(|p| !p.synced && crate::net::ip_key(p.endpoint) == ip)
                 .count() as u64;
             let unsynced = self.peers.iter().filter(|p| !p.synced).count() as u64;
             let full = self.synced() >= s.max_players
@@ -1194,7 +1195,7 @@ impl Engine {
         }
         p.over_last = Some(now);
         if p.over_since.is_some_and(|s| now - s >= r.abuse_ms as i64) {
-            let ip = p.endpoint.ip();
+            let ip = crate::net::ip_key(p.endpoint);
             send::doom(p, Why::RateLimit);
             let expired: Vec<IpAddr> = self
                 .bans
