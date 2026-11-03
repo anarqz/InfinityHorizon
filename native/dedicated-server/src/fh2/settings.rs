@@ -82,6 +82,23 @@ impl RelaySettings {
         s
     }
 
+    /// Makes a join's snapshot fit the joiner's reliable queue (contract §8): the snapshot holds
+    /// every other player's kept history, so with `max_players - 1` others at their history
+    /// caps it must stay within `QueueMaxMessages`/`QueueMaxBits`, or one synced peer holding a
+    /// legal history would doom every later joiner (QueueFull). The entry cap goes down to the
+    /// queue's share (the engine trims a peer's histories down to it before dooming anybody);
+    /// the queue's bit cap goes up to carry the others' history bits (the history bit cap dooms
+    /// at once, so it is never lowered).
+    pub fn fit_join_snapshot(&mut self, max_players: usize) {
+        let others = max_players.saturating_sub(1).max(1) as u64;
+        self.history_max_entries = self
+            .history_max_entries
+            .min((self.queue_max_messages / others).max(1));
+        self.queue_max_bits = self
+            .queue_max_bits
+            .max(self.history_max_bits.saturating_mul(others));
+    }
+
     /// Applies `world.open`'s `settings` object.
     pub fn apply(&mut self, overrides: &Map<String, Value>) -> Result<(), CmdError> {
         for (key, value) in overrides {
@@ -143,5 +160,25 @@ impl RelaySettings {
             *slot = n;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_world_of_histories_fits_one_joiners_queue() {
+        for profile in [Profile::Private, Profile::Public] {
+            let mut s = RelaySettings::for_profile(profile);
+            s.fit_join_snapshot(12);
+            // eleven others at their caps: the snapshot fits the joiner's queue
+            assert!(s.history_max_entries * 11 <= s.queue_max_messages);
+            assert!(s.history_max_bits * 11 <= s.queue_max_bits);
+            assert_eq!(s.history_max_bits, 2 * 1024 * 1024);
+        }
+        let mut s = RelaySettings::for_profile(Profile::Private);
+        s.fit_join_snapshot(1);
+        assert_eq!(s.history_max_entries, 4096);
     }
 }
