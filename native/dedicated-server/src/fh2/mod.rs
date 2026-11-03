@@ -911,6 +911,10 @@ impl GameWorld for Fh2World {
             e.tick(now as i64);
             out.extend(e.take_out());
         }
+        // a route outlives nothing: an endpoint no longer seated where it points is forgotten
+        let engines = &self.engines;
+        self.routes
+            .retain(|peer, kind| engines.get(kind).is_some_and(|e| e.has_peer(*peer)));
         self.drain_events();
     }
 
