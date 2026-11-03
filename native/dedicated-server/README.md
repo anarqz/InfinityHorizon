@@ -133,7 +133,7 @@ engine, in this recommended order:
 | 0 | NerdCore codec (`src/fh2/codec/`) | fh2 | core written for Infinity from NERDCORE_WIRE.md, the C# engine and fh2-mods as references (OD-187; no code copied): bit stream, header, reliability state, objects, synced variables, every message body but 22 (none exists); every §7 variable list (7.1-7.12), checked against the corpus's object payloads (**done**) |
 | 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover; quiet joins (T25), weather, group navigation, held opens, the car-state side channel | fh2 | **done** for free roam: the D2 Delivery, Boundary, WorldFoundation, Integration and SideChannel suites and the free-roam RelayEngineTests replay exactly |
 | 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | **done** (private tests `admission.rs`) |
-| 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | **done**: wired, granted punches (2 per candidate, 10 per 15 s per grant); the C# 5 s STUN keepalive between rounds is not ported yet |
+| 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | **done**: wired, granted punches (2 per candidate, 10 per 15 s per grant), the 5 s STUN keepalive between rounds (one IPv4 server in turn) |
 | 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | **done** for private worlds; the public multiplex routes by grant id but no official world opens until S34 fixes the grant form |
 | 5 | Side channels: car state, control/state, their authorisation and rates | fh2 | livery is retired and dropped |
 | 6 | Engine routing by lobby type, car meet engines 3 and 6, moves between engines, weather, quiet joins, the 30 s seat behaviour | fh2 | |
@@ -142,7 +142,7 @@ engine, in this recommended order:
 | 9 | Car meet invitations and the game-session request/answer | fh2 + core | |
 | 10 | Road Trip (vote, events, alone/wait/drop) with the catalog reader | fh2 | needs a read-only SQLite reader of the catalog; `RoadTripServerState` includes Solo = 3 |
 | 11 | Bucket-list co-op: pairing, 61 gating and fallback, message 65's universe per pair | fh2 | the universe must be BucketList1..6 (18..23), one per pair, at most 6 per world |
-| 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | |
+| 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | **done** (`fh2/voice.rs` codec, `fh2/engine/voice.rs`): the RelayVoice suite and every proximity and moderation vector without teams replay exactly; team voice reads the team seams (`team_event_active`, `team_of`, `hearing_group`) and waits for the teams port |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
 | 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | **done**: `diag` every 3 s (2048, one at close), `peer.rejected` (128 per 30 s, 1 s dedup), `peer.synced`/`peer.left`, `world.empty`/`world.occupied`, note lines at info |
 
@@ -169,9 +169,8 @@ engine, in this recommended order:
   into the trusted clock (`max(serverTimeMs-derived, monotonic)`, never back).
 - **`world.empty`/`world.occupied`:** transitions only (a new world starts empty, no event); the
   host's own game, synced or handshaking, is not an occupant.
-- **Not yet:** the C# `RelayNetworkNat` 5 s keepalive between STUN rounds; engine routing by lobby
-  type (only free roam exists, so `AdmittedLate` moves nothing); voice blocks are stored per source
-  for the voice port.
+- **Not yet:** engine routing by lobby type (only free roam exists, so `AdmittedLate` moves
+  nothing).
 - **Datagram limit (WINDOWS' rule, 2026-11-02):** packets split only between messages (at most 8
   messages, a 1,189-byte body); a single message over `(1372 - 11) × 8` bits is dropped, never
   sent (`send.oversize_dropped`); a late joiner's catch-up create folds updates only up to
@@ -181,6 +180,20 @@ engine, in this recommended order:
   player's deletes show.
 - **Randomness** (`engine/random.rs`): one SplitMix64 stream per purpose (weather, tag, team,
   attempt ids, STUN transaction ids) and the seeded subtractive generator for the weather's draws.
+
+## Decisions taken in the voice port
+
+- **Unknown engine-level voice mode is off** (MACBOOK): the reference engine throws; the control
+  channel stays strict (`world.voice` refuses any other mode), so only an engine caller can pass
+  one (`VoiceMode::or_off`).
+- **Voice blocks** (§6.4): one table per world (`VoiceBlockTable`, the C# `VoiceBlockTable`
+  semantics) fed by both sources, shared with every engine's policy and compared with the wall
+  clock (Unix seconds) at each question; a change calls `voice_blocks_changed` on every engine.
+  `world.voiceBlocks` answers `changed` when a block changed (a source repeating itself changes
+  nothing).
+- **State downs of a control command** (`world.voice`, `world.voiceBlocks`) are queued in the
+  engine and leave with its next receive or tick (at most 20 ms later): `GameWorld::command` has
+  no datagram sink.
 
 ## Acknowledgements
 

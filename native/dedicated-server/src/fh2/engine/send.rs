@@ -264,6 +264,7 @@ impl Engine {
             self.send_sequenced(s, deletes.clone());
         }
         self.side_rates.remove(&serial);
+        self.voice_peer_left(serial);
         if self.peers.is_empty() {
             self.group_node = 0;
         }

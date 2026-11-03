@@ -232,7 +232,6 @@ impl Engine {
     /// §5c rule 2a: a player's hearing group. Outside team events everybody shares one (0); in a
     /// team event a participant's is its team (1 red, 2 blue), the others' 0; a participant whose
     /// team the game does not have yet shares one with nobody (negative, unique).
-    #[allow(dead_code)] // voice (voice.rs) reads it
     pub(super) fn hearing_group(&self, serial: u64) -> i32 {
         let Some(p) = self.peer(serial) else { return 0 };
         if !self.team_event
@@ -250,15 +249,18 @@ impl Engine {
         }
     }
 
-    #[allow(dead_code)] // voice (voice.rs) reads it
-    pub(super) fn same_hearing_group(&self, a: u64, b: u64) -> bool {
-        let g = self.hearing_group(a);
-        g >= 0 && g == self.hearing_group(b)
-    }
-
     /// A player's team in the running team event.
-    #[allow(dead_code)] // voice (voice.rs) reads it
     pub(super) fn team_of(&self, serial: u64) -> Option<u8> {
-        self.peer(serial).and_then(|p| p.team)
+        let p = self.peer(serial)?;
+        if !self.team_event
+            || !self
+                .ev
+                .race
+                .as_ref()
+                .is_some_and(|r| r.participants.contains(&p.index))
+        {
+            return None;
+        }
+        p.team
     }
 }
