@@ -25,11 +25,13 @@ const MAX_OBJECTS: usize = 256;
 /// Updates kept for objects whose create has not come yet.
 const MAX_ORPHANS: usize = 32;
 /// A Road Trip player object's largest payload (router 9, type 2).
-const ROAD_TRIP_PLAYER_MAX_BITS: usize = 256;
 /// The bucket-list router and its player state type.
 pub(super) const BUCKET_LIST_ROUTER: u8 = 12;
 const BUCKET_LIST_PLAYER_TYPE: u8 = 0;
 pub(super) const BUCKET_LIST_SLOTS_TYPE: u8 = 1;
+/// Before its handshake completed, a peer's packet id may move at most this far forward.
+const PRE_AUTH_MAX_JUMP: u16 = 0x1000;
+
 /// What a snapshot adds to a player object (PrivateUniverseId 8+5, TeamId 8+1) and to a
 /// console (nine server flags, 4+1 each).
 const SERVER_PLAYER_BITS: usize = 13 + 9;
@@ -127,11 +129,29 @@ impl Engine {
             }
             return Ok(());
         }
-        let verdict = p.acks.accept(header.id);
-        if verdict == wire::Verdict::Dropped {
-            return Ok(()); // 0x3fff or more from the newest id: the game drops it silently
+        // packet-id hardening (MACBOOK decision 3): until its handshake completed, a peer's id may
+        // not jump more than 0x1000 forward (no ack, nothing applied); a synced peer, admitted by
+        // the verified grant and endpoint binding, gets the game's own window
+        if !p.synced
+            && header.id != wire::NO_SEQUENCE
+            && let Some(newest) = p.acks.newest()
+        {
+            let jump = crate::fh2::codec::reliable::id_dist(header.id, newest);
+            if jump > PRE_AUTH_MAX_JUMP && jump <= crate::fh2::codec::reliable::HALF_SPACE {
+                let index = p.index;
+                if self.peer_note(serial, "id_jump") {
+                    self.note("receive.id_jump_dropped", vec![json!(index), json!(jump)]);
+                }
+                return Ok(());
+            }
         }
-        if verdict == wire::Verdict::Duplicate {
+        let Some(p) = self.peer_mut(serial) else {
+            return Ok(());
+        };
+        let verdict = p.acks.accept(header.id);
+        // a dropped (0x3fff or more from the newest) or stale id is not recorded, never applied,
+        // and answered with the acknowledgement as it stands, as the reference engine answers it
+        if verdict != wire::Verdict::Fresh {
             if let Some(Msg::OpenResponse {
                 reason: 6, attempt, ..
             }) = &first
@@ -444,7 +464,6 @@ impl Engine {
         // the game makes its RoadTripPlayerSynced in every session type: relayed in every world
         let road_trip_player = obj.router == 9
             && obj.handle.kind == Kind::Own
-            && obj.payload.len() <= ROAD_TRIP_PLAYER_MAX_BITS
             && if obj.create {
                 obj.ty == 2
             } else {
@@ -524,6 +543,34 @@ impl Engine {
             }
         }
         if road_trip_player {
+            // validated against its variable list (NERDCORE_WIRE.md §7.9), as routers 1-3 are
+            match payload::sanitize(9, &obj.payload) {
+                Ok(clean) => obj.payload = clean,
+                Err(fault) => {
+                    let message = if obj.create { 7 } else { 8 };
+                    self.rejected(
+                        xuid,
+                        "invalid_payload",
+                        Some(message),
+                        Some(9),
+                        Some(fault.value()),
+                    );
+                    if self.peer_note(serial, "roadtrip_player") {
+                        self.note(
+                            "roadtrip.player_refused",
+                            vec![
+                                json!(index),
+                                json!(if obj.create { "create" } else { "update" }),
+                                json!(obj.seq),
+                                json!(fault.name()),
+                                json!(fault.value()),
+                                json!(obj.payload.len()),
+                            ],
+                        );
+                    }
+                    return None;
+                }
+            }
             if obj.create && self.is_road_trip() {
                 self.note(
                     "roadtrip.player_created",

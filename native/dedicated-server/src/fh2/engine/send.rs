@@ -67,16 +67,27 @@ impl Engine {
         let mut chunk: Vec<M> = Vec::new();
         let mut bits = 0usize;
         for m in messages {
-            if m.len() > wire::MAX_MESSAGE_BITS && !super::send_cap_off() {
+            if m.len() > wire::MAX_MESSAGE_BITS {
                 // a message that alone cannot fit a datagram is dropped, never sent
                 self.oversize_dropped += 1;
-                let index = self.peer(serial).map_or(0, |p| p.index);
                 let id = m.reader().read(7).unwrap_or(0);
-                let count = self.oversize_dropped;
-                self.note(
-                    "send.oversize_dropped",
-                    vec![json!(index), json!(id), json!(m.len()), json!(count)],
-                );
+                let Some(p) = self.peer_mut(serial) else {
+                    continue;
+                };
+                p.oversize_dropped += 1;
+                let (index, dropped) = (p.index, p.oversize_dropped);
+                if self.peer_note(serial, "oversize") {
+                    self.note(
+                        "send.oversize_dropped",
+                        vec![
+                            json!(index),
+                            json!(id),
+                            json!(m.len()),
+                            json!(wire::MAX_DATAGRAM),
+                            json!(dropped),
+                        ],
+                    );
+                }
                 continue;
             }
             if !chunk.is_empty()

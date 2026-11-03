@@ -28,6 +28,8 @@ pub enum Applied {
     Stored,
     Buffered,
     Overflow,
+    /// Its relayed form (an update or a grant) could not fit one datagram: not stored.
+    TooLong,
 }
 
 /// The bounded journal of original GameOptions writes.
@@ -99,6 +101,11 @@ impl Journal {
                 .is_some_and(|last| !seq_newer(sequence, last))
         {
             return Applied::Ignored;
+        }
+        // a record must fit one datagram once relayed (as an update or a grant, under any key):
+        // refused before it is stored, so no receiver's sequence is spent on it
+        if payload.len() > MAX_RECORD_BITS {
+            return Applied::TooLong;
         }
         let future = self
             .source_sequence
@@ -236,6 +243,11 @@ impl TagRules {
     pub const IT: i32 = 1;
 }
 pub const INFECTED_PRESET: u64 = 8;
+/// The relayed prefix of a record, as an update or a grant: 7 id + 4 router + 2 kind + 2 id +
+/// 8 sequence + 14 length.
+pub const RELAYED_PREFIX_BITS: usize = 37;
+/// The longest record kept: one whose relayed update or grant fits one datagram.
+pub const MAX_RECORD_BITS: usize = super::wire::MAX_MESSAGE_BITS - RELAYED_PREFIX_BITS;
 /// A bucket name: a 5-bit count of up to 24 UTF-16 units.
 const NAME: i32 = -24;
 
