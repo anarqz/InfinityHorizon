@@ -148,10 +148,10 @@ engine, in this recommended order:
 
 ## Decisions taken in step 2
 
-- **The engine reads messages with its own acceptance set** (`engine/wire.rs`): exactly the ids it
+- **The engine reads messages with its own acceptance set** (`engine/message.rs`): exactly the ids it
   handles or forwards; any other id ends the packet (a `truncated_packet` rejection), as the
   reference engine does. The codec's registry (the full §6 catalogue) is for decoding anything.
-- **Acknowledgements** (`engine/wire.rs` `AckWindow`, MACBOOK's ruling in step 3): the game's
+- **Acknowledgements** (`engine/datagram.rs` `AckWindow`, MACBOOK's ruling in step 3): the game's
   rule, the codec's `reliable::ReceiveState` (ids modulo 0xffff; an id equal to the newest is a
   duplicate; one 0x3fff or more away is dropped silently). The C# engine wraps at 2^16; no vector
   of the corpus crosses the wrap, so none disagrees today.
