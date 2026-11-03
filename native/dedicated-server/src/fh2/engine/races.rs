@@ -798,6 +798,12 @@ impl Engine {
             .filter(|p| p.serial != serial && p.synced && participants.contains(&p.index))
             .map(|p| p.serial)
             .collect();
+        // reliable lap and finish reports (44, 45) are rebroadcast even when repeated (the
+        // reference's rule, which its scoring relies on), so each is charged to its sender's
+        // fan-out budget
+        if kind != 43 && !others.is_empty() && !self.charge_fanout(serial, 1) {
+            return false;
+        }
         for o in others {
             if kind == 43 {
                 self.send(o, vec![m.clone()], false, 0);
