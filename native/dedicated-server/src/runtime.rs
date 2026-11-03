@@ -133,13 +133,25 @@ fn read_socket(socket: UdpSocket, sock: SockId, hub: HubTx, stop: Arc<AtomicBool
             Ok((n, _)) if n > DATAGRAM_MAX => errors = 0,
             Ok((n, from)) => {
                 errors = 0;
-                let msg = Hub::Datagram {
+                let mut msg = Hub::Datagram {
                     sock,
                     from,
                     data: buf[..n].to_vec(),
                 };
-                if hub.send(msg).is_err() {
-                    return;
+                // never parked on a full hub once stopped: the loop joins this thread when it
+                // releases the socket, and it is the loop that drains the hub
+                loop {
+                    match hub.try_send(msg) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Full(back)) => {
+                            if stop.load(Ordering::Acquire) {
+                                return;
+                            }
+                            msg = back;
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => return,
+                    }
                 }
             }
             Err(e)
@@ -752,6 +764,32 @@ mod tests {
         stop.store(true, Ordering::Release);
         reader.join().unwrap();
     }
+    #[test]
+    fn a_stopped_reader_never_waits_on_a_full_hub() {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let to = socket.local_addr().unwrap();
+        // a hub of one, already full, that nobody drains (the loop is busy joining)
+        let (hub, _full) = mpsc::sync_channel::<Hub>(1);
+        hub.send(Hub::Fatal("filler")).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let reader = std::thread::spawn(move || read_socket(socket, 7, hub, flag));
+        UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .send_to(&[1u8; 8], to)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        stop.store(true, Ordering::Release);
+        let (done, joined) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(reader.join().is_ok());
+        });
+        assert_eq!(joined.recv_timeout(Duration::from_secs(5)), Ok(true));
+    }
+
     #[test]
     fn a_released_world_port_can_be_bound_again_at_once() {
         let (hub, _loop) = mpsc::sync_channel::<Hub>(64);
