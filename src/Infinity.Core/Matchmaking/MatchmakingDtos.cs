@@ -85,7 +85,13 @@ public static class WorldActivities
     public const string FreeRoam = "freeroam";
     public const string RoadTrip = "roadtrip";
 
+    /// <summary>OD-190 (WORLDS_OFFICIAL §11.1): an official world that runs car meets; a player world's activity is never one.</summary>
+    public const string CarMeet = "carmeet";
+
     public static IReadOnlyList<string> All { get; } = [FreeRoam, RoadTrip];
+
+    /// <summary>OD-190 (WORLDS_OFFICIAL §11.2): what a quick join (<c>POST /mm/v1/join {activity}</c>, no world id, no code) asks for.</summary>
+    public static IReadOnlyList<string> Placement { get; } = [FreeRoam, CarMeet, RoadTrip];
 }
 
 /// <summary>A world as one caller sees it (MATCHMAKING_API.md §2.1).</summary>
@@ -490,7 +496,7 @@ public sealed record ModerationResult
     public string? Until { get; init; }
 }
 
-/// <summary><c>POST /mm/v1/join</c> body: a world id, a code (8 digits), or both.</summary>
+/// <summary><c>POST /mm/v1/join</c> body: a world id, a code (8 digits), or both; or neither with an activity (OD-190's quick join).</summary>
 public sealed record JoinRequest
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -515,7 +521,10 @@ public sealed record JoinRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Transport { get; init; }
 
-    /// <summary>OD-150: the activity asked for (<see cref="WorldActivities"/>); a world running another is 409 <c>{reason: "activity"}</c>; null: any.</summary>
+    /// <summary>
+    /// OD-150: the activity asked for (<see cref="WorldActivities"/>); a world running another is 409 <c>{reason: "activity"}</c>; null: any.
+    /// OD-190: alone (no world id, no code) it is a quick join into an official world (<see cref="WorldActivities.Placement"/>).
+    /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Activity { get; init; }
 }

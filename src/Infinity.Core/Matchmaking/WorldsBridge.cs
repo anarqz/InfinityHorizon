@@ -475,7 +475,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             }
             ObservePool(list.Pool);
             foreach (var world in list.Items.Concat(list.Locked)) _listedActivity[world.Id] = world.Activity;
-            var rows = list.Items.Select(w => WithActivity(Row(w, false), w)).Concat(list.Locked.Select(w => WithActivity(Row(w, true), w))).ToList();
+            // OD-190 (WORLDS_OFFICIAL §11.2): the list shows player worlds only (the server filters; an official row is dropped here too)
+            var rows = list.Items.Where(PlayerWorld).Select(w => WithActivity(Row(w, false), w))
+                .Concat(list.Locked.Where(PlayerWorld).Select(w => WithActivity(Row(w, true), w))).ToList();
             return new UiFrame.WorldsList(query.Filter, 0, string.Empty, rows);
         }
         catch (Exception e) when (HostFailure(e))
@@ -561,6 +563,12 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (answer.Value is not { } join)
                 {
                     if (PoolRefusal(answer.Error) is { } poolRefusal) return poolRefusal;
+                    if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.LobbiesFull } lobbiesFull)
+                    {
+                        // OD-190 (WORLDS_OFFICIAL §11.2): no official world of the activity has a free seat; the quick join waits Retry-After
+                        Volatile.Write(ref _lobbiesFullAfter, (answer.RetryAfter ?? lobbiesFull.RetryAfter ?? TimeSpan.Zero).Ticks);
+                        return new UiFrame.JoinResult(UiJoin.Full, _text("worlds.lobbies_full"));
+                    }
                     if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.Activity })
                     {
                         // OD-150: the world runs another activity now; like a closed world, the free-roam step tries the next one
@@ -732,6 +740,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 {
                     InvalidateMine(reset: true);
                     _log(SeatEndedLine(seat.Ended, grantId)); // T35: with its reason
+                    ObserveHostLeft(seat.Ended, grantId);
                 }
                 // OD-149: isolated by the anti-cheat system: the seat in a clean world ended, the launcher moves the player
                 if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text("worlds.pool_moved");
@@ -845,6 +854,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // T35: the joiner's seat ending on the server is said with its reason (released: the host's heartbeat no
                     // longer listed this player), so a cleared relay leg is never silent
                     if (heldGrant is not null) _log(SeatEndedLine(value.Ended, heldGrant));
+                    ObserveHostLeft(value.Ended, heldGrant); // OD-190: the next placement says the host left
                     _seat.Observe(value, Now);
                     // OD-149: the seat this launcher held ended because the anti-cheat system isolated the player: it is moved
                     if (SeatEndedForPool(value.Ended, heldGrant)) _freeRoamToasts.Enqueue(PoolToast());

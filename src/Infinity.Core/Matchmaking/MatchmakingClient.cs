@@ -93,7 +93,10 @@ public interface IMatchmakingApi
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
         IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation) => JoinAsync(worldId, code, mods, nat, relays, cancellation);
 
-    /// <summary>OD-150: as above, with the <paramref name="activity"/> asked for (null: any; another is 409 <c>{reason: "activity"}</c>).</summary>
+    /// <summary>
+    /// OD-150: as above, with the <paramref name="activity"/> asked for (null: any; another is 409 <c>{reason: "activity"}</c>). OD-190:
+    /// with neither <paramref name="worldId"/> nor <paramref name="code"/>, a quick join into an official world running it.
+    /// </summary>
     Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
         IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation) =>
         JoinAsync(worldId, code, mods, nat, relays, transport, cancellation);
@@ -268,7 +271,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests/" + Id(requestId, nameof(requestId)) + "/accept", null, cancellation);
 
     /// <summary>
-    /// <c>POST /mm/v1/join {worldId?, code?}</c> (at least one). The code is sent as its 8 digits;
+    /// <c>POST /mm/v1/join {worldId?, code?}</c> (at least one, or OD-190's quick join <c>{activity}</c>). The code is sent as its 8 digits;
     /// one that is not 8 digits (with or without the hyphen) throws before sending. A 429 answers
     /// <c>status: "rate_limited"</c> with <c>retryAfterSeconds</c> (from <c>Retry-After</c> when
     /// the body is the generic error body).
@@ -292,13 +295,15 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
         IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation)
     {
-        if (activity is not null && !WorldActivities.All.Contains(activity))
+        // OD-190 (WORLDS_OFFICIAL §11.2): neither a world id nor a code is a quick join, which names its activity (car meets too)
+        var quick = worldId is null && code is null;
+        if (activity is not null && !(quick ? WorldActivities.Placement : WorldActivities.All).Contains(activity))
         {
-            throw new ArgumentException("freeroam or roadtrip", nameof(activity));
+            throw new ArgumentException(quick ? "freeroam, carmeet or roadtrip" : "freeroam or roadtrip", nameof(activity));
         }
-        if (worldId is null && code is null)
+        if (quick && activity is null)
         {
-            throw new ArgumentException("a world id, a code, or both");
+            throw new ArgumentException("a world id, a code, both, or a quick join's activity");
         }
         var body = new JoinRequest
         {

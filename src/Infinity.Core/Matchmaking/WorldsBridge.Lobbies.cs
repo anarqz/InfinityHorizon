@@ -27,11 +27,14 @@ public sealed partial class WorldsBridge
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _listedActivity = new(StringComparer.Ordinal);
 
+    /// <summary>OD-190 (WORLDS_OFFICIAL §11.2): a world a list may show; official ones are joined by activity, never browsed.</summary>
+    private static bool PlayerWorld(WorldView world) => world.Official != true;
+
     private async Task<LobbyRead> ReadLobbiesCoreAsync(string filter, bool notFull, CancellationToken cancellation)
     {
         static LobbyRead Failed() => new("worlds.list_failed", []); // CR-S69: no refusal is about the tier any more
         static IEnumerable<(WorldView, bool)> Of(WorldList list) =>
-            list.Items.Select(w => (w, false)).Concat(list.Locked.Select(w => (w, true)));
+            list.Items.Where(PlayerWorld).Select(w => (w, false)).Concat(list.Locked.Where(PlayerWorld).Select(w => (w, true)));
         if (filter == WorldFilters.Every)
         {
             var all = await OperationAsync(_listRetry, token => _mm.ListAsync(WorldFilters.Every, notFull, false, token), cancellation).ConfigureAwait(false);
