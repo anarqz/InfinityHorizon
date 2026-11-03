@@ -246,5 +246,11 @@ engine, in this recommended order:
 ## Acknowledgements
 
 The fh2-mods project's online research (https://github.com/conner-mcvay/fh2-mods, `tools/online`, by conner-mcvay and
-contributors) was an inspiration and a reference for this work. No code from it is used here: the game protocol layer is
-written from our own specification of the game's network format.
+contributors) was an inspiration and a reference for this work. No code from it is used here.
+
+**References (owner decision OD-187, final rule).** This server was written for Infinity with these references: the
+Infinity C# world engine (the launcher's former in-process WorldServer, client `b43618a`) for every behaviour, and its
+golden vectors; our NERDCORE_WIRE.md for the game's network format; fh2-mods' code as inspiration and reference; RFC
+8489/5389 (STUN) and the UPnP IGD WANIPConnection/SSDP specifications for NAT discovery and port mapping. No code is
+copied from fh2-mods or from the retired Beta relay (`deprecated/native-relay`); the STUN, UPnP, NAT and car-state
+modules were rewritten from those specifications for this server, and no new reverse engineering was done for it.
