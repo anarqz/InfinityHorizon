@@ -3,8 +3,8 @@
 
 use serde_json::{Map, Value, json};
 
-/// `busy`'s `retryAfterMs` (contract: at least 20).
-pub const BUSY_RETRY_MS: u64 = 50;
+/// `busy`'s `retryAfterMs`: the contract's default (§4.1, §4.6); never below 20.
+pub const BUSY_RETRY_MS: u64 = 1000;
 
 // error codes (contract §4.1)
 pub const BAD_REQUEST: &str = "bad_request";
