@@ -27,8 +27,9 @@ pub const INVITE_ROAD_TRIP: u8 = 2;
 pub const CAR_MEET_JOIN_MS: i64 = 20_000;
 pub const CAR_MEET_CREATE_MS: i64 = 15_000;
 pub const CAR_MEET_READY_MS: i64 = 30_000;
-/// How long the official car meet waits after telling the starter before it tells the joiners.
-pub const CAR_MEET_JOINER_DELAY_MS: i64 = 8_000;
+/// How long the official car meet waits after telling the starter before it tells the joiners: 0
+/// since every reader sees itself first (the server's reader-first answers); kept as a knob.
+pub const CAR_MEET_JOINER_DELAY_MS: i64 = 0;
 /// A session or template name's longest form (CarMeetSynced 16/17, 32).
 pub const CAR_MEET_NAME_MAX: usize = 64;
 const PENDING_NONE: u64 = 0;
