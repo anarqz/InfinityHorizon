@@ -13,9 +13,10 @@
 //! Nothing here sends anything but STUN Binding requests (to the STUN servers and, for a punch,
 //! to the player) and Binding successes (to whoever sent us a request).
 //!
-//! Step 1 of the port: kept from the 2026-10-20 engine and not wired into the loop yet; the C#
-//! `RelayNetworkNat`/`RelayNetworkUpnp` behaviour (lease, renewal, alternate port) comes with the
-//! private-world network port (README, PORT_STATUS).
+//! Between full STUN rounds one IPv4 server per `keepalive_ms` (5 s) refreshes the mapping
+//! (`W/RelayNetworkNat.cs`): a router whose UDP idle timeout is shorter than the round would
+//! otherwise hand the world a new external port while it waits for players, leaving the
+//! announced one stale.
 
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs},
@@ -37,11 +38,17 @@ const PENDING_MAX: usize = 16;
 const PENDING_TTL_MS: u64 = 10_000;
 /// Binding requests answered per second (a flood of them gets no answers).
 const ANSWERS_PER_SECOND: u32 = 50;
+/// One IPv4 STUN server this often between rounds keeps the NAT's mapping (0: off).
+pub const KEEPALIVE_MS: u64 = 5_000;
+/// At most this many STUN servers are used.
+const SERVERS_MAX: usize = 16;
 
 #[derive(Debug, Clone)]
 pub struct NatSettings {
     pub stun_servers: Vec<String>,
     pub stun_every_ms: u64,
+    /// The keepalive between rounds (0: none).
+    pub keepalive_ms: u64,
     pub discovery: bool,
     pub upnp: bool,
     pub port: u16,
@@ -52,6 +59,7 @@ impl NatSettings {
         NatSettings {
             stun_servers: STUN_SERVERS.iter().map(|s| s.to_string()).collect(),
             stun_every_ms: 25_000,
+            keepalive_ms: KEEPALIVE_MS,
             discovery,
             upnp,
             port,
@@ -122,6 +130,9 @@ pub struct Nat {
     resolved: Option<Receiver<Vec<SocketAddr>>>,
     servers: Vec<SocketAddr>,
     last_round: Option<u64>,
+    /// The last round or keepalive, and the IPv4 server the last keepalive went to.
+    last_keepalive: Option<u64>,
+    keepalive_server: usize,
     /// (transaction, server, sent)
     pending: Vec<(TxId, SocketAddr, u64)>,
     /// (server, our address as it saw it): the last answer of each server.
@@ -171,6 +182,8 @@ impl Nat {
             resolved,
             servers: Vec::new(),
             last_round: None,
+            last_keepalive: None,
+            keepalive_server: 0,
             pending: Vec::new(),
             seen: Vec::new(),
             punches: Vec::new(),
@@ -251,11 +264,28 @@ impl Nat {
                     .map_or(0, |t| t + self.settings.stun_every_ms),
             )
         };
+        let keepalive = self
+            .last_keepalive
+            .filter(|_| self.settings.keepalive_ms > 0 && self.servers.iter().any(|s| s.is_ipv4()))
+            .map(|t| t + self.settings.keepalive_ms);
         let punch = self.punches.iter().filter(|p| p.1 > 0).map(|p| p.2).min();
-        match (round, punch) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
+        [round, keepalive, punch].into_iter().flatten().min()
+    }
+
+    /// The STUN servers (the lookup's result; tests set them directly): at most 16, canonical,
+    /// each once.
+    pub fn set_servers(&mut self, servers: &[SocketAddr]) {
+        let mut out: Vec<SocketAddr> = Vec::new();
+        for s in servers
+            .iter()
+            .take(SERVERS_MAX)
+            .map(|s| stun::canonical(*s))
+        {
+            if !out.contains(&s) {
+                out.push(s);
+            }
         }
+        self.servers = out;
     }
 
     /// The timer: STUN rounds, punches, the router's news. Lookup and UPnP results are polled
@@ -267,17 +297,18 @@ impl Nat {
             if servers.is_empty() {
                 self.news.push(NatNews::NoStunServers);
             }
-            self.servers = servers;
+            self.set_servers(&servers);
             self.resolved = None;
         }
+        self.pending
+            .retain(|(_, _, sent)| now_ms.saturating_sub(*sent) < PENDING_TTL_MS);
         if !self.servers.is_empty()
             && self
                 .last_round
                 .is_none_or(|t| now_ms.saturating_sub(t) >= self.settings.stun_every_ms)
         {
             self.last_round = Some(now_ms);
-            self.pending
-                .retain(|(_, _, sent)| now_ms.saturating_sub(*sent) < PENDING_TTL_MS);
+            self.last_keepalive = Some(now_ms);
             for &server in &self.servers {
                 if server.is_ipv6() && !self.socket_is_v6 {
                     continue;
@@ -286,6 +317,30 @@ impl Nat {
                 if self.pending.len() < PENDING_MAX {
                     self.pending.push((t, server, now_ms));
                 }
+                send(
+                    stun::for_socket(server, self.socket_is_v6),
+                    stun::binding_request(&t).to_vec(),
+                );
+            }
+        } else if self.settings.keepalive_ms > 0
+            && self
+                .last_keepalive
+                .is_some_and(|t| now_ms.saturating_sub(t) >= self.settings.keepalive_ms)
+            && self.pending.len() < PENDING_MAX
+        {
+            // between rounds, one IPv4 server in turn keeps the mapping open
+            let v4: Vec<SocketAddr> = self
+                .servers
+                .iter()
+                .copied()
+                .filter(|s| s.is_ipv4())
+                .collect();
+            if !v4.is_empty() {
+                self.last_keepalive = Some(now_ms);
+                self.keepalive_server = (self.keepalive_server + 1) % v4.len();
+                let server = v4[self.keepalive_server];
+                let t = stun::new_txid();
+                self.pending.push((t, server, now_ms));
                 send(
                     stun::for_socket(server, self.socket_is_v6),
                     stun::binding_request(&t).to_vec(),
