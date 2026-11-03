@@ -203,10 +203,6 @@ fn fault_name(f: &Fault) -> &'static str {
     }
 }
 
-fn upper_hex(d: &[u8]) -> String {
-    d.iter().map(|b| format!("{b:02X}")).collect()
-}
-
 fn ready_state(state: u64) -> bool {
     state == STATE_READY || state == STATE_ACTIVE
 }
@@ -534,7 +530,7 @@ impl Engine {
         let player = self.bucket_player(serial);
         if player.refused_trace > 0 {
             player.refused_trace -= 1;
-            // the hex is safe to log: a PlayerState (at most 128 bits) holds numbers and flags
+            // never the payload itself (contract §2.3): its length and the fault say enough
             let mut args: Vec<Value> = vec![
                 json!(index),
                 json!(if obj.create { "create" } else { "update" }),
@@ -542,7 +538,6 @@ impl Engine {
                 json!(fault_name(&fault)),
                 json!(fault.value()),
                 json!(obj.payload.len()),
-                json!(upper_hex(obj.payload.bytes())),
             ];
             match &prefix {
                 Some(p) => {
