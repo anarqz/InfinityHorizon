@@ -411,7 +411,20 @@ impl ObjectMessage {
 
 /// `(s + 1) mod 0xff` (§4.3).
 pub const fn seq_next(s: u8) -> u8 {
-    ((s as u16 + 1) % SEQ_MOD as u16) as u8
+    seq_forward(s, 1)
+}
+
+/// The number `steps` places after `s`, modulo 0xff (§4.3). A wire value of 0xff counts as 0.
+pub const fn seq_forward(s: u8, steps: u8) -> u8 {
+    ((s as u16 + steps as u16) % SEQ_MOD as u16) as u8
+}
+
+/// Whether `candidate` is newer than `reference`: their difference wrapped to 8 bits is a
+/// positive `i8` (1..=127). This is the relay's freshness test on raw 8-bit numbers (wire values
+/// up to 0xff included); [`seq_order`] is the receiver's classification modulo 0xff and differs
+/// from it at the half-way edge.
+pub const fn seq_is_newer(candidate: u8, reference: u8) -> bool {
+    (candidate.wrapping_sub(reference) as i8) > 0
 }
 
 /// How far `new` is ahead of `last`, modulo 0xff (both `< 0xff`).

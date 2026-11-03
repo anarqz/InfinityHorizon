@@ -110,6 +110,26 @@ impl Field {
     }
 }
 
+/// The width in bits of a layout made only of fixed-width fields; `None` when any field has a
+/// data-dependent width (a key, a byte run, a string or a repeat).
+pub const fn fixed_bits(layout: &[Field]) -> Option<usize> {
+    let mut total = 0usize;
+    let mut i = 0;
+    while i < layout.len() {
+        total += match layout[i] {
+            Field::U(n) | Field::S(n) => n as usize,
+            Field::Bool => 1,
+            Field::F32 => 32,
+            Field::Vec3 => 96,
+            Field::U64 => 64,
+            Field::Raw(n) => n as usize,
+            Field::Blob64 | Field::Str(_) | Field::Key(_) | Field::Repeat { .. } => return None,
+        };
+        i += 1;
+    }
+    Some(total)
+}
+
 /// Reads every field of a layout in order.
 pub fn read_fields(layout: &[Field], r: &mut BitReader<'_>) -> Result<Vec<FieldValue>, CodecError> {
     layout.iter().map(|f| f.read(r)).collect()
