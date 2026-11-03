@@ -530,12 +530,12 @@ impl PeerWatch {
                     vec![json!(index), json!(at - car.at)],
                 ));
             }
-            car.first += 1;
+            car.first = car.first.saturating_add(1);
             car.restart(position, stamp, universe, at);
             return;
         }
         if universe != car.universe {
-            car.universes += 1;
+            car.universes = car.universes.saturating_add(1);
             out.push(Out::Note(
                 "watch.universe",
                 vec![json!(index), json!(car.universe), json!(universe)],
@@ -545,7 +545,7 @@ impl PeerWatch {
         }
         let sent = stamp.wrapping_sub(car.stamp) as i32;
         if sent <= 0 {
-            car.stale += 1;
+            car.stale = car.stale.saturating_add(1);
             return;
         }
         let moved = f64::from(distance(position, car.position));
@@ -557,7 +557,7 @@ impl PeerWatch {
                 car.jumps = 0;
             }
             car.jump_peak = car.jump_peak.max(moved);
-            car.jumps += 1;
+            car.jumps = car.jumps.saturating_add(1);
             car.jump_last = at;
             out.push(Out::Note(
                 "watch.jump",
@@ -576,7 +576,7 @@ impl PeerWatch {
         );
         car.velocity_horizontal += (vx * vx + vz * vz).sqrt();
         car.velocity_up += 0f64.max(vy);
-        car.velocity_samples += 1;
+        car.velocity_samples = car.velocity_samples.saturating_add(1);
         let window_received = at - car.anchor_at;
         let window_sent = stamp.wrapping_sub(car.anchor_stamp) as i32;
         if window_received < WINDOW_MS {
@@ -732,7 +732,7 @@ impl PeerWatch {
         }
         e.reset_run();
         if (ov || os || or) && e.active {
-            e.disagreed += 1;
+            e.disagreed = e.disagreed.saturating_add(1);
         }
     }
 
@@ -740,7 +740,7 @@ impl PeerWatch {
     fn exclude(&mut self, why: &str, out: &mut Vec<Out>) {
         for (_, car) in self.cars.iter_mut() {
             car.has = false;
-            car.events += 1;
+            car.events = car.events.saturating_add(1);
             car.speed.reset_run();
             car.climb.reset_run();
         }
