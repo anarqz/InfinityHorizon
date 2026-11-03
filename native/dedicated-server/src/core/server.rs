@@ -803,7 +803,9 @@ impl Server {
         self.worlds.insert(id.clone(), w);
         self.timers
             .schedule(Timer::Housekeeping, self.now + HOUSEKEEPING_MS);
-        self.after_world(&id);
+        if !self.after_world_guarded(io, &id) {
+            return Err(CmdError::code(proto::INTERNAL));
+        }
         Ok(reply)
     }
 
@@ -859,7 +861,15 @@ impl Server {
                     _ => Ok(Map::new()),
                 },
                 #[cfg(feature = "test-hooks")]
-                "debug.fault" => panic!("debug.fault"),
+                "debug.fault" => {
+                    // `where: "after"`: the world's follow-up (events, state) panics instead
+                    if o.get("where").and_then(Value::as_str) == Some("after") {
+                        w.fault_after = true;
+                        Ok(Map::new())
+                    } else {
+                        panic!("debug.fault")
+                    }
+                }
                 _ => w.game_command(op, o, &mut ctx),
             }
         }));
@@ -867,7 +877,9 @@ impl Server {
             Ok(r) => {
                 let sock = self.worlds.get(&id).and_then(|w| w.sock);
                 push_sends(&mut self.out, sock, sends);
-                self.after_world(&id);
+                if !self.after_world_guarded(io, &id) {
+                    return Err(CmdError::code(proto::INTERNAL));
+                }
                 r
             }
             Err(_) => {
@@ -875,6 +887,16 @@ impl Server {
                 Err(CmdError::code(proto::INTERNAL))
             }
         }
+    }
+
+    /// `after_world` inside the world's fault boundary: a panic there faults only that world.
+    /// False when it did.
+    fn after_world_guarded(&mut self, io: &mut dyn Io, id: &str) -> bool {
+        if catch_unwind(AssertUnwindSafe(|| self.after_world(id))).is_ok() {
+            return true;
+        }
+        self.fault(io, id, "world.panic.after");
+        false
     }
 
     /// After anything changed a world: its state event and its engine tick.
@@ -948,7 +970,8 @@ impl Server {
                 timers: &mut self.timers,
                 now: self.now,
             };
-            w.diag(&mut ctx, true);
+            // the last diag runs in the fault boundary too: a panic there loses only that line
+            let _ = catch_unwind(AssertUnwindSafe(|| w.diag(&mut ctx, true)));
             w.gate.lock().clear();
         }
         if let Some(sock) = w.sock {
@@ -1036,7 +1059,7 @@ impl Server {
                 self.stats.datagrams_dropped += after - before;
                 let sock = w.sock;
                 push_sends(&mut self.out, sock, sends);
-                self.after_world(&id);
+                self.after_world_guarded(io, &id);
             }
             Err(_) => self.fault(io, &id, "world.panic.datagram"),
         }
@@ -1048,7 +1071,9 @@ impl Server {
         for t in self.timers.pop_due(self.now) {
             match t {
                 Timer::Housekeeping => self.housekeeping(io),
-                Timer::StateFlush(id) => self.after_world(&id),
+                Timer::StateFlush(id) => {
+                    self.after_world_guarded(io, &id);
+                }
                 Timer::EngineTick(id) => self.engine_tick(io, &id),
                 Timer::Drain => self.check_drain(io),
                 Timer::NetTick(id) => self.net_tick(io, &id),
@@ -1066,7 +1091,7 @@ impl Server {
             Ok(()) => {
                 let sock = w.sock;
                 push_sends(&mut self.out, sock, sends);
-                self.after_world(id);
+                self.after_world_guarded(io, id);
             }
             Err(_) => self.fault(io, id, "world.panic.tick"),
         }
@@ -1098,7 +1123,7 @@ impl Server {
             Ok(()) => {
                 let sock = w.sock;
                 push_sends(&mut self.out, sock, sends);
-                self.after_world(id);
+                self.after_world_guarded(io, id);
             }
             Err(_) => self.fault(io, id, "world.panic.net"),
         }
