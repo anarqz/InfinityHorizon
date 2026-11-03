@@ -1,20 +1,20 @@
 [package]
-name = "dedicated-server"
+name = "worlds"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
-description = "Infinity world server: the world engine for private (launcher) and public (relay VM) worlds"
+description = "Infinity Worlds: the world engine for private (launcher) and public (Worlds host VM) worlds"
 publish = false
 
 # A standalone crate with its own workspace (not part of any other workspace).
 [workspace]
 
 [lib]
-name = "dedicated_server"
+name = "worlds"
 path = "src/lib.rs"
 
 [[bin]]
-name = "dedicated-server"
+name = "worlds"
 path = "src/main.rs"
 
 [features]

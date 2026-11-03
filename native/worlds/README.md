@@ -1,6 +1,9 @@
-# dedicated-server
+# worlds
 
-The Infinity world server: one Rust program that hosts online worlds. The launcher runs it as a
+Infinity Worlds: one Rust program that hosts online worlds (formerly `dedicated-server`; contract
+DEDICATED_SERVER.md, WORLDS_OFFICIAL.md). One binary, one role per process: `worlds serve` is the
+world engine described here; `worlds relay` and `worlds agent` are named but not implemented yet
+(exit 7). The launcher runs it as a
 child process for a private world (one world per process, its own UDP port); the relay VM runs it
 as one long-lived process for public worlds (several worlds behind the co-located relay). Both are
 the same build and the same code; a profile (`--profile private|public`) sets the limits.
@@ -37,7 +40,7 @@ cargo build --release --target x86_64-pc-windows-gnu     # Windows, from Linux (
 
 Set `DS_COMMIT=<40 lowercase hex>` when building to stamp the commit that `--version` and
 `hello.build.commit` report (40 zeros otherwise). On `x86_64-pc-windows-msvc`, `build.rs` writes the
-executable's VERSIONINFO (`FileDescription` "Infinity world server", contract §2.4) as a compiled
+executable's VERSIONINFO (`FileDescription` "Infinity Worlds", `OriginalFilename` `worlds.exe`, contract §2.4) as a compiled
 `.res` that the MSVC linker takes directly: no resource compiler and no extra dependency.
 `DS_PRODUCT_VERSION` (the launcher's version, e.g. `2.0.5`) sets its product and file versions
 (the crate version otherwise). Other targets carry no VERSIONINFO.
@@ -45,10 +48,11 @@ executable's VERSIONINFO (`FileDescription` "Infinity world server", contract §
 ## Run
 
 ```text
-dedicated-server --profile private|public --control <endpoint> [options]
-dedicated-server --version
-dedicated-server --health --control unix:<path>
-dedicated-server --probe-bind <port>
+worlds serve --profile private|public --control <endpoint> [options]
+worlds serve --version          # also: worlds --version
+worlds serve --health --control unix:<path>
+worlds serve --probe-bind <port>
+worlds relay | worlds agent     # not implemented yet: exit 7
 ```
 
 | Option | Environment | Default |
@@ -68,7 +72,7 @@ dedicated-server --probe-bind <port>
 
 Exit codes: 0 clean stop, 2 invalid configuration, 3 control endpoint unavailable, 4 control
 authentication failed, 5 no common protocol version, 6 public socket or budget not set up,
-70 internal fault outside any world. `--probe-bind`: 0 bound, 3 in use, 4 denied, 1 other.
+7 role not implemented yet (`worlds relay`, `worlds agent`), 70 internal fault outside any world. `--probe-bind`: 0 bound, 3 in use, 4 denied, 1 other.
 
 Logs are JSON lines on stdout, written off the loop through a bounded queue that counts what it
 drops. They never carry a player identity, an address, a key or game payload bytes.

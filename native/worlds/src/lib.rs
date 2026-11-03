@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! `dedicated-server`: the Infinity world engine, one program for private worlds (a child process
-//! of the launcher, one world each) and public worlds (a long-lived process on the relay VM).
+//! `worlds`: Infinity Worlds, the world engine, one program for private worlds (a child process
+//! of the launcher, one world each) and public worlds (a long-lived process on a Worlds host VM).
 //!
 //! Layers:
 //!   - `core`: the deterministic, I/O-free server: control commands, worlds, admission state,

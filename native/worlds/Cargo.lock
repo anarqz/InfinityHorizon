@@ -84,7 +84,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dedicated-server"
+name = "worlds"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek",

@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! Windows VERSIONINFO for `dedicated-server.exe` (contract DEDICATED_SERVER.md §2.4: the firewall
-//! prompt and rule list show `FileDescription` "Infinity world server").
+//! Windows VERSIONINFO for `worlds.exe` (contract DEDICATED_SERVER.md §2.4, WORLDS_OFFICIAL.md §1: the
+//! firewall prompt and rule list show `FileDescription` "Infinity Worlds").
 //!
 //! No dependency and no resource compiler: the script writes the compiled resource (`.res`) itself
 //! and hands it to the MSVC linker, which accepts `.res` inputs directly (link.exe and lld-link).
@@ -12,11 +12,11 @@
 
 use std::io::Write;
 
-const FILE_DESCRIPTION: &str = "Infinity world server";
+const FILE_DESCRIPTION: &str = "Infinity Worlds";
 const PRODUCT_NAME: &str = "infinity";
 const COMPANY_NAME: &str = "infinity";
 const LEGAL_COPYRIGHT: &str = " ";
-const EXE_NAME: &str = "dedicated-server.exe";
+const EXE_NAME: &str = "worlds.exe";
 /// en-US, Unicode (the StringTable key "040904B0" and the Translation entry).
 const LANGUAGE: u16 = 0x0409;
 const CODEPAGE: u16 = 1200;
@@ -40,7 +40,7 @@ fn main() {
     });
     let res = resource_file(&version_info(&version, numeric));
     let path = std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR"))
-        .join("dedicated-server-version.res");
+        .join("worlds-version.res");
     std::fs::write(&path, res).expect("write the version resource");
     let _ = writeln!(out, "cargo:rustc-link-arg-bins={}", path.display());
 }

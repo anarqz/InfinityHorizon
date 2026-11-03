@@ -82,6 +82,8 @@ pub mod exit {
     pub const UNAUTHORIZED: i32 = 4;
     pub const PROTO: i32 = 5;
     pub const START_FAILED: i32 = 6;
+    /// `worlds relay` / `worlds agent`: the role is not implemented in this build yet.
+    pub const ROLE_UNIMPLEMENTED: i32 = 7;
     pub const FAULT: i32 = 70;
 }
 
