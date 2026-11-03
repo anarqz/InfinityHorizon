@@ -929,7 +929,11 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (seat.State != SeatStates.Reserved || seat.GrantId is not null && seat.ExpiresAt is not null
                     && seat.HoldUntil is not null && _seat.GrantId != seat.GrantId) _seat.Observe(value, Now);
                 // OD-191 (W-4 review): a grant taken over from the read (a group seat, an accepted request, a restart) names its world
-                if (seat.State != SeatStates.Hosting && seat.GrantId is { } readGrant && _seat.GrantId == readGrant) SeatWorldIs(seat.WorldId);
+                if (seat.State != SeatStates.Hosting && seat.GrantId is { } readGrant && _seat.GrantId == readGrant)
+                {
+                    ObserveGroupSeat(Volatile.Read(ref _seatWorld), seat); // OD-191: a car meet seat's move to its group world
+                    SeatWorldIs(seat.WorldId);
+                }
                 if (_mineId != seat.WorldId) { _lastRosterAt = null; _roster.Reset(); }
                 if (_mineId != seat.WorldId || _mineRole != role) Interlocked.Increment(ref _mineEpoch);
                 (_mineId, _mineRole) = (seat.WorldId, role);

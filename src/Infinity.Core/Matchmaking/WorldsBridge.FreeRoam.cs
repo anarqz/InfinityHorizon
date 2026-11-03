@@ -103,6 +103,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     public async Task FreeRoamLeftAsync(CancellationToken cancellation)
     {
+        StartGroupSeatWatch(cancellation); // OD-191: an official car meet's session moves the seat to a group world
         var asked = Interlocked.Exchange(ref _lobbyReadyTicks, 0); // one ask covers one leave
         if (asked != 0 && Now - new DateTimeOffset(asked, TimeSpan.Zero) is var ago && ago >= TimeSpan.Zero && ago <= FreeRoamLeftGrace)
         {
@@ -197,7 +198,8 @@ public sealed partial class WorldsBridge
     {
         // the wait is taken first, so a grace loop waking meanwhile sees it called off before it says the host is away again
         var pending = Interlocked.Exchange(ref _freeRoamLeave, null);
-        if (join) SeatPlays("the game joined"); // a guest's join (detail join:…) is the seat's proof: no give-up
+        // a guest's join (detail join:…) is the seat's proof: no give-up; OD-191: never bound to a car meet seat that is moving
+        if (join) { if (!HoldJoinForGroupSeat()) SeatPlays("the game joined"); }
         else SetHostAway(false, "its game joined it again"); // CR-L49: the host's game is back in its world
         if (pending is null) return;
         CancelFreeRoamLeave(pending);
@@ -305,7 +307,8 @@ public sealed partial class WorldsBridge
     /// another kind never does (test.11).
     /// </summary>
     private bool StaysAtOnce(byte kind) => UnprovenOtherSeat(kind) is null
-        && (OwnWorld || HasFreeRoamWorld && !HostGone(Volatile.Read(ref _seatWorld)) && SeatRunsCached(kind) == true);
+        && (OwnWorld || HasFreeRoamWorld && !HostGone(Volatile.Read(ref _seatWorld)) && SeatRunsCached(kind) == true
+            || kind == FreeRoamKind.CarMeet && FreshGroupSeat()); // W-5: a car meet ticket never releases a fresh group seat
 
     // the seat's world as last read: its host is away (CR-L49: its game quit or left the session)
     private bool HostGone(string? world)
