@@ -102,6 +102,8 @@ impl Engine {
                 self.guard_note(owner_index, key, d);
             }
         }
+        // the options journal, after whatever this joiner was really sent in that sequence domain
+        self.append_game_options(serial, &mut held);
         for m in &held {
             if !self.queue_reliable(serial, m.clone()) {
                 break;

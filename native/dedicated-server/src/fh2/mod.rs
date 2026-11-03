@@ -197,6 +197,7 @@ impl Game for Fh2 {
             max_players,
             races,
             car_meet_lobby: None,
+            enforce_car_rule: false,
         };
         let rng = &mut *info.rng;
         let random = EngineRandom::from_source(|| rng.next_u64());

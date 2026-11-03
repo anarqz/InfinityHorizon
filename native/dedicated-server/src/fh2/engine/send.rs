@@ -331,6 +331,9 @@ impl Engine {
         self.tick_held_opens();
         self.tick_quiet_joins();
         self.tick_side_channels();
+        self.tick_race();
+        self.tick_game_options();
+        self.tick_phasing();
         self.tick_weather();
         let now = self.now;
         let r = self.settings.relay.clone();

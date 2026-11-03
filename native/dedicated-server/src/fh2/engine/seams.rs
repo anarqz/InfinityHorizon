@@ -3,10 +3,8 @@
 //! The seams of the features later steps port (README PORT_STATUS): what free roam needs from
 //! them until then. Each function is where its feature plugs in:
 //!
-//! - events and races (step 7): ownership of the event options (10), race requests (38), Ready
-//!   (41), scores (43-45), the tag collision (36); nothing happens before the port;
-//! - phasing (step 8): no event exists, so every player is on the same side in universe 0 and a
-//!   car prediction goes out as the game wrote it;
+//! - events, races, the options and phasing are in [`super::races`]; the tag collision (36), tag
+//!   and team events, Road Trip events and bucket-list universes plug in here (step 4);
 //! - car meet invitations (step 9: 26, 27) and Road Trip (step 10: 47, 51): read, not acted on;
 //! - bucket-list co-op (step 11): the server-owned slot array is in every free-roam snapshot (the
 //!   game needs it to exist) and stays empty; RequestSynchronize, cancel and challenge end
@@ -25,13 +23,6 @@ use super::{
 
 /// CarPredictionFull: the car's universe (5 bits) sits at this bit.
 const CAR_UNIVERSE_OFFSET: usize = 395;
-
-/// MsgReadyRequest (41): the lobby's event key, then the ready flag.
-pub(super) fn ready_request(body: &Bits) -> Option<bool> {
-    let mut r = body.reader();
-    Handle::read(&mut r, 2).ok()?;
-    r.boolean().ok()
-}
 
 impl Engine {
     /// Bucket-list co-op is free roam's: no car meet or Road Trip world serves it.
@@ -66,20 +57,12 @@ impl Engine {
         }
     }
 
-    /// An event message (`races` worlds): the reliable answers to the sender.
-    pub(super) fn race_message_seam(&mut self, _serial: u64, _kind: u8, _body: &Bits) -> Vec<M> {
-        Vec::new()
-    }
-
-    /// Whether two players are on the same side of an event boundary (always, until phasing).
-    fn same_side(&self, _a: u64, _b: u64) -> bool {
-        true
-    }
-
     /// A car prediction for one receiver: across an event boundary it carries its owner's private
     /// universe; on the same side (or in universe 0) it goes as the game wrote it.
     pub(super) fn car_for(&self, sender: u64, receiver: u64, handle: Handle, body: &Bits) -> M {
-        let universe = self.peer(sender).map_or(0, |p| p.universe);
+        let universe = self
+            .bucket_list_pair_universe(sender)
+            .unwrap_or_else(|| self.peer(sender).map_or(0, |p| p.universe));
         let body = if self.same_side(sender, receiver) || universe == 0 {
             body.clone()
         } else {
@@ -113,7 +96,10 @@ impl Engine {
             if let Some((handle, body)) = &car {
                 messages.push(self.car_for(sender, s, *handle, body));
             }
-            messages.extend(events.iter().cloned());
+            // car events (contacts) stay on their side of the event boundary
+            if self.same_side(sender, s) {
+                messages.extend(events.iter().cloned());
+            }
             if !messages.is_empty() {
                 self.send(s, messages, false, 0);
             }
@@ -123,13 +109,83 @@ impl Engine {
     /// A player's router-1 object was created: the universe and team it was assigned before its
     /// object existed (none outside events) reach it now.
     pub(super) fn player_object_created(&mut self, serial: u64) {
-        if let Some(p) = self.peer_mut(serial) {
-            p.player_sequence = None;
+        let Some(p) = self.peer_mut(serial) else {
+            return;
+        };
+        p.player_sequence = None;
+        let universe = p.universe;
+        if universe != 0 {
+            self.set_universe(serial, universe);
         }
+        self.team_object_created(serial);
     }
 
     /// What the later features clear when a peer leaves.
     pub(super) fn peer_left_seams(&mut self, peer: &Peer) {
         self.release_keep.remove(&peer.serial);
+        self.race_peer_left(peer.index, peer.serial);
+        self.leave_event_side(peer.index, false);
+    }
+
+    // ---- step 4: Road Trip, tag events, teams, bucket-list pairs, the watch ----
+
+    /// A Road Trip's own event start once its players are ready (step 4).
+    pub(super) fn road_trip_ready(&mut self) {}
+
+    /// A Road Trip event closed (step 4).
+    pub(super) fn road_trip_event_closed(&mut self) {}
+
+    /// The watch's exclusion at an event boundary (step 4).
+    pub(super) fn watch_event_start(&mut self) {}
+
+    /// A tag event's It cars are drawn at the grid (step 4).
+    pub(super) fn begin_tag(&mut self) {}
+
+    /// A tag event's "GO" (step 4).
+    pub(super) fn tag_started(&mut self) {}
+
+    pub(super) fn tick_tag(&mut self) {}
+
+    pub(super) fn tag_ended(&mut self) {}
+
+    pub(super) fn tag_left(&mut self, _index: u8) {}
+
+    /// A tag event ends on its own limit, never on an early score (step 4).
+    pub(super) fn tag_too_early_to_finish(&self) -> bool {
+        false
+    }
+
+    /// A tag event with its It cars drawn (its finish window is its time-up, step 4).
+    pub(super) fn tag_assigned(&self) -> bool {
+        false
+    }
+
+    /// A tag event runs (no lap progress for it, step 4).
+    pub(super) fn tag_running(&self) -> bool {
+        false
+    }
+
+    /// Teams for a team event at the selection (step 4); no team event: nothing was written.
+    pub(super) fn assign_teams(&mut self) {}
+
+    pub(super) fn team_event_ended(&mut self) {}
+
+    pub(super) fn team_player_left(&mut self, _index: u8) {}
+
+    pub(super) fn team_object_created(&mut self, _serial: u64) {}
+
+    /// A bucket-list co-op player stays in universe 0 during an event (step 4).
+    pub(super) fn bucket_list_busy(&self, _serial: u64) -> bool {
+        false
+    }
+
+    /// A bucket-list pair's universe (18..23, step 4) never clashes with event phasing.
+    pub(super) fn bucket_list_universe_held(&self, _universe: u8) -> bool {
+        false
+    }
+
+    /// A bucket-list partner's car carries its pair's universe (step 4).
+    pub(super) fn bucket_list_pair_universe(&self, _serial: u64) -> Option<u8> {
+        None
     }
 }

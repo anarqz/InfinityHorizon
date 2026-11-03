@@ -14,6 +14,8 @@
 //!   1,372-byte datagram limit), drops and the tick;
 //! - [`join`]: quiet joins (a joiner's cars wait for its FinaliseSessionEntry);
 //! - [`side`]: the car-state side channel;
+//! - [`races`] and [`options`]: free-roam events, the options journal, event progress, the
+//!   race-end hold and phasing;
 //! - [`seams`]: the features of later steps (races, events, car meets, Road Trip, tag, bucket-list
 //!   pairing, voice, phasing, the watch), as the no-ops free roam needs until they are ported.
 
@@ -21,8 +23,10 @@ pub mod bits;
 pub mod dict;
 pub mod history;
 mod join;
+pub mod options;
 mod packets;
 pub mod payload;
+mod races;
 pub mod random;
 mod seams;
 mod send;
@@ -126,6 +130,8 @@ pub enum Why {
     Closed,
     HistoryBits,
     HistoryEntries,
+    OptionsOverflow,
+    OptionsStalled,
     SyncUnconfirmed,
     Unacknowledged(u32),
     Quiet(i64),
@@ -150,6 +156,8 @@ impl Why {
             Why::Closed => "peer.dropped.closed",
             Why::HistoryBits => "peer.dropped.history_bits",
             Why::HistoryEntries => "peer.dropped.history_entries",
+            Why::OptionsOverflow => "peer.dropped.options_overflow",
+            Why::OptionsStalled => "peer.dropped.options_stalled",
             Why::SyncUnconfirmed => "peer.dropped.sync_unconfirmed",
             Why::Unacknowledged(_) => "peer.dropped.unacknowledged",
             Why::Quiet(_) => "peer.dropped.quiet",
@@ -180,7 +188,9 @@ impl Why {
             | Why::RateLimit
             | Why::QueueFull
             | Why::HistoryBits
-            | Why::HistoryEntries => "doomed",
+            | Why::HistoryEntries
+            | Why::OptionsOverflow
+            | Why::OptionsStalled => "doomed",
             _ => "other",
         }
     }
@@ -283,6 +293,13 @@ pub(crate) struct Peer {
     car_state_at: Option<i64>,
     last_car_at: Option<i64>,
     last_car_body: Option<Bits>,
+    /// The options' object sequences this player was sent (and when it last asked).
+    lobby_sequences: HashMap<u32, (u8, i64)>,
+    /// The car this player chose (PlayerChoices CarClass and PerfIndex).
+    car_class: Option<i32>,
+    car_pi: f32,
+    /// A Ready refused for the car (T11): it counts once the next car fits.
+    ready_refused: bool,
 }
 
 impl Peer {
@@ -378,6 +395,9 @@ pub struct EngineSettings {
     pub max_players: usize,
     pub races: bool,
     pub car_meet_lobby: Option<u32>,
+    /// T11 (tests only, never from `world.open`): refuse a Ready from a car outside the event's
+    /// class or PI.
+    pub enforce_car_rule: bool,
 }
 
 impl EngineSettings {
@@ -443,6 +463,8 @@ pub struct Engine {
     side_rates: DotMap<u64, SideRate>,
     pub side_channel_rate_drops: u64,
     bucket_slots_sequence: u8,
+    /// Events, the options and phasing (races.rs).
+    ev: races::Events,
     out: Vec<Send>,
     events: Vec<Event>,
     /// Datagrams nobody could take (stats).
@@ -523,6 +545,7 @@ impl Engine {
             side_rates: DotMap::new(),
             side_channel_rate_drops: 0,
             bucket_slots_sequence: 0,
+            ev: races::Events::default(),
             out: Vec::new(),
             events: Vec::new(),
             dropped: 0,
@@ -869,6 +892,10 @@ impl Engine {
             car_state_at: None,
             last_car_at: None,
             last_car_body: None,
+            lobby_sequences: HashMap::new(),
+            car_class: None,
+            car_pi: f32::NAN,
+            ready_refused: false,
         });
         self.events.push(Event::ConnectionOpened {
             index,
@@ -1102,6 +1129,11 @@ impl Engine {
         self.skipped_cars_noted.clear();
         self.side_rates.clear();
         self.side_channel_rate_drops = 0;
+        self.ev.options.clear();
+        self.ev.options_outlived = false;
+        self.event_progress_reset();
+        self.ev.event_side.clear();
+        self.ev.phasing = false;
     }
 
     /// Sends every synced peer the game's Close (drain, shutdown), then clears.
