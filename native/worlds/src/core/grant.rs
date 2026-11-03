@@ -293,6 +293,9 @@ fn claims_of(v: Value) -> Option<Claims> {
         && xuid(&xuid_s)
         // an official world's grants carry no `relay` claim (OD-189: direct, never relayed)
         && relay.as_ref().is_none_or(|r| !official && valid_relay(r))
+        // the Worlds engine is an official world's host: its grants are joiner grants only
+        // (WORLDS_OFFICIAL.md §3; the launcher's verifier refuses the same)
+        && (!official || role == "joiner")
         && voice_blocked_until.is_none_or(|v| v >= 0);
     ok.then_some(Claims {
         grant,

@@ -73,10 +73,20 @@ fn sign(claims: &str) -> (String, String) {
     )
 }
 
-/// Grant claims for `world` with the raw `host` member and `extra` members.
+/// Grant claims for `world` with the raw `host` member and `extra` members: role `joiner` for an
+/// official host (the only role it may carry), `host` for a player host.
 fn claims(grant: &str, world: &str, host: &str, extra: &str) -> String {
+    let role = if host.contains("official") {
+        "joiner"
+    } else {
+        "host"
+    };
+    claims_as(grant, world, host, role, extra)
+}
+
+fn claims_as(grant: &str, world: &str, host: &str, role: &str, extra: &str) -> String {
     format!(
-        r#"{{"v":1,"kid":"{KID}","grant":"{grant}","world":"{world}","sub":"{SUB}","xuid":"{J1}","tier":"free","host":{host},"role":"host","iat":{},"exp":{}{extra}}}"#,
+        r#"{{"v":1,"kid":"{KID}","grant":"{grant}","world":"{world}","sub":"{SUB}","xuid":"{J1}","tier":"free","host":{host},"role":"{role}","iat":{},"exp":{}{extra}}}"#,
         NOW - 1,
         NOW + 59
     )
@@ -211,14 +221,29 @@ fn the_grant_host_is_exactly_one_of_xuid_or_official() {
         world: W1,
         host_xuid: host,
         peer_xuid: "1000000000000102",
-        role: "host",
+        role: if host.starts_with("official:") {
+            "joiner"
+        } else {
+            "host"
+        },
         grant: Some(G1),
     };
     let verify = |host: &str, extra: &str, context: Context| {
         let (c, s) = sign(&claims(G1, W1, host, extra));
         grant::verify(&c, &s, &ring(), NOW, context).map(|v| v.0)
     };
+    // an official grant is a joiner grant: a host-role one is refused (WORLDS_OFFICIAL.md §3)
+    let (c, s) = sign(&claims_as(G1, W1, &official_host(), "host", ""));
+    let host_role = Context {
+        role: "host",
+        ..ctx("official:sao-1")
+    };
+    assert_eq!(
+        grant::verify(&c, &s, &ring(), NOW, host_role).unwrap_err(),
+        Failure::Invalid
+    );
     let official = verify(&official_host(), "", ctx("official:sao-1")).unwrap();
+    assert_eq!(official.role, "joiner");
     assert_eq!(official.host_xuid, "official:sao-1");
     let player = format!(r#"{{"xuid":"{HOST_XUID}"}}"#);
     assert!(verify(&player, "", ctx("1000000000000101")).is_ok());
@@ -227,8 +252,12 @@ fn the_grant_host_is_exactly_one_of_xuid_or_official() {
         verify(&official_host(), "", ctx("official:sao-2")).unwrap_err(),
         Failure::ContextMismatch
     );
+    let player_ctx = Context {
+        role: "joiner",
+        ..ctx("1000000000000101")
+    };
     assert_eq!(
-        verify(&official_host(), "", ctx("1000000000000101")).unwrap_err(),
+        verify(&official_host(), "", player_ctx).unwrap_err(),
         Failure::ContextMismatch
     );
     let both = format!(r#"{{"xuid":"{HOST_XUID}","official":"{VM}"}}"#);
@@ -243,6 +272,10 @@ fn the_grant_host_is_exactly_one_of_xuid_or_official() {
         typed.as_str(),
         r#"{"official":""}"#,
         r#"{"official":"official:sao-1"}"#,
+        r#"{"official":null}"#,
+        r#"{"xuid":null,"official":"sao-1"}"#,
+        r#"{"official":"sao 1"}"#,
+        r#"{"official":"sao-1","extra":1}"#,
     ] {
         assert_eq!(
             verify(host, "", ctx("official:sao-1")).unwrap_err(),
@@ -399,5 +432,12 @@ fn a_player_hosted_grant_is_refused_on_an_official_world() {
     // an official grant for another VM is not this world's either
     let other = r#"{"official":"sao-2"}"#;
     let r = admit(&mut s, &mut io, W1, vec![punch(G1, W1, other)]);
+    assert_eq!(r["admitted"], 0, "{r}");
+    // nor a host-role grant naming this VM: the engine is the host
+    let (c, sig) = sign(&claims_as(G1, W1, &official_host(), "host", ""));
+    let mut p = punch(G1, W1, &official_host());
+    p["relay"]["claims"] = json!(c);
+    p["relay"]["signature"] = json!(sig);
+    let r = admit(&mut s, &mut io, W1, vec![p]);
     assert_eq!(r["admitted"], 0, "{r}");
 }
