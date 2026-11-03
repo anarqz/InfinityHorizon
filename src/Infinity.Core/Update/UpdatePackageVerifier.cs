@@ -16,8 +16,8 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
     public const string DescriptorName = "infinity-horizon-update-windows-x64.json";
     public const string SignaturePrefix = "fi-launcher-release-v1\n";
     public const int MaxDescriptorBytes = 65536;
-    /// <summary>The optional world server next to infinity.exe (DEDICATED_SERVER.md §2.4); shipped only with its .sig.</summary>
-    public const string DedicatedServerExe = "dedicated-server.exe";
+    /// <summary>The optional world engine, Infinity Worlds, next to infinity.exe (DEDICATED_SERVER.md §2.4); shipped only with its .sig.</summary>
+    public const string DedicatedServerExe = "worlds.exe";
     public const long MaxZipBytes = 536870912;
     public const long MaxExpandedBytes = 1073741824;
     public static string DefaultStateDirectory => Auth.ServerConfig.Default.StateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher"));
@@ -31,7 +31,7 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
         "licenses/MinHook-LICENSE.txt", "licenses/Selawik-LICENSE.txt", "licenses/FluentSystemIcons-LICENSE.txt", "SHA256SUMS", "SHA256SUMS.sig"];
     /// <summary>The top-level names of the launcher's release layout (files and folders next to infinity.exe).</summary>
     public static IReadOnlyList<string> PayloadRoots { get; } = Required.Select(path => path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase)
-        .Concat(["mod", "dedicated-server.exe", "dedicated-server.exe.sig"]).ToArray();
+        .Concat(["mod", DedicatedServerExe, DedicatedServerExe + ".sig"]).ToArray();
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false, NumberHandling = JsonNumberHandling.Strict,

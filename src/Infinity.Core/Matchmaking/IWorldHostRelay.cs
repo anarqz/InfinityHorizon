@@ -5,7 +5,7 @@ namespace Infinity.Core.Matchmaking;
 
 /// <summary>
 /// A world server the bridge hosts a world on, with its admission: the in-process engine (<see cref="IntegratedWorldRelay"/>)
-/// or the <c>dedicated-server</c> child (<c>DedicatedServer.DedicatedWorldRelay</c>, CR-L50). Everything the bridge, the
+/// or the <c>worlds serve</c> child (<c>DedicatedServer.DedicatedWorldRelay</c>, CR-L50). Everything the bridge, the
 /// overlay and the away-host read comes through here and <see cref="IHostRelay"/>, whichever engine runs the world.
 /// </summary>
 public interface IWorldHostRelay : IHostRelay, IAsyncDisposable

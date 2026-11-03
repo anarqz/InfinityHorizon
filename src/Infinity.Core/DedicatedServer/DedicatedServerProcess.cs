@@ -12,7 +12,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Infinity.Core.DedicatedServer;
 
-/// <summary>What the launcher hands one private <c>dedicated-server</c> child (DEDICATED_SERVER.md §2).</summary>
+/// <summary>What the launcher hands one private <c>worlds serve</c> child (DEDICATED_SERVER.md §2).</summary>
 public sealed record DsLaunchOptions
 {
     /// <summary>The fixed path next to <c>infinity.exe</c> (<see cref="DedicatedServerProcess.ResolveExecutable"/>); never searched on PATH.</summary>
@@ -63,7 +63,7 @@ public sealed record DsLaunchOptions
 }
 
 /// <summary>The child could not be brought up; <see cref="Exit"/> says whether hosting is unavailable.</summary>
-public sealed class DedicatedServerStartException(DsExit exit) : Exception($"dedicated-server did not start: {exit.Kind} ({exit.Detail})")
+public sealed class DedicatedServerStartException(DsExit exit) : Exception($"worlds did not start: {exit.Kind} ({exit.Detail})")
 {
     public DsExit Exit { get; } = exit;
 }
@@ -76,7 +76,7 @@ public enum DsSupervision
 }
 
 /// <summary>
-/// One private <c>dedicated-server</c> child (DEDICATED_SERVER.md §2-§3.1; CR-L50): the launcher creates the control
+/// One private <c>worlds serve</c> child (DEDICATED_SERVER.md §2-§3.1; CR-L50): the launcher creates the control
 /// pipe first (<see cref="PipeServer"/>: user-SID DACL, first instance, reject remote, one byte-mode instance) as
 /// <c>\\.\pipe\fi-ds-&lt;32 hex&gt;</c>, starts the fixed-path exe with the contract's arguments and the per-launch
 /// secret in the child's own environment block (never argv, never the launcher's environment, no inherited
@@ -90,7 +90,8 @@ public enum DsSupervision
 [SupportedOSPlatform("windows")]
 public sealed class DedicatedServerProcess : IAsyncDisposable
 {
-    public const string ExecutableName = "dedicated-server.exe";
+    /// <inheritdoc cref="DsProto.ExecutableName"/>
+    public const string ExecutableName = DsProto.ExecutableName;
 
     /// <summary>The window the child has, after EOF on its pipe, to exit before it is killed (§2.2: it exits within 2 s).</summary>
     public static readonly TimeSpan EofGrace = TimeSpan.FromSeconds(3);
@@ -178,11 +179,11 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
     /// <summary>64 lowercase hex, 32 random bytes per launch.</summary>
     public static string NewSecret() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
 
-    /// <summary>The contract's arguments (§2): <c>--profile private --control pipe:&lt;name&gt;</c> and the options given.</summary>
+    /// <summary>The contract's arguments (§2): <c>serve --profile private --control pipe:&lt;name&gt;</c> and the options given.</summary>
     public static IReadOnlyList<string> BuildArguments(DsLaunchOptions options, string pipeName)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var args = new List<string> { "--profile", "private", "--control", "pipe:" + pipeName };
+        var args = new List<string> { DsProto.Role, "--profile", "private", "--control", "pipe:" + pipeName };
         if (options.GameDatabase is { Length: > 0 } db)
         {
             args.AddRange(["--game-db", Path.GetFullPath(db)]);
@@ -223,13 +224,13 @@ public sealed class DedicatedServerProcess : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         if (!Path.IsPathFullyQualified(options.Executable) || !File.Exists(options.Executable))
         {
-            throw new DedicatedServerStartException(new DsExit(DsExitKind.ConfigInvalid, null, "dedicated-server.exe is missing"));
+            throw new DedicatedServerStartException(new DsExit(DsExitKind.ConfigInvalid, null, "worlds.exe is missing"));
         }
         // the exe and its .sig stay open (no write, delete or rename) from the check until Process.Start returns
         DsVerifiedExecutable? verified = null;
         if (options.Signature is { } signature && (verified = DsSignature.Open(options.Executable, signature)) is null)
         {
-            throw new DedicatedServerStartException(new DsExit(DsExitKind.ConfigInvalid, null, "dedicated-server.exe signature"));
+            throw new DedicatedServerStartException(new DsExit(DsExitKind.ConfigInvalid, null, "worlds.exe signature"));
         }
         using var held = verified;
         var name = options.TestOnlyPipeName ?? NewPipeName();

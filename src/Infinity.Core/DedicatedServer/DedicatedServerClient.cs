@@ -35,7 +35,7 @@ public enum DsBusyPolicy
 }
 
 /// <summary>The channel is gone (EOF, a protocol violation, a stalled write, or disposed): every world it served is gone (§2.3).</summary>
-public sealed class DedicatedServerGoneException(string reason) : IOException($"dedicated-server channel closed: {reason}")
+public sealed class DedicatedServerGoneException(string reason) : IOException($"worlds channel closed: {reason}")
 {
     public string Reason { get; } = reason;
 }
@@ -383,7 +383,7 @@ public sealed class DedicatedServerClient : IAsyncDisposable
             catch (TimeoutException)
             {
                 Log(FormattableString.Invariant($"ds timeout: {request.Op} id={id}"));
-                throw new TimeoutException($"dedicated-server did not answer {request.Op} in time");
+                throw new TimeoutException($"worlds did not answer {request.Op} in time");
             }
             catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
             {

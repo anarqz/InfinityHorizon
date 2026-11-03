@@ -5,8 +5,8 @@ using Infinity.Core.Matchmaking;
 
 namespace Infinity.Core.DedicatedServer;
 
-// The control channel of dedicated-server (docs/contracts/DEDICATED_SERVER.md §3-§4, proto 1), mirrored
-// from native/dedicated-server field for field. Field names are camelCase; XUIDs are decimal strings;
+// The control channel of Infinity Worlds (docs/contracts/DEDICATED_SERVER.md §3-§4, proto 1), mirrored
+// from native/worlds field for field. Field names are camelCase; XUIDs are decimal strings;
 // times are Unix milliseconds (…Ms) or Unix seconds (voice blocks); ids are lowercase UUID strings.
 // Optional fields are nullable and left out when null, except where null itself means something
 // (world.watch rules, world.gameSession.answer session). Unknown reply and event fields are ignored.
@@ -14,6 +14,12 @@ namespace Infinity.Core.DedicatedServer;
 /// <summary>The protocol range this controller speaks (§10).</summary>
 public static class DsProto
 {
+    /// <summary>Infinity Worlds' binary next to <c>infinity.exe</c> (OD-188); its first argument names the role, <see cref="Role"/>.</summary>
+    public const string ExecutableName = "worlds.exe";
+
+    /// <summary>The world engine role (WORLDS_OFFICIAL.md §1): every launch of the binary starts with it.</summary>
+    public const string Role = "serve";
+
     /// <summary>The <c>hello.proto</c> this controller asks for (an integer, §10).</summary>
     public const int Version = 1;
 

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 namespace Infinity.Core.DedicatedServer;
 
-/// <summary>Why a dedicated-server process ended (DEDICATED_SERVER.md §2.1); every kind means its worlds are gone.</summary>
+/// <summary>Why a worlds process ended (DEDICATED_SERVER.md §2.1); every kind means its worlds are gone.</summary>
 public enum DsExitKind
 {
     /// <summary>0: drain finished, <c>shutdown</c>, or the control channel closed.</summary>
@@ -21,6 +21,9 @@ public enum DsExitKind
 
     /// <summary>6: the public profile's socket or budget (VM only).</summary>
     StartFailed,
+
+    /// <summary>7: the binary does not implement the role it was given yet (<c>ds.role.unimplemented</c>); a build mismatch, never a crash.</summary>
+    RoleUnimplemented,
 
     /// <summary>70: an internal fault outside any world.</summary>
     Fault,
@@ -49,7 +52,7 @@ public sealed record DsExit(DsExitKind Kind, int? Code, string Detail)
 {
     /// <summary>§2.1: "hosting unavailable" for the session (no retry would help).</summary>
     public bool HostingUnavailable => Kind is DsExitKind.ConfigInvalid or DsExitKind.ControlUnavailable or DsExitKind.Unauthorized
-        or DsExitKind.ProtoUnsupported or DsExitKind.StartFailed or DsExitKind.VersionMismatch;
+        or DsExitKind.ProtoUnsupported or DsExitKind.StartFailed or DsExitKind.RoleUnimplemented or DsExitKind.VersionMismatch;
 
     /// <summary>Counts toward "repeated crashes → hosting unavailable" (§2.2).</summary>
     public bool Crash => Kind is DsExitKind.Fault or DsExitKind.ProtocolViolation or DsExitKind.Crashed or DsExitKind.ConnectTimedOut or DsExitKind.Stalled;
@@ -66,6 +69,7 @@ public sealed record DsExit(DsExitKind Kind, int? Code, string Detail)
         4 => new(DsExitKind.Unauthorized, code, "ds.control.unauthorized"),
         5 => new(DsExitKind.ProtoUnsupported, code, "ds.control.proto_unsupported"),
         6 => new(DsExitKind.StartFailed, code, "ds.start.failed"),
+        7 => new(DsExitKind.RoleUnimplemented, code, "ds.role.unimplemented"),
         70 => new(DsExitKind.Fault, code, "ds.fault"),
         _ => new(DsExitKind.Crashed, code, "exit " + code.ToString(System.Globalization.CultureInfo.InvariantCulture)),
     };
@@ -107,7 +111,7 @@ public sealed class DsHostingHealth(int crashLimit = 2)
     }
 }
 
-/// <summary><c>dedicated-server --probe-bind &lt;port&gt;</c>'s outcome (§2.4).</summary>
+/// <summary><c>worlds serve --probe-bind &lt;port&gt;</c>'s outcome (§2.4).</summary>
 public enum DsProbeResult
 {
     /// <summary>0: bound (and released after 1 s).</summary>

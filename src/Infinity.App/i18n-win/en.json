@@ -78,7 +78,7 @@
   "worlds.load_game": "Load your game to access lobbies.",
   "worlds.integrated_unavailable": "Hosting could not start. See Diagnostics for details.",
   "worlds.hosting_unavailable": "Hosting is unavailable on this PC for now: the world server could not run. See Diagnostics for details.",
-  "worlds.firewall_allow_offer": "Windows Firewall may keep players from joining your lobby. To let them in, allow \"Infinity world server\" for inbound UDP on private networks in Windows Firewall settings. Your lobby stays open either way.",
+  "worlds.firewall_allow_offer": "Windows Firewall may keep players from joining your lobby. To let them in, allow \"Infinity Worlds\" for inbound UDP on private networks in Windows Firewall settings. Your lobby stays open either way.",
   "worlds.firewall_blocks_all_inbound": "Windows Firewall blocks all incoming connections on this network, so players may not reach your lobby. Turn off \"Block all incoming connections\" for this network in Windows Firewall settings. Your lobby stays open either way.",
   "saves.pick_title": "Start from a save on this PC",
   "saves.pick_text": "Pick the Azimuth profile {name} starts from. Infinity copies it into {name}'s own save; the original is not changed.",

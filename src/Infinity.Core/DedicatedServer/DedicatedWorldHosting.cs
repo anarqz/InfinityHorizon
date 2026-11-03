@@ -8,7 +8,7 @@ namespace Infinity.Core.DedicatedServer;
 /// <summary>What a session's dedicated hosting needs to start a world's child (CR-L50 stage 2).</summary>
 public sealed record DedicatedWorldHostingOptions
 {
-    /// <summary>The fixed path of <c>dedicated-server.exe</c> (<see cref="DedicatedServerProcess.ResolveExecutable"/>).</summary>
+    /// <summary>The fixed path of <c>worlds.exe</c> (<see cref="DedicatedServerProcess.ResolveExecutable"/>).</summary>
     public required string Executable { get; init; }
 
     /// <summary>The launcher's version (<c>hello.controller.version</c>).</summary>
@@ -107,7 +107,7 @@ public sealed class DedicatedWorldHosting(DedicatedWorldHostingOptions options)
         }
         if (!File.Exists(_options.Executable))
         {
-            Health.Record(new DsExit(DsExitKind.ConfigInvalid, null, "dedicated-server.exe is missing"));
+            Health.Record(new DsExit(DsExitKind.ConfigInvalid, null, "worlds.exe is missing"));
             _log("worlds: hosting unavailable: " + DedicatedServerProcess.ExecutableName + " is missing next to the launcher");
             return null;
         }
@@ -116,7 +116,7 @@ public sealed class DedicatedWorldHosting(DedicatedWorldHostingOptions options)
         string? refusal = null;
         if (!DsSignature.Trusted(_options.Executable, _options.Signature, why => refusal = why))
         {
-            Health.Record(new DsExit(DsExitKind.ConfigInvalid, null, "dedicated-server.exe signature"));
+            Health.Record(new DsExit(DsExitKind.ConfigInvalid, null, "worlds.exe signature"));
             _log("worlds: hosting unavailable: " + DedicatedServerProcess.ExecutableName + " not run: " + refusal);
             return null;
         }

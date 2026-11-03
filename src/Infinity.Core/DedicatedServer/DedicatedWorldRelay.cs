@@ -11,7 +11,7 @@ using Infinity.Core.WorldServer;
 namespace Infinity.Core.DedicatedServer;
 
 /// <summary>
-/// CR-L50 stage 2: one hosted world on one <c>dedicated-server</c> child (DEDICATED_SERVER.md §2.2), as the bridge sees a
+/// CR-L50 stage 2: one hosted world on one <c>worlds serve</c> child (DEDICATED_SERVER.md §2.2), as the bridge sees a
 /// world server (<see cref="IWorldHostRelay"/>). A single pump reads the child's events and keeps the latest
 /// <c>world.state</c> and <c>world.network</c>; every read the bridge, the overlay and the away-host make is answered from
 /// them, with no round trip. Commands go over the control channel; the snapshots (<c>world.context</c>,
