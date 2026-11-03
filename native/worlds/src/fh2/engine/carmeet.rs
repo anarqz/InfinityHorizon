@@ -79,6 +79,8 @@ pub(super) struct CarMeet {
     /// starter was in left it).
     late: Vec<u64>,
     late_at: i64,
+    /// The session-vars update the late players get (the starter got it already).
+    late_update: Option<Arc<Bits>>,
 }
 
 /// JoinTypes (CarMeetSynced vars 4-15, `CarMeetJoinType`: 0 None, 1 WagerRace, 2 GameMode).
@@ -153,18 +155,23 @@ impl Engine {
     }
 
     fn car_meet_update(&mut self, variables: Bits) {
+        let update = self.car_meet_message(variables);
+        for s in self.synced_serials_except(None) {
+            self.send_sequenced(s, vec![update.clone()]);
+        }
+    }
+
+    /// The next CarMeetSynced update, encoded once (every player gets the same sequence).
+    fn car_meet_message(&mut self, variables: Bits) -> Arc<Bits> {
         self.car_meet.sequence = seq_next(self.car_meet.sequence);
-        let update = Arc::new(Message::encode(&Message::Object(ObjectChange {
+        Arc::new(Message::encode(&Message::Object(ObjectChange {
             is_create: false,
             router_id: 11,
             key: ObjKey::own(0),
             ty: 0,
             sequence: self.car_meet.sequence,
             vars: variables,
-        })));
-        for s in self.synced_serials_except(None) {
-            self.send_sequenced(s, vec![update.clone()]);
-        }
+        })))
     }
 
     fn invite_cleared() -> Bits {
@@ -299,6 +306,7 @@ impl Engine {
         m.mode32 = mode32;
         m.session = None;
         m.late.clear();
+        m.late_update = None;
         let mut vars = Bits::new();
         vars.push(0, 5)
             .push(u64::from(kind), 2)
@@ -354,7 +362,12 @@ impl Engine {
             && let Some(session) = self.car_meet.session.clone()
         {
             let late = std::mem::take(&mut self.car_meet.late);
-            self.car_meet_update(car_meet_vars(Some(&session), CAR_MEET_JOIN_MS));
+            let starter = self.car_meet.starter;
+            if let Some(update) = self.car_meet.late_update.take() {
+                for s in self.synced_serials_except(starter) {
+                    self.send_sequenced(s, vec![update.clone()]);
+                }
+            }
             let ready = session_ready(&session.0, &session.1);
             let alive: Vec<u64> = late.into_iter().filter(|s| self.alive(*s)).collect();
             for s in &alive {
@@ -452,11 +465,14 @@ impl Engine {
             .filter(|s| self.alive(*s))
             .collect();
         if self.car_meet.official {
-            // the starter first; the others (and the session vars) once it is in the session
+            // the starter first (the session vars, then 32); every other synced player gets the
+            // same vars update, and the joiners 32, once the starter had time to join
             let starter = self.car_meet.starter;
+            let update = self.car_meet_message(car_meet_vars(Some(&session), CAR_MEET_JOIN_MS));
             for s in joined.iter().filter(|s| Some(**s) == starter) {
-                self.send_sequenced(*s, vec![ready.clone()]);
+                self.send_sequenced(*s, vec![update.clone(), ready.clone()]);
             }
+            self.car_meet.late_update = Some(update);
             self.car_meet.late = joined
                 .iter()
                 .copied()
@@ -502,6 +518,7 @@ impl Engine {
         m.joined.clear();
         m.session = None;
         m.late.clear();
+        m.late_update = None;
         self.car_meet_update(self.invite_end_update());
         self.note("carmeet.cancelled", vec![json!(why)]);
         self.update_join_types();
