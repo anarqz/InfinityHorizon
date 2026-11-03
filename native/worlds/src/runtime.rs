@@ -319,7 +319,6 @@ pub fn run(rc: RunConfig) -> i32 {
     cfg.memory_limit_mb = rc.memory_limit_mb;
     cfg.drain_seconds = rc.drain_seconds;
     cfg.stats_seconds = rc.stats_seconds;
-    cfg.relay = rc.relay;
     cfg.control_secret = rc.secret.clone();
     if let Some(k) = &rc.grant_keys {
         cfg.keys = k.clone();
@@ -398,17 +397,21 @@ pub fn run(rc: RunConfig) -> i32 {
         next_sock: PUBLIC_SOCKET,
     };
     if rc.profile == Profile::Public {
-        let socket = match net::bind_loopback(rc.bind) {
-            Ok(s) => s,
+        let bound = rc.bind.ok_or(BindFailure::Other).and_then(net::bind_public);
+        let bound = match bound {
+            Ok(b) => b,
             Err(e) => {
                 log::error(log_ids::DS_START_FAILED)
                     .field("what", "socket")
-                    .msg(&e.to_string())
+                    .field("reason", e.reason())
                     .emit();
                 return exit::START_FAILED;
             }
         };
-        if io.add_socket(PUBLIC_SOCKET, socket, false, false).is_err() {
+        if io
+            .add_socket(PUBLIC_SOCKET, bound.socket, bound.dual, false)
+            .is_err()
+        {
             log::error(log_ids::DS_START_FAILED)
                 .field("what", "socket")
                 .emit();

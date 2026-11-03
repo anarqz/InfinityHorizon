@@ -4,8 +4,9 @@ Infinity Worlds: one Rust program that hosts online worlds (formerly `dedicated-
 DEDICATED_SERVER.md, WORLDS_OFFICIAL.md). One binary, one role per process: `worlds serve` is the
 world engine described here; `worlds relay` and `worlds agent` are named but not implemented yet
 (exit 7). The launcher runs it as a
-child process for a private world (one world per process, its own UDP port); the relay VM runs it
-as one long-lived process for public worlds (several worlds behind the co-located relay). Both are
+child process for a private world (one world per process, its own UDP port); a Worlds host VM runs it
+as one long-lived process for official (public) worlds: several worlds on one public UDP socket
+(`--bind`), players connecting directly, no relay (OD-189). Both are
 the same build and the same code; a profile (`--profile private|public`) sets the limits.
 
 It holds no disk state, writes nothing, ships no game data, and opens no listener besides its
@@ -62,7 +63,7 @@ worlds relay | worlds agent     # not implemented yet: exit 7
 | (none) | `FI_DS_CONTROL_SECRET` | required with `pipe:`; read once, then removed from the environment |
 | `--game-db` | `FI_DS_GAME_DB` | none; deprecated and ignored (the catalogs come by `catalog.set` / `catalog.parts`) |
 | `--grant-keys` | `FI_DS_GRANT_VERIFY_KEYS` | none (`keys.set` replaces it) |
-| `--relay` / `--bind` | `FI_DS_RELAY` / `FI_DS_BIND` | `127.0.0.1:5101` / `127.0.0.1:0` (public only) |
+| `--bind` | `FI_DS_BIND` | public: required, the one public UDP socket `addr:port` (`[::]:port` dual-stack); private: refused |
 | `--max-worlds` | `FI_DS_MAX_WORLDS` | private 1, public 4 (1-8) |
 | `--max-seats` | `FI_DS_MAX_SEATS` | private 12, public 48 (1-96) |
 | `--memory-limit-mb` | `FI_DS_MEMORY_LIMIT_MB` | private 0 (off), public 400 (at least 128) |
@@ -112,9 +113,8 @@ it reached the right launcher with the per-launch secret.
   `world.open` for the self-close of a controllerless public world.
 - **`world.open` without `game`** means `"fh2"` (the only game before the field existed).
 - **`world.open`** takes the tagged host (OD-186 item 7): the private profile only `{kind: "player", xuid, isPlayer}`,
-  the public profile only `{kind: "official", vmId}`, which answers `bad_request {field: "host.kind", reason:
-  "grant_form_pending"}` until S34 fixes how grants name it (a `test-hooks` build opens it, for the private cap tests).
-  The public profile forces `requireProof`. `hello.proto` is an integer (the step-1 range `[lo, hi]` is still read).
+  the public profile only `{kind: "official", vmId}` (`vmId` `[a-z0-9-]{1,32}`; grants name it `host: {official:
+  vmId}`, the FIUP header the official host tag, WORLDS_OFFICIAL.md §3). The public profile forces `requireProof`. `hello.proto` is an integer (the step-1 range `[lo, hi]` is still read).
   `world.context` carries the context only and answers `{leaseUntilMs}`; `world.admission` carries the punches only.
 - **Panics:** a panic inside a world's command, datagram or tick closes only that world
   (`world.closed {reason: "fault"}`); the panic hook only logs (anonymised); a panic on the loop
@@ -138,7 +138,7 @@ engine, in this recommended order:
 | 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover; quiet joins (T25), weather, group navigation, held opens, the car-state side channel | fh2 | **done** for free roam: the D2 Delivery, Boundary, WorldFoundation, Integration and SideChannel suites and the free-roam RelayEngineTests replay exactly |
 | 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | **done** (private tests `admission.rs`) |
 | 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | **done**: wired, granted punches (2 per candidate, 10 per 15 s per grant), the 5 s STUN keepalive between rounds (one IPv4 server in turn) |
-| 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | **done** for private worlds; the public multiplex routes by grant id but no official world opens until S34 fixes the grant form |
+| 4 | Relay legs (FIR1 HOST role) for private worlds; the public profile's one direct socket | core | **done**: private legs; public worlds share one public socket (`--bind`), a FIUP frame routed by its grant id, every other datagram by its proven endpoint; no legs, STUN, UPnP or punches (OD-189) |
 | 5 | Side channels: car state, control/state, their authorisation and rates | fh2 | livery is retired and dropped |
 | 6 | Engine routing by lobby type, car meet engines 3 and 6, moves between engines, weather, quiet joins, the 30 s seat behaviour | fh2 | **done** (`fh2/mod.rs`): each OpenConnection goes to its lobby's engine (made on first use), a seat follows its endpoint (AdmittedLate included), a public world runs its one `activity` (refusal 4 for the others) |
 | 7 | Races: grid, start, scores, departures, deadlines; two players for everything; event progress HUD (43/44, start line); race-end split and finishers staying participants | fh2 | **done** (RaceLifecycle, GameOptions, EventProgress suites) |

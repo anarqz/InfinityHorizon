@@ -43,6 +43,9 @@ pub struct Claims {
     pub grant: String,
     pub world: String,
     pub xuid: String,
+    /// The signed host (WORLDS_OFFICIAL.md §3): a player host's decimal XUID, or
+    /// `official:<vmId>` for an official world (the engine's own spelling of `{official: vmId}`;
+    /// never a player identity).
     pub host_xuid: String,
     pub role: String,
     pub iat: i64,
@@ -55,6 +58,7 @@ pub struct Claims {
 #[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
     pub world: &'a str,
+    /// A decimal XUID, or `official:<vmId>` (as [`Claims::host_xuid`]).
     pub host_xuid: &'a str,
     pub peer_xuid: &'a str,
     pub role: &'a str,
@@ -175,6 +179,18 @@ pub fn uuid_bytes(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
+/// An official Worlds host's id (WORLDS_OFFICIAL.md §3, the `FI_WORLDS` entry): `[a-z0-9-]{1,32}`.
+pub fn vm_id(s: &str) -> bool {
+    (1..=32).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// The engine's spelling of an official host, `official:<vmId>` (never a decimal XUID).
+pub fn official_host(vm: &str) -> String {
+    format!("official:{vm}")
+}
+
 /// A canonical decimal XUID other than 0 (no sign, spaces, separators or leading zero).
 pub fn xuid(s: &str) -> bool {
     s.parse::<u64>().is_ok_and(|x| x != 0 && x.to_string() == s)
@@ -241,10 +257,17 @@ fn claims_of(v: Value) -> Option<Claims> {
     let Value::Object(mut host) = o.remove("host")? else {
         return None;
     };
-    let host_xuid = take_str(&mut host, "xuid")?;
+    // exactly one of `{xuid}` (player-hosted, unchanged bytes) or `{official: vmId}`
+    // (WORLDS_OFFICIAL.md §3): both, neither or anything else is refused
+    let host_xuid = match (host.remove("xuid"), host.remove("official")) {
+        (Some(Value::String(x)), None) if xuid(&x) => x,
+        (None, Some(Value::String(vm))) if vm_id(&vm) => official_host(&vm),
+        _ => return None,
+    };
     if !host.is_empty() {
         return None;
     }
+    let official = host_xuid.starts_with("official:");
     let role = take_str(&mut o, "role")?;
     let iat = take_int(&mut o, "iat")?;
     let exp = take_int(&mut o, "exp")?;
@@ -268,8 +291,8 @@ fn claims_of(v: Value) -> Option<Claims> {
         && uuid(&world)
         && uuid(&sub)
         && xuid(&xuid_s)
-        && xuid(&host_xuid)
-        && relay.as_ref().is_none_or(valid_relay)
+        // an official world's grants carry no `relay` claim (OD-189: direct, never relayed)
+        && relay.as_ref().is_none_or(|r| !official && valid_relay(r))
         && voice_blocked_until.is_none_or(|v| v >= 0);
     ok.then_some(Claims {
         grant,

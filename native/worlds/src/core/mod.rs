@@ -18,6 +18,9 @@ pub mod server;
 pub mod timers;
 pub mod world;
 
+#[cfg(test)]
+mod official_tests;
+
 use std::{net::SocketAddr, sync::Arc};
 
 pub use server::Server;
@@ -28,7 +31,8 @@ use crate::net::BindFailure;
 pub enum Profile {
     /// One world per process, its own UDP socket (the launcher's child).
     Private,
-    /// Up to `maxWorlds` worlds on one loopback socket behind the co-located relay (the VM).
+    /// Up to `maxWorlds` official worlds on one public UDP socket (a Worlds host VM; joiners
+    /// connect directly, OD-189).
     Public,
 }
 
@@ -59,7 +63,7 @@ pub fn world_tables_worst_case_bytes() -> usize {
     admission::Gate::worst_case_bytes() + legs::Legs::worst_case_bytes()
 }
 
-/// A socket of the process: the public profile's loopback socket, or a private world's.
+/// A socket of the process: the public profile's one public socket, or a private world's.
 pub type SockId = u32;
 pub const PUBLIC_SOCKET: SockId = 0;
 
@@ -107,8 +111,6 @@ pub struct Config {
     pub keys: keys::KeyRing,
     /// The game modules this server hosts (OD-186), by `world.open`'s `game`.
     pub games: Vec<Arc<dyn game::Game>>,
-    /// The co-located relay's endpoint (public): the only source the public socket accepts.
-    pub relay: SocketAddr,
     /// The public socket is bound (public profile; the runtime sets it).
     pub public_socket: bool,
     /// The pipe's per-launch secret (64 lowercase hex), compared with `hello.secret`.
@@ -128,7 +130,6 @@ impl Config {
             stats_seconds: 60,
             keys: keys::KeyRing::default(),
             games: Vec::new(),
-            relay: SocketAddr::from(([127, 0, 0, 1], 5101)),
             public_socket: false,
             control_secret: None,
         }

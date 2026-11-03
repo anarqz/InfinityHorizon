@@ -61,15 +61,20 @@ pub fn bind_world(port: u16) -> Result<Bound, BindFailure> {
     }
 }
 
-/// Binds the public profile's loopback socket (§5.2), a plain bind of a loopback literal.
-pub fn bind_loopback(addr: SocketAddr) -> io::Result<UdpSocket> {
-    if !is_loopback(addr.ip()) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not a loopback address",
-        ));
+/// Binds the public profile's one socket (§5.2) on `--bind`: `[::]:port` dual-stack with the
+/// IPv4 fall-back exactly as a private world's socket (§5.1); any other literal is a plain bind
+/// of that address.
+pub fn bind_public(addr: SocketAddr) -> Result<Bound, BindFailure> {
+    if addr.ip() == IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED) {
+        return bind_world(addr.port());
     }
-    UdpSocket::bind(addr)
+    match UdpSocket::bind(addr) {
+        Ok(socket) => Ok(Bound {
+            socket,
+            dual: false,
+        }),
+        Err(e) => Err(BindFailure::of(&e)),
+    }
 }
 
 /// Windows: switches off SIO_UDP_CONNRESET, so an ICMP port unreachable for an earlier send

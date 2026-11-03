@@ -63,7 +63,8 @@ pub struct Stats {
     pub datagrams_in: u64,
     pub datagrams_out: u64,
     pub datagrams_dropped: u64,
-    pub not_relay_dropped: u64,
+    /// Public: datagrams the one socket could route to no world (§5.2).
+    pub unrouted_dropped: u64,
     pub rate_drops: u64,
     pub send_errors: u64,
     pub refused_opens: u64,
@@ -687,8 +688,7 @@ impl Server {
             return Err(CmdError::bad("game"));
         };
         let profile = self.cfg.profile;
-        let relay = (profile == Profile::Public).then_some(self.cfg.relay);
-        let gate = Shared::new(World::rules(&id, &spec, relay));
+        let gate = Shared::new(World::rules(&id, &spec));
         let admit: Arc<dyn Admit> = Arc::new(gate.clone());
         let info = |rng| OpenInfo {
             request: o,
@@ -1019,21 +1019,12 @@ impl Server {
         self.stats.datagrams_in += 1;
         let from = crate::stun::plain_endpoint(from);
         if self.cfg.profile == Profile::Public {
-            if sock != PUBLIC_SOCKET || from != crate::stun::plain_endpoint(self.cfg.relay) {
-                self.stats.not_relay_dropped += 1;
-                self.stats.datagrams_dropped += 1;
-                return;
-            }
-            // FIR1 HOST role, multiplexed by grant id (§5.2): the world holding the grant's leg
-            let owner = (data.len() >= 21 && &data[..4] == crate::core::legs::MAGIC)
-                .then(|| {
-                    self.worlds
-                        .iter()
-                        .find(|(_, w)| w.legs.owns(&data[5..21], from))
-                        .map(|(k, _)| k.clone())
-                })
+            // one public socket for every world, joiners straight to it (§5.2, OD-189)
+            let owner = (sock == PUBLIC_SOCKET)
+                .then(|| self.public_owner(data, from))
                 .flatten();
             let Some(id) = owner else {
+                self.stats.unrouted_dropped += 1;
                 self.stats.datagrams_dropped += 1;
                 return;
             };
@@ -1045,6 +1036,27 @@ impl Server {
             return;
         };
         self.world_datagram(io, &id, from, data);
+    }
+
+    /// The public socket's routing (§5.2): a FIUP frame goes to the world holding its grant id
+    /// (bytes 8..24 of the header), any other datagram to the world where its source endpoint
+    /// holds a fresh FIUP binding. Anything else (an unproven source, a FIUP frame for no
+    /// world's grant) has no world and is dropped.
+    fn public_owner(&self, data: &[u8], from: SocketAddr) -> Option<String> {
+        let now = self.now;
+        if data.len() >= 24 && &data[..4] == b"FIUP" {
+            let mut grant = [0u8; 16];
+            grant.copy_from_slice(&data[8..24]);
+            return self
+                .worlds
+                .iter()
+                .find(|(_, w)| w.gate.lock().holds_grant(&grant))
+                .map(|(k, _)| k.clone());
+        }
+        self.worlds
+            .iter()
+            .find(|(_, w)| w.gate.lock().binds(from, now))
+            .map(|(k, _)| k.clone())
     }
 
     fn world_datagram(&mut self, io: &mut dyn Io, id: &str, from: SocketAddr, data: &[u8]) {

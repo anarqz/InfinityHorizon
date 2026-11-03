@@ -26,8 +26,8 @@ pub struct RunConfig {
     pub secret: Option<String>,
     pub game_db: Option<PathBuf>,
     pub grant_keys: Option<KeyRing>,
-    pub relay: SocketAddr,
-    pub bind: SocketAddr,
+    /// Public profile only: the one public UDP socket every world shares (contract §5.2).
+    pub bind: Option<SocketAddr>,
     pub max_worlds: usize,
     pub max_seats: usize,
     pub memory_limit_mb: u64,
@@ -52,7 +52,6 @@ const OPTIONS: &[(&str, &str)] = &[
     ("--control", "CONTROL"),
     ("--game-db", "GAME_DB"),
     ("--grant-keys", "GRANT_VERIFY_KEYS"),
-    ("--relay", "RELAY"),
     ("--bind", "BIND"),
     ("--max-worlds", "MAX_WORLDS"),
     ("--max-seats", "MAX_SEATS"),
@@ -184,29 +183,6 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
         Some(t) => Some(KeyRing::parse(&t).map_err(|_| "--grant-keys")?),
         None => None,
     };
-    if !public && (cli("--relay").is_some() || cli("--bind").is_some()) {
-        return Err(if cli("--relay").is_some() {
-            "--relay"
-        } else {
-            "--bind"
-        });
-    }
-    let loopback = |opt: &'static str, default: &str| -> Result<SocketAddr, Invalid> {
-        let text = if public {
-            value(opt).unwrap_or_else(|| default.to_string())
-        } else {
-            default.to_string()
-        };
-        text.parse::<SocketAddr>()
-            .ok()
-            .filter(|a| crate::net::is_loopback(a.ip()))
-            .ok_or(opt)
-    };
-    let relay = loopback("--relay", "127.0.0.1:5101")?;
-    let bind = loopback("--bind", "127.0.0.1:0")?;
-    if relay.port() == 0 {
-        return Err("--relay");
-    }
     let int = |opt: &'static str, default: u64, ok: &dyn Fn(u64) -> bool| -> Result<u64, Invalid> {
         match value(opt) {
             None => Ok(default),
@@ -241,13 +217,20 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
     if public && log_level == Level::Debug {
         return Err("--log-level");
     }
+    // public: the VM's public `addr:port` (the `FI_WORLDS` endpoint), required; private: none
+    // (each world binds its own port at `world.open`)
+    let bind = match (public, value("--bind")) {
+        (true, Some(text)) => Some(text.parse::<SocketAddr>().map_err(|_| "--bind")?),
+        (true, None) => return Err("--bind"),
+        (false, _) if cli("--bind").is_some() => return Err("--bind"),
+        (false, _) => None,
+    };
     Ok(Command::Run(Box::new(RunConfig {
         profile,
         control,
         secret,
         game_db,
         grant_keys,
-        relay,
         bind,
         max_worlds,
         max_seats,
