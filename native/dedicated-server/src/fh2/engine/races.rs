@@ -1073,15 +1073,6 @@ impl Engine {
         {
             return;
         }
-        // ingest-size rule: a fragment no grant or update copy of it fits is refused before it
-        // takes a source sequence or enters the journal (its gap then stalls the writer)
-        if obj.payload.len() > wire::MAX_DATAGRAM_PAYLOAD_BITS {
-            let (xuid, index) = self.peer(serial).map_or((0, 0), |p| (p.xuid, p.index));
-            let bits = obj.payload.len() as u32;
-            self.rejected(xuid, "invalid_payload", Some(8), Some(6), Some(bits));
-            self.note("options.oversize_refused", vec![json!(index), json!(bits)]);
-            return;
-        }
         let now = self.now;
         let mut ready = Vec::new();
         let mut result = self.ev.options.apply(
@@ -1092,6 +1083,19 @@ impl Engine {
             now,
             &mut ready,
         );
+        if result == Applied::TooLong {
+            // not stored, not relayed; its writer's next fragment would wait on it forever, so
+            // its session ends, as an overflow's does
+            let (xuid, index) = self.peer(serial).map_or((0, 0), |p| (p.xuid, p.index));
+            let bits = obj.payload.len() as u32;
+            let id = if obj.create { 7 } else { 8 };
+            self.rejected(xuid, "game_options_too_long", Some(id), Some(6), Some(bits));
+            if self.peer_note(serial, "options_too_long") {
+                self.note("options.too_long", vec![json!(index), json!(bits)]);
+            }
+            self.doom(serial, Why::OptionsOverflow);
+            return;
+        }
         // a long session of deltas fills the journal: its merged values take less
         if result == Applied::Overflow
             && obj.payload.len() <= wire::MAX_PAYLOAD_BITS

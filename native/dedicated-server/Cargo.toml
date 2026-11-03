@@ -28,6 +28,8 @@ test-hooks = []
 # versions (fi-relay, fi-auth, matchmaking): ed25519-dalek verifies relay grants (contract §6.2),
 # hmac + sha2 are FIUP v1's HMAC-SHA256 (UDP_SOCKET_PROOF.md), getrandom the FIUP challenge nonce.
 [dependencies]
+# keys.set's full point check (prime order, torsion-free); already ed25519-dalek's own pin
+curve25519-dalek = "=5.0.0"
 ed25519-dalek = "=3.0.0"
 getrandom = "=0.4.3"
 hmac = "=0.13.0"

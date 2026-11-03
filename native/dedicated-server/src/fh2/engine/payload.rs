@@ -49,6 +49,20 @@ pub enum Fault {
 }
 
 impl Fault {
+    /// The fault's name as the world log writes it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Fault::Router(_) => "Router",
+            Fault::Index(_) => "Index",
+            Fault::Duplicate(_) => "Duplicate",
+            Fault::NotFinite(_) => "NotFinite",
+            Fault::NameTooLong(_) => "NameTooLong",
+            Fault::Truncated => "Truncated",
+            Fault::TooBig(_) => "TooBig",
+            Fault::OutOfRange(_) => "OutOfRange",
+        }
+    }
+
     pub fn value(&self) -> u32 {
         match *self {
             Fault::Router(v)
@@ -63,11 +77,20 @@ impl Fault {
     }
 }
 
+/// RoadTripPlayerSynced (router 9, type 2; NERDCORE_WIRE.md §7.9): 0 State (4 bits, 0..8),
+/// 1 CompletedEventCount (3 bits, 0..4), 2 XPOnDestinationJoin (s32); 3-bit ids.
+pub const ROAD_TRIP_PLAYER_ROUTER: u8 = 9;
+const ROAD_TRIP_PLAYER_VARIABLES: [i32; 3] = [4, 3, 32];
+const ROAD_TRIP_PLAYER_MAXIMA: [Option<u64>; 3] = [Some(8), Some(4), None];
+/// The largest RoadTripPlayerSynced payload relayed.
+pub const ROAD_TRIP_PLAYER_MAX_BITS: usize = 256;
+
 pub fn max_bits(router: u8) -> Option<usize> {
     match router {
         1 => Some(PLAYER_DATA_MAX_BITS),
         2 => Some(787),
         3 => Some(47),
+        ROAD_TRIP_PLAYER_ROUTER => Some(ROAD_TRIP_PLAYER_MAX_BITS),
         12 => Some(BUCKET_LIST_PLAYER_MAX_BITS),
         _ => None,
     }
@@ -78,6 +101,7 @@ fn index_width(router: u8) -> u32 {
         1 => 8,
         2 => 5,
         3 => 4,
+        ROAD_TRIP_PLAYER_ROUTER => 3,
         12 => 3,
         _ => 0,
     }
@@ -137,6 +161,7 @@ pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Fault> {
         1 => &PLAYER_VARIABLES,
         2 => &CAR_VARIABLES,
         3 => &CONSOLE_VARIABLES,
+        ROAD_TRIP_PLAYER_ROUTER => &ROAD_TRIP_PLAYER_VARIABLES,
         12 => &BUCKET_LIST_PLAYER_VARIABLES,
         _ => return Err(Fault::Router(u32::from(router))),
     };
@@ -190,6 +215,13 @@ pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Fault> {
                 if router == 12
                     && index == BUCKET_LIST_STATE_VARIABLE
                     && value > BUCKET_LIST_STATE_MAX
+                {
+                    return Err(Fault::OutOfRange(value as u32));
+                }
+                // a road-trip player State past RoadTripServerState, a CompletedEventCount past
+                // its range
+                if router == ROAD_TRIP_PLAYER_ROUTER
+                    && ROAD_TRIP_PLAYER_MAXIMA[index].is_some_and(|m| value > m)
                 {
                     return Err(Fault::OutOfRange(value as u32));
                 }

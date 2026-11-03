@@ -335,6 +335,10 @@ pub(crate) struct Peer {
     /// Road Trip: when this player's own Initialising ends, and its vote object's sequence.
     road_trip_start_at: Option<i64>,
     road_trip_selection_sequence: Option<u8>,
+    /// Messages to this peer dropped for not fitting one datagram.
+    oversize_dropped: u32,
+    /// Notes used per kind for this peer's repeatable refusals (`peer_note`).
+    notes_used: HashMap<&'static str, u32>,
 }
 
 impl Peer {
@@ -356,7 +360,8 @@ impl Peer {
 
     fn take_packet_id(&mut self) -> u16 {
         let r = self.next_packet;
-        self.next_packet = if r >= 0xfffd { 0 } else { r + 1 };
+        // ids run 0..0xfffe, the next (id + 1) mod 0xffff (NERDCORE_WIRE.md §2.2)
+        self.next_packet = ((u32::from(r) + 1) % 0xffff) as u16;
         r
     }
 }
@@ -417,6 +422,8 @@ struct SideRate {
 const MAX_RETIRED_ATTEMPTS: usize = 1024;
 const RETIRED_ATTEMPT_MS: i64 = 60_000;
 const NOTES_PER_WINDOW: i32 = 40;
+/// Notes per peer and kind for refusals its own traffic can repeat.
+pub const PEER_NOTES_PER_KIND: u32 = 4;
 const NOTE_WINDOW_MS: i64 = 10_000;
 pub const HELD_OPEN_MS: i64 = 20_000;
 const MAX_HELD_OPENS: usize = 32;
@@ -534,38 +541,6 @@ impl std::fmt::Debug for Engine {
             .field("kind", &self.kind)
             .field("peers", &self.peers.len())
             .finish_non_exhaustive()
-    }
-}
-
-/// Tests only (`test-hooks`): the reference engine read datagrams of any size; the private runner
-/// turns the 1,372-byte inbound cap off to show a vector's divergence is that rule alone.
-#[cfg(feature = "test-hooks")]
-pub static INBOUND_CAP_OFF: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-fn inbound_cap_off() -> bool {
-    #[cfg(feature = "test-hooks")]
-    {
-        INBOUND_CAP_OFF.load(std::sync::atomic::Ordering::Relaxed)
-    }
-    #[cfg(not(feature = "test-hooks"))]
-    {
-        false
-    }
-}
-
-/// Tests only (`test-hooks`): the reference engine sent a message whatever its size.
-#[cfg(feature = "test-hooks")]
-pub static SEND_CAP_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-fn send_cap_off() -> bool {
-    #[cfg(feature = "test-hooks")]
-    {
-        SEND_CAP_OFF.load(std::sync::atomic::Ordering::Relaxed)
-    }
-    #[cfg(not(feature = "test-hooks"))]
-    {
-        false
     }
 }
 
@@ -812,6 +787,19 @@ impl Engine {
         self.events.push(Event::Note { id, args });
     }
 
+    /// A per-peer budget of each kind of note its own traffic can repeat: the first few only.
+    pub(super) fn peer_note(&mut self, serial: u64, kind: &'static str) -> bool {
+        let Some(p) = self.peer_mut(serial) else {
+            return false;
+        };
+        let used = p.notes_used.entry(kind).or_insert(0);
+        if *used >= PEER_NOTES_PER_KIND {
+            return false;
+        }
+        *used += 1;
+        true
+    }
+
     fn rejected(
         &mut self,
         xuid: u64,
@@ -1037,6 +1025,8 @@ impl Engine {
             team_written: None,
             road_trip_start_at: None,
             road_trip_selection_sequence: None,
+            oversize_dropped: 0,
+            notes_used: HashMap::new(),
         });
         self.events.push(Event::ConnectionOpened {
             index,
@@ -1214,14 +1204,36 @@ impl Engine {
         self.now = self.now.max(now_ms);
         // no datagram over the game's 1,372-byte limit is read at all (nothing legitimate is
         // larger; one that is could carry a message no copy of it fits)
-        if data.len() > wire::MAX_DATAGRAM && !inbound_cap_off() {
-            self.dropped += 1;
-            self.oversize_in += 1;
-            return;
-        }
         let from = canonical(from);
         if crate::stun::is_stun(data) {
             self.receive_side_channel(data, from);
+            return;
+        }
+        // the game never sends a datagram over 1,372 bytes (its own receiver closes the
+        // connection on one): refused whole, nothing in it read, acknowledged or relayed
+        if data.len() > wire::MAX_DATAGRAM {
+            self.dropped += 1;
+            self.oversize_in += 1;
+            if let Some((serial, xuid, index)) = self
+                .peers
+                .iter()
+                .find(|p| p.endpoint == from)
+                .map(|p| (p.serial, p.xuid, p.index))
+            {
+                self.rejected(
+                    xuid,
+                    "oversize_datagram",
+                    None,
+                    None,
+                    Some(data.len() as u32),
+                );
+                if self.peer_note(serial, "oversize_in") {
+                    self.note(
+                        "receive.oversize_refused",
+                        vec![json!(index), json!(data.len()), json!(wire::MAX_DATAGRAM)],
+                    );
+                }
+            }
             return;
         }
         // a malformed packet ends at the bad message; what it already did stands

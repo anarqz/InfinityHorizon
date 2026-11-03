@@ -29,22 +29,6 @@ pub const MAX_KEPT_BITS: usize = 512 * 1024;
 /// server variables a snapshot adds: console flags, PrivateUniverseId, TeamId) always fits one
 /// datagram; later updates stay separate tail messages.
 pub const FOLD_MAX_BITS: usize = wire::MAX_DATAGRAM_PAYLOAD_BITS - 128;
-/// Tests only (`test-hooks`): the reference engine's fold (its 16,383-bit payload limit), so the
-/// private runner can show that a vector's divergence is this rule and nothing else.
-#[cfg(feature = "test-hooks")]
-pub static FOLD_OVERRIDE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-fn fold_max() -> usize {
-    #[cfg(feature = "test-hooks")]
-    {
-        let v = FOLD_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
-        if v != 0 {
-            return v;
-        }
-    }
-    FOLD_MAX_BITS
-}
-
 /// Out-of-order updates held past a gap.
 pub const MAX_PENDING: usize = 16;
 
@@ -140,7 +124,7 @@ impl History {
 
     fn apply(&mut self, next: u8, update: Bits, notes: &mut Vec<usize>) {
         self.last = next;
-        if self.tail.is_empty() && self.base.len() + update.len() <= fold_max() {
+        if self.tail.is_empty() && self.base.len() + update.len() <= FOLD_MAX_BITS {
             self.base.append(&update);
             return;
         }
@@ -202,7 +186,7 @@ impl History {
             let oldest = std::mem::take(&mut self.tail[drained].1);
             drained += 1;
             self.tail_bits -= oldest.len();
-            if self.base.len() + oldest.len() <= fold_max() {
+            if self.base.len() + oldest.len() <= FOLD_MAX_BITS {
                 self.base.append(&oldest);
             } else {
                 discarded += 1;

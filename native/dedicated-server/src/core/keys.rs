@@ -26,7 +26,7 @@ impl KeyRing {
             }
             let key = decode_base64(encoded).ok_or("not standard base64")?;
             let key: [u8; 32] = key.try_into().map_err(|_| "not 32 bytes")?;
-            if ed25519_dalek::VerifyingKey::from_bytes(&key).map_or(true, |k| k.is_weak()) {
+            if !full_key(&key) {
                 return Err("not an Ed25519 public key");
             }
             if keys.iter().any(|(k, _)| k == kid) {
@@ -114,4 +114,15 @@ pub fn encode_base64(data: &[u8]) -> String {
         }
     }
     s
+}
+
+/// The full public-key check the reference makes (BouncyCastle `ValidatePublicKeyFull`, as
+/// `verify_strict` needs): a canonical encoding of a curve point, not of small order, in the
+/// prime-order subgroup (torsion-free).
+pub fn full_key(key: &[u8; 32]) -> bool {
+    let compressed = curve25519_dalek::edwards::CompressedEdwardsY(*key);
+    let Some(point) = compressed.decompress() else {
+        return false;
+    };
+    !point.is_small_order() && point.is_torsion_free() && point.compress().to_bytes() == *key
 }
