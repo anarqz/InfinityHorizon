@@ -477,3 +477,35 @@ impl Engine {
         self.drop_doomed();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::testkit::{engine, seat};
+    use super::*;
+
+    #[test]
+    fn a_reliable_flood_dooms_its_sender_not_the_receivers() {
+        let mut e = engine();
+        let sender = seat(&mut e, 1, 1001);
+        let receivers = [seat(&mut e, 2, 1002), seat(&mut e, 3, 1003)];
+        e.now = 1000;
+        // the burst passes, counted once per message whatever the receivers
+        assert!(e.charge_fanout(sender, FANOUT_BURST as usize));
+        assert!(!e.charge_fanout(sender, 1));
+        assert!(e.peer(sender).is_some_and(|p| p.doomed));
+        assert!(matches!(
+            e.peer(sender).and_then(|p| p.doomed_by),
+            Some(Why::FanOut)
+        ));
+        assert!(
+            receivers
+                .iter()
+                .all(|r| e.peer(*r).is_some_and(|p| !p.doomed))
+        );
+        // another sender has its own budget; one second refills FANOUT_PER_SECOND
+        let other = receivers[0];
+        assert!(e.charge_fanout(other, 10));
+        e.now = 2000;
+        assert!(e.charge_fanout(other, FANOUT_BURST as usize - 10));
+    }
+}
