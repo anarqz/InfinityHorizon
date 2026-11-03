@@ -36,7 +36,7 @@ pub const FANOUT_BURST: f64 = 1024.0;
 pub const FANOUT_PER_SECOND: f64 = 256.0;
 
 /// At most this many messages share one packet.
-const MESSAGES_PER_PACKET: usize = 8;
+pub(super) const MESSAGES_PER_PACKET: usize = 8;
 /// What one pacing turn sends per peer at most (bytes).
 const PACE_BUDGET: usize = 8 * 1024;
 /// A reliable packet is resent this many times before the peer is dropped.
@@ -382,6 +382,7 @@ impl Engine {
             return;
         }
         self.now = self.now.max(now_ms);
+        self.close_note_window();
         self.tick_held_opens();
         self.tick_quiet_joins();
         self.tick_side_channels();
@@ -507,5 +508,52 @@ mod tests {
         assert!(e.charge_fanout(other, 10));
         e.now = 2000;
         assert!(e.charge_fanout(other, FANOUT_BURST as usize - 10));
+    }
+
+    #[test]
+    fn re_sent_game_options_spend_the_owners_fan_out_budget() {
+        let mut e = engine();
+        let owner = seat(&mut e, 1, 1001);
+        let other = seat(&mut e, 2, 1002);
+        e.now = 1000;
+        let mut record = super::super::bits::Bits::new();
+        record.push(1, 4).push(1, 1);
+        e.relay_game_options(owner, 9, std::slice::from_ref(&record));
+        assert!(e.peer(other).is_some_and(|p| !p.in_flight.is_empty()));
+        // the burst spent: the next record drops the owner and reaches nobody
+        assert!(e.charge_fanout(owner, FANOUT_BURST as usize - 1));
+        let sent = e.peer(other).map(|p| p.in_flight.len() + p.queue.len());
+        e.relay_game_options(owner, 9, &[record]);
+        assert!(matches!(
+            e.peer(owner).and_then(|p| p.doomed_by),
+            Some(Why::FanOut)
+        ));
+        assert_eq!(
+            e.peer(other).map(|p| p.in_flight.len() + p.queue.len()),
+            sent
+        );
+    }
+
+    #[test]
+    fn suppressed_world_log_lines_are_counted_when_the_window_ends() {
+        use super::super::{Event, NOTE_WINDOW_MS, NOTES_PER_WINDOW};
+        let mut e = engine();
+        e.now = 1000;
+        for _ in 0..NOTES_PER_WINDOW + 5 {
+            e.note("test.note", Vec::new());
+        }
+        let notes = e.take_events();
+        assert_eq!(notes.len(), NOTES_PER_WINDOW as usize);
+        // no later note needed: the tick that ends the window reports the count
+        e.tick(1000 + NOTE_WINDOW_MS);
+        let counted: Vec<u32> = e
+            .take_events()
+            .into_iter()
+            .filter_map(|ev| match ev {
+                Event::LinesSuppressed { count } => Some(count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counted, vec![5]);
     }
 }

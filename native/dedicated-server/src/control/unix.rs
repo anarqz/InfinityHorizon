@@ -37,9 +37,9 @@ pub enum ListenError {
 }
 
 /// Creates the parent directory (`0700`) when missing, refuses one that others can enter,
-/// removes a stale socket nobody answers on, binds and sets the socket to `0600`, and refuses a
-/// directory another user owns (its owner could replace the socket): the socket just bound
-/// belongs to the engine's effective user, so its owner is compared with the directory's.
+/// refuses a directory another user owns (its owner could replace the socket) before touching
+/// anything in it, removes a stale socket nobody answers on, binds and sets the socket to
+/// `0600`; the bound socket's owner is compared with the directory's once more.
 pub fn listen(path: &Path) -> Result<UnixListener, ListenError> {
     let dir = path.parent().ok_or_else(|| {
         ListenError::Io(io::Error::new(io::ErrorKind::InvalidInput, "no directory"))
@@ -57,6 +57,14 @@ pub fn listen(path: &Path) -> Result<UnixListener, ListenError> {
             .create(dir)
             .map_err(ListenError::Io)?,
         Err(e) => return Err(ListenError::Io(e)),
+    }
+    // the owner is checked before anything in the directory is touched: a stale socket in
+    // another user's directory is never removed. `/proc/self` belongs to the effective user;
+    // where it is missing, the check after the bind below still refuses.
+    if let (Ok(me), Ok(d)) = (fs::metadata("/proc/self"), fs::metadata(dir))
+        && me.uid() != d.uid()
+    {
+        return Err(ListenError::DirectoryOwner);
     }
     if let Ok(m) = fs::symlink_metadata(path) {
         if !m.file_type().is_socket() {
@@ -157,17 +165,13 @@ fn start_connection(
     hub.send(Hub::Closer { conn, closer })
         .map_err(|_| io::Error::other("loop gone"))?;
     let fault = hub.clone();
-    let feeder = Feeder {
-        conn,
-        writer,
-        inflight,
-        hub,
-    };
+    let feeder = Feeder::new(conn, writer, inflight, hub);
     std::thread::Builder::new()
         .name("ds-control-read".into())
         .spawn(move || {
             super::guarded(&fault, "control reader", move || {
-                let _ = framing::read_frames(&stream, |f| feeder.frame(f));
+                let _ =
+                    framing::read_frames(&stream, |f| feeder.frame(f) && feeder.flush_backlog());
                 feeder.closed();
                 open.fetch_sub(1, Ordering::AcqRel);
             });

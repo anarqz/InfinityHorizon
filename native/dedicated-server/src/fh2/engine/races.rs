@@ -1132,16 +1132,26 @@ impl Engine {
         if result != Applied::Stored {
             return;
         }
+        self.relay_game_options(serial, obj.key.id, &ready);
+    }
+
+    /// The owner's committed option records, re-sent under each synced player's own sequence:
+    /// charged to the owner's reliable fan-out budget once per record, whatever the receivers
+    /// (past it the owner is dropped and nothing goes out).
+    pub(super) fn relay_game_options(&mut self, serial: u64, id: u32, ready: &[Bits]) {
         let others: Vec<u64> = self
             .peers
             .iter()
             .filter(|p| p.serial != serial && p.synced && !self.holding.contains_key(&p.serial))
             .map(|p| p.serial)
             .collect();
+        if others.is_empty() || ready.is_empty() || !self.charge_fanout(serial, ready.len()) {
+            return;
+        }
         for o in others {
             let updates: Vec<M> = ready
                 .iter()
-                .map(|r| self.game_options_update(o, obj.key.id, r))
+                .map(|r| self.game_options_update(o, id, r))
                 .collect();
             self.send_sequenced(o, updates);
         }

@@ -49,6 +49,16 @@ impl Profile {
     }
 }
 
+/// Bytes one heap allocation costs beyond its payload (allocator header and size-class
+/// rounding): the rule of the worst-case memory accounting (contract §8).
+pub const ALLOC_SLACK_BYTES: usize = 32;
+
+/// The most one world's game-agnostic tables hold (admission, FIUP, relay legs), every table at
+/// its cap (contract §8's worst-case table).
+pub fn world_tables_worst_case_bytes() -> usize {
+    admission::Gate::worst_case_bytes() + legs::Legs::worst_case_bytes()
+}
+
 /// A socket of the process: the public profile's loopback socket, or a private world's.
 pub type SockId = u32;
 pub const PUBLIC_SOCKET: SockId = 0;

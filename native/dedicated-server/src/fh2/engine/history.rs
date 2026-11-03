@@ -182,10 +182,23 @@ impl History {
     }
 
     fn guard(&mut self, notes: &mut Vec<usize>) {
+        self.shed(MAX_KEPT_UPDATES / 2, MAX_KEPT_BITS / 2, notes);
+    }
+
+    /// The peer's entry cap, past what [`History::trim`] reaches: the oldest kept updates go
+    /// until at most `keep` are left (folded into the create while it fits, else discarded and
+    /// noted once, as the hard guard does). The entries removed.
+    pub fn shed_to(&mut self, keep: usize, notes: &mut Vec<usize>) -> usize {
+        let before = self.tail.len();
+        self.shed(keep, MAX_KEPT_BITS / 2, notes);
+        self.rearm();
+        before - self.tail.len()
+    }
+
+    fn shed(&mut self, keep_updates: usize, keep_bits: usize, notes: &mut Vec<usize>) {
         let mut discarded = 0usize;
         let mut drained = 0usize;
-        while self.tail.len() - drained > MAX_KEPT_UPDATES / 2 || self.tail_bits > MAX_KEPT_BITS / 2
-        {
+        while self.tail.len() - drained > keep_updates || self.tail_bits > keep_bits {
             let oldest = std::mem::take(&mut self.tail[drained].1);
             drained += 1;
             self.tail_bits -= oldest.len();

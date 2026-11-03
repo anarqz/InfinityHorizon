@@ -126,12 +126,7 @@ pub fn serve(file: File, conn: u64, hub: crate::runtime::HubTx) -> io::Result<()
     hub.send(Hub::Closer { conn, closer })
         .map_err(|_| io::Error::other("loop gone"))?;
     let fault = hub.clone();
-    let feeder = Feeder {
-        conn,
-        writer,
-        inflight,
-        hub,
-    };
+    let feeder = Feeder::new(conn, writer, inflight, hub);
     std::thread::Builder::new()
         .name("ds-control-pipe".into())
         .spawn(move || {
@@ -162,6 +157,13 @@ fn run(mut file: File, lines: mpsc::Receiver<String>, closed: Arc<AtomicBool>, f
             }
         }
         if closed.load(Ordering::Acquire) {
+            // the loop closes after its last reply (an `unauthorized`): that reply still goes out
+            while let Ok(line) = lines.try_recv() {
+                if file.write_all(line.as_bytes()).is_err() {
+                    break;
+                }
+            }
+            let _ = file.flush();
             break;
         }
         match available(&file) {
@@ -174,6 +176,12 @@ fn run(mut file: File, lines: mpsc::Receiver<String>, closed: Arc<AtomicBool>, f
                     Ok(got) => {
                         for f in framer.push(&chunk[..got]) {
                             if !feeder.frame(f) {
+                                break 'run;
+                            }
+                        }
+                        // this thread is the pipe's writer too: its own answers go out here
+                        for line in feeder.take_backlog() {
+                            if file.write_all(line.as_bytes()).is_err() {
                                 break 'run;
                             }
                         }

@@ -88,7 +88,8 @@ pub mod exit {
 struct RtIo {
     hub: HubTx,
     sockets: HashMap<SockId, (UdpSocket, bool)>,
-    stops: HashMap<SockId, Arc<AtomicBool>>,
+    /// Each socket's reader: its stop flag and its thread, joined when the socket is released.
+    stops: HashMap<SockId, (Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
     next_sock: SockId,
 }
 
@@ -108,7 +109,7 @@ impl RtIo {
         }
         let hub = self.hub.clone();
         let flag = stop.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("ds-udp".into())
             .spawn(move || {
                 let r = catch_unwind(AssertUnwindSafe(|| {
@@ -119,7 +120,7 @@ impl RtIo {
                 }
             })?;
         self.sockets.insert(sock, (socket, dual));
-        self.stops.insert(sock, stop);
+        self.stops.insert(sock, (stop, thread));
         Ok(())
     }
 }
@@ -179,11 +180,27 @@ impl Io for RtIo {
         })
     }
 
+    /// Frees the world's port before returning: the reader's clone of the socket is closed too
+    /// (woken by an empty datagram to itself, else by its 500 ms read timeout), so an immediate
+    /// re-bind of the same port succeeds.
     fn release_world(&mut self, sock: SockId) {
-        if let Some(stop) = self.stops.remove(&sock) {
+        let reader = self.stops.remove(&sock);
+        if let Some((stop, _)) = &reader {
             stop.store(true, Ordering::Release);
         }
-        self.sockets.remove(&sock);
+        if let Some((socket, _)) = self.sockets.remove(&sock)
+            && let Ok(local) = socket.local_addr()
+        {
+            let wake: SocketAddr = if local.is_ipv6() {
+                (std::net::Ipv6Addr::LOCALHOST, local.port()).into()
+            } else {
+                (std::net::Ipv4Addr::LOCALHOST, local.port()).into()
+            };
+            let _ = socket.send_to(&[], wake);
+        }
+        if let Some((_, thread)) = reader {
+            let _ = thread.join();
+        }
     }
 
     fn memory_used_bytes(&self) -> u64 {
@@ -221,9 +238,53 @@ struct Conn {
     /// writer, so replies the writer cannot take keep the reader answering `busy` (§4.6).
     inflight: Arc<AtomicUsize>,
     /// Lines the writer could not take yet: (line, whether it is a reply; else an event).
-    replies: VecDeque<(String, bool)>,
+    replies: Backlog,
     closer: Option<Box<dyn Fn() + Send>>,
     stalled_since: Option<Instant>,
+}
+
+/// A connection's unwritten lines with a running count of the replies among them, so the
+/// stall check each turn does not walk the queue.
+#[derive(Default)]
+struct Backlog {
+    lines: VecDeque<(String, bool)>,
+    replies: usize,
+}
+
+impl Backlog {
+    fn push_back(&mut self, line: (String, bool)) {
+        self.replies += usize::from(line.1);
+        self.lines.push_back(line);
+    }
+
+    fn push_front(&mut self, line: (String, bool)) {
+        self.replies += usize::from(line.1);
+        self.lines.push_front(line);
+    }
+
+    fn pop_front(&mut self) -> Option<(String, bool)> {
+        let line = self.lines.pop_front()?;
+        self.replies -= usize::from(line.1);
+        Some(line)
+    }
+
+    fn clear(&mut self) {
+        self.lines.clear();
+        self.replies = 0;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn reply_count(&self) -> usize {
+        self.replies
+    }
 }
 
 impl Conn {
@@ -445,7 +506,7 @@ fn run_loop(
                         Conn {
                             writer,
                             inflight,
-                            replies: VecDeque::new(),
+                            replies: Backlog::default(),
                             closer: None,
                             stalled_since: None,
                         },
@@ -554,7 +615,7 @@ fn server_has_events(server: &Server) -> bool {
 
 /// Whether a connection's unwritten replies fill a command queue.
 fn reply_backlog_full(c: &Conn) -> bool {
-    c.replies.iter().filter(|(_, reply)| *reply).count() >= crate::control::COMMAND_QUEUE
+    c.replies.reply_count() >= crate::control::COMMAND_QUEUE
 }
 
 /// Moves queued replies (and, for the controller, events) into the connection's writer; a
@@ -572,7 +633,7 @@ fn flush_conn(c: &mut Conn, events: Option<&mut Server>) {
                 return;
             }
             Err(TrySendError::Disconnected(_)) => {
-                let replies = c.replies.iter().filter(|(_, r)| *r).count() + usize::from(reply);
+                let replies = c.replies.reply_count() + usize::from(reply);
                 c.inflight.fetch_sub(
                     replies.min(c.inflight.load(Ordering::Acquire)),
                     Ordering::AcqRel,
@@ -692,13 +753,31 @@ mod tests {
         reader.join().unwrap();
     }
     #[test]
+    fn a_released_world_port_can_be_bound_again_at_once() {
+        let (hub, _loop) = mpsc::sync_channel::<Hub>(64);
+        let mut io = RtIo {
+            hub,
+            sockets: HashMap::new(),
+            stops: HashMap::new(),
+            next_sock: PUBLIC_SOCKET,
+        };
+        let first = io.bind_world(0).expect("a free port");
+        io.release_world(first.sock);
+        let again = io
+            .bind_world(first.port)
+            .expect("the released port is free");
+        assert_eq!(again.port, first.port);
+        io.release_world(again.sock);
+    }
+
+    #[test]
     fn a_request_counts_toward_busy_until_its_reply_is_written() {
         let (writer, lines) = mpsc::sync_channel::<String>(1);
         let inflight = Arc::new(AtomicUsize::new(3));
         let mut c = Conn {
             writer,
             inflight: inflight.clone(),
-            replies: VecDeque::new(),
+            replies: Backlog::default(),
             closer: None,
             stalled_since: None,
         };

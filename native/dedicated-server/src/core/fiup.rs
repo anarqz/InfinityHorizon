@@ -33,6 +33,11 @@ const SEEN_MS: u64 = 90_000;
 /// Retransmitted hellos (or responses) answered per pending challenge (or completed proof),
 /// counted per endpoint: a replay from elsewhere never spends another endpoint's retries.
 const RETRIES: u32 = 16;
+/// Table caps: hello rate entries, seen nonces and per-grant rates; pending challenges,
+/// completed responses and bindings; distinct source IPs counted per pre-rate entry.
+const TABLE_MAX: usize = 4096;
+const HANDSHAKES_MAX: usize = 64;
+const PRE_IPS_MAX: usize = 16;
 
 /// The FIUP authority of one grant (from a verified punch): the frame header it must carry, its
 /// key and its expiry (Unix seconds). Its fingerprint (SHA-256 of header and key, what bindings
@@ -340,6 +345,27 @@ pub struct ProofHost {
     pub counters: Counters,
 }
 
+impl ProofHost {
+    /// The most the proof tables can hold, every table at its cap (contract §8's worst case):
+    /// each pending or completed handshake keeps two frames on the heap, each pre-rate entry
+    /// its source list; the binding index is a hash set at twice its entries.
+    pub fn worst_case_bytes() -> usize {
+        use std::mem::size_of;
+        let frame = FRAME_LEN + super::ALLOC_SLACK_BYTES;
+        let pending = HANDSHAKES_MAX * (size_of::<Pending>() + 2 * frame);
+        let completed = HANDSHAKES_MAX * (size_of::<Completed>() + 2 * frame);
+        let bindings =
+            HANDSHAKES_MAX * (size_of::<Binding>() + 2 * (size_of::<(u64, u8, SocketAddr)>() + 1));
+        let seen = TABLE_MAX * size_of::<Seen>();
+        let rates = TABLE_MAX * size_of::<GrantRate>();
+        let pre = TABLE_MAX
+            * (size_of::<([u8; 16], PreRate)>()
+                + PRE_IPS_MAX * size_of::<(IpAddr, u32)>()
+                + super::ALLOC_SLACK_BYTES);
+        pending + completed + bindings + seen + rates + pre + 6 * super::ALLOC_SLACK_BYTES
+    }
+}
+
 fn fresh(at: u64, now: u64, ms: u64) -> bool {
     now >= at && now - at < ms
 }
@@ -425,7 +451,7 @@ impl ProofHost {
         let i = match self.pre.iter().position(|r| r.0 == grant) {
             Some(i) => i,
             None => {
-                if self.pre.len() >= 4096 {
+                if self.pre.len() >= TABLE_MAX {
                     return false;
                 }
                 self.pre.push((
@@ -447,7 +473,7 @@ impl ProofHost {
             return true;
         }
         let have = rate.ips.iter().find(|x| x.0 == ip).map_or(0, |x| x.1);
-        if rate.count >= 64 || have >= 16 || (rate.ips.len() >= 16 && have == 0) {
+        if rate.count >= 64 || have >= 16 || (rate.ips.len() >= PRE_IPS_MAX && have == 0) {
             return false;
         }
         rate.count += 1;
@@ -558,7 +584,7 @@ impl ProofHost {
             }) {
                 return None;
             }
-            if self.seen.len() >= 4096
+            if self.seen.len() >= TABLE_MAX
                 || self.seen.iter().any(|x| {
                     x.grant == p.grant
                         && x.kind == p.kind
@@ -595,7 +621,7 @@ impl ProofHost {
             } else {
                 rate.fresh_hellos >= 2 || (established && rate.fresh_hellos >= 1)
             };
-            if over || (self.rates.len() >= 4096 && known.is_none()) {
+            if over || (self.rates.len() >= TABLE_MAX && known.is_none()) {
                 return None;
             }
             if if renewal {
@@ -606,7 +632,7 @@ impl ProofHost {
                 return None;
             }
             // a grant's pending slots: two for new endpoints, two for renewals, never shared
-            if self.pending.len() >= 64
+            if self.pending.len() >= HANDSHAKES_MAX
                 || (!renewal && self.pending.iter().filter(|x| !x.renewal).count() >= 32)
                 || self
                     .pending
@@ -684,7 +710,7 @@ impl ProofHost {
         {
             return None;
         }
-        if self.bindings.len() >= 64
+        if self.bindings.len() >= HANDSHAKES_MAX
             && !self
                 .bindings
                 .iter()
@@ -705,7 +731,7 @@ impl ProofHost {
         });
         self.reindex();
         let ack = change_type(&p.raw, 4, &authority.key);
-        if self.completed.len() == 64 {
+        if self.completed.len() == HANDSHAKES_MAX {
             self.completed.remove(0);
         }
         self.completed.push(Completed {

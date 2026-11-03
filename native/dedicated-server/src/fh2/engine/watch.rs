@@ -1048,13 +1048,6 @@ impl PartsWatch {
         };
         car.awaiting = false;
         car.checked = Some(key);
-        let firsts: Vec<String> = installed
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| is_part(**p))
-            .take(6)
-            .map(|(slot, p)| format!("{slot}:{p}"))
-            .collect();
         out.push(Out::Note(
             "parts.rows",
             vec![
@@ -1062,11 +1055,11 @@ impl PartsWatch {
                 json!(MODEL_VARIABLE),
                 json!(model),
                 json!(PARTS_VARIABLE),
+                // counts only: the installed rows themselves are game data (contract §2.3)
                 json!(format!(
-                    "{} x 0xFFFFFFFF, {} x 0, first rows (slot:row) {}",
+                    "{} x 0xFFFFFFFF, {} x 0",
                     installed.iter().filter(|p| **p == NO_PART).count(),
                     installed.iter().filter(|p| **p == 0).count(),
-                    firsts.join(" ")
                 )),
             ],
         ));
@@ -1202,6 +1195,9 @@ impl PartsWatch {
 pub(crate) struct Watch {
     peer: Option<PeerWatch>,
     parts: Option<PartsWatch>,
+    /// This engine's place in the catalog's need budget, drawn once: a new `world.watch` keeps
+    /// it (and the parts reports already made), so re-sending the rules never resets the budget.
+    parts_world: u64,
     self_xuid: u64,
     roster_at: i64,
     roster_sent: String,
@@ -1212,6 +1208,7 @@ impl Default for Watch {
         Watch {
             peer: None,
             parts: None,
+            parts_world: NEXT_PARTS_WATCH.fetch_add(1, Ordering::Relaxed),
             self_xuid: 0,
             roster_at: i64::MIN,
             roster_sent: String::new(),
@@ -1253,14 +1250,20 @@ impl Engine {
         }
         self.drain_watch(out);
         let rules = rules.filter(|_| report);
+        let (reported, per_player) = self
+            .watch
+            .parts
+            .take()
+            .map(|p| (p.reported, p.per_player))
+            .unwrap_or_default();
         self.watch.parts = match (&rules, parts) {
             (Some(r), Some(store)) => Some(PartsWatch {
                 store,
                 rules_version: r.version,
                 cars: DotMap::new(),
-                reported: HashSet::new(),
-                per_player: HashMap::new(),
-                world: NEXT_PARTS_WATCH.fetch_add(1, Ordering::Relaxed),
+                reported,
+                per_player,
+                world: self.watch.parts_world,
             }),
             _ => None,
         };
@@ -1492,6 +1495,29 @@ mod tests {
             per_player: HashMap::new(),
             world: 1,
         }
+    }
+
+    #[test]
+    fn a_new_world_watch_keeps_the_parts_budget_and_reports() {
+        let mut e = super::super::testkit::engine();
+        let rules = WatchRules {
+            version: 1,
+            speed_max_kmh: 400.0,
+            speed_sustain_ms: 3000,
+            climb_max_kmh: 100.0,
+            climb_sustain_ms: 3000,
+            jump_max_meters: 50.0,
+            force_speed: false,
+            speed_floor_kmh: None,
+        };
+        let store = store_with(&[]);
+        e.set_watch(Some(rules.clone()), 1, true, Some(store.clone()), 0);
+        let first = e.watch.parts.as_ref().unwrap().world;
+        e.watch.parts.as_mut().unwrap().reported.insert((7, 247));
+        e.set_watch(Some(rules), 1, true, Some(store), 10);
+        let again = e.watch.parts.as_ref().unwrap();
+        assert_eq!(again.world, first);
+        assert!(again.reported.contains(&(7, 247)));
     }
 
     fn answer(store: &Arc<Mutex<CatalogStore>>, body: Value) {

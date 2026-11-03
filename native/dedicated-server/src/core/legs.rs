@@ -84,6 +84,15 @@ pub struct Legs {
 }
 
 impl Legs {
+    /// The most the legs can hold: [`MAX_LEGS`] grants, each with its claims at the grant's
+    /// limit and its 64-byte signature on the heap (contract §8's worst case).
+    pub fn worst_case_bytes() -> usize {
+        let heap = super::grant::MAX_CLAIMS_BYTES + 64 + 2 * super::ALLOC_SLACK_BYTES;
+        MAX_LEGS * (std::mem::size_of::<Leg>() + heap) + super::ALLOC_SLACK_BYTES
+    }
+}
+
+impl Legs {
     pub fn len(&self) -> usize {
         self.legs.len()
     }
