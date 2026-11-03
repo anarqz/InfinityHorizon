@@ -485,6 +485,12 @@ impl Engine {
             match payload::sanitize(obj.router, &obj.payload) {
                 Ok(clean) => {
                     obj.payload = clean;
+                    if obj.router == 1
+                        && !obj.create
+                        && obj.payload.len() >= super::roadtrip::CAR_CHOICE_BITS
+                    {
+                        self.road_trip_car_picked(serial);
+                    }
                     if obj.router == 1 {
                         self.observe_car_choice(serial, &obj.payload);
                     }
@@ -501,6 +507,15 @@ impl Engine {
                     return None;
                 }
             }
+        }
+        if road_trip_player {
+            if obj.create && self.is_road_trip() {
+                self.note(
+                    "roadtrip.player_created",
+                    vec![json!(index), json!(9), json!(2), json!(obj.handle.id)],
+                );
+            }
+            self.road_trip_player_update(serial, &obj.payload);
         }
         // ingest-size rule: a message whose relayed form (relay key, and the server variables a
         // snapshot adds) cannot fit one datagram is refused here, before it takes a sequence or
@@ -747,6 +762,8 @@ impl Engine {
                 payload: self.weather.payload(),
             })),
         ];
+        self.append_car_meet_snapshot(&mut snapshot);
+        self.append_road_trip_snapshot(serial, &mut snapshot);
         self.append_bucket_list_snapshot(&mut snapshot);
         // the players already here (routers 1, 3, 9 and 12); their cars follow at the finalise
         let owners: Vec<u64> = self.synced_serials_except(Some(serial));
@@ -777,6 +794,7 @@ impl Engine {
         if self.ev.phasing {
             self.assign_universe(serial);
         }
+        self.road_trip_joined(serial);
         self.pace(serial);
     }
 }

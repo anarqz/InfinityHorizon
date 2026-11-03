@@ -53,6 +53,13 @@ pub enum GameEvent {
         peer: u8,
         reason: &'static str,
     },
+    /// A game event the core forwards as it is (`world.gameSession.request`, `watch.report`,
+    /// `catalog.need`, `notice`): `world` adds the world's `worldId` to the body.
+    Custom {
+        ev: &'static str,
+        world: bool,
+        body: serde_json::Map<String, Value>,
+    },
     /// A validation refusal (`peer.rejected`; the core throttles it).
     Rejected {
         xuid: u64,
@@ -93,6 +100,12 @@ pub trait Game: std::marker::Send + Sync {
     /// Validates `world.open`'s game-scoped fields and makes the world's game side. Errors are
     /// `bad_request` naming the field. Also returns the notices of the open (catalog missing...).
     fn open(&self, info: OpenInfo) -> Result<(Box<dyn GameWorld>, Vec<Notice>), CmdError>;
+
+    /// A process-level command of this game (`catalog.set`, `catalog.parts`); `None` when the
+    /// game has no such command.
+    fn command(&self, _op: &str, _request: Obj) -> Option<CmdResult> {
+        None
+    }
 }
 
 /// One world's game side: its engines and game state. The core calls it inside the world's

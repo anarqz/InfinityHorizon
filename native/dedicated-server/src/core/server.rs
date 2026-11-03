@@ -322,6 +322,7 @@ impl Server {
             "stats" => Ok(self.stats_value(io)),
             "drain" => self.drain_cmd(io, o),
             "shutdown" => self.shutdown_cmd(io),
+            "catalog.set" | "catalog.parts" => self.game_cmd(op, o),
             "world.open" => self.world_open(io, o),
             "world.close" => self.world_close(io, o),
             "world.context"
@@ -338,6 +339,16 @@ impl Server {
             _ => Err(CmdError::code(proto::UNKNOWN_OP)),
         };
         proto::reply(&id, r)
+    }
+
+    /// A game's process-level command (`catalog.set`, `catalog.parts`; contract §9).
+    fn game_cmd(&mut self, op: &str, o: Obj) -> CmdResult {
+        let game = crate::core::world::game_of(o)?;
+        let Some(g) = self.cfg.games.iter().find(|g| g.id() == game).cloned() else {
+            return Err(o.bad("game"));
+        };
+        g.command(op, o)
+            .unwrap_or_else(|| Err(CmdError::code(proto::UNKNOWN_OP)))
     }
 
     fn hello(&mut self, conn: ConnId, o: Obj) -> CmdResult {

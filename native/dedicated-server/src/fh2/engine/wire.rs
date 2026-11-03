@@ -66,6 +66,14 @@ impl Handle {
         }
     }
 
+    pub fn transfer(id: u32) -> Handle {
+        Handle {
+            kind: Kind::Transfer,
+            id,
+            peer: 0,
+        }
+    }
+
     pub fn server(id: u32) -> Handle {
         Handle {
             kind: Kind::Server,

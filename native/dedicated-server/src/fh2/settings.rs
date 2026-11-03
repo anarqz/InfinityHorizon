@@ -104,10 +104,9 @@ impl RelaySettings {
                 }
                 continue;
             }
-            let n = value
-                .as_u64()
-                .filter(|n| *n <= i32::MAX as u64)
-                .ok_or_else(bad)?;
+            // the C# fields are `long` for times and `int` for counts; a time up to 2^62 keeps
+            // every `now + time` in range
+            let n = value.as_u64().filter(|n| *n <= 1 << 62).ok_or_else(bad)?;
             // (field, minimum, maximum) as the C# constructor validates
             let (slot, min, max): (&mut u64, u64, u64) = match key.as_str() {
                 "timeSyncMs" => (&mut self.time_sync_ms, 1, u64::MAX),

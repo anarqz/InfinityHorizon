@@ -335,6 +335,8 @@ impl Engine {
         self.tick_game_options();
         self.tick_phasing();
         self.tick_weather();
+        self.tick_car_meet();
+        self.tick_road_trip();
         let now = self.now;
         let r = self.settings.relay.clone();
         if now - self.last_resend >= 50 {

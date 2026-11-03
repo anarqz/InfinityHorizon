@@ -641,6 +641,17 @@ impl World {
                     router,
                     value,
                 } => self.rejected(ctx, xuid, kind, message, router, value),
+                GameEvent::Custom {
+                    ev,
+                    world,
+                    mut body,
+                } => {
+                    if world {
+                        body.insert("worldId".into(), json!(self.id));
+                    }
+                    let scope = world.then_some(self.id.as_str());
+                    ctx.events.push(ev, scope, body);
+                }
             }
         }
         // hints: nobody but the host's own game, synced or handshaking

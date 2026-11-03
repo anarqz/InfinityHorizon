@@ -20,6 +20,7 @@
 //!   pairing, voice, phasing, the watch), as the no-ops free roam needs until they are ported.
 
 pub mod bits;
+mod carmeet;
 pub mod dict;
 pub mod history;
 mod join;
@@ -28,6 +29,7 @@ mod packets;
 pub mod payload;
 mod races;
 pub mod random;
+pub mod roadtrip;
 mod seams;
 mod send;
 mod side;
@@ -90,6 +92,11 @@ pub trait Policy: std::marker::Send {
     fn authorize_hook(&mut self, xuid: u64, from: SocketAddr, now: i64) -> bool;
     /// `None`: not installed.
     fn awaits_proof(&mut self, xuid: u64, now: i64) -> Option<bool>;
+    /// Whether a car meet invitation can ask for its shared session (`world.gameSession.request`
+    /// has somebody to answer it); not installed: the invitation is cancelled at once.
+    fn can_create_game_session(&self) -> bool {
+        false
+    }
 }
 
 /// Admits nobody: an engine before its world's first admission snapshot (fail closed).
@@ -134,6 +141,7 @@ pub enum Why {
     HistoryEntries,
     OptionsOverflow,
     OptionsStalled,
+    RoadTripAlone,
     SyncUnconfirmed,
     Unacknowledged(u32),
     Quiet(i64),
@@ -160,6 +168,7 @@ impl Why {
             Why::HistoryEntries => "peer.dropped.history_entries",
             Why::OptionsOverflow => "peer.dropped.options_overflow",
             Why::OptionsStalled => "peer.dropped.options_stalled",
+            Why::RoadTripAlone => "peer.dropped.roadtrip_alone",
             Why::SyncUnconfirmed => "peer.dropped.sync_unconfirmed",
             Why::Unacknowledged(_) => "peer.dropped.unacknowledged",
             Why::Quiet(_) => "peer.dropped.quiet",
@@ -222,6 +231,9 @@ pub enum Event {
     },
     /// A held OpenConnection admitted after its endpoint proof.
     AdmittedLate { endpoint: SocketAddr },
+    /// A car meet invitation's §3.8 request: its id, the invite kind and the XUIDs (the starter
+    /// first).
+    CreateGameSession { id: u32, kind: u8, xuids: Vec<u64> },
     /// A peer synced (`peer.synced`).
     PeerSynced { xuid: u64, peer: u8 },
     /// A peer left (`peer.left` when it was synced).
@@ -305,6 +317,9 @@ pub(crate) struct Peer {
     /// The running team event's team (teams.rs) and the TeamId last written on its object.
     team: Option<u8>,
     team_written: Option<u8>,
+    /// Road Trip: when this player's own Initialising ends, and its vote object's sequence.
+    road_trip_start_at: Option<i64>,
+    road_trip_selection_sequence: Option<u8>,
 }
 
 impl Peer {
@@ -403,6 +418,8 @@ pub struct EngineSettings {
     /// T11 (tests only, never from `world.open`): refuse a Ready from a car outside the event's
     /// class or PI.
     pub enforce_car_rule: bool,
+    /// An online Road Trip world (lobby type 1): its catalog, Storm Island and the vote's seed.
+    pub road_trip: Option<roadtrip::RoadTripSettings>,
 }
 
 impl EngineSettings {
@@ -472,6 +489,12 @@ pub struct Engine {
     ev: races::Events,
     /// The running tag event (tag.rs) and its draws.
     tag: Option<tag::TagGame>,
+    /// The car meet's invitation (carmeet.rs).
+    car_meet: carmeet::CarMeet,
+    /// The online Road Trip (roadtrip.rs).
+    road_trip: Option<roadtrip::RoadTrip>,
+    road_trip_sequence: u8,
+    road_trip_state_sent: Option<i64>,
     tag_random: Option<random::LegacyRandom>,
     /// Team events (teams.rs).
     team_event: bool,
@@ -519,12 +542,16 @@ impl Engine {
         // SessionHostSynced var 0 LobbyType (3 bits; the game's default 2 is free roam)
         if let Some(lobby) = settings.car_meet_lobby {
             host_variables.insert(0u8, (u64::from(lobby), 3u32));
+        } else if settings.road_trip.is_some() {
+            // the game loads the session's entities for this value: a Road Trip world says 1
+            host_variables.insert(0u8, (ROAD_TRIP_LOBBY, 3u32));
         }
         let seed = settings
             .relay
             .weather_seed
             .unwrap_or_else(|| random.seed(SeedPurpose::Weather));
         let weather = Weather::new(seed, 0, 1);
+        let road_trip = settings.road_trip.clone().map(roadtrip::RoadTrip::new);
         Some(Engine {
             kind,
             settings,
@@ -561,6 +588,10 @@ impl Engine {
             bucket_slots_sequence: 0,
             ev: races::Events::default(),
             tag: None,
+            car_meet: carmeet::CarMeet::default(),
+            road_trip,
+            road_trip_sequence: 0,
+            road_trip_state_sent: None,
             tag_random: None,
             team_event: false,
             team_pending: HashSet::new(),
@@ -650,6 +681,29 @@ impl Engine {
         match wire::read(&mut bits::Rd::new(&data[wire::HEADER_LEN..])).ok()? {
             Msg::Open { a, .. } => Some(a),
             _ => None,
+        }
+    }
+
+    /// A world that does not serve this datagram's lobby type (a public world runs one
+    /// activity): its OpenConnection gets refusal 4, past the handshake rate.
+    pub fn refuse_open(&mut self, data: &[u8], from: SocketAddr, now_ms: i64) {
+        if self.closed || data.len() > wire::MAX_DATAGRAM || crate::stun::is_stun(data) {
+            return;
+        }
+        self.now = self.now.max(now_ms);
+        let from = canonical(from);
+        let Some(header) = Header::parse(data) else {
+            return;
+        };
+        if header.count == 0 {
+            return;
+        }
+        let Ok(m) = wire::read(&mut bits::Rd::new(&data[wire::HEADER_LEN..])) else {
+            return;
+        };
+        let Some(open) = Open::of(&m) else { return };
+        if self.handshake_allowed(from, open.user) {
+            self.refuse(from, header, &open, data.len(), 4);
         }
     }
 
@@ -929,6 +983,8 @@ impl Engine {
             ready_refused: false,
             team: None,
             team_written: None,
+            road_trip_start_at: None,
+            road_trip_selection_sequence: None,
         });
         self.events.push(Event::ConnectionOpened {
             index,
@@ -1174,6 +1230,10 @@ impl Engine {
         self.event_progress_reset();
         self.ev.event_side.clear();
         self.ev.phasing = false;
+        // the C# Clear keeps them; nothing reads them after the close, but a closed engine holds
+        // no event (MACBOOK decision 4)
+        self.ev.race = None;
+        self.ev.event_owner = None;
     }
 
     /// Sends every synced peer the game's Close (drain, shutdown), then clears.
