@@ -14,6 +14,7 @@
 //!   1,372-byte datagram limit), drops and the tick;
 //! - [`join`]: quiet joins (a joiner's cars wait for its FinaliseSessionEntry);
 //! - [`side`]: the car-state side channel;
+//! - [`voice`]: voice (off, open, proximity), its mute layers, seats and state down;
 //! - [`races`] and [`options`]: free-roam events, the options journal, event progress, the
 //!   race-end hold and phasing;
 //! - [`seams`]: the features of later steps (races, events, car meets, Road Trip, tag, bucket-list
@@ -31,6 +32,7 @@ pub mod random;
 mod seams;
 mod send;
 mod side;
+mod voice;
 pub mod weather;
 pub mod wire;
 
@@ -88,6 +90,12 @@ pub trait Policy: std::marker::Send {
     fn authorize_hook(&mut self, xuid: u64, from: SocketAddr, now: i64) -> bool;
     /// `None`: not installed.
     fn awaits_proof(&mut self, xuid: u64, now: i64) -> Option<bool>;
+    /// The server's voice block of `xuid` now (CR-S67, contract §6.4: the two sources merged,
+    /// compared with the wall clock); not installed: never blocked.
+    fn voice_blocked(&mut self, xuid: u64, now: i64) -> bool {
+        let _ = (xuid, now);
+        false
+    }
 }
 
 /// Admits nobody: an engine before its world's first admission snapshot (fail closed).
@@ -109,6 +117,9 @@ impl Policy for DenyAll {
     }
     fn awaits_proof(&mut self, _: u64, _: i64) -> Option<bool> {
         None
+    }
+    fn voice_blocked(&mut self, _: u64, _: i64) -> bool {
+        false
     }
 }
 
@@ -293,6 +304,8 @@ pub(crate) struct Peer {
     car_state_at: Option<i64>,
     last_car_at: Option<i64>,
     last_car_body: Option<Bits>,
+    /// Voice proximity's jump counter (teleports, new cars, a car known again).
+    car_jumps: u8,
     /// The options' object sequences this player was sent (and when it last asked).
     lobby_sequences: HashMap<u32, (u8, i64)>,
     /// The car this player chose (PlayerChoices CarClass and PerfIndex).
@@ -465,6 +478,8 @@ pub struct Engine {
     bucket_slots_sequence: u8,
     /// Events, the options and phasing (races.rs).
     ev: races::Events,
+    /// Voice (voice.rs).
+    voice: voice::Voice,
     out: Vec<Send>,
     events: Vec<Event>,
     /// Datagrams nobody could take (stats).
@@ -548,6 +563,7 @@ impl Engine {
             side_channel_rate_drops: 0,
             bucket_slots_sequence: 0,
             ev: races::Events::default(),
+            voice: voice::Voice::default(),
             out: Vec::new(),
             events: Vec::new(),
             dropped: 0,
@@ -906,6 +922,7 @@ impl Engine {
             car_state_at: None,
             last_car_at: None,
             last_car_body: None,
+            car_jumps: 0,
             lobby_sequences: HashMap::new(),
             car_class: None,
             car_pi: f32::NAN,
@@ -1150,6 +1167,7 @@ impl Engine {
         self.skipped_cars_noted.clear();
         self.side_rates.clear();
         self.side_channel_rate_drops = 0;
+        self.voice = voice::Voice::default();
         self.ev.options.clear();
         self.ev.options_outlived = false;
         self.event_progress_reset();

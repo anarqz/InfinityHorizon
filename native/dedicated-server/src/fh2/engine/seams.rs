@@ -9,7 +9,9 @@
 //! - bucket-list co-op (step 11): the server-owned slot array is in every free-roam snapshot (the
 //!   game needs it to exist) and stays empty; RequestSynchronize, cancel and challenge end
 //!   (62-64) are read, not acted on;
-//! - voice (step 12) and the watch (step 13): nothing to measure or forward yet.
+//! - the watch (step 13): nothing to measure yet;
+//! - voice ([`super::voice`]) reads the teams through `team_event_active`, `team_of` and
+//!   `hearing_group`; the teams port calls `voice_groups_changed` when they change.
 
 use std::sync::Arc;
 
@@ -173,6 +175,24 @@ impl Engine {
     pub(super) fn team_player_left(&mut self, _index: u8) {}
 
     pub(super) fn team_object_created(&mut self, _serial: u64) {}
+
+    /// A team event runs (voice: state down per listener, step 4).
+    pub(super) fn team_event_active(&self) -> bool {
+        false
+    }
+
+    /// The team (0 red, 1 blue) of a running team event's participant whose team the relay
+    /// assigned, for its state down's 0xC0FA; `None` for everyone else (step 4).
+    pub(super) fn team_of(&self, _serial: u64) -> Option<u8> {
+        None
+    }
+
+    /// §5c rule 2a, a player's hearing group: 0 outside team events and for a team event's
+    /// non-participants; a participant's team + 1; negative (unique, `-1 - index`) for a
+    /// participant whose team the game does not have yet (step 4).
+    pub(super) fn hearing_group(&self, _serial: u64) -> i32 {
+        0
+    }
 
     /// A bucket-list co-op player stays in universe 0 during an event (step 4).
     pub(super) fn bucket_list_busy(&self, _serial: u64) -> bool {

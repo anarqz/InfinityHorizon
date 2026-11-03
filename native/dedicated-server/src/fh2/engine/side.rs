@@ -1,13 +1,13 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 // Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! The side channels beside NerdCore on the world socket (contract §5.3): the hook's car state
-//! (lights and roof, kind 0x3E91). Voice (0x3E93/0x3E94) is a later step and is dropped unread
-//! until then; the retired livery channel never reaches an engine.
+//! (lights and roof, kind 0x3E91), and voice (0x3E93/0x3E94, [`super::voice`]); the retired
+//! livery channel never reaches an engine.
 
 use std::net::{IpAddr, SocketAddr};
 
 use super::{Engine, SideRate};
-use crate::fh2::carstate;
+use crate::fh2::{carstate, voice};
 
 pub const SIDE_CHANNEL_PACKETS_PER_SECOND: f64 = 4096.0;
 pub const SIDE_CHANNEL_BYTES_PER_SECOND: f64 = 2.0 * 1024.0 * 1024.0;
@@ -47,12 +47,15 @@ pub fn is_private(ip: IpAddr) -> bool {
 
 impl Engine {
     pub(super) fn receive_side_channel(&mut self, data: &[u8], endpoint: SocketAddr) {
-        if u16::from_be_bytes([data[0], data[1]]) == carstate::KIND {
-            self.receive_car_state(data, endpoint);
+        match u16::from_be_bytes([data[0], data[1]]) {
+            carstate::KIND => self.receive_car_state(data, endpoint),
+            voice::VOICE_KIND => self.receive_voice(data, endpoint),
+            voice::CONTROL_KIND => self.receive_voice_control(data, endpoint),
+            _ => {}
         }
     }
 
-    fn take_side_rate(&mut self, serial: u64, bytes: usize, control: bool) -> bool {
+    pub(super) fn take_side_rate(&mut self, serial: u64, bytes: usize, control: bool) -> bool {
         let now = self.now;
         if !self.side_rates.contains_key(&serial) {
             self.side_rates.insert(
@@ -198,5 +201,6 @@ impl Engine {
                 self.pass_car_state(s);
             }
         }
+        self.tick_voice();
     }
 }
