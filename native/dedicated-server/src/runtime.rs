@@ -217,8 +217,11 @@ fn proc_statm_rss() -> Option<u64> {
 
 struct Conn {
     writer: SyncSender<String>,
+    /// Requests taken and not yet written back: a request counts until its reply is on the
+    /// writer, so replies the writer cannot take keep the reader answering `busy` (§4.6).
     inflight: Arc<AtomicUsize>,
-    replies: VecDeque<String>,
+    /// Lines the writer could not take yet: (line, whether it is a reply; else an event).
+    replies: VecDeque<(String, bool)>,
     closer: Option<Box<dyn Fn() + Send>>,
     stalled_since: Option<Instant>,
 }
@@ -456,11 +459,10 @@ fn run_loop(
                 Hub::Control(ControlMsg::Request { conn, request }) => {
                     let reply = server.request(io, now, conn, &request);
                     if let Some(c) = conns.get_mut(&conn) {
-                        let depth = c.inflight.fetch_sub(1, Ordering::AcqRel) as u64;
-                        server.note_queue_depth(depth);
+                        server.note_queue_depth(c.inflight.load(Ordering::Acquire) as u64);
                         let mut line = reply.to_string();
                         line.push('\n');
-                        c.replies.push_back(line);
+                        c.replies.push_back((line, true));
                     }
                 }
                 Hub::Control(ControlMsg::Closed { conn }) => {
@@ -507,18 +509,27 @@ fn run_loop(
             let events = (Some(*id) == controller).then_some(&mut *server);
             flush_conn(c, events);
         }
-        if let Some(cid) = controller
-            && let Some(c) = conns.get_mut(&cid)
-        {
-            let blocked = server.events_full();
+        // a connection that does not read for 30 s while its queue is full is disconnected:
+        // the controller's event queue, or any connection's replies (a full command queue's
+        // worth waiting for the writer)
+        let events_full = server.events_full();
+        let mut stalled = Vec::new();
+        for (id, c) in conns.iter_mut() {
+            let blocked = (Some(*id) == controller && events_full) || reply_backlog_full(c);
             match (blocked, c.stalled_since) {
                 (true, None) => c.stalled_since = Some(Instant::now()),
-                (true, Some(t)) if t.elapsed() >= STALL => {
-                    c.close();
-                    server.controller_stalled(io, mono());
-                }
+                (true, Some(t)) if t.elapsed() >= STALL => stalled.push(*id),
                 (false, _) => c.stalled_since = None,
                 _ => {}
+            }
+        }
+        for id in stalled {
+            if let Some(c) = conns.get_mut(&id) {
+                c.close();
+                c.stalled_since = None;
+            }
+            if Some(id) == controller {
+                server.controller_stalled(io, mono());
             }
         }
         if let Some(code) = server.exit_code() {
@@ -541,16 +552,31 @@ fn server_has_events(server: &Server) -> bool {
     server.controller().is_some() && server.has_events()
 }
 
-/// Moves queued replies (and, for the controller, events) into the connection's writer.
+/// Whether a connection's unwritten replies fill a command queue.
+fn reply_backlog_full(c: &Conn) -> bool {
+    c.replies.iter().filter(|(_, reply)| *reply).count() >= crate::control::COMMAND_QUEUE
+}
+
+/// Moves queued replies (and, for the controller, events) into the connection's writer; a
+/// request stops counting toward its connection's queue when its reply is on the writer.
 fn flush_conn(c: &mut Conn, events: Option<&mut Server>) {
-    while let Some(line) = c.replies.pop_front() {
+    while let Some((line, reply)) = c.replies.pop_front() {
         match c.writer.try_send(line) {
-            Ok(()) => {}
+            Ok(()) => {
+                if reply {
+                    c.inflight.fetch_sub(1, Ordering::AcqRel);
+                }
+            }
             Err(TrySendError::Full(line)) => {
-                c.replies.push_front(line);
+                c.replies.push_front((line, reply));
                 return;
             }
             Err(TrySendError::Disconnected(_)) => {
+                let replies = c.replies.iter().filter(|(_, r)| *r).count() + usize::from(reply);
+                c.inflight.fetch_sub(
+                    replies.min(c.inflight.load(Ordering::Acquire)),
+                    Ordering::AcqRel,
+                );
                 c.replies.clear();
                 return;
             }
@@ -562,7 +588,7 @@ fn flush_conn(c: &mut Conn, events: Option<&mut Server>) {
                 Ok(()) => {}
                 Err(TrySendError::Full(line)) | Err(TrySendError::Disconnected(line)) => {
                     // keep it for the next turn (it already has its seq)
-                    c.replies.push_back(line);
+                    c.replies.push_back((line, false));
                     return;
                 }
             }
@@ -664,5 +690,45 @@ mod tests {
         }
         stop.store(true, Ordering::Release);
         reader.join().unwrap();
+    }
+    #[test]
+    fn a_request_counts_toward_busy_until_its_reply_is_written() {
+        let (writer, lines) = mpsc::sync_channel::<String>(1);
+        let inflight = Arc::new(AtomicUsize::new(3));
+        let mut c = Conn {
+            writer,
+            inflight: inflight.clone(),
+            replies: VecDeque::new(),
+            closer: None,
+            stalled_since: None,
+        };
+        for i in 0..3 {
+            c.replies.push_back((format!("{i}\n"), true));
+        }
+        c.replies.push_back(("event\n".into(), false));
+        flush_conn(&mut c, None);
+        assert_eq!(
+            inflight.load(Ordering::Acquire),
+            2,
+            "one reply on the writer"
+        );
+        assert_eq!(c.replies.len(), 3);
+        assert!(!reply_backlog_full(&c));
+        assert_eq!(lines.try_recv().unwrap(), "0\n");
+        flush_conn(&mut c, None);
+        assert_eq!(inflight.load(Ordering::Acquire), 1);
+        for i in 0..crate::control::COMMAND_QUEUE {
+            c.replies.push_back((format!("x{i}\n"), true));
+        }
+        assert!(
+            reply_backlog_full(&c),
+            "a full queue's worth of unwritten replies"
+        );
+        // the writer gone: nothing stays counted
+        drop(lines);
+        inflight.store(1 + crate::control::COMMAND_QUEUE, Ordering::Release);
+        flush_conn(&mut c, None);
+        assert!(c.replies.is_empty());
+        assert_eq!(inflight.load(Ordering::Acquire), 0);
     }
 }
