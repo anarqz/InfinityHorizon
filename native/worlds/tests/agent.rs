@@ -53,16 +53,20 @@ fn punch(world: &str) -> Value {
 
 type Log = Arc<Mutex<Vec<(String, String)>>>;
 
+/// How the fake answers `POST …/game-sessions`: a status (201 with a `GameModeSession`, anything
+/// else a refusal), or `HANG` (no answer for 16 s, past the agent's 14 s budget).
+const HANG: u16 = 0;
+
 /// The fake server: answers until the test ends; records (method, target) of verified calls.
-fn fake(listener: TcpListener, log: Log) {
+fn fake(listener: TcpListener, log: Log, sessions: u16) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { return };
         let log = log.clone();
-        std::thread::spawn(move || serve(stream, log));
+        std::thread::spawn(move || serve(stream, log, sessions));
     }
 }
 
-fn serve(stream: TcpStream, log: Log) {
+fn serve(stream: TcpStream, log: Log, sessions: u16) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut out = stream;
     let public = SigningKey::from_bytes(&AGENT_SEED).verifying_key();
@@ -132,14 +136,39 @@ fn serve(stream: TcpStream, log: Log) {
                     200,
                     json!({"serverTimeMs": now_s() * 1000,
                         "grantVerifyKeys": [{"kid": KID, "publicKey": encode_base64(SigningKey::from_bytes(&GRANT_SEED).verifying_key().as_bytes())}],
-                        "activities": ["freeroam", "roadtrip"]}),
+                        "activities": ["freeroam", "carmeet", "roadtrip"]}),
                 ),
                 ("PUT", Some(w)) => {
                     let settings: Value = serde_json::from_slice(&body).unwrap();
                     assert_eq!(settings["game"], "fh2");
                     assert_eq!(settings["mode"], "noob");
-                    assert_eq!(settings["activity"], "freeroam");
+                    assert!(
+                        settings["activity"] == "freeroam" || settings["activity"] == "carmeet",
+                        "{settings}"
+                    );
                     (201, json!({"id": w, "punches": []}))
+                }
+                ("POST", Some(w)) if target.ends_with("/game-sessions") => {
+                    assert!(idem.is_some(), "a game session carries Idempotency-Key");
+                    let request: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(request, json!({"kind": "freeroam", "xuids": [XUID]}));
+                    match sessions {
+                        HANG => {
+                            std::thread::sleep(Duration::from_secs(16));
+                            (503, json!({"code": "UNAVAILABLE", "message": "late"}))
+                        }
+                        201 => (
+                            201,
+                            json!({"kind": "freeroam", "scid": "788f0100-a4bc-46c3-b19b-d1001a96545b",
+                                "templateName": "defaulttemplate",
+                                "name": format!("fh2inf-invite-{}-{}", w.replace('-', ""), "0".repeat(32)),
+                                "members": [XUID]}),
+                        ),
+                        status => (
+                            status,
+                            json!({"code": "REQUEST.INVALID", "message": "no", "details": {"field": "xuids"}}),
+                        ),
+                    }
                 }
                 ("POST", Some(w)) if target.ends_with("/announce") => {
                     assert!(idem.is_some(), "an announce carries Idempotency-Key");
@@ -192,7 +221,7 @@ fn hello_open_announce_admission_and_delete_end_to_end() {
     let port = listener.local_addr().unwrap().port();
     let log: Log = Arc::default();
     let server_log = log.clone();
-    std::thread::spawn(move || fake(listener, server_log));
+    std::thread::spawn(move || fake(listener, server_log, 201));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_worlds"))
         .arg("agent")
@@ -306,4 +335,113 @@ fn an_invalid_setting_refuses_the_start_with_a_stable_id() {
     assert_eq!(line["ev"], "agent.config.invalid");
     assert_eq!(line["field"], "FI_WORLDS_SERVER_URL");
     assert!(!String::from_utf8_lossy(&out.stdout).contains("198.51.100.7"));
+}
+
+/// OD-190: an official car meet lobby (`carmeet`, both modes) opens, and the §4.4 game session
+/// goes engine → agent → `POST …/game-sessions` → `world.gameSession.answer` → engine; a refusal
+/// and a call past the 14 s budget answer `session: null`. The engine's request is the
+/// test-hooks synthetic one (`FI_DS_TEST_GAME_SESSION_XUIDS`): a real one needs a game.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_car_meet_lobby_opens_and_answers_its_game_session_end_to_end() {
+    for (status, outcome, given) in [
+        (201, "created", true),
+        (400, "refused", false),
+        (HANG, "timeout", false),
+    ] {
+        let dir = std::env::temp_dir().join(format!("fi-agent-cm-{}-{status}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("agent.key");
+        std::fs::write(&key, format!("{}\n", encode_base64(&AGENT_SEED))).unwrap();
+        let control = dir.join("ctl").join("control.sock");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let log: Log = Arc::default();
+        let server_log = log.clone();
+        std::thread::spawn(move || fake(listener, server_log, status));
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_worlds"))
+            .arg("agent")
+            .env_clear()
+            .env("FI_WORLDS_SERVER_URL", format!("http://127.0.0.1:{port}"))
+            .env("FI_WORLDS_VM_ID", VM)
+            .env("FI_WORLDS_KEY_FILE", &key)
+            .env("FI_WORLDS_BIND", "127.0.0.1:0")
+            .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
+            .env("FI_WORLDS_ACTIVITIES", "carmeet")
+            .env("FI_WORLDS_MODES", "noob")
+            .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
+            .env("FI_DS_TEST_GAME_SESSION_XUIDS", XUID)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                let v: Value = serde_json::from_str(&line).expect("stdout carries JSON lines only");
+                if tx.send(v).is_err() {
+                    return;
+                }
+            }
+        });
+        let opened = wait_line(&rx, "agent.world.opened", |v| {
+            v["ev"] == "agent.world.opened"
+        });
+        assert_eq!(opened["activity"], "carmeet", "{opened}");
+        assert_eq!(opened["mode"], "noob", "{opened}");
+        let world = opened["world"].as_str().unwrap().to_string();
+        // the engine's note and the agent's line come from two processes: either order
+        let (mut answered, mut note) = (None, None);
+        while answered.is_none() || note.is_none() {
+            let v = wait_line(&rx, "agent.game_session and debug.game_session", |v| {
+                v["ev"] == "agent.game_session"
+                    || (v["ev"] == "world.note" && v["note"] == "debug.game_session")
+            });
+            if v["ev"] == "agent.game_session" {
+                answered = Some(v);
+            } else {
+                note = Some(v);
+            }
+        }
+        let (answered, note) = (answered.unwrap(), note.unwrap());
+        assert_eq!(answered["world"], world.as_str(), "{answered}");
+        assert_eq!(answered["outcome"], outcome, "{answered}");
+        assert_eq!(
+            answered["engine"], "ok",
+            "the engine took the answer: {answered}"
+        );
+        assert_eq!(note["args"], json!([given]), "{note}");
+        let line = answered.to_string();
+        assert!(!line.contains(XUID), "no XUID is logged: {line}");
+
+        Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(20);
+        let status_code = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            assert!(Instant::now() < until, "the agent did not stop");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(status_code.code(), Some(0));
+        let calls = log.lock().unwrap().clone();
+        let sessions = format!("/mm/v1/official/worlds/{world}/game-sessions");
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(m, t)| m == "POST" && *t == sessions)
+                .count(),
+            1,
+            "{calls:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

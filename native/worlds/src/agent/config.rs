@@ -17,8 +17,15 @@ use crate::core::keys::{decode_base64, encode_base64};
 /// The settings' names in `agent.config.invalid {field}`.
 pub type Invalid = &'static str;
 
-/// The activities an official world may run (MATCHMAKING_API §2.9 `OfficialWorldSettings`).
-pub const ACTIVITIES: [&str; 2] = ["freeroam", "roadtrip"];
+/// The activities an official world may run (MATCHMAKING_API §2.9 `OfficialWorldSettings`;
+/// WORLDS_OFFICIAL.md §11.1): `freeroam` and `roadtrip` per mode, `carmeet` for both modes.
+pub const ACTIVITIES: [&str; 3] = ["freeroam", "carmeet", "roadtrip"];
+/// The one activity whose world admits both modes (OD-180, WORLDS_OFFICIAL.md §11.1).
+pub const MIXED: &str = "carmeet";
+/// The default `--max-worlds`: one spare per (freeroam, mode) and (roadtrip, mode) and one car
+/// meet spare (2 + 2 + 1) with room for three more; the engine's public cap (§8: 8 × 40 MiB
+/// reserved fits the 400 MB limit) and `--max-seats` 8 × 12 = 96.
+pub const DEFAULT_MAX_WORLDS: u64 = 8;
 /// The pools an official world may serve (`OfficialWorldSettings.mode`).
 pub const MODES: [&str; 2] = ["hardcore", "noob"];
 /// The one game module this build hosts.
@@ -45,7 +52,7 @@ pub struct AgentConfig {
     /// `None`: the hello's `activities`.
     pub activities: Option<Vec<&'static str>>,
     pub modes: Vec<&'static str>,
-    /// The most worlds this VM keeps open (the engine's `--max-worlds`, 1-8).
+    /// The most worlds this VM keeps open (the engine's `--max-worlds`, 1-8, default 8).
     pub max_worlds: usize,
     /// Each world's `maxPlayers` (guests, 2-12).
     pub max_players: u8,
@@ -154,7 +161,9 @@ pub fn parse(
         None => MODES.to_vec(),
         Some(t) => list(&t, &MODES).ok_or("FI_WORLDS_MODES")?,
     };
-    let max_worlds = int("FI_WORLDS_MAX_WORLDS", 4, &|n| (1..=8).contains(&n))? as usize;
+    let max_worlds = int("FI_WORLDS_MAX_WORLDS", DEFAULT_MAX_WORLDS, &|n| {
+        (1..=8).contains(&n)
+    })? as usize;
     let max_players = int("FI_WORLDS_MAX_PLAYERS", 12, &|n| (2..=12).contains(&n))? as u8;
     let announce_seconds = int("FI_WORLDS_ANNOUNCE_SECONDS", 15, &|n| (1..=15).contains(&n))?;
     Ok(AgentConfig {
@@ -355,7 +364,7 @@ mod tests {
         assert_eq!(c.modes, vec!["hardcore", "noob"]);
         assert_eq!(
             (c.max_worlds, c.max_players, c.announce_seconds),
-            (4, 12, 15)
+            (8, 12, 15)
         );
         let c = with(
             &[("FI_WORLDS_VM_ID", "env-vm"), ("FI_WORLDS_MODES", "noob")],
@@ -365,6 +374,9 @@ mod tests {
         assert_eq!(c.vm_id, "cli-vm");
         assert_eq!(c.modes, vec!["noob"]);
         assert_eq!(c.activities, Some(vec!["roadtrip", "freeroam"]));
+        // OD-190: the car meet lobby is an activity of its own
+        let c = with(&[("FI_WORLDS_ACTIVITIES", "carmeet,freeroam")], &[]).unwrap();
+        assert_eq!(c.activities, Some(vec!["carmeet", "freeroam"]));
     }
 
     // The fixtures' key and catalog paths are Unix absolute paths (the role runs on Unix only).
@@ -391,7 +403,8 @@ mod tests {
             ("FI_WORLDS_BIND", "host:5101"),
             ("FI_WORLDS_CONTROL", "relative.sock"),
             ("FI_WORLDS_CATALOG", "/nonexistent/gamedbRC.slt"),
-            ("FI_WORLDS_ACTIVITIES", "carmeet"),
+            ("FI_WORLDS_ACTIVITIES", "carmeet3"),
+            ("FI_WORLDS_ACTIVITIES", "carmeet,carmeet"),
             ("FI_WORLDS_ACTIVITIES", "freeroam,freeroam"),
             ("FI_WORLDS_ACTIVITIES", ","),
             ("FI_WORLDS_MODES", "any"),

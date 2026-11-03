@@ -6,16 +6,22 @@
 //! 1. `GET /mm/v1/official/hello` (retried with backoff): the server's clock and grant keys;
 //! 2. the engine child, its controller `hello`, `keys.set`, `catalog.set`; restarted with backoff
 //!    when it ends, its worlds `DELETE`d on the server;
-//! 3. one spare open world per (mode, activity): `world.open` + `PUT` with a client-minted id kept
-//!    for its retries; an announce per world every 15 s with `world.state`'s peers, each answer
-//!    feeding `world.context` then `world.admission`; an idle extra world closed (`DELETE`);
+//! 3. one spare open world per (mode, activity) for `freeroam` and `roadtrip` and one `carmeet`
+//!    spare for both modes (WORLDS_OFFICIAL.md §11.1): `world.open` + `PUT` with a client-minted
+//!    id kept for its retries; an announce per world every 15 s with `world.state`'s peers, each
+//!    answer feeding `world.context` then `world.admission`; an idle extra world closed (`DELETE`);
 //! 4. `catalog.need` answered with `catalog.parts`;
-//! 5. SIGTERM/SIGINT: `DELETE` every world, `shutdown` the engine, exit 0.
+//! 5. a car meet's `world.gameSession.request` answered from `POST …/game-sessions` (a call off
+//!    the loop, at most 14 s; DEDICATED_SERVER.md §4.4), `session: null` when refused or late;
+//! 6. SIGTERM/SIGINT: `DELETE` every world, `shutdown` the engine, exit 0.
 
 use std::{
     collections::HashMap,
     process::Child,
-    sync::mpsc::{Receiver, RecvTimeoutError, Sender},
+    sync::{
+        Arc,
+        mpsc::{Receiver, RecvTimeoutError, Sender},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -24,7 +30,7 @@ use serde_json::{Map, Value, json};
 use super::{
     catalog::{self, Catalog},
     config::{self, AgentConfig, GAME},
-    engine::{self, Control, Input},
+    engine::{self, Control, Input, SessionAnswer},
     exit,
     http::{Client, Reply},
     sign, uuid_v4,
@@ -46,6 +52,12 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const STABLE_RUN: Duration = Duration::from_secs(120);
 /// The most punches in one `world.admission` (§4.3).
 const PUNCHES_MAX: usize = 256;
+/// A car meet session's budget: `CarMeetCreateMs` 15 s − 1 s (DEDICATED_SERVER.md §4.4).
+const GAME_SESSION_BUDGET: Duration = Duration::from_secs(14);
+/// The most game-session calls in flight (an engine holds at most 16 requests per world).
+const GAME_SESSIONS_MAX: usize = 32;
+/// `GameModeSessionRequest.xuids`: 1-12 (MATCHMAKING_API §3.8).
+const GAME_SESSION_XUIDS_MAX: usize = 12;
 
 struct World {
     id: String,
@@ -59,6 +71,13 @@ struct World {
     /// One key per logical announce, kept for its retries.
     announce_key: String,
     last_admission: Option<(usize, u64)>,
+}
+
+/// A `world.gameSession.request` waiting for its call.
+struct PendingSession {
+    world: String,
+    rid: u64,
+    deadline: Instant,
 }
 
 struct Deletion {
@@ -79,6 +98,13 @@ enum Outcome {
 struct Agent {
     cfg: AgentConfig,
     client: Client,
+    /// The game-session calls' client (off the loop; 15 s timeout, past the 14 s budget).
+    session_client: Arc<Client>,
+    /// The loop's input, for the game-session calls' answers.
+    inputs: Sender<Input>,
+    /// The engine session the loop drives now (answers of an ended one are dropped).
+    generation: u64,
+    sessions: Vec<PendingSession>,
     offset_ms: i64,
     ring: String,
     hello_activities: Vec<String>,
@@ -145,7 +171,16 @@ pub fn run(cfg: AgentConfig) -> i32 {
     signals::install(tx.clone());
     let now = Instant::now();
     let mut agent = Agent {
-        client: Client::new(&cfg.server.base, &cfg.vm_id, key),
+        client: Client::new(&cfg.server.base, &cfg.vm_id, key.clone()),
+        session_client: Arc::new(Client::with_timeout(
+            &cfg.server.base,
+            &cfg.vm_id,
+            key,
+            GAME_SESSION_BUDGET + Duration::from_secs(1),
+        )),
+        inputs: tx.clone(),
+        generation: 0,
+        sessions: Vec::new(),
         cfg,
         offset_ms: 0,
         ring: String::new(),
@@ -515,11 +550,16 @@ impl Agent {
             self.engine_refused("catalog.set", &e);
         }
         self.engine_full = false;
+        self.generation = generation;
+        self.sessions.clear();
         loop {
             match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(Input::Signal) | Err(RecvTimeoutError::Disconnected) => return Outcome::Stop,
                 Ok(Input::Closed(g)) if g == generation => return Outcome::Ended,
                 Ok(Input::Event(g, ev)) if g == generation => self.on_event(control, &ev),
+                Ok(Input::GameSession(g, answer)) if g == generation => {
+                    self.session_answered(control, answer)
+                }
                 Ok(_) | Err(RecvTimeoutError::Timeout) => {}
             }
             if !matches!(child.try_wait(), Ok(None)) {
@@ -590,6 +630,7 @@ impl Agent {
                 self.freed();
                 self.schedule_delete(w.id);
             }
+            Some("world.gameSession.request") => self.game_session_request(control, ev),
             Some("catalog.need") => {
                 if ev.get("kind").and_then(Value::as_str) != Some("parts") {
                     return;
@@ -625,8 +666,144 @@ impl Agent {
         self.capacity_logged = false;
     }
 
+    /// `world.gameSession.request {worldId, rid, kind, xuids}` of one of this agent's car meet
+    /// lobbies: the signed `POST …/game-sessions` on a thread of its own (the loop keeps
+    /// announcing), answered by [`Agent::session_answered`] or `null` at the 14 s deadline. Any
+    /// other request is answered `null` at once, never left hanging (§4.4).
+    fn game_session_request(&mut self, control: &Control, ev: &Value) {
+        let Some(world) = ev.get("worldId").and_then(Value::as_str).map(String::from) else {
+            return;
+        };
+        let Some(rid) = ev.get("rid").and_then(Value::as_u64) else {
+            return;
+        };
+        let kind = ev.get("kind").and_then(Value::as_str);
+        let xuids = ev.get("xuids").and_then(Value::as_array).cloned();
+        let ours = self
+            .worlds
+            .iter()
+            .any(|w| w.id == world && w.activity == config::MIXED);
+        let refusal = if !ours {
+            Some("not_served")
+        } else if kind != Some("freeroam")
+            || xuids.as_ref().is_none_or(|x| {
+                x.is_empty() || x.len() > GAME_SESSION_XUIDS_MAX || x.iter().any(|v| !v.is_string())
+            })
+        {
+            Some("invalid")
+        } else if self.sessions.len() >= GAME_SESSIONS_MAX {
+            Some("busy")
+        } else {
+            None
+        };
+        if let Some(code) = refusal {
+            self.answer_session(control, &world, rid, Err(code), None);
+            return;
+        }
+        let body = json!({"kind": "freeroam", "xuids": xuids}).to_string();
+        let target = format!("{}/game-sessions", Self::world_target(&world));
+        let key = uuid_v4();
+        let seconds = self.seconds();
+        let client = self.session_client.clone();
+        let inputs = self.inputs.clone();
+        let generation = self.generation;
+        let world_id = world.clone();
+        let spawned = std::thread::Builder::new()
+            .name("agent-game-session".into())
+            .spawn(move || {
+                let reply =
+                    client.call("POST", &target, Some(body.as_bytes()), Some(&key), seconds);
+                let (session, status) = match reply {
+                    Ok(r) if r.status == 200 || r.status == 201 => {
+                        (session_of(&r.body).ok_or("body"), Some(r.status))
+                    }
+                    Ok(r) => (Err("refused"), Some(r.status)),
+                    Err(()) => (Err("network"), None),
+                };
+                let _ = inputs.send(Input::GameSession(
+                    generation,
+                    SessionAnswer {
+                        world: world_id,
+                        rid,
+                        session,
+                        status,
+                    },
+                ));
+            });
+        if spawned.is_err() {
+            self.answer_session(control, &world, rid, Err("internal"), None);
+            return;
+        }
+        self.sessions.push(PendingSession {
+            world,
+            rid,
+            deadline: Instant::now() + GAME_SESSION_BUDGET,
+        });
+    }
+
+    /// A game-session call came back: answered unless its deadline already answered `null`.
+    fn session_answered(&mut self, control: &Control, a: SessionAnswer) {
+        let Some(i) = self
+            .sessions
+            .iter()
+            .position(|p| p.world == a.world && p.rid == a.rid)
+        else {
+            return;
+        };
+        self.sessions.remove(i);
+        self.answer_session(control, &a.world, a.rid, a.session, a.status);
+    }
+
+    /// `world.gameSession.answer`: the session, or `session: null` with the refusal's code (the
+    /// engine cancels the invitation; a `stale` reply means it already gave up).
+    fn answer_session(
+        &mut self,
+        control: &Control,
+        world: &str,
+        rid: u64,
+        session: Result<(String, String), &'static str>,
+        status: Option<u16>,
+    ) {
+        let (fields, outcome) = match &session {
+            Ok((name, template)) => (
+                json!({"worldId": world, "rid": rid,
+                    "session": {"name": name, "templateName": template}}),
+                "created",
+            ),
+            Err(code) => (
+                json!({"worldId": world, "rid": rid, "session": null, "error": code}),
+                *code,
+            ),
+        };
+        let engine = match control.request_retry("world.gameSession.answer", fields) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.code,
+        };
+        let mut line = log::info(log_ids::AGENT_GAME_SESSION)
+            .world(world)
+            .field("outcome", outcome)
+            .field("engine", engine);
+        if let Some(s) = status {
+            line = line.field("status", s);
+        }
+        line.emit();
+    }
+
+    /// The game-session calls past their 14 s budget: `session: null` (the late answer is
+    /// dropped when it comes).
+    fn expire_sessions(&mut self, control: &Control, now: Instant) {
+        let (late, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sessions)
+            .into_iter()
+            .partition(|p| p.deadline <= now);
+        self.sessions = keep;
+        for p in late {
+            self.answer_session(control, &p.world, p.rid, Err("timeout"), None);
+        }
+    }
+
     fn tick(&mut self, control: &Control) {
         let now = Instant::now();
+        self.expire_sessions(control, now);
         if now >= self.next_hello {
             let ring = self.ring.clone();
             if self.hello() {
@@ -775,13 +952,7 @@ impl Agent {
             self.close(control, &id, "idle");
             return;
         }
-        let groups: Vec<(&'static str, &'static str)> = self
-            .cfg
-            .modes
-            .iter()
-            .flat_map(|m| self.activities.iter().map(move |a| (*m, *a)))
-            .collect();
-        for (mode, activity) in groups {
+        for (mode, activity) in spare_groups(&self.cfg.modes, &self.activities) {
             let group: Vec<&World> = self
                 .worlds
                 .iter()
@@ -833,6 +1004,8 @@ impl Agent {
             .entry((mode, activity))
             .or_insert_with(uuid_v4)
             .clone();
+        // `carmeet` without `carMeetLobby`: the official car meet lobby (both locations and their
+        // free roam, DEDICATED_SERVER.md §16 decision 10)
         let opened = control.request_retry(
             "world.open",
             json!({"worldId": id, "game": GAME,
@@ -1018,6 +1191,37 @@ impl Agent {
     }
 }
 
+/// The placement groups, each kept with one spare: (mode, activity) for `freeroam` and
+/// `roadtrip`, and one `carmeet` group for both modes, stored under the first mode
+/// (WORLDS_OFFICIAL.md §11.1: `any_mode`, `mode` = the agent's first mode). Free roam first, the
+/// car meet lobby, then Road Trip: the order spares are restored in.
+fn spare_groups(
+    modes: &[&'static str],
+    activities: &[&'static str],
+) -> Vec<(&'static str, &'static str)> {
+    let mut groups = Vec::new();
+    for activity in config::ACTIVITIES {
+        if !activities.contains(&activity) {
+            continue;
+        }
+        if activity == config::MIXED {
+            groups.extend(modes.first().map(|m| (*m, activity)));
+        } else {
+            groups.extend(modes.iter().map(|m| (*m, activity)));
+        }
+    }
+    groups
+}
+
+/// `GameModeSession {name, templateName}` of a `game-sessions` answer (MATCHMAKING_API §3.8).
+fn session_of(body: &[u8]) -> Option<(String, String)> {
+    let v: Value = serde_json::from_slice(body).ok()?;
+    Some((
+        v.get("name")?.as_str()?.to_string(),
+        v.get("templateName")?.as_str()?.to_string(),
+    ))
+}
+
 fn idle_for(w: &World, now: Instant) -> Duration {
     if w.busy || !w.peers.is_empty() {
         return Duration::ZERO;
@@ -1048,6 +1252,54 @@ fn end_child(child: &mut Child, wait: Duration) -> Option<i32> {
                 return child.wait().ok().and_then(|s| s.code());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_spare_per_mode_for_free_roam_and_road_trip_and_one_car_meet_lobby() {
+        let all = spare_groups(&config::MODES, &config::ACTIVITIES);
+        assert_eq!(
+            all,
+            vec![
+                ("hardcore", "freeroam"),
+                ("noob", "freeroam"),
+                ("hardcore", "carmeet"),
+                ("hardcore", "roadtrip"),
+                ("noob", "roadtrip"),
+            ]
+        );
+        // 2 + 1 + 2 spares fit the default cap with room
+        assert!(all.len() < config::DEFAULT_MAX_WORLDS as usize);
+        // the car meet lobby is stored under the first mode, whatever the order of the list
+        assert_eq!(
+            spare_groups(&["noob", "hardcore"], &["carmeet"]),
+            vec![("noob", "carmeet")]
+        );
+        // without a catalog (no roadtrip placed) or with one mode
+        assert_eq!(
+            spare_groups(&["noob"], &["roadtrip", "freeroam", "carmeet"]),
+            vec![
+                ("noob", "freeroam"),
+                ("noob", "carmeet"),
+                ("noob", "roadtrip")
+            ]
+        );
+        assert!(spare_groups(&config::MODES, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_game_session_answer_needs_its_name_and_template() {
+        let ok = br#"{"kind":"freeroam","scid":"788f0100-a4bc-46c3-b19b-d1001a96545b","templateName":"defaulttemplate","name":"fh2inf-invite-a-b","members":["1"]}"#;
+        assert_eq!(
+            session_of(ok),
+            Some(("fh2inf-invite-a-b".into(), "defaulttemplate".into()))
+        );
+        assert_eq!(session_of(br#"{"name":"x"}"#), None);
+        assert_eq!(session_of(b"not json"), None);
     }
 }
 

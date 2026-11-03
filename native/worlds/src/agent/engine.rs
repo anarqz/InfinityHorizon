@@ -33,6 +33,17 @@ pub enum Input {
     /// EOF or a read error on the control channel.
     Closed(u64),
     Signal,
+    /// The answer of a car meet's `POST …/game-sessions` (a call off the loop, §4.4).
+    GameSession(u64, SessionAnswer),
+}
+
+/// What the game-session call came back with, for `world.gameSession.answer`.
+pub struct SessionAnswer {
+    pub world: String,
+    pub rid: u64,
+    /// `{name, templateName}`, or the refusal's code (`refused`, `network`, `body`).
+    pub session: Result<(String, String), &'static str>,
+    pub status: Option<u16>,
 }
 
 /// A refused command (`ok: false`), or no reply at all (`code` `"gone"`).
