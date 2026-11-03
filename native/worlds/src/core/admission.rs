@@ -478,7 +478,13 @@ impl Gate {
                 world: &world_id,
                 host_xuid: &host_text,
                 peer_xuid: &info.xuid,
-                role: "host",
+                // an official world has no host-role grant (WORLDS_OFFICIAL.md §3): its punches
+                // carry the joiners' own grants
+                role: if self.rules.official().is_some() {
+                    "joiner"
+                } else {
+                    "host"
+                },
                 grant: Some(&info.grant),
             };
             let (claims, raw_claims, raw_sig) =
