@@ -31,6 +31,8 @@ pub mod random;
 mod seams;
 mod send;
 mod side;
+mod tag;
+pub mod teams;
 pub mod weather;
 pub mod wire;
 
@@ -300,6 +302,9 @@ pub(crate) struct Peer {
     car_pi: f32,
     /// A Ready refused for the car (T11): it counts once the next car fits.
     ready_refused: bool,
+    /// The running team event's team (teams.rs) and the TeamId last written on its object.
+    team: Option<u8>,
+    team_written: Option<u8>,
 }
 
 impl Peer {
@@ -465,6 +470,13 @@ pub struct Engine {
     bucket_slots_sequence: u8,
     /// Events, the options and phasing (races.rs).
     ev: races::Events,
+    /// The running tag event (tag.rs) and its draws.
+    tag: Option<tag::TagGame>,
+    tag_random: Option<random::LegacyRandom>,
+    /// Team events (teams.rs).
+    team_event: bool,
+    team_pending: HashSet<u8>,
+    team_random: Option<random::LegacyRandom>,
     out: Vec<Send>,
     events: Vec<Event>,
     /// Datagrams nobody could take (stats).
@@ -548,6 +560,11 @@ impl Engine {
             side_channel_rate_drops: 0,
             bucket_slots_sequence: 0,
             ev: races::Events::default(),
+            tag: None,
+            tag_random: None,
+            team_event: false,
+            team_pending: HashSet::new(),
+            team_random: None,
             out: Vec::new(),
             events: Vec::new(),
             dropped: 0,
@@ -910,6 +927,8 @@ impl Engine {
             car_class: None,
             car_pi: f32::NAN,
             ready_refused: false,
+            team: None,
+            team_written: None,
         });
         self.events.push(Event::ConnectionOpened {
             index,

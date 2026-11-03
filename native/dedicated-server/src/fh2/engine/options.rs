@@ -205,6 +205,36 @@ pub const NUM_TEAMS_ID: u16 = 428;
 /// Var 0 GameTypePreset (7 King, 8 Infected).
 pub const GAME_TYPE_PRESET_ID: u16 = 0;
 pub const KING_PRESET: u64 = 7;
+/// Var 420 TimedRaceLength (f32 seconds).
+pub const TIMED_RACE_LENGTH_ID: u16 = 420;
+/// TagOptions: TagItBucket 441, ItBucketBecomes 442, NotItBucketBecomes 443, NumPlayersPerIt 445.
+pub const TAG_IT_BUCKET_ID: u16 = 441;
+pub const IT_BUCKET_BECOMES_ID: u16 = 442;
+pub const NOT_IT_BUCKET_BECOMES_ID: u16 = 443;
+pub const NUM_PLAYERS_PER_IT_ID: u16 = 445;
+
+/// The tag events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagMode {
+    King,
+    Infected,
+}
+
+/// A tag event's rules (TagOptions): the It bucket, what each car of a hit between an It car and
+/// a not-It car becomes, and how many players share one It car at the start (King).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TagRules {
+    pub mode: TagMode,
+    pub it_bucket: i32,
+    pub it_becomes: i32,
+    pub not_it_becomes: i32,
+    pub players_per_it: Option<i32>,
+}
+
+impl TagRules {
+    pub const NOT_IT: i32 = 0;
+    pub const IT: i32 = 1;
+}
 pub const INFECTED_PRESET: u64 = 8;
 /// A bucket name: a 5-bit count of up to 24 UTF-16 units.
 const NAME: i32 = -24;
@@ -361,6 +391,45 @@ impl Fields {
     /// ScoringOptions.NumTeams (2 is "Teams: On").
     pub fn num_teams(&self) -> Option<i32> {
         self.number(NUM_TEAMS_ID).map(|v| v as i32)
+    }
+
+    /// TimedRaceLength (var 420, f32 seconds), when written as a finite value.
+    pub fn timed_race_length(&self) -> Option<f32> {
+        self.float(TIMED_RACE_LENGTH_ID)
+    }
+
+    fn float(&self, id: u16) -> Option<f32> {
+        let bits = self.number(id)?;
+        if self.values.get(&id)?.len() != 32 {
+            return None;
+        }
+        let v = f32::from_bits(bits as u32);
+        v.is_finite().then_some(v)
+    }
+
+    /// The tag rules of a King or Infected event (`None` otherwise); a variable not written keeps
+    /// the game's default.
+    pub fn tag(&self) -> Option<TagRules> {
+        let mode = match self.number(GAME_TYPE_PRESET_ID)? {
+            KING_PRESET => TagMode::King,
+            INFECTED_PRESET => TagMode::Infected,
+            _ => return None,
+        };
+        let byte = |id: u16, fallback: i32| self.number(id).map_or(fallback, |v| v as i32);
+        Some(TagRules {
+            mode,
+            it_bucket: byte(TAG_IT_BUCKET_ID, TagRules::IT),
+            it_becomes: byte(
+                IT_BUCKET_BECOMES_ID,
+                if mode == TagMode::Infected {
+                    TagRules::IT
+                } else {
+                    TagRules::NOT_IT
+                },
+            ),
+            not_it_becomes: byte(NOT_IT_BUCKET_BECOMES_ID, TagRules::IT),
+            players_per_it: self.number(NUM_PLAYERS_PER_IT_ID).map(|v| v as i32),
+        })
     }
 
     /// A King or Infected preset (a tag event).

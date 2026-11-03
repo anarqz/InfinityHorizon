@@ -138,41 +138,13 @@ impl Engine {
     /// The watch's exclusion at an event boundary (step 4).
     pub(super) fn watch_event_start(&mut self) {}
 
-    /// A tag event's It cars are drawn at the grid (step 4).
-    pub(super) fn begin_tag(&mut self) {}
+    /// Voice's hearing groups changed (a team event's teams; the voice port).
+    pub(super) fn voice_groups_changed(&mut self) {}
 
-    /// A tag event's "GO" (step 4).
-    pub(super) fn tag_started(&mut self) {}
-
-    pub(super) fn tick_tag(&mut self) {}
-
-    pub(super) fn tag_ended(&mut self) {}
-
-    pub(super) fn tag_left(&mut self, _index: u8) {}
-
-    /// A tag event ends on its own limit, never on an early score (step 4).
-    pub(super) fn tag_too_early_to_finish(&self) -> bool {
-        false
+    /// The running Road Trip event's catalog id (its team twin is id + 10000).
+    pub(super) fn road_trip_current_race(&self) -> Option<i32> {
+        None
     }
-
-    /// A tag event with its It cars drawn (its finish window is its time-up, step 4).
-    pub(super) fn tag_assigned(&self) -> bool {
-        false
-    }
-
-    /// A tag event runs (no lap progress for it, step 4).
-    pub(super) fn tag_running(&self) -> bool {
-        false
-    }
-
-    /// Teams for a team event at the selection (step 4); no team event: nothing was written.
-    pub(super) fn assign_teams(&mut self) {}
-
-    pub(super) fn team_event_ended(&mut self) {}
-
-    pub(super) fn team_player_left(&mut self, _index: u8) {}
-
-    pub(super) fn team_object_created(&mut self, _serial: u64) {}
 
     /// A bucket-list co-op player stays in universe 0 during an event (step 4).
     pub(super) fn bucket_list_busy(&self, _serial: u64) -> bool {

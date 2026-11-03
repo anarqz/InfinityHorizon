@@ -759,7 +759,7 @@ impl Engine {
             ]);
             self.note("event.started", vec![json!(participants.len())]);
             self.watch_event_start();
-            self.tag_started();
+            self.tag_started(self.now + 5000);
             self.begin_event_progress(start);
         }
     }
