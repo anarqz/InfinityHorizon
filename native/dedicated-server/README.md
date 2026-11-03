@@ -109,14 +109,17 @@ it reached the right launcher with the per-launch secret.
 
 ## PORT_STATUS
 
-Step 1 (this commit) is the process and its scaffold; the engines admit nobody yet (fail closed).
+Step 1 was the process and its scaffold. Step 2 ports the free-roam engine (`src/fh2/engine/`)
+from the Infinity C# world engine's behaviour, judged by WINDOWS' D2 golden vectors at the engine
+level; it runs behind a deny-all policy until the admission snapshot (row 2) feeds it, so a world
+still admits nobody (fail closed).
 The game features come next, each one passing its golden vectors recorded from the current C#
 engine, in this recommended order:
 
 | # | Feature | Where | Notes |
 | --- | --- | --- | --- |
-| 0 | NerdCore codec (`src/fh2/codec/`) | fh2 | core written for Infinity from NERDCORE_WIRE.md, the C# engine and fh2-mods as references (OD-187; no code copied): bit stream, header, reliability state, objects, synced variables, every message body but 22 (none exists); the §7 variable lists beyond SessionHost and Console still to transcribe |
-| 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover | fh2 | behaviour from golden vectors of the C# engine; wire format from NERDCORE_WIRE.md (OD-187) |
+| 0 | NerdCore codec (`src/fh2/codec/`) | fh2 | core written for Infinity from NERDCORE_WIRE.md, the C# engine and fh2-mods as references (OD-187; no code copied): bit stream, header, reliability state, objects, synced variables, every message body but 22 (none exists); every §7 variable list (7.1-7.12), checked against the corpus's object payloads (**done**) |
+| 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover; quiet joins (T25), weather, group navigation, held opens, the car-state side channel | fh2 | **done** for free roam: the D2 Delivery, Boundary, WorldFoundation, Integration and SideChannel suites and the free-roam RelayEngineTests replay exactly |
 | 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | needs an Ed25519 verifier (a pure-Rust dependency or a reviewed implementation) |
 | 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | `nat.rs`/`upnp.rs` are here, sans-I/O, not wired yet |
 | 4 | Relay legs (FIR1 HOST role) for private worlds, then the public socket multiplexed by grant id | core | the public socket drops everything until this lands |
@@ -130,6 +133,24 @@ engine, in this recommended order:
 | 12 | Voice: off/open/proximity, blocks from both sources, lobby mutes, team voice, state down | fh2 | |
 | 13 | The anti-cheat watch, the parts rule and the watch roster | fh2 | the single detector on public worlds |
 | 14 | `diag`, `peer.rejected`, the engine lifecycle line budget | core + fh2 | |
+
+## Decisions taken in step 2
+
+- **The engine reads messages with its own acceptance set** (`engine/wire.rs`): exactly the ids it
+  handles or forwards; any other id ends the packet (a `truncated_packet` rejection), as the
+  reference engine does. The codec's registry (the full §6 catalogue) is for decoding anything.
+- **Acknowledgements** (`engine/wire.rs` `AckWindow`) wrap packet ids at 2^16 with no drop
+  window, as the reference engine and the vectors do; the codec's `reliable::ReceiveState`
+  follows §2.3 (modulo 0xffff, the 0x3fff window). The two agree for every id the corpus uses.
+- **Datagram limit (WINDOWS' rule, 2026-11-02):** packets split only between messages (at most 8
+  messages, a 1,189-byte body); a single message over `(1372 - 11) × 8` bits is dropped, never
+  sent (`send.oversize_dropped`); a late joiner's catch-up create folds updates only up to
+  `10836 - 128` bits, so it always fits.
+- **Map order:** the reference engine's maps enumerate in slot order (a freed slot is reused
+  first); `engine/dict.rs` keeps that order, which the bytes of a snapshot or of a leaving
+  player's deletes show.
+- **Randomness** (`engine/random.rs`): one SplitMix64 stream per purpose (weather, tag, team,
+  attempt ids, STUN transaction ids) and the seeded subtractive generator for the weather's draws.
 
 ## Acknowledgements
 
