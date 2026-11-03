@@ -88,18 +88,10 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
         _ => return Err(host.bad("kind")),
     }
     let (host_xuid, official, is_player) = if profile == Profile::Public {
+        // WORLDS_OFFICIAL.md §3: the `FI_WORLDS` entry's id, `[a-z0-9-]{1,32}`
         let vm = host.str("vmId")?;
-        if !(1..=64).contains(&vm.len())
-            || !vm
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        {
+        if !grant::vm_id(vm) {
             return Err(host.bad("vmId"));
-        }
-        // how grants name `official:<vmId>` is S34's (contract §6.3, §15 Q1): until then an
-        // official world is refused; the private tests' build opens it to exercise the caps
-        if !cfg!(feature = "test-hooks") {
-            return Err(host.bad("kind").reason("grant_form_pending"));
         }
         (0, Some(vm.to_string()), false)
     } else {
@@ -301,18 +293,17 @@ impl World {
     }
 
     /// The admission's rules for a world being opened.
-    pub fn rules(id: &str, spec: &OpenSpec, relay: Option<SocketAddr>) -> Rules {
+    pub fn rules(id: &str, spec: &OpenSpec) -> Rules {
         Rules {
             world_id: id.to_string(),
             host: match &spec.official {
-                Some(vm) => format!("official:{vm}"),
+                Some(vm) => grant::official_host(vm),
                 None => spec.host_xuid.to_string(),
             },
             host_xuid: spec.host_xuid,
             is_player: spec.is_player && spec.official.is_none(),
             require_proof: spec.require_proof,
             dev_lan_peers: spec.dev_lan_peers,
-            relay,
         }
     }
 
@@ -361,15 +352,24 @@ impl World {
         let world = Obj::new(o.obj("world")?, "world");
         let id = world.str("id")?;
         let game = world.str("game")?;
+        // the host as the grants name it (WORLDS_OFFICIAL.md §3): `{xuid}` for a player host
+        // (unchanged), `{official: vmId}` alone for an official world
         let host = Obj::new(world.obj("host")?, "world.host");
-        let host_xuid = host.str("xuid")?;
+        let official = match &self.spec.official {
+            Some(_) => Some((host.str("official")?, host.map.len() == 1)),
+            None => None,
+        };
+        let host_xuid = match official {
+            Some(_) => "",
+            None => host.str("xuid")?,
+        };
         if ctx.keys_empty {
             self.clear_admission(ctx, "no_keys");
             return Err(CmdError::code(proto::NO_KEYS));
         }
-        let host_ok = match &self.spec.official {
-            Some(vm) => host_xuid.strip_prefix("official:") == Some(vm.as_str()),
-            None => parse_xuid(host_xuid).is_some_and(|x| x != 0 && x == self.spec.host_xuid),
+        let host_ok = match (&self.spec.official, official) {
+            (Some(vm), Some((named, alone))) => alone && named == vm.as_str(),
+            _ => parse_xuid(host_xuid).is_some_and(|x| x != 0 && x == self.spec.host_xuid),
         };
         if !host_ok || game != self.spec.game || id != self.id || !grant::uuid(id) {
             self.clear_admission(ctx, "context");
@@ -783,7 +783,7 @@ impl World {
 
     /// A datagram for this world, in the contract's order (§5.1): FIR1 from a leg's relay (its
     /// `data` becomes the virtual peer's datagram), FIUP, STUN for the NAT (non-virtual), then
-    /// the game.
+    /// the game. A public world has no legs and no NAT: FIUP, then the game (§5.2).
     pub fn receive(&mut self, data: &[u8], from: SocketAddr, now: u64, out: &mut Vec<Send>) {
         let mut sends = Vec::new();
         let (from, payload) = match self.legs.receive(data, from, now, &mut sends) {
@@ -792,12 +792,8 @@ impl World {
                 return;
             }
             Received::Data(peer, payload) => (peer, payload),
-            Received::NotOurs => {
-                if self.spec.official.is_some() {
-                    return; // public: relay-only (§5.2)
-                }
-                (from, data.to_vec())
-            }
+            // public: no legs, every datagram comes straight from the joiner (§5.2)
+            Received::NotOurs => (from, data.to_vec()),
         };
         self.send_out(sends, out);
         if payload.len() >= 4 && &payload[..4] == b"FIUP" {

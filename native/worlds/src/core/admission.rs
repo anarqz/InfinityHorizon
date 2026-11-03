@@ -68,8 +68,22 @@ pub struct Rules {
     pub is_player: bool,
     pub require_proof: bool,
     pub dev_lan_peers: bool,
-    /// Public: every leg goes to the co-located relay (contract §5.2).
-    pub relay: Option<SocketAddr>,
+}
+
+impl Rules {
+    /// An official world's VM id (`host` = `official:<vmId>`); `None` for a player host.
+    pub fn official(&self) -> Option<&str> {
+        self.host.strip_prefix("official:")
+    }
+
+    /// The FIUP header's host field (UDP_SOCKET_PROOF.md §2): the host XUID, or the official
+    /// host tag (WORLDS_OFFICIAL.md §3).
+    pub fn proof_host(&self) -> u64 {
+        match self.official() {
+            Some(vm) => fiup::official_host_tag(vm),
+            None => self.host_xuid,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -491,7 +505,7 @@ impl Gate {
             let grant_bytes = grant::uuid_bytes(&claims.grant).unwrap_or([0; 16]);
             if let Some(key) = proof_key {
                 let authority = Authority::new(
-                    fiup::header(grant_bytes, self.world_bytes, self.rules.host_xuid, xuid),
+                    fiup::header(grant_bytes, self.world_bytes, self.rules.proof_host(), xuid),
                     key,
                     claims.exp,
                 );
@@ -509,10 +523,10 @@ impl Gate {
             if let Some(o) = observed {
                 snap.entries.insert((xuid, o), entry.clone());
             }
-            // CR-S57: only the relay the verified grant names is contacted (public: the
-            // co-located relay, §5.2)
-            let leg_relay = match self.rules.relay {
-                Some(r) => Some(r),
+            // CR-S57: only the relay the verified grant names is contacted; an official world
+            // has no relay legs (OD-189: direct; its grants carry no `relay` claim)
+            let leg_relay = match self.rules.official() {
+                Some(_) => None,
                 None => claims.relay.as_ref().and_then(|r| {
                     r.addr
                         .parse::<Ipv4Addr>()
@@ -526,8 +540,7 @@ impl Gate {
                     claims: raw_claims,
                     signature: raw_sig,
                     relay,
-                    forward: self.rules.relay.is_some()
-                        || p.get("transport").and_then(Value::as_str) == Some("relay"),
+                    forward: p.get("transport").and_then(Value::as_str) == Some("relay"),
                 });
             }
             if self.rules.dev_lan_peers {
@@ -660,6 +673,20 @@ impl Gate {
                 .values()
                 .any(|p| p.peer == xuid && p.entry.live(unix, mono))
         })
+    }
+
+    /// Whether this world's verified snapshot holds a FIUP grant with these id bytes (the public
+    /// socket routes a FIUP frame by its grant id, contract §5.2).
+    pub fn holds_grant(&self, grant: &[u8; 16]) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(|s| s.proofs.contains_key(grant))
+    }
+
+    /// Whether `endpoint` holds a fresh FIUP binding in this world (the public socket's routing
+    /// of every other datagram; the per-packet decision stays [`Gate::allowed`]).
+    pub fn binds(&self, endpoint: SocketAddr, mono: u64) -> bool {
+        self.proof.binds(endpoint, mono)
     }
 
     /// A FIUP datagram: the answer to send back the same way, if any.

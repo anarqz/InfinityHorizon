@@ -109,6 +109,20 @@ pub fn header(grant: [u8; 16], world: [u8; 16], host: u64, peer: u64) -> [u8; 56
     raw
 }
 
+/// The FIUP header's host field for an official world (WORLDS_OFFICIAL.md §3): the official
+/// host tag `0x8000000000000000 | first 8 bytes, big endian, of SHA-256("fi-official-host-v1\n" ‖
+/// vmId)`: nonzero, top bit set, so outside every real XUID. It lives only in the proof header,
+/// never in a claim, a row or a log line.
+pub fn official_host_tag(vm_id: &str) -> u64 {
+    let mut h = Sha256::new();
+    h.update(b"fi-official-host-v1\n");
+    h.update(vm_id.as_bytes());
+    let digest = h.finalize();
+    let mut first = [0u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(first) | 0x8000_0000_0000_0000
+}
+
 /// A unicast address (IPv4-mapped unmapped first; IPv4 first octet 1-223; IPv6 not `::` and
 /// not multicast).
 pub fn unicast(ip: IpAddr) -> bool {
@@ -387,6 +401,15 @@ impl ProofHost {
     fn same_authority(l: &dyn Lookup, grant: &[u8; 16], fp: &[u8; 32], unix: i64) -> bool {
         l.authority(grant)
             .is_some_and(|a| a.expires > unix && a.fingerprint() == *fp && *fp != [0; 32])
+    }
+
+    /// Whether `endpoint` holds a fresh binding of any peer and kind (the public socket's
+    /// routing, contract §5.2; authorization stays [`ProofHost::allowed`]'s).
+    pub fn binds(&self, endpoint: SocketAddr, now: u64) -> bool {
+        let endpoint = crate::stun::plain_endpoint(endpoint);
+        self.bindings
+            .iter()
+            .any(|b| b.endpoint == endpoint && fresh(b.at, now, BINDING_MS))
     }
 
     fn reindex(&mut self) {
@@ -770,5 +793,27 @@ pub mod joiner {
     /// The response to a host's challenge.
     pub fn response(challenge: &[u8], key: &[u8; 32]) -> Vec<u8> {
         change_type(challenge, 3, key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_official_host_tag_vectors() {
+        // WORLDS_OFFICIAL.md §3; DEDICATED_SERVER.md §6.3 lists the same vectors
+        assert_eq!(official_host_tag("local-mac"), 0xfda2_331c_be2b_d82e);
+        assert_eq!(official_host_tag("sao-1"), 0xde2d_c048_516f_ba57);
+        for vm in [
+            "a",
+            "local-mac",
+            "sao-1",
+            "x-0123456789abcdefghijklmnopqrst",
+        ] {
+            let tag = official_host_tag(vm);
+            assert!(tag != 0 && tag >> 63 == 1, "{vm}");
+        }
+        assert_ne!(official_host_tag("sao-1"), official_host_tag("sao-2"));
     }
 }
