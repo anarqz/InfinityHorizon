@@ -37,6 +37,14 @@ serde = "=1.0.229"
 serde_json = "=1.0.154"
 sha2 = "=0.11.1"
 
+# `worlds agent` (WORLDS_OFFICIAL.md §4, DEDICATED_SERVER.md §16) runs on the Linux Worlds host only,
+# so its two dependencies with C code are Unix-only and the Windows build keeps needing no C
+# toolchain: ureq + rustls (ring, webpki-roots) for the signed HTTPS calls, the same pin as the
+# launcher's fi-launcher-http; rusqlite (bundled SQLite) reads the server-side catalog read-only.
+[target.'cfg(unix)'.dependencies]
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

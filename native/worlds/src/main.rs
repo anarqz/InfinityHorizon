@@ -8,7 +8,7 @@
 //! worlds serve --health --control unix:<path>
 //! worlds serve --probe-bind <port>
 //! worlds relay                           # not implemented yet: exit 7
-//! worlds agent                           # not implemented yet: exit 7
+//! worlds agent [options]                 # the world agent (Linux; Windows: exit 7)
 //! ```
 
 use std::{io::Write, time::Duration};
@@ -33,6 +33,7 @@ fn main() {
     let args = match cli::parse_role(&all) {
         Ok(Role::Serve(args)) => args,
         Ok(Role::Version) => std::process::exit(version()),
+        Ok(Role::Agent(args)) => std::process::exit(agent(&args)),
         Ok(Role::Unimplemented(role)) => {
             log::error(log_ids::DS_ROLE_UNIMPLEMENTED)
                 .field("role", role)
@@ -104,6 +105,24 @@ fn install_panic_hook() {
             .msg(&text)
             .emit();
     }));
+}
+
+/// `worlds agent`: the world agent of a Worlds host (Linux only, DEDICATED_SERVER.md §16).
+#[cfg(unix)]
+fn agent(args: &[String]) -> i32 {
+    log::start(log::Level::Info);
+    let env = |name: &str| std::env::var(name).ok();
+    let code = worlds::agent::main(args, &env);
+    log::shutdown(Duration::from_secs(2));
+    code
+}
+
+#[cfg(not(unix))]
+fn agent(_args: &[String]) -> i32 {
+    log::error(log_ids::DS_ROLE_UNIMPLEMENTED)
+        .field("role", "agent")
+        .emit();
+    exit::ROLE_UNIMPLEMENTED
 }
 
 fn version() -> i32 {

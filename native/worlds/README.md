@@ -2,8 +2,8 @@
 
 Infinity Worlds: one Rust program that hosts online worlds (formerly `dedicated-server`; contract
 DEDICATED_SERVER.md, WORLDS_OFFICIAL.md). One binary, one role per process: `worlds serve` is the
-world engine described here; `worlds relay` and `worlds agent` are named but not implemented yet
-(exit 7). The launcher runs it as a
+world engine described here, `worlds agent` the world agent of a Worlds host (below; Linux), and
+`worlds relay` is named but not implemented yet (exit 7). The launcher runs it as a
 child process for a private world (one world per process, its own UDP port); a Worlds host VM runs it
 as one long-lived process for official (public) worlds: several worlds on one public UDP socket
 (`--bind`), players connecting directly, no relay (OD-189). Both are
@@ -53,7 +53,8 @@ worlds serve --profile private|public --control <endpoint> [options]
 worlds serve --version          # also: worlds --version
 worlds serve --health --control unix:<path>
 worlds serve --probe-bind <port>
-worlds relay | worlds agent     # not implemented yet: exit 7
+worlds agent [options]          # the world agent (Linux; Windows: exit 7)
+worlds relay                    # not implemented yet: exit 7
 ```
 
 | Option | Environment | Default |
@@ -73,7 +74,35 @@ worlds relay | worlds agent     # not implemented yet: exit 7
 
 Exit codes: 0 clean stop, 2 invalid configuration, 3 control endpoint unavailable, 4 control
 authentication failed, 5 no common protocol version, 6 public socket or budget not set up,
-7 role not implemented yet (`worlds relay`, `worlds agent`), 70 internal fault outside any world. `--probe-bind`: 0 bound, 3 in use, 4 denied, 1 other.
+7 role not implemented yet (`worlds relay`; `worlds agent` on Windows), 70 internal fault outside any world. `--probe-bind`: 0 bound, 3 in use, 4 denied, 1 other.
+
+### `worlds agent` (WORLDS_OFFICIAL.md §4, §5; DEDICATED_SERVER.md §16)
+
+The "host's launcher" of official worlds on a Worlds host: it signs every call to the server's
+`/mm/v1/official` routes with the VM's node key (`FI-World-Agent`), spawns and supervises
+`worlds serve --profile public --bind <FI_WORLDS_BIND>` from its own executable (restarted with
+backoff; the worlds of an ended engine are `DELETE`d), keeps one spare open world per (mode,
+activity), announces each every 15 s with `world.state`'s peers, feeds each answer to
+`world.context` and `world.admission`, and answers `catalog.need` from the server-side catalog.
+SIGTERM: every world `DELETE`d, the engine shut down, exit 0.
+
+| Option | Environment | Default |
+| --- | --- | --- |
+| `--server-url` | `FI_WORLDS_SERVER_URL` | required: `https://host[:port]`; `http://` only for a loopback or RFC 1918 IP literal or `localhost` |
+| `--vm-id` | `FI_WORLDS_VM_ID` | required: `[a-z0-9-]{1,32}`, the `FI_WORLDS` entry |
+| `--key-file` | `FI_WORLDS_KEY_FILE` | required: absolute path; base64 of the 32-byte Ed25519 seed, created once (0600) when missing |
+| `--bind` | `FI_WORLDS_BIND` | required: the engine's public UDP `addr:port` (the `FI_WORLDS` endpoint's port) |
+| `--control` | `FI_WORLDS_CONTROL` | `unix:/run/fi-ds/control.sock` |
+| `--catalog` | `FI_WORLDS_CATALOG` | none: the server-side catalog SQLite, opened read-only and immutable |
+| `--activities` | `FI_WORLDS_ACTIVITIES` | the hello's `activities` (`freeroam`, `roadtrip`); Road Trip only with catalog events |
+| `--modes` | `FI_WORLDS_MODES` | `hardcore,noob` |
+| `--max-worlds` | `FI_WORLDS_MAX_WORLDS` | 4 (1-8; the engine's `--max-worlds`) |
+| `--max-players` | `FI_WORLDS_MAX_PLAYERS` | 12 (2-12 guests per world) |
+| `--announce-seconds` | `FI_WORLDS_ANNOUNCE_SECONDS` | 15 (1-15; less only in tests) |
+
+It logs the node key's public half once (`agent.started {publicKey}`, for the server's
+`FI_WORLDS`), never the seed, a grant, an address or a body. Exit codes: 0 stopped by a signal, 2
+invalid setting (`agent.config.invalid {field}`), 3 another controller holds the engine.
 
 Logs are JSON lines on stdout, written off the loop through a bounded queue that counts what it
 drops. They never carry a player identity, an address, a key or game payload bytes.

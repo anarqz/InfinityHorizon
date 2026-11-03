@@ -14,9 +14,13 @@
 //!     ported later against golden vectors (README).
 //!   - `runtime`: the single network loop thread, the sockets, the control transports.
 //!   - game-agnostic network pieces: `net` (bind), `stun`, `nat`, `upnp`.
+//!   - `agent`: `worlds agent`, the world agent of a Worlds host (WORLDS_OFFICIAL.md §4): signed
+//!     calls to the server's official routes, the engine's supervisor and controller, the
+//!     server-side catalog reader (Linux; the signature and the configuration are portable).
 //!
 //! The control channel and its rules are the contract `DEDICATED_SERVER.md` (proto 1).
 
+pub mod agent;
 pub mod alloc;
 pub mod anon;
 pub mod cli;
