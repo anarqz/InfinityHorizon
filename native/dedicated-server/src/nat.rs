@@ -161,7 +161,7 @@ struct PunchTarget {
 }
 
 /// The per-second Binding answer allowance: a fixed one-second window with a total and a count
-/// per source IP (at most [`ANSWERS_PER_WINDOW`] entries, since every entry took an answer).
+/// per source address key (`net::ip_key`: an IPv6 source counts as its /64; at most [`ANSWERS_PER_WINDOW`] entries, since every entry took an answer).
 struct AnswerBudget {
     window: u64,
     total: u32,
@@ -375,7 +375,7 @@ impl Nat {
         let source = stun::canonical(from);
         if let Some(message) = stun::parse(data).filter(|_| framed) {
             if message.kind == stun::BINDING_REQUEST {
-                if reachable(source) && self.budget.allow(source.ip(), now_ms) {
+                if reachable(source) && self.budget.allow(crate::net::ip_key(source), now_ms) {
                     send(source, stun::binding_success(&message.txid, source));
                 }
             } else if message.kind == stun::BINDING_SUCCESS {
@@ -667,6 +667,19 @@ mod tests {
             (answer.kind, answer.mapped),
             (stun::BINDING_SUCCESS, Some(victim))
         );
+    }
+
+    #[test]
+    fn an_ipv6_slash_64_shares_one_answer_budget() {
+        let mut b = AnswerBudget::new(0);
+        let granted = (0..200u16)
+            .filter(|i| {
+                let ip: std::net::Ipv6Addr = format!("2001:db8:1:2::{:x}", i + 1).parse().unwrap();
+                let from = SocketAddr::new(IpAddr::V6(ip), 3074);
+                b.allow(crate::net::ip_key(from), 10)
+            })
+            .count();
+        assert_eq!(granted, ANSWERS_PER_ADDRESS as usize);
     }
 
     #[test]
