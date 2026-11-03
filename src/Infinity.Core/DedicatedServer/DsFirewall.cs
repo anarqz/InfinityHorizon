@@ -247,7 +247,7 @@ public sealed record DsFirewallRuleCommand(string Executable, bool IncludePublic
     public const string Switch = "--firewall-rule";
 
     /// <summary>The rule's name and what the firewall list shows (the exe's VERSIONINFO <c>FileDescription</c>).</summary>
-    public const string RuleName = "Infinity world server";
+    public const string RuleName = "Infinity Worlds";
 
     public int Profiles => DsFirewall.ProfilePrivate | (IncludePublic ? DsFirewall.ProfilePublic : 0);
 
@@ -261,7 +261,7 @@ public sealed record DsFirewallRuleCommand(string Executable, bool IncludePublic
         return args;
     }
 
-    /// <summary>Parses the helper's arguments; null when they are not exactly <c>--firewall-rule --exe &lt;absolute path to dedicated-server.exe&gt; [--public]</c>.</summary>
+    /// <summary>Parses the helper's arguments; null when they are not exactly <c>--firewall-rule --exe &lt;absolute path to worlds.exe&gt; [--public]</c>.</summary>
     public static DsFirewallRuleCommand? TryParse(IReadOnlyList<string> args)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -270,7 +270,7 @@ public sealed record DsFirewallRuleCommand(string Executable, bool IncludePublic
             return null;
         }
         var exe = args[2];
-        if (!Path.IsPathFullyQualified(exe) || !string.Equals(Path.GetFileName(exe), DedicatedServerExe, StringComparison.OrdinalIgnoreCase))
+        if (!Path.IsPathFullyQualified(exe) || !string.Equals(Path.GetFileName(exe), WorldsExe, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -307,7 +307,7 @@ public sealed record DsFirewallRuleCommand(string Executable, bool IncludePublic
         return verified is null ? null : TryParse(args);
     }
 
-    private const string DedicatedServerExe = "dedicated-server.exe";
+    private const string WorldsExe = DsProto.ExecutableName;
 
     public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"firewall rule: allow inbound UDP, profiles {Profiles}");
 }

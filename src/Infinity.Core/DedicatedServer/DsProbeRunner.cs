@@ -6,7 +6,7 @@ using System.Globalization;
 namespace Infinity.Core.DedicatedServer;
 
 /// <summary>
-/// <c>dedicated-server --probe-bind &lt;port&gt;</c> (DEDICATED_SERVER.md §2.4): run once after an update brings a new exe
+/// <c>worlds serve --probe-bind &lt;port&gt;</c> (DEDICATED_SERVER.md §2.4): run once after an update brings a new exe
 /// and on the first Host, while the game is not running, so the first-bind firewall prompt comes at a calm moment.
 /// The probe holds the port for 1 s; the launcher waits at most <see cref="DefaultTimeout"/> (the prompt does not block
 /// the bind) and kills it past that.
@@ -16,7 +16,7 @@ public static class DsProbeRunner
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
 
     public static IReadOnlyList<string> Arguments(int port) =>
-        port is > 0 and <= 65535 ? ["--probe-bind", port.ToString(CultureInfo.InvariantCulture)] : throw new ArgumentOutOfRangeException(nameof(port));
+        port is > 0 and <= 65535 ? [DsProto.Role, "--probe-bind", port.ToString(CultureInfo.InvariantCulture)] : throw new ArgumentOutOfRangeException(nameof(port));
 
     public static Task<DsProbeResult> RunAsync(string executable, int port, TimeSpan? timeout = null, CancellationToken cancellation = default) =>
         RunAsync(executable, port, null, timeout, cancellation);

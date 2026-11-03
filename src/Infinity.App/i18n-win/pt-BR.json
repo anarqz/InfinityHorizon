@@ -78,7 +78,7 @@
   "worlds.load_game": "Carregue sua partida para acessar os lobbies.",
   "worlds.integrated_unavailable": "Não foi possível iniciar a hospedagem. Veja os detalhes em Diagnóstico.",
   "worlds.hosting_unavailable": "A hospedagem está indisponível neste PC por enquanto: o servidor do mundo não pôde ser executado. Veja os detalhes em Diagnóstico.",
-  "worlds.firewall_allow_offer": "O Firewall do Windows pode impedir que jogadores entrem no seu lobby. Para liberar, permita o \"Infinity world server\" para UDP de entrada em redes privadas nas configurações do Firewall do Windows. Seu lobby continua aberto de qualquer forma.",
+  "worlds.firewall_allow_offer": "O Firewall do Windows pode impedir que jogadores entrem no seu lobby. Para liberar, permita o \"Infinity Worlds\" para UDP de entrada em redes privadas nas configurações do Firewall do Windows. Seu lobby continua aberto de qualquer forma.",
   "worlds.firewall_blocks_all_inbound": "O Firewall do Windows bloqueia todas as conexões de entrada nesta rede, então os jogadores podem não alcançar seu lobby. Desative \"Bloquear todas as conexões de entrada\" para esta rede nas configurações do Firewall do Windows. Seu lobby continua aberto de qualquer forma.",
   "saves.pick_title": "Começar de um save deste PC",
   "saves.pick_text": "Escolha o perfil do Azimuth de onde {name} começa. O Infinity copia esse save para o save próprio de {name}; o original não muda.",

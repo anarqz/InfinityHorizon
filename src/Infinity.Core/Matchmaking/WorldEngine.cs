@@ -7,7 +7,7 @@ public enum WorldEngineKind
     /// <summary>The in-process C# engine (<see cref="IntegratedWorldRelay"/>).</summary>
     Integrated,
 
-    /// <summary>The <c>dedicated-server</c> child process (CR-L50, DEDICATED_SERVER.md).</summary>
+    /// <summary>The Infinity Worlds child process, <c>worlds serve</c> (CR-L50, DEDICATED_SERVER.md; OD-188).</summary>
     Dedicated,
 }
 
@@ -25,7 +25,7 @@ public static class WorldEngine
     /// </summary>
     public const WorldEngineKind ProductionEngine = WorldEngineKind.Integrated;
 
-    /// <summary>Development builds only: <c>dedicated</c> or <c>integrated</c>; anything else, or none, is <see cref="ProductionEngine"/>.</summary>
+    /// <summary>Development builds only: <c>worlds</c> or <c>integrated</c>; anything else, or none, is <see cref="ProductionEngine"/>.</summary>
     public const string Variable = "FI_WORLD_ENGINE";
 
 #if !INFINITY_PRODUCTION_BUILD
@@ -44,16 +44,19 @@ public static class WorldEngine
 #else
         var selected = TestOnlyOverride ?? Parse(Environment.GetEnvironmentVariable(Variable));
         if (selected != ProductionEngine && Interlocked.Exchange(ref _logged, 1) == 0)
-            log?.Invoke($"worlds: {Variable} set (development build): worlds run on the {selected.ToString().ToLowerInvariant()} engine");
+            log?.Invoke($"worlds: {Variable} set (development build): worlds run on the {Name(selected)} engine");
         return selected;
 #endif
     }
 
-    /// <summary>Exactly <c>dedicated</c> or <c>integrated</c> (case-insensitive, blanks trimmed); anything else is <see cref="ProductionEngine"/>.</summary>
+    /// <summary>Exactly <c>worlds</c> or <c>integrated</c> (case-insensitive, blanks trimmed); anything else is <see cref="ProductionEngine"/>.</summary>
     public static WorldEngineKind Parse(string? value) => value?.Trim().ToLowerInvariant() switch
     {
-        "dedicated" => WorldEngineKind.Dedicated,
+        "worlds" => WorldEngineKind.Dedicated,
         "integrated" => WorldEngineKind.Integrated,
         _ => ProductionEngine,
     };
+
+    /// <summary>The <see cref="Variable"/> value that selects <paramref name="kind"/>.</summary>
+    public static string Name(WorldEngineKind kind) => kind == WorldEngineKind.Dedicated ? "worlds" : "integrated";
 }

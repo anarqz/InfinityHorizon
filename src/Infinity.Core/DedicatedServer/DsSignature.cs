@@ -8,7 +8,7 @@ using Org.BouncyCastle.Math.EC.Rfc8032;
 namespace Infinity.Core.DedicatedServer;
 
 /// <summary>
-/// Which signature <c>dedicated-server.exe</c> must carry before the launcher runs it or writes its firewall rule
+/// Which signature <c>worlds.exe</c> must carry before the launcher runs it or writes its firewall rule
 /// (<see cref="DsSignature"/>). A production build accepts the release key only; a development build may also accept the
 /// development key of a development server (<see cref="HookInstaller.DevKeyEnv"/>, as the overlay and the hook), never an
 /// unsigned file.
@@ -70,9 +70,9 @@ public sealed class DsVerifiedExecutable : IDisposable
 /// </summary>
 public static class DsSignature
 {
-    public const string OriginalFilename = "dedicated-server.exe";
+    public const string OriginalFilename = "worlds.exe";
 
-    public const string FileDescription = "Infinity world server";
+    public const string FileDescription = "Infinity Worlds";
 
     /// <summary>Whether <paramref name="executable"/> would run now (the handles are released at once).</summary>
     public static bool Trusted(string executable, DsSignaturePolicy policy, Action<string>? why = null)
