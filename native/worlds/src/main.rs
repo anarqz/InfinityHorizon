@@ -1,18 +1,21 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! `dedicated-server`: the Infinity world server (contract DEDICATED_SERVER.md §2).
+//! `worlds`: Infinity Worlds (contract DEDICATED_SERVER.md §2, WORLDS_OFFICIAL.md §1). One binary,
+//! one role per process:
 //!
 //! ```text
-//! dedicated-server --profile private|public --control <endpoint> [options]
-//! dedicated-server --version
-//! dedicated-server --health --control unix:<path>
-//! dedicated-server --probe-bind <port>
+//! worlds serve --profile private|public --control <endpoint> [options]   # the world engine
+//! worlds serve --version                 # also `worlds --version`
+//! worlds serve --health --control unix:<path>
+//! worlds serve --probe-bind <port>
+//! worlds relay                           # not implemented yet: exit 7
+//! worlds agent                           # not implemented yet: exit 7
 //! ```
 
 use std::{io::Write, time::Duration};
 
-use dedicated_server::{
+use worlds::{
     alloc::CountingAlloc,
-    cli::{self, Command, Endpoint},
+    cli::{self, Command, Endpoint, Role},
     log, log_ids,
     net::{self, BindFailure},
     runtime::{self, exit},
@@ -26,7 +29,23 @@ fn main() {
     // thread exists (contract §3.1).
     let secret = std::env::var(cli::SECRET_ENV).ok();
     remove_secret_from_env();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    let args = match cli::parse_role(&all) {
+        Ok(Role::Serve(args)) => args,
+        Ok(Role::Version) => std::process::exit(version()),
+        Ok(Role::Unimplemented(role)) => {
+            log::error(log_ids::DS_ROLE_UNIMPLEMENTED)
+                .field("role", role)
+                .emit();
+            std::process::exit(exit::ROLE_UNIMPLEMENTED);
+        }
+        Err(field) => {
+            log::error(log_ids::DS_CONFIG_INVALID)
+                .field("field", field)
+                .emit();
+            std::process::exit(exit::CONFIG);
+        }
+    };
     let env = |name: &str| -> Option<String> {
         if name == cli::SECRET_ENV {
             secret.clone()
@@ -89,10 +108,10 @@ fn install_panic_hook() {
 
 fn version() -> i32 {
     let line = serde_json::json!({
-        "name": "dedicated-server",
-        "version": dedicated_server::VERSION,
-        "commit": dedicated_server::commit(),
-        "proto": [dedicated_server::PROTO_MIN, dedicated_server::PROTO_MAX],
+        "name": "worlds",
+        "version": worlds::VERSION,
+        "commit": worlds::commit(),
+        "proto": [worlds::PROTO_MIN, worlds::PROTO_MAX],
     });
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{line}");
@@ -132,7 +151,7 @@ fn health(endpoint: &Endpoint) -> i32 {
     // the contract's integer `proto` (§3.2)
     let request = format!(
         "{{\"id\":1,\"op\":\"hello\",\"proto\":{}}}\n{{\"id\":2,\"op\":\"health\"}}\n",
-        dedicated_server::PROTO_MAX
+        worlds::PROTO_MAX
     );
     if stream.write_all(request.as_bytes()).is_err() {
         return 1;

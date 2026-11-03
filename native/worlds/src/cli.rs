@@ -62,6 +62,28 @@ const OPTIONS: &[(&str, &str)] = &[
     ("--log-level", "LOG_LEVEL"),
 ];
 
+/// The role named by the first argument (WORLDS_OFFICIAL.md §1: one binary, one role per process).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Role {
+    /// `worlds serve <arguments>`: the world engine; the arguments go to [`parse`].
+    Serve(Vec<String>),
+    /// `worlds --version` (the same line as `worlds serve --version`).
+    Version,
+    /// `worlds relay` / `worlds agent`: named, not implemented yet (exit 7).
+    Unimplemented(&'static str),
+}
+
+/// Splits off the role. No role, or an unknown one, is invalid (`field: "role"`, exit 2).
+pub fn parse_role(args: &[String]) -> Result<Role, Invalid> {
+    match args.split_first() {
+        Some((role, rest)) if role == "serve" => Ok(Role::Serve(rest.to_vec())),
+        Some((flag, [])) if flag == "--version" => Ok(Role::Version),
+        Some((role, _)) if role == "relay" => Ok(Role::Unimplemented("relay")),
+        Some((role, _)) if role == "agent" => Ok(Role::Unimplemented("agent")),
+        _ => Err("role"),
+    }
+}
+
 /// The environment variable of the secret (read once, then removed by `main`).
 pub const SECRET_ENV: &str = "FI_DS_CONTROL_SECRET";
 
@@ -253,4 +275,42 @@ pub fn parse_endpoint(s: &str) -> Option<Endpoint> {
         return (cfg!(windows) && ok).then(|| Endpoint::Pipe(name.to_string()));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_first_argument_names_the_role() {
+        assert_eq!(
+            parse_role(&args(&["serve", "--profile", "private"])),
+            Ok(Role::Serve(args(&["--profile", "private"])))
+        );
+        assert_eq!(parse_role(&args(&["--version"])), Ok(Role::Version));
+        assert_eq!(
+            parse_role(&args(&["serve", "--version"])),
+            Ok(Role::Serve(args(&["--version"])))
+        );
+        assert_eq!(
+            parse_role(&args(&["relay"])),
+            Ok(Role::Unimplemented("relay"))
+        );
+        assert_eq!(
+            parse_role(&args(&["agent", "--x"])),
+            Ok(Role::Unimplemented("agent"))
+        );
+        for bad in [
+            &[][..],
+            &["--profile", "private"],
+            &["Serve"],
+            &["--version", "x"],
+        ] {
+            assert_eq!(parse_role(&args(bad)), Err("role"));
+        }
+    }
 }

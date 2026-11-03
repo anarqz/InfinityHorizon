@@ -6,6 +6,8 @@
 pub const DS_STARTED: &str = "ds.started";
 pub const DS_STOPPED: &str = "ds.stopped";
 pub const DS_CONFIG_INVALID: &str = "ds.config.invalid";
+/// `worlds relay` / `worlds agent` in a build that does not carry that role yet (exit 7).
+pub const DS_ROLE_UNIMPLEMENTED: &str = "ds.role.unimplemented";
 pub const DS_CONTROL_UNAVAILABLE: &str = "ds.control.unavailable";
 pub const DS_CONTROL_UNAUTHORIZED: &str = "ds.control.unauthorized";
 pub const DS_CONTROL_PROTO_UNSUPPORTED: &str = "ds.control.proto_unsupported";
