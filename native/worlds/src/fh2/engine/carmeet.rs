@@ -165,6 +165,18 @@ impl Engine {
         b
     }
 
+    /// The end of an invitation: the official car meet lobby also empties the session name and
+    /// template (vars 16/17). A joiner's game takes the session from them, so a name left from an
+    /// earlier round sent it to that old, empty session (local test 2026-11-03); the player-hosted
+    /// car meet keeps the reference behaviour.
+    fn invite_end_update(&self) -> Bits {
+        let mut b = Self::invite_cleared();
+        if self.car_meet.official {
+            b.push(16, 5).push(0, 7).push(17, 5).push(0, 7);
+        }
+        b
+    }
+
     /// The official car meet lobby (OD-190/OD-191): Road Trip sessions are asked for too (the
     /// agent opens a group world for them; Showdown and other types stay ignored), and the
     /// invitation's players are shown in JoinTypes, so the games count the joiners.
@@ -375,7 +387,7 @@ impl Engine {
                 m.starter = None;
                 m.joined.clear();
                 m.session = None;
-                self.car_meet_update(Self::invite_cleared());
+                self.car_meet_update(self.invite_end_update());
             }
             _ => {}
         }
@@ -453,7 +465,7 @@ impl Engine {
         m.starter = None;
         m.joined.clear();
         m.session = None;
-        self.car_meet_update(Self::invite_cleared());
+        self.car_meet_update(self.invite_end_update());
         self.note("carmeet.cancelled", vec![json!(why)]);
         self.update_join_types();
     }
@@ -626,6 +638,10 @@ mod tests {
         e.now += CAR_MEET_READY_MS + 1;
         e.tick_car_meet();
         assert_eq!(e.car_meet.join_slots, 0);
+        // ... and the session name and template are emptied, so a later round never inherits them
+        let mut cleared = Engine::invite_cleared();
+        cleared.push(16, 5).push(0, 7).push(17, 5).push(0, 7);
+        assert_eq!(e.invite_end_update(), cleared);
     }
 
     #[test]
@@ -636,6 +652,8 @@ mod tests {
         let mut body = Bits::new();
         body.push(u64::from(INVITE_FREE_ROAM), 2).push(0, 32);
         e.invite_request(starter, &body);
+        // the reference end of an invitation: only the type is cleared
+        assert_eq!(e.invite_end_update(), Engine::invite_cleared());
         let before = reliable(&e, joiner).len();
         join(&mut e, joiner, true);
         assert_eq!(e.car_meet.join_slots, 0);
