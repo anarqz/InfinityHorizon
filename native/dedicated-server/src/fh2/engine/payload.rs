@@ -39,11 +39,15 @@ const CONSOLE_VARIABLES: [i32; 9] = [1, 1, 1, 1, 1, 1, 1, 2, 2];
 const BUCKET_LIST_PLAYER_VARIABLES: [i32; 6] = [32, 32, 32, 1, 4, 1];
 
 /// What made the sanitizer refuse a payload, with the number `validation_rejected` reports
-/// (the router, the variable id, the value or the payload's length; 0 for a cut payload).
+/// (the router, the variable id, the value or the payload's length; 0 for a cut payload) and
+/// where it happened (the variable id, the router or the length: never a decoded value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Refusal {
     pub cause: Cause,
+    /// For the controller's `peer.rejected` only (contract §4.5); it may be a decoded value.
     pub detail: u32,
+    /// What a world-log note may carry (contract §2.3): a catalog id, a size or a position.
+    pub at: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,9 +87,19 @@ impl Cause {
     }
 
     fn with(self, detail: impl TryInto<u32>) -> Refusal {
+        let detail = detail.try_into().unwrap_or(u32::MAX);
         Refusal {
             cause: self,
-            detail: detail.try_into().unwrap_or(u32::MAX),
+            detail,
+            at: detail,
+        }
+    }
+
+    /// A refusal whose number is a decoded value: notes get the variable id instead.
+    fn with_value(self, value: impl TryInto<u32>, variable: usize) -> Refusal {
+        Refusal {
+            at: u32::try_from(variable).unwrap_or(u32::MAX),
+            ..self.with(value)
         }
     }
 }
@@ -256,14 +270,14 @@ pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Refusal> {
                     && index == BUCKET_LIST_STATE_VARIABLE
                     && value > BUCKET_LIST_STATE_MAX
                 {
-                    return Err(Cause::PastRange.with(value));
+                    return Err(Cause::PastRange.with_value(value, index));
                 }
                 // a road-trip player State past RoadTripServerState, a CompletedEventCount past
                 // its range
                 if router == ROAD_TRIP_PLAYER_ROUTER
                     && ROAD_TRIP_PLAYER_MAXIMA[index].is_some_and(|m| value > m)
                 {
-                    return Err(Cause::PastRange.with(value));
+                    return Err(Cause::PastRange.with_value(value, index));
                 }
                 variable.push(value, w as u32);
             }
@@ -471,4 +485,23 @@ pub fn player_name(payload: &Bits) -> Option<Vec<u16>> {
         name = Some(units);
     }
     name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refusal_carries_no_decoded_value_where_notes_read() {
+        // an out-of-range value: the value for peer.rejected, the variable for notes
+        let mut p = Bits::new();
+        p.push(BUCKET_LIST_STATE_VARIABLE as u64, 3).push(12, 4);
+        let r = sanitize(12, &p).unwrap_err();
+        assert_eq!((r.cause, r.detail, r.at), (Cause::PastRange, 12, 4));
+        // ids, sizes and positions are the same for both
+        let mut repeated = Bits::new();
+        repeated.push(1, 4).push(1, 1).push(1, 4).push(0, 1);
+        let r = sanitize(3, &repeated).unwrap_err();
+        assert_eq!((r.cause, r.detail, r.at), (Cause::RepeatedId, 1, 1));
+    }
 }

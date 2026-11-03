@@ -18,7 +18,7 @@ use std::{
     sync::Arc,
 };
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{
     Engine, M, Why,
@@ -140,45 +140,6 @@ pub(super) struct Events {
     pub results_kept_until: i64,
 }
 
-/// A float note argument: the f32's shortest decimal, as the world log prints it.
-pub(super) fn f32_arg(x: f32) -> Value {
-    if x.is_nan() {
-        json!("NaN")
-    } else if x.is_infinite() {
-        json!(if x > 0.0 { "Infinity" } else { "-Infinity" })
-    } else {
-        let v: f64 = format!("{x}").parse().unwrap_or(0.0);
-        if v.fract() == 0.0 && v.abs() < 1e15 {
-            json!(v as i64)
-        } else {
-            json!(v)
-        }
-    }
-}
-
-/// A double as the reference world log's round-trip text: the shortest digits, positional for
-/// exponents -5..14, else `d.dddE+XX`.
-pub(super) fn round_trip(x: f64) -> String {
-    if x.is_nan() {
-        return "NaN".into();
-    }
-    if x.is_infinite() {
-        return if x > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if x == 0.0 {
-        return if x.is_sign_negative() { "-0" } else { "0" }.into();
-    }
-    let e = format!("{x:e}");
-    let (mantissa, exponent) = e.split_once('e').unwrap_or((&e, "0"));
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    if (-5..15).contains(&exponent) {
-        format!("{x}")
-    } else {
-        let sign = if exponent < 0 { '-' } else { '+' };
-        format!("{mantissa}E{sign}{:02}", exponent.abs())
-    }
-}
-
 /// SessionHostSynced's f32 value.
 fn host_float(x: f32) -> u64 {
     u64::from(x.to_bits())
@@ -274,34 +235,13 @@ fn in_progress_score(body: &Bits) -> Option<(f32, bool)> {
     Some((value, r.boolean().ok()?))
 }
 
-struct LapScore {
-    values: [f64; 3],
-    count: u32,
-    flag89: bool,
-    flag8b: bool,
-}
-
-/// MsgLapScore (44) in the game's layout: the sender's own key, three 8-byte strings (doubles),
-/// then exactly 34 bits (a u32 and two flags).
-fn lap_score(body: &Bits) -> Option<LapScore> {
+/// Whether a MsgLapScore (44) has the game's layout: the sender's own key, three 8-byte
+/// strings (doubles), then exactly 34 bits (a u32 and two flags). Only the layout is checked:
+/// the values are the player's and are neither kept nor logged (contract §2.3).
+fn lap_score_reads(body: &Bits) -> bool {
     let mut r = body.reader();
-    if ObjKey::read(&mut r, 7).ok()?.kind != KeyOwner::Own {
-        return None;
-    }
-    let mut values = [0f64; 3];
-    for v in &mut values {
-        let bytes: [u8; 8] = r.byte_string(8).ok()?.try_into().ok()?;
-        *v = f64::from_le_bytes(bytes);
-    }
-    if r.left() != 34 {
-        return None;
-    }
-    Some(LapScore {
-        values,
-        count: r.read(32).ok()? as u32,
-        flag89: r.boolean().ok()?,
-        flag8b: r.boolean().ok()?,
-    })
+    let own = ObjKey::read(&mut r, 7).is_ok_and(|k| k.kind == KeyOwner::Own);
+    own && (0..3).all(|_| r.byte_string(8).is_ok_and(|b| b.len() == 8)) && r.left() == 34
 }
 
 impl Engine {
@@ -1318,19 +1258,20 @@ impl Engine {
             return;
         };
         progress.last_score_at = Some(now);
-        let Some((raw, flag)) = in_progress_score(body) else {
-            self.refused_score(index, json!("?"), None);
+        let Some((raw, _flag)) = in_progress_score(body) else {
+            self.refused_score(index, None);
             return;
         };
         if progress.first_noted.insert(index) {
             self.note(
                 "progress.first",
-                vec![json!(43), json!(index), f32_arg(raw), json!(u8::from(flag))],
+                // which player and message only: the score and its flag are what it sent (§2.3)
+                vec![json!(43), json!(index)],
             );
         }
         let value = raw.abs();
         if !value.is_finite() {
-            self.refused_score(index, f32_arg(raw), Some("not finite"));
+            self.refused_score(index, Some("not finite"));
             return;
         }
         let Some(progress) = self.ev.progress.as_mut() else {
@@ -1341,7 +1282,7 @@ impl Engine {
             if progress.refused_noted.insert(index) {
                 self.note(
                     "progress.refused_above",
-                    vec![json!(43), json!(index), f32_arg(raw), json!(above)],
+                    vec![json!(43), json!(index), json!(above)],
                 );
             }
             return;
@@ -1350,7 +1291,7 @@ impl Engine {
         self.publish_event_progress();
     }
 
-    fn refused_score(&mut self, index: u8, value: Value, why: Option<&str>) {
+    fn refused_score(&mut self, index: u8, why: Option<&str>) {
         let Some(progress) = self.ev.progress.as_mut() else {
             return;
         };
@@ -1358,7 +1299,7 @@ impl Engine {
             let why = why.unwrap_or("does not read");
             self.note(
                 "progress.refused",
-                vec![json!(43), json!(index), value, json!(why)],
+                vec![json!(43), json!(index), json!(why)],
             );
         }
     }
@@ -1381,41 +1322,27 @@ impl Engine {
         let Some(progress) = self.ev.progress.as_mut() else {
             return;
         };
-        let Some(fields) = lap_score(body) else {
+        if !lap_score_reads(body) {
             if progress.refused_laps.insert(index) {
                 self.note("progress.lap_layout", vec![json!(index)]);
             }
             return;
-        };
+        }
         let done = progress.laps_done.get(&index).copied().unwrap_or(0);
         let at = progress.progress.get(&index).copied();
-        let shown = format!(
-            "u32 {}, f64 {}/{}/{}, flags {}{}",
-            fields.count,
-            round_trip(fields.values[0]),
-            round_trip(fields.values[1]),
-            round_trip(fields.values[2]),
-            u8::from(fields.flag89),
-            u8::from(fields.flag8b)
-        );
         // T24c: a 44 at the start line (progress about 0) is not a lap
-        let reached = match at {
-            Some(r) if r >= done as f32 + LAP_SCORE_MIN_PROGRESS => r,
-            _ => {
-                if progress.start_line_noted.insert(index) {
-                    match at {
-                        Some(p) => self.note(
-                            "progress.start_line",
-                            vec![f32_arg(p), json!(index), json!(shown)],
-                        ),
-                        None => {
-                            self.note("progress.start_line_none", vec![json!(index), json!(shown)])
-                        }
-                    }
-                }
-                return;
+        if !at.is_some_and(|r| r >= done as f32 + LAP_SCORE_MIN_PROGRESS) {
+            if progress.start_line_noted.insert(index) {
+                // the player only: its progress and the lap message's fields are what it sent
+                let id = if at.is_some() {
+                    "progress.start_line"
+                } else {
+                    "progress.start_line_none"
+                };
+                self.note(id, vec![json!(index)]);
             }
-        };
+            return;
+        }
         if done >= progress.laps {
             return;
         }
@@ -1426,13 +1353,7 @@ impl Engine {
         if noted {
             self.note(
                 "progress.lap",
-                vec![
-                    json!(done + 1),
-                    json!(laps),
-                    json!(index),
-                    f32_arg(reached),
-                    json!(shown),
-                ],
+                vec![json!(done + 1), json!(laps), json!(index)],
             );
         }
         self.publish_event_progress();

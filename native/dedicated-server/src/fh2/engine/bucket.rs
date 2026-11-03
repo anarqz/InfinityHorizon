@@ -525,7 +525,7 @@ impl Engine {
                 json!(if obj.is_create { "create" } else { "update" }),
                 json!(obj.sequence),
                 json!(refusal.cause.label()),
-                json!(refusal.detail),
+                json!(refusal.at),
                 json!(obj.vars.len()),
             ];
             match &prefix {
