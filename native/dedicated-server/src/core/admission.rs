@@ -89,7 +89,6 @@ impl Entry {
 
 #[derive(Debug)]
 struct ProofGrant {
-    grant: [u8; 16],
     peer: u64,
     entry: Entry,
     authority: Authority,
@@ -99,7 +98,8 @@ struct ProofGrant {
 struct Snapshot {
     entries: HashMap<(u64, SocketAddr), Entry>,
     lan: HashMap<u64, Entry>,
-    proofs: Vec<ProofGrant>,
+    /// By grant id: the per-datagram decision finds a grant's authority in O(1).
+    proofs: HashMap<[u8; 16], ProofGrant>,
 }
 
 /// One punch as the hints and kicks read it again.
@@ -156,8 +156,8 @@ impl Lookup for LiveProofs<'_> {
         }
         self.snapshot?
             .proofs
-            .iter()
-            .find(|p| p.grant == *grant && p.entry.live(self.unix, self.mono))
+            .get(grant)
+            .filter(|p| p.entry.live(self.unix, self.mono))
             .map(|p| &p.authority)
     }
 }
@@ -349,7 +349,7 @@ impl Gate {
         self.has_context = false;
         self.lease = None;
         if let Some(mut s) = self.snapshot.take() {
-            for p in &mut s.proofs {
+            for p in s.proofs.values_mut() {
                 p.authority.zero();
             }
         }
@@ -480,22 +480,21 @@ impl Gate {
             };
             let grant_bytes = grant::uuid_bytes(&claims.grant).unwrap_or([0; 16]);
             if let Some(key) = proof_key {
-                snap.proofs.retain(|g| g.grant != grant_bytes);
-                snap.proofs.push(ProofGrant {
-                    grant: grant_bytes,
-                    peer: xuid,
-                    entry: entry.clone(),
-                    authority: Authority {
-                        header: fiup::header(
-                            grant_bytes,
-                            self.world_bytes,
-                            self.rules.host_xuid,
-                            xuid,
-                        ),
-                        key,
-                        expires: claims.exp,
+                let authority = Authority::new(
+                    fiup::header(grant_bytes, self.world_bytes, self.rules.host_xuid, xuid),
+                    key,
+                    claims.exp,
+                );
+                if let Some(mut old) = snap.proofs.insert(
+                    grant_bytes,
+                    ProofGrant {
+                        peer: xuid,
+                        entry: entry.clone(),
+                        authority,
                     },
-                });
+                ) {
+                    old.authority.zero();
+                }
             }
             if let Some(o) = observed {
                 snap.entries.insert((xuid, o), entry.clone());
@@ -539,7 +538,7 @@ impl Gate {
         };
         self.proof.reconcile(&lookup, mono, unix_now);
         if let Some(mut old) = old {
-            for p in &mut old.proofs {
+            for p in old.proofs.values_mut() {
                 p.authority.zero();
             }
         }
@@ -648,7 +647,7 @@ impl Gate {
         let unix = (self.now_ms(mono) / 1000) as i64;
         self.snapshot.as_ref().is_some_and(|s| {
             s.proofs
-                .iter()
+                .values()
                 .any(|p| p.peer == xuid && p.entry.live(unix, mono))
         })
     }
@@ -667,6 +666,22 @@ impl Gate {
             mono,
         };
         proof.receive(&lookup, data, source, mono, unix)
+    }
+
+    /// Housekeeping (once a second): drops expired FIUP state, off the datagram path.
+    pub fn housekeep(&mut self, mono: u64) {
+        let host_live = self.host_live(mono);
+        let unix = (self.now_ms(mono) / 1000) as i64;
+        let Gate {
+            snapshot, proof, ..
+        } = self;
+        let lookup = LiveProofs {
+            snapshot: snapshot.as_ref(),
+            host_live,
+            unix,
+            mono,
+        };
+        proof.reconcile(&lookup, mono, unix);
     }
 
     pub fn fiup_counters(&self) -> fiup::Counters {
@@ -701,10 +716,10 @@ impl Gate {
         for g in punched {
             self.revoke_grant(&g, mono);
         }
-        for p in s.proofs.iter_mut().filter(|p| p.peer == xuid) {
+        for p in s.proofs.values_mut().filter(|p| p.peer == xuid) {
             p.authority.zero();
         }
-        s.proofs.retain(|p| p.peer != xuid);
+        s.proofs.retain(|_, p| p.peer != xuid);
         self.snapshot = Some(s);
         let host_live = self.host_live(mono);
         let unix = (self.now_ms(mono) / 1000) as i64;

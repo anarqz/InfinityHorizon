@@ -1136,6 +1136,7 @@ impl Server {
                 timers,
                 now,
             };
+            w.gate.lock().housekeep(now);
             let until = w.lease_until();
             let lapsed = match until {
                 Some(_) => !w.lease_live(now),
