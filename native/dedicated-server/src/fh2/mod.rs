@@ -353,6 +353,7 @@ impl Game for Fh2 {
         if o.has("settings") {
             settings.apply(o.obj("settings")?)?;
         }
+        settings.fit_join_snapshot(usize::from(info.max_players));
         let base = EngineSettings {
             relay: settings.clone(),
             max_players: usize::from(info.max_players),
