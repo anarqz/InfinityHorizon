@@ -33,10 +33,10 @@ use crate::{
 };
 
 const HOUSEKEEPING_MS: u64 = 1000;
-const MIB: u64 = 1024 * 1024;
+pub(crate) const MIB: u64 = 1024 * 1024;
 /// Public budget: per world `4 MB + 3 MB × maxPlayers` against `limit − 20 MB` (§8).
-const WORLD_BASE_MB: u64 = 4;
-const SEAT_MB: u64 = 3;
+pub(crate) const WORLD_BASE_MB: u64 = 4;
+pub(crate) const SEAT_MB: u64 = 3;
 const BUDGET_HEADROOM_MB: u64 = 20;
 /// Public CPU guard: refuse opens while the rolling 60 s CPU is above 15 % of one core.
 const CPU_GUARD_PERMILLE: u64 = 150;

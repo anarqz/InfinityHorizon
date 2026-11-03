@@ -7,6 +7,12 @@ use serde_json::{Map, Value};
 
 use crate::{control::proto::CmdError, core::Profile};
 
+/// The public profile's per-peer history cap (contract §8): 512 Kib, one object's hard guard.
+pub const PUBLIC_HISTORY_MAX_BITS: u64 = 512 * 1024;
+/// The most bits an object message's prefix takes before its payload: message id 7, router 4,
+/// key and type at most 26, sequence 8, payload length 14 (59, rounded up).
+pub const SNAPSHOT_PREFIX_BITS: u64 = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelaySettings {
     pub weather_seed: Option<i32>,
@@ -38,10 +44,15 @@ pub struct RelaySettings {
     pub history_max_bits: u64,
     pub history_max_entries: u64,
     pub queue_max_bits: u64,
+    /// The entries a peer's histories are shed down to after each packet (never a drop): the
+    /// join snapshot's share of a joiner's queue (contract §8). Not a `world.open` key: it
+    /// follows `historyMaxEntries` until [`RelaySettings::fit_join_snapshot`] lowers it.
+    pub history_trim_entries: u64,
 }
 
 impl RelaySettings {
-    /// The C# defaults, with the public profile's tighter queue caps (contract §8).
+    /// The C# defaults, with the public profile's tighter caps (contract §8): its smaller
+    /// history cap keeps a joiner's fitted queue (eleven histories) within 1 MiB.
     pub fn for_profile(profile: Profile) -> RelaySettings {
         let mut s = RelaySettings {
             weather_seed: None,
@@ -73,8 +84,10 @@ impl RelaySettings {
             history_max_bits: 2 * 1024 * 1024,
             history_max_entries: 16_384,
             queue_max_bits: 8 * 1024 * 1024,
+            history_trim_entries: 16_384,
         };
         if profile == Profile::Public {
+            s.history_max_bits = PUBLIC_HISTORY_MAX_BITS;
             s.queue_max_bits = 4 * 1024 * 1024;
             s.queue_max_messages = 2048;
             s.max_unsynced = 8;
@@ -85,18 +98,25 @@ impl RelaySettings {
     /// Makes a join's snapshot fit the joiner's reliable queue (contract §8): the snapshot holds
     /// every other player's kept history, so with `max_players - 1` others at their history
     /// caps it must stay within `QueueMaxMessages`/`QueueMaxBits`, or one synced peer holding a
-    /// legal history would doom every later joiner (QueueFull). The entry cap goes down to the
-    /// queue's share (the engine trims a peer's histories down to it before dooming anybody);
-    /// the queue's bit cap goes up to carry the others' history bits (the history bit cap dooms
-    /// at once, so it is never lowered).
+    /// legal history would doom every later joiner (QueueFull). The trim target goes down to the
+    /// queue's share (the engine sheds a peer's oldest kept updates down to it after each
+    /// packet, largest histories first, and never drops anybody for it; `HistoryMaxEntries`
+    /// stays the reference's drop rule); the queue's bit cap goes up to carry the others'
+    /// history bits (the history bit cap dooms at once, so it is never lowered). Each snapshot
+    /// message also carries its object prefix (id, router, key, type, sequence, length), so the
+    /// queue gets [`SNAPSHOT_PREFIX_BITS`] per kept entry on top of the history bits.
     pub fn fit_join_snapshot(&mut self, max_players: usize) {
         let others = max_players.saturating_sub(1).max(1) as u64;
-        self.history_max_entries = self
+        self.history_trim_entries = self
             .history_max_entries
             .min((self.queue_max_messages / others).max(1));
+        let snapshot_bits = self.history_max_bits.saturating_add(
+            self.history_trim_entries
+                .saturating_mul(SNAPSHOT_PREFIX_BITS),
+        );
         self.queue_max_bits = self
             .queue_max_bits
-            .max(self.history_max_bits.saturating_mul(others));
+            .max(snapshot_bits.saturating_mul(others));
     }
 
     /// Applies `world.open`'s `settings` object.
@@ -166,19 +186,48 @@ impl RelaySettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::server::{MIB, SEAT_MB, WORLD_BASE_MB};
 
     #[test]
     fn a_full_world_of_histories_fits_one_joiners_queue() {
         for profile in [Profile::Private, Profile::Public] {
             let mut s = RelaySettings::for_profile(profile);
             s.fit_join_snapshot(12);
-            // eleven others at their caps: the snapshot fits the joiner's queue
-            assert!(s.history_max_entries * 11 <= s.queue_max_messages);
-            assert!(s.history_max_bits * 11 <= s.queue_max_bits);
-            assert_eq!(s.history_max_bits, 2 * 1024 * 1024);
+            // eleven others at their caps, prefixes included: the snapshot fits the queue
+            assert!(s.history_trim_entries * 11 <= s.queue_max_messages);
+            let snapshot = s.history_max_bits + s.history_trim_entries * SNAPSHOT_PREFIX_BITS;
+            assert!(snapshot * 11 <= s.queue_max_bits);
         }
-        let mut s = RelaySettings::for_profile(Profile::Private);
+        let private = RelaySettings::for_profile(Profile::Private);
+        assert_eq!(private.history_max_bits, 2 * 1024 * 1024);
+        let mut s = private;
         s.fit_join_snapshot(1);
-        assert_eq!(s.history_max_entries, 4096);
+        assert_eq!(s.history_trim_entries, 4096);
+        assert_eq!(
+            s.history_max_entries, 16_384,
+            "the drop rule is the reference's"
+        );
+    }
+
+    #[test]
+    fn the_public_worst_case_fits_the_section_8_reservation() {
+        for seats in 1..=12usize {
+            let mut s = RelaySettings::for_profile(Profile::Public);
+            s.fit_join_snapshot(seats);
+            // a joiner's queue stays within 1 MiB at any world size
+            assert!(
+                s.queue_max_bits <= 8 * 1024 * 1024,
+                "{seats}: {}",
+                s.queue_max_bits
+            );
+            let world = crate::fh2::engine::world_worst_case_bytes(&s, seats) as u64
+                + crate::core::world_tables_worst_case_bytes() as u64;
+            let reserved = (WORLD_BASE_MB + SEAT_MB * seats as u64) * MIB;
+            assert!(world <= reserved, "{seats}: {world} of {reserved}");
+            if seats == 12 {
+                // the full world: comfortably inside 3 MB per seat (at most two thirds of it)
+                assert!(world * 3 <= 2 * SEAT_MB * MIB * 12, "{world}");
+            }
+        }
     }
 }

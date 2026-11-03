@@ -609,7 +609,7 @@ impl Engine {
             let mut raises = false;
             if (player.waiting.is_some() || player.pair.is_some()) && player.trace > 0 {
                 player.trace -= 1;
-                let text: Vec<String> = variables.iter().map(|(v, x)| format!("{v}={x}")).collect();
+                // which state the trace is about, never the decoded values (contract §2.3)
                 trace_note = Some(vec![
                     json!(index),
                     json!(if create { "create" } else { "update" }),
@@ -619,7 +619,6 @@ impl Engine {
                     } else {
                         "waiting"
                     }),
-                    json!(text.join(" ")),
                 ]);
             }
             for (var, value) in &variables {

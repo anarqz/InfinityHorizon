@@ -333,9 +333,10 @@ impl Engine {
         }
     }
 
-    /// Whether two participants' cars may have touched: when both cars' last accepted
-    /// predictions are fresh, they must be within `TAG_HIT_RADIUS_M`; without both positions the
-    /// hit stands, as in the reference (the swap cooldown still bounds the rate).
+    /// Whether two participants' cars may have touched: both cars' last accepted predictions
+    /// must be fresh and within `TAG_HIT_RADIUS_M`. A missing or stale position fails closed
+    /// (MACBOOK, WINDOWS' re-review of 9db6478): a reporter cannot skip the radius check by
+    /// withholding its car's predictions.
     fn tag_cars_close(&self, x: u8, y: u8) -> bool {
         let now = self.now;
         let at = |index: u8| {
@@ -350,7 +351,7 @@ impl Engine {
                 let (dx, dy, dz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
                 (dx * dx + dy * dy + dz * dz).sqrt() <= TAG_HIT_RADIUS_M
             }
-            _ => true,
+            _ => false,
         }
     }
 
@@ -638,6 +639,20 @@ mod tests {
             e.peer_mut(s).unwrap().last_car_at = Some(e.now);
         }
         hit(&mut e, b, 2, 1);
+        assert_eq!(buckets(&e), (1, 0));
+    }
+
+    #[test]
+    fn a_hit_without_both_fresh_positions_fails_closed() {
+        // a reporter that withholds its car's predictions
+        let (mut e, a, _) = king(0.0, 5.0);
+        e.peer_mut(a).unwrap().car_position = None;
+        hit(&mut e, a, 1, 2);
+        assert_eq!(buckets(&e), (1, 0));
+        // positions older than the freshness window
+        let (mut e, a, _) = king(0.0, 5.0);
+        e.now += TAG_CAR_FRESH_MS + 1;
+        hit(&mut e, a, 1, 2);
         assert_eq!(buckets(&e), (1, 0));
     }
 }

@@ -643,11 +643,12 @@ impl World {
                 }
                 GameEvent::Rejected {
                     xuid,
+                    peer,
                     kind,
                     message,
                     router,
                     value,
-                } => self.rejected(ctx, xuid, kind, message, router, value),
+                } => self.rejected(ctx, (xuid, peer), kind, message, router, value),
                 GameEvent::Custom {
                     ev,
                     world,
@@ -697,7 +698,7 @@ impl World {
     fn rejected(
         &mut self,
         ctx: &mut Ctx,
-        xuid: u64,
+        (xuid, peer): (u64, Option<u8>),
         kind: &'static str,
         message: Option<u32>,
         router: Option<u32>,
@@ -728,10 +729,12 @@ impl World {
             }
         }
         ctx.events.push(events::PEER_REJECTED, Some(&self.id), body);
-        crate::log::info(crate::log_ids::PEER_REJECTED)
-            .world(&self.id)
-            .field("kind", kind)
-            .emit();
+        // stdout names the peer by its engine index only (§2.3)
+        let mut line = crate::log::info(crate::log_ids::PEER_REJECTED).world(&self.id);
+        if let Some(p) = peer {
+            line = line.field("peer", p);
+        }
+        line.field("kind", kind).emit();
     }
 
     /// The `diag` event (at most every 3 s, 2048 per world; `final_one` at close).

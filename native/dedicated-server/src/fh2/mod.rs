@@ -609,6 +609,12 @@ impl Fh2World {
             let engine = kind.as_str();
             for ev in e.take_events() {
                 match ev {
+                    Event::LinesSuppressed { count } => {
+                        crate::log::info(crate::log_ids::WORLD_LINES_SUPPRESSED)
+                            .field("engine", engine)
+                            .field("count", count)
+                            .emit();
+                    }
                     Event::Note { id, args } => {
                         if id == "carmeet.cancelled" {
                             requests.push((*kind, None, args.first().cloned()));
@@ -639,12 +645,14 @@ impl Fh2World {
                     }
                     Event::ValidationRejected {
                         xuid,
+                        peer,
                         kind,
                         message,
                         router,
                         value,
                     } => self.events.push(GameEvent::Rejected {
                         xuid,
+                        peer,
                         kind,
                         message,
                         router,

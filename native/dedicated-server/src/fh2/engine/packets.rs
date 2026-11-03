@@ -370,6 +370,14 @@ impl Engine {
             self.doom(serial, Why::HistoryEntries);
             return Ok(());
         }
+        // the join snapshot's share (contract §8): shed down to it, never a drop
+        let share = self.settings.relay.history_trim_entries as usize;
+        if self
+            .peer(serial)
+            .is_some_and(|p| p.history_entries() > share)
+        {
+            self.shed_history(serial, share);
+        }
         // AC-2: a watching host measures the other players' cars
         if let Some((_, body)) = &car_now {
             self.watch_car(serial, body);
@@ -440,6 +448,37 @@ impl Engine {
                 h.trim(&mut notes);
                 entries -= before - h.history_entries();
                 guard_notes.extend(notes.into_iter().map(|d| (key, d)));
+            }
+        }
+        for (key, d) in guard_notes {
+            self.guard_note(index, key, d);
+        }
+        entries
+    }
+
+    /// Sheds the peer's oldest kept updates, largest histories first, until its entries are
+    /// within the join snapshot's share `limit` (contract §8), a level compaction and the
+    /// per-object guard need not reach; the entries left (more than `limit` only when its
+    /// creates alone exceed it).
+    fn shed_history(&mut self, serial: u64, limit: usize) -> usize {
+        let Some(p) = self.peer_mut(serial) else {
+            return 0;
+        };
+        let index = p.index;
+        let mut entries = p.history_entries();
+        let mut order: Vec<((u8, u32), usize)> =
+            p.objects.iter().map(|(k, o)| (*k, o.tail.len())).collect();
+        order.sort_by_key(|x| std::cmp::Reverse(x.1));
+        let mut guard_notes = Vec::new();
+        for (key, _) in &order {
+            if entries <= limit {
+                break;
+            }
+            if let Some(h) = p.objects.get_mut(key) {
+                let keep = h.tail.len().saturating_sub(entries - limit);
+                let mut notes = Vec::new();
+                entries -= h.shed_to(keep, &mut notes);
+                guard_notes.extend(notes.into_iter().map(|d| (*key, d)));
             }
         }
         for (key, d) in guard_notes {
@@ -802,10 +841,16 @@ impl Engine {
             self.peers
                 .iter()
                 .find(|o| o.serial != serial && o.synced && o.xuid == xuid)
-                .map(|o| (o.serial, o.last_seen, o.index))
+                .map(|o| (o.serial, o.last_seen, o.index, o.endpoint))
         };
-        if let Some((old_serial, last_seen, old_index)) = old {
-            if self.now - last_seen < self.settings.relay.takeover_quiet_ms as i64 {
+        if let Some((old_serial, last_seen, old_index, old_endpoint)) = old {
+            // a game that rebinds its socket comes back from the same address with a new port:
+            // when the installed policy verified this endpoint for this identity (the host's
+            // loopback, a player's FIUP binding), the old seat is that game's dead socket and is
+            // taken over at once; otherwise the reference's quiet rule (TakeoverQuietMs) holds
+            let rebind = self.policy.has_authorize()
+                && crate::net::ip_key(old_endpoint) == crate::net::ip_key(endpoint);
+            if !rebind && self.now - last_seen < self.settings.relay.takeover_quiet_ms as i64 {
                 self.drop_peer(serial, Why::StillActive(old_index));
                 return;
             }
@@ -894,5 +939,106 @@ fn number(x: f64) -> serde_json::Value {
         json!(x as i64)
     } else {
         json!(x)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{
+        bits::Bits,
+        history::History,
+        testkit::{engine, seat},
+    };
+    use crate::fh2::codec::object::seq_next;
+
+    /// One player object whose kept updates compaction cannot shrink: two variables each, so
+    /// none supersedes another.
+    fn long_history(updates: u32) -> History {
+        let mut h = History::new(0, 0, Bits::new(), 1);
+        let mut notes = Vec::new();
+        let mut seq = 0u8;
+        for i in 1..=updates {
+            seq = seq_next(seq);
+            let mut u = Bits::new();
+            u.push(4, 8)
+                .push(u64::from(i), 64)
+                .push(8, 8)
+                .push(u64::from(i), 32);
+            assert!(h.update(seq, u, &mut notes));
+        }
+        h
+    }
+
+    #[test]
+    fn the_join_snapshot_share_sheds_the_largest_history_instead_of_dooming() {
+        let mut e = engine();
+        let s = seat(&mut e, 1, 1001);
+        let (big, small) = (long_history(900), long_history(150));
+        let p = e.peer_mut(s).unwrap();
+        p.objects.insert((1, 7), big);
+        p.objects.insert((1, 8), small);
+        let before = p.history_entries();
+        // the private profile's share fitted to 12 players: 4096 / 11
+        let cap = 372;
+        assert!(before > cap + 300, "{before}");
+        // the reference's pass (compaction and the per-object guard) cannot get there
+        assert!(e.trim_history(s, cap) > cap);
+        let left = e.shed_history(s, cap);
+        assert_eq!(left, cap);
+        let p = e.peer(s).unwrap();
+        assert_eq!(p.history_entries(), cap);
+        // the largest went first: the smaller history kept its updates
+        let small_left = p.objects.get(&(1, 8)).unwrap().history_entries();
+        assert_eq!(small_left, long_history(150).history_entries());
+        assert!(!p.doomed);
+    }
+
+    /// A policy that verified every identity on every endpoint (as the world's admission does
+    /// for the host's loopback and for FIUP-bound players).
+    struct Verified;
+
+    impl super::super::Policy for Verified {
+        fn has_authorize(&self) -> bool {
+            true
+        }
+        fn has_authorize_hook(&self) -> bool {
+            true
+        }
+        fn authorize(&mut self, _: u64, _: std::net::SocketAddr, _: i64) -> bool {
+            true
+        }
+        fn authorize_hook(&mut self, _: u64, _: std::net::SocketAddr, _: i64) -> bool {
+            true
+        }
+        fn awaits_proof(&mut self, _: u64, _: i64) -> Option<bool> {
+            None
+        }
+    }
+
+    /// The host synced at 192.0.2.1:3074 and seen just now, and its game back from `from`
+    /// before its handshake completes: whether the new seat synced.
+    fn rebind(verified: bool, from: &str) -> bool {
+        let mut e = engine();
+        if verified {
+            e.policy = Box::new(Verified);
+        }
+        let host = seat(&mut e, 1, 1001);
+        e.now = 10_000;
+        e.peer_mut(host).unwrap().last_seen = 10_000;
+        e.now = 10_100;
+        let serial = e.next_serial;
+        e.next_serial += 1;
+        let peer = e.new_peer(serial, from.parse().unwrap(), 2, 1001, 9, 9);
+        e.peers.push(peer);
+        e.complete_handshake(serial);
+        e.peer(serial).is_some_and(|p| p.synced)
+    }
+
+    #[test]
+    fn a_verified_game_back_on_a_new_port_takes_its_seat_over_at_once() {
+        assert!(rebind(true, "192.0.2.1:4000"));
+        // another address, or no verified identity: the quiet rule (3 s) still holds
+        assert!(!rebind(true, "198.51.100.9:4000"));
+        assert!(!rebind(false, "192.0.2.1:4000"));
     }
 }

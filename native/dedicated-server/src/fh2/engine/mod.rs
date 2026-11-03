@@ -248,9 +248,14 @@ pub enum Event {
         b: u32,
         refusal: Option<u8>,
     },
+    /// The world-log lines the note budget dropped in its last window
+    /// (`world.lines_suppressed`).
+    LinesSuppressed { count: u32 },
     /// A sanitizer refusal.
     ValidationRejected {
         xuid: u64,
+        /// The sender's index when seated.
+        peer: Option<u8>,
         kind: &'static str,
         message: Option<u32>,
         router: Option<u32>,
@@ -355,6 +360,61 @@ pub(crate) struct Peer {
     oversize_dropped: u32,
     /// Notes used per kind for this peer's repeatable refusals (`peer_note`).
     notes_used: HashMap<&'static str, u32>,
+}
+
+/// Engine-level game state outside the peers (lobby options records, race, team, tag and
+/// bucket-list state, the parts rows' 64-model cache): an allowance, every part of it capped by
+/// its own module (contract §8's worst-case table).
+pub const ENGINE_STATE_ALLOWANCE_BYTES: usize = 512 * 1024;
+/// A lower bound on one kept message's bits on the wire (id, router, key, sequence, length).
+const MIN_MESSAGE_BITS: usize = 32;
+
+/// The most one peer holds, by part (bytes; contract §8's worst-case table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerWorstCase {
+    /// Kept histories: bits plus one object and one buffer per kept entry (the trim target and
+    /// one datagram's worth of entries and bytes before the per-packet trim).
+    pub histories: usize,
+    /// The reliable queue: bits plus a shared message per entry.
+    pub queue: usize,
+    /// The in-flight window: full packets of shared messages.
+    pub in_flight: usize,
+    /// The peer record itself.
+    pub record: usize,
+}
+
+impl PeerWorstCase {
+    pub fn total(&self) -> usize {
+        self.histories + self.queue + self.in_flight + self.record
+    }
+}
+
+/// The most one peer holds under `s`. Messages are shared between receivers, so counting each
+/// queue whole is an upper bound.
+pub fn peer_worst_case(s: &RelaySettings) -> PeerWorstCase {
+    use std::mem::size_of;
+    let slack = crate::core::ALLOC_SLACK_BYTES;
+    let entry = size_of::<((u8, u32), History)>() + size_of::<(u8, Bits)>() + slack + 1;
+    // an Arc<Bits>: the queue slot, the shared block with its counts, the bytes' own buffer
+    let message = size_of::<M>() + 2 * size_of::<usize>() + size_of::<Bits>() + 2 * slack + 1;
+    let packet =
+        size_of::<Reliable>() + send::MESSAGES_PER_PACKET * message + datagram::MAX_DATAGRAM;
+    // one packet's growth before the per-packet trim: a datagram of the smallest messages
+    let packet_entries = datagram::MAX_DATAGRAM * 8 / MIN_MESSAGE_BITS;
+    PeerWorstCase {
+        histories: (s.history_max_bits as usize).div_ceil(8)
+            + (s.history_trim_entries as usize + packet_entries) * entry
+            + datagram::MAX_DATAGRAM,
+        queue: (s.queue_max_bits as usize).div_ceil(8) + s.queue_max_messages as usize * message,
+        in_flight: s.reliable_window as usize * packet,
+        record: size_of::<Peer>(),
+    }
+}
+
+/// The most one engine holds with `seats` peers under `s`: every peer at its worst case plus
+/// [`ENGINE_STATE_ALLOWANCE_BYTES`].
+pub fn world_worst_case_bytes(s: &RelaySettings, seats: usize) -> usize {
+    seats * peer_worst_case(s).total() + ENGINE_STATE_ALLOWANCE_BYTES
 }
 
 impl Peer {
@@ -521,7 +581,7 @@ pub struct Engine {
     closed: bool,
     note_window: Option<i64>,
     notes: i32,
-    notes_dropped: i32,
+    notes_dropped: u32,
     held_opens: DotMap<SocketAddr, HeldOpen>,
     weather: Weather,
     weather_sequence: u8,
@@ -797,21 +857,11 @@ impl Engine {
 
     // ---- the world log ----
 
-    /// A world-log line, bounded: at most 40 per 10 s, then one count of the suppressed ones.
+    /// A world-log line, bounded: at most 40 per 10 s, then one `world.lines_suppressed` count
+    /// of the dropped ones when the window ends.
     fn note(&mut self, id: &'static str, args: Vec<Value>) {
-        if self
-            .note_window
-            .is_none_or(|w| self.now - w >= NOTE_WINDOW_MS)
-        {
-            if self.notes_dropped != 0 {
-                self.events.push(Event::Note {
-                    id: "notes.suppressed",
-                    args: vec![json!(self.notes_dropped)],
-                });
-            }
+        if self.close_note_window() {
             self.note_window = Some(self.now);
-            self.notes = 0;
-            self.notes_dropped = 0;
         }
         self.notes += 1;
         if self.notes > NOTES_PER_WINDOW {
@@ -819,6 +869,26 @@ impl Engine {
             return;
         }
         self.events.push(Event::Note { id, args });
+    }
+
+    /// Ends the note window once it is over, reporting what it dropped; true when no window
+    /// is open any more. The tick calls it too, so a count never waits for a later note.
+    pub(super) fn close_note_window(&mut self) -> bool {
+        if self
+            .note_window
+            .is_some_and(|w| self.now - w < NOTE_WINDOW_MS)
+        {
+            return false;
+        }
+        if self.notes_dropped != 0 {
+            self.events.push(Event::LinesSuppressed {
+                count: self.notes_dropped,
+            });
+        }
+        self.note_window = None;
+        self.notes = 0;
+        self.notes_dropped = 0;
+        true
     }
 
     /// A note the peer's own traffic can repeat at message rate: within its per-peer budget only,
@@ -850,8 +920,10 @@ impl Engine {
         router: Option<u32>,
         value: Option<u32>,
     ) {
+        let peer = self.peers.iter().find(|p| p.xuid == xuid).map(|p| p.index);
         self.events.push(Event::ValidationRejected {
             xuid,
+            peer,
             kind,
             message,
             router,

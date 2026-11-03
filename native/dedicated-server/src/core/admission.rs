@@ -141,6 +141,16 @@ pub struct Gate {
     admitted: usize,
 }
 
+impl Gate {
+    /// The most a world's gate holds on its own: the revoked grant ids at their cap (a UUID
+    /// string each, in a hash map at twice its entries) and the proof tables. The snapshot and
+    /// the punches are the controller's own bounded input.
+    pub fn worst_case_bytes() -> usize {
+        let revoked_entry = std::mem::size_of::<(String, u64)>() + 36 + super::ALLOC_SLACK_BYTES;
+        2 * REVOKED_MAX * revoked_entry + ProofHost::worst_case_bytes()
+    }
+}
+
 /// The snapshot's live FIUP authorities.
 struct LiveProofs<'a> {
     snapshot: Option<&'a Snapshot>,

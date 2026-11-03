@@ -63,6 +63,8 @@ pub enum GameEvent {
     /// A validation refusal (`peer.rejected`; the core throttles it).
     Rejected {
         xuid: u64,
+        /// The sender's engine index when it is seated (stdout names the peer by it).
+        peer: Option<u8>,
         kind: &'static str,
         message: Option<u32>,
         router: Option<u32>,
