@@ -100,7 +100,11 @@ it reached the right launcher with the per-launch secret.
 - **Lapse without a context:** a world that never received `world.context` counts its 45 s from
   `world.open` for the self-close of a controllerless public world.
 - **`world.open` without `game`** means `"fh2"` (the only game before the field existed).
-- **`world.open` in the public profile** forces `requireProof` and refuses `host.isPlayer: true`.
+- **`world.open`** takes the tagged host (OD-186 item 7): the private profile only `{kind: "player", xuid, isPlayer}`,
+  the public profile only `{kind: "official", vmId}`, which answers `bad_request {field: "host.kind", reason:
+  "grant_form_pending"}` until S34 fixes how grants name it (a `test-hooks` build opens it, for the private cap tests).
+  The public profile forces `requireProof`. `hello.proto` is an integer (the step-1 range `[lo, hi]` is still read).
+  `world.context` carries the context only and answers `{leaseUntilMs}`; `world.admission` carries the punches only.
 - **Panics:** a panic inside a world's command, datagram or tick closes only that world
   (`world.closed {reason: "fault"}`); the panic hook only logs (anonymised); a panic on the loop
   thread is exit 70.

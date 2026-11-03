@@ -354,13 +354,18 @@ impl Server {
                 return Err(CmdError::code(proto::UNAUTHORIZED));
             }
         }
-        let range = o
-            .arr("proto")
-            .ok()
-            .filter(|a| a.len() == 2)
-            .and_then(|a| Some((a[0].as_u64()?, a[1].as_u64()?)))
-            .filter(|(lo, hi)| lo <= hi)
-            .ok_or_else(|| CmdError::bad("proto"))?;
+        // the contract's integer (`proto: 1`); the step-1 range form `[lo, hi]` is still read
+        let range = match o.get("proto") {
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .filter(|v| *v <= u64::from(u32::MAX))
+                .map(|v| (v, v)),
+            Some(Value::Array(a)) if a.len() == 2 => {
+                a[0].as_u64().zip(a[1].as_u64()).filter(|(lo, hi)| lo <= hi)
+            }
+            _ => None,
+        }
+        .ok_or_else(|| CmdError::bad("proto"))?;
         let controller = if o.has("controller") {
             let c = Obj::new(o.obj("controller")?, "controller");
             if !matches!(c.str("kind")?, "launcher" | "vm") {
