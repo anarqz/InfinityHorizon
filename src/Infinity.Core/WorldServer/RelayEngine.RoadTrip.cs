@@ -343,7 +343,7 @@ internal sealed partial class RelayEngine
                 if (variable == 0) trip.PlayerStates[peer.Index] = (int)reader.Read(4);
                 else if (variable == 1) reader.Skip(3);
                 else if (variable == 2) reader.Skip(32);
-                else break; // a layout this server does not read: the object is still relayed as it came
+                else break; // unreachable: the sanitizer refused any id past 2 (NERDCORE_WIRE.md §7.9) before this reads it
             }
         }
         catch (WireFormatException) { return; }

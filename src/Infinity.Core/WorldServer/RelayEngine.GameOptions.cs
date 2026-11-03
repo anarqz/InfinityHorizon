@@ -58,6 +58,16 @@ internal sealed partial class RelayEngine
         TickGameOptions();
         if (peer.Doomed || !IsEventOwner(peer) || obj.Create) return;
         var result = _gameOptions.Apply(peer, obj.Handle.Id, obj.Sequence, obj.Payload, _now, out var ready);
+        if (result == GameOptionsUpdateResult.TooLong)
+        {
+            // not stored, not relayed: its relayed form could not fit one datagram. Its writer's next fragment would wait on it
+            // forever (the options object would be incomplete for everyone), so its session ends, as an overflow's does
+            Rejected(peer, "game_options_too_long", obj.Id, obj.Router, obj.Payload.Length);
+            if (PeerNote(peer, "options_too_long"))
+                Note(string.Create(CultureInfo.InvariantCulture, $"options: peer {peer.Index}'s update of {obj.Payload.Length} bits cannot fit one datagram relayed, refused"));
+            Doom(peer, "game options overflow");
+            return;
+        }
         // a long session of delta writes fills the bounded journal: its merged values take less (an overflow committed nothing)
         if (result == GameOptionsUpdateResult.Overflow && obj.Payload.Length <= NerdCodec.MaxPayloadBits && CompactGameOptions())
             result = _gameOptions.Apply(peer, obj.Handle.Id, obj.Sequence, obj.Payload, _now, out ready);

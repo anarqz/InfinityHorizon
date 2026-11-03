@@ -83,6 +83,13 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
     /// are folded into the create while they fit, else discarded, down to half of it, and the owner logs it once.</summary>
     internal const int MaxKeptUpdates = 4096;
     internal const int MaxKeptBits = 512 * 1024;
+    /// <summary>
+    /// How far updates fold into the create (Base): the snapshot's create must fit one datagram with the server-set variables it
+    /// appends (<see cref="ServerVariables"/>, <see cref="Universe"/>, <see cref="Team"/>: well under this reserve), as NerdCore
+    /// cannot fragment a message (NERDCORE_WIRE.md §2.3). Later updates stay their own messages in the tail.
+    /// </summary>
+    internal const int FoldMaxBits = NerdCodec.MaxDatagramPayloadBits - ServerVariablesReserveBits;
+    private const int ServerVariablesReserveBits = 128;
     private int _compactCount = CompactAt, _compactBits = CompactBits, _tailBits;
     private bool _guardNoted;
 
@@ -131,7 +138,7 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
     private void Apply(byte next, BitBuffer update)
     {
         Last = next;
-        if (Tail.Count == 0 && Base.Length + update.Length <= NerdCodec.MaxPayloadBits) { Base.Append(update); return; }
+        if (Tail.Count == 0 && Base.Length + update.Length <= FoldMaxBits) { Base.Append(update); return; }
         Tail.Add((next, update)); _tailBits += update.Length;
         if (Tail.Count >= _compactCount || _tailBits > _compactBits) Compact();
     }
@@ -185,7 +192,7 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
         while (Tail.Count > MaxKeptUpdates / 2 || _tailBits > MaxKeptBits / 2)
         {
             var oldest = Tail[0]; Tail.RemoveAt(0); _tailBits -= oldest.Payload.Length;
-            if (Base.Length + oldest.Payload.Length <= NerdCodec.MaxPayloadBits) Base.Append(oldest.Payload);
+            if (Base.Length + oldest.Payload.Length <= FoldMaxBits) Base.Append(oldest.Payload);
             else discarded++;
         }
         Discarded += discarded;
@@ -200,7 +207,7 @@ internal sealed class RelayObject(byte type, byte sequence, BitBuffer payload, b
         // a joiner gets the compacted history, whatever was appended since the last compaction
         if (Tail.Count != 0) Compact();
         var payload = BitBuffer.From(Base.Bytes, Base.Length);
-        if (router == 3 && payload.Length + ServerVariables.Count * 5 > NerdCodec.MaxPayloadBits)
+        if (router == 3 && payload.Length + ServerVariables.Count * 5 > NerdCodec.MaxDatagramPayloadBits)
         {
             // A console's history may repeat known variables thousands of times. Its last
             // values are sufficient for a snapshot and leave room for server-owned flags.
@@ -237,6 +244,10 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal bool CompletionConfirmed { get; set; }
     internal long LastCompletion { get; set; }
     internal AckWindow Acks { get; } = new();
+    /// <summary>Messages to this peer dropped for not fitting one datagram.</summary>
+    internal int OversizeDropped { get; set; }
+    /// <summary>Notes used per kind for this peer's repeatable refusals (RelayEngine.PeerNote).</summary>
+    internal Dictionary<string, int> NotesUsed { get; } = [];
     internal ushort NextPacket { get; set; } = 1;
     internal List<ReliablePacket> InFlight { get; } = [];
     internal bool Synced { get; set; }
@@ -321,7 +332,7 @@ internal sealed class RelayPeer(IPEndPoint endpoint, byte index, ulong xuid, uin
     internal ushort TakePacketId()
     {
         var result = NextPacket;
-        NextPacket = result >= 0xfffd ? (ushort)0 : (ushort)(result + 1);
+        NextPacket = AckWindow.NextId(result); // 0..0xfffe, as the game numbers (NERDCORE_WIRE.md §2.2)
         return result;
     }
 }

@@ -24,8 +24,26 @@ internal readonly record struct NerdHeader(ushort Id, ushort Ack, uint AckBits, 
 internal static class NerdCodec
 {
     internal const ushort NoSequence = 0xffff;
+    /// <summary>
+    /// The <c>ack</c> sent while nothing sequenced has been received (an empty <see cref="AckWindow.Header"/>, a refusal to an
+    /// unsequenced open), with <c>ackBits</c> 0. 0xfffe is also a real packet id (ids run 0..0xfffe, NERDCORE_WIRE.md §2.2): a peer
+    /// reading it before it has sent that many packets finds nothing to acknowledge (its own ids from 0 are ahead of it, §3.3), and an
+    /// ack of 0xfffe received from a peer does acknowledge our packet 0xfffe.
+    /// </summary>
     internal const ushort NoAck = 0xfffe;
     internal const int MaxPayloadBits = (1 << 14) - 1;
+    /// <summary>
+    /// The largest datagram the game accepts, header included: its packet-header reader closes the connection on a size over
+    /// 0x55c (1372 bytes) with 0x80600007 "Disconnect Invalid Msg Size" (NERDCORE_WIRE.md §2.3, §3.5). NerdCore has no message
+    /// fragmentation (§2.4: messages carry no length and never span packets), so every message fits one datagram whole.
+    /// </summary>
+    internal const int MaxDatagramBytes = 1372;
+    /// <summary>The message bits one datagram carries after its header.</summary>
+    internal const int MaxMessageBits = (MaxDatagramBytes - NerdHeader.Length) * 8;
+    /// <summary>The widest object-message prefix: 7 id + 4 router + 2 kind + 7 id + 8 peer (a relayed key) + 2 type + 8 sequence + 14 length.</summary>
+    internal const int ObjectPrefixMaxBits = 52;
+    /// <summary>An object payload this long or shorter always fits one datagram, alone, under any key.</summary>
+    internal const int MaxDatagramPayloadBits = MaxMessageBits - ObjectPrefixMaxBits;
     internal const int CarBodyBits = 710;
     internal const int DetachPartSafeBytes = 1024;
     internal const int ChatSafeBytes = 64;
@@ -226,8 +244,13 @@ internal static class NerdCodec
             case 50: // ConfigureGameOptionsForRoadTripEvent, server to the leader: the event, then u32
                 reader.Skip(64);
                 return;
-            case 61 or 66 or 67 or 68: // bucket-list co-op, server to client: 61 the start time (u32); 66-68 waiting/started/ended (s32)
+            case 61: // bucket-list co-op start time, server to client (u32)
                 reader.Skip(32);
+                return;
+            case 66 or 67 or 68: // bucket-list co-op status, server to client (§6.3): key(7) [key(7)] s32 [bool]
+                ObjectHandle.Read(ref reader, 7);
+                if (id != 66) ObjectHandle.Read(ref reader, 7);
+                reader.Skip(id == 68 ? 33 : 32);
                 return;
             case 65: // bucket-list co-op partner, server to client: PlayerState key, the pair's 5-bit universe, found, a name of at most 36 bytes
                 ObjectHandle.Read(ref reader, 7);
@@ -266,50 +289,78 @@ internal static class NerdCodec
     }
 }
 
+/// <summary>
+/// Packet ids and their acknowledgement, as NerdCore counts them (NERDCORE_WIRE.md §2.2, §2.3, §3.2, §3.3): sequenced ids run
+/// <c>0..0xfffe</c> (the next is <c>(id + 1) mod 0xffff</c>; 0xffff is "unsequenced"), and every distance is taken modulo 0xffff.
+/// </summary>
 internal sealed class AckWindow
 {
+    /// <summary>The count of sequenced packet ids, 0..0xfffe.</summary>
+    internal const int IdModulus = 0xffff;
+    /// <summary>A sequenced id this far from the newest, the short way round, or farther, is dropped (§2.3), as the game drops it.</summary>
+    internal const int DropDistance = 0x3fff;
+
     private ushort? _top;
     private uint _bits;
     internal (ushort Ack, uint Bits) Header => (_top ?? NerdCodec.NoAck, _bits);
-    /// <summary>Duplicate/stale sequenced packets are acknowledged without repeating their mutations.</summary>
+
+    /// <summary>How far <paramref name="to"/> is ahead of <paramref name="from"/>, modulo 0xffff (0..0xfffe).</summary>
+    internal static int Ahead(ushort from, ushort to) => ((to - from) % IdModulus + IdModulus) % IdModulus;
+
+    /// <summary>The id after <paramref name="id"/>: <c>(id + 1) mod 0xffff</c>, never 0xffff.</summary>
+    internal static ushort NextId(ushort id) => (ushort)((id + 1) % IdModulus);
+
+    /// <summary>
+    /// Whether a sequenced packet is new: the game's receiver checks first (§2.3: equal to the newest, or 0x3fff or more away the short
+    /// way round, is dropped), then duplicates within the 32 acknowledged behind the newest, and anything older than that, are stale.
+    /// A dropped or stale packet is not recorded, so it is never acknowledged as new and its mutations never repeat.
+    /// </summary>
     internal bool Accept(ushort packet)
     {
         if (packet == NerdCodec.NoSequence) return true;
-        if (_top is { } top && !SequenceAfter(packet, top))
+        if (_top is { } top)
         {
-            var back = unchecked((ushort)(top - packet));
-            if (back == 0 || back > 32 || (_bits & (1u << (back - 1))) != 0) return false;
+            var ahead = Ahead(top, packet);
+            if (ahead == 0 || Math.Min(ahead, IdModulus - ahead) >= DropDistance) return false;
+            if (ahead > DropDistance)
+            {
+                var back = IdModulus - ahead;
+                if (back > 32 || (_bits & (1u << (back - 1))) != 0) return false;
+            }
         }
         Add(packet);
         return true;
     }
+
     internal void Add(ushort packet)
     {
         if (packet == NerdCodec.NoSequence) return;
         if (_top is not { } top) { _top = packet; _bits = 0; return; }
-        var ahead = unchecked((ushort)(packet - top));
+        var ahead = Ahead(top, packet);
         if (ahead == 0) return;
-        if (ahead < 0x8000)
+        // the newest moves only for an id ahead within half the id space (§3.2)
+        if (ahead < IdModulus / 2)
         {
             _bits = ahead > 32 ? 0 : (ahead == 32 ? 0 : _bits << ahead) | (1u << (ahead - 1));
             _top = packet;
         }
         else
         {
-            var back = unchecked((ushort)(top - packet));
+            var back = IdModulus - ahead;
             if (back is >= 1 and <= 32) _bits |= 1u << (back - 1);
         }
     }
 
+    /// <summary>Whether an incoming <c>ack</c>/<c>ackBits</c> acknowledges our sent <paramref name="packet"/> (§3.3, distances mod 0xffff).</summary>
     internal static bool Acknowledges(ushort ack, uint bits, ushort packet)
     {
-        if (ack == packet) return ack != NerdCodec.NoAck || bits != 0;
-        var back = unchecked((ushort)(ack - packet));
+        if (packet == NerdCodec.NoSequence || ack == NerdCodec.NoSequence) return false;
+        if (ack == packet) return true;
+        var back = Ahead(packet, ack);
         return back is >= 1 and <= 32 && (bits & (1u << (back - 1))) != 0;
     }
 
     internal static byte SequenceNext(byte sequence) => SequenceAdd(sequence, 1);
     internal static byte SequenceAdd(byte sequence, byte count) => (byte)((sequence + count) % 255);
     internal static bool SequenceNewer(byte a, byte b) => (b < a && a - b < 128) || (a < b && b - a > 128);
-    internal static bool SequenceAfter(ushort a, ushort b) => a != b && unchecked((ushort)(a - b)) < 0x8000;
 }

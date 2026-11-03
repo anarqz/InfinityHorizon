@@ -8,6 +8,18 @@ internal sealed partial class RelayEngine
 {
     private void ReceivePacket(ReadOnlySpan<byte> data, IPEndPoint endpoint)
     {
+        if (data.Length > NerdCodec.MaxDatagramBytes)
+        {
+            // the game never sends one (its own receiver closes a connection on it, NERDCORE_WIRE.md §2.3): refused whole, nothing in it
+            // is read, acknowledged or relayed, so no message from it can spend a sequence and then fail to fit on its way out
+            if (_peers.FirstOrDefault(p => p.Endpoint.Equals(endpoint)) is { } sender)
+            {
+                Rejected(sender, "oversize_datagram", null, null, data.Length);
+                if (PeerNote(sender, "oversize_in"))
+                    Note(string.Create(CultureInfo.InvariantCulture, $"peer {sender.Index}: a {data.Length}-byte datagram is over {NerdCodec.MaxDatagramBytes} bytes, refused"));
+            }
+            return;
+        }
         if (NerdHeader.Parse(data) is not { } header) return;
         var reader = new BitReader(data[NerdHeader.Length..]);
         var probe = reader;
@@ -163,7 +175,8 @@ internal sealed partial class RelayEngine
         if (_settings.Races && obj.Router == 6 && obj.Handle.Kind == HandleKind.Transfer)
         { OnGameOptions(peer, obj); return null; }
         // the game makes its RoadTripPlayerSynced in every session type (free roam and car meets too): relayed in every world
-        var roadTripPlayer = obj.Router == 9 && obj.Handle.Kind == HandleKind.Own && obj.Payload.Length <= RoadTripPlayerMaxBits
+        // its size is the sanitizer's check (TooBig), below
+        var roadTripPlayer = obj.Router == 9 && obj.Handle.Kind == HandleKind.Own
             && (obj.Create ? obj.Type == 2 : peer.Objects.ContainsKey((9, obj.Handle.Id)));
         // a player's own BucketListPlayerStateSynced (router 12, type 0, id 0) in free roam; every other router-12 shape is refused
         var bucketPlayer = obj.Router == BucketListRouter && BucketListWorld && obj.Handle is { Kind: HandleKind.Own, Id: 0 }
@@ -193,6 +206,14 @@ internal sealed partial class RelayEngine
         }
         else
         {
+            // validated against its variable list (NERDCORE_WIRE.md §7.9), as routers 1-3 are: anything else is refused, never relayed
+            if (!NerdPayload.TrySanitize(9, obj.Payload, out var clean, out var refusal))
+            {
+                Rejected(peer, "invalid_payload", obj.Id, obj.Router, refusal?.Value);
+                if (PeerNote(peer, "roadtrip_player")) Note($"road trip: peer {peer.Index} RoadTripPlayerSynced {(obj.Create ? "create" : "update")} seq {obj.Sequence} refused by the sanitizer: {refusal?.Fault} {refusal?.Value}, {obj.Payload.Length} bits");
+                return null;
+            }
+            obj = obj with { Payload = clean! };
             if (obj.Create && IsRoadTrip) Note($"road trip: peer {peer.Index} created its RoadTripPlayerSynced (router 9, type 2, id {obj.Handle.Id}): accepted");
             RoadTripPlayerUpdate(peer, obj.Payload);
         }

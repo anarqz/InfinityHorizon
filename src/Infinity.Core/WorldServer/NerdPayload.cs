@@ -29,14 +29,22 @@ internal static class NerdPayload
     /// ArrivedAtDestination (SyncedBool). Pinned from the game binary, T22 (2026-11-02).
     /// </summary>
     private static readonly int[] BucketListPlayerVariables = [32, 32, 32, 1, 4, 1];
+    /// <summary>
+    /// RoadTripPlayerSynced (router 9, type 2; NERDCORE_WIRE.md §7.9): 3 variables against a count of 4, so 3-bit var ids. 0 State
+    /// (SyncedEnum&lt;RoadTripServerState&gt;, 4 bits, 0..8), 1 CompletedEventCount (SyncedInt Range 0..4, 3 bits), 2 XPOnDestinationJoin (s32).
+    /// </summary>
+    private static readonly int[] RoadTripPlayerVariables = [4, 3, 32];
+    /// <summary>The largest value each RoadTripPlayerSynced variable may hold (RoadTripServerState 8 FinaliseEvent; Range 0..4); null: any.</summary>
+    private static readonly uint?[] RoadTripPlayerMaxima = [8, 4, null];
+    internal const byte RoadTripPlayerRouter = 9;
     internal const byte BucketListSlotVariable = 1, BucketListChallengeVariable = 2, BucketListRequestingVariable = 3, BucketListStateVariable = 4;
     /// <summary>Every BucketListPlayerStateSynced variable once (120 bits), rounded up; a repeated id is refused anyway.</summary>
     internal const int BucketListPlayerMaxBits = 128;
     internal static int? MaxBits(byte router) => router switch
     {
-        1 => PlayerDataMaxBits, 2 => 787, 3 => 47, 12 => BucketListPlayerMaxBits, _ => null,
+        1 => PlayerDataMaxBits, 2 => 787, 3 => 47, RoadTripPlayerRouter => RelayEngine.RoadTripPlayerMaxBits, 12 => BucketListPlayerMaxBits, _ => null,
     };
-    private static int IndexWidth(byte router) => router switch { 1 => 8, 2 => 5, 3 => 4, 12 => 3, _ => 0 };
+    private static int IndexWidth(byte router) => router switch { 1 => 8, 2 => 5, 3 => 4, RoadTripPlayerRouter => 3, 12 => 3, _ => 0 };
 
     /// <summary>
     /// Player object (router 1) variables past the mapped twelve whose width is known, so that an update carrying exactly one of
@@ -83,7 +91,10 @@ internal static class NerdPayload
     {
         clean = null;
         failure = null;
-        var variables = router switch { 1 => PlayerVariables, 2 => CarVariables, 3 => ConsoleVariables, 12 => BucketListPlayerVariables, _ => null };
+        var variables = router switch
+        {
+            1 => PlayerVariables, 2 => CarVariables, 3 => ConsoleVariables, RoadTripPlayerRouter => RoadTripPlayerVariables, 12 => BucketListPlayerVariables, _ => null,
+        };
         if (variables is null) { failure = new(PayloadFault.Router, router); return false; }
         if (payload.Length > MaxBits(router)) { failure = new(PayloadFault.TooBig, payload.Length); return false; }
         var indexWidth = IndexWidth(router);
@@ -127,6 +138,9 @@ internal static class NerdPayload
                         var value = reader.Read(variables[index]);
                         // a bucket-list State past the game's enum (EnumCount 8) is no state the game writes
                         if (router == 12 && index == BucketListStateVariable && value > BucketListStateMax)
+                        { failure = new(PayloadFault.OutOfRange, (int)value); return false; }
+                        // a road-trip player State past RoadTripServerState, or a CompletedEventCount past its range
+                        if (router == RoadTripPlayerRouter && RoadTripPlayerMaxima[index] is { } maximum && value > maximum)
                         { failure = new(PayloadFault.OutOfRange, (int)value); return false; }
                         entry.Push(value, variables[index]);
                         break;
@@ -429,8 +443,7 @@ internal static class NerdPayload
     /// </summary>
     internal static BitBuffer BucketListPartner(ObjectHandle partner, byte universe, bool found, string name, int nameMax)
     {
-        var output = new BitBuffer().Push(65, 7);
-        partner.Write(output, 7);
+        var output = BucketListKey(new BitBuffer().Push(65, 7), partner);
         var text = System.Text.Encoding.Latin1.GetBytes(name.Select(c => c is >= ' ' and <= '~' or >= '\u00a0' and <= '\u00ff' ? c : '?').ToArray());
         return output.Push(universe, 5).Boolean(found).ByteString(text.AsSpan(0, Math.Min(text.Length, nameMax)));
     }
@@ -438,8 +451,30 @@ internal static class NerdPayload
     /// <summary>The co-op challenge's start time (61) on the network clock, server to client.</summary>
     internal static BitBuffer BucketListStart(uint time) => new BitBuffer().Push(61, 7).Push(time, 32);
 
-    /// <summary>A co-op challenge waiting (66), started (67) or ended (68), server to client: one s32.</summary>
-    internal static BitBuffer BucketListStatus(byte kind, int value) => new BitBuffer().Push(kind, 7).Push(unchecked((uint)value), 32);
+    /// <summary>
+    /// A BucketListPlayerStateSynced key in a bucket-list message body (65 to 68): the receiver-relative object key with the router's
+    /// 7-bit id field (NERDCORE_WIRE.md §1.7, §6.4): two kind bits, the id, and the owner byte for another client's object.
+    /// </summary>
+    internal static BitBuffer BucketListKey(BitBuffer output, ObjectHandle key)
+    {
+        key.Write(output, 7);
+        return output;
+    }
+
+    /// <summary>BucketListStatusPlayerWaiting (66), server to client: the waiting player's key, then the challenge (s32); §6.3.</summary>
+    internal static BitBuffer BucketListWaiting(ObjectHandle waiter, int challenge) =>
+        BucketListKey(new BitBuffer().Push(66, 7), waiter).Push(unchecked((uint)challenge), 32);
+
+    /// <summary>BucketListStatusChallengeStarted (67), server to client: the joining player's key, the waiter's key, the challenge (s32).</summary>
+    internal static BitBuffer BucketListStarted(ObjectHandle joined, ObjectHandle waiter, int challenge) =>
+        BucketListKey(BucketListKey(new BitBuffer().Push(67, 7), joined), waiter).Push(unchecked((uint)challenge), 32);
+
+    /// <summary>
+    /// BucketListStatusChallengeEnded (68), server to client: the key of the player whose ChallengeEnded (62) ended it, its partner's key,
+    /// the challenge (s32), then that 62's flag.
+    /// </summary>
+    internal static BitBuffer BucketListEnded(ObjectHandle ender, ObjectHandle partner, int challenge, bool flag) =>
+        BucketListKey(BucketListKey(new BitBuffer().Push(68, 7), ender), partner).Push(unchecked((uint)challenge), 32).Boolean(flag);
 
     /// <summary>
     /// MsgInProgressScoreUpdate (43): the sender's own handle (7-bit id), then 33 bits: the f32 score first, then one flag bit. The

@@ -47,8 +47,6 @@ internal sealed partial class RelayEngine
     /// <summary>Diagnostic lines per player and wait or pair (decoded PlayerState updates) and per player (sanitizer refusals).</summary>
     internal const int BucketListTraceLines = 12;
     internal const int BucketListNameMax = 36;
-    /// <summary>Whether the s32 in 66-68 is the slot (true) or the challenge (false). Unverified; the two-client capture (V11) decides.</summary>
-    internal const bool BucketListStatusCarriesSlot = false;
     /// <summary>
     /// What 65's string carries: the partner's name as this relay knows it (its player object's NetworkName). Unverified; the two-client
     /// capture (V11) decides.
@@ -160,8 +158,6 @@ internal sealed partial class RelayEngine
         return player;
     }
 
-    private static int BucketListStatusValue(int slot, int challenge) => BucketListStatusCarriesSlot ? slot : challenge;
-
     private static IEnumerable<(byte Variable, int Value)> BucketListEntryVariables((int Slot, int Challenge, int Owner)[] slots, int i) =>
         [((byte)(3 * i), slots[i].Slot), ((byte)(3 * i + 1), slots[i].Challenge), ((byte)(3 * i + 2), slots[i].Owner)];
 
@@ -200,10 +196,36 @@ internal sealed partial class RelayEngine
         }
     }
 
-    private void BucketListStatus(byte kind, int slot, int challenge, params RelayPeer[] except)
+    /// <summary>A player's own PlayerState key as <paramref name="receiver"/> knows it: its own (plain kind) or another client's (relayed, with
+    /// the owner byte), as 65 writes its partner key.</summary>
+    private static ObjectHandle BucketListKeyFor(RelayPeer receiver, RelayPeer subject) =>
+        receiver == subject ? new(HandleKind.Own, 0) : new(HandleKind.Relay, 0, subject.Index);
+
+    /// <summary>Whether the receiver's game has <paramref name="subject"/>'s PlayerState: its own, or one relayed to it (live or in its
+    /// join snapshot; router 12 is never held for a joiner). A key to an object the game lacks names nothing.</summary>
+    private bool BucketListStateKnown(RelayPeer subject) => _peers.Contains(subject) && subject.Objects.ContainsKey((BucketListRouter, 0));
+
+    /// <summary>
+    /// A status message (66 waiting, 67 started, 68 ended) to every synced receiver but <paramref name="except"/>, its keys relative to
+    /// each receiver (<paramref name="a"/>, then <paramref name="b"/> for 67 and 68). A receiver whose game lacks a key's PlayerState is
+    /// skipped; the skipped receivers are noted once per message, by peer index.
+    /// </summary>
+    private void BucketListStatus(byte kind, int challenge, RelayPeer a, RelayPeer? b, bool flag = false, RelayPeer? except = null)
     {
-        var message = NerdPayload.BucketListStatus(kind, BucketListStatusValue(slot, challenge));
-        foreach (var peer in _peers.Where(p => p.Synced && !except.Contains(p))) BucketListSend(peer, message);
+        var known = BucketListStateKnown(a) && (b is null || BucketListStateKnown(b));
+        var skipped = new List<int>();
+        foreach (var receiver in _peers.Where(p => p.Synced && p != except))
+        {
+            if (!known) { skipped.Add(receiver.Index); continue; }
+            BucketListSend(receiver, kind switch
+            {
+                66 => NerdPayload.BucketListWaiting(BucketListKeyFor(receiver, a), challenge),
+                67 => NerdPayload.BucketListStarted(BucketListKeyFor(receiver, a), BucketListKeyFor(receiver, b!), challenge),
+                _ => NerdPayload.BucketListEnded(BucketListKeyFor(receiver, a), BucketListKeyFor(receiver, b!), challenge, flag),
+            });
+        }
+        if (skipped.Count != 0)
+            Note($"bucket list: {kind} not sent to peer(s) {string.Join(",", skipped)}: no PlayerState there of peer(s) {string.Join(",", b is null ? [a.Index] : new[] { a.Index, b.Index })}");
     }
 
     /// <summary>The staged output: the slot array's one delta (only the variables that differ from what was sent), then the messages.</summary>
@@ -415,7 +437,7 @@ internal sealed partial class RelayEngine
             return;
         }
         player.LastRequestAt = _now; player.PendingRequest = null; player.RateNoted = false; player.RepeatNoted = false;
-        if (player.Pair is { } current) EndBucketPair(current, $"peer {peer.Index} asks for another challenge");
+        if (player.Pair is { } current) EndBucketPair(current, $"peer {peer.Index} asks for another challenge", peer);
         if (player.Waiting is not null) CancelBucketWait(peer, player, "a new request replaces it");
         var waiter = _bucketPlayers.Where(p => p.Key != peer && p.Key.Synced && p.Value.Pair is null
                 && p.Value.Waiting is { } w && w.Slot == slot && w.Challenge == challenge && _now - w.At < BucketListWaitMs)
@@ -428,7 +450,7 @@ internal sealed partial class RelayEngine
         player.Trace = BucketListTraceLines;
         _bucketUniverseDue.Add(peer); // a waiter is at universe 0
         ClaimBucketEntry(peer, slot, challenge);
-        BucketListStatus(66, slot, challenge, peer);
+        BucketListStatus(66, challenge, peer, null, except: peer); // to everyone but the waiter
         Note($"bucket list: peer {peer.Index} waits for a partner (slot {slot}, challenge {challenge})");
     }
 
@@ -452,7 +474,7 @@ internal sealed partial class RelayEngine
             var known = partner.Objects.TryGetValue((BucketListRouter, 0), out var state) ? $"yes (its sequence {state.Last})" : "no";
             Note($"bucket list: 65 to peer {receiver.Index}: {message.Length} bits; partner peer {partner.Index}, universe {pair.Universe}, name of {Math.Min(name.Length, BucketListNameMax)} characters; partner PlayerState known to it: {known}");
         }
-        BucketListStatus(67, slot, challenge, first, second);
+        BucketListStatus(67, challenge, second, first); // A: the player who joined (completed the pair), B: the waiter
         Note($"bucket list: peers {first.Index} and {second.Index} paired (slot {slot}, challenge {challenge}) in universe {pair.Universe}; the start waits for both at State {BucketListStateReady}/{BucketListStateActive}, or {BucketListStartFallbackMs} ms after both cancels");
     }
 
@@ -552,7 +574,7 @@ internal sealed partial class RelayEngine
             // the pair is over for both partners: their next 63 is taken at once
             foreach (var partner in new[] { pair.First, pair.Second })
                 if (_bucketPlayers.TryGetValue(partner, out var other)) { other.LastRequestAt = null; other.Last63At = null; }
-            EndBucketPair(pair, $"peer {peer.Index} ended its challenge ({(completed ? 1 : 0)})");
+            EndBucketPair(pair, $"peer {peer.Index} ended its challenge ({(completed ? 1 : 0)})", peer, completed);
         }
         else if (player.Waiting is not null) { player.LastRequestAt = null; player.Last63At = null; CancelBucketWait(peer, player, "its challenge ended"); }
     }
@@ -566,13 +588,16 @@ internal sealed partial class RelayEngine
         Note($"bucket list: peer {peer.Index} stops waiting (slot {slot}, challenge {challenge}): {why}");
     }
 
-    private void EndBucketPair(BucketPair pair, string why)
+    /// <param name="ender">The partner whose 62 (or new request, or leave) ended the pair: 68's first key; the other is its second.</param>
+    /// <param name="flag">The ending 62's flag (false for a new request or a leave).</param>
+    private void EndBucketPair(BucketPair pair, string why, RelayPeer ender, bool flag = false)
     {
         var partners = new[] { pair.First, pair.Second };
         foreach (var peer in partners)
             if (_bucketPlayers.TryGetValue(peer, out var player) && player.Pair == pair) { player.Pair = null; player.Waiting = null; }
         FreeBucketEntries(partners);
-        BucketListStatus(68, pair.Slot, pair.Challenge, partners);
+        // a leaver's PlayerState is gone from every game (its deletes went out first): that 68 is skipped everywhere
+        BucketListStatus(68, pair.Challenge, ender, ender == pair.First ? pair.Second : pair.First, flag);
         // still phasing: the former partners get their private universe as everybody else has one (at the flush, so one that waits
         // again at once stays at 0)
         foreach (var peer in partners) _bucketUniverseDue.Add(peer);
@@ -624,7 +649,7 @@ internal sealed partial class RelayEngine
     private void BucketListPeerLeft(RelayPeer peer)
     {
         if (!_bucketPlayers.Remove(peer, out var player)) return;
-        if (player.Pair is { } pair) EndBucketPair(pair, $"peer {peer.Index} left");
+        if (player.Pair is { } pair) EndBucketPair(pair, $"peer {peer.Index} left", peer);
         else if (player.Waiting is not null) { player.Waiting = null; FreeBucketEntries(peer); }
         FlushBucketList();
     }
