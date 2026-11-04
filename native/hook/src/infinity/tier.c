@@ -23,10 +23,12 @@
      cloud copy without a line) is answered here as the server answers a sync it took (200, an
      empty bin/xtsw reply); everything else is answered here with the 503 the game already gets
      offline;
-   - Xbox Live: the friends list (social.xboxlive.com, profile.xboxlive.com .../people/...) and
-     friends' presence (userpresence.xboxlive.com .../groups/People) are answered here empty; the
-     free roam services (sessiondirectory, gameserverds, gameserverms, momatch),
-     profile.xboxlive.com and userpresence go to the server; every other host gets the offline
+   - Xbox Live: the friends list (social.xboxlive.com .../people, profile.xboxlive.com
+     .../people/People) and friends' presence (userpresence.xboxlive.com .../groups/People and a
+     friend's own presence by xuid(N)) go to the server (OD-193, F-3: friends are account data, so
+     a profile without a line sees them too); the free roam services (sessiondirectory,
+     gameserverds, gameserverms, momatch), profile.xboxlive.com and userpresence go to the server;
+     the rest of social.xboxlive.com is answered here empty; every other host gets the offline
      503 here.
    Outside a launcher session (the retired Beta protocol, OD-69) there is no line and no gate:
    every request goes to the server, as a Supporter's Hardcore profile's always did. */
@@ -159,39 +161,6 @@ static int tier_ends(const wchar_t *text, size_t n, const wchar_t *suffix) {
 
 /* ----------------------------------------------------------- foreign XUIDs */
 
-/* Output text with a capacity: `ok` drops to 0 once it would overflow. */
-typedef struct {
-    char *out;
-    size_t n, cap;
-    int ok;
-} TierText;
-
-static void tier_put(TierText *t, const char *s) {
-    for (; *s; ++s) {
-        if (t->n + 1 >= t->cap) {
-            t->ok = 0;
-            t->out[t->n] = 0;
-            return;
-        }
-        t->out[t->n++] = *s;
-    }
-    t->out[t->n] = 0;
-}
-
-static void tier_put_number(TierText *t, unsigned long long v) {
-    char digits[24];
-    int n = 0;
-    do {
-        digits[n++] = (char)('0' + v % 10);
-        v /= 10;
-    } while (v);
-    char c[2] = {0, 0};
-    while (n) {
-        c[0] = digits[--n];
-        tier_put(t, c);
-    }
-}
-
 /* The number after `xuid(` or `xuid=` in a URL (0 when none). */
 static unsigned long long tier_url_xuid(const wchar_t *url) {
     for (const wchar_t *p = url; p && *p; ++p) {
@@ -229,17 +198,10 @@ int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned lo
         return FI_ROUTE_PASS;
     }
     /* another player: with a cloud line reads go to the server and writes are not sent; without
-       one their presence reads as offline here and anything else about them is not sent */
+       one their presence (a friend's, OD-193 F-3: friends are account data) is read from the
+       server too, and anything else about them is not sent */
     if (no_line && get && tier_host_is(host, host_length, L"userpresence.xboxlive.com")) {
-        TierText t = {json, 0, json_cap, 1};
-        if (tier_ends(path, path_length, L"/groups/People")) {
-            tier_put(&t, "[]"); /* a list: the friends' presence, empty (the server's own answer) */
-            return t.ok ? FI_ROUTE_JSON : FI_ROUTE_UNAVAILABLE;
-        }
-        tier_put(&t, "{\"xuid\":\"");
-        tier_put_number(&t, named);
-        tier_put(&t, "\",\"state\":\"Offline\"}");
-        return t.ok ? FI_ROUTE_JSON : FI_ROUTE_UNAVAILABLE;
+        return FI_ROUTE_PASS;
     }
     return no_line || !get ? FI_ROUTE_UNAVAILABLE : FI_ROUTE_PASS;
 }
@@ -315,16 +277,18 @@ int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char
         }
         what[n] = 0;
     }
+    /* OD-193 (F-3): the friends list is the account's, so it comes from the server with or without a
+       line: social .../people, profile .../people/People (and userpresence, sent below) */
     if (tier_host_is(host, host_length, L"social.xboxlive.com")) {
+        if (tier_ends(path, path_length, L"/people")) {
+            return FI_ROUTE_PASS;
+        }
         *json = "{\"totalCount\":0,\"people\":[]}";
         return FI_ROUTE_JSON;
     }
-    if (tier_host_is(host, host_length, L"profile.xboxlive.com") && tier_contains(path, path_length, L"/people/")) {
+    if (tier_host_is(host, host_length, L"profile.xboxlive.com") && tier_contains(path, path_length, L"/people/") &&
+        !tier_ends(path, path_length, L"/people/People")) {
         *json = "{\"profileUsers\":[]}";
-        return FI_ROUTE_JSON;
-    }
-    if (tier_host_is(host, host_length, L"userpresence.xboxlive.com") && tier_ends(path, path_length, L"/groups/People")) {
-        *json = "[]";
         return FI_ROUTE_JSON;
     }
     static const wchar_t *const sent[] = {L"sessiondirectory.xboxlive.com", L"gameserverds.xboxlive.com",
