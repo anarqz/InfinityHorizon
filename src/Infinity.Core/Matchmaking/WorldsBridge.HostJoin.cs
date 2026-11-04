@@ -66,18 +66,21 @@ public sealed partial class WorldsBridge
     /// in no other world), the game may still be matchmaking toward it: that matchmaking is released first (CancelMatchmaking),
     /// before the relay stops and the DELETE.
     /// </summary>
-    private async Task ReleaseHostJoinAsync(string? worldId)
+    private async Task<bool> ReleaseHostJoinAsync(string? worldId)
     {
-        if (Interlocked.Exchange(ref _hostJoin, null) is not { } wait) return;
+        if (Interlocked.Exchange(ref _hostJoin, null) is not { } wait) return false;
         if (Interlocked.CompareExchange(ref _followOwnWorld, null, wait.WorldId) == wait.WorldId)
             Volatile.Write(ref _followHost, null); // its FollowHost, not sent yet, never takes the game to a world that is gone
-        if (worldId is not null && wait.WorldId != worldId) return;
-        if (Volatile.Read(ref _gameInWorld) != 0) return; // the game plays in a seat's world now: never pulled out of it
+        if (worldId is not null && wait.WorldId != worldId) return false;
+        if (Volatile.Read(ref _gameInWorld) != 0) return false; // the game plays in a seat's world now: never pulled out of it
         bool asking;
         lock (_freeRoamState) asking = _freeRoamRun is { IsCompleted: false };
         _log($"worlds: closing {wait.WorldId} while the host's game is not in it ({(int)_clock.GetElapsedTime(wait.Since).TotalSeconds} s after it opened"
             + (asking ? ", a lobby ask in flight" : string.Empty) + "); the game's matchmaking is released first");
         await CancelMatchmakingAsync().ConfigureAwait(false);
+        Volatile.Write(ref _switch, null); // W-12: released once
+        Volatile.Write(ref _switchExpired, null);
+        return true;
     }
     /// <summary>
     /// W-10 Q4: the player leaves a seat from the overlay before its game ever played in it: the game's matchmaking toward that

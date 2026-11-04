@@ -120,6 +120,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             return null;
         }
         _log?.Invoke($"world: car meet session created for {world} ({kind}, {xuids.Count} player(s))");
+        // W-12: its members, the host's game among them, now move from the car meet to free roam in this same world: hold it
+        if (HostedWorldId == worldId) HostSessionCreated(worldId, xuids);
         return (session.Name, session.TemplateName);
     }
     private DateTimeOffset _nextAdmissionsRefresh;
@@ -697,6 +699,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         var next = _seat.Next(now);
         if (next.Step == SeatStep.Stop && next.Why is SeatDecision.Lapsed or SeatDecision.HoldReached)
         {
+            // W-12 (c), review M4: a game moving into this seat's world is released before the seat goes
+            await ReleaseSessionSwitchAsync(Volatile.Read(ref _seatWorld), $"the seat in {Volatile.Read(ref _seatWorld) ?? "its world"} lapsed").ConfigureAwait(false);
             _seat.Left();
             InvalidateMine(reset: true);
             await ClearSeatEndAsync(next.Why == SeatDecision.Lapsed ? "the seat lapsed" : "the seat's hold ended").ConfigureAwait(false); // the hook's context and relay leg end with the seat
@@ -749,6 +753,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     InvalidateMine(reset: true);
                     _log(SeatEndedLine(seat.Ended, grantId)); // T35: with its reason
                     ObserveHostLeft(seat.Ended, grantId);
+                    SessionSwitchSeatEnded(seat.Ended, grantId); // W-12 (c): a game moving into that world is released
                 }
                 // OD-149: isolated by the anti-cheat system: the seat in a clean world ended, the launcher moves the player
                 if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text("worlds.pool_moved");
@@ -866,6 +871,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // longer listed this player), so a cleared relay leg is never silent
                     if (heldGrant is not null) _log(SeatEndedLine(value.Ended, heldGrant));
                     ObserveHostLeft(value.Ended, heldGrant); // OD-190: the next placement says the host left
+                    SessionSwitchSeatEnded(value.Ended, heldGrant); // W-12 (c): a game moving into that world is released
                     _seat.Observe(value, Now);
                     // OD-149: the seat this launcher held ended because the anti-cheat system isolated the player: it is moved
                     if (SeatEndedForPool(value.Ended, heldGrant)) _freeRoamToasts.Enqueue(PoolToast());
@@ -1510,7 +1516,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private async Task CloseCurrentHostAsync(string? worldId, CancellationToken cancellation)
     {
         var id = _host.IsOpen ? _host.WorldId : worldId;
-        await ReleaseHostJoinAsync(id).ConfigureAwait(false); // W-10 Q4: a game still matchmaking toward it is released first
+        // W-10 Q4: a game still matchmaking toward it is released first; W-12 (c): so is a game moving into its car meet session there
+        if (!await ReleaseHostJoinAsync(id).ConfigureAwait(false) && id is not null)
+            await ReleaseSessionSwitchAsync(id, $"closing {id}").ConfigureAwait(false);
         if (id is not null) InvalidateMine(reset: true);
         _host.Stop();
         Volatile.Write(ref _hostedWorldId, null);
@@ -1629,6 +1637,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public async Task LeaveAsync(CancellationToken cancellation)
     {
         CancelFreeRoamLeave();
+        // W-12 (c): a game still moving into its car meet session in this seat's world is released before the seat goes
+        if (_seat.GrantId is not null)
+            await ReleaseSessionSwitchAsync(Volatile.Read(ref _seatWorld), $"leaving {Volatile.Read(ref _seatWorld) ?? "its seat"}").ConfigureAwait(false);
         InvalidateMine(reset: true);
         await ClearProofAsync("the seat is let go (leave)", CancellationToken.None).ConfigureAwait(false);
         if (_seat.GrantId is null)
