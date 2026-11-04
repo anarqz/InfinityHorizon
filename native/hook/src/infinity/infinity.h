@@ -7,6 +7,26 @@
 #include "../core/azimuth_host.h"
 #include "../core/infinity_base.h"
 
+/* W-13 (watchdog.c): the hang watchdog. The launcher pipe thread beats with each 1 Hz Capture
+   lease and disarms at its end; a beat missing 3 s dumps every thread's stack and the hook's locks
+   to infinity.log. Started with the launcher session (fi_launch_start). */
+int fi_watchdog_start(void);
+void fi_watchdog_beat(void);
+void fi_watchdog_disarm(void);
+/* The hook's SRW locks, watched (owner, shared count, last waiter) for the dump. Built with
+   FI_LOCK_WATCH (build.py, the DLL only), every Acquire/Release in src/infinity goes through
+   these; unit tests that compile one module keep the plain Windows calls. */
+void fi_lock_exclusive(SRWLOCK *lock, const char *name);
+void fi_unlock_exclusive(SRWLOCK *lock);
+void fi_lock_shared(SRWLOCK *lock, const char *name);
+void fi_unlock_shared(SRWLOCK *lock);
+#ifdef FI_LOCK_WATCH
+#define AcquireSRWLockExclusive(lock) fi_lock_exclusive((lock), #lock)
+#define ReleaseSRWLockExclusive(lock) fi_unlock_exclusive(lock)
+#define AcquireSRWLockShared(lock) fi_lock_shared((lock), #lock)
+#define ReleaseSRWLockShared(lock) fi_unlock_shared(lock)
+#endif
+
 void fi_mod_host_start(void *image);
 void fi_mod_host_wait(unsigned ms);
 

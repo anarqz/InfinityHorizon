@@ -211,50 +211,65 @@ static WinHttpSetTimeoutsFn http_set_timeouts;
 
 /* The game frees response-header strings with OLE32's CoTaskMemFree, which
    Azimuth forwards to the real ole32.dll; allocate from the same place. */
+/* W-13: no hook lock is held across a call out of the hook. The loader (LoadLibraryExW,
+   GetProcAddress: the loader lock) runs before net_api_lock is taken; the lock only publishes the
+   result, once (two first callers may both load: a module load is reference counted and the
+   addresses are the same). */
 static void *net_task_alloc(size_t size) {
-    AcquireSRWLockExclusive(&net_api_lock);
-    if (!net_ole_state) {
+    AcquireSRWLockShared(&net_api_lock);
+    int state = net_ole_state;
+    ReleaseSRWLockShared(&net_api_lock);
+    if (!state) {
         HMODULE ole = LoadLibraryExW(L"ole32.dll", 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        net_co_task_mem_alloc =
-            ole ? (CoTaskMemAllocFn)(uintptr_t)GetProcAddress(ole, "CoTaskMemAlloc") : 0;
-        net_ole_state = net_co_task_mem_alloc ? 1 : -1;
+        CoTaskMemAllocFn alloc = ole ? (CoTaskMemAllocFn)(uintptr_t)GetProcAddress(ole, "CoTaskMemAlloc") : 0;
+        AcquireSRWLockExclusive(&net_api_lock);
+        if (!net_ole_state) {
+            net_co_task_mem_alloc = alloc;
+            net_ole_state = alloc ? 1 : -1;
+        }
+        ReleaseSRWLockExclusive(&net_api_lock);
     }
-    ReleaseSRWLockExclusive(&net_api_lock);
-    return net_ole_state > 0 ? net_co_task_mem_alloc(size) : 0;
+    AcquireSRWLockShared(&net_api_lock);
+    CoTaskMemAllocFn alloc = net_ole_state > 0 ? net_co_task_mem_alloc : 0;
+    ReleaseSRWLockShared(&net_api_lock);
+    return alloc ? alloc(size) : 0;
 }
 
 static int net_load_winhttp(void) {
+    AcquireSRWLockShared(&net_api_lock);
+    int state = net_http_state;
+    ReleaseSRWLockShared(&net_api_lock);
+    if (state) return state > 0;
+    HMODULE http = LoadLibraryExW(L"winhttp.dll", 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    void *found[11];
+    for (unsigned i = 0; i < 11; ++i) found[i] = 0;
+    static const char *const names[11] = {"WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
+                                          "WinHttpAddRequestHeaders", "WinHttpSendRequest", "WinHttpReceiveResponse",
+                                          "WinHttpQueryHeaders", "WinHttpQueryDataAvailable", "WinHttpReadData",
+                                          "WinHttpCloseHandle", "WinHttpSetTimeouts"};
+    int all = http != 0;
+    for (unsigned i = 0; i < 11 && http; ++i) {
+        found[i] = (void *)(uintptr_t)GetProcAddress(http, names[i]);
+        all &= found[i] != 0;
+    }
     AcquireSRWLockExclusive(&net_api_lock);
     if (!net_http_state) {
-        HMODULE http = LoadLibraryExW(L"winhttp.dll", 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (http) {
-            http_open = (WinHttpOpenFn)(uintptr_t)GetProcAddress(http, "WinHttpOpen");
-            http_connect = (WinHttpConnectFn)(uintptr_t)GetProcAddress(http, "WinHttpConnect");
-            http_open_request =
-                (WinHttpOpenRequestFn)(uintptr_t)GetProcAddress(http, "WinHttpOpenRequest");
-            http_add_headers = (WinHttpAddRequestHeadersFn)(uintptr_t)GetProcAddress(
-                http, "WinHttpAddRequestHeaders");
-            http_send = (WinHttpSendRequestFn)(uintptr_t)GetProcAddress(http, "WinHttpSendRequest");
-            http_receive = (WinHttpReceiveResponseFn)(uintptr_t)GetProcAddress(
-                http, "WinHttpReceiveResponse");
-            http_query_headers =
-                (WinHttpQueryHeadersFn)(uintptr_t)GetProcAddress(http, "WinHttpQueryHeaders");
-            http_query_available = (WinHttpQueryDataAvailableFn)(uintptr_t)GetProcAddress(
-                http, "WinHttpQueryDataAvailable");
-            http_read = (WinHttpReadDataFn)(uintptr_t)GetProcAddress(http, "WinHttpReadData");
-            http_close = (WinHttpCloseHandleFn)(uintptr_t)GetProcAddress(http, "WinHttpCloseHandle");
-            http_set_timeouts =
-                (WinHttpSetTimeoutsFn)(uintptr_t)GetProcAddress(http, "WinHttpSetTimeouts");
-        }
-        net_http_state = http && http_open && http_connect && http_open_request &&
-                                 http_add_headers && http_send && http_receive &&
-                                 http_query_headers && http_query_available && http_read &&
-                                 http_close && http_set_timeouts
-                             ? 1
-                             : -1;
+        http_open = (WinHttpOpenFn)(uintptr_t)found[0];
+        http_connect = (WinHttpConnectFn)(uintptr_t)found[1];
+        http_open_request = (WinHttpOpenRequestFn)(uintptr_t)found[2];
+        http_add_headers = (WinHttpAddRequestHeadersFn)(uintptr_t)found[3];
+        http_send = (WinHttpSendRequestFn)(uintptr_t)found[4];
+        http_receive = (WinHttpReceiveResponseFn)(uintptr_t)found[5];
+        http_query_headers = (WinHttpQueryHeadersFn)(uintptr_t)found[6];
+        http_query_available = (WinHttpQueryDataAvailableFn)(uintptr_t)found[7];
+        http_read = (WinHttpReadDataFn)(uintptr_t)found[8];
+        http_close = (WinHttpCloseHandleFn)(uintptr_t)found[9];
+        http_set_timeouts = (WinHttpSetTimeoutsFn)(uintptr_t)found[10];
+        net_http_state = all ? 1 : -1;
     }
+    state = net_http_state;
     ReleaseSRWLockExclusive(&net_api_lock);
-    return net_http_state > 0;
+    return state > 0;
 }
 
 /* ------------------------------------------------------------ JSON capture */
@@ -2188,16 +2203,24 @@ static HRESULT net_buffer_create(const unsigned char *data, size_t size, NetCom 
     if (size > 0xffffffffu) {
         return E_OUTOFMEMORY;
     }
+    /* W-13: the WinRT activation (a call into Azimuth) runs outside net_writer_lock; the lock only
+       publishes the factory. A second first caller's factory is released (the first one stays). */
     AcquireSRWLockExclusive(&net_writer_lock);
-    if (!net_buffer_factory) {
-        void *factory = 0;
-        if (SUCCEEDED(net_activate_raw(L"Windows.Storage.Streams.Buffer", net_iid_buffer_factory,
-                                       &factory, 0))) {
-            net_buffer_factory = factory;
-        }
-    }
     NetCom *factory = net_buffer_factory;
     ReleaseSRWLockExclusive(&net_writer_lock);
+    if (!factory) {
+        void *made = 0;
+        if (SUCCEEDED(net_activate_raw(L"Windows.Storage.Streams.Buffer", net_iid_buffer_factory, &made, 0)) && made) {
+            AcquireSRWLockExclusive(&net_writer_lock);
+            if (!net_buffer_factory) {
+                net_buffer_factory = made;
+                made = 0;
+            }
+            factory = net_buffer_factory;
+            ReleaseSRWLockExclusive(&net_writer_lock);
+            if (made) ((NetCom *)made)->lpVtbl->Release((NetCom *)made);
+        }
+    }
     if (!factory) {
         return REGDB_E_CLASSNOTREG;
     }

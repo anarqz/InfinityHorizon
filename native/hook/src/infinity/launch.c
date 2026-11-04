@@ -1992,6 +1992,7 @@ static void launch_session(void) {
             capability[6] = 1;
             if (!launch_write(capability, sizeof(capability))) break;
             next_receiver_report = now + 1000;
+            fi_watchdog_beat(); /* W-13: the lease went out: the hook's pipe thread is alive */
         }
         DWORD error = 0;
         int got = launch_read_frame(LAUNCH_READ_POLL_MS, &error);
@@ -2022,6 +2023,7 @@ static void launch_session(void) {
         }
         launch_frame_clear();
     }
+    fi_watchdog_disarm(); /* W-13: no pipe, no heartbeat to miss */
     launch_suspend(4); /* ControlLost; idempotent after an explicit suspension */
     InterlockedExchange(&launch_connected, 0);
     InterlockedExchange(&launch_outbox_flushed, 1);
@@ -2277,6 +2279,7 @@ int fi_launch_start(const wchar_t *bin) {
     }
     launch_bin[n] = 0;
     InterlockedExchange(&launch_state, LAUNCH_WAITING);
+    fi_watchdog_start(); /* W-13: armed by the pipe thread's first heartbeat */
     HANDLE thread = CreateThread(0, 0, launch_thread, 0, 0, 0);
     if (!thread) {
         log_append("LAUNCH: the launch thread could not start: offline.\r\n");

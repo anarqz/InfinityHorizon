@@ -60,6 +60,7 @@ SOURCES = [
     "src/infinity/carstate.c",
     "src/infinity/carstate_hook.c",
     "src/infinity/carmeet.c",
+    "src/infinity/watchdog.c",
     "src/infinity/follow.c",
     "src/infinity/watch.c",
     "src/infinity/events.c",
@@ -164,6 +165,7 @@ def compiler_arguments(compiler, options):
         str(compiler.parent / "lib/include"),
         "-isystem",
         str(compiler.parent / "lib/libc/include/any-windows-any"),
+        "-DFI_LOCK_WATCH=1",  # W-13: the hook's SRW locks are watched for the hang watchdog's dump
     ]
     if options.dev:
         arguments.append("-DFI_DEV=1")

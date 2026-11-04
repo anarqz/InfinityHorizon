@@ -81,6 +81,28 @@ void log_append(const char *message) {
     CloseHandle(file);
 }
 
+/* W-13 (watchdog.c): a handle to this run's infinity.log opened now, for a writer that must not
+   open files later (a stalled process may hold the locks a path lookup takes). */
+HANDLE log_open_append(void) {
+    if (!runtime_log_path[0]) {
+        return INVALID_HANDLE_VALUE;
+    }
+    return CreateFileW(runtime_log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+}
+
+/* One complete line (its own stamp, ending with "\r\n") through such a handle: WriteFile and the
+   size check only, no hook lock, no path lookup. */
+void log_raw(HANDLE file, const char *line) {
+    LARGE_INTEGER length;
+    if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &length) || length.QuadPart >= 8 * 1024 * 1024) {
+        return;
+    }
+    DWORD bytes_written;
+    WriteFile(file, line, (DWORD)text_length(line), &bytes_written, NULL);
+    note_line_end(line);
+}
+
 static void write_text(HANDLE file, const char *text) {
     DWORD bytes_written;
     WriteFile(file, text, (DWORD)text_length(text), &bytes_written, NULL);
