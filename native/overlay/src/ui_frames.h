@@ -176,6 +176,9 @@ struct MyWorld {
     // the lobby notice, the launcher's own localized text shown as given. An older launcher ends after any_mode.
     uint8_t transport = 0;
     std::string notice;
+    // OD-192 (after notice, written only when true; then the transport is written even when unknown): the world is an official
+    // one. The guide's lobby tab becomes the Official Lobby pane, with no lobby options, and no overlay notice shows.
+    bool official = false;
 };
 constexpr uint8_t kTransportUnknown = 0, kTransportRelay = 1, kTransportDirect = 2;
 constexpr size_t kMaxMineMembers = 16;
@@ -453,7 +456,9 @@ inline bool DecodeMyWorld(const uint8_t *body, size_t size, MyWorld &out) {
     if (r.ok && r.left > 0) { // OD-160
         m.transport = r.U8();
         m.notice = r.Text(kMaxPaneText);
-        if (m.transport == kTransportUnknown || m.transport > kTransportDirect) r.ok = false;
+        if (r.ok && r.left > 0) m.official = r.Flag(); // OD-192
+        // an unknown transport is written only ahead of the official flag
+        if ((m.transport == kTransportUnknown && !m.official) || m.transport > kTransportDirect) r.ok = false;
     }
     if (!r.ok) return false;
     out = std::move(m);
@@ -480,9 +485,10 @@ inline std::vector<uint8_t> EncodeMyWorld(const MyWorld &m) {
         wire::U8(b, p.friend_state);
     }
     wire::Flag(b, m.any_mode);
-    if (m.transport != kTransportUnknown) { // OD-160: only when known (the 2.0.0 layout otherwise)
+    if (m.transport != kTransportUnknown || m.official) { // OD-160: only when known (the 2.0.0 layout otherwise)
         wire::U8(b, m.transport);
         wire::Str(b, m.notice);
+        if (m.official) wire::Flag(b, true); // OD-192
     }
     return b;
 }

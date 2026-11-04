@@ -680,6 +680,7 @@ public sealed class PlaySupervisor
         var worlds = overlay is null ? null : _config.Worlds?.Invoke(() => _ticket);
         if (worlds is not null)
         {
+            overlay!.Quiet = () => worlds.InOfficialLobby; // OD-192: no overlay notice in an official lobby
             worlds.SendRelayContext=async (context,ct)=>
             {
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");

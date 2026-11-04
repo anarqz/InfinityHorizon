@@ -6,16 +6,15 @@
 // Per talker, per 5 ms block: both cars are extrapolated to "now" with their velocity and the poses' age; the vector
 // between them is put in the listener's frame (its car's quaternion, else its heading from velocity, else the last
 // heading); distance and direction are smoothed (critically damped, ~50 ms); the distance gives the gain (full within
-// r0 = 10 m, inverse distance beyond, a raised-cosine fade to silence from 0.8 R to R = 150 m) and the Doppler delay;
-// the direction gives an equal-power pan (pan = sin(azimuth), at most ±0.8). Doppler is a fractional delay line, read
-// s·r(t)/c behind the write point (c = 343 m/s, s = 0.75) with 4-point Hermite interpolation: the pitch follows from
-// the change of r(t), the buffer never drifts or underruns, and the read rate is held to 0.5-2. A teleport (the jump
-// flag, or a move v·dt + 10 m does not explain) crossfades the old and the new read taps over 30 ms, with no pitch
-// sweep; a change of kind (open ↔ spatial ↔ "far") crossfades over 200 ms.
+// r0 = 10 m, inverse distance beyond, a raised-cosine fade to silence from 0.8 R to R = 150 m); the direction gives an
+// equal-power pan (pan = sin(azimuth), at most ±0.8). No Doppler (OD-192, removed entirely): the voice is read at a fixed
+// delay of kMinDelay samples behind the write point (4-point Hermite), so its pitch never changes with distance or speed.
+// A teleport (the jump flag, or a move v·dt + 10 m does not explain) crossfades the old and the new gains over 30 ms; a
+// change of kind (open ↔ spatial ↔ "far") crossfades over 200 ms.
 //
 // Edge cases (owner may change them): a talker with no car or a stale pose (> 1.5 s) holds its last position for 3 s,
 // then plays centred at the edge-of-range gain (EdgeGain: heard, but far); a listener with no car hears everyone open
-// (centred, unit gain, no Doppler). Open mode is the old mono path, both channels bit-identical to it.
+// (centred, unit gain). Open mode is the old mono path, both channels bit-identical to it.
 //
 // Time is the mixer's audio clock in seconds (samples mixed / 48000): poses are stamped with it when they arrive, so
 // extrapolation is smooth even though mix frames are computed in bursts.
@@ -92,14 +91,10 @@ struct Params {
     float range_m = 150.0f;   // R: silent at and beyond (OD-164)
     float full_m = 10.0f;     // r0: full gain within (OD-164)
     float fade_from = 0.8f;   // the fade to silence starts at fade_from × R (OD-164)
-    float doppler = 0.75f;    // s: 0 turns Doppler off; open question for the owner's listening test (0.5-1)
     float pan_limit = 0.8f;   // |pan| at most this: some crossfeed, so headphones never go one-eared
     bool rear_lowpass = false; // a gentle low-pass for talkers behind (front/back hint); off by default
 };
 
-constexpr float kSpeedOfSound = 343.0f;  // m/s
-constexpr float kMaxDelayS = 0.5f;       // the delay line's reach: s·R/c must fit
-constexpr float kMinRatio = 0.5f, kMaxRatio = 2.0f; // the read rate (pitch ratio) is held to this
 constexpr float kSmoothS = 0.05f;        // critically damped smoothing of distance and direction
 constexpr float kMaxRadialAccel = 500.0f; // m/s²: the slew limit of dr/dt (a 30 m/s pass-by 2 m off peaks ~450)
 constexpr float kJumpSlackM = 10.0f;     // a move v·dt + this does not explain is a teleport
@@ -114,8 +109,6 @@ inline Params Sanitized(Params p) {
     p.range_m = std::clamp(finite(p.range_m, 150.0f), 20.0f, 1000.0f);
     p.full_m = std::clamp(finite(p.full_m, 10.0f), 1.0f, p.range_m * 0.5f);
     p.fade_from = std::clamp(finite(p.fade_from, 0.8f), 0.5f, 0.99f);
-    const float most = (kMaxDelayS - 0.01f) * kSpeedOfSound / p.range_m; // s·R/c within the line
-    p.doppler = std::clamp(finite(p.doppler, 0.75f), 0.0f, std::min(1.0f, most));
     p.pan_limit = std::clamp(finite(p.pan_limit, 0.8f), 0.0f, 1.0f);
     return p;
 }
@@ -223,10 +216,9 @@ struct Scene {
 
 class SeatProcessor {
 public:
-    static constexpr int kLine = 32768, kMask = kLine - 1; // 0.68 s: the 0.5 s reach + Hermite's taps
-    static constexpr int kBlock = 240;                      // 5 ms: poses, smoothing and the delay's slope per block
-    static constexpr float kMinDelay = 2.0f;                // Hermite reads two samples ahead of its point
-    static constexpr float kMaxDelay = kMaxDelayS * kRate;
+    static constexpr int kLine = 32768, kMask = kLine - 1; // 0.68 s: the line's tail after the last input
+    static constexpr int kBlock = 240;                      // 5 ms: poses and smoothing per block
+    static constexpr float kMinDelay = 2.0f;                // Hermite reads two samples ahead of its point: the fixed delay
     enum class Kind : uint8_t { Open, Spatial, Far };
 
     SeatProcessor() : line_(kLine, 0.0f) {}
@@ -271,11 +263,9 @@ public:
                 r_.Step(g.r, dt, kMaxRadialAccel);
                 lat_.Step(lat_t_, dt, 1e9f);
                 front_.Step(front_t_, dt, 1e9f);
-                const float want = std::min(kMinDelay + p.doppler * std::min(std::max(r_.x, 0.0f), p.range_m) / kSpeedOfSound * kRate, kMaxDelay);
-                // read rate = 1 - d(delay)/d(sample), held to [kMinRatio, kMaxRatio]
-                next.delay = cur_.delay + std::clamp(want - cur_.delay, -(kMaxRatio - 1.0f) * kBlock, (1.0f - kMinRatio) * kBlock);
+                next.delay = kMinDelay; // OD-192: no Doppler, the read rate stays 1
                 Gains(p, DistanceGain(std::max(r_.x, 0.0f), p), next);
-                ratio_ = 1.0f - (next.delay - cur_.delay) / kBlock;
+                ratio_ = 1.0f;
             } else {
                 next = FixedTap(g.kind, scene.params);
                 ratio_ = 1.0f;
@@ -291,7 +281,7 @@ public:
     float DelaySamples() const { return cur_.delay; }
     float LeftGain() const { return cur_.left; }
     float RightGain() const { return cur_.right; }
-    float Ratio() const { return ratio_; }   // the last block's read rate (the Doppler pitch ratio)
+    float Ratio() const { return ratio_; }   // the last block's read rate: always 1 (no Doppler, OD-192)
     float Distance() const { return r_.x; }  // smoothed
     bool Fading() const { return fade_left_ > 0; }
     // The louder channel's gain now (1 open; 0 beyond range): with SeatTalking, "heard now" for the talk indicator.
@@ -352,7 +342,7 @@ private:
         lat_.Snap(lat_t_);
         front_.Snap(front_t_);
         cur_.kind = Kind::Spatial;
-        cur_.delay = std::min(kMinDelay + p.doppler * std::min(g.r, p.range_m) / kSpeedOfSound * kRate, kMaxDelay);
+        cur_.delay = kMinDelay; // OD-192: no Doppler
         Gains(p, DistanceGain(g.r, p), cur_);
     }
     void StartFade(float seconds) {

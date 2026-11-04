@@ -93,13 +93,20 @@ public sealed class OverlayChannel : IDisposable
         }
     }
 
-    /// <summary>A toast (queued until the overlay says hello).</summary>
+    /// <summary>
+    /// OD-192: while this says true (the player is in an official lobby) no toast is sent or queued: every launcher notice
+    /// passes here, so official play shows none and user lobbies show them all.
+    /// </summary>
+    public Func<bool>? Quiet { get; set; }
+
+    /// <summary>A toast (queued until the overlay says hello); none while <see cref="Quiet"/>.</summary>
     public Task ToastAsync(UiFrame.Toast toast, CancellationToken cancellation)
     {
+        if (Quiet?.Invoke() == true) return Task.CompletedTask;
         lock (_lock)
         {
             if (_closed) return Task.CompletedTask;
-            _queued.Enqueue(toast);
+            _queued.Enqueue(OverlayNotices.Shortened(toast)); // OD-192: half as long
             if (!_toastReady || _flushing) return Task.CompletedTask;
             _flushing = true;
         }

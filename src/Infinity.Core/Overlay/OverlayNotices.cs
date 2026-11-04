@@ -4,6 +4,17 @@ namespace Infinity.Core.Overlay;
 /// <summary>Readable notices for the native overlay's Title\nBody toast format (OD-73).</summary>
 public static class OverlayNotices
 {
+    /// <summary>
+    /// OD-192: every overlay notice lasts half as long. The one place a launcher toast's hold is shortened
+    /// (<see cref="Supervisor.OverlayChannel.ToastAsync"/>); the overlay halves its own default (ui.cpp, PushToast) the same way.
+    /// </summary>
+    public const int DurationDivisor = 2;
+
+    /// <summary>The hold the overlay is sent: <see cref="UiFrame.Toast.TtlDs"/> / <see cref="DurationDivisor"/>, at least a tenth
+    /// of a second (0 stays 0: the overlay's own default, already halved there).</summary>
+    public static UiFrame.Toast Shortened(UiFrame.Toast toast) => toast.TtlDs == 0 ? toast
+        : toast with { TtlDs = (ushort)Math.Max(1, toast.TtlDs / DurationDivisor) };
+
     public static UiFrame.Toast Create(byte level, string body, Strings? text = null)
     {
         level = Math.Min(level, UiLevel.Error);

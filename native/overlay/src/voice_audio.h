@@ -85,7 +85,7 @@ void SetVoiceMode(VoiceMode mode);
 // both sampled at the same relay instant. Call before Receive of the same packet. Any thread; copies; never blocks
 // for long. Without poses (an older relay) proximity plays everyone open.
 void SetPose(uint8_t seat, const spatial::Pose &talker, const spatial::Pose &self);
-// The owner's listening-test knobs (range, r0, fade, Doppler scale s, pan limit, rear low-pass); out-of-range values
+// The owner's listening-test knobs (range, r0, fade, pan limit, rear low-pass; no Doppler, OD-192); out-of-range values
 // are clamped (spatial::Sanitized). Any thread; it outlives Stop/Start.
 void SetSpatialParams(const spatial::Params &params);
 // This player's voice is leaving the PC now.
