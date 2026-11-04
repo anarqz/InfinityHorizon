@@ -71,7 +71,8 @@ public sealed partial class WorldsBridge
 
     /// <summary>How long a world the game just left stays its first choice for the next world it asks for.</summary>
     public static readonly TimeSpan RejoinWindow = TimeSpan.FromSeconds(60);
-    private sealed record RecentWorld(string WorldId, DateTimeOffset LeftAt);
+    // Code (W-14): the code its seat was joined with, for a rejoin of a friends or private world
+    private sealed record RecentWorld(string WorldId, DateTimeOffset LeftAt, string? Code = null);
     private string? _seatWorld;
     private RecentWorld? _recentlyLeft;
     private RecentWorld? _leftOnPurpose;
@@ -101,7 +102,8 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// OD-148 (refines OD-57): the game left free roam. After <see cref="FreeRoamLeftGrace"/> with no lobby ask the hosted
-    /// world closes (<see cref="CloseHostAsync"/>) or the seat is let go (<see cref="LeaveAsync"/>); a lobby ask, the game
+    /// world closes (<see cref="CloseHostAsync"/>) or an official world's seat is let go (<see cref="LeaveAsync"/>; W-14: a
+    /// player world's seat stays, the server's CR-S86 release bounds it); a lobby ask, the game
     /// joining a world again (<see cref="GameJoined"/>), the overlay's own close, leave, join or open, the session's end or
     /// another leave of free roam ends this wait first. A lobby ask answered Ready within the grace BEFORE this leave counts
     /// too (live, test.9: back from a Road Trip the game asks for free roam, opens it, and only then closes its Road Trip
@@ -143,7 +145,9 @@ public sealed partial class WorldsBridge
                 _log($"worlds: the host's game left {stays}; it stays open while {others} other player(s) remain");
             }
             else if (world is not null && SessionSwitchHolds(world) is null)
-                _log($"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
+                _log(HostedWorldId is null && KeepsPlayerSeat() is not null
+                    ? $"worlds: free roam left; {world} is kept for the game's next lobby (a player world's seat)"
+                    : $"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
             var wait = FreeRoamLeftGrace;
             while (true)
             {
@@ -195,11 +199,44 @@ public sealed partial class WorldsBridge
         }
         if (!due) return;
         var hosted = HostedWorldId;
+        // W-14 (live, worlds9 17:14:39 local): a guest's seat in a player world is never let go by this rule. The game may take
+        // longer than the grace between leaving free roam and its next car meet ask (35 s live); the seat ends only on the
+        // player's own leave, the world's close, or the host's heartbeat no longer listing this player (CR-S86), and an ask
+        // after that rejoins the world first (RejoinWindow). An official world's seat goes as before, and so does a seat whose game
+        // is stuck moving into a car meet session past SessionSwitchBudget (W-12: the leave releases that game first).
+        if (hosted is null && KeepsPlayerSeat() is { } player && Volatile.Read(ref _switchExpired)?.World != player)
+        {
+            Volatile.Write(ref _keptPastGrace, player); // review 1: the next ask reads the seat before it says "stay"
+            _log($"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {player} stays (a player "
+                + "world's seat is kept for the game's next lobby; the player's leave, the world's close or the host's heartbeat ends it)");
+            return;
+        }
         if ((hosted ?? Volatile.Read(ref _seatWorld)) is { } gone)
             _log(held && hosted is not null ? $"worlds: free roam left; closing {gone}: no other player left"
                 : $"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {(hosted is null ? "leaving" : "closing")} {gone}");
         await (hosted is not null ? CloseHostAsync(cancellation) : LeaveAsync(cancellation)).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// W-14: the seat's world when it is a player world (not official, by the seat reads and the last "my world") whose seat the
+    /// game played (a used seat, which CR-S86 bounds); null otherwise. A reserved seat the game never played keeps the 30 s rule.
+    /// </summary>
+    private string? KeepsPlayerSeat() => _seat.GrantId is { } grant && Played(grant) && Volatile.Read(ref _seatWorld) is { } world
+        && Volatile.Read(ref _seatOfficial) != world
+        && !(Volatile.Read(ref _mineSnapshot) is { Official: true } mine && mine.WorldId == world) ? world : null;
+
+    // W-14 review 1: the player world whose seat was kept past the grace with the game out of it (the server may release it any
+    // moment, CR-S86): every ask reads the seat first instead of trusting the cached activity; cleared when the game joins again
+    private string? _keptPastGrace;
+
+    // W-14 review 2: the code the seat's world was joined with (a friends or private world), so a rejoin of it can send it
+    private SeatCode? _seatCodeBox;
+    private sealed record SeatCode(string WorldId, string Code);
+    private string? CodeOf(string world) => Volatile.Read(ref _seatCodeBox) is { } box && box.WorldId == world ? box.Code : null;
+
+    /// <summary>W-14: a join of <paramref name="world"/> was granted with <paramref name="code"/> (null: none): a rejoin sends it.</summary>
+    private void JoinedWithCode(string world, string? code) =>
+        Volatile.Write(ref _seatCodeBox, code is null ? null : new SeatCode(world, code));
 
     /// <summary>How often a hosted world kept for its other players with no host game says so in the log (OD-180.2).</summary>
     public static readonly TimeSpan HeldWorldLogEvery = TimeSpan.FromHours(1);
@@ -231,6 +268,7 @@ public sealed partial class WorldsBridge
         // the wait is taken first, so a grace loop waking meanwhile sees it called off before it says the host is away again
         CancellationTokenSource? pending;
         lock (_awayGate) pending = Interlocked.Exchange(ref _freeRoamLeave, null); // after any away the loop already said
+        Volatile.Write(ref _keptPastGrace, null); // W-14: the game is in a world again
         SessionSwitchJoined(); // W-12: a move into a car meet session ends here
         // a guest's join (detail join:…) is the seat's proof: no give-up; OD-191: never bound to a car meet seat that is moving
         // W-6: with a seat staged it is installed first and the join bound to it
@@ -346,6 +384,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     private bool StaysAtOnce(byte kind) => UnprovenOtherSeat(kind) is null
         && (OwnWorld || HasFreeRoamWorld && !HostGone(Volatile.Read(ref _seatWorld)) && SeatRunsCached(kind) == true
+            && (Volatile.Read(ref _keptPastGrace) is not { } kept || kept != Volatile.Read(ref _seatWorld)) // W-14 review 1
             || kind == FreeRoamKind.CarMeet && FreshGroupSeat()); // W-5: a car meet ticket never releases a fresh group seat
 
     // the seat's world as last read: its host is away (CR-L49: its game quit or left the session)
@@ -405,8 +444,17 @@ public sealed partial class WorldsBridge
     /// <summary>OD-190: the held seat ended because its world closed (its host quit or closed it); the next placement says so.</summary>
     private void ObserveHostLeft(SeatEnded? ended, string? heldGrant)
     {
-        if (heldGrant is null || ended is not { Reason: SeatEnds.WorldClosed } || ended.GrantId != heldGrant) return;
+        if (heldGrant is null || ended is null || ended.GrantId != heldGrant) return;
         if (Volatile.Read(ref _seatOfficial) == ended.WorldId) return; // an official world closing is not a host leaving
+        // W-14: a player world's seat released while the game was between its lobbies (CR-S86: the host's heartbeat stopped listing
+        // it) is the world the game's next ask rejoins first, never a reason to place it in an official world
+        // (the player's own leave never gets here: it lets the grant go before the DELETE, so heldGrant is null by then)
+        if (ended.Reason == SeatEnds.Released)
+        {
+            Volatile.Write(ref _recentlyLeft, new RecentWorld(ended.WorldId, Now, CodeOf(ended.WorldId)));
+            return;
+        }
+        if (ended.Reason != SeatEnds.WorldClosed) return;
         Volatile.Write(ref _hostLeft, new RecentWorld(ended.WorldId, Now));
     }
 
@@ -417,6 +465,7 @@ public sealed partial class WorldsBridge
     private void SeatWorldIs(string world)
     {
         if (Interlocked.Exchange(ref _seatWorld, world) == world) return;
+        Volatile.Write(ref _keptPastGrace, null);
         Volatile.Write(ref _hostMoved, null);
         Volatile.Write(ref _hostLeft, null);
     }
@@ -473,13 +522,20 @@ public sealed partial class WorldsBridge
             }
             else if (Interlocked.Exchange(ref _hostLeft, null) is { } left && Now - left.LeftAt <= RejoinWindow) moved = "worlds.moved_host_left";
             // the player world the game left moments ago comes first (a failed car meet step retries at once), so a retry never
-            // splits its players; an official one is placed again by activity
-            if (Interlocked.Exchange(ref _recentlyLeft, null) is { } recent && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld
-                && lobby is null && !Isolated && moved is null && Volatile.Read(ref _seatOfficial) != recent.WorldId)
+            // splits its players; an official one is placed again by activity. W-14: a car meet or Road Trip ask too, when that
+            // world still runs it (live, worlds9: a private car meet ask 5 s after the seat went quick joined the official car meet)
+            // (review 8: a world that runs no car meet right now stays the next free roam ask's first choice)
+            var recent = Volatile.Read(ref _recentlyLeft);
+            var rejoin = recent is not null && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld && !Isolated && moved is null
+                && Volatile.Read(ref _seatOfficial) != recent.WorldId;
+            if (recent is not null && (!rejoin || await RecentWorldRunsAsync(recent, kind, token).ConfigureAwait(false)))
+                rejoin &= Interlocked.CompareExchange(ref _recentlyLeft, null, recent) == recent; // one ask takes it
+            else rejoin = false;
+            if (rejoin && recent is not null)
             {
                 token.ThrowIfCancellationRequested();
                 joins++;
-                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, string.Empty), activity, token, kind).ConfigureAwait(false);
+                var back = await JoinAsync(new UiFrame.JoinWorld(recent.WorldId, recent.Code ?? string.Empty), activity, token, kind).ConfigureAwait(false);
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
                 _log($"worlds: {KindName(kind)}: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
@@ -500,6 +556,26 @@ public sealed partial class WorldsBridge
         {
             return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, OnlineOpen ? "no world (the game stopped waiting)" : "no world (online is closed)");
         }
+    }
+
+    /// <summary>
+    /// W-14: whether the player world the game left moments ago runs this ask, so the ask rejoins it before any quick join. A free
+    /// roam ask always does (as before). A car meet ask needs the world's car meet lobby, a Road Trip ask its Road Trip; an official
+    /// world, one gone, or one whose host is away never. A failed read tries the world anyway (its join answers for it).
+    /// </summary>
+    private async Task<bool> RecentWorldRunsAsync(RecentWorld recent, byte kind, CancellationToken cancellation)
+    {
+        if (kind == FreeRoamKind.FreeRoam) return true;
+        MmResult<WorldView>? view = null;
+        try { view = await _mm.GetAsync(recent.WorldId, cancellation).ConfigureAwait(false); }
+        catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
+        if (view is { Error.Kind: MmErrorKind.WorldNotFound }) return false;
+        if (view is not { Ok: true, Value: { } seen }) return true;
+        if (seen.Official == true || seen.HostAway == true) return false;
+        // review 2: a world this caller cannot join now (a code it does not hold, its host's bans, full) spends no join and no code try
+        if (seen.NeedsCode && recent.Code is null) return false;
+        if (!seen.CanJoin && !(seen.NeedsCode && recent.Code is not null)) return false;
+        return kind == FreeRoamKind.CarMeet ? seen.Lobbies.Contains(LobbyKinds.CarMeet) : seen.Activity == ActivityOf(kind);
     }
 
     // OD-190 (W-4 review): a placement that failed for anything but full lobbies says so

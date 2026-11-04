@@ -623,6 +623,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             {
                                 _seat.Granted(grant, Now);
                                 SeatWorldIs(grant.WorldId); // OD-190: a new seat forgets the last one's host notices
+                                JoinedWithCode(grant.WorldId, code); // W-14: a rejoin of a code world sends its code
                                 SeatTakenFor(grant.Id, kind);
                                 InvalidateMine(reset: true);
                                 accepted = OnlineOpen && !cancellation.IsCancellationRequested;
@@ -1647,7 +1648,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             return;
         }
         // the game may come straight back (a failed car meet step retries at once): it rejoins this world first
-        if (Volatile.Read(ref _seatWorld) is { } leftWorld) Volatile.Write(ref _recentlyLeft, new RecentWorld(leftWorld, Now));
+        if (Volatile.Read(ref _seatWorld) is { } leftWorld) Volatile.Write(ref _recentlyLeft, new RecentWorld(leftWorld, Now, CodeOf(leftWorld)));
         _seat.Left();
         try
         {
