@@ -1759,11 +1759,63 @@ static HRESULT STDMETHODCALLTYPE fr_system_ui_invite(FrWrap *self, uintptr_t a, 
 FR_PARTY_REGISTER(6) FR_PARTY_REGISTER(7)
 #undef FR_PARTY_REGISTER
 
+/* W-10: Party statics(15946429) slot 6 (User.Users, &out action; called from 0x1417B57A0 by the
+   party manager, FUN_141791000) is an action on the local users' party. Azimuth's action fails with
+   0x800704cf (ERROR_NETWORK_UNREACHABLE; F-5, the "MATCHMAKING..." screen of a private host). The
+   game's own end of that action is its completion: the party manager resets its party state
+   (game+0x17adf10) and a search waiting for its ticket deletes it and leaves its own session
+   (game+0x17ade10), i.e. the search drops back cleanly. A failed action instead throws in its
+   continuation (a failed HRESULT throws, PARITY_PLAN V12). So when the launcher says no lobby is
+   pending for the game (fi_launch_lobby_pending: no FreeRoamNeed in flight, every kind never asked,
+   answered none or cancelled) it completes here, as IPartyStatics 6/7 do. A seat ready or unknown, or
+   no live launcher session, forwards and observes it as before (T36: the first car meet after a boot
+   keeps and polls its ticket). */
+static HRESULT STDMETHODCALLTYPE fr_party_local_users(FrWrap *self, uintptr_t a, uintptr_t b, uintptr_t c,
+                                                      uintptr_t d, uintptr_t e, uintptr_t f) {
+    if (fi_launch_lobby_pending()) {
+        FrCall6 call = (FrCall6)((void *const *)(const void *)self->inner->lpVtbl)[6];
+        HRESULT result = call(self->inner, a, b, c, d, e, f);
+        fr_observed(self, 6, fr_obs_next(self->observe, 6), result, "forwarded (a lobby is pending)", a, b, c, d, e, f);
+        return result;
+    }
+    HRESULT result = fr_completed(0, (void **)b);
+    fr_observed(self, 6, fr_obs_next(self->observe, 6), result, "completed here (no lobby pending)", a, b, c, d, e, f);
+    return result;
+}
+
+/* W-10 Q4: what is still pending when the launcher releases the game's matchmaking (a world closed
+   or a seat left before the game played): the watched async Party/SystemUI outs, by interface and
+   slot, without touching them. */
+void azimuth_freeroam_pending_log(const char *why) {
+    FR_LINE(line);
+    fr_text(&line, "FREEROAM: ");
+    fr_text(&line, why ? why : "pending calls");
+    fr_text(&line, ": ");
+    unsigned count = 0;
+    for (unsigned i = 0; i < FR_OBS_WATCH; ++i) {
+        FrWatch *watch = &fr_obs_watch[i];
+        if (watch->state != 2) continue;
+        if (count++) fr_text(&line, ", ");
+        fr_text(&line, fr_obs_names[watch->kind]);
+        fr_text(&line, ".");
+        fr_number(&line, watch->slot);
+        fr_text(&line, " #");
+        fr_number(&line, watch->call);
+        fr_text(&line, " Started ");
+        unsigned long long now = GetTickCount64();
+        fr_number(&line, now > watch->since ? now - watch->since : 0);
+        fr_text(&line, " ms");
+    }
+    if (!count) fr_text(&line, "no Party call pending");
+    fr_text(&line, ".");
+    fr_end(&line);
+}
+
 /* -------------------------------------------------------------- vtables */
 
 static void *fr_qos_statics_vtable[FR_SLOTS], *fr_address_statics_vtable[FR_SLOTS],
     *fr_template_statics_vtable[FR_SLOTS], *fr_party_statics_vtable[FR_SLOTS],
-    *fr_observed_vtable[FR_SLOTS], *fr_system_ui_vtable[FR_SLOTS];
+    *fr_observed_vtable[FR_SLOTS], *fr_system_ui_vtable[FR_SLOTS], *fr_party_1594_vtable[FR_SLOTS];
 static volatile LONG fr_vtables_ready;
 
 static void fr_build_vtables(void) {
@@ -1785,6 +1837,8 @@ static void fr_build_vtables(void) {
     fr_party_statics_vtable[6] = (void *)(uintptr_t)fr_party_register6;
     fr_party_statics_vtable[7] = (void *)(uintptr_t)fr_party_register7;
     fr_vtable_observed(fr_observed_vtable);
+    fr_vtable_observed(fr_party_1594_vtable);
+    fr_party_1594_vtable[6] = (void *)(uintptr_t)fr_party_local_users;
     fr_vtable_observed(fr_system_ui_vtable);
     fr_system_ui_vtable[9] = (void *)(uintptr_t)fr_system_ui_invite;
     InterlockedExchange(&fr_vtables_ready, 2);
@@ -1827,7 +1881,7 @@ int azimuth_freeroam_filter(const wchar_t *name, const void *iid, void **out) {
         } else if (fr_guid_is(iid, &fr_iid_party_8752)) {
             guid = &fr_iid_party_8752, observe = FR_OBS_PARTY_8752;
         }
-        if (guid) vtable = fr_observed_vtable;
+        if (guid) vtable = observe == FR_OBS_PARTY_1594 ? fr_party_1594_vtable : fr_observed_vtable;
     } else if (fr_guid_is(iid, &fr_iid_system_ui_statics) && fr_wide_equal(name, L"Windows.Xbox.UI.SystemUI")) {
         vtable = fr_system_ui_vtable, guid = &fr_iid_system_ui_statics, observe = FR_OBS_SYSTEM_UI;
     }

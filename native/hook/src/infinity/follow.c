@@ -99,6 +99,10 @@ static volatile LONG fh_connected;
 static volatile LONG64 fh_connected_at;
 #define FH_LEFT_MS 3000u
 static volatile LONG64 fh_cancel_at;
+/* W-10 Q4: when the game thread ran the release (0 none) and which of its after-checks (3 s, 10 s)
+   were logged: a game that freezes after a release never writes them. Game thread only. */
+static ULONGLONG fh_released_at;
+static int fh_released_logged;
 /* the queued start last seen at module+0x150, since when, and whether it was logged */
 static void *fh_queued_seen;
 static ULONGLONG fh_queued_since;
@@ -231,6 +235,19 @@ static void fh_update(void *module, float dt) {
             log_append("FOLLOW: a matchmaking cancel came too late or online is closed; dropped.\r\n");
         } else {
             fh_cancel_now(module);
+            fh_released_at = GetTickCount64();
+            fh_released_logged = 0;
+        }
+    }
+    if (fh_released_at) {
+        ULONGLONG since = GetTickCount64() - fh_released_at;
+        if (fh_released_logged == 0 && since >= 3000u) {
+            fh_released_logged = 1;
+            log_append("FOLLOW: the game thread still runs 3 s after the matchmaking release.\r\n");
+            azimuth_freeroam_pending_log("3 s after the release");
+        } else if (fh_released_logged == 1 && since >= 10000u) {
+            fh_released_at = 0;
+            log_append("FOLLOW: the game thread still runs 10 s after the matchmaking release.\r\n");
         }
     }
     LONG pending = fh_pending ? InterlockedExchange(&fh_pending, 0) : 0;
@@ -341,6 +358,8 @@ void fi_follow_cancel(void) {
     }
     InterlockedExchange64(&fh_cancel_at, (LONG64)GetTickCount64());
     InterlockedExchange(&fh_cancel, 1);
+    /* W-10 Q4: what the game still waits on when its matchmaking is released (read only) */
+    azimuth_freeroam_pending_log("at the matchmaking release");
 }
 
 void fi_follow_apply(unsigned char *game_image) {

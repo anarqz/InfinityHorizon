@@ -874,6 +874,12 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
    (ticket_guard.c). A CancelMatchmaking makes every seat FI_SEAT_CANCELLED until a handshake
    answers again. Under launch_fr_lock. */
 static int launch_fr_seat[3] = {-1, -1, -1};
+/* W-10 Q4: the handshake a CancelMatchmaking ended (its waiters leave at once, seat cancelled). */
+static unsigned launch_fr_cancelled;
+/* W-10: each kind's last handshake nonce (0 never asked in this session); a waiter writes its kind's
+   seat only while its nonce is still that kind's last one (a late waiter never overwrites a newer
+   answer). Under launch_fr_lock. */
+static unsigned launch_fr_kind_nonce[3];
 
 static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted);
 
@@ -893,6 +899,22 @@ int fi_launch_seat(unsigned kind) {
     int seat = launch_fr_seat[kind];
     ReleaseSRWLockShared(&launch_fr_lock);
     return seat;
+}
+
+/* W-10: 0 only when the launcher says no lobby is pending for the game: a live launcher session, no
+   FreeRoamNeed in flight, and every kind either never asked in this session or answered "none" (0)
+   or cancelled (FI_SEAT_CANCELLED). A seat ready (1) or unknown (-1 after a timeout or a pipe drop),
+   or no live launcher session, is 1: Party(15946429).6 is forwarded then, as before W-10 (T36). */
+int fi_launch_lobby_pending(void) {
+    if (!fi_launch_protocol() || !fi_launch_live() || !launch_connected) return 1;
+    AcquireSRWLockShared(&launch_fr_lock);
+    int pending = launch_fr_nonce != 0;
+    for (unsigned kind = 0; kind < 3 && !pending; ++kind) {
+        int seat = launch_fr_seat[kind];
+        pending = launch_fr_kind_nonce[kind] && seat != 0 && seat != FI_SEAT_CANCELLED;
+    }
+    ReleaseSRWLockShared(&launch_fr_lock);
+    return pending;
 }
 
 int fi_launch_seat_ask(unsigned kind, volatile LONG *aborted) {
@@ -929,6 +951,7 @@ static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted) {
             if (launch_queue_frame(FRAME_FREE_ROAM_NEED, payload, sizeof(payload))) {
                 launch_fr_nonce = launch_fr_counter;
                 launch_fr_kind = kind;
+                launch_fr_kind_nonce[kind] = launch_fr_counter;
                 launch_fr_deadline = GetTickCount64() + LAUNCH_FREE_ROAM_WAIT_MS;
                 first = 1;
             }
@@ -950,10 +973,13 @@ static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted) {
         int answered = launch_fr_nonce != nonce;
         if (answered) {
             result = launch_fr_done == nonce ? (int)launch_fr_result : -1;
-            launch_fr_seat[kind] = result < 0 ? -1 : result == 0; /* no answer for this nonce: unknown */
+            if (launch_fr_kind_nonce[kind] == nonce) {
+                launch_fr_seat[kind] = launch_fr_cancelled == nonce ? FI_SEAT_CANCELLED
+                                       : result < 0 ? -1 : result == 0; /* no answer for this nonce: unknown */
+            }
         } else if (GetTickCount64() >= launch_fr_deadline || !launch_connected || fi_launch_suspended()) {
             launch_fr_nonce = 0; /* the next request asks again */
-            launch_fr_seat[kind] = -1; /* unknown: a found answer goes through, as before T34 */
+            if (launch_fr_kind_nonce[kind] == nonce) launch_fr_seat[kind] = -1; /* unknown: a found answer goes through, as before T34 */
             answered = 1;
         } else if (aborted && *aborted) {
             answered = 1; /* only this request leaves: other waiters keep the shared handshake */
@@ -1910,7 +1936,16 @@ static int launch_session_frame(void) {
         AcquireSRWLockExclusive(&launch_fr_lock);
         /* T34: given up; a found ticket says "canceled", never asks again, until the next search */
         launch_fr_seat[0] = launch_fr_seat[1] = launch_fr_seat[2] = FI_SEAT_CANCELLED;
+        /* W-10 Q4: a lobby ask still waiting ends now with "none" (its request goes on to the server) */
+        unsigned ended = launch_fr_nonce;
+        if (ended) {
+            launch_fr_done = ended;
+            launch_fr_result = 1;
+            launch_fr_cancelled = ended;
+            launch_fr_nonce = 0;
+        }
         ReleaseSRWLockExclusive(&launch_fr_lock);
+        if (ended) launch_log("CancelMatchmaking: the lobby ask in flight ends now (none).", 0, 0, "");
         fi_follow_cancel();
         return 1;
     case FRAME_WATCH:

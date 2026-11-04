@@ -397,7 +397,15 @@ public sealed class DedicatedWorldRelay : IWorldHostRelay, IWireWatchRelay
         try { admitted = await _child.Client.AdmissionAsync(admission, cancellation).ConfigureAwait(false); }
         catch (Exception e) when (e is TimeoutException or DedicatedServerGoneException) { throw Fatal(DsOps.WorldAdmission, e, null); }
         if (!admitted.Ok && !admitted.Superseded) throw Fatal(DsOps.WorldAdmission, null, admitted.Error);
+        // W-10: the world's first admission says its result. The host's own game needs no grant: the engine admits the host's
+        // XUID from loopback only (DEDICATED_SERVER.md §6.2), with no FIUP hello and no development LAN rule.
+        if (Interlocked.Exchange(ref _admissionLogged, 1) == 0)
+            _log($"ds world {Short}: admission installed: context {(lease.Superseded ? "superseded" : "ok")}, "
+                + (admitted.Superseded ? "admission superseded" : $"{admitted.Value?.Admitted ?? 0} grant(s) admitted")
+                + "; the host's own game is admitted from loopback (no grant, no FIUP)");
     }
+
+    private int _admissionLogged;
 
     public async Task RefreshAdmissionsAsync(IMatchmakingApi matchmaking, CancellationToken cancellation = default)
     {

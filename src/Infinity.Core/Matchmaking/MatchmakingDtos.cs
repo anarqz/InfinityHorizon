@@ -409,6 +409,13 @@ public sealed record Heartbeat
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? HostAway { get; init; }
+
+    /// <summary>
+    /// OD-194 (CR-S91), official worlds only (their world agent sends it): past the point newcomers may join. Absent means false;
+    /// a player host's launcher never writes it (null).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? InProgress { get; init; }
 }
 
 /// <summary>The host's answer to <c>PUT</c> and the announce: the world as its host sees it (<c>code</c> included) and the punches.</summary>
