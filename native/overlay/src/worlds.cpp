@@ -18,6 +18,7 @@
 // - OD-192: the tab is "User Lobbies" (only for hosting one's own lobby; official play needs nothing, matchmaking places the
 //   player). In an official lobby (MyWorld.official) it is the "Official Lobby" pane: the lobby, its players, their details,
 //   mute, voice volume, report and friend actions, never a lobby option; and no overlay notice shows (WorldsOfficial).
+//   OD-196: it keeps "Leave lobby" (the same action as a user lobby's).
 // - A private or friends world is joined with its code (code_entry.cpp); create gives the host
 //   the code to share.
 // - Create: name (the keyboard; "{gamertag}'s lobby" by default, CR-L40 §4), audience (Everyone,
@@ -127,7 +128,6 @@ bool g_world_action_busy = false;
 bool g_mine_refresh = true; // one explicit reconcile on open/action/manual refresh
 bool g_showing_mine = false; // the List screen shows my world this frame
 int g_mine_focus = 0;       // 0 the close or leave button, [1 the host's voice switch], then the players
-bool g_mine_leave_row = true; // OD-192 (W-9): false in an official lobby: item 0 is not drawn and never focused
 int g_mine_count = 0;       // what the focus walks: 1 [+ 1] + the players
 int g_mine_col = 0;         // on a player: layout::kStopCard the card, kStopMute the mute button beside it (OD-154)
 int g_mine_scroll = 0;      // §15: the first player row drawn (the rows follow the focus)
@@ -1114,9 +1114,9 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
         y += 30 * s;
     }
     y += 6 * s;
-    // OD-192 (W-9): no Leave in an official lobby; players go into Horizon Solo to leave it. Item 0 is then never focused.
-    g_mine_leave_row = !official;
-    if (g_mine_leave_row) {
+    // OD-196 (W-11, reverses W-9): an official lobby keeps Leave lobby, the same action as a user lobby's, so a player whose
+    // game shows no Horizon Solo option can still leave. Item 0 is drawn, focused and accepted in every lobby.
+    {
         const float bh = 52 * s;
         const ImVec2 a(x, y), b(x + w, y + bh);
         Button(dl, a, b, g_mine_focus == 0, false, m.role == 1 ? T("Close lobby", "Fechar lobby") : T("Leave lobby", "Sair do lobby"));
@@ -1648,8 +1648,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
             // OD-149: the notice stays above its own lobby
             const MineClick click = DrawMine(dl, x, PoolBanner(dl, x, y, w, sh), w, bottom, sh.mine);
             if (click.item >= 0) { g_mine_focus = click.item; g_mine_col = click.col; g_accept = true; } // A next frame
-            const int last = std::max(0, g_mine_count - 1);
-            g_mine_focus = std::clamp(g_mine_focus, g_mine_leave_row ? 0 : std::min(FirstPlayerItem(), last), last); // W-9
+            g_mine_focus = std::clamp(g_mine_focus, 0, std::max(0, g_mine_count - 1)); // OD-196: item 0, Leave, in every lobby
             const int player = g_mine_focus - FirstPlayerItem();
             const bool x_press = g_mine_x;
             g_mine_x = false;
@@ -1658,7 +1657,6 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
             }
             if (accept) {
                 if (g_mine_focus == 0) {
-                    if (!g_mine_leave_row) break; // W-9: an official lobby has no Leave
                     g_confirm = sh.mine.role == 1 ? 1 : 2;
                     g_button = 0;
                     g_screen = Screen::Confirm;
