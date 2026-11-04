@@ -212,7 +212,7 @@ public sealed partial class WorldsBridge
         // a guest's join (detail join:…) is the seat's proof: no give-up; OD-191: never bound to a car meet seat that is moving
         // W-6: with a seat staged it is installed first and the join bound to it
         if (join) { if (!JoinStaged() && !HoldJoinForGroupSeat()) { SeatPlays("the game joined"); GameInWorld(true); } }
-        else SetHostAway(false, "its game joined it again"); // CR-L49: the host's game is back in its world
+        else { SetHostAway(false, "its game joined it again"); HostJoined(); } // CR-L49: the host's game is back in its world; W-10
         if (pending is null) return;
         CancelFreeRoamLeave(pending);
         if ((HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } world) _log($"worlds: the game joined again; {world} stays");
@@ -655,11 +655,14 @@ public sealed partial class WorldsBridge
     {
         if (Interlocked.Exchange(ref _followHost, null) is not { } follow) return;
         var name = follow.LobbyType == Session.FollowHostLobby.RoadTrip ? "Road Trip" : "free roam";
+        var own = Interlocked.Exchange(ref _followOwnWorld, null); // W-10: the host's own new world
         if (!OnlineOpen || SendFollowHost is null) { _log($"worlds: the host is in {name}; online is closed here, the game is not asked to follow"); return; }
         try
         {
             await SendFollowHost(follow, cancellation).ConfigureAwait(false);
-            _log($"worlds: the host is in {name}; the game is asked to look for it (FollowHost, the player confirms)");
+            _log(own is not null
+                ? $"worlds: {own} is open; the host's game is asked to start FREE ROAM ONLINE there (FollowHost, the player confirms)"
+                : $"worlds: the host is in {name}; the game is asked to look for it (FollowHost, the player confirms)");
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or ProtocolException or ObjectDisposedException)
         { _log("worlds: FollowHost not sent (" + error.GetType().Name + ")"); }

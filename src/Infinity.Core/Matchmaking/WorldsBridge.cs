@@ -1019,6 +1019,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     CancelFreeRoamLeave();
                     InvalidateMine(reset: true);
                     // left on purpose: never the world the game's next "find me a lobby" goes back to
+                    await ReleaseUnplayedSeatAsync().ConfigureAwait(false); // W-10 Q4: a search toward it is released first
                     LeftOnPurpose();
                     _seat.Left();
                     await ClearSeatEndAsync("the player left from the overlay").ConfigureAwait(false); // no relay leg outlives the seat
@@ -1207,6 +1208,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     hosted = true;
                     Voice?.Creating(settings.Voice); // OD-154, CR-S67: the lobby's voice mode, the host's to change later
                     _log($"worlds: world {openingId} open ({settings.Mode}{(request.AnyMode ? " + any" : string.Empty)}, {settings.Audience}, {players} players{(opening == WorldActivities.RoadTrip ? ", road trip" : string.Empty)}, voice {settings.Voice})");
+                    ArmHostJoin(openingId); // W-10: the host's own game is asked in and awaited (bounded)
                     return new UiFrame.Hosted(0, openingId, world.Code ?? string.Empty, string.Empty);
                 }
                 openingId = null; // an explicit refusal did not open this id
@@ -1265,6 +1267,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             await CloseHostAsync(cancellation).ConfigureAwait(false);
             return hadHost ? _text(denied.MessageKey) : null;
         }
+        HostJoinTick(); // W-10: the bounded wait for the host's own game
         var operation = QueueHostOperation(replace: false, create: false);
         await operation.Previous.ConfigureAwait(false);
         var hostRemaining = TimeSpan.FromSeconds(45) - _clock.GetElapsedTime(_hostLastStamp);
@@ -1507,6 +1510,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private async Task CloseCurrentHostAsync(string? worldId, CancellationToken cancellation)
     {
         var id = _host.IsOpen ? _host.WorldId : worldId;
+        await ReleaseHostJoinAsync(id).ConfigureAwait(false); // W-10 Q4: a game still matchmaking toward it is released first
         if (id is not null) InvalidateMine(reset: true);
         _host.Stop();
         Volatile.Write(ref _hostedWorldId, null);

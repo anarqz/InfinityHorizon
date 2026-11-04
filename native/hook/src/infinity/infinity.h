@@ -202,6 +202,11 @@ int fi_launch_free_roam(const wchar_t *method, const wchar_t *url, volatile LONG
 #define FI_SEAT_CANCELLED (-2)
 int fi_launch_seat(unsigned kind);
 int fi_launch_seat_ask(unsigned kind, volatile LONG *aborted);
+/* W-10: 0 only when the launcher says no lobby is pending (launch.c); 1 otherwise, or unknown. */
+int fi_launch_lobby_pending(void);
+/* W-10 (freeroam.c): the Party calls still watched (async, Started), logged with `why`; and
+   follow.c's game-thread check after a CancelMatchmaking. */
+void azimuth_freeroam_pending_log(const char *why);
 /* ticket_guard.c (T34, OD-182): a "found" matchmaking ticket answer (GET momatch .../hoppers/
    {FreeRoam,CarMeet,RoadTrip}_qos/tickets/{id}) reaches the game only while the launcher holds a
    seat; otherwise the launcher is asked again and the answer says "searching" (the game polls it
