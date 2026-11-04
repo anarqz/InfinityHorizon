@@ -731,6 +731,10 @@ impl Engine {
                     .is_some_and(|t| t.votes.contains_key(&p.index))
             })
         });
+        // OD-194: a lone voter keeps the whole vote, so the players still on their way (a car
+        // meet group arrives one by one) can join it (live test 2026-11-04: the first arrival's
+        // vote closed 10 s after its own vote and it was sent back before the other came)
+        let all = all && players.len() >= MIN_EVENT_PARTICIPANTS;
         let trip = self.trip();
         if all && trip.until > now + ALL_VOTED_MS {
             trip.until = now + ALL_VOTED_MS;
@@ -1351,6 +1355,29 @@ mod tests {
             "closed to newcomers after the vote"
         );
         assert!(!doomed(&e, first) && !doomed(&e, late));
+    }
+
+    /// A vote: router 9 id 0 (2-bit key), then the destination (32 bits).
+    fn vote(e: &mut Engine, serial: u64, choice: u32) {
+        let mut body = Bits::new();
+        ObjKey::own(0).write(&mut body, 2);
+        body.push(u64::from(choice), 32);
+        e.road_trip_vote(serial, &body);
+    }
+
+    #[test]
+    fn a_lone_voter_keeps_the_whole_vote_and_two_voters_close_it() {
+        let mut e = road_trip();
+        let first = arrive(&mut e, 1);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        let until = e.trip().until;
+        vote(&mut e, first, 0);
+        assert_eq!(e.trip().until, until, "alone: the vote keeps its time");
+        let second = arrive(&mut e, 2);
+        tick_for(&mut e, PLAYER_START_MS + 1);
+        vote(&mut e, second, 1);
+        let soon = e.now + ALL_VOTED_MS;
+        assert_eq!(e.trip().until, soon, "both voted: closes soon");
     }
 
     #[test]
