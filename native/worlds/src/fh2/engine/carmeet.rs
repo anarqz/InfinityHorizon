@@ -210,7 +210,9 @@ impl Engine {
     /// and every joiner still here), each at its rank among the engine's synced players by index
     /// (the game's player order; FH2MP's slot is the same rank, unproven), the first 12.
     fn join_slots_now(&self) -> u16 {
-        if !self.car_meet.official || self.car_meet.stage == InviteStage::Idle {
+        // OD-195: every car meet counts its invitation's players (it was the official lobby's only;
+        // a private lobby's car meet showed 0/12 with both players in, live 2026-11-04)
+        if self.car_meet.stage == InviteStage::Idle {
             return 0;
         }
         let mut order: Vec<u8> = self
@@ -237,9 +239,6 @@ impl Engine {
     /// The official lobby's JoinTypes, sent reliably to every synced player when they change (a
     /// join, a cancel, a player leaving or ranking differently, the invitation's end).
     fn update_join_types(&mut self) {
-        if !self.car_meet.official {
-            return;
-        }
         let now = self.join_slots_now();
         let old = self.car_meet.join_slots;
         if now == old {
@@ -790,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn a_player_hosted_car_meet_keeps_the_reference_and_sends_no_join_types() {
+    fn a_player_hosted_car_meet_counts_its_joiners_too() {
         let mut e = car_meet();
         let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_101);
         let joiner = testkit::seat(&mut e, 2, 1_000_000_000_000_102);
@@ -801,11 +800,20 @@ mod tests {
         let mut cleared = Engine::invite_cleared();
         cleared.push(3, 5).push(0, 32);
         assert_eq!(e.invite_end_update(), cleared);
+        // OD-195: the starter and every joiner are counted (JoinTypes), as in the official lobby
+        assert_eq!(e.car_meet.join_slots, 0b01);
         let before = reliable(&e, joiner).len();
         join(&mut e, joiner, true);
-        assert_eq!(e.car_meet.join_slots, 0);
-        assert_eq!(reliable(&e, joiner).len(), before);
-        assert!(notes(&mut e, "carmeet.join_types").is_empty());
+        assert_eq!(e.car_meet.join_slots, 0b11);
+        assert_eq!(
+            reliable(&e, joiner).len(),
+            before + 1,
+            "everybody sees the count"
+        );
+        assert_eq!(
+            notes(&mut e, "carmeet.join_types").last(),
+            Some(&vec![json!(2)])
+        );
     }
 
     #[test]
