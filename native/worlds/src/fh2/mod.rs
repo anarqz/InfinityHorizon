@@ -1106,6 +1106,10 @@ impl GameWorld for Fh2World {
         };
         m.insert("activity".into(), activity);
         m.insert("engines".into(), Value::Object(engines));
+        // OD-194: a Road Trip past its vote takes no newcomers (the agent announces it)
+        if self.engines.values().any(|e| e.road_trip_in_progress()) {
+            m.insert("inProgress".into(), Value::Bool(true));
+        }
         m.insert("hostInWorld".into(), Value::Bool(host_in));
         m
     }

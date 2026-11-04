@@ -569,6 +569,10 @@ impl World {
         for k in ["peers", "lobbyPlayers", "activity", "engines"] {
             m.insert(k.into(), game.get(k).cloned().unwrap_or(Value::Null));
         }
+        // OD-194: present (true) only while the activity takes no newcomers
+        if let Some(v) = game.get("inProgress").filter(|v| v.as_bool() == Some(true)) {
+            m.insert("inProgress".into(), v.clone());
+        }
         m.insert("handshaking".into(), json!(self.handshaking()));
         m.insert(
             "hostInWorld".into(),

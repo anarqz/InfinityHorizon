@@ -7,9 +7,12 @@
 //! own RoadTripPlayerSynced (router 9, type 2), which the server relays and reads. The first
 //! player to arrive gives the others a short time to follow; everybody arriving ends the drive.
 //!
-//! OD-183: a Road Trip is for two players or more: the vote is drawn only with two; a lone
-//! player is sent back after 60 s with nobody, or 10 s after the others left; an event with fewer
-//! than two ready is dropped and the trip goes on.
+//! OD-194 (amends OD-183's start): the first player opens the destination vote, alone or not, and
+//! players arriving during it are shown it with its time left and vote. A Road Trip is still for
+//! two players or more (OD-183): a vote that ends with fewer than two sends its player back; after
+//! the vote a player left alone is sent back 10 s after the others left; an event with fewer than
+//! two ready is dropped and the trip goes on. The trip takes newcomers only until its vote ends
+//! ([`Engine::road_trip_in_progress`], announced so matchmaking places nobody else in it).
 //!
 //! The catalog (the game's online events, their modes' minimum players and allowed car classes)
 //! reaches the engine as rows through the control channel (`catalog.set`, contract §9); the
@@ -263,7 +266,9 @@ impl RoadTripState {
     }
 }
 
-const INITIALISING_MS: i64 = 10_000;
+/// OD-194: a fresh trip's vote opens once its first player's own Initialising is over (FH2MP's
+/// 3 s too), alone or not.
+const INITIALISING_MS: i64 = PLAYER_START_MS;
 const VOTE_MS: i64 = 60_000;
 const ALL_VOTED_MS: i64 = 10_000;
 /// A player's RoadTripSynced is created in Initialising and changes state this long after (the
@@ -276,9 +281,8 @@ const DRIVE_CAP_MS: i64 = 300_000;
 const FIRST_ARRIVAL_MS: i64 = 30_000;
 const DRIVE_HOLD_MS: i64 = 180_000;
 const PREPARE_MS: i64 = 120_000;
-/// OD-183: how long a first player waits alone for a second...
-const WAIT_FOR_PLAYERS_MS: i64 = 60_000;
-/// ...and how long the last player of a trip the others left stays.
+/// OD-183: how long the last player of a trip the others left stays (after the vote; a vote
+/// always runs to its end, OD-194).
 const ALONE_MS: i64 = 10_000;
 /// A router-1 update this large during car select is a player's car choice.
 pub const CAR_CHOICE_BITS: usize = 1000;
@@ -308,7 +312,6 @@ pub(super) struct RoadTrip {
     hold_until: i64,
     leader: Option<u8>,
     alone_since: Option<i64>,
-    began: bool,
     last_dropped: bool,
 }
 
@@ -333,7 +336,6 @@ impl RoadTrip {
             hold_until: 0,
             leader: None,
             alone_since: None,
-            began: false,
             last_dropped: false,
         }
     }
@@ -380,6 +382,17 @@ impl Engine {
     /// The running Road Trip event's catalog id (its team twin is id + 10000).
     pub(super) fn road_trip_current_race(&self) -> Option<i32> {
         self.road_trip.as_ref()?.current_race()
+    }
+
+    /// OD-194: the trip is past its destination vote and takes no newcomers (matchmaking places a
+    /// Road Trip newcomer in a lobby still voting, or a fresh one).
+    pub fn road_trip_in_progress(&self) -> bool {
+        self.road_trip.as_ref().is_some_and(|t| {
+            !matches!(
+                t.state,
+                RoadTripState::Initialising | RoadTripState::DestinationVote
+            )
+        })
     }
 
     fn trip(&mut self) -> &mut RoadTrip {
@@ -649,7 +662,9 @@ impl Engine {
         let trip = self.trip();
         let storm = trip.settings.storm_island;
         let catalog = trip.settings.catalog.clone();
-        trip.plan = catalog.draw(players, storm, &mut trip.random);
+        // OD-194: the vote opens alone, but the trip only runs with two (OD-183): draw for two
+        // at least, so a joiner sees the events a pair can run
+        trip.plan = catalog.draw(players.max(MIN_EVENT_PARTICIPANTS), storm, &mut trip.random);
         if trip.plan.is_none() {
             trip.until = i64::MAX;
             self.note("roadtrip.no_vote", Vec::new());
@@ -725,6 +740,26 @@ impl Engine {
     }
 
     fn finish_vote(&mut self) {
+        // OD-194 / OD-183: nobody joined during the vote: its player goes back to free roam
+        let players: Vec<(u64, u8)> = self
+            .peers
+            .iter()
+            .filter(|p| p.synced && !p.doomed)
+            .map(|p| (p.serial, p.index))
+            .collect();
+        if players.len() < MIN_EVENT_PARTICIPANTS {
+            for (serial, index) in players {
+                self.note(
+                    "roadtrip.nobody_joined",
+                    vec![json!(index), json!(MIN_EVENT_PARTICIPANTS)],
+                );
+                if let Some(p) = self.peer_mut(serial) {
+                    send::doom(p, super::Why::RoadTripAlone);
+                }
+            }
+            self.reset_road_trip("its vote ended with nobody else");
+            return;
+        }
         let counts = self.vote_counts();
         let max = counts.iter().copied().max().unwrap_or(0);
         // a tie goes to the first of the tied destinations
@@ -1103,10 +1138,8 @@ impl Engine {
         let configured = trip.configured || now >= trip.configure_until;
         let state = trip.state;
         match state {
-            // OD-183: the vote is drawn for two players or more
-            RoadTripState::Initialising
-                if self.road_trip_players().len() >= MIN_EVENT_PARTICIPANTS =>
-            {
+            // OD-194: the first player opens the vote, alone or not
+            RoadTripState::Initialising if !self.road_trip_players().is_empty() => {
                 self.begin_vote();
             }
             RoadTripState::DestinationVote => self.finish_vote(),
@@ -1142,36 +1175,30 @@ impl Engine {
             return false;
         }
         let trip = self.trip();
-        if players.len() >= MIN_EVENT_PARTICIPANTS {
+        // OD-194: the vote runs to its end whoever is there (finish_vote sends a lone player back)
+        if players.len() >= MIN_EVENT_PARTICIPANTS
+            || present.len() >= MIN_EVENT_PARTICIPANTS // a second player is joining
+            || matches!(
+                trip.state,
+                RoadTripState::Initialising | RoadTripState::DestinationVote
+            )
+        {
             trip.alone_since = None;
-            trip.began = true;
-            return false;
-        }
-        if present.len() >= MIN_EVENT_PARTICIPANTS {
-            trip.alone_since = None; // a second player is joining
             return false;
         }
         let since = *trip.alone_since.get_or_insert(now);
-        let limit = if trip.began {
-            ALONE_MS
-        } else {
-            WAIT_FOR_PLAYERS_MS
-        };
-        if now - since < limit {
+        if now - since < ALONE_MS {
             return false;
         }
-        let began = trip.began;
         let (lone, index) = players[0];
-        let id = if began {
-            "roadtrip.alone"
-        } else {
-            "roadtrip.nobody_joined"
-        };
-        self.note(id, vec![json!(index), json!(MIN_EVENT_PARTICIPANTS)]);
+        self.note(
+            "roadtrip.alone",
+            vec![json!(index), json!(MIN_EVENT_PARTICIPANTS)],
+        );
         if let Some(p) = self.peer_mut(lone) {
             send::doom(p, super::Why::RoadTripAlone);
         }
-        // at once: a player joining in between gets a fresh trip and its full wait
+        // at once: a player joining in between gets a fresh trip and its full vote
         self.reset_road_trip("its last player was sent back");
         true
     }
@@ -1202,5 +1229,141 @@ impl Engine {
             self.choose_road_trip_leader();
         }
         self.road_trip_progress();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::{Event, testkit},
+        *,
+    };
+    use crate::{core::Profile, fh2::RelaySettings};
+
+    /// Three locations of four two-player events, one class: a vote for any group size.
+    fn catalog() -> Arc<RoadTripCatalog> {
+        let events = (0..12).map(|i| RoadTripEvent {
+            id: 100 + i,
+            location: 3 + i / 4,
+            mode: i % 2,
+            min_players: 2,
+            classes: BTreeSet::from([1]),
+        });
+        Arc::new(RoadTripCatalog::new(events))
+    }
+
+    fn road_trip() -> Engine {
+        let settings = super::super::EngineSettings {
+            relay: RelaySettings::for_profile(Profile::Public),
+            max_players: 12,
+            races: true,
+            car_meet_lobby: None,
+            enforce_car_rule: false,
+            road_trip: Some(RoadTripSettings {
+                catalog: catalog(),
+                storm_island: false,
+                seed: 7,
+            }),
+        };
+        let seeds = super::super::random::Seeds {
+            weather: 1,
+            tag: 2,
+            team: 3,
+            attempt: 4,
+            transaction: 5,
+        };
+        Engine::new(
+            super::super::EngineKind::RoadTrip,
+            settings,
+            super::super::random::EngineRandom::new(seeds),
+            Box::new(testkit::AllowAll),
+        )
+        .expect("valid settings")
+    }
+
+    /// A player arriving: seated, its RoadTripSynced created, joined.
+    fn arrive(e: &mut Engine, index: u8) -> u64 {
+        let serial = testkit::seat(e, index, 1_000_000_000_000_100 + u64::from(index));
+        let mut snapshot = Vec::new();
+        e.append_road_trip_snapshot(serial, &mut snapshot);
+        e.road_trip_joined(serial);
+        serial
+    }
+
+    fn notes(e: &mut Engine) -> Vec<&'static str> {
+        e.take_events()
+            .into_iter()
+            .filter_map(|ev| match ev {
+                Event::Note { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tick_for(e: &mut Engine, ms: i64) {
+        e.now += ms;
+        e.tick_road_trip();
+    }
+
+    fn doomed(e: &Engine, serial: u64) -> bool {
+        e.peer(serial).is_some_and(|p| p.doomed)
+    }
+
+    #[test]
+    fn a_lone_player_opens_the_vote_and_is_sent_back_when_it_ends() {
+        let mut e = road_trip();
+        let lone = arrive(&mut e, 1);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        assert_eq!(e.trip().state, RoadTripState::DestinationVote, "OD-194");
+        assert!(!e.road_trip_in_progress(), "joinable during the vote");
+        assert!(notes(&mut e).contains(&"roadtrip.vote"));
+        // the 10 s alone rule does not cut the vote short
+        tick_for(&mut e, ALONE_MS + 1);
+        assert_eq!(e.trip().state, RoadTripState::DestinationVote);
+        assert!(!doomed(&e, lone));
+        tick_for(&mut e, VOTE_MS);
+        assert!(doomed(&e, lone), "sent back at the vote's end");
+        assert!(notes(&mut e).contains(&"roadtrip.nobody_joined"));
+        assert_eq!(e.trip().state, RoadTripState::Initialising, "a fresh trip");
+        assert!(!e.road_trip_in_progress());
+    }
+
+    #[test]
+    fn a_late_joiner_votes_and_the_trip_then_takes_no_newcomers() {
+        let mut e = road_trip();
+        let first = arrive(&mut e, 1);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        assert_eq!(e.trip().state, RoadTripState::DestinationVote);
+        let until = e.trip().until;
+        tick_for(&mut e, 20_000);
+        let late = arrive(&mut e, 2);
+        tick_for(&mut e, PLAYER_START_MS + 1);
+        assert_eq!(e.trip().until, until, "the vote keeps its end time");
+        assert!(
+            notes(&mut e).contains(&"roadtrip.peer_starts"),
+            "shown the vote"
+        );
+        e.now = until + 1;
+        e.tick_road_trip();
+        assert_eq!(e.trip().state, RoadTripState::CarSelect);
+        assert!(
+            e.road_trip_in_progress(),
+            "closed to newcomers after the vote"
+        );
+        assert!(!doomed(&e, first) && !doomed(&e, late));
+    }
+
+    #[test]
+    fn a_vote_the_other_player_left_still_ends_in_a_send_back() {
+        let mut e = road_trip();
+        let first = arrive(&mut e, 1);
+        let second = arrive(&mut e, 2);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        assert_eq!(e.trip().state, RoadTripState::DestinationVote);
+        e.peers.retain(|p| p.serial != second);
+        tick_for(&mut e, ALONE_MS + 1);
+        assert!(!doomed(&e, first), "the vote runs to its end");
+        tick_for(&mut e, VOTE_MS);
+        assert!(doomed(&e, first));
     }
 }
