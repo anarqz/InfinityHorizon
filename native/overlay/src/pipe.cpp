@@ -46,12 +46,18 @@
 // Protocol 4 (OD-181): 0x1E RosterMods from the launcher after each 0x0E, the mods each player of my world declared
 // (players may mix mods; modsMatch is always 1 and is ignored).
 //
+// Protocol 5 (OD-193 F-2; layouts in ui_frames.h, the cache in player_actions.h): the game's own PLAYER ACTIONS popup asks a
+// player's friend state (0x1F PlayerStateQuery -> 0x20 PlayerState) and sends our items' actions (0x21 PlayerActionRequest ->
+// 0x22 PlayerActionDone) through the fi_overlay_player_* exports the hook calls; nothing of it is drawn here.
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
 // The overlay holds no tokens: everything it shows comes from here (OD-50). It reconnects every
 // second for the life of the process; frames queued while disconnected are dropped.
 #include "overlay.h"
+#include "player_actions.h"
+#include "fi_overlay.h"
 
 #include <deque>
 #include <mutex>
@@ -66,18 +72,19 @@ std::mutex g_out_lock;
 std::deque<std::vector<uint8_t>> g_out; // whole frames, waiting for the pipe thread
 HANDLE g_out_event = nullptr;           // set when g_out has something
 bool g_connected = false;
+PlayerActionCache g_players; // OD-193 F-2
 
 void PutU16(std::vector<uint8_t> &b, uint16_t v) { wire::U16(b, v); }
 void PutU32(std::vector<uint8_t> &b, uint32_t v) { wire::U32(b, v); }
 void PutStr(std::vector<uint8_t> &b, const std::string &s) { wire::Str(b, s); }
 
-// Any thread: queue a frame (never blocks on the pipe).
-void Queue(uint8_t type, const std::vector<uint8_t> &body) {
+// Any thread: queue a frame (never blocks on the pipe); false when no launcher is connected (dropped).
+bool Queue(uint8_t type, const std::vector<uint8_t> &body) {
     std::vector<uint8_t> frame = wire::Frame(type, body);
     {
         std::lock_guard<std::mutex> lock(g_out_lock);
         if (!g_connected) {
-            return;
+            return false;
         }
         if (g_out.size() >= 64) {
             g_out.pop_front();
@@ -85,6 +92,7 @@ void Queue(uint8_t type, const std::vector<uint8_t> &body) {
         g_out.push_back(std::move(frame));
     }
     SetEvent(g_out_event);
+    return true;
 }
 
 using Reader = wire::Reader;
@@ -129,6 +137,18 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         RosterMods mods;
         if (DecodeRosterMods(body, size, mods)) SetRosterMods(std::move(mods));
         else Log("ui pipe: malformed RosterMods ignored");
+        break;
+    }
+    case 0x20: { // OD-193 F-2 (protocol 5)
+        PlayerStateFrame state;
+        if (DecodePlayerState(body, size, state)) g_players.OnState(state);
+        else Log("ui pipe: malformed PlayerState ignored");
+        break;
+    }
+    case 0x22: {
+        PlayerActionDone done;
+        if (DecodePlayerActionDone(body, size, done)) g_players.OnDone(done);
+        else Log("ui pipe: malformed PlayerActionDone ignored");
         break;
     }
     case 0x13: {
@@ -320,6 +340,7 @@ void Session(HANDLE pipe) {
     {
         std::lock_guard<std::mutex> lock(g_out_lock);
         g_connected = false;
+        g_players.Disconnected();
         SetConnectionDetails(2, "");
         g_out.clear();
     }
@@ -396,3 +417,18 @@ void SendWorldAction(uint8_t action, const std::string &xuid, const std::string 
 }
 
 } // namespace fi
+
+// OD-193 F-2 (fi_overlay.h): the game's PLAYER ACTIONS, for the hook. Any thread; they never wait for the pipe.
+extern "C" __declspec(dllexport) uint32_t fi_overlay_player_state(uint64_t xuid) {
+    if (fi::InPassthrough()) return FI_PLAYER_OWN; // no launcher behind it: no item at all
+    return fi::g_players.State(xuid, GetTickCount64(), fi::Queue);
+}
+
+extern "C" __declspec(dllexport) uint32_t fi_overlay_player_action(uint64_t xuid, uint32_t kind, uint32_t reason) {
+    if (fi::InPassthrough() || kind > 0xFF || reason > 0xFF) return 0;
+    return fi::g_players.Act(xuid, static_cast<uint8_t>(kind), static_cast<uint8_t>(reason), GetTickCount64(), fi::Queue);
+}
+
+extern "C" __declspec(dllexport) int32_t fi_overlay_player_result(uint32_t id, uint32_t *result, uint32_t *state) {
+    return fi::g_players.Result(id, GetTickCount64(), result, state);
+}

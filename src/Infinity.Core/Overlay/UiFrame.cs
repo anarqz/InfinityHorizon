@@ -70,13 +70,14 @@ public enum UiDirection
 /// Same envelope as the control pipe, its own type space 0x01-0x1A (0x07-0x10: worlds, OD-54, OD-63;
 /// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
 /// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
+/// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5;
 /// native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
 /// never sees it.
 /// </summary>
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 4;
+    public const ushort ProtocolVersion = 5;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -104,8 +105,11 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 4 (each lobby player's declared mods, OD-181).</summary>
     public const byte FirstProtocol4Type = 0x1E;
 
+    /// <summary>The lowest type that needs protocol 5 (the game's PLAYER ACTIONS friend and report items, OD-193 F-2).</summary>
+    public const byte FirstProtocol5Type = 0x1F;
+
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x1E;
+    public const byte LastType = 0x22;
 
     /// <summary>OD-181: the players a <see cref="RosterMods"/> names (the "my world" roster's own bound).</summary>
     public const int MaxRosterMembers = 16;
@@ -542,6 +546,72 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x1F, overlay → launcher (protocol 5, OD-193 F-2): the game's PLAYER ACTIONS popup opened on this player (decimal XUID); answer
+    /// with <see cref="PlayerState"/>. The hook asks through the overlay, which asks at most every few seconds per player.
+    /// </summary>
+    public sealed record PlayerStateQuery(string Xuid) : UiFrame
+    {
+        public override byte Type => 0x1F;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate() => CheckXuid(Xuid, "player state xuid");
+    }
+
+    /// <summary>0x20, launcher → overlay (protocol 5): which friend item the player's popup offers, <see cref="UiPlayerState"/>.</summary>
+    public sealed record PlayerState(string Xuid, byte State) : UiFrame
+    {
+        public override byte Type => 0x20;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        internal void Validate()
+        {
+            CheckXuid(Xuid, "player state xuid");
+            if (State > UiPlayerState.Max) throw new ProtocolException("invalid player state");
+        }
+    }
+
+    /// <summary>
+    /// 0x21, overlay → launcher (protocol 5): the player chose one of our PLAYER ACTIONS items. <c>Id</c> (non-zero) names this user
+    /// action (its answer echoes it); <c>Kind</c> <see cref="UiPlayerAction"/>; <c>Reason</c> <see cref="UiReport"/> for a report, else 0.
+    /// </summary>
+    public sealed record PlayerActionRequest(uint Id, string Xuid, byte Kind, byte Reason) : UiFrame
+    {
+        public override byte Type => 0x21;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate()
+        {
+            if (Id == 0) throw new ProtocolException("player action id 0");
+            CheckXuid(Xuid, "player action xuid");
+            if (Kind is < UiPlayerAction.Add or > UiPlayerAction.Report) throw new ProtocolException("invalid player action");
+            if (Kind == UiPlayerAction.Report ? Reason is < UiReport.Cheating or > UiReport.Other : Reason != 0)
+                throw new ProtocolException("invalid player action reason");
+        }
+    }
+
+    /// <summary>
+    /// 0x22, launcher → overlay (protocol 5): how <see cref="PlayerActionRequest"/> <c>Id</c> went: <c>Result</c> the text the game shows
+    /// (<see cref="UiPlayerResult"/>; the hook holds the words, in the game's language), <c>State</c> the player's state now.
+    /// </summary>
+    public sealed record PlayerActionDone(uint Id, string Xuid, byte Result, byte State) : UiFrame
+    {
+        public override byte Type => 0x22;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        internal void Validate()
+        {
+            if (Id == 0) throw new ProtocolException("player action id 0");
+            CheckXuid(Xuid, "player action xuid");
+            if (Result > UiPlayerResult.Max) throw new ProtocolException("invalid player action result");
+            if (State > UiPlayerState.Max) throw new ProtocolException("invalid player state");
+        }
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -846,6 +916,29 @@ public abstract record UiFrame
                     }
                 }
                 break;
+            case PlayerStateQuery q:
+                q.Validate();
+                w.Str(q.Xuid);
+                break;
+            case PlayerState s:
+                s.Validate();
+                w.Str(s.Xuid);
+                w.U8(s.State);
+                break;
+            case PlayerActionRequest a:
+                a.Validate();
+                w.U32(a.Id);
+                w.Str(a.Xuid);
+                w.U8(a.Kind);
+                w.U8(a.Reason);
+                break;
+            case PlayerActionDone d:
+                d.Validate();
+                w.U32(d.Id);
+                w.Str(d.Xuid);
+                w.U8(d.Result);
+                w.U8(d.State);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -919,12 +1012,17 @@ public abstract record UiFrame
             0x1B => DecodeVoiceState(ref r),
             0x1C => new VoiceCommand(r.U8(), r.Str(), r.U8()),
             0x1D => new VoiceDevice(r.U8(), r.Str(), r.Str()),
-            _ => DecodeRosterMods(ref r),
+            0x1E => DecodeRosterMods(ref r),
+            0x1F => new PlayerStateQuery(r.Str()),
+            0x20 => new PlayerState(r.Str(), r.U8()),
+            0x21 => new PlayerActionRequest(r.U32(), r.Str(), r.U8(), r.U8()),
+            _ => new PlayerActionDone(r.U32(), r.Str(), r.U8(), r.U8()),
         };
         r.End();
         switch (frame)
         {
-            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods:
+            case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
+                or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1126,6 +1224,12 @@ public abstract record UiIncoming
 
     /// <summary>VOICE_CHAT.md §15: the player picked a microphone or an output; answer with the new <see cref="UiFrame.VoiceState"/>.</summary>
     public sealed record VoiceDevice(UiFrame.VoiceDevice Request) : UiIncoming;
+
+    /// <summary>Protocol 5 (OD-193 F-2): the game's PLAYER ACTIONS asks a player's friend state; answer with <see cref="UiFrame.PlayerState"/>.</summary>
+    public sealed record PlayerStateAsk(UiFrame.PlayerStateQuery Request) : UiIncoming;
+
+    /// <summary>Protocol 5 (OD-193 F-2): one of our PLAYER ACTIONS items was chosen; answer with <see cref="UiFrame.PlayerActionDone"/>.</summary>
+    public sealed record PlayerAct(UiFrame.PlayerActionRequest Request) : UiIncoming;
 }
 
 /// <summary>
@@ -1342,6 +1446,74 @@ public static class UiWorldAction
     public const byte Report = 5;
 }
 
+/// <summary>
+/// <see cref="UiFrame.PlayerState"/> (OD-193 F-2): the friend item the game's PLAYER ACTIONS offers for a player, from the account's
+/// friend list (<c>GET /launcher/v1/friends</c>). REPORT PLAYER is offered in every state but <see cref="Own"/>.
+/// </summary>
+public static class UiPlayerState
+{
+    /// <summary>Not known (the list could not be read): only REPORT PLAYER.</summary>
+    public const byte Unknown = 0;
+
+    /// <summary>ADD FRIEND.</summary>
+    public const byte None = 1;
+
+    /// <summary>REMOVE FRIEND (a profile of a friend account).</summary>
+    public const byte Friend = 2;
+
+    /// <summary>ACCEPT FRIEND REQUEST (that account asked this one).</summary>
+    public const byte Incoming = 3;
+
+    /// <summary>CANCEL FRIEND REQUEST (this account asked that profile).</summary>
+    public const byte Outgoing = 4;
+
+    /// <summary>A profile of this account: no item.</summary>
+    public const byte Own = 5;
+
+    public const byte Max = Own;
+}
+
+/// <summary><see cref="UiFrame.PlayerActionRequest"/> kinds (OD-193 F-2).</summary>
+public static class UiPlayerAction
+{
+    public const byte Add = 1, Remove = 2, Accept = 3, Cancel = 4, Report = 5;
+}
+
+/// <summary>
+/// <see cref="UiFrame.PlayerActionDone"/> results: the text the game's own message popup shows (the hook holds it in English and
+/// pt-BR; <see cref="None"/> shows nothing).
+/// </summary>
+public static class UiPlayerResult
+{
+    public const byte None = 0;
+
+    /// <summary>202: the game's own "Your report was submitted." (Storefront 0xa139).</summary>
+    public const byte ReportSubmitted = 1;
+
+    /// <summary>The report was not taken (404 and every other failure): the game's "Your report failed to submit." (Storefront 0xf33d).</summary>
+    public const byte ReportFailed = 2;
+
+    /// <summary>429 <c>REQUEST.RATE_LIMITED</c>.</summary>
+    public const byte TryLater = 3;
+
+    public const byte FriendRequestSent = 4;
+
+    /// <summary>Friends now (an ADD that met their request, or an ACCEPT).</summary>
+    public const byte FriendAdded = 5;
+
+    public const byte FriendRemoved = 6;
+    public const byte RequestCancelled = 7;
+
+    /// <summary>404 <c>PORTAL.NOT_FOUND</c> on a friend action.</summary>
+    public const byte PlayerNotFound = 8;
+
+    /// <summary>409 <c>SOCIAL.LIMIT_REACHED</c>.</summary>
+    public const byte FriendLimit = 9;
+
+    public const byte ActionFailed = 10;
+    public const byte Max = ActionFailed;
+}
+
 /// <summary><c>WorldAction.reason</c> for a report.</summary>
 public static class UiReport
 {
@@ -1430,7 +1602,7 @@ public sealed class UiSession
     {
         ArgumentNullException.ThrowIfNull(frame);
         return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
-            && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4);
+            && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1467,13 +1639,15 @@ public sealed class UiSession
             return new UiIncoming.Hello(hello.OverlayVersion, [_status]);
         }
         if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
-            || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4)
+            || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }
         return frame switch
         {
             UiFrame.UiHello => throw new ProtocolException("second UiHello"),
+            UiFrame.PlayerStateQuery q => new UiIncoming.PlayerStateAsk(q),
+            UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),
             UiFrame.VoiceCommand v => new UiIncoming.Voice(v),
             UiFrame.VoiceDevice d => new UiIncoming.VoiceDevice(d),
             UiFrame.WorldsQueryV2 q => new UiIncoming.WorldsV2(q),

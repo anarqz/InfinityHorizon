@@ -238,6 +238,9 @@ void fi_gamer_card_apply(unsigned char *game_image);
 /* OD-154 VC-2b: the game's own player list and HUD show the overlay's voice chat (voice_ui.c;
    always on since OD-144 VC-T9, guarded by the game build and its bytes). */
 void fi_voice_ui_apply(unsigned char *game_image);
+/* OD-193 F-2: the game's PLAYER ACTIONS offers ADD / REMOVE / ACCEPT / CANCEL FRIEND and REPORT PLAYER through the
+   overlay's fi_overlay_player_* exports (player_actions.c; guarded by the game build, its bytes and slots). */
+void fi_player_actions_apply(unsigned char *game_image);
 /* voice_net.c (OD-154 VC-2): FiOverlayHost.voice_send, and the voice kinds (0x3E93, 0x3E94) the
    world's relay sends to this hook's sockets (proxy.c, carstate.c, livery_world.c): 1 when d is
    one of them (passed to the overlay's fi_overlay_voice if well formed), 0 for any other kind. */
@@ -450,7 +453,7 @@ int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char
                           size_t what_capacity);
 /* Foreign XUIDs (owner via the Mac, 2026-10-19, GAME_PLATFORM §3a): in a launcher session only
    the chosen profile (`own`) talks to the server. A URL naming another XUID (xuid(N), xuid=N):
-   no cloud line (`no_line`) → userpresence GET answered Offline here, anything else 503 here;
+   no cloud line (`no_line`) → userpresence GET sent (a friend's presence, OD-193), anything else 503 here;
    with a line → reads sent, writes 503 here. FI_ROUTE_JSON fills `json` (capacity `json_cap`). */
 int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned long long own, int no_line, char *json,
                           size_t json_cap);

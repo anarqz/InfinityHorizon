@@ -37,13 +37,53 @@ public sealed partial class ApiClient
     }
 
     /// <summary>
-    /// <c>POST /launcher/v1/reports {game, xuid, reason, worldId?}</c> → 202 <c>{id}</c> (CR-L25, OD-63): a
-    /// player the reporter shared a world with in the last 30 minutes; one per target a day.
+    /// <c>POST /launcher/v1/friends {game, xuid}</c> → 200 <see cref="FriendAddResult"/> (CR-S89, OD-193): a request to the account
+    /// of that profile, or the acceptance of its request. <paramref name="idempotencyKey"/> is the user action's (every retry
+    /// of that action reuses it).
+    /// </summary>
+    public Task<FriendAddResult> AddFriendByXuidAsync(string access, string game, string xuid, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(xuid);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        return SendAsync<FriendAddResult>(HttpMethod.Post, Core, "/launcher/v1/friends", new FriendAdd { Game = game, Xuid = xuid }, access, idempotencyKey, cancellation);
+    }
+
+    /// <summary><c>POST /launcher/v1/friends/{friendId}/accept</c> → 200 <see cref="Friend"/> (CORE_API.md §4.1; any XUID of the asker).</summary>
+    public Task<Friend> AcceptFriendAsync(string access, string friendId, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(friendId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        return SendAsync<Friend>(HttpMethod.Post, Core, $"/launcher/v1/friends/{Uri.EscapeDataString(friendId)}/accept", null, access, idempotencyKey, cancellation);
+    }
+
+    /// <summary>
+    /// <c>DELETE /launcher/v1/friends/{friendId}</c> → 204 (CORE_API.md §4.1): unfriends, cancels the caller's request and declines
+    /// theirs, whichever is there.
+    /// </summary>
+    public async Task RemoveFriendAsync(string access, string friendId, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(friendId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        await SendAsync<System.Text.Json.JsonElement?>(HttpMethod.Delete, Core, $"/launcher/v1/friends/{Uri.EscapeDataString(friendId)}", null, access, idempotencyKey, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>POST /launcher/v1/reports {game, xuid, reason, worldId?}</c> → 202 <c>{id}</c> (CR-L25, OD-63; CR-S90, OD-193): any profile of the
+    /// game but one's own; with <c>worldId</c> only a player the reporter shared that world with in the last 30 minutes. One per
+    /// target a day.
     /// </summary>
     public Task<GameReportResult> ReportAsync(string access, GameReport report, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(report);
         return SendAsync<GameReportResult>(HttpMethod.Post, Core, "/launcher/v1/reports", report, access, idempotent: true, cancellation);
+    }
+
+    /// <summary>As <see cref="ReportAsync(string, GameReport, CancellationToken)"/> with the user action's <c>Idempotency-Key</c> (a retry reuses it).</summary>
+    public Task<GameReportResult> ReportAsync(string access, GameReport report, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        return SendAsync<GameReportResult>(HttpMethod.Post, Core, "/launcher/v1/reports", report, access, idempotencyKey, cancellation);
     }
 
     /// <summary>

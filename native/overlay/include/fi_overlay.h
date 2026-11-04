@@ -138,6 +138,48 @@ __declspec(dllexport) void fi_overlay_voice_mute(uint64_t xuid, int32_t muted);
  * never blocks. Absent export (an older overlay): the hook drops them. */
 __declspec(dllexport) void fi_overlay_voice(const uint8_t *datagram, uint32_t size);
 
+/* Optional exports (OD-193 F-2; resolve with GetProcAddress, absent before): the game's own PLAYER ACTIONS popup offers ADD /
+ * REMOVE / ACCEPT / CANCEL FRIEND and REPORT PLAYER. The hook adds the items; the launcher holds the account's friend list and
+ * makes the calls (UI pipe protocol 5). Any thread, return at once, never wait for the pipe.
+ *
+ * fi_overlay_player_state(xuid): the friend item to offer, FI_PLAYER_*; FI_PLAYER_UNKNOWN until the launcher answered (then
+ * only REPORT PLAYER). It asks the launcher when the state is unknown or older than a few seconds, so a popup that keeps asking
+ * sees a change. */
+#define FI_PLAYER_UNKNOWN 0u  /* not known yet (or no launcher) */
+#define FI_PLAYER_NONE 1u     /* ADD FRIEND */
+#define FI_PLAYER_FRIEND 2u   /* REMOVE FRIEND */
+#define FI_PLAYER_INCOMING 3u /* ACCEPT FRIEND REQUEST */
+#define FI_PLAYER_OUTGOING 4u /* CANCEL FRIEND REQUEST */
+#define FI_PLAYER_OWN 5u      /* a profile of this account: no item at all */
+__declspec(dllexport) uint32_t fi_overlay_player_state(uint64_t xuid);
+
+/* fi_overlay_player_action(xuid, kind, reason): one user action (kind FI_PLAYER_ACT_*; reason FI_REPORT_* for a report, else 0).
+ * Returns its id (non-zero), or 0 when it cannot go (bad arguments, no launcher). */
+#define FI_PLAYER_ACT_ADD 1u
+#define FI_PLAYER_ACT_REMOVE 2u
+#define FI_PLAYER_ACT_ACCEPT 3u
+#define FI_PLAYER_ACT_CANCEL 4u
+#define FI_PLAYER_ACT_REPORT 5u
+#define FI_REPORT_CHEATING 1u
+#define FI_REPORT_ABUSE 2u
+#define FI_REPORT_OTHER 3u
+__declspec(dllexport) uint32_t fi_overlay_player_action(uint64_t xuid, uint32_t kind, uint32_t reason);
+
+/* fi_overlay_player_result(id, &result, &state): 1 answered (FI_PLAYER_RESULT_* and the player's FI_PLAYER_* state now; the id is
+ * forgotten), 0 still waiting, -1 an id unknown here (never made, already read, or unanswered for 60 s). */
+#define FI_PLAYER_RESULT_NONE 0u              /* nothing to show (one's own profile) */
+#define FI_PLAYER_RESULT_REPORT_SUBMITTED 1u
+#define FI_PLAYER_RESULT_REPORT_FAILED 2u
+#define FI_PLAYER_RESULT_TRY_LATER 3u
+#define FI_PLAYER_RESULT_REQUEST_SENT 4u
+#define FI_PLAYER_RESULT_FRIENDS 5u
+#define FI_PLAYER_RESULT_REMOVED 6u
+#define FI_PLAYER_RESULT_CANCELLED 7u
+#define FI_PLAYER_RESULT_NOT_FOUND 8u
+#define FI_PLAYER_RESULT_LIMIT 9u
+#define FI_PLAYER_RESULT_FAILED 10u
+__declspec(dllexport) int32_t fi_overlay_player_result(uint32_t id, uint32_t *result, uint32_t *state);
+
 #ifdef __cplusplus
 }
 #endif
