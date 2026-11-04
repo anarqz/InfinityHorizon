@@ -93,6 +93,8 @@ public sealed partial class WorldsBridge
     /// </summary>
     public static readonly TimeSpan FreeRoamLeftGrace = TimeSpan.FromSeconds(30);
     private CancellationTokenSource? _freeRoamLeave;
+    // the grace loop's "still pending → away" and GameJoined's take of the wait, as one step each
+    private readonly object _awayGate = new();
 
     // when a lobby ask was last answered with the world kept (Ready), as Now's UTC ticks; 0: none since the last leave
     private long _lobbyReadyTicks;
@@ -126,6 +128,9 @@ public sealed partial class WorldsBridge
         var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _onlineStop.Token);
         CancelFreeRoamLeave(Interlocked.Exchange(ref _freeRoamLeave, pending)); // a new leave starts the wait again
         var world = HostedWorldId ?? Volatile.Read(ref _seatWorld);
+        // W-12: a car meet invitation's session moves the game within this same world (the host's 201, or a joiner leaving its car meet)
+        if (HostedWorldId is null) JoinerLeftCarMeet();
+        SessionSwitchLeft(world);
         var due = false;
         var held = false;
         long heldSince = 0, heldHours = 0;
@@ -137,18 +142,34 @@ public sealed partial class WorldsBridge
                 (held, heldSince) = (true, _clock.GetTimestamp());
                 _log($"worlds: the host's game left {stays}; it stays open while {others} other player(s) remain");
             }
-            else if (world is not null) _log($"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
+            else if (world is not null && SessionSwitchHolds(world) is null)
+                _log($"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
+            var wait = FreeRoamLeftGrace;
             while (true)
             {
-                await Task.Delay(FreeRoamLeftGrace, _clock, pending.Token).ConfigureAwait(false);
+                await Task.Delay(wait, _clock, pending.Token).ConfigureAwait(false);
+                wait = FreeRoamLeftGrace;
                 if (Volatile.Read(ref _freeRoamLeave) != pending) break; // called off meanwhile
+                // W-12: the game moves into its car meet session in this world: no close, no leave and no hostAway until it is
+                // there or SessionSwitchBudget runs out (then the rules below apply as before)
+                if (SessionSwitchHolds(HostedWorldId ?? Volatile.Read(ref _seatWorld)) is { } switching)
+                {
+                    wait = switching < FreeRoamLeftGrace ? switching : FreeRoamLeftGrace;
+                    _log($"worlds: {HostedWorldId ?? Volatile.Read(ref _seatWorld)} stays: the game is moving into its car meet session "
+                        + $"({(int)Math.Ceiling(switching.TotalSeconds)} s of the hold left)");
+                    continue;
+                }
                 // a hosted world that still has other players (free roam, Road Trip or car meet) stays for them (live, test.8 and
                 // T28: the host's game left its session after a race while the other player drove on); it is weighed again later
                 if (HostedWorldId is { } kept && await OtherPlayersAsync(pending.Token).ConfigureAwait(false) is var players and > 0)
                 {
-                    if (Volatile.Read(ref _freeRoamLeave) != pending) break; // the game joined again while the players were read
-                    // CR-L49: past the grace the host is away: its heartbeat says so until its game is back in the world
-                    SetHostAway(true, $"its game left free roam {(int)FreeRoamLeftGrace.TotalSeconds} s ago");
+                    // CR-L49: past the grace the host is away: its heartbeat says so until its game is back in the world. The check
+                    // and the set are one step with GameJoined's (W-12 review: a join between them left hostAway set)
+                    lock (_awayGate)
+                    {
+                        if (Volatile.Read(ref _freeRoamLeave) != pending) break; // the game joined again while the players were read
+                        SetHostAway(true, $"its game left free roam {(int)FreeRoamLeftGrace.TotalSeconds} s ago");
+                    }
                     if (!held)
                     {
                         (held, heldSince) = (true, _clock.GetTimestamp());
@@ -208,9 +229,12 @@ public sealed partial class WorldsBridge
     public void GameJoined(bool join = false)
     {
         // the wait is taken first, so a grace loop waking meanwhile sees it called off before it says the host is away again
-        var pending = Interlocked.Exchange(ref _freeRoamLeave, null);
+        CancellationTokenSource? pending;
+        lock (_awayGate) pending = Interlocked.Exchange(ref _freeRoamLeave, null); // after any away the loop already said
+        SessionSwitchJoined(); // W-12: a move into a car meet session ends here
         // a guest's join (detail join:…) is the seat's proof: no give-up; OD-191: never bound to a car meet seat that is moving
         // W-6: with a seat staged it is installed first and the join bound to it
+        if (join) JoinedFor(); // W-12: the lobby this connection is (a car meet's, after a car meet ask)
         if (join) { if (!JoinStaged() && !HoldJoinForGroupSeat()) { SeatPlays("the game joined"); GameInWorld(true); } }
         else { SetHostAway(false, "its game joined it again"); HostJoined(); } // CR-L49: the host's game is back in its world; W-10
         if (pending is null) return;
@@ -246,6 +270,7 @@ public sealed partial class WorldsBridge
         if (result == FreeRoamResult.Ready)
         {
             Interlocked.Exchange(ref _lobbyReadyTicks, Now.UtcTicks); // the next leave of free roam is this lobby's
+            Volatile.Write(ref _readyKind, kind + 1); // W-12: the lobby the game's next world connection is
             ArmGiveUp(kind); // a seat that never played gets SeatGiveUp to start playing; hosting never
         }
         return result;
@@ -270,6 +295,7 @@ public sealed partial class WorldsBridge
     public Task<byte> EnsureFreeRoamWorldAsync(byte kind, CancellationToken cancellation)
     {
         CancelFreeRoamLeave(); // the game left free roam for this ask: its world stays and is weighed here
+        SessionSwitchAsked(); // W-12: matchmaking of its own, not a move into an invitation's session
         if (!OnlineOpen) return Task.FromResult(Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)"));
         if (StaysAtOnce(kind)) return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
         lock (_freeRoamState)
