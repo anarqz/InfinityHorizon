@@ -146,6 +146,7 @@ pub trait GameWorld: std::marker::Send {
     fn close_all(&mut self, out: &mut Vec<Send>);
 
     /// `WorldState`'s game-dependent fields: `peers`, `lobbyPlayers`, `activity`, `engines`,
+    /// `inProgress` (OD-194: `true` while the activity takes no newcomers, else absent),
     /// `hostInWorld` (contract §4.5).
     fn state(&self) -> Map<String, Value>;
 

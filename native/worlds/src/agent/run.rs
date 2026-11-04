@@ -78,6 +78,9 @@ struct World {
     group: bool,
     /// Somebody was in it once (a group world closes when it empties again).
     seen_peers: bool,
+    /// OD-194: its activity is past the point newcomers may join (a Road Trip past its vote):
+    /// announced, so matchmaking places nobody else in it, and not counted as the spare.
+    in_progress: bool,
     opened: Instant,
 }
 
@@ -610,6 +613,12 @@ impl Agent {
                 let handshaking = ev.get("handshaking").and_then(Value::as_u64).unwrap_or(0);
                 w.peers = peers;
                 w.seen_peers |= !w.peers.is_empty();
+                let in_progress = ev.get("inProgress").and_then(Value::as_bool) == Some(true);
+                if in_progress != w.in_progress {
+                    // announced at once: placement stops (or starts again) sending newcomers
+                    w.in_progress = in_progress;
+                    w.next_announce = Instant::now();
+                }
                 w.busy = grants > 0 || handshaking > 0;
                 if w.peers.is_empty() && !w.busy {
                     w.idle_since.get_or_insert_with(Instant::now);
@@ -841,6 +850,7 @@ impl Agent {
             last_admission: None,
             group: true,
             seen_peers: false,
+            in_progress: false,
             opened: now,
         });
         log::info(log_ids::AGENT_WORLD_OPENED)
@@ -931,7 +941,11 @@ impl Agent {
         let Some(w) = self.worlds.iter().find(|w| w.id == id) else {
             return;
         };
-        let body = json!({"peers": w.peers, "activity": w.activity}).to_string();
+        let mut body = json!({"peers": w.peers, "activity": w.activity});
+        if w.in_progress {
+            body["inProgress"] = Value::Bool(true);
+        }
+        let body = body.to_string();
         let key = w.announce_key.clone();
         let target = format!("{}/announce", Self::world_target(id));
         let reply = self.client.call(
@@ -1066,7 +1080,11 @@ impl Agent {
                 .iter()
                 .filter(|w| !w.group && w.mode == mode && w.activity == activity)
                 .collect();
-            let free = group.iter().filter(|w| w.peers.len() < max).count();
+            // OD-194: a Road Trip past its vote takes no newcomers: it is no spare
+            let free = group
+                .iter()
+                .filter(|w| w.peers.len() < max && !w.in_progress)
+                .count();
             if free == 0 {
                 let server_full = self.server_full_until.is_some_and(|t| now < t);
                 let reason = if self.worlds.len() >= self.engine_cap.max(1) {
@@ -1160,6 +1178,7 @@ impl Agent {
                     last_admission: None,
                     group: false,
                     seen_peers: false,
+                    in_progress: false,
                     opened: now,
                 });
                 log::info(log_ids::AGENT_WORLD_OPENED)
