@@ -4,9 +4,11 @@
 //! Online Free Roam from the meet (26); the others get a 20 s countdown and join or cancel (27).
 //! When it ends the engine asks its world for one shared session (`world.gameSession.request`)
 //! for the starter and everybody who joined; the joiners are told to wait (29, wait), then where
-//! to go (32, plus CarMeetSynced vars 16/17). Any failure, or the starter leaving, cancels it for
-//! everybody (invite type 0); the players already waiting first get 29(none), which ends their
-//! wait. Updates go out reliably, never re-broadcast on a timer.
+//! to go (32, plus CarMeetSynced vars 16/17). Any failure, the starter leaving or backing out of
+//! its own invitation (27), or a Road Trip countdown that ends with nobody but its starter
+//! (OD-183: no solo Road Trip), cancels it for everybody (invite type 0); the players already
+//! waiting first get 29(none), which ends their wait. Updates go out reliably, never
+//! re-broadcast on a timer.
 
 use std::sync::Arc;
 
@@ -325,7 +327,7 @@ impl Engine {
 
     /// 27: a player joins or leaves the running invitation.
     pub(super) fn join_or_cancel(&mut self, serial: u64, body: &Bits) {
-        if self.car_meet.stage != InviteStage::Joining || self.car_meet.starter == Some(serial) {
+        if self.car_meet.stage != InviteStage::Joining {
             return;
         }
         let Some(index) = self.peer(serial).map(|p| p.index) else {
@@ -340,6 +342,15 @@ impl Engine {
         }
         // a game-mode invitation's bit reads the other way round: accepting arrives as 0
         let join = bit == 0;
+        if self.car_meet.starter == Some(serial) {
+            // live test 2026-11-04: the starter backing out of its own invitation was ignored, so
+            // the countdown ran on and made a session its game no longer waited for (it froze)
+            if !join {
+                self.peer_noted(serial, "carmeet.starter_left", vec![json!(index)]);
+                self.cancel_invite("its starter backed out");
+            }
+            return;
+        }
         let m = &mut self.car_meet;
         if join && !m.joined.contains(&serial) {
             m.joined.push(serial);
@@ -389,6 +400,11 @@ impl Engine {
                     .filter(|s| self.alive(*s))
                     .collect();
                 self.car_meet.joined = joined.clone();
+                // OD-183: a Road Trip is for two players or more; nobody joined the starter
+                if self.car_meet.kind == INVITE_ROAD_TRIP && joined.len() < 2 {
+                    self.cancel_invite("nobody joined the road trip");
+                    return;
+                }
                 if !self.policy.can_create_game_session() {
                     self.cancel_invite("this host cannot create sessions");
                     return;
@@ -588,16 +604,18 @@ mod tests {
         let mut e = car_meet();
         e.set_official_car_meet(road_trip);
         let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_102);
+        let joiner = testkit::seat(&mut e, 2, 1_000_000_000_000_104);
         let mut body = Bits::new();
         body.push(u64::from(kind), 2).push(0, 32);
         e.invite_request(starter, &body);
+        join(&mut e, joiner, true);
         e.now += CAR_MEET_JOIN_MS + 1;
         e.tick_car_meet();
         e.take_events()
             .into_iter()
             .filter_map(|ev| match ev {
                 Event::CreateGameSession { kind, xuids, .. } => {
-                    assert_eq!(xuids, vec![1_000_000_000_000_102]);
+                    assert_eq!(xuids, vec![1_000_000_000_000_102, 1_000_000_000_000_104]);
                     Some(kind)
                 }
                 _ => None,
@@ -631,6 +649,65 @@ mod tests {
         // a game-mode answer: accepting arrives as 0
         body.push(u64::from(!accept), 1).push(2, 2);
         e.join_or_cancel(serial, &body);
+    }
+
+    fn road_trip_invite(e: &mut Engine, starter: u64) {
+        let mut body = Bits::new();
+        body.push(u64::from(INVITE_ROAD_TRIP), 2).push(0, 32);
+        e.invite_request(starter, &body);
+    }
+
+    fn sessions_asked(e: &mut Engine) -> usize {
+        e.take_events()
+            .into_iter()
+            .filter(|ev| matches!(ev, Event::CreateGameSession { .. }))
+            .count()
+    }
+
+    /// Live test 2026-11-04: the starter backs out after the only joiner left; the countdown
+    /// must not run on into a session for a game that no longer waits for one.
+    #[test]
+    fn the_starter_backing_out_cancels_its_invitation() {
+        let mut e = car_meet();
+        e.set_official_car_meet(true);
+        let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_102);
+        let joiner = testkit::seat(&mut e, 2, 1_000_000_000_000_104);
+        road_trip_invite(&mut e, starter);
+        join(&mut e, joiner, true);
+        join(&mut e, joiner, false);
+        join(&mut e, starter, true); // the starter's own accept changes nothing
+        assert_eq!(e.car_meet.stage, InviteStage::Joining);
+        join(&mut e, starter, false);
+        assert_eq!(e.car_meet.stage, InviteStage::Idle, "cancelled at once");
+        assert_eq!(
+            notes(&mut e, "carmeet.cancelled"),
+            vec![vec![json!("its starter backed out")]]
+        );
+        e.now += CAR_MEET_JOIN_MS + 1;
+        e.tick_car_meet();
+        assert_eq!(sessions_asked(&mut e), 0);
+    }
+
+    /// OD-183: a Road Trip countdown that ends with its starter alone asks for no session.
+    #[test]
+    fn a_road_trip_nobody_joined_is_cancelled_when_its_countdown_ends() {
+        let mut e = car_meet();
+        e.set_official_car_meet(true);
+        let starter = testkit::seat(&mut e, 1, 1_000_000_000_000_102);
+        road_trip_invite(&mut e, starter);
+        e.now += CAR_MEET_JOIN_MS + 1;
+        e.tick_car_meet();
+        assert_eq!(e.car_meet.stage, InviteStage::Idle);
+        let events = e.take_events();
+        assert!(
+            !events
+                .iter()
+                .any(|ev| matches!(ev, Event::CreateGameSession { .. }))
+        );
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            Event::Note { id: "carmeet.cancelled", args } if args == &vec![json!("nobody joined the road trip")]
+        )));
     }
 
     #[test]
