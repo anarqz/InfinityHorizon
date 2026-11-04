@@ -140,12 +140,21 @@ public sealed record InviteList
     public required string GeneratedAt { get; init; }
 }
 
-/// <summary><c>POST /launcher/v1/friends</c> body.</summary>
+/// <summary>
+/// <c>POST /launcher/v1/friends</c> body: exactly one of <see cref="Gamertag"/> and <see cref="Xuid"/> (CR-S89, OD-193: the game's
+/// PLAYER ACTIONS names the player by XUID).
+/// </summary>
 public sealed record FriendAdd
 {
     public required string Game { get; init; }
 
-    public required string Gamertag { get; init; }
+    /// <summary>The plain name (OD-120).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Gamertag { get; init; }
+
+    /// <summary>A decimal XUID of any profile of the other account in <see cref="Game"/>.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Xuid { get; init; }
 }
 
 /// <summary><c>POST /launcher/v1/friends</c> → 200: <c>requested</c> (with the request) or <c>friends</c> (with the friend).</summary>

@@ -52,6 +52,16 @@
 //        (decimal), u8 mods 1..32 x {str name (<= 64 B: the catalog's name, else the mod's id), str version (<= 16 B)}}}, sent
 //        after every 0x0E MyWorld: only the players with mods (anyone else uses none). LobbyRow.modsMatch is always 1 since
 //        OD-181 (mods never block a join) and LobbyRow's mod id is that same display name.
+// Protocol 5 (OD-193 F-2): the game's own PLAYER ACTIONS popup gets ADD / REMOVE / ACCEPT / CANCEL FRIEND and REPORT PLAYER (the
+// hook adds the items and asks through this overlay's fi_overlay_player_* exports; the launcher holds the friend list and the calls)
+//   0x1F PlayerStateQuery, overlay -> launcher {str xuid (decimal)}
+//   0x20 PlayerState, launcher -> overlay {str xuid, u8 state (0 unknown, 1 none: ADD, 2 friend: REMOVE, 3 incoming: ACCEPT,
+//        4 outgoing: CANCEL, 5 own profile: no item)}
+//   0x21 PlayerActionRequest, overlay -> launcher {u32 id (non-zero), str xuid, u8 kind (1 add, 2 remove, 3 accept, 4 cancel,
+//        5 report), u8 reason (report: 1 cheating, 2 abuse, 3 other; else 0)}
+//   0x22 PlayerActionDone, launcher -> overlay {u32 id, str xuid, u8 result (0 none, 1 report submitted, 2 report failed, 3 try
+//        later, 4 friend request sent, 5 friends now, 6 friend removed, 7 request cancelled, 8 player not found, 9 friend limit,
+//        10 failed), u8 state (as 0x20)}
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -62,7 +72,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 4;
+constexpr uint16_t kUiProtocol = 5;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
@@ -531,6 +541,80 @@ inline std::vector<uint8_t> EncodeRosterMods(const RosterMods &m) {
             wire::Str(b, mod.version);
         }
     }
+    return b;
+}
+
+// ---------------------------------------------------------------- PLAYER ACTIONS (protocol 5, OD-193 F-2)
+enum : uint8_t { kPlayerUnknown = 0, kPlayerNone = 1, kPlayerFriend = 2, kPlayerIncoming = 3, kPlayerOutgoing = 4, kPlayerOwn = 5,
+                 kPlayerStateMax = kPlayerOwn };
+enum : uint8_t { kPlayerAdd = 1, kPlayerRemove = 2, kPlayerAccept = 3, kPlayerCancel = 4, kPlayerReport = 5 };
+enum : uint8_t { kReportCheating = 1, kReportAbuse = 2, kReportOther = 3 };
+constexpr uint8_t kPlayerResultMax = 10;
+
+// The kind and reason rule both ends check (UiFrame.PlayerActionRequest.Validate).
+inline bool PlayerActionValid(uint8_t kind, uint8_t reason) {
+    if (kind < kPlayerAdd || kind > kPlayerReport) return false;
+    return kind == kPlayerReport ? reason >= kReportCheating && reason <= kReportOther : reason == 0;
+}
+
+inline std::vector<uint8_t> EncodePlayerStateQuery(const std::string &xuid) {
+    std::vector<uint8_t> b;
+    wire::Str(b, xuid);
+    return b;
+}
+inline std::vector<uint8_t> EncodePlayerActionRequest(uint32_t id, const std::string &xuid, uint8_t kind, uint8_t reason) {
+    std::vector<uint8_t> b;
+    wire::U32(b, id);
+    wire::Str(b, xuid);
+    wire::U8(b, kind);
+    wire::U8(b, reason);
+    return b;
+}
+
+struct PlayerStateFrame {
+    std::string xuid;
+    uint8_t state = kPlayerUnknown;
+};
+inline bool DecodePlayerState(const uint8_t *body, size_t size, PlayerStateFrame &out) {
+    wire::Reader r{body, size};
+    PlayerStateFrame f;
+    f.xuid = r.Text(kMaxXuid);
+    f.state = r.U8();
+    if (!XuidText(f.xuid) || f.state > kPlayerStateMax) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(f);
+    return true;
+}
+inline std::vector<uint8_t> EncodePlayerState(const PlayerStateFrame &f) {
+    std::vector<uint8_t> b;
+    wire::Str(b, f.xuid);
+    wire::U8(b, f.state);
+    return b;
+}
+
+struct PlayerActionDone {
+    uint32_t id = 0;
+    std::string xuid;
+    uint8_t result = 0, state = kPlayerUnknown;
+};
+inline bool DecodePlayerActionDone(const uint8_t *body, size_t size, PlayerActionDone &out) {
+    wire::Reader r{body, size};
+    PlayerActionDone d;
+    d.id = r.U32();
+    d.xuid = r.Text(kMaxXuid);
+    d.result = r.U8();
+    d.state = r.U8();
+    if (d.id == 0 || !XuidText(d.xuid) || d.result > kPlayerResultMax || d.state > kPlayerStateMax) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(d);
+    return true;
+}
+inline std::vector<uint8_t> EncodePlayerActionDone(const PlayerActionDone &d) {
+    std::vector<uint8_t> b;
+    wire::U32(b, d.id);
+    wire::Str(b, d.xuid);
+    wire::U8(b, d.result);
+    wire::U8(b, d.state);
     return b;
 }
 

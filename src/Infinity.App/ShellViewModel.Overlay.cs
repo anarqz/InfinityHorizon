@@ -75,6 +75,8 @@ public sealed partial class ShellViewModel
         var devLan = DevLanAdmission(mm);
         var relayReports = RelayReports;
         var gamertag = _gate.ProfileTag; // CR-L40 §4: the name of a lobby FREE ROAM ONLINE opens
+        // OD-193 F-2: this account's own profiles get no friend item in the game's PLAYER ACTIONS (read here, on the shell's thread)
+        IReadOnlyCollection<string> ownXuids = Profiles.Select(p => p.Xuid).Append(xuid).Where(x => !string.IsNullOrEmpty(x)).ToHashSet(StringComparer.Ordinal);
         // CR-L50: the dedicated engine only when a development build selects it (WorldEngine); one health for the session
         var dedicatedWorlds = DedicatedWorlds(xuid, relayKeys, devLan, ProofClock(session), isPlayer: true,
             key => _commands?.Writer.TryWrite(new SupervisorCommand.OverlayToast(new UiFrame.Toast(UiLevel.Warn, 2, 50, S[key]))));
@@ -89,7 +91,12 @@ public sealed partial class ShellViewModel
                 async (mute, ct) => await session.Api.VoiceMuteAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), mute, ct).ConfigureAwait(false), Log)
             { Accepted = target => voiceRoom?.MuteSent(target) };
             voiceRoom = new Infinity.Core.Voice.VoiceRoom(new Infinity.Core.Voice.VoiceStore(_stateDirectory), mode, xuid) { MuteReported = voiceMutes.Report };
-            return _playWorlds = new Infinity.Core.Matchmaking.WorldsBridge(
+            Infinity.Core.Matchmaking.WorldsBridge? bridge = null;
+            // OD-193 F-2: the game's PLAYER ACTIONS friend and report items; a report names the world only when the roster lists the player
+            var playerActions = new Infinity.Core.Matchmaking.PlayerActions(
+                new Infinity.Core.Matchmaking.ApiPlayerActions(session.Api, ct => session.Tokens.AccessAsync(ct)),
+                () => ownXuids, target => bridge?.RosterWorldOf(target), log: Log);
+            return _playWorlds = bridge = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], ProofClock(session), mode,
                 players => StartRelay(players, xuid, relayKeys, devLan, ProofClock(session)), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
                 updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IWorldHostRelay hosted
@@ -104,6 +111,7 @@ public sealed partial class ShellViewModel
                 StartRelayAsync = dedicatedWorlds is null ? null : dedicatedWorlds.StartAsync,
                 RelayFailureKey = dedicatedWorlds is null ? null : () => dedicatedWorlds.FailureKey,
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
+                PlayerActions = playerActions,
                 ModSet = mods,
                 ModName = LobbyModName, // OD-181: the catalog's names of the mods players declare
                 Gamertag = gamertag,

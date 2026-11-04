@@ -1133,6 +1133,24 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.VoiceDevice d when worlds is not null && !suspended: // §15
                                 if (worlds.VoiceDevice(d.Request) is { } deviceState) _ = overlay.SendFrameAsync(deviceState, stop.Token);
                                 break;
+                            case Overlay.UiIncoming.PlayerStateAsk ask when worlds?.PlayerActions is { } stateActions && !suspended:
+                                // OD-193 F-2: the friend item of the game's PLAYER ACTIONS for this player
+                                _ = ReplyAsync(overlay, async () => await stateActions.StateAsync(ask.Request, stop.Token).ConfigureAwait(false), stop.Token);
+                                break;
+                            case Overlay.UiIncoming.PlayerAct act when worlds?.PlayerActions is { } playerActions:
+                                // OD-193 F-2: one friend action or report; always answered (paused: refused), so the game's popup says something
+                                _ = ReplyAsync(overlay, async () => suspended
+                                        ? new Overlay.UiFrame.PlayerActionDone(act.Request.Id, act.Request.Xuid,
+                                            act.Request.Kind == Overlay.UiPlayerAction.Report ? Overlay.UiPlayerResult.ReportFailed : Overlay.UiPlayerResult.ActionFailed,
+                                            Overlay.UiPlayerState.Unknown)
+                                        : await playerActions.ActAsync(act.Request, stop.Token).ConfigureAwait(false), stop.Token, always: true);
+                                break;
+                            case Overlay.UiIncoming.PlayerAct unanswerable:
+                                // no player actions in this session (offline, no matchmaking): the game's popup still says it failed
+                                _ = ReplyAsync(overlay, () => Task.FromResult<Overlay.UiFrame>(new Overlay.UiFrame.PlayerActionDone(unanswerable.Request.Id,
+                                    unanswerable.Request.Xuid, unanswerable.Request.Kind == Overlay.UiPlayerAction.Report ? Overlay.UiPlayerResult.ReportFailed
+                                        : Overlay.UiPlayerResult.ActionFailed, Overlay.UiPlayerState.Unknown)), stop.Token, always: true);
+                                break;
                             case Overlay.UiIncoming.Act a when worlds is not null && !suspended:
                                 // the result, then the world as it is now
                                 _ = ReplyAsync(overlay, async () => await worlds.ActAsync(a.Request, stop.Token).ConfigureAwait(false), stop.Token)

@@ -102,6 +102,7 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     fi_game_ready_apply(game_image);
     fi_gamer_card_apply(game_image); /* OD-112: PLAYER DETAILS opens the overlay's player pane */
     fi_voice_ui_apply(game_image);   /* OD-154 VC-2b: voice chat in the game's UI (always on, VC-T9) */
+    fi_player_actions_apply(game_image); /* OD-193 F-2: friend and report items in PLAYER ACTIONS */
     fi_activity_apply(game_image);   /* OD-121: the activity report on RetrieveForUser */
     fi_mod_host_start(game_image);
     return 1;
