@@ -14,8 +14,10 @@
 //   scrolls with the focus and the mouse wheel. A join answered "closed" or "full" refreshes it: the
 //   list was older than the world. No queue for worlds: a full world is just full.
 // - Join reserves a seat only (matchmaking's handshake); the game's own Free Roam Online then
-//   lands the player in it. Before the first join or create of the session, the not-rated
-//   online-play warning (OD-54).
+//   lands the player in it. (OD-192: no online-play or public lobby warning any more.)
+// - OD-192: the tab is "User Lobbies" (only for hosting one's own lobby; official play needs nothing, matchmaking places the
+//   player). In an official lobby (MyWorld.official) it is the "Official Lobby" pane: the lobby, its players, their details,
+//   mute, voice volume, report and friend actions, never a lobby option; and no overlay notice shows (WorldsOfficial).
 // - A private or friends world is joined with its code (code_entry.cpp); create gives the host
 //   the code to share.
 // - Create: name (the keyboard; "{gamertag}'s lobby" by default, CR-L40 §4), audience (Everyone,
@@ -92,6 +94,7 @@ struct Shared {
 };
 std::mutex g_lock;
 Shared g_shared;
+std::atomic<bool> g_official{false}; // OD-192: g_shared.mine is an official world's (read without the lock: PushToast, the tab name)
 
 bool WorldAccessAllowed() {
     if (DevHost()) return true;
@@ -106,12 +109,11 @@ const char *AccessMessage(const Shared &sh) {
 }
 
 // ---------------------------------------------------------------- render-thread state
-enum class Screen { List, Warning, Busy, Create, Hosted, Member, Report, Confirm };
+enum class Screen { List, Busy, Create, Hosted, Member, Report, Confirm };
 Screen g_screen = Screen::List;
 WorldFilter g_filter = WorldFilter::All; // CR-L40: every lobby, no chip selected
 bool g_queried = false;                   // the list was asked since the guide opened
 bool g_hide_full = false;
-bool g_warned = false; // the online-play warning, once per game session
 int g_focus = 0;       // the list's focus: 0 the filter row, then the tiles
 int g_chip = 0;        // in the filter row: 0 Friends, 1 Close to me, 2 Global, 3 Hide full
 constexpr int kLastChip = 3;
@@ -120,7 +122,6 @@ DetailPane g_lobby_pane; // the focused or hovered row's details, rebuilt every 
 uint64_t g_seen_list = 0, g_seen_join = 0, g_seen_hosted = 0;
 std::string g_busy;    // what Busy says
 bool g_world_action_busy = false;
-std::function<void()> g_after_warning;
 
 // my world (OD-63)
 bool g_mine_refresh = true; // one explicit reconcile on open/action/manual refresh
@@ -298,40 +299,23 @@ void Query() {
     }
 }
 
-void WithWarning(std::function<void()> then) {
-    if (g_warned) {
-        then();
-        return;
-    }
-    g_after_warning = std::move(then);
-    g_screen = Screen::Warning;
-}
-
 void Join(const std::string &world, const std::string &code) {
     if (!GameReady() || !WorldAccessAllowed()) return;
-    WithWarning([world, code] {
-        if (!GameReady() || !WorldAccessAllowed()) return;
-        g_world_action_busy = false;
-        g_busy = T("Reserving your seat...", "Reservando seu lugar...");
-        g_screen = Screen::Busy;
-        if (DevHost()) {
-            g_dev_wait = 0.8f;
-            g_dev_kind = code == "00000000" ? 3 : 2;
-        } else {
-            SendJoinWorld(world, code);
-        }
-    });
+    g_world_action_busy = false;
+    g_busy = T("Reserving your seat...", "Reservando seu lugar...");
+    g_screen = Screen::Busy;
+    if (DevHost()) {
+        g_dev_wait = 0.8f;
+        g_dev_kind = code == "00000000" ? 3 : 2;
+    } else {
+        SendJoinWorld(world, code);
+    }
 }
 
 void JoinByCode() {
     if (!GameReady() || !WorldAccessAllowed()) return;
-    WithWarning([] {
-        OpenCodeEntry(T("Enter the lobby code", "Digite o código do lobby"), "0123456789", [](bool join, const std::string &code) {
-            if (join) {
-                g_warned = true; // already accepted on the way in
-                Join(std::string(), code);
-            }
-        });
+    OpenCodeEntry(T("Enter the lobby code", "Digite o código do lobby"), "0123456789", [](bool join, const std::string &code) {
+        if (join) Join(std::string(), code);
     });
 }
 
@@ -355,13 +339,10 @@ std::string DefaultLobbyName(const std::string &gamertag) {
 
 void StartCreate() {
     if (!GameReady() || !WorldAccessAllowed()) return;
-    WithWarning([] {
-        if (!GameReady() || !WorldAccessAllowed()) return;
-        g_create = Create{}; // Everyone; any of the four audiences for every host (OD-129)
-        g_create.name = DefaultLobbyName(ProfileGamertag());
-        g_create.voice = g_last_voice;
-        g_screen = Screen::Create;
-    });
+    g_create = Create{}; // Everyone; any of the four audiences for every host (OD-129)
+    g_create.name = DefaultLobbyName(ProfileGamertag());
+    g_create.voice = g_last_voice;
+    g_screen = Screen::Create;
 }
 
 void SubmitCreate() {
@@ -812,27 +793,6 @@ void Button(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, bool primary, const 
 
 int g_button = 0; // a two-button screen's focus: 0 the primary
 
-void DrawWarning(ImDrawList *dl, float x, float y, float w) {
-    y = Panel(dl, x, y, T("Before you play online", "Antes de jogar online"));
-    dl->AddText(f.icon_big, f.icon_big->FontSize, ImVec2(x, y), kAmber, kIconWarning);
-    y += 52 * s;
-    const char *text = T(
-        "Online play exchanges data with other players. Bugs and crashes are expected in public lobbies with unknown players. "
-        "Infinity mitigates problems where possible, but cannot prevent every problem.\n\nPrefer playing with people you trust.",
-        "Jogar online troca dados com outros jogadores. Bugs e travamentos são esperados em lobbies públicos com jogadores desconhecidos. "
-        "O Infinity mitiga os problemas quando possível, mas não consegue evitar todos eles.\n\nPrefira jogar com pessoas de confiança.");
-    Wrapped(dl, f.body, ImVec2(x, y), w, kText, text);
-    y += WrappedHeight(f.body, w, text) + 28 * s;
-    const float bh = 56 * s;
-    const ImVec2 a1(x, y), b1(x + w, y + bh);
-    Button(dl, a1, b1, g_button == 0, true, T("I understand, continue", "Entendi, continuar"));
-    if (Clicked(a1, b1)) { g_button = 0; g_accept = true; }
-    y += bh + 10 * s;
-    const ImVec2 a2(x, y), b2(x + w, y + bh);
-    Button(dl, a2, b2, g_button == 1, false, T("Back", "Voltar"));
-    if (Clicked(a2, b2)) { g_button = 1; g_accept = true; }
-}
-
 void DrawBusy(ImDrawList *dl, float x, float y, float w) {
     y += 60 * s;
     const float t = static_cast<float>(ImGui::GetTime());
@@ -1098,7 +1058,10 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
     g_mine_role = m.role;
     g_mine_world = m.world;
     const VoiceState voice = CurrentVoice();
-    const char *tag = m.role == 1 ? T("YOUR LOBBY", "SEU LOBBY") : m.role == 2 ? T("SEAT RESERVED", "LUGAR RESERVADO") : T("YOU ARE IN A LOBBY", "VOCÊ ESTÁ EM UM LOBBY");
+    // OD-192: an official lobby is its Official Lobby pane: the lobby and its players, never an option (the server fixes them)
+    const bool official = m.official && m.role != 1;
+    const char *tag = official ? T("OFFICIAL LOBBY", "LOBBY OFICIAL")
+                      : m.role == 1 ? T("YOUR LOBBY", "SEU LOBBY") : m.role == 2 ? T("SEAT RESERVED", "LUGAR RESERVADO") : T("YOU ARE IN A LOBBY", "VOCÊ ESTÁ EM UM LOBBY");
     TextAt(dl, f.tag, ImVec2(x, y), kPinkU, tag);
     y += 24 * s;
     dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + 44 * s), true);
@@ -1155,7 +1118,7 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
     Button(dl, a, b, g_mine_focus == 0, false, m.role == 1 ? T("Close lobby", "Fechar lobby") : T("Leave lobby", "Sair do lobby"));
     if (Clicked(a, b)) click = {0, layout::kStopCard};
     y += bh + 10 * s;
-    g_mine_voice_row = m.role == 1;
+    g_mine_voice_row = m.role == 1 && !official; // OD-192: nobody changes an official lobby's voice
     if (g_mine_voice_row) {
         const ImVec2 va(x, y), vb(x + w, y + 58 * s);
         VoiceSwitch(dl, va, vb, g_mine_focus == 1, voice);
@@ -1228,7 +1191,8 @@ std::vector<Choice> MemberChoices(const MemberRow &m) {
     std::vector<Choice> out;
     const VoiceState v = CurrentVoice();
     const uint8_t st = v.StateOf(m.xuid);
-    for (layout::MemberItem item : layout::MemberItems(g_mine_role == 1 && m.role != 0, m.friend_state)) {
+    // OD-192: no host action (remove, mute for the lobby) in an official lobby
+    for (layout::MemberItem item : layout::MemberItems(g_mine_role == 1 && m.role != 0 && !WorldsOfficial(), m.friend_state)) {
         switch (item) {
         case layout::MemberItem::Volume: out.push_back({kChoiceVolume, T("Voice volume", "Volume da voz"), true}); break;
         case layout::MemberItem::Mute:
@@ -1444,6 +1408,7 @@ void SetHosted(const HostedWorld &hosted) {
 
 void SetMyWorld(MyWorld mine) {
     std::lock_guard<std::mutex> lock(g_lock);
+    g_official.store(mine.role != 0 && mine.official, std::memory_order_relaxed); // OD-192
     g_shared.mine = std::move(mine);
     ++g_shared.mine_serial;
 }
@@ -1471,6 +1436,8 @@ void WorldsReset() {
 }
 
 bool WorldsCanRefresh() { return g_screen == Screen::List && WorldAccessAllowed(); }
+
+bool WorldsOfficial() { return g_official.load(std::memory_order_relaxed); }
 
 bool WorldsMuteHint() { return g_screen == Screen::List && g_showing_mine && g_mine_focus >= FirstPlayerItem(); }
 
@@ -1516,14 +1483,6 @@ bool WorldsNavigate(Nav nav) {
         case Nav::Accept: g_accept = true; return true;
         case Nav::Y: Query(); return true; // refresh
         default: return false;
-        }
-    case Screen::Warning:
-        switch (nav) {
-        case Nav::Up: g_button = 0; return true;
-        case Nav::Down: g_button = 1; return true;
-        case Nav::Accept: g_accept = true; return true;
-        case Nav::Back: g_screen = Screen::List; g_after_warning = nullptr; return true;
-        default: return true;
         }
     case Screen::Busy: return nav != Nav::Back || true; // waits for the launcher
     case Screen::Create:
@@ -1576,13 +1535,16 @@ bool WorldsNavigate(Nav nav) {
 }
 
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt) {
-    const char *warning = T(
-        "Public lobbies: bugs and crashes are expected with unknown players. Infinity mitigates problems where possible. Prefer people you trust.",
-        "Lobbies públicos: bugs e travamentos são esperados com jogadores desconhecidos. O Infinity mitiga os problemas quando possível. Prefira pessoas de confiança.");
-    const float warning_height = WrappedHeight(f.small, w, warning);
-    const float warning_y = bottom - warning_height;
-    Wrapped(dl, f.small, ImVec2(x, warning_y), w, kAmber, warning);
-    bottom = warning_y - 16 * s;
+    if (!WorldsOfficial()) { // OD-192: what User Lobbies is for (the Official Lobby pane needs no such line)
+        const char *about = T(
+            "User Lobbies are only for hosting your own private or public lobby. For official lobbies just play normally in-game: "
+            "matchmaking places you on official servers automatically.",
+            "Os Lobbies de usuários servem só para hospedar seu próprio lobby privado ou público. Para os lobbies oficiais, basta jogar "
+            "normalmente no jogo: o matchmaking coloca você nos servidores oficiais automaticamente.");
+        const float about_y = bottom - WrappedHeight(f.small, w, about);
+        Wrapped(dl, f.small, ImVec2(x, about_y), w, kTextDim, about);
+        bottom = about_y - 16 * s;
+    }
     dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, bottom), true);
     Shared sh;
     {
@@ -1591,10 +1553,9 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
     }
     g_roster = sh.roster_mods; // OD-181: the cards and the details column read it this frame
     const bool world_access = DevHost() || sh.access.Allowed(GetTickCount64());
-    if (!world_access && (g_screen == Screen::Warning || g_screen == Screen::Create || g_screen == Screen::Hosted
+    if (!world_access && (g_screen == Screen::Create || g_screen == Screen::Hosted
         || (g_screen == Screen::Busy && !g_world_action_busy))) {
         g_screen = Screen::List;
-        g_after_warning = nullptr;
         g_accept = false;
     }
     if (g_dev_wait >= 0) {
@@ -1760,19 +1721,6 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
                 Act(static_cast<uint8_t>(g_confirm), g_confirm == 3 ? g_member : MemberRow{}, 0);
             } else {
                 g_screen = g_confirm == 3 ? Screen::Member : Screen::List;
-            }
-            g_button = 0;
-        }
-        break;
-    case Screen::Warning:
-        DrawWarning(dl, x, y, w);
-        if (accept) {
-            if (g_button == 0) {
-                g_warned = true;
-                g_screen = Screen::List;
-                if (auto then = std::move(g_after_warning)) then();
-            } else {
-                g_screen = Screen::List;
             }
             g_button = 0;
         }

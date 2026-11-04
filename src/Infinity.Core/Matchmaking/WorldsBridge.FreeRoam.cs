@@ -46,6 +46,14 @@ public sealed partial class WorldsBridge
     private long _lobbiesFullAfter = -1;
     // OD-190: the seat's world when it is an official one (a quick join's, or a seat read or world read said so)
     private string? _seatOfficial;
+
+    /// <summary>
+    /// OD-192: the seat's world is an official one. Official play stays vanilla: no overlay notice is sent while it holds
+    /// (<see cref="Supervisor.OverlayChannel.Quiet"/>); notices show in user lobbies only. It holds after that seat ends too (its
+    /// "seat ended" and "left" notices stay quiet) until the player hosts a lobby or takes a seat in a player's one.
+    /// </summary>
+    public bool InOfficialLobby => !OwnWorld && Volatile.Read(ref _seatOfficial) is { } official
+        && (Volatile.Read(ref _seatWorld) is not { } world || world == official);
     // OD-190: the seat's world whose host changed activity while this guest held it, and what it ran before (a later other ask
     // "couldn't follow"); cleared when the seat changes, the host comes back to that activity, or the guest is with its host again
     private HostMoved? _hostMoved;

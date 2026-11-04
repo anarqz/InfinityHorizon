@@ -101,6 +101,7 @@ void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
 bool WorldsMuteHint();        // X mutes the focused player (OD-154; the footer's hint)
+bool WorldsOfficial();        // OD-192: the player is in an official lobby (any thread): the Official Lobby pane, no notices
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
 // A player's details in my lobby (their volume, mute, moderation, friend, report) fill the second column beside the
 // guide while open; the tab keeps showing the lobby. Drawn after DrawWorldsTab, x..x + w.

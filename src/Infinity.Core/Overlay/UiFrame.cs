@@ -264,10 +264,13 @@ public abstract record UiFrame
     /// open to Hardcore and Noob (the header's "Hardcore + Noob" badge). <c>Transport</c> and <c>Notice</c> (OD-160, after
     /// <c>AnyMode</c>, written only when <c>Transport</c> is not <see cref="UiTransport.Unknown"/>): the connection in use (u8
     /// <see cref="UiTransport"/>) and the lobby notice the overlay shows as given (the launcher's own localized text; an older overlay
-    /// ignores trailing bytes of this frame).
+    /// ignores trailing bytes of this frame). <c>Official</c> (OD-192, after <c>Notice</c>, written only when true; then
+    /// <c>Transport</c> and <c>Notice</c> are written even when unknown): the world is an official one (the overlay shows its
+    /// Official Lobby pane, offers no lobby option and shows no notice).
     /// </summary>
     public sealed record MyWorld(byte Role, string WorldId, string Name, string Host, string Code, byte Audience, byte Players, byte Max,
-        bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false, byte Transport = UiTransport.Unknown, string Notice = "") : UiFrame
+        bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false, byte Transport = UiTransport.Unknown, string Notice = "",
+        bool Official = false) : UiFrame
     {
         public override byte Type => 0x0E;
 
@@ -677,11 +680,12 @@ public abstract record UiFrame
                     w.U8(member.Friend);
                 }
                 w.Flag(m.AnyMode);
-                if (m.Transport != UiTransport.Unknown)
+                if (m.Transport != UiTransport.Unknown || m.Official)
                 {
                     if (m.Transport > UiTransport.Direct) throw new ProtocolException("invalid MyWorld.transport");
                     w.U8(m.Transport);
                     w.Str(m.Notice);
+                    if (m.Official) w.Flag(true); // OD-192
                 }
                 break;
             case WorldAction a:
@@ -988,8 +992,10 @@ public abstract record UiFrame
         if (r.IsEmpty) return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode);
         // OD-160: the connection in use and its notice (a launcher before it ends after anyMode)
         var transport = r.U8();
-        if (transport is UiTransport.Unknown or > UiTransport.Direct) throw new ProtocolException("invalid MyWorld.transport");
-        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, r.Str());
+        var notice = r.Str();
+        var official = !r.IsEmpty && r.Flag("MyWorld.official"); // OD-192: an unknown transport only ahead of it
+        if (transport > UiTransport.Direct || (transport == UiTransport.Unknown && !official)) throw new ProtocolException("invalid MyWorld.transport");
+        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, notice, official);
     }
 
     /// <summary>

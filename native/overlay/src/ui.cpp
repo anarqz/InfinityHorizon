@@ -759,7 +759,9 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
 
     // tabs
     const char *icons[] = {kIconHome, kIconWorld, kIconPeople, kIconSettings};
-    const char *names[] = {T("Home", "Início"), T("Lobbies", "Lobbies"), T("Friends", "Amigos"), T("Settings", "Ajustes")};
+    // OD-192: the lobby tab is "User Lobbies" (hosting one's own lobby), or the "Official Lobby" pane while in an official one
+    const char *names[] = {T("Home", "Início"), WorldsOfficial() ? T("Official Lobby", "Lobby oficial") : T("User Lobbies", "Lobbies de usuários"),
+                           T("Friends", "Amigos"), T("Settings", "Ajustes")};
     const float tw = (pw - 2 * pad) / kTabs;
     for (int i = 0; i < kTabs; ++i) {
         const float tx = x0 + pad + i * tw;
@@ -872,9 +874,13 @@ void SetConnectionDetails(uint8_t state, const std::string &text) {
     g_model.connection_at = GetTickCount64();
 }
 
+// OD-192: the one gate and the one hold of every notice. None shows in an official lobby (official play stays vanilla);
+// the launcher already sends its holds halved (OverlayNotices.Shortened), and this overlay's own default and bounds are
+// half of what they were (4.6 s, 1..30 s).
 void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl) {
+    if (WorldsOfficial()) return;
     std::lock_guard<std::mutex> lock(g_lock);
-    const float hold = ttl ? std::clamp(ttl / 10.0f, 1.0f, 30.0f) : 4.6f;
+    const float hold = ttl ? std::clamp(ttl / 10.0f, 0.5f, 15.0f) : 2.3f;
     g_toasts.Push({kind, title, body, 0, hold});
 }
 

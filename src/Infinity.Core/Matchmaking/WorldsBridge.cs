@@ -167,7 +167,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private readonly WorldOperationRetry _admissionsRetry = new(clock ?? TimeProvider.System, retryJitter);
     private readonly WorldOperationRetry _actionRetry = new(clock ?? TimeProvider.System, retryJitter);
     private readonly LobbyRoster _roster = new(ownXuid);
-    private readonly PublicWorldWarning _publicWarning = new();
     private UiFrame.MyWorld _mineSnapshot = NoWorld;
     private long _mineNextTicks, _mineEpoch, _mineReadTicks;
     // OD-107: settled background reads (no pending request, join or uncertainty) slow down.
@@ -179,7 +178,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     {
         var toasts = new List<UiFrame.Toast>();
         while (_freeRoamToasts.TryDequeue(out var freeRoam)) toasts.Add(freeRoam); // CR-L40: the lobby FREE ROAM ONLINE joined or opened
-        if (_publicWarning.Take()) toasts.Add(new(UiLevel.Warn, 2, 150, _text("worlds.public_warning")));
         toasts.AddRange(_roster.Drain().Select(change =>
             new UiFrame.Toast(UiLevel.Info, 0, 50, _text(change.Joined ? "worlds.player_joined" : "worlds.player_left")
                 .Replace("{player}", change.Gamertag, StringComparison.Ordinal))));
@@ -196,7 +194,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             if (reset)
             {
                 _roster.Reset();
-                _publicWarning.Reset();
                 _seatActivity = null; // a new seat's first read is never a change
                 _seatHostAway = null; // CR-L49: a new seat's host away is said afresh
                 Volatile.Write(ref _followHost, null); // nor does a change of a seat that is gone move the game
@@ -875,7 +872,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     (_mineId, _mineRole) = (null, UiWorldRole.None);
                     _lastRosterAt = null;
                     _roster.Reset();
-                    _publicWarning.Reset();
                     _seatActivity = null;
                     CrashContext?.ObserveWorld(null);
                     return _mineSnapshot = NoWorld;
@@ -947,7 +943,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     _lastRosterAt = DateTimeOffset.TryParse(boundedRoster!.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
                         System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
                 }
-                if (role is UiWorldRole.Hosting or UiWorldRole.Seated) _publicWarning.Observe(seat.WorldId, world.Audience);
                 ObserveNoticeWorld(world); // OD-160's notice: the world's modes and transport
                 ObserveActivity(seat);
                 CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
@@ -958,7 +953,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     ? boundedRoster!.Items.Select(i => (i.Xuid, i.Role == "host", i.Mods))
                     : world.Host.Xuid is { } host ? [(host, true, (IReadOnlyList<ModEntry>?)null)] : [], world.Mods, ModName));
                 return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.DisplayName, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
-                    WorldModes.OpenToBoth(world));
+                    WorldModes.OpenToBoth(world), Official: role != UiWorldRole.Hosting
+                        && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)); // OD-192
             }
         }
         catch (Exception e) when (HostFailure(e) || e is TimeoutException)
@@ -1207,7 +1203,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         Volatile.Write(ref _hostedVoice, settings.Voice);
                         _hostedPool = world.Pool;
                         Volatile.Write(ref _hostedWorldId, openingId);
-                        _publicWarning.Observe(openingId, world.Audience);
                     }
                     hosted = true;
                     Voice?.Creating(settings.Voice); // OD-154, CR-S67: the lobby's voice mode, the host's to change later
