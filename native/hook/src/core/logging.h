@@ -14,4 +14,8 @@ void log_append_value(const char *label, int value);
 /* This run's infinity.log in `directory`: the last one becomes infinity.previous.log, then the
    banner (MOD_BANNER) and the status line (status_get) start the new one. */
 void log_start(const wchar_t *directory);
+/* W-13: this run's infinity.log opened once for appending (INVALID_HANDLE_VALUE: no log), and one
+   complete line written through it with WriteFile only (no lock, no path lookup). */
+HANDLE log_open_append(void);
+void log_raw(HANDLE file, const char *line);
 #endif
