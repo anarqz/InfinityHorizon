@@ -310,6 +310,13 @@ public sealed partial class WorldsBridge
             Interlocked.Exchange(ref _lobbyReadyTicks, Now.UtcTicks); // the next leave of free roam is this lobby's
             Volatile.Write(ref _readyKind, kind + 1); // W-12: the lobby the game's next world connection is
             ArmGiveUp(kind); // a seat that never played gets SeatGiveUp to start playing; hosting never
+            // W-16 (c): a host's lobby ask answered from its own world (its car meet or Road Trip there too) is its game in that
+            // world: not away. The game's car meet connection to its own world sends no Event 3 (F-9: no "joined" line at
+            // 11:34:47Z), so GameJoined alone would leave a hostAway set by a held grace standing for the whole car meet.
+            // one step with the grace loop's check-and-set (the ask already took its wait, so a later loop step breaks). Only with the
+            // game loaded and no anti-cheat move running its own ask (review 5: neither is the host's game in its world)
+            if (OwnWorld && GameReadiness.CurrentGeneration is not null && Volatile.Read(ref _poolMoving) == 0)
+                lock (_awayGate) SetHostAway(false, $"its game asked for its {KindName(kind)} there");
         }
         return result;
     }
@@ -501,11 +508,32 @@ public sealed partial class WorldsBridge
             // test.11: a seat taken for another kind that never played is not this ask's world ("stay" left the game on FINDING
             // SESSION): it is let go (not on purpose) and this kind is placed as usual. No CancelMatchmaking: this ask is
             // the game's live matchmaking now.
+            // W-15 (live, worlds10 08:34:56 local): a player world (private, code or friends) that runs this ask's lobby IS its world:
+            // a guest joined it with a free roam seat and its game went straight to a car meet; dropping that seat sent it to the
+            // official car meet. Such a seat stays, now taken for this kind; test.11 goes on for official worlds and for player
+            // worlds that do not run the lobby. OD-197: the two car meet spots (lobby types 3 and 6) both ask through the game's
+            // one CarMeet hopper (kind 1) and a world's lobbies list only "carmeet", whose engine serves both spots: either
+            // spot stays.
             if (UnprovenOtherSeat(kind) is { } stale)
             {
-                var staleWorld = Volatile.Read(ref _seatWorld) ?? "its seat";
+                var staleWorld = Volatile.Read(ref _seatWorld);
+                var read = staleWorld is null ? PlayerWorldRead.Unknown : await PlayerWorldRunsAsync(staleWorld, kind, token).ConfigureAwait(false);
+                if (read.Runs && _seat.GrantId == stale.Grant && Volatile.Read(ref _seatWorld) == staleWorld)
+                {
+                    SeatTakenFor(stale.Grant, kind); // the seat is this ask's now (a later ask of this kind stays at once)
+                    return Decided(kind, FreeRoamResult.Ready, Staying($"its unproven {KindName(stale.Kind)} seat is kept: player world {read.Why}"));
+                }
+                // W-15 belt and braces: a seat let go on a car meet or Road Trip ask in a world just read as a player world (open, its host
+                // there, only not running the lobby now) is that ask's first choice, before any official quick join: the rejoin below
+                // reads it again and goes back only when it runs the lobby. Review 1/3: never after an official, gone, host-away or failed
+                // read, and never for a free roam ask (its rejoin does not read). Written before the DELETE, so the player's own Leave
+                // during it (LeftOnPurpose) still clears it (review 2); taken back when the seat was not this one's any more.
+                RecentWorld? back = null;
+                if (read.Player && kind != FreeRoamKind.FreeRoam && staleWorld is not null)
+                    Volatile.Write(ref _recentlyLeft, back = new RecentWorld(staleWorld, Now, CodeOf(staleWorld)));
                 if (await ReleaseUnprovenSeatAsync(stale.Grant, $"an unproven {KindName(stale.Kind)} seat dropped for a {KindName(kind)} ask").ConfigureAwait(false))
-                    _log($"worlds: {KindName(kind)}: dropped the unproven {KindName(stale.Kind)} seat in {staleWorld}; joining again");
+                    _log($"worlds: {KindName(kind)}: dropped the unproven {KindName(stale.Kind)} seat in {staleWorld ?? "its seat"}; joining again");
+                else if (back is not null) Interlocked.CompareExchange(ref _recentlyLeft, null, back);
             }
             if (OwnWorld) return Decided(kind, FreeRoamResult.Ready, Staying());
             string? moved = null;
@@ -576,6 +604,35 @@ public sealed partial class WorldsBridge
         if (seen.NeedsCode && recent.Code is null) return false;
         if (!seen.CanJoin && !(seen.NeedsCode && recent.Code is not null)) return false;
         return kind == FreeRoamKind.CarMeet ? seen.Lobbies.Contains(LobbyKinds.CarMeet) : seen.Activity == ActivityOf(kind);
+    }
+
+    // W-15: the seat's world is known official (the seat reads, a quick join, or the last "my world"), W-14's test
+    private bool KnownOfficial(string world) => Volatile.Read(ref _seatOfficial) == world
+        || Volatile.Read(ref _mineSnapshot) is { Official: true } mine && mine.WorldId == world;
+
+    // W-15: what the read of an unproven seat's world said: a player world (open, its host there) and whether it runs the ask
+    private readonly record struct PlayerWorldRead(bool Player, bool Runs, string? Why)
+    {
+        public static PlayerWorldRead Unknown => default; // official, gone, host away, or unreadable
+    }
+
+    /// <summary>
+    /// W-15: whether <paramref name="world"/>, the world of an unproven seat taken for another kind, is a player world (read now: not
+    /// official, open, its host not away) and whether it runs this ask. A car meet ask needs "carmeet" in its lobbies (OD-197: either
+    /// car meet spot, lobby type 3 or 6, is that one engine kind and is never compared against the list), a Road Trip ask its host's
+    /// Road Trip activity, a free roam ask its host's free roam.
+    /// </summary>
+    private async Task<PlayerWorldRead> PlayerWorldRunsAsync(string world, byte kind, CancellationToken cancellation)
+    {
+        if (KnownOfficial(world) || HostGone(world)) return PlayerWorldRead.Unknown;
+        MmResult<WorldView>? view = null;
+        try { view = await _mm.GetAsync(world, cancellation).ConfigureAwait(false); }
+        catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
+        if (view is not { Ok: true, Value: { } seen } || seen.Id != world) return PlayerWorldRead.Unknown;
+        if (seen.Official == true) { Volatile.Write(ref _seatOfficial, world); return PlayerWorldRead.Unknown; }
+        if (seen.HostAway == true) return PlayerWorldRead.Unknown;
+        var runs = kind == FreeRoamKind.CarMeet ? seen.Lobbies.Contains(LobbyKinds.CarMeet) : seen.Activity == ActivityOf(kind);
+        return new PlayerWorldRead(true, runs, runs ? $"{world} runs {(kind == FreeRoamKind.CarMeet ? "its car meet" : seen.Activity)}" : null);
     }
 
     // OD-190 (W-4 review): a placement that failed for anything but full lobbies says so
