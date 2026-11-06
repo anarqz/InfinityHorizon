@@ -324,7 +324,7 @@ impl Engine {
             why,
             synced: p.synced,
         });
-        self.peer_left_seams(&p);
+        self.peer_left_seams(&p, why);
     }
 
     pub(super) fn drop_doomed(&mut self) {

@@ -856,7 +856,7 @@ impl Server {
         let mut sends = Vec::new();
         let result = catch_unwind(AssertUnwindSafe(|| -> CmdResult {
             match op {
-                "world.context" => w.context(o, &mut ctx),
+                "world.context" => w.context(o, &mut ctx, &mut sends),
                 "world.admission" => w.admission(o, &mut ctx, &mut sends),
                 "world.admission.end" => w.admission_end(o, &mut ctx),
                 "world.kick" => w.kick(o, &mut ctx, &mut sends),

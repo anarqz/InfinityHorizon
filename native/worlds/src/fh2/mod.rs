@@ -389,6 +389,7 @@ impl Game for Fh2 {
             dropped: 0,
             last_activity: std::cell::Cell::new(None),
             events: Vec::new(),
+            private: false,
             #[cfg(feature = "test-hooks")]
             debug_session: debug::DebugSession::from_env(activity),
         };
@@ -446,6 +447,9 @@ pub struct Fh2World {
     last_activity: std::cell::Cell<Option<&'static str>>,
     /// Events for the core (peer.synced, peer.left, peer.rejected, requests, notices).
     events: Vec<GameEvent>,
+    /// A private official world (WORLDS_OFFICIAL.md §12.8b): every engine, made now or later, is
+    /// private (PrivacyMode InviteOnly, a leader).
+    private: bool,
     /// test-hooks: a synthetic `world.gameSession.request` (the agent's end-to-end test).
     #[cfg(feature = "test-hooks")]
     debug_session: debug::DebugSession,
@@ -527,6 +531,9 @@ impl Fh2World {
             e.set_voice(self.voice.mode, &self.voice.lobby_muted);
             if self.watch.is_some() {
                 self.apply_watch(&mut e);
+            }
+            if self.private {
+                e.set_private();
             }
             self.engines.insert(kind, e);
         }
@@ -1111,7 +1118,33 @@ impl GameWorld for Fh2World {
             m.insert("inProgress".into(), Value::Bool(true));
         }
         m.insert("hostInWorld".into(), Value::Bool(host_in));
+        // §12.8b (T-L9): the agent announces the leader (absent for a public world)
+        if self.private {
+            m.insert("private".into(), Value::Bool(true));
+            if let Some(x) = self.engines.values().find_map(Engine::leader_xuid) {
+                m.insert("leader".into(), json!(x.to_string()));
+            }
+        }
         m
+    }
+
+    fn supports_private(&self) -> bool {
+        matches!(
+            self.activity,
+            Some(Activity::Lobby(EngineKind::FreeRoam | EngineKind::RoadTrip))
+        )
+    }
+
+    fn set_private(&mut self, out: &mut Vec<Send>) {
+        if self.private || !self.supports_private() {
+            return;
+        }
+        self.private = true;
+        for e in self.engines.values_mut() {
+            e.set_private();
+            out.extend(e.take_out());
+        }
+        self.drain_events();
     }
 
     fn dropped(&self) -> u64 {

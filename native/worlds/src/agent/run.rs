@@ -33,7 +33,7 @@ use super::{
     engine::{self, Control, Input, MadeSession, SessionAnswer},
     exit,
     http::{Client, Reply},
-    sign, uuid_v4,
+    private, sign, uuid_v4,
 };
 use crate::{core::keys::KeyRing, log, log_ids};
 
@@ -82,6 +82,11 @@ struct World {
     /// announced, so matchmaking places nobody else in it, and not counted as the spare.
     in_progress: bool,
     opened: Instant,
+    /// WORLDS_OFFICIAL.md §12.2 item 5 (T-L9): the server made it a private official world
+    /// (`WorldView.private`); one way. Never a spare again, closed as a group world (item 10).
+    private: bool,
+    /// A private world's leader (the engine's `world.state.leader`), announced as `leader`.
+    leader: Option<String>,
 }
 
 /// A `world.gameSession.request` waiting for its call.
@@ -619,6 +624,17 @@ impl Agent {
                     w.in_progress = in_progress;
                     w.next_announce = Instant::now();
                 }
+                // §12.8b: a private world's new leader is announced at once (the invites route
+                // follows the current leader, A3)
+                let leader = if w.private {
+                    private::leader_of(ev)
+                } else {
+                    None
+                };
+                if leader != w.leader {
+                    w.leader = leader;
+                    w.next_announce = Instant::now();
+                }
                 w.busy = grants > 0 || handshaking > 0;
                 if w.peers.is_empty() && !w.busy {
                     w.idle_since.get_or_insert_with(Instant::now);
@@ -826,8 +842,7 @@ impl Agent {
         }
         let context = control.request_retry(
             "world.context",
-            json!({"worldId": made.world, "serverTimeMs": self.server_ms(),
-                "world": {"id": made.world, "game": GAME, "host": {"official": self.cfg.vm_id}}}),
+            private::context_fields(&made.world, self.server_ms(), &self.cfg.vm_id, GAME, false),
         );
         if let Err(e) = context {
             self.engine_refused("world.context", &e);
@@ -852,6 +867,8 @@ impl Agent {
             seen_peers: false,
             in_progress: false,
             opened: now,
+            private: false,
+            leader: None,
         });
         log::info(log_ids::AGENT_WORLD_OPENED)
             .world(&made.world)
@@ -941,11 +958,14 @@ impl Agent {
         let Some(w) = self.worlds.iter().find(|w| w.id == id) else {
             return;
         };
-        let mut body = json!({"peers": w.peers, "activity": w.activity});
-        if w.in_progress {
-            body["inProgress"] = Value::Bool(true);
-        }
-        let body = body.to_string();
+        let body = private::announce_body(
+            &w.peers,
+            w.activity,
+            w.in_progress,
+            w.private,
+            w.leader.as_deref(),
+        )
+        .to_string();
         let key = w.announce_key.clone();
         let target = format!("{}/announce", Self::world_target(id));
         let reply = self.client.call(
@@ -1011,11 +1031,30 @@ impl Agent {
             .unwrap_or_default();
         punches.truncate(PUNCHES_MAX);
         let time = self.server_ms();
+        // §12.2 item 5 (T-L9): a promoted spare comes back `private: true`; from then on it is
+        // no spare, closes as a group world, and its engine runs the private session (one way)
+        let private = match self.worlds.iter_mut().find(|w| w.id == id) {
+            Some(w) => {
+                if private::answer_is_private(&answer) && !w.private {
+                    w.private = true;
+                    // its group-world clock starts now (a spare idle for long is not "ended")
+                    let now = Instant::now();
+                    w.opened = now;
+                    w.seen_peers = false;
+                    w.idle_since = Some(now);
+                    log::info(log_ids::AGENT_WORLD_PRIVATE)
+                        .world(id)
+                        .field("activity", w.activity)
+                        .emit();
+                }
+                w.private
+            }
+            None => false,
+        };
         // the official host is this VM's own id, never copied from the answer (§6.3)
         let context = control.request_retry(
             "world.context",
-            json!({"worldId": id, "serverTimeMs": time,
-                "world": {"id": id, "game": GAME, "host": {"official": self.cfg.vm_id}}}),
+            private::context_fields(id, time, &self.cfg.vm_id, GAME, private),
         );
         if let Err(e) = context {
             self.engine_refused("world.context", &e);
@@ -1054,9 +1093,10 @@ impl Agent {
             return;
         }
         let max = usize::from(self.cfg.max_players);
-        // a group world closes once it emptied again, or nobody came within the seats' hold
+        // a group world closes once it emptied again, or nobody came within the seats' hold; a
+        // private world as a group world (§12.2 item 10; A11's 10 minutes is `GROUP_HOLD`)
         let ended = self.worlds.iter().find(|w| {
-            w.group
+            (w.group || w.private)
                 && idle_for(w, now) >= IDLE_CLOSE
                 && (w.seen_peers || now.saturating_duration_since(w.opened) >= GROUP_HOLD)
         });
@@ -1067,6 +1107,7 @@ impl Agent {
         // worlds of an activity or mode no longer placed close once idle
         let stray = self.worlds.iter().find(|w| {
             !w.group
+                && !w.private
                 && (!self.activities.contains(&w.activity) || !self.cfg.modes.contains(&w.mode))
                 && idle_for(w, now) >= IDLE_CLOSE
         });
@@ -1078,7 +1119,8 @@ impl Agent {
             let group: Vec<&World> = self
                 .worlds
                 .iter()
-                .filter(|w| !w.group && w.mode == mode && w.activity == activity)
+                // a private world is nobody's spare (§12.2 item 5): its group refills
+                .filter(|w| !w.group && !w.private && w.mode == mode && w.activity == activity)
                 .collect();
             // OD-194: a Road Trip past its vote takes no newcomers: it is no spare
             let free = group
@@ -1180,6 +1222,8 @@ impl Agent {
                     seen_peers: false,
                     in_progress: false,
                     opened: now,
+                    private: false,
+                    leader: None,
                 });
                 log::info(log_ids::AGENT_WORLD_OPENED)
                     .world(&id)

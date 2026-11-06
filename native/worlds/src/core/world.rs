@@ -346,8 +346,10 @@ impl World {
     }
 
     /// `world.context` (the context only, never punches; contract §4.3): the checks of §6.2, the
-    /// clock and the 45 s host lease (only this renews it). Any failure clears admission.
-    pub fn context(&mut self, o: Obj, ctx: &mut Ctx) -> CmdResult {
+    /// clock and the 45 s host lease (only this renews it). Any failure clears admission. A
+    /// private official world's first `private: true` makes its game private (`out`: what that
+    /// sends to the players already in).
+    pub fn context(&mut self, o: Obj, ctx: &mut Ctx, out: &mut Vec<Send>) -> CmdResult {
         let server_ms = o.int("serverTimeMs", 0, JSON_INT_MAX)?;
         let world = Obj::new(o.obj("world")?, "world");
         let id = world.str("id")?;
@@ -363,6 +365,13 @@ impl World {
             Some(_) => "",
             None => host.str("xuid")?,
         };
+        // WORLDS_OFFICIAL.md §12.2 item 5, §12.8b (T-L9): `private: true` from the server's
+        // `WorldView.private`, an official world's only (free roam or Road Trip); one way, so
+        // `false` or absent never makes a private world public again
+        let private = world.opt_bool("private", false)?;
+        if private && (self.spec.official.is_none() || !self.game.supports_private()) {
+            return Err(world.bad("private"));
+        }
         if ctx.keys_empty {
             self.clear_admission(ctx, "no_keys");
             return Err(CmdError::code(proto::NO_KEYS));
@@ -377,6 +386,11 @@ impl World {
         }
         let until = self.gate.lock().context(server_ms, ctx.now);
         self.admission.lapse_noticed = false;
+        if private {
+            let mut sends = Vec::new();
+            self.game.set_private(&mut sends);
+            self.send_out(sends, out);
+        }
         let mut m = Map::new();
         m.insert("leaseUntilMs".into(), json!(until));
         Ok(m)
@@ -572,6 +586,13 @@ impl World {
         // OD-194: present (true) only while the activity takes no newcomers
         if let Some(v) = game.get("inProgress").filter(|v| v.as_bool() == Some(true)) {
             m.insert("inProgress".into(), v.clone());
+        }
+        // §12.8b (T-L9): a private official world says so, and names its leader while one leads
+        if let Some(v) = game.get("private").filter(|v| v.as_bool() == Some(true)) {
+            m.insert("private".into(), v.clone());
+            if let Some(l) = game.get("leader").filter(|v| v.is_string()) {
+                m.insert("leader".into(), l.clone());
+            }
         }
         m.insert("handshaking".into(), json!(self.handshaking()));
         m.insert(

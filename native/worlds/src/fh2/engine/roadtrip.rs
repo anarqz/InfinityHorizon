@@ -340,6 +340,11 @@ impl RoadTrip {
         }
     }
 
+    /// A private session's leader is the trip's (leader.rs keeps them equal).
+    pub(super) fn set_leader(&mut self, leader: Option<u8>) {
+        self.leader = leader;
+    }
+
     fn current_race(&self) -> Option<i32> {
         let w = self.winner?;
         self.plan
@@ -609,9 +614,16 @@ impl Engine {
         if self.trip().state == RoadTripState::Initialising && self.road_trip_players().len() >= 2 {
             self.begin_vote();
         }
+        // private: the leader's choice may have waited for a second player
+        self.private_vote_closes();
     }
 
     fn choose_road_trip_leader(&mut self) {
+        // a private session's leader is the trip's (leader.rs: told to every member)
+        if self.private {
+            self.choose_leader();
+            return;
+        }
         if let Some(leader) = self.trip().leader
             && self.peers.iter().any(|p| p.index == leader && p.synced)
         {
@@ -722,6 +734,11 @@ impl Engine {
             let m = self.event_selection(s, true);
             self.send_sequenced(s, vec![m]);
         }
+        // private (A7): the leader's choice decides, no OD-194 majority
+        if self.private {
+            self.private_vote_closes();
+            return;
+        }
         let players = self.road_trip_players();
         let now = self.now;
         let all = players.iter().all(|s| {
@@ -743,7 +760,67 @@ impl Engine {
         }
     }
 
+    /// A private trip's destination (WORLDS_OFFICIAL.md §12.6, A7): the leader's vote, once two
+    /// players or more are in (OD-183: a Road Trip is for two); `None` until then.
+    fn private_choice(&self) -> Option<usize> {
+        let trip = self.road_trip.as_ref()?;
+        let leader = self.leader?;
+        let players = self.peers.iter().filter(|p| p.synced && !p.doomed).count();
+        if trip.state != RoadTripState::DestinationVote
+            || players < MIN_EVENT_PARTICIPANTS
+            || !self.peers.iter().any(|p| p.index == leader && p.synced)
+        {
+            return None;
+        }
+        let choice = *trip.votes.get(&leader)?;
+        usize::try_from(choice).ok().filter(|c| *c < DESTINATIONS)
+    }
+
+    /// Private: the leader chose and two are in: the vote closes soon (the others see the
+    /// choice), as a public vote everybody answered does.
+    fn private_vote_closes(&mut self) {
+        if !self.private || self.private_choice().is_none() {
+            return;
+        }
+        let now = self.now;
+        let trip = self.trip();
+        if trip.until > now + ALL_VOTED_MS {
+            trip.until = now + ALL_VOTED_MS;
+            let until = trip.until;
+            self.road_trip_update(&[(9, wire_at(until))]);
+            self.note("roadtrip.leader_chose", Vec::new());
+        }
+    }
+
+    /// The private session's leader changed (leader.rs): its own vote may close the vote.
+    pub(super) fn road_trip_leader_changed(&mut self) {
+        if self.road_trip.is_some() {
+            self.private_vote_closes();
+        }
+    }
+
+    /// Private: the vote ended with no leader's choice or fewer than two players: it is shown
+    /// again for another `VOTE_MS`, nobody is sent back (the leader waits for its friends).
+    fn private_vote_waits(&mut self) {
+        let now = self.now;
+        let players = self.road_trip_players().len();
+        let leader = self.leader;
+        let trip = self.trip();
+        trip.until = now + VOTE_MS;
+        let until = trip.until;
+        self.road_trip_update(&[(9, wire_at(until))]);
+        self.note("roadtrip.waits_leader", vec![json!(leader), json!(players)]);
+    }
+
     fn finish_vote(&mut self) {
+        if self.private {
+            let Some(winner) = self.private_choice() else {
+                self.private_vote_waits();
+                return;
+            };
+            self.vote_won(winner);
+            return;
+        }
         // OD-194 / OD-183: nobody joined during the vote: its player goes back to free roam
         let players: Vec<(u64, u8)> = self
             .peers
@@ -768,6 +845,12 @@ impl Engine {
         let max = counts.iter().copied().max().unwrap_or(0);
         // a tie goes to the first of the tied destinations
         let winner = counts.iter().position(|c| *c == max).unwrap_or(0);
+        self.vote_won(winner);
+    }
+
+    /// The destination `winner` won: car select, the leader configures the first event.
+    fn vote_won(&mut self, winner: usize) {
+        let counts = self.vote_counts();
         let now = self.now;
         let trip = self.trip();
         trip.winner = Some(winner);
@@ -1178,9 +1261,13 @@ impl Engine {
             }
             return false;
         }
+        let private = self.private;
         let trip = self.trip();
-        // OD-194: the vote runs to its end whoever is there (finish_vote sends a lone player back)
-        if players.len() >= MIN_EVENT_PARTICIPANTS
+        // OD-194: the vote runs to its end whoever is there (finish_vote sends a lone player back);
+        // private (§12.6): a member alone is never sent back, the world goes on while anybody is
+        // in (A3) and its events still need two (OD-183)
+        if private
+            || players.len() >= MIN_EVENT_PARTICIPANTS
             || present.len() >= MIN_EVENT_PARTICIPANTS // a second player is joining
             || matches!(
                 trip.state,
@@ -1239,7 +1326,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::{
-        super::{Event, testkit},
+        super::{Event, Why, testkit},
         *,
     };
     use crate::{core::Profile, fh2::RelaySettings};
@@ -1378,6 +1465,142 @@ mod tests {
         vote(&mut e, second, 1);
         let soon = e.now + ALL_VOTED_MS;
         assert_eq!(e.trip().until, soon, "both voted: closes soon");
+    }
+
+    fn until_of(e: &Engine) -> i64 {
+        e.road_trip.as_ref().unwrap().until
+    }
+
+    fn private_road_trip() -> Engine {
+        let mut e = road_trip();
+        e.set_private();
+        e
+    }
+
+    #[test]
+    fn a_private_trip_leader_alone_waits_for_its_friends_and_is_never_sent_back() {
+        let mut e = private_road_trip();
+        let lone = arrive(&mut e, 1);
+        assert_eq!(
+            e.trip().leader,
+            Some(1),
+            "the session's leader is the trip's"
+        );
+        tick_for(&mut e, INITIALISING_MS + 1);
+        assert_eq!(e.trip().state, RoadTripState::DestinationVote);
+        vote(&mut e, lone, 2);
+        let until = e.trip().until;
+        assert!(until > e.now + ALL_VOTED_MS, "alone: its choice waits");
+        e.now = until + 1;
+        e.tick_road_trip();
+        assert!(!doomed(&e, lone), "no OD-194 send-back");
+        assert_eq!(
+            e.trip().state,
+            RoadTripState::DestinationVote,
+            "still choosing"
+        );
+        assert_eq!(until_of(&e), e.now + VOTE_MS, "shown again");
+        assert!(notes(&mut e).contains(&"roadtrip.waits_leader"));
+        // a friend arrives: the leader's earlier choice closes the vote soon
+        let friend = arrive(&mut e, 2);
+        assert_eq!(until_of(&e), e.now + ALL_VOTED_MS);
+        e.now += ALL_VOTED_MS + 1;
+        e.tick_road_trip();
+        assert_eq!(e.trip().state, RoadTripState::CarSelect);
+        assert_eq!(e.trip().winner, Some(2), "the leader's destination");
+        assert!(!doomed(&e, lone) && !doomed(&e, friend));
+    }
+
+    #[test]
+    fn a_private_trip_goes_where_the_leader_chose_whatever_the_others_vote() {
+        let mut e = private_road_trip();
+        let leader = arrive(&mut e, 1);
+        let b = arrive(&mut e, 2);
+        let c = arrive(&mut e, 3);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        let until = e.trip().until;
+        // everybody but the leader voted: the vote keeps its time (no OD-194 majority)
+        vote(&mut e, b, 0);
+        vote(&mut e, c, 0);
+        assert_eq!(e.trip().until, until);
+        vote(&mut e, leader, 1);
+        assert_eq!(until_of(&e), e.now + ALL_VOTED_MS, "the leader chose");
+        assert!(notes(&mut e).contains(&"roadtrip.leader_chose"));
+        e.now += ALL_VOTED_MS + 1;
+        e.tick_road_trip();
+        assert_eq!(
+            e.trip().winner,
+            Some(1),
+            "outvoted 2 to 1, the leader decides"
+        );
+    }
+
+    #[test]
+    fn a_private_trip_without_its_leaders_choice_shows_the_vote_again() {
+        let mut e = private_road_trip();
+        let _leader = arrive(&mut e, 1);
+        let b = arrive(&mut e, 2);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        vote(&mut e, b, 0);
+        tick_for(&mut e, VOTE_MS);
+        assert_eq!(e.trip().state, RoadTripState::DestinationVote);
+        assert!(e.peers.iter().all(|p| !p.doomed));
+    }
+
+    #[test]
+    fn a_private_trips_new_leader_who_already_chose_closes_the_vote() {
+        let mut e = private_road_trip();
+        let first = arrive(&mut e, 1);
+        let second = arrive(&mut e, 2);
+        let third = arrive(&mut e, 3);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        let until = e.trip().until;
+        vote(&mut e, second, 2);
+        assert_eq!(e.trip().until, until);
+        e.drop_peer(first, Why::Closed);
+        assert_eq!(e.trip().leader, Some(2), "the longest present leads");
+        assert_eq!(until_of(&e), e.now + ALL_VOTED_MS);
+        e.now += ALL_VOTED_MS + 1;
+        e.tick_road_trip();
+        assert_eq!(e.trip().winner, Some(2));
+        assert!(!doomed(&e, third));
+    }
+
+    #[test]
+    fn a_private_trip_member_left_alone_after_the_vote_stays() {
+        let mut e = private_road_trip();
+        let leader = arrive(&mut e, 1);
+        let b = arrive(&mut e, 2);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        vote(&mut e, leader, 0);
+        e.now += ALL_VOTED_MS + 1;
+        e.tick_road_trip();
+        assert_eq!(e.trip().state, RoadTripState::CarSelect);
+        e.drop_peer(b, Why::Closed);
+        tick_for(&mut e, ALONE_MS + 1);
+        tick_for(&mut e, ALONE_MS + 1);
+        assert!(!doomed(&e, leader), "OD-183's send-back is public only");
+    }
+
+    #[test]
+    fn a_public_trip_ignores_the_private_rules() {
+        // the same moves as the private tests: the public trip still votes by majority and sends
+        // a lone voter back
+        let mut e = road_trip();
+        let first = arrive(&mut e, 1);
+        let second = arrive(&mut e, 2);
+        tick_for(&mut e, INITIALISING_MS + 1);
+        vote(&mut e, second, 2);
+        vote(&mut e, first, 1);
+        e.now += ALL_VOTED_MS + 1;
+        e.tick_road_trip();
+        assert_eq!(
+            e.trip().winner,
+            Some(1),
+            "a tie goes to the first destination"
+        );
+        assert!(!e.is_private());
+        assert!(!notes(&mut e).iter().any(|n| n.starts_with("session.")));
     }
 
     #[test]

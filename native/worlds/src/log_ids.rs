@@ -61,4 +61,6 @@ pub const AGENT_WORLD_ENDED: &str = "agent.world.ended";
 pub const AGENT_WORLD_CLOSED: &str = "agent.world.closed";
 pub const AGENT_WORLD_DELETED: &str = "agent.world.deleted";
 pub const AGENT_WORLD_ADMISSION: &str = "agent.world.admission";
+/// The server made one of this agent's worlds a private official world (WORLDS_OFFICIAL.md §12).
+pub const AGENT_WORLD_PRIVATE: &str = "agent.world.private";
 pub const AGENT_GAME_SESSION: &str = "agent.game_session";

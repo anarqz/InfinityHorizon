@@ -5,6 +5,7 @@
 //!
 //!   - `config`: the settings (`FI_WORLDS_*` and their options), validated before anything starts;
 //!   - `sign`: the `FI-World-Agent` signature of every call (WORLDS_OFFICIAL.md §4.1);
+//!   - `private`: a private official world's fields (WORLDS_OFFICIAL.md §12.8b);
 //!   - `catalog` (Linux): the server-side game catalog, read-only (`catalog.set`, `catalog.parts`);
 //!   - `engine` (Linux): the engine child (`worlds serve --profile public`) and its control channel;
 //!   - `http` (Linux): the signed calls to MATCHMAKING_API §2.9;
@@ -14,6 +15,7 @@
 //! (`ds.role.unimplemented`), and the signature and the configuration still build and test there.
 
 pub mod config;
+pub mod private;
 pub mod sign;
 
 #[cfg(unix)]
