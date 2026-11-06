@@ -39,6 +39,11 @@ impl Engine {
                 self.road_trip_configured(serial);
                 true
             }
+            // RequestLeaderChange: a private session's only (public: dropped, as ever)
+            59 if self.private => {
+                self.request_leader_change(serial, body);
+                true
+            }
             62..=64 if self.bucket_list_world() => {
                 self.bucket_list_message(serial, kind, body);
                 true
@@ -108,14 +113,17 @@ impl Engine {
             self.set_universe(serial, universe);
         }
         self.team_object_created(serial);
+        self.leader_object_created(serial);
     }
 
     /// What the later features clear when a peer leaves.
-    pub(super) fn peer_left_seams(&mut self, peer: &Peer) {
+    pub(super) fn peer_left_seams(&mut self, peer: &Peer, why: super::Why) {
         self.release_keep.remove(&peer.serial);
         self.race_peer_left(peer.index, peer.serial);
         self.leave_event_side(peer.index, false);
         self.car_meet_peer_left(peer.serial);
+        // a private session's leader, before Road Trip reads it
+        self.leader_peer_left(peer.index, why);
         self.road_trip_peer_left(peer.serial, peer.index);
         self.bucket_list_peer_left(peer);
     }

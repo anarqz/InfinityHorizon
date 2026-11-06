@@ -147,7 +147,8 @@ pub trait GameWorld: std::marker::Send {
 
     /// `WorldState`'s game-dependent fields: `peers`, `lobbyPlayers`, `activity`, `engines`,
     /// `inProgress` (OD-194: `true` while the activity takes no newcomers, else absent),
-    /// `hostInWorld` (contract §4.5).
+    /// `hostInWorld` (contract §4.5); a private official world adds `private: true` and, while
+    /// somebody leads, `leader` (the leader's XUID, a decimal string).
     fn state(&self) -> Map<String, Value>;
 
     /// Datagrams the game dropped so far (stats).
@@ -166,4 +167,14 @@ pub trait GameWorld: std::marker::Send {
 
     /// CR-S67: the grant source of the voice blocks (each XUID's signed instant, Unix seconds).
     fn set_grant_voice_blocks(&mut self, _blocks: &BTreeMap<u64, i64>) {}
+
+    /// Whether this world may become a private official world (WORLDS_OFFICIAL.md §12.2 item 8:
+    /// free roam or Road Trip, never a car meet).
+    fn supports_private(&self) -> bool {
+        false
+    }
+
+    /// The world became a private official world (`world.context`'s `world.private`; one way,
+    /// §12.8b): the game's session privacy and its leader, sent at once.
+    fn set_private(&mut self, _out: &mut Vec<Send>) {}
 }

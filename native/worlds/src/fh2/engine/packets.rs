@@ -640,6 +640,8 @@ impl Engine {
         // snapshot adds) cannot fit one datagram is refused here, before it takes a sequence or
         // enters a history, never dropped later at send
         let server_bits = match obj.router_id {
+            // a private session's leader flag rides on the player object too (leader.rs)
+            1 if self.private => SERVER_PLAYER_BITS + super::leader::LEADER_SNAPSHOT_BITS,
             1 => SERVER_PLAYER_BITS,
             3 => SERVER_CONSOLE_BITS,
             _ => 0,
@@ -928,6 +930,8 @@ impl Engine {
         if self.ev.phasing {
             self.assign_universe(serial);
         }
+        // a private session nobody leads gets its leader (a public engine: nothing)
+        self.leader_joined();
         self.road_trip_joined(serial);
         self.pace(serial);
     }

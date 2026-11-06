@@ -29,7 +29,8 @@ pub const COMPACT_BITS: usize = 64 * 1024;
 pub const MAX_KEPT_UPDATES: usize = 4096;
 pub const MAX_KEPT_BITS: usize = 512 * 1024;
 /// Updates fold into the catch-up create only up to this many bits, so the create (plus the
-/// server variables a snapshot adds: console flags, PrivateUniverseId, TeamId) always fits one
+/// server variables a snapshot adds: console flags, PrivateUniverseId, TeamId, a private leader's
+/// IsLeader) always fits one
 /// datagram; later updates stay separate tail messages.
 pub const FOLD_MAX_BITS: usize = datagram::MAX_DATAGRAM_PAYLOAD_BITS - 128;
 /// Out-of-order updates held past a gap.
@@ -52,6 +53,8 @@ pub struct History {
     pub universe: Option<u8>,
     /// A player object's server-set TeamId (null: never written).
     pub team: Option<u8>,
+    /// A private session's leader's player object: its IsLeader (leader.rs).
+    pub leader: bool,
     pub tail: Vec<(u8, Bits)>,
     pub pending: Vec<(u8, Bits)>,
     pub discarded: usize,
@@ -72,6 +75,7 @@ impl History {
             server_variables: DotMap::new(),
             universe: None,
             team: None,
+            leader: false,
             tail: Vec::new(),
             pending: Vec::new(),
             discarded: 0,
@@ -254,6 +258,11 @@ impl History {
             payload
                 .push(u64::from(payload::TEAM_VARIABLE), 8)
                 .push(u64::from(t), payload::TEAM_BITS);
+        }
+        if router == 1 && self.leader {
+            payload
+                .push(super::leader::IS_LEADER_VARIABLE, 8)
+                .push(1, 1);
         }
         let mut seq = seq_forward(self.create_sequence(), self.injected);
         let mut out = Vec::with_capacity(1 + self.tail.len() + self.pending.len());

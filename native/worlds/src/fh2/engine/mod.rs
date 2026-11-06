@@ -32,6 +32,7 @@ pub mod dict;
 pub mod history;
 mod join;
 pub mod key;
+mod leader;
 pub mod message;
 pub mod options;
 mod packets;
@@ -618,6 +619,13 @@ pub struct Engine {
     voice: voice::Voice,
     /// The anti-cheat watch (watch.rs).
     watch: watch::Watch,
+    /// A private official world's engine (leader.rs, WORLDS_OFFICIAL.md §12.8b): PrivacyMode
+    /// InviteOnly, a leader at all times. One way: never public again.
+    private: bool,
+    /// The private session's leader (an index), and the index of the seat that took over the
+    /// leader's own game (a rebind) while it is still joining.
+    leader: Option<u8>,
+    leader_heir: Option<u8>,
     out: Vec<Send>,
     events: Vec<Event>,
     /// Datagrams nobody could take (stats).
@@ -717,6 +725,9 @@ impl Engine {
             team_random: None,
             voice: voice::Voice::default(),
             watch: watch::Watch::default(),
+            private: false,
+            leader: None,
+            leader_heir: None,
             out: Vec::new(),
             events: Vec::new(),
             dropped: 0,
@@ -1463,6 +1474,8 @@ impl Engine {
         // no event (MACBOOK decision 4)
         self.ev.race = None;
         self.ev.event_owner = None;
+        self.leader = None;
+        self.leader_heir = None;
     }
 
     /// Sends every synced peer the game's Close (drain, shutdown), then clears.

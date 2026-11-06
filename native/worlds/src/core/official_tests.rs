@@ -512,6 +512,83 @@ fn the_official_car_meet_lobby_serves_both_locations_and_their_free_roam() {
     );
 }
 
+fn status(s: &mut Server, io: &mut NoIo, world: &str) -> Value {
+    call(
+        s,
+        io,
+        10,
+        json!({"id": 7, "op": "world.status", "worldId": world}),
+    )
+}
+
+fn private_context(world: &str, private: Value) -> Value {
+    let mut req = context_req(world, json!({"official": VM}));
+    req["world"]["private"] = private;
+    req
+}
+
+#[test]
+fn a_public_official_worlds_state_names_no_privacy_and_no_leader() {
+    let (mut s, mut io) = server();
+    open(&mut s, &mut io, W1);
+    let st = status(&mut s, &mut io, W1);
+    assert_eq!(st["running"], true, "{st}");
+    assert!(
+        st.get("private").is_none() && st.get("leader").is_none(),
+        "{st}"
+    );
+    // `private: false` is the same as no member
+    let r = call(&mut s, &mut io, 0, private_context(W1, json!(false)));
+    assert_eq!(r["ok"], true, "{r}");
+    let st = status(&mut s, &mut io, W1);
+    assert!(st.get("private").is_none(), "{st}");
+}
+
+#[test]
+fn the_contexts_private_member_makes_a_free_roam_or_road_trip_world_private_for_good() {
+    for activity in ["freeroam", "roadtrip"] {
+        let (mut s, mut io) = server();
+        let mut req = open_req(W1, VM);
+        req["activity"] = json!(activity);
+        assert_eq!(call(&mut s, &mut io, 0, req)["ok"], true);
+        let r = call(&mut s, &mut io, 0, private_context(W1, json!(true)));
+        assert_eq!(r["ok"], true, "{activity}: {r}");
+        let st = status(&mut s, &mut io, W1);
+        assert_eq!(st["private"], true, "{activity}: {st}");
+        assert!(st.get("leader").is_none(), "nobody in, nobody leads: {st}");
+        // one way: a later context without it (or with false) keeps the world private
+        for later in [
+            context_req(W1, json!({"official": VM})),
+            private_context(W1, json!(false)),
+        ] {
+            let r = call(&mut s, &mut io, 0, later);
+            assert_eq!(r["ok"], true, "{r}");
+            assert_eq!(status(&mut s, &mut io, W1)["private"], true);
+        }
+    }
+}
+
+#[test]
+fn a_car_meet_world_or_a_malformed_private_member_is_refused_and_changes_nothing() {
+    let (mut s, mut io) = server();
+    let mut req = open_req(W1, VM);
+    req["activity"] = json!("carmeet");
+    assert_eq!(call(&mut s, &mut io, 0, req)["ok"], true);
+    let r = call(&mut s, &mut io, 0, private_context(W1, json!(true)));
+    assert_eq!(r["error"]["field"], "world.private", "{r}");
+    let st = status(&mut s, &mut io, W1);
+    assert!(st.get("private").is_none(), "{st}");
+    assert_eq!(
+        st["admission"]["leaseUntilMs"],
+        Value::Null,
+        "no lease: {st}"
+    );
+    open(&mut s, &mut io, W2);
+    let r = call(&mut s, &mut io, 0, private_context(W2, json!("yes")));
+    assert_eq!(r["error"]["field"], "world.private", "{r}");
+    assert!(status(&mut s, &mut io, W2).get("private").is_none());
+}
+
 #[test]
 fn a_located_car_meet_and_a_free_roam_world_serve_only_their_own_lobby() {
     assert_eq!(

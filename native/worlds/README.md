@@ -276,6 +276,32 @@ engine, in this recommended order:
 - **Public worlds:** `world.open.activity` (and `carMeetLobby`) is required in the public profile and
   refused in the private one; `lobbies` lists only that activity's lobby.
 
+## Decisions taken for private official worlds (T-L9; WORLDS_OFFICIAL.md §12.8b, T-R3)
+
+- **How a world becomes private:** the server's `WorldView.private: true` on a `PUT`/announce
+  answer. The agent then sends `world.context` with `world.private: true` (every context of that
+  world from then on), stops counting the world as a spare, closes it as a group world
+  (`GROUP_HOLD`, counted from the promotion) and logs `agent.world.private`. One way: a context
+  without the member never makes it public again. Only a public-profile `freeroam` or `roadtrip`
+  world takes it; a car meet world, the private profile (dormant, A14) or a non-boolean value is
+  `bad_request {field: "world.private"}`, and nothing changes.
+- **The engine:** SessionHostSynced `PrivacyMode` (var 1) = 1 InviteOnly, to the members and in
+  every later snapshot. The leader is the longest-present synced member (earliest sync, the
+  earlier seat on a tie), picked again when it leaves; a seat that takes over the leader's own game
+  (a rebind) inherits it once synced. `IsLeader` is written to every member: the leader's own
+  object gets IsLeader and PlayerHost (as Road Trip always wrote), the others its relayed object's
+  IsLeader, kept for later joiners' snapshots (9 more bits reserved at ingest, private only); the
+  old leader is cleared before the new one is set. RequestLeaderChange (59) from the leader naming
+  a synced member's player key moves it (the asker's fan-out budget pays); from anyone else, or
+  for anything else, it changes nothing. DropLeadership (60) is not read.
+- **Private Road Trip (A7):** no OD-194 majority and no send-back. The vote is shown as usual; the
+  leader's choice decides and closes it 10 s later once two players are in; without that choice
+  (or alone) the vote is shown again for 60 s. A member alone after the vote is never sent back;
+  events still need two (OD-183).
+- **`world.state`** adds `private: true` and, while somebody leads, `leader` (XUID); the agent
+  announces `leader` for a private world only, at once when it changes. A public world's state,
+  announce and bytes are unchanged.
+
 ## Acknowledgements
 
 The fh2-mods project's online research (https://github.com/conner-mcvay/fh2-mods, `tools/online`, by conner-mcvay and
