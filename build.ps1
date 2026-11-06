@@ -51,27 +51,30 @@ if ($LASTEXITCODE -ne 0) { throw "Mod runtime build failed" }
 New-Item -ItemType Directory -Force "$out/mod" | Out-Null
 foreach ($name in @('infinity_mod.dll', 'infinity-mod-prepare.exe')) { Copy-Item -LiteralPath "$root/native/mod/build/$name" -Destination "$out/mod/$name" -Force }
 
-# The Rust world engine, Infinity Worlds (native/worlds), ships next to infinity.exe. Its rust-toolchain.toml pins the toolchain and
-# the MSVC target. DS_COMMIT stamps --version (git HEAD by default) and DS_PRODUCT_VERSION its VERSIONINFO (-Version by
-# default); an existing CARGO_TARGET_DIR is honoured (the crate's own target/ otherwise).
-$dsCrate = "$root/native/worlds"
-$cargo = (Get-Command cargo -ErrorAction SilentlyContinue)?.Source ?? (Join-Path $HOME '.cargo/bin/cargo.exe')
-if (!(Test-Path -LiteralPath $cargo)) { throw 'cargo not found: install rustup (the crate pins Rust 1.99.0, target x86_64-pc-windows-msvc)' }
-$dsEnvSaved = @{}; foreach ($name in 'DS_COMMIT', 'DS_PRODUCT_VERSION') { $dsEnvSaved[$name] = [Environment]::GetEnvironmentVariable($name) }
-try {
-    if (!$env:DS_COMMIT) {
-        $env:DS_COMMIT = (& git -C $root rev-parse HEAD).Trim()
-        if ($LASTEXITCODE -ne 0 -or $env:DS_COMMIT -notmatch '^[a-f0-9]{40}$') { throw 'worlds: source commit unavailable (git rev-parse HEAD)' }
+# The Rust world engine, Infinity Worlds (native/worlds), ships next to infinity.exe in development builds only: players never
+# host a world (OD-204), so a production package carries no worlds.exe. Its rust-toolchain.toml pins the toolchain and the MSVC
+# target. DS_COMMIT stamps --version (git HEAD by default) and DS_PRODUCT_VERSION its VERSIONINFO (-Version by default); an
+# existing CARGO_TARGET_DIR is honoured (the crate's own target/ otherwise).
+if (!$Production) {
+    $dsCrate = "$root/native/worlds"
+    $cargo = (Get-Command cargo -ErrorAction SilentlyContinue)?.Source ?? (Join-Path $HOME '.cargo/bin/cargo.exe')
+    if (!(Test-Path -LiteralPath $cargo)) { throw 'cargo not found: install rustup (the crate pins Rust 1.99.0, target x86_64-pc-windows-msvc)' }
+    $dsEnvSaved = @{}; foreach ($name in 'DS_COMMIT', 'DS_PRODUCT_VERSION') { $dsEnvSaved[$name] = [Environment]::GetEnvironmentVariable($name) }
+    try {
+        if (!$env:DS_COMMIT) {
+            $env:DS_COMMIT = (& git -C $root rev-parse HEAD).Trim()
+            if ($LASTEXITCODE -ne 0 -or $env:DS_COMMIT -notmatch '^[a-f0-9]{40}$') { throw 'worlds: source commit unavailable (git rev-parse HEAD)' }
+        }
+        if (!$env:DS_PRODUCT_VERSION) { $env:DS_PRODUCT_VERSION = $Version }
+        Push-Location -LiteralPath $dsCrate
+        try { & $cargo build --release --locked --target x86_64-pc-windows-msvc } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) { throw 'worlds build failed' }
+    } finally {
+        foreach ($name in $dsEnvSaved.Keys) { [Environment]::SetEnvironmentVariable($name, $dsEnvSaved[$name]) }
     }
-    if (!$env:DS_PRODUCT_VERSION) { $env:DS_PRODUCT_VERSION = $Version }
-    Push-Location -LiteralPath $dsCrate
-    try { & $cargo build --release --locked --target x86_64-pc-windows-msvc } finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) { throw 'worlds build failed' }
-} finally {
-    foreach ($name in $dsEnvSaved.Keys) { [Environment]::SetEnvironmentVariable($name, $dsEnvSaved[$name]) }
+    $dsTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { "$dsCrate/target" }
+    Copy-Item -LiteralPath "$dsTarget/x86_64-pc-windows-msvc/release/worlds.exe" -Destination "$out/worlds.exe" -Force
 }
-$dsTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { "$dsCrate/target" }
-Copy-Item -LiteralPath "$dsTarget/x86_64-pc-windows-msvc/release/worlds.exe" -Destination "$out/worlds.exe" -Force
 
 if (!$Production) {
     & dotnet build "$root/tools/DevSign/DevSign.csproj" -c Release --nologo
