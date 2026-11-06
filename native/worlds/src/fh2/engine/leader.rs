@@ -571,6 +571,37 @@ mod tests {
     }
 
     #[test]
+    fn a_private_members_own_leader_flags_are_stripped() {
+        use crate::fh2::engine::payload::without_leader_flags;
+        let mut spoof = Bits::new();
+        spoof
+            .push(4, 8)
+            .push(X, 64) // XUID
+            .push(IS_LEADER_VARIABLE, 8)
+            .push(1, 1)
+            .push(6, 8)
+            .push(7, 32) // NumReceivedKickVotes
+            .push(12, 8)
+            .push(1, 1) // Ready
+            .push(PLAYER_HOST_VARIABLE, 8)
+            .push(1, 1)
+            .push(16, 8)
+            .push(1, 1);
+        let mut kept = Bits::new();
+        kept.push(4, 8)
+            .push(X, 64)
+            .push(6, 8)
+            .push(7, 32)
+            .push(12, 8)
+            .push(1, 1)
+            .push(16, 8)
+            .push(1, 1);
+        assert_eq!(without_leader_flags(&spoof), kept);
+        assert_eq!(without_leader_flags(&kept), kept, "nothing else changes");
+        assert_eq!(without_leader_flags(&Bits::new()), Bits::new());
+    }
+
+    #[test]
     fn the_leaders_snapshot_flag_follows_its_writes() {
         let mut e = private_engine();
         let a = member(&mut e, 1, 10);

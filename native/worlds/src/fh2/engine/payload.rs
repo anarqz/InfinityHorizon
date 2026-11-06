@@ -293,7 +293,12 @@ pub fn sanitize(router: u8, payload: &Bits) -> Result<Bits, Refusal> {
 /// The player object's unmapped tail (ids from 12): copied, but for every TeamId entry, while
 /// each variable's width is known; from the first variable of unknown width (or a cut entry) the
 /// rest is copied as it came. True when the whole tail was read.
-pub fn player_tail(mut tail: Rd<'_>, out: &mut Bits) -> bool {
+pub fn player_tail(tail: Rd<'_>, out: &mut Bits) -> bool {
+    player_tail_without(tail, out, &[])
+}
+
+/// [`player_tail`], also dropping the tail variables in `skip`.
+fn player_tail_without(mut tail: Rd<'_>, out: &mut Bits, skip: &[u32]) -> bool {
     while tail.left() > 0 {
         let start = tail;
         let copy_rest = |start: Rd<'_>, out: &mut Bits| {
@@ -314,12 +319,60 @@ pub fn player_tail(mut tail: Rd<'_>, out: &mut Bits) -> bool {
             return false;
         }
         let value = tail.read(width).unwrap_or(0);
-        if index == u32::from(TEAM_VARIABLE) {
+        if index == u32::from(TEAM_VARIABLE) || skip.contains(&index) {
             continue; // a client never writes its team
         }
         out.push(u64::from(index), 8).push(value, width);
     }
     true
+}
+
+/// A private session's player payload (sanitized) without the leader flags the server alone
+/// writes there (leader.rs, T-R3): IsLeader (var 5) and LobbyPlayer.PlayerHost (var 13, while
+/// the tail's widths are known). Every other variable is kept as it is.
+pub fn without_leader_flags(payload: &Bits) -> Bits {
+    const IS_LEADER: usize = 5;
+    const PLAYER_HOST: u32 = 13;
+    let iw = index_width(1);
+    let mut r = payload.reader();
+    let mut out = Bits::new();
+    while r.left() > 0 {
+        let start = r;
+        let Ok(index) = r.read(iw) else {
+            return payload.clone();
+        };
+        let index = index as usize;
+        if index >= PLAYER_VARIABLES.len() {
+            player_tail_without(start, &mut out, &[PLAYER_HOST]);
+            return out;
+        }
+        let mut variable = Bits::new();
+        variable.push(index as u64, iw);
+        let width = match PLAYER_VARIABLES[index] {
+            -1 => 32,
+            -2 => {
+                let Ok(count) = r.read(5) else {
+                    return payload.clone();
+                };
+                variable.push(count, 5);
+                16 * count as u32
+            }
+            w => w as u32,
+        };
+        let mut left = width;
+        while left > 0 {
+            let w = left.min(32);
+            let Ok(v) = r.read(w) else {
+                return payload.clone();
+            };
+            variable.push(v, w);
+            left -= w;
+        }
+        if index != IS_LEADER {
+            out.append(&variable);
+        }
+    }
+    out
 }
 
 /// The console variables of a payload, in order; `None` when it does not read.
