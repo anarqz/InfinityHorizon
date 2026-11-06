@@ -1035,7 +1035,11 @@ impl Agent {
         // no spare, closes as a group world, and its engine runs the private session (one way)
         let private = match self.worlds.iter_mut().find(|w| w.id == id) {
             Some(w) => {
-                if private::answer_is_private(&answer) && !w.private {
+                // only a spare of free roam or Road Trip is ever promoted (§12.2 items 5, 8)
+                if private::answer_is_private(&answer)
+                    && !w.private
+                    && private::may_be_private(w.activity, w.group)
+                {
                     w.private = true;
                     // its group-world clock starts now (a spare idle for long is not "ended")
                     let now = Instant::now();

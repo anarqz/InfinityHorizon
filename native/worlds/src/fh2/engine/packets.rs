@@ -571,6 +571,10 @@ impl Engine {
             match payload::sanitize(obj.router_id, &obj.vars) {
                 Ok(clean) => {
                     obj.vars = clean;
+                    // a private session: IsLeader and PlayerHost are the server's alone (T-L9)
+                    if self.private && obj.router_id == 1 {
+                        obj.vars = payload::without_leader_flags(&obj.vars);
+                    }
                     if obj.router_id == 1
                         && !obj.is_create
                         && obj.vars.len() >= super::roadtrip::CAR_CHOICE_BITS

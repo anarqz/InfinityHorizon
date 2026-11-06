@@ -293,7 +293,11 @@ engine, in this recommended order:
   IsLeader, kept for later joiners' snapshots (9 more bits reserved at ingest, private only); the
   old leader is cleared before the new one is set. RequestLeaderChange (59) from the leader naming
   a synced member's player key moves it (the asker's fan-out budget pays); from anyone else, or
-  for anything else, it changes nothing. DropLeadership (60) is not read.
+  for anything else, it changes nothing. DropLeadership (60) is not read. A member's own
+  IsLeader and PlayerHost writes are stripped before they are kept or relayed (private only;
+  PlayerHost while the player tail's widths are known), so nobody can crown itself.
+- **The agent** only promotes a free roam or Road Trip spare; `private` on any other world's
+  answer is ignored.
 - **Private Road Trip (A7):** no OD-194 majority and no send-back. The vote is shown as usual; the
   leader's choice decides and closes it 10 s later once two players are in; without that choice
   (or alone) the vote is shown again for 60 s. A member alone after the vote is never sent back;

@@ -20,6 +20,13 @@ pub fn answer_is_private(answer: &Value) -> bool {
     answer.get("private").and_then(Value::as_bool) == Some(true)
 }
 
+/// Whether an agent's world may become private: a spare (not a car meet session's group world) of
+/// free roam or Road Trip, never a car meet (§12.2 items 5 and 8). Anything else ignores the
+/// answer's `private` (a server fault), so its engine context keeps working.
+pub fn may_be_private(activity: &str, group: bool) -> bool {
+    !group && matches!(activity, "freeroam" | "roadtrip")
+}
+
 /// The leader a `world.state` event names: a non-zero decimal XUID, else none.
 pub fn leader_of(state: &Value) -> Option<String> {
     state
@@ -83,6 +90,17 @@ mod tests {
         ] {
             assert!(!answer_is_private(&answer), "{answer}");
         }
+    }
+
+    #[test]
+    fn only_a_free_roam_or_road_trip_spare_may_be_promoted() {
+        assert!(may_be_private("freeroam", false));
+        assert!(may_be_private("roadtrip", false));
+        assert!(!may_be_private("carmeet", false));
+        assert!(
+            !may_be_private("freeroam", true),
+            "a car meet session's group world"
+        );
     }
 
     #[test]
