@@ -49,6 +49,15 @@ public static class CaptureWhat
     /// does the launcher set that flag.
     /// </summary>
     public const byte WatchPerCar = 11;
+
+    /// <summary>
+    /// T-L6 (OD-204, WORLDS_OFFICIAL §12.2): the hook can hold the game's private session create and ask for its private official
+    /// lobby first (<see cref="Frame.FreeRoamNeed"/> kinds <see cref="Matchmaking.FreeRoamKind.PrivateFreeRoam"/> and
+    /// <see cref="Matchmaking.FreeRoamKind.PrivateRoadTrip"/>, after a <see cref="Frame.PrivateSession"/>). The only
+    /// <c>Capture</c> a launcher sends back (launcher → hook, same layout): <c>Capture{12, 1}</c> says this launcher serves those
+    /// kinds; the hook sends them only after it. A launcher that does not answer keeps today's path (the write goes on).
+    /// </summary>
+    public const byte PrivateCreate = 12;
 }
 
 /// <summary><see cref="Frame.Observed"/> kinds; the platform's names are <see cref="Matchmaking.ObservationKinds"/>.</summary>
@@ -305,7 +314,28 @@ public abstract record Frame
 
         internal static void Validate(byte kind)
         {
-            if (kind > Matchmaking.FreeRoamKind.RoadTrip) throw new ProtocolException("Invalid free roam kind");
+            if (kind > Matchmaking.FreeRoamKind.PrivateRoadTrip) throw new ProtocolException("Invalid free roam kind");
+        }
+    }
+
+    /// <summary>
+    /// hook → launcher (0x28, T-L6): <c>{str scid, str templateName, str name}</c>, the session reference of the private create
+    /// the hook holds (read from its own <c>PUT …/serviceconfigs/{scid}/sessionTemplates/{templateName}/sessions/{name}</c>, the
+    /// session the game then registers with IPartyStatics slot 6), sent right before its <see cref="FreeRoamNeed"/> kind 3 or 4.
+    /// Each part is <c>[A-Za-z0-9._-]{1,128}</c>. Only to a launcher that answered <see cref="CaptureWhat.PrivateCreate"/>.
+    /// </summary>
+    public sealed record PrivateSession(string Scid, string TemplateName, string Name) : Frame
+    {
+        public const int MaxPart = 128;
+
+        public override byte Type => 0x28;
+
+        internal void Validate()
+        {
+            if (!Part(Scid) || !Part(TemplateName) || !Part(Name)) throw new ProtocolException("Invalid private session reference");
+
+            static bool Part(string? text) => text is { Length: >= 1 and <= MaxPart }
+                && text.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-' or '_' or '.');
         }
     }
 
@@ -652,6 +682,9 @@ public abstract record Frame
             case FreeRoamReady ready:
                 FreeRoamReady.Validate(ready.Result);
                 w.U32(ready.Nonce); w.U8(ready.Result); break;
+            case PrivateSession session:
+                session.Validate();
+                w.Str(session.Scid); w.Str(session.TemplateName); w.Str(session.Name); break;
             case Progress progress:
                 w.U32(progress.Level); w.U64(progress.Credits); break;
             case Car car:
@@ -782,6 +815,7 @@ public abstract record Frame
             0x25 => r.U8() == Watch.Layout ? DecodeWatch(ref r) : throw new ProtocolException("Unknown watch layout"),
             0x26 => DecodeObserved(ref r),
             0x27 => r.U8() == PlayerParts.Layout ? DecodePlayerParts(ref r) : throw new ProtocolException("Unknown player parts layout"),
+            0x28 => new PrivateSession(r.Str(), r.Str(), r.Str()),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
@@ -795,6 +829,7 @@ public abstract record Frame
         if (frame is RelayFallback fallback) RelayFallback.Validate(fallback.Grant, fallback.State);
         if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
         if (frame is FreeRoamNeed need) FreeRoamNeed.Validate(need.Kind);
+        if (frame is PrivateSession privateSession) privateSession.Validate();
         if (frame is Car car) Car.Validate(car.CarKey);
         if (frame is FollowHost follow) FollowHost.Validate(follow.LobbyType);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");

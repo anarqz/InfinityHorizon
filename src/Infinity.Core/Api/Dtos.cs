@@ -242,7 +242,18 @@ public sealed record PlaySessionCreate(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Dedicated = false,
     // OD-112 follow-up (GATE_API.md §2 "Modded sessions"): the launch plan's multiplayer mod set is
     // not empty; left out when false so an ordinary body is unchanged byte for byte.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Modded = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Modded = false,
+    // OD-204 (MATCHMAKING_API §2.10, WORLDS_OFFICIAL §12.8, CR-S96): what this client can do, PlaySessionFeatures; absent on ≤ 2.0.4
+    // and left out when null. A server that does not know the member refuses it as unknown (REQUEST.INVALID {field: "features"}):
+    // GateAdmission then creates the session again without it, and private creates stay off for that session.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Features = null);
+
+/// <summary>OD-204: <see cref="PlaySessionCreate.Features"/> values (MATCHMAKING_API §2.10).</summary>
+public static class PlaySessionFeatures
+{
+    /// <summary>The private official seat class and the private create (CR-S96); the server's gate for both.</summary>
+    public const string PrivateOfficialV1 = "private_official_v1";
+}
 
 /// <summary>The game access ticket (PASETO <c>v4.public</c>; the hook sends it as <c>X-Fi-Session</c>).</summary>
 public sealed record GateTicket(string Token, string ExpiresAt, uint HeartbeatEveryMs);

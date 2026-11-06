@@ -224,6 +224,14 @@ int fi_launch_seat(unsigned kind);
 int fi_launch_seat_ask(unsigned kind, volatile LONG *aborted);
 /* W-10: 0 only when the launcher says no lobby is pending (launch.c); 1 otherwise, or unknown. */
 int fi_launch_lobby_pending(void);
+/* T-L6 (OD-204, WORLDS_OFFICIAL 12.2): the game's private session create (a sessiondirectory PUT, launch.c's predicate) waits
+   on the calling net worker until the launcher holds its private official lobby (FreeRoamNeed kind 3, only once the launcher
+   answered Capture{12, 1}). 0: forward the request (not a private create, an older launcher, or Ready); 1: do not forward it,
+   answer NET_OFFLINE_ERROR (refused, none, no answer within the wait, or no live session). fi_launch_private_kind: the
+   predicate alone (3, or 0). */
+int fi_launch_private_create(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
+                             volatile LONG *aborted);
+unsigned fi_launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
 /* W-10 (freeroam.c): the Party calls still watched (async, Started), logged with `why`; and
    follow.c's game-thread check after a CancelMatchmaking. */
 void azimuth_freeroam_pending_log(const char *why);

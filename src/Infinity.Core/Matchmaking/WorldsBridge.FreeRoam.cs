@@ -19,6 +19,19 @@ public static class FreeRoamKind
     public const byte FreeRoam = 0;
     public const byte CarMeet = 1;
     public const byte RoadTrip = 2;
+
+    /// <summary>
+    /// T-L6 (OD-204, WORLDS_OFFICIAL §12.2): the game created a private free roam in its own menu; the hook holds its session
+    /// write until the launcher holds the player's private official lobby (<c>POST /mm/v1/join {activity, private: true}</c>).
+    /// Sent only to a launcher that answered <see cref="Session.CaptureWhat.PrivateCreate"/>.
+    /// </summary>
+    public const byte PrivateFreeRoam = 3;
+
+    /// <summary>T-L6: as <see cref="PrivateFreeRoam"/> for a private Road Trip (the hook derives it once T-R2 finds its marker).</summary>
+    public const byte PrivateRoadTrip = 4;
+
+    /// <summary>Kinds 3 and 4: a private create, never a matchmaking ask.</summary>
+    public static bool IsPrivateCreate(byte kind) => kind is PrivateFreeRoam or PrivateRoadTrip;
 }
 
 // CR-L40 §3.2, OD-190 (WORLDS_OFFICIAL §11.3): before the game's FreeRoam, car meet or Road Trip hopper request the hook asks;
@@ -146,7 +159,7 @@ public sealed partial class WorldsBridge
             }
             else if (world is not null && SessionSwitchHolds(world) is null)
                 _log(HostedWorldId is null && KeepsPlayerSeat() is not null
-                    ? $"worlds: free roam left; {world} is kept for the game's next lobby (a player world's seat)"
+                    ? $"worlds: free roam left; {world} is kept for the game's next lobby ({KeptSeat(world)})"
                     : $"worlds: free roam left; {world} is kept {(int)FreeRoamLeftGrace.TotalSeconds} s for the game's next lobby");
             var wait = FreeRoamLeftGrace;
             while (true)
@@ -207,8 +220,8 @@ public sealed partial class WorldsBridge
         if (hosted is null && KeepsPlayerSeat() is { } player && Volatile.Read(ref _switchExpired)?.World != player)
         {
             Volatile.Write(ref _keptPastGrace, player); // review 1: the next ask reads the seat before it says "stay"
-            _log($"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {player} stays (a player "
-                + "world's seat is kept for the game's next lobby; the player's leave, the world's close or the host's heartbeat ends it)");
+            _log($"worlds: free roam left {(int)FreeRoamLeftGrace.TotalSeconds} s ago with no lobby asked; {player} stays ({KeptSeat(player)} "
+                + "is kept for the game's next lobby; the player's leave, the world's close or the host's heartbeat ends it)");
             return;
         }
         if ((hosted ?? Volatile.Read(ref _seatWorld)) is { } gone)
@@ -222,8 +235,9 @@ public sealed partial class WorldsBridge
     /// game played (a used seat, which CR-S86 bounds); null otherwise. A reserved seat the game never played keeps the 30 s rule.
     /// </summary>
     private string? KeepsPlayerSeat() => _seat.GrantId is { } grant && Played(grant) && Volatile.Read(ref _seatWorld) is { } world
-        && Volatile.Read(ref _seatOfficial) != world
-        && !(Volatile.Read(ref _mineSnapshot) is { Official: true } mine && mine.WorldId == world) ? world : null;
+        && (SeatPrivate(world) // T-L6: a private official seat keeps a player world's lifetime (WORLDS_OFFICIAL §12.2 item 11)
+            || Volatile.Read(ref _seatOfficial) != world
+            && !(Volatile.Read(ref _mineSnapshot) is { Official: true } mine && mine.WorldId == world)) ? world : null;
 
     // W-14 review 1: the player world whose seat was kept past the grace with the game out of it (the server may release it any
     // moment, CR-S86): every ask reads the seat first instead of trusting the cached activity; cleared when the game joins again
@@ -294,6 +308,8 @@ public sealed partial class WorldsBridge
     {
         FreeRoamKind.CarMeet => "car meet",
         FreeRoamKind.RoadTrip => "road trip",
+        FreeRoamKind.PrivateFreeRoam => "private free roam",
+        FreeRoamKind.PrivateRoadTrip => "private road trip",
         _ => "free roam",
     };
 
@@ -342,7 +358,8 @@ public sealed partial class WorldsBridge
         CancelFreeRoamLeave(); // the game left free roam for this ask: its world stays and is weighed here
         SessionSwitchAsked(); // W-12: matchmaking of its own, not a move into an invitation's session
         if (!OnlineOpen) return Task.FromResult(Decided(kind, FreeRoamResult.NotOnline, "no world (online is closed)"));
-        if (StaysAtOnce(kind)) return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
+        // T-L6: a private create (kinds 3/4) always calls the server: the hook holds the game's session write for it
+        if (!FreeRoamKind.IsPrivateCreate(kind) && StaysAtOnce(kind)) return Task.FromResult(Decided(kind, FreeRoamResult.Ready, Staying()));
         lock (_freeRoamState)
         {
             if (_freeRoamRun is { IsCompleted: false } running)
@@ -352,15 +369,18 @@ public sealed partial class WorldsBridge
                 return _freeRoamRun = AfterAsync(running, kind, cancellation);
             }
             _freeRoamRunKind = kind;
-            return _freeRoamRun = FreeRoamCoreAsync(kind, cancellation);
+            return _freeRoamRun = CoreFor(kind, cancellation);
         }
 
         async Task<byte> AfterAsync(Task<byte> previous, byte next, CancellationToken token)
         {
             try { await previous.WaitAsync(token).ConfigureAwait(false); }
             catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested) { }
-            return await FreeRoamCoreAsync(next, token).ConfigureAwait(false);
+            return await CoreFor(next, token).ConfigureAwait(false);
         }
+
+        Task<byte> CoreFor(byte next, CancellationToken token) =>
+            FreeRoamKind.IsPrivateCreate(next) ? PrivateCreateCoreAsync(next, token) : FreeRoamCoreAsync(next, token);
     }
 
     private static string? LobbyOf(byte kind) => kind switch
@@ -380,7 +400,7 @@ public sealed partial class WorldsBridge
     private static string PlacementOf(byte kind) => kind switch
     {
         FreeRoamKind.CarMeet => WorldActivities.CarMeet,
-        FreeRoamKind.RoadTrip => WorldActivities.RoadTrip,
+        FreeRoamKind.RoadTrip or FreeRoamKind.PrivateRoadTrip => WorldActivities.RoadTrip,
         _ => WorldActivities.FreeRoam,
     };
 
@@ -452,6 +472,12 @@ public sealed partial class WorldsBridge
     private void ObserveHostLeft(SeatEnded? ended, string? heldGrant)
     {
         if (heldGrant is null || ended is null || ended.GrantId != heldGrant) return;
+        // T-L6: a private lobby's seat the server released (missing from the announce, a crash or a slow move) is rejoined by id
+        if (SeatPrivate(ended.WorldId) && ended.Reason == SeatEnds.Released)
+        {
+            Volatile.Write(ref _recentlyLeft, new RecentWorld(ended.WorldId, Now));
+            return;
+        }
         if (Volatile.Read(ref _seatOfficial) == ended.WorldId) return; // an official world closing is not a host leaving
         // W-14: a player world's seat released while the game was between its lobbies (CR-S86: the host's heartbeat stopped listing
         // it) is the world the game's next ask rejoins first, never a reason to place it in an official world
@@ -505,6 +531,9 @@ public sealed partial class WorldsBridge
             if (await AccessAsync(token).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no world (online lobbies are not allowed now)");
             if (WireMods().Refusal is { } refusal) return Decided(kind, FreeRoamResult.None, $"no world (mods: {refusal})");
+            // T-L6 (WORLDS_OFFICIAL §12.2 item 11): a private lobby's seat (known from the seat just read) is never dropped by test.11
+            // nor moved by a quick join: PrivateLobbyPolicy says whether this ask stays there or holds
+            if (PrivateSeatDecision(kind) is { } inPrivate) return inPrivate;
             // test.11: a seat taken for another kind that never played is not this ask's world ("stay" left the game on FINDING
             // SESSION): it is let go (not on purpose) and this kind is placed as usual. No CancelMatchmaking: this ask is
             // the game's live matchmaking now.
@@ -554,8 +583,9 @@ public sealed partial class WorldsBridge
             // world still runs it (live, worlds9: a private car meet ask 5 s after the seat went quick joined the official car meet)
             // (review 8: a world that runs no car meet right now stays the next free roam ask's first choice)
             var recent = Volatile.Read(ref _recentlyLeft);
+            // T-L6: a private lobby is rejoined by its world id (an official one is placed again by activity)
             var rejoin = recent is not null && Now - recent.LeftAt <= RejoinWindow && !HasFreeRoamWorld && !Isolated && moved is null
-                && Volatile.Read(ref _seatOfficial) != recent.WorldId;
+                && (Volatile.Read(ref _seatOfficial) != recent.WorldId || SeatPrivate(recent.WorldId));
             if (recent is not null && (!rejoin || await RecentWorldRunsAsync(recent, kind, token).ConfigureAwait(false)))
                 rejoin &= Interlocked.CompareExchange(ref _recentlyLeft, null, recent) == recent; // one ask takes it
             else rejoin = false;
@@ -599,6 +629,9 @@ public sealed partial class WorldsBridge
         catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
         if (view is { Error.Kind: MmErrorKind.WorldNotFound }) return false;
         if (view is not { Ok: true, Value: { } seen }) return true;
+        // T-L6: a private lobby runs its one activity for life (a car meet ask never goes back to one, A7)
+        if (seen.Private == true || SeatPrivate(recent.WorldId))
+            return kind != FreeRoamKind.CarMeet && seen.Activity == ActivityOf(kind);
         if (seen.Official == true || seen.HostAway == true) return false;
         // review 2: a world this caller cannot join now (a code it does not hold, its host's bans, full) spends no join and no code try
         if (seen.NeedsCode && recent.Code is null) return false;
@@ -780,6 +813,7 @@ public sealed partial class WorldsBridge
     {
         ObserveHostAway(seat); // CR-L49: a guest is told once when its host goes away
         if (seat.State == SeatStates.Hosting || seat.World.Id != seat.WorldId) { _seatActivity = null; return; }
+        ObservePrivate(seat.WorldId, seat.World); // T-L6: the private official seat class
         var official = seat.World.Official == true;
         if (official) Volatile.Write(ref _seatOfficial, seat.WorldId);
         var activity = seat.World.Activity;
@@ -837,8 +871,8 @@ public sealed partial class WorldsBridge
     // OD-150: the activity a lobby ask joins by and opens with; a car meet does not change it, so it asks for none
     private static string? ActivityOf(byte kind) => kind switch
     {
-        FreeRoamKind.FreeRoam => WorldActivities.FreeRoam,
-        FreeRoamKind.RoadTrip => WorldActivities.RoadTrip,
+        FreeRoamKind.FreeRoam or FreeRoamKind.PrivateFreeRoam => WorldActivities.FreeRoam,
+        FreeRoamKind.RoadTrip or FreeRoamKind.PrivateRoadTrip => WorldActivities.RoadTrip,
         _ => null,
     };
 

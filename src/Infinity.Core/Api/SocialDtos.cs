@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Text.Json.Serialization;
 using Infinity.Core.Matchmaking;
 
 namespace Infinity.Core.Api;
@@ -130,6 +131,22 @@ public sealed record InviteReceived
     public required string CreatedAt { get; init; }
 
     public required string ExpiresAt { get; init; }
+
+    /// <summary>OD-204 (MATCHMAKING_API §2.10, CR-S96): an invite to a private official world; omitted elsewhere.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Private { get; init; }
+
+    /// <summary>OD-204: the private world's game session (the owner's created session); omitted elsewhere.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public GameSessionReference? Session { get; init; }
+}
+
+/// <summary>OD-204 (MATCHMAKING_API §2.10): <c>{scid, templateName, name}</c>, a game session as the game names it.</summary>
+public sealed record GameSessionReference
+{
+    public required string Scid { get; init; }
+
+    public required string TemplateName { get; init; }
+
+    public required string Name { get; init; }
 }
 
 /// <summary><c>GET /launcher/v1/invites[?asXuid=]</c> → 200 (polled about every 10 s): newest first, at most 20.</summary>

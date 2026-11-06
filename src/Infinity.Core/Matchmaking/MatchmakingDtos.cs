@@ -132,6 +132,13 @@ public record WorldView : World
     /// <summary>§2.9 (OD-188/189): hosted by a Worlds host of <c>FI_WORLDS</c>, not a player (its <see cref="World.Host"/> is official). Omitted when false.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Official { get; init; }
 
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, CR-S96): a private official world (created in the game's own menu, friends only). Omitted
+    /// elsewhere and by older servers (null reads as false). The client's cue for the private official seat class
+    /// (WORLDS_OFFICIAL §12.2 item 11); also on <c>GET /mm/v1/seat</c>'s world.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Private { get; init; }
+
     public required bool Invited { get; init; }
 
     /// <summary>Only to the host of a <c>friends</c> or <c>private</c> world: 8 digits.</summary>
@@ -534,6 +541,14 @@ public sealed record JoinRequest
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Activity { get; init; }
+
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, CR-S96): <c>true</c> with an <see cref="Activity"/> (<c>freeroam</c> or <c>roadtrip</c>) and no
+    /// world id or code is the private create: the caller's own private official world, or a spare promoted for it. Null: left out
+    /// (every other join; an older server refuses the member as unknown).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Private { get; init; }
 }
 
 /// <summary>A reserved seat (<c>expiresAt</c> ≤ 60 s away, renewable up to <c>holdUntil</c>).</summary>

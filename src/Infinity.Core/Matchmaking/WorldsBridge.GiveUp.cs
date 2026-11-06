@@ -12,6 +12,15 @@ public sealed partial class WorldsBridge
     /// <summary>How long a seat a lobby ask answered Ready has to start playing before it is given up.</summary>
     public static readonly TimeSpan SeatGiveUp = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// T-L6: the bound for a seat a private create (FreeRoamNeed kinds 3/4) took. After Ready the game still writes its session
+    /// (host, active) and connects, a path T-R2 has not timed (it saw about 50 s before UNABLE TO JOIN SESSION with no server), and
+    /// it is no matchmaking search: the seat is let go after this, with no CancelMatchmaking.
+    /// </summary>
+    public static readonly TimeSpan PrivateSeatGiveUp = TimeSpan.FromSeconds(60);
+
+    private static TimeSpan GiveUpAfter(byte kind) => FreeRoamKind.IsPrivateCreate(kind) ? PrivateSeatGiveUp : SeatGiveUp;
+
     /// <summary>Writes <see cref="Session.Frame.CancelMatchmaking"/> to the hook (the supervisor's control pipe).</summary>
     public Func<CancellationToken, Task>? SendCancelMatchmaking { get; set; }
 
@@ -62,6 +71,7 @@ public sealed partial class WorldsBridge
     private SeatTaken? UnprovenOtherSeat(byte kind)
     {
         if (Hosting || _seat.GrantId is not { } grant || Played(grant)) return null;
+        if (SeatPrivate(Volatile.Read(ref _seatWorld))) return null; // T-L6: a private lobby's seat is exempt (WORLDS_OFFICIAL §12.2 item 11)
         // OD-191: a grant this launcher did not take (a seat read's: an OD-191 group seat, an accepted request) was taken for no ask
         // of its own; its world's activity decides
         if (Volatile.Read(ref _seatTaken) is not { } seat || seat.Grant != grant) return null;
@@ -88,7 +98,7 @@ public sealed partial class WorldsBridge
         var due = false;
         try
         {
-            await Task.Delay(SeatGiveUp, _clock, bound.Token).ConfigureAwait(false);
+            await Task.Delay(GiveUpAfter(kind), _clock, bound.Token).ConfigureAwait(false);
             due = Interlocked.CompareExchange(ref _giveUp, null, bound) == bound;
         }
         catch (OperationCanceledException) { }
@@ -102,8 +112,10 @@ public sealed partial class WorldsBridge
         if (Volatile.Read(ref _joinAttempt) != 0) return;
         lock (_freeRoamState) if (_freeRoamRun is { IsCompleted: false }) return;
         var reason = GiveUpReason(grant);
-        if (!await ReleaseUnprovenSeatAsync(grant, $"the seat was given up after {(int)SeatGiveUp.TotalSeconds} s: {reason}").ConfigureAwait(false)) return;
-        _log($"worlds: {KindName(kind)}: gave up on {world} after {(int)SeatGiveUp.TotalSeconds} s: {reason}");
+        var after = (int)GiveUpAfter(kind).TotalSeconds;
+        if (!await ReleaseUnprovenSeatAsync(grant, $"the seat was given up after {after} s: {reason}").ConfigureAwait(false)) return;
+        _log($"worlds: {KindName(kind)}: gave up on {world} after {after} s: {reason}");
+        if (FreeRoamKind.IsPrivateCreate(kind)) return; // T-L6: the game is writing its own session, not searching
         await CancelMatchmakingAsync().ConfigureAwait(false);
     }
 
