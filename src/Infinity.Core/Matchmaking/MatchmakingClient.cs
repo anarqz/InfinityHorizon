@@ -101,6 +101,13 @@ public interface IMatchmakingApi
         IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation) =>
         JoinAsync(worldId, code, mods, nat, relays, transport, cancellation);
 
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, CR-S96): the private create, <c>POST /mm/v1/join {activity, private: true}</c>: the caller's own
+    /// private official world, or a spare promoted for it, ending the caller's other live seat. A test double without it refuses.
+    /// </summary>
+    Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) => throw new NotSupportedException("private create");
+
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
 
     Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) => SeatAsync(cancellation);
@@ -315,6 +322,29 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
             Transport = transport,
             Activity = activity,
         };
+        return await PostJoinAsync(body, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10): the private create, <c>POST /mm/v1/join {activity, private: true}</c> (<paramref name="activity"/>
+    /// <c>freeroam</c> or <c>roadtrip</c>). Answered as any join (a 429 reads as <c>status: "rate_limited"</c>).
+    /// </summary>
+    public Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, string? nat,
+        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation)
+    {
+        if (!WorldActivities.All.Contains(activity)) throw new ArgumentException("freeroam or roadtrip", nameof(activity));
+        return PostJoinAsync(new JoinRequest
+        {
+            Mods = mods is { Count: > 0 } ? mods : null,
+            Nat = nat,
+            Relays = relays,
+            Activity = activity,
+            Private = true,
+        }, cancellation);
+    }
+
+    private async Task<MmResult<JoinAnswer>> PostJoinAsync(JoinRequest body, CancellationToken cancellation)
+    {
         var result = await SendAsync<JoinAnswer>(HttpMethod.Post, "/mm/v1/join", body, cancellation).ConfigureAwait(false);
         if (result.Error is { Kind: MmErrorKind.RateLimited } limited)
         {

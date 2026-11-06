@@ -334,10 +334,14 @@ public sealed class PlaySupervisor
         // the UI pipe too, before the child: the overlay connects once the hook loaded it
         using var uiPipe = _config.Overlay is not null && _uiPipes is not null ? _uiPipes(handoff) : null;
         _admissionPending = true;
-        var admission = await new GateAdmission(_gate, _emit, _clock).WaitAsync(
+        // OD-204 (MATCHMAKING_API §2.10): the session declares private_official_v1; a server that does not know the member refuses it,
+        // and the admission is asked again without it (private creates then stay off this session)
+        var gateAdmission = new GateAdmission(_gate, _emit, _clock);
+        var admission = await gateAdmission.WaitAsync(
             id => new PlaySessionCreate(id, _config.Game, _config.Xuid, handoff.NonceHex, _config.LauncherVersion, _config.Install.HookSha256, _config.CarDbSha256, 0, false,
-                Modded: Matchmaking.ModSets.Modded(_config.Mods)),
+                Modded: Matchmaking.ModSets.Modded(_config.Mods), Features: [PlaySessionFeatures.PrivateOfficialV1]),
             preparing.Token, _config.PrepareAdmission, initialSessionId).ConfigureAwait(false);
+        _privateOfficial = !gateAdmission.FeaturesRefused;
         if (admission is null)
         {
             if (_online.IsPaused) EmitPause(await _online.Paused.ConfigureAwait(false));
@@ -884,6 +888,25 @@ public sealed class PlaySupervisor
                         }
                         if(frame is Frame.Capture{What:CaptureWhat.Parts} partsCapability && endpoint.Greeted && worlds is not null)
                             worlds.PartsCapable=partsCapability.Ok;
+                        // T-L6 (OD-204): the hook can hold the game's private create; answered Capture{12, 1} only when this session's
+                        // server took features: ["private_official_v1"] (else the hook keeps today's path and the write goes on)
+                        if (frame is Frame.Capture { What: CaptureWhat.PrivateCreate } privateCapability && endpoint.Greeted && worlds is not null
+                            && !suspended && tokensOpen && PrivateCreateReply(privateCapability, _privateOfficial) is { } reply)
+                        {
+                            try
+                            {
+                                await pipe.WriteAsync(reply.Encode(), stop.Token).ConfigureAwait(false);
+                                worlds.PrivateCreateCapable = true;
+                                _emit(new SupervisorEvent.Note("worlds: private creates on (the hook holds the game's private session write)"));
+                            }
+                            catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException)
+                            { _emit(new SupervisorEvent.Note("worlds: private creates off (Capture 12 not sent: " + error.GetType().Name + ")")); }
+                        }
+                        if (frame is Frame.PrivateSession privateSession && endpoint.Greeted)
+                        {
+                            worlds?.PrivateSessionWritten(privateSession.Scid, privateSession.TemplateName, privateSession.Name);
+                            continue;
+                        }
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
@@ -1287,6 +1310,17 @@ public sealed class PlaySupervisor
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception error) { _emit(new SupervisorEvent.Note("worlds: relay fallback report failed (" + error.GetType().Name + ")")); }
     }
+
+    // T-L6: this session's server took features: ["private_official_v1"] (OneSessionAsync's admission)
+    private bool _privateOfficial;
+
+    /// <summary>
+    /// T-L6 (OD-204): the launcher's answer to the hook's <see cref="CaptureWhat.PrivateCreate"/>: <c>Capture{12, 1}</c> back (the hook
+    /// then holds the game's private create for FreeRoamNeed kinds 3/4) only when the hook reported it ok and this session's server
+    /// took <c>private_official_v1</c>; else nothing, and the hook keeps today's path.
+    /// </summary>
+    internal static Frame.Capture? PrivateCreateReply(Frame.Capture hook, bool serverTookFeatures) =>
+        hook is { What: CaptureWhat.PrivateCreate, Ok: true } && serverTookFeatures ? new Frame.Capture(CaptureWhat.PrivateCreate, true) : null;
 
     /// <summary>CR-L40: how long the launcher looks for a lobby before it answers <see cref="Frame.FreeRoamReady"/> (the hook waits 20 s).</summary>
     public static readonly TimeSpan FreeRoamBudget = TimeSpan.FromSeconds(18);

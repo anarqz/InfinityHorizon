@@ -1625,8 +1625,9 @@ static int net_forward_noted(NetRequest *request, HRESULT *error) {
 static DWORD WINAPI net_worker(void *parameter) {
     NetRequest *request = parameter;
     HRESULT error = NET_OFFLINE_ERROR;
+    int held_off = 0; /* T-L6: a private create the launcher could not seat is answered offline here */
     if (net_mode == NET_MODE_PROXY && !request->aborted) {
-        /* a private free roam session opens this PC's world before the server sees it */
+        /* a private free roam session opens this PC's world before the server sees it (never under the launcher) */
         azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
                                  request->request_body.data, request->request_body.size);
         /* a car meet's matchmaking ticket (CarMeet_qos): what it asks for, in the log (no identity) */
@@ -1636,11 +1637,17 @@ static DWORD WINAPI net_worker(void *parameter) {
         /* CR-L40: FREE ROAM ONLINE's matchmaking waits (this worker only, at most 20 s) until
            the launcher has seated the player in a lobby; it is forwarded whatever the answer */
         (void)fi_launch_free_roam(buffer_wide(&request->method), buffer_wide(&request->url), &request->aborted);
+        /* T-L6 (WORLDS_OFFICIAL 12.2): the game's private session create waits (this worker only, at most 20 s) until the
+           launcher holds its private official lobby; unlike the matchmaking ask above it is NOT forwarded otherwise */
+        held_off = fi_launch_private_create(buffer_wide(&request->method), buffer_wide(&request->url), request->request_body.data,
+                                            request->request_body.size, &request->aborted);
         /* T34: a leave of the target a found ticket named, in the log (read only) */
-        fi_ticket_guard_request(buffer_wide(&request->method), buffer_wide(&request->url), request->request_body.data,
-                                request->request_body.size);
+        if (!held_off) {
+            fi_ticket_guard_request(buffer_wide(&request->method), buffer_wide(&request->url), request->request_body.data,
+                                    request->request_body.size);
+        }
     }
-    int answered = net_mode == NET_MODE_PROXY && !request->aborted &&
+    int answered = !held_off && net_mode == NET_MODE_PROXY && !request->aborted &&
                    (net_answer_without_profile(request) || net_answer_foreign(request) || net_answer_livery(request) ||
                     net_answer_no_line(request) || net_hold_progress(request) || net_answer_backoff(request) ||
                     net_forward_noted(request, &error));

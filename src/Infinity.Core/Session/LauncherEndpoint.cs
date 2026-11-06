@@ -56,6 +56,9 @@ public abstract record EndpointEvent
 
     /// <summary>Frame 0x22 from the hook (CR-L41.3): the local player's current car changed (its car key, <c>Data_Car.Id × 1000</c>).</summary>
     public sealed record CarChanged(int CarKey) : EndpointEvent;
+
+    /// <summary>Frame 0x28 from the hook (T-L6): the session reference of the private create it holds.</summary>
+    public sealed record PrivateSessionWritten(string Scid, string TemplateName, string Name) : EndpointEvent;
 }
 
 /// <summary>
@@ -169,6 +172,7 @@ public sealed class LauncherEndpoint
             Frame.FreeRoamNeed f => new EndpointEvent.FreeRoamNeeded(f.Nonce, f.Kind),
             Frame.Progress p => new EndpointEvent.ProgressReported(p.Level, p.Credits),
             Frame.Car c => new EndpointEvent.CarChanged(c.CarKey),
+            Frame.PrivateSession p => new EndpointEvent.PrivateSessionWritten(p.Scid, p.TemplateName, p.Name),
             _ => throw new ProtocolException($"unexpected frame from hook: type 0x{frame.Type:x2}"),
         };
         return ([], evt);

@@ -495,14 +495,16 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>As <see cref="JoinAsync(UiFrame.JoinWorld, CancellationToken)"/>, asking for <paramref name="activity"/> (OD-150; null: any).</summary>
     /// <paramref name="kind"/>: the lobby ask the seat is taken for (<see cref="FreeRoamKind"/>; the overlay's join is free roam).
-    private async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, string? activity, CancellationToken cancellation, byte kind = FreeRoamKind.FreeRoam)
+    /// <paramref name="privateCreate"/> (T-L6): the private create, <c>POST /mm/v1/join {activity, private: true}</c>.
+    private async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, string? activity, CancellationToken cancellation, byte kind = FreeRoamKind.FreeRoam,
+        bool privateCreate = false)
     {
         if(Interlocked.CompareExchange(ref _joinAttempt,1,0)!=0)return new(UiJoin.SlowDown,_text("worlds.slow_down"));
         CancelFreeRoamLeave(); // the new seat is never let go by an older leave of free roam
-        try {return await JoinCoreAsync(request,activity,kind,cancellation).ConfigureAwait(false);}
+        try {return await JoinCoreAsync(request,activity,kind,privateCreate,cancellation).ConfigureAwait(false);}
         finally {Volatile.Write(ref _joinAttempt,0);}
     }
-    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, string? activity, byte kind, CancellationToken cancellation)
+    private async Task<UiFrame.JoinResult> JoinCoreAsync(UiFrame.JoinWorld request, string? activity, byte kind, bool privateCreate, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
         Volatile.Write(ref _lastJoinRefusal, null);
@@ -543,7 +545,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-                var answer = await OperationAsync(_joinRetry, token => _mm.JoinAsync(worldId, code, mods, nat, relays, null, activity, token), cancellation,
+                var answer = await OperationAsync(_joinRetry, token => privateCreate && activity is not null
+                        ? _mm.PrivateCreateAsync(activity, mods, nat, relays, token)
+                        : _mm.JoinAsync(worldId, code, mods, nat, relays, null, activity, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -581,6 +585,20 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         // OD-150: the world runs another activity now; like a closed world, the free-roam step tries the next one
                         _log($"worlds: join refused: {worldId ?? "the code's world"} does not run {activity ?? "the asked activity"} now");
                         return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.closed"));
+                    }
+                    if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.ClientUpdate })
+                    {
+                        // OD-204 (MATCHMAKING_API §2.10): this session did not declare private_official_v1 (or the server did not take it)
+                        Volatile.Write(ref _lastJoinRefusal, ConflictReasons.ClientUpdate);
+                        _log("worlds: join refused: client_update (private lobbies need this session's features)");
+                        return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.client_update"));
+                    }
+                    if (privateCreate && answer.Error is { Kind: MmErrorKind.Invalid, Field: "private" })
+                    {
+                        // T-L6: a server before CR-S96 refuses the unknown member
+                        Volatile.Write(ref _lastJoinRefusal, "private_unsupported");
+                        _log("worlds: private create refused: this server has no private lobbies yet");
+                        return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.private_unavailable"));
                     }
                     if (ConflictReasons.RelayKey(answer.Error) is { } relayKey)
                     {
@@ -961,7 +979,10 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     : world.Host.Xuid is { } host ? [(host, true, (IReadOnlyList<ModEntry>?)null)] : [], world.Mods, ModName));
                 return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.DisplayName, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
                     WorldModes.OpenToBoth(world), Official: role != UiWorldRole.Hosting
-                        && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)); // OD-192
+                        && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId), // OD-192
+                    // OD-204 (T-L6): only with the official flag (a private world is an official one; the frame refuses it alone)
+                    Private: role != UiWorldRole.Hosting && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)
+                        && (world.Private == true || SeatPrivate(seat.WorldId)));
             }
         }
         catch (Exception e) when (HostFailure(e) || e is TimeoutException)

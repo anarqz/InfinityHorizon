@@ -76,8 +76,14 @@ public static class ConflictReasons
     /// </summary>
     public const string LobbiesFull = "lobbies_full";
 
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, CR-S96): the private create, or a join into a private official world, from a session that did
+    /// not declare <c>features: ["private_official_v1"]</c> (an older launcher, or another device's).
+    /// </summary>
+    public const string ClientUpdate = "client_update";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect, LobbiesFull];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect, LobbiesFull, ClientUpdate];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

@@ -189,6 +189,9 @@ struct MyWorld {
     // OD-192 (after notice, written only when true; then the transport is written even when unknown): the world is an official
     // one. The guide's lobby tab becomes the Official Lobby pane, with no lobby options, and no overlay notice shows.
     bool official = false;
+    // OD-204 (T-L6, after official, written only when true and only with official): a private official world, created in the
+    // game's own menu. Read here; the Private Lobby pane is T-L3's.
+    bool is_private = false;
 };
 constexpr uint8_t kTransportUnknown = 0, kTransportRelay = 1, kTransportDirect = 2;
 constexpr size_t kMaxMineMembers = 16;
@@ -467,6 +470,8 @@ inline bool DecodeMyWorld(const uint8_t *body, size_t size, MyWorld &out) {
         m.transport = r.U8();
         m.notice = r.Text(kMaxPaneText);
         if (r.ok && r.left > 0) m.official = r.Flag(); // OD-192
+        if (r.ok && r.left > 0) m.is_private = r.Flag(); // OD-204 (T-L6)
+        if (m.is_private && !m.official) r.ok = false; // a private world is an official one
         // an unknown transport is written only ahead of the official flag
         if ((m.transport == kTransportUnknown && !m.official) || m.transport > kTransportDirect) r.ok = false;
     }
@@ -499,6 +504,7 @@ inline std::vector<uint8_t> EncodeMyWorld(const MyWorld &m) {
         wire::U8(b, m.transport);
         wire::Str(b, m.notice);
         if (m.official) wire::Flag(b, true); // OD-192
+        if (m.official && m.is_private) wire::Flag(b, true); // OD-204 (T-L6)
     }
     return b;
 }

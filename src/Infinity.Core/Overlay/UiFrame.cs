@@ -270,11 +270,13 @@ public abstract record UiFrame
     /// <see cref="UiTransport"/>) and the lobby notice the overlay shows as given (the launcher's own localized text; an older overlay
     /// ignores trailing bytes of this frame). <c>Official</c> (OD-192, after <c>Notice</c>, written only when true; then
     /// <c>Transport</c> and <c>Notice</c> are written even when unknown): the world is an official one (the overlay shows its
-    /// Official Lobby pane, offers no lobby option and shows no notice).
+    /// Official Lobby pane, offers no lobby option and shows no notice). <c>Private</c> (OD-204, T-L6, after <c>Official</c>, written
+    /// only when true and only with <c>Official</c>): a private official world, created in the game's own menu (the overlay's
+    /// Private Lobby pane is T-L3's; an older overlay ignores the byte).
     /// </summary>
     public sealed record MyWorld(byte Role, string WorldId, string Name, string Host, string Code, byte Audience, byte Players, byte Max,
         bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false, byte Transport = UiTransport.Unknown, string Notice = "",
-        bool Official = false) : UiFrame
+        bool Official = false, bool Private = false) : UiFrame
     {
         public override byte Type => 0x0E;
 
@@ -750,12 +752,14 @@ public abstract record UiFrame
                     w.U8(member.Friend);
                 }
                 w.Flag(m.AnyMode);
+                if (m.Private && !m.Official) throw new ProtocolException("a private MyWorld is an official one");
                 if (m.Transport != UiTransport.Unknown || m.Official)
                 {
                     if (m.Transport > UiTransport.Direct) throw new ProtocolException("invalid MyWorld.transport");
                     w.U8(m.Transport);
                     w.Str(m.Notice);
                     if (m.Official) w.Flag(true); // OD-192
+                    if (m.Private) w.Flag(true); // OD-204 (T-L6)
                 }
                 break;
             case WorldAction a:
@@ -1093,7 +1097,9 @@ public abstract record UiFrame
         var notice = r.Str();
         var official = !r.IsEmpty && r.Flag("MyWorld.official"); // OD-192: an unknown transport only ahead of it
         if (transport > UiTransport.Direct || (transport == UiTransport.Unknown && !official)) throw new ProtocolException("invalid MyWorld.transport");
-        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, notice, official);
+        var isPrivate = !r.IsEmpty && r.Flag("MyWorld.private"); // OD-204 (T-L6): only after an official flag of 1
+        if (isPrivate && !official) throw new ProtocolException("a private MyWorld is an official one");
+        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, notice, official, isPrivate);
     }
 
     /// <summary>

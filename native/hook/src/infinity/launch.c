@@ -68,6 +68,7 @@ enum {
     FRAME_WATCH = 0x25,           /* launcher -> hook, AC-2: the Hardcore world's watch rules, version 0 clears (watch.c) */
     FRAME_OBSERVED = 0x26,        /* hook -> launcher, AC-2: one ended episode of another player's car (watch.c) */
     FRAME_PLAYER_PARTS = 0x27,    /* hook -> launcher, NR-6: another player's model and part rows (watch.c) */
+    FRAME_PRIVATE_SESSION = 0x28, /* hook -> launcher, T-L6: {str scid, str templateName, str name} of a held private create */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -90,6 +91,16 @@ enum {
 /* NR-5: this hook takes a Watch with flags bit 2 (the per-car speed floor) and then sends Observed layout 2
    (the held speed and the car); the launcher sets that flag only after this */
 #define LAUNCH_CAPTURE_WATCH_PER_CAR 11u
+/* T-L6 (OD-204, WORLDS_OFFICIAL 12.2): this hook can hold the game's private session create and ask the launcher for its
+   private official lobby first (FreeRoamNeed kinds 3 and 4, PrivateSession 0x28). Sent once with ok=1 at every handshake; a
+   launcher that serves those kinds answers with the same Capture{12, 1} (launcher -> hook), and only after that answer does
+   this hook send kinds 3/4 or PrivateSession (an older launcher refuses both as protocol errors). Without it the private
+   session write goes on as before. */
+#define LAUNCH_CAPTURE_PRIVATE_CREATE 12u
+/* FreeRoamNeed kinds 3 and 4 (T-L6): a private free roam or a private Road Trip created in the game's own menu. */
+#define LAUNCH_KIND_PRIVATE_FREE_ROAM 3u
+#define LAUNCH_KIND_PRIVATE_ROAD_TRIP 4u
+#define LAUNCH_FR_KINDS 5u
 /* How long the game's matchmaking request waits for FreeRoamReady before it goes on anyway. */
 #ifndef LAUNCH_FREE_ROAM_WAIT_MS
 #define LAUNCH_FREE_ROAM_WAIT_MS 20000u
@@ -873,13 +884,13 @@ int fi_launch_free_roam_request(const wchar_t *method, const wchar_t *url) {
    none, 1 a world is ready), so a "found" ticket answer reaches the game only with a seat
    (ticket_guard.c). A CancelMatchmaking makes every seat FI_SEAT_CANCELLED until a handshake
    answers again. Under launch_fr_lock. */
-static int launch_fr_seat[3] = {-1, -1, -1};
+static int launch_fr_seat[LAUNCH_FR_KINDS] = {-1, -1, -1, -1, -1}; /* T-L6: kinds 3/4 too (fi_launch_lobby_pending) */
 /* W-10 Q4: the handshake a CancelMatchmaking ended (its waiters leave at once, seat cancelled). */
 static unsigned launch_fr_cancelled;
 /* W-10: each kind's last handshake nonce (0 never asked in this session); a waiter writes its kind's
    seat only while its nonce is still that kind's last one (a late waiter never overwrites a newer
    answer). Under launch_fr_lock. */
-static unsigned launch_fr_kind_nonce[3];
+static unsigned launch_fr_kind_nonce[LAUNCH_FR_KINDS];
 
 static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted);
 
@@ -909,7 +920,7 @@ int fi_launch_lobby_pending(void) {
     if (!fi_launch_protocol() || !fi_launch_live() || !launch_connected) return 1;
     AcquireSRWLockShared(&launch_fr_lock);
     int pending = launch_fr_nonce != 0;
-    for (unsigned kind = 0; kind < 3 && !pending; ++kind) {
+    for (unsigned kind = 0; kind < LAUNCH_FR_KINDS && !pending; ++kind) { /* T-L6: a private create counts (12.5) */
         int seat = launch_fr_seat[kind];
         pending = launch_fr_kind_nonce[kind] && seat != 0 && seat != FI_SEAT_CANCELLED;
     }
@@ -960,11 +971,13 @@ static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted) {
         ReleaseSRWLockExclusive(&launch_fr_lock);
         break;
     }
+    const int held_create = kind >= LAUNCH_KIND_PRIVATE_FREE_ROAM; /* T-L6: fi_launch_private_create says the rest */
     if (!nonce) {
-        log_append("LAUNCH: FreeRoamNeed could not be queued: the matchmaking request goes on.\r\n");
+        log_append(held_create ? "LAUNCH: PRIVATE CREATE: FreeRoamNeed could not be queued.\r\n"
+                               : "LAUNCH: FreeRoamNeed could not be queued: the matchmaking request goes on.\r\n");
         return -1;
     }
-    if (first) {
+    if (first && !held_create) {
         log_append("LAUNCH: FREE ROAM ONLINE: asking the launcher for a lobby first (FreeRoamNeed).\r\n");
     }
     int result = -1;
@@ -988,7 +1001,7 @@ static int launch_free_roam_kind(unsigned kind, volatile LONG *aborted) {
         if (answered) break;
         Sleep(LAUNCH_POLL_MS);
     }
-    if (first) {
+    if (first && !held_create) {
         launch_log(result < 0 ? "no FreeRoamReady (timeout, pipe or suspension): the matchmaking request goes on."
                               : "FreeRoamReady (result ",
                    result >= 0, (unsigned long long)result, result < 0 ? "" : "): the matchmaking request goes on.");
@@ -1020,6 +1033,187 @@ static int launch_free_roam_ready(LaunchReader *r) {
         launch_log("a FreeRoamReady for no handshake in flight; ignored.", 0, 0, "");
     }
     return 1;
+}
+
+/* --------------------------------------------------------- private create */
+/* T-L6 (OD-204, WORLDS_OFFICIAL 12.2, MATCHMAKING_API 2.10). A private free roam created in the game's own menu writes a new
+   session (T-R2, 12.8a: PUT sessiondirectory .../sessionTemplates/<t>/sessions/<new guid>, constants.custom.hopperId 2 and
+   gameServerPlatform, no momatch) and then joins the server that session names. The server alone cannot pick that world
+   (12.2 F1: the FIUP context the launcher installs does), so the net worker holds the PUT and asks the launcher first
+   (FreeRoamNeed kind 3, after PrivateSession with the session's reference), at most LAUNCH_FREE_ROAM_WAIT_MS. Ready: the PUT
+   goes on (the server links it to the caller's private seat). Anything else (none, not online, no answer, a closed pipe):
+   the PUT is NOT forwarded; the game gets NET_OFFLINE_ERROR, as without a server (12.2 item 6: a forwarded PUT with no
+   world would get the placeholder server). Never a local world (world.c keeps its early return under the launcher). */
+
+/* The launcher answered Capture{12, 1} (FRAME_CAPTURE above): only then are kinds 3/4 and PrivateSession sent. */
+static volatile LONG launch_private_on;
+/* The name of the last session the launcher answered Ready for: a later write of it is the game's own update of the
+   session it created (host, active), never a second create. ASCII, lower case. Under launch_private_lock. */
+#define LAUNCH_SESSION_TEXT 128u
+static SRWLOCK launch_private_lock = SRWLOCK_INIT;
+static char launch_private_ready[LAUNCH_SESSION_TEXT + 1];
+/* ...only for a while after that Ready (the game's own update follows within seconds); a CancelMatchmaking clears it. */
+#ifndef LAUNCH_PRIVATE_UPDATE_MS
+#define LAUNCH_PRIVATE_UPDATE_MS 120000u
+#endif
+static unsigned long long launch_private_ready_at;
+
+static int launch_session_char(wchar_t c) {
+    return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'-' || c == L'_' ||
+           c == L'.';
+}
+
+/* One path segment at `*at` (`[A-Za-z0-9._-]{1,128}`) into `out`, lower-cased when `lower`; `*at` moves past it. */
+static int launch_session_segment(const wchar_t **at, char *out, int lower) {
+    size_t n = 0;
+    for (; launch_session_char(**at); ++*at) {
+        if (n >= LAUNCH_SESSION_TEXT) return 0;
+        wchar_t c = lower ? launch_lower(**at) : **at;
+        out[n++] = (char)c;
+    }
+    out[n] = 0;
+    return n != 0;
+}
+
+/* The key `"key"` (exact case) as a JSON member name in the request body: the quoted text followed by optional blanks and
+   ':'. Points just past the ':' (0 when absent). */
+static const unsigned char *launch_body_member(const unsigned char *body, size_t size, const char *key) {
+    size_t k = text_length(key);
+    for (size_t i = 0; body && i + k + 2 <= size; ++i) {
+        if (body[i] != '"' || body[i + k + 1] != '"') continue;
+        size_t j = 0;
+        while (j < k && body[i + 1 + j] == (unsigned char)key[j]) ++j;
+        if (j != k) continue;
+        size_t at = i + k + 2;
+        while (at < size && (body[at] == ' ' || body[at] == '\t' || body[at] == '\r' || body[at] == '\n')) ++at;
+        if (at < size && body[at] == ':') return body + at + 1;
+    }
+    return 0;
+}
+
+/* WORLDS_OFFICIAL 12.2 item 1 (F2): the FreeRoamNeed kind of a private create (3 private free roam), 0 for anything else.
+   All must hold: a PUT to sessiondirectory.xboxlive.com .../serviceconfigs/<scid>/sessionTemplates/<template>/sessions/<name>
+   (the session itself: no member or other sub-path), a name without the fh2inf- prefix (every server-made group, invitation
+   and move session has it, MATCHMAKING_API 3.8), and a body with "gameServerPlatform", hopperId 2 and no "matchmaking"
+   (CreatedPrivateSession is not a trigger: T-R2 saw no such property in the body). Road Trip's marker is unknown (12.8a: a
+   second attempt sent the same body), so this hook never derives kind 4 yet; another hopper is logged once and goes on as
+   before. `ref` gets scid, template and name (as sent; the name also lower-cased in `lower_name`). */
+typedef struct {
+    char scid[LAUNCH_SESSION_TEXT + 1], template_name[LAUNCH_SESSION_TEXT + 1], name[LAUNCH_SESSION_TEXT + 1],
+        lower_name[LAUNCH_SESSION_TEXT + 1];
+} LaunchSessionRef;
+
+static unsigned launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
+                                    LaunchSessionRef *ref) {
+    static const wchar_t host[] = L"sessiondirectory.xboxlive.com";
+    if (!method || !url || !launch_wide_starts(method, L"put") || method[3]) return 0;
+    const wchar_t *at = url;
+    if (launch_wide_starts(at, L"https://")) at += 8;
+    else if (launch_wide_starts(at, L"http://")) at += 7;
+    else return 0;
+    if (!launch_wide_starts(at, host)) return 0;
+    at += sizeof(host) / sizeof(host[0]) - 1;
+    if (*at == L':') {
+        while (*++at >= L'0' && *at <= L'9') {}
+    }
+    char lower[LAUNCH_SESSION_TEXT + 1];
+    if (!launch_wide_starts(at, L"/serviceconfigs/")) return 0;
+    at += 16;
+    if (!launch_session_segment(&at, ref->scid, 0) || !launch_wide_starts(at, L"/sessiontemplates/")) return 0;
+    at += 18;
+    if (!launch_session_segment(&at, ref->template_name, 0) || !launch_wide_starts(at, L"/sessions/")) return 0;
+    at += 10;
+    const wchar_t *name_at = at;
+    if (!launch_session_segment(&at, ref->name, 0) || (*at && *at != L'?' && *at != L'#')) return 0;
+    if (!launch_session_segment(&name_at, lower, 1)) return 0;
+    memory_copy(ref->lower_name, lower, sizeof(lower));
+    static const char server_made[] = "fh2inf-"; /* a server-made session (group, invitation, move) */
+    size_t prefix = 0;
+    while (prefix < sizeof(server_made) - 1 && lower[prefix] == server_made[prefix]) ++prefix;
+    if (prefix == sizeof(server_made) - 1) return 0;
+    if (!launch_body_member(body, size, "gameServerPlatform") || launch_body_member(body, size, "matchmaking")) return 0;
+    const unsigned char *hopper = launch_body_member(body, size, "hopperId");
+    if (!hopper) return 0;
+    const unsigned char *end = body + size;
+    while (hopper < end && (*hopper == ' ' || *hopper == '\t' || *hopper == '\r' || *hopper == '\n')) ++hopper;
+    unsigned value = 0, digits = 0;
+    for (; hopper < end && *hopper >= '0' && *hopper <= '9' && digits < 6; ++hopper, ++digits) value = value * 10 + (unsigned)(*hopper - '0');
+    if (!digits || (hopper < end && *hopper >= '0' && *hopper <= '9')) return 0;
+    if (value == 2) return LAUNCH_KIND_PRIVATE_FREE_ROAM;
+    static volatile LONG logged;
+    if (!InterlockedExchange(&logged, 1)) {
+        launch_log("PRIVATE CREATE: a private-looking session write with hopperId ", 1, value,
+                   " is not a known private create (Road Trip's marker is open, T-R2); it goes on as before.");
+    }
+    return 0;
+}
+
+/* PrivateSession (0x28): {str scid, str templateName, str name} of the held write, before its FreeRoamNeed. The session the
+   game registers with IPartyStatics slot 6 (freeroam.c, completed here) is the one it just wrote; this is that reference,
+   read from the write itself (12.4 "Link": the launcher's cross-check). */
+static int launch_queue_private_session(const LaunchSessionRef *ref) {
+    unsigned char frame[16 + 3 * (2 + LAUNCH_SESSION_TEXT)];
+    LaunchWriter w;
+    launch_frame_begin(&w, frame, sizeof(frame), FRAME_PRIVATE_SESSION);
+    const char *parts[3] = {ref->scid, ref->template_name, ref->name};
+    for (unsigned i = 0; i < 3; ++i) {
+        size_t n = text_length(parts[i]);
+        launch_put_le(&w, n, 2);
+        launch_put(&w, parts[i], n);
+    }
+    size_t n = launch_frame_end(&w);
+    return n && launch_queue(frame, n);
+}
+
+int fi_launch_private_create(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
+                             volatile LONG *aborted) {
+    if (!fi_launch_protocol()) return 0;
+    LaunchSessionRef ref;
+    unsigned kind = launch_private_kind(method, url, body, size, &ref);
+    if (!kind) return 0;
+    AcquireSRWLockShared(&launch_private_lock);
+    int existing = launch_private_ready[0] && text_equal_ignore_case(launch_private_ready, ref.lower_name) &&
+                   GetTickCount64() - launch_private_ready_at < LAUNCH_PRIVATE_UPDATE_MS;
+    ReleaseSRWLockShared(&launch_private_lock);
+    if (existing) return 0; /* the game's own update of the session the launcher already seated it for */
+    if (!InterlockedCompareExchange(&launch_private_on, 0, 0)) {
+        static volatile LONG logged;
+        if (!InterlockedExchange(&logged, 1)) {
+            launch_log("PRIVATE CREATE: this launcher does not serve private creates (no Capture 12): the session write goes on "
+                       "as before.", 0, 0, "");
+        }
+        return 0;
+    }
+    if (!fi_launch_live() || !launch_connected || fi_launch_suspended()) {
+        launch_log("PRIVATE CREATE: no live launcher session: the session write is answered offline here.", 0, 0, "");
+        return 1;
+    }
+    if (!launch_queue_private_session(&ref)) {
+        launch_log("PRIVATE CREATE: PrivateSession could not be queued; asking anyway.", 0, 0, "");
+    }
+    launch_log("PRIVATE CREATE: the game writes a new private session (kind ", 1, kind,
+               "); asking the launcher for its private lobby first (FreeRoamNeed).");
+    int result = launch_free_roam_kind(kind, aborted);
+    if (result == 0) {
+        AcquireSRWLockExclusive(&launch_private_lock);
+        memory_copy(launch_private_ready, ref.lower_name, sizeof(launch_private_ready));
+        launch_private_ready_at = GetTickCount64();
+        ReleaseSRWLockExclusive(&launch_private_lock);
+        launch_log("PRIVATE CREATE: FreeRoamReady (result 0): the player holds its private lobby; the session write goes on.",
+                   0, 0, "");
+        return 0;
+    }
+    launch_log(result < 0 ? "PRIVATE CREATE: no FreeRoamReady (timeout, pipe or suspension)" : "PRIVATE CREATE: FreeRoamReady (result ",
+               result >= 0, (unsigned long long)result,
+               result < 0 ? ": the session write is answered offline here (NET_OFFLINE_ERROR)."
+                          : "): the session write is answered offline here (NET_OFFLINE_ERROR).");
+    return 1;
+}
+
+/* T-L6 tests: the predicate alone (kind, 0 for none). */
+unsigned fi_launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size) {
+    LaunchSessionRef ref;
+    return launch_private_kind(method, url, body, size, &ref);
 }
 
 /* --------------------------------------------------------------- ticket */
@@ -1677,6 +1871,7 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
     fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
     fi_launch_capture(LAUNCH_CAPTURE_WATCH_PER_CAR, 1); /* NR-5: the per-car speed floor, Observed layout 2 */
+    fi_launch_capture(LAUNCH_CAPTURE_PRIVATE_CREATE, 1); /* T-L6: kinds 3/4 once the launcher answers Capture{12, 1} */
     return 1;
 }
 
@@ -1935,8 +2130,9 @@ static int launch_session_frame(void) {
         launch_log("CancelMatchmaking: the launcher gave up on its seat; the game's matchmaking is cancelled.", 0, 0, "");
         AcquireSRWLockExclusive(&launch_fr_lock);
         /* T34: given up; a found ticket says "canceled", never asks again, until the next search */
-        launch_fr_seat[0] = launch_fr_seat[1] = launch_fr_seat[2] = FI_SEAT_CANCELLED;
-        /* W-10 Q4: a lobby ask still waiting ends now with "none" (its request goes on to the server) */
+        for (unsigned kind = 0; kind < LAUNCH_FR_KINDS; ++kind) launch_fr_seat[kind] = FI_SEAT_CANCELLED;
+        /* W-10 Q4: a lobby ask still waiting ends now with "none" (a matchmaking request goes on to the server; T-L6: a held private
+           create is answered offline instead) */
         unsigned ended = launch_fr_nonce;
         if (ended) {
             launch_fr_done = ended;
@@ -1945,9 +2141,27 @@ static int launch_session_frame(void) {
             launch_fr_nonce = 0;
         }
         ReleaseSRWLockExclusive(&launch_fr_lock);
+        AcquireSRWLockExclusive(&launch_private_lock); /* T-L6: the next write of that session is held again */
+        launch_private_ready[0] = 0;
+        ReleaseSRWLockExclusive(&launch_private_lock);
         if (ended) launch_log("CancelMatchmaking: the lobby ask in flight ends now (none).", 0, 0, "");
         fi_follow_cancel();
         return 1;
+    case FRAME_CAPTURE: {
+        /* T-L6: the launcher serves private creates (its answer to this hook's Capture{12, 1}); any other value, or a
+           malformed frame, is a protocol error (only a launcher that read this hook's capability sends it) */
+        unsigned what = (unsigned)launch_le(&r, 1), ok = (unsigned)launch_le(&r, 1);
+        if (r.bad || r.left || what != LAUNCH_CAPTURE_PRIVATE_CREATE || ok > 1) {
+            launch_log("REFUSED: a Capture frame the launcher does not send (what ", 1, what, ").");
+            return 0;
+        }
+        if (fi_launch_suspended()) return 1;
+        InterlockedExchange(&launch_private_on, (LONG)ok);
+        launch_log(ok ? "the launcher serves private creates (Capture 12): the game's private session write waits for its lobby."
+                      : "the launcher does not serve private creates (Capture 12 off).",
+                   0, 0, "");
+        return 1;
+    }
     case FRAME_WATCH:
         /* AC-2: the Hardcore world's rules (or the clear); a malformed one is a protocol error */
         if (fi_launch_suspended()) return 1;

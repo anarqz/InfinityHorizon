@@ -37,7 +37,20 @@ public sealed class GateAdmission(IGate gate, Action<SupervisorEvent> emit, Time
                     // Until a definitive refusal arrives, cancellation must clean up even a lost create response.
                     openSession = id;
                     var create = request(id);
-                    session = await AttemptAsync(() => gate.CreateAsync(create, cancellation), id, lastConfirmed, cancellation).ConfigureAwait(false);
+                    if (FeaturesRefused) create = create with { Features = null };
+                    try
+                    {
+                        session = await AttemptAsync(() => gate.CreateAsync(create, cancellation), id, lastConfirmed, cancellation).ConfigureAwait(false);
+                    }
+                    catch (ApiException error) when (create.Features is not null && FeaturesUnknown(error))
+                    {
+                        // OD-204: a server before CR-S96 refuses the member at parse time (nothing was created): the same session again
+                        // without it, and this session serves no private create
+                        FeaturesRefused = true;
+                        emit(new SupervisorEvent.Note("gate: this server does not take session features yet; private lobbies are off"));
+                        create = create with { Features = null };
+                        session = await AttemptAsync(() => gate.CreateAsync(create, cancellation), id, lastConfirmed, cancellation).ConfigureAwait(false);
+                    }
                     fence = (session as GateActive)?.Lease?.FenceToken;
                     if (_clock.GetElapsedTime(lastConfirmed) >= QueueLife) throw new AdmissionExpiredException();
                     lastConfirmed = _clock.GetTimestamp();
@@ -171,6 +184,15 @@ public sealed class GateAdmission(IGate gate, Action<SupervisorEvent> emit, Time
         if (lastConfirmed is { } confirmed) await DelayWithinAsync(delay, confirmed, cancellation).ConfigureAwait(false);
         else await Task.Delay(delay, _clock, cancellation).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// OD-204: the server refused <see cref="PlaySessionCreate.Features"/> as an unknown member (a server before CR-S96); the admission
+    /// was then made without it. Read after <see cref="WaitAsync"/>.
+    /// </summary>
+    public bool FeaturesRefused { get; private set; }
+
+    private static bool FeaturesUnknown(ApiException e) =>
+        e.Status == HttpStatusCode.BadRequest && e.Code == ErrorCodes.RequestInvalid && Detail(e, "field") == "features";
 
     private static bool Retryable(ApiException e) =>
         OnlinePause.From(e) is null &&
