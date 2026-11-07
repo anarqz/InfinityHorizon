@@ -278,8 +278,6 @@ static void launch_suspend(unsigned reason) {
     fi_watch_stop();
     azimuth_proxy_stop();
     azimuth_world_lan_left();
-    azimuth_world_launcher_host(0);
-    azimuth_world_left();
     launch_log("online suspended for this process (reason ", 1, reason, "); local play continues.");
 }
 

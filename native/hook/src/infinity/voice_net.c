@@ -1,18 +1,17 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE).
 
    Voice chat's transport (OD-154, VC-2; docs/launcher/VOICE_CHAT.md 3.1, 12.3 and 13 in the
-   monorepo; the relay's side is Infinity.Core/WorldServer/VoiceCodec.cs). The overlay builds
+   monorepo; the world's side is the Worlds engine's). The overlay builds
    whole voice side-channel datagrams, STUN indications (big-endian, magic 0x2112A442, at most 548
    bytes) of kind 0x3E93 (voice, attribute 0xC0F3 up / 0xC0F4 down) or 0x3E94 (control up 0xC0F5 /
    state down 0xC0F6), and hands them to FiOverlayHost.voice_send. This file only checks their
    shape and moves them, exactly as car state (carstate.c, kind 0x3E91) travels:
 
-   - sent from the socket the world's relay knows this player by: the host's loopback socket of
-     carstate.c to its own relay; a joiner's proxy socket to the world (azimuth_proxy_send_world,
+   - sent from the socket the world knows this player by (OD-208: never a host's): the proxy socket to the world (azimuth_proxy_send_world,
      FIR1 data through a fallback relay, and only once the hook's kind is proved under FIUP); a
      world on this network the game reached directly, the hook's own LAN socket (livery_world.c);
    - received on those same sockets, with the source checks car state has there (proxy.c: from
-     the world, the hook's kind proved; carstate.c: the host's loopback socket, from its relay),
+     the world, the hook's kind proved),
      and handed to the overlay's optional export fi_overlay_voice. Nothing else goes there, and
      without that export (an older overlay) voice is dropped.
 
@@ -96,15 +95,13 @@ static int vn_rate_take(unsigned long long now) {
 int fi_voice_send(const uint8_t *datagram, uint32_t size) {
     if (!vn_up(datagram, size)) return VN_E_SHAPE;
     if (fi_cfg()->launch == FI_LAUNCH_OFFLINE || !fi_launch_network_allowed()) return VN_E_OFF;
-    int hosting = azimuth_world_hosting();
     int joined = azimuth_proxy_world_ready() || azimuth_world_lan_ready();
-    if (!hosting && !joined) {
+    if (!joined) {
         /* FreeRoamDirect (outside FIUP) leaves the game on its own socket: no hook socket the relay knows */
         return azimuth_proxy_passthrough() ? VN_E_OFF : VN_E_NO_WORLD;
     }
     if (!vn_rate_take(GetTickCount64())) return VN_E_RATE;
-    int sent = hosting ? azimuth_carstate_host_send(datagram, (int)size)
-                       : azimuth_proxy_send_world(datagram, (int)size) || azimuth_world_lan_send(datagram, (int)size);
+    int sent = azimuth_proxy_send_world(datagram, (int)size) || azimuth_world_lan_send(datagram, (int)size);
     return sent ? VN_SENT : VN_E_NO_WORLD;
 }
 

@@ -11,9 +11,8 @@
    it is valid UTF-8, else in the ANSI code page as Kernel32 would; a UTF-8 BOM is skipped, with a
    warning), at most 64 KiB.
 
-   [hook] is ours (the table below). [relay] belongs to the launcher; the hook reads it for the
-   world it hosts when the relay is the launcher's infinity.exe (world.c). [launcher] is never
-   read. ExtraOptions' <Azimuth>\FH2_ExtraOptions.ini is never read or written.
+   [hook] is ours (the table below). [relay] and [launcher] belong to the launcher and are never
+   read (OD-208: this PC hosts no world). ExtraOptions' <Azimuth>\FH2_ExtraOptions.ini is never read or written.
 
    The one write: when Infinity.cfg has no [hook] (no launcher yet, or a launcher that leaves the
    section to the hook), the ForzaInfinity keys of hooks up to 0.2.74+fh2online.58, kept in
@@ -1051,69 +1050,3 @@ void fi_cfg_flush_log(void) {
     }
 }
 
-/* ------------------------------------------------------------- [relay] */
-
-static void cfg_utf8(const wchar_t *in, char *out, size_t cap) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, in, -1, out, (int)cap, 0, 0);
-    out[n > 0 ? n - 1 : 0] = 0;
-}
-
-static unsigned cfg_number(const wchar_t *v, unsigned fallback, unsigned low, unsigned high) {
-    unsigned n = 0;
-    if (!v[0]) {
-        return fallback;
-    }
-    for (size_t i = 0; v[i]; ++i) {
-        if (v[i] < L'0' || v[i] > L'9' || n > 100000) {
-            return fallback;
-        }
-        n = n * 10 + (unsigned)(v[i] - L'0');
-    }
-    return n >= low && n <= high ? n : fallback;
-}
-
-int fi_cfg_relay(FiRelayConfig *out) {
-    wchar_t v[300];
-    int encoding, found = 0;
-    size_t size;
-    cfg_zero(out, sizeof(*out));
-    memory_copy(out->visibility, "public", 7);
-    out->max_players = 8;
-    out->port = 5101;
-    out->races = 1;
-    AcquireSRWLockExclusive(&cfg_lock);
-    size_t saved_log = cfg_log_used;
-    int read = cfg_file[0] && cfg_decode(cfg_file, &encoding, &size, "Infinity.cfg") > 0;
-    cfg_log_used = saved_log; /* the start's lines are flushed already */
-    if (read && cfg_has_section(L"relay")) {
-        found = 1;
-        /* the launcher's limits (PRODUCT.md 6.3); the server checks them again */
-        if (cfg_lookup(L"relay", L"Name", v, 33, 0)) {
-            cfg_utf8(v, out->name, sizeof(out->name));
-        }
-        if (cfg_lookup(L"relay", L"Message", v, 121, 0)) {
-            cfg_utf8(v, out->message, sizeof(out->message));
-        }
-        if (cfg_lookup(L"relay", L"Visibility", v, ARRAY_COUNT(v), 0) &&
-            (wequal(v, L"public") || wequal(v, L"unlisted") || wequal(v, L"friends") || wequal(v, L"off"))) {
-            for (size_t i = 0; v[i] && i + 1 < sizeof(out->visibility); ++i) {
-                out->visibility[i] = (char)wlower(v[i]);
-                out->visibility[i + 1] = 0;
-            }
-        }
-        if (cfg_lookup(L"relay", L"Password", v, 33, 0)) {
-            cfg_utf8(v, out->password, sizeof(out->password));
-        }
-        if (cfg_lookup(L"relay", L"MaxPlayers", v, ARRAY_COUNT(v), 0)) {
-            out->max_players = cfg_number(v, 8, 1, 12);
-        }
-        if (cfg_lookup(L"relay", L"Port", v, ARRAY_COUNT(v), 0)) {
-            out->port = cfg_number(v, 5101, 1024, 65535);
-        }
-        if (cfg_lookup(L"relay", L"Races", v, ARRAY_COUNT(v), 0)) {
-            out->races = !wequal(v, L"0");
-        }
-    }
-    ReleaseSRWLockExclusive(&cfg_lock);
-    return found;
-}
