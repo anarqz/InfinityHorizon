@@ -85,6 +85,30 @@ public static class PrivateLobbyNotices
     /// <summary>T-L5: the game never asked for its lobby within the bound, or never connected: the private seat was let go.</summary>
     public const string InviteMoveFailed = "invite_move_failed";
 
+    /// <summary>
+    /// OD-210 (CR-S101 §2.11, W14): the invitee's join answered <c>not_allowed {reason: "mode"}</c>: the leader changed who can join
+    /// after the invite, and this profile's mode no longer fits (the invite still held its seat until then).
+    /// </summary>
+    public const string InviteMode = "invite_mode";
+
+    /// <summary>OD-210 (W14): who can join changed (200): "Who can join: {who}", with the players already in the lobby staying.</summary>
+    public const string JoinModesSet = "join_modes_set";
+
+    /// <summary>OD-210 (W14): a non-leader's change (the overlay's rule, or the server's 409 <c>not_leader</c> / 403 <c>MM.NOT_HOST</c>).</summary>
+    public const string JoinModesNotLeader = "join_modes_not_leader";
+
+    /// <summary>OD-210 (W14): a change outside a private official lobby (a stale pane).</summary>
+    public const string JoinModesPrivateOnly = "join_modes_private_only";
+
+    /// <summary>OD-210 (CR-S101): 400 <c>REQUEST.INVALID {field: "modes"}</c>: the lobby's game has no such mode (FM5 has no Hardcore).</summary>
+    public const string JoinModesUnavailable = "join_modes_unavailable";
+
+    /// <summary>OD-210 (W14): the change failed with no reason the table knows (a 5xx, a transport failure, an older server).</summary>
+    public const string JoinModesFailed = "join_modes_failed";
+
+    /// <summary>OD-210 (W14): the words of each "Who can join" choice (<see cref="UiJoinModes"/>), for <see cref="JoinModesSet"/>'s {who}.</summary>
+    public static IReadOnlyList<string> JoinModesChoiceKeys { get; } = ["worlds.join_modes_everyone", "worlds.join_modes_hardcore", "worlds.join_modes_noob"];
+
     /// <summary>The one table: a server reason (or one of this class's own) and the i18n-win key of its notice.</summary>
     public static IReadOnlyDictionary<string, string> Keys { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
     {
@@ -97,6 +121,12 @@ public static class PrivateLobbyNotices
         [InviteLeaveLobby] = "worlds.invite_leave_lobby",
         [InviteBusy] = "worlds.invite_busy",
         [InviteMoveFailed] = "worlds.invite_move_failed",
+        [InviteMode] = "worlds.invite_mode", // OD-210 (CR-S101)
+        [JoinModesSet] = "worlds.join_modes_set", // with {who}
+        [JoinModesNotLeader] = "worlds.join_modes_not_leader",
+        [JoinModesPrivateOnly] = "worlds.join_modes_private_only",
+        [JoinModesUnavailable] = "worlds.join_modes_unavailable",
+        [JoinModesFailed] = "worlds.join_modes_failed",
         [Full] = "worlds.invite_full",
         [PendingLimit] = "worlds.invite_pending_limit",
         [NotFriend] = "worlds.invite_not_friend",
@@ -179,12 +209,33 @@ public static class PrivateLobbyNotices
     public static string InviteJoinRefusal(byte result, string? refusal, bool inviteExpired) => (result, refusal) switch
     {
         (_, Friends) => inviteExpired ? InviteExpired : Friends,
+        (_, NotAllowedReasons.Mode) => InviteMode, // OD-210 (CR-S101): the leader's "Who can join" no longer fits this profile
         (_, ConflictReasons.ClientUpdate or ConflictReasons.Region or ConflictReasons.Pool) => refusal,
         (_, Closed) => InviteClosed, // the join's closed answer or 404 (UiJoin.Closed alone also means a failed join)
         (UiJoin.Full, _) => InviteLobbyFull,
         (UiJoin.SlowDown, _) => RateLimited,
         _ => InviteJoinFailed,
     };
+
+    /// <summary>
+    /// OD-210 (CR-S101 §2.11, W14): the reason of a refused "Who can join" change (<c>PUT /mm/v1/worlds/{worldId}/modes</c>), a key of
+    /// this table: 409 <c>not_leader</c> and 403 <c>MM.NOT_HOST</c> <see cref="JoinModesNotLeader"/>; 400 <c>{field: "modes"}</c>
+    /// <see cref="JoinModesUnavailable"/>; 404 <see cref="Closed"/>; 429 (the <c>mm.settings</c> bucket) <see cref="RateLimited"/>;
+    /// anything else <see cref="JoinModesFailed"/>.
+    /// </summary>
+    public static string JoinModesRefusal(MmError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return error.Kind switch
+        {
+            MmErrorKind.Conflict when error.Reason == NotLeader => JoinModesNotLeader,
+            MmErrorKind.NotHost => JoinModesNotLeader,
+            MmErrorKind.Invalid when error.Field == "modes" => JoinModesUnavailable,
+            MmErrorKind.WorldNotFound or MmErrorKind.NotFound => Closed,
+            MmErrorKind.RateLimited => RateLimited,
+            _ => JoinModesFailed,
+        };
+    }
 
     /// <summary>The notice for <paramref name="reason"/>.</summary>
     public static UiFrame.Toast Toast(Func<string, string> text, string reason, TimeSpan? poolLeft = null) => Toast(Text(text, reason, poolLeft));

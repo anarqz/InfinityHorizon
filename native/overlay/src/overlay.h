@@ -62,6 +62,7 @@ void Navigate(Nav nav);
 void SetMyWorld(MyWorld mine);
 // OD-181 (protocol 4, 0x1E): the mods each player of my world declared (RosterMods in ui_frames.h).
 void SetRosterMods(RosterMods mods);
+void SetLobbyJoinModes(LobbyJoinModesFrame modes); // any thread (0x28, OD-210 W14): the private lobby's "Who can join"
 void SetActionResult(uint8_t action, uint8_t status, const std::string &message); // status 0 done
 void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
@@ -163,5 +164,6 @@ void SendWorldAction(uint8_t action, const std::string &xuid, const std::string 
 void SendInviteAnswer(const std::string &invite, bool accept); // 0x24 (protocol 6, T-L3)
 void SendFriendPickerAsk();                                   // 0x26 (protocol 7, T-L4): the pane's Invite friends
 void SendInviteSend(const std::string &xuid);                 // 0x27 (protocol 7, T-L4): a friend chosen in the picker
+void SendJoinModesSet(uint8_t modes);                         // 0x29 (protocol 8, OD-210 W14): the leader's "Who can join"
 
 } // namespace fi

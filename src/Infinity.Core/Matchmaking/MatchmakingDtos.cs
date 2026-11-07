@@ -774,6 +774,15 @@ public sealed record InviteRequest
     public required string Xuid { get; init; }
 }
 
+/// <summary>
+/// OD-210 (CR-S101, MATCHMAKING_API §2.11; TypeScript <c>WorldJoinModes</c>): <c>PUT /mm/v1/worlds/{worldId}/modes</c>, who may join
+/// a private official world from now on: one of <see cref="WorldModes"/> (<c>any</c>: Everyone). Seats already granted stay.
+/// </summary>
+public sealed record WorldJoinModes
+{
+    public required string Modes { get; init; }
+}
+
 /// <summary>An invite (<c>…/invites</c>) or a request to join (<c>…/requests</c>): 201, 200 for the pending one.</summary>
 public sealed record Invite
 {

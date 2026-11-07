@@ -8,6 +8,9 @@
 // - A private official lobby (MyWorld.is_private) is the Private Lobby: its players with Report, Friends, Mute and the voice
 //   volume, Leave lobby (A12, OD-196) and Invite friends, enabled for the current lobby leader only (lobby_policy.h InviteGateOf;
 //   it asks the launcher for the friend picker, friend_picker.cpp, T-L4). Any other official lobby is the Official Lobby (OD-192): the same pane without Invite.
+// - OD-210 (CR-S101, W14): the Private Lobby also shows "Who can join" (Everyone, Hardcore only, Noob only; FM5: no Hardcore) from
+//   the launcher's 0x28; the current leader's A moves it to the next choice (0x29, PUT …/modes), everyone else reads it. It applies to
+//   new joins only: nobody already here is removed (kicking stays the leader's).
 //   A lobby the launcher itself hosts (the player-hosted code stays until T-L8) shows its players; it is closed from the launcher.
 // - No overlay notice in an official lobby, a private one included (OD-192), except what the launcher marks always (ui.cpp
 //   PushToast, T-L3); this tab's own action results follow the same rule.
@@ -46,6 +49,7 @@ struct Shared {
     MyWorld mine;
     uint64_t mine_serial = 0;
     RosterMods roster_mods; // OD-181 (0x1E): each player's declared mods, for mine.world only
+    LobbyJoinModesFrame join_modes; // OD-210 (0x28): the private lobby's "Who can join", for join_modes.world only
     uint8_t action = 0, action_status = 0;
     std::string action_message;
     uint64_t action_serial = 0;
@@ -89,7 +93,8 @@ uint64_t g_seen_mine = 0, g_seen_action = 0;
 
 // The buttons above the players, in focus order (T-L3): Leave lobby (every lobby but one the launcher hosts, OD-196, A12), then
 // Invite friends in a private lobby. Rebuilt by DrawMine every frame.
-enum class MineButton : uint8_t { Leave, Invite };
+enum class MineButton : uint8_t { Leave, Invite, JoinModes };
+LobbyJoinModesFrame g_join_modes; // OD-210: the render thread's copy of Shared::join_modes
 std::vector<MineButton> g_mine_buttons;
 
 // the dev host answers by itself, as a launcher would: a private lobby this player leads
@@ -134,6 +139,27 @@ void InviteFriends(const MyWorld &m) {
     Log("invite: Invite friends chosen in the Private Lobby pane; the launcher answers with its friend picker");
 }
 
+// OD-210 (W14): the words of a "Who can join" choice
+const char *JoinModesLabel(uint8_t modes) {
+    return modes == kJoinHardcoreOnly ? T("Who can join: Hardcore only", "Quem pode entrar: só Hardcore")
+           : modes == kJoinNoobOnly   ? T("Who can join: Noob only", "Quem pode entrar: só Noob")
+                                      : T("Who can join: Everyone", "Quem pode entrar: todos");
+}
+
+// OD-210 (W14): the leader's A on "Who can join": the next offered choice, sent to the launcher (which answers a notice and 0x28)
+void ChangeJoinModes(const MyWorld &m, const LobbyJoinModesFrame &j) {
+    if (JoinModesGateOf(m, j) != JoinModesGate::Allowed) return;
+    const uint8_t next = NextJoinModes(j);
+    if (next == j.modes) return;
+    if (DevHost()) {
+        std::lock_guard<std::mutex> lock(g_lock);
+        g_shared.join_modes.modes = next;
+        return;
+    }
+    SendJoinModesSet(next);
+    Log("who can join: choice %u sent by the lobby leader", static_cast<unsigned>(next));
+}
+
 // the dev host's fake launcher
 void DevAnswer() {
     std::lock_guard<std::mutex> lock(g_lock);
@@ -163,6 +189,8 @@ void DevAnswer() {
             g_shared.roster_mods.members.push_back({"1", {{"Synthetic Handling Pack", "3"}, {"extraoptions", "2"}}});
             g_shared.roster_mods.members.push_back({"3", {{"Synthetic Night Lights", "1"}}});
         }
+        // OD-210: the dev lobby starts Everyone, as every private lobby does
+        if (g_shared.join_modes.world != m.world) g_shared.join_modes = m.world.empty() ? LobbyJoinModesFrame{} : LobbyJoinModesFrame{m.world, kJoinEveryone, kOfferAll};
         g_official.store(m.role != 0 && m.official, std::memory_order_relaxed);
         g_private.store(m.role != 0 && m.official && m.is_private, std::memory_order_relaxed);
         g_shared.mine = m;
@@ -487,6 +515,22 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
         }
         y += 4 * s;
     }
+    // OD-210 (CR-S101, W14): "Who can join", the leader's to change (new joins only), read-only for everyone else
+    if (const JoinModesGate gate = JoinModesGateOf(m, g_join_modes); gate != JoinModesGate::Hidden) {
+        const int item = static_cast<int>(g_mine_buttons.size());
+        const bool allowed = gate == JoinModesGate::Allowed;
+        const float bh = 52 * s;
+        const ImVec2 a(x, y), b(x + w, y + bh);
+        Button(dl, a, b, g_mine_focus == item, false, JoinModesLabel(g_join_modes.modes));
+        if (!allowed) dl->AddRectFilled(a, b, Rgba(0, 0, 0, 0.45f), 6 * s);
+        if (Clicked(a, b)) click = {item, layout::kStopCard};
+        g_mine_buttons.push_back(MineButton::JoinModes);
+        y += bh + 6 * s;
+        TextAt(dl, f.small, ImVec2(x, y), kTextDim,
+               allowed ? T("Applies to new players; everyone here stays", "Vale para novos jogadores; quem já está aqui continua")
+                       : T("Only the lobby leader can change who can join", "Só o líder do lobby pode mudar quem pode entrar"));
+        y += 24 * s;
+    }
     y += 10 * s;
     // the buttons changed (private to official, a lobby the launcher hosts): the focus goes back to the top instead of
     // silently landing on another control
@@ -738,6 +782,11 @@ void SetRosterMods(RosterMods mods) {
     g_shared.roster_mods = std::move(mods);
 }
 
+void SetLobbyJoinModes(LobbyJoinModesFrame modes) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_shared.join_modes = std::move(modes);
+}
+
 void SetActionResult(uint8_t action, uint8_t status, const std::string &message) {
     std::lock_guard<std::mutex> lock(g_lock);
     g_shared.action = action;
@@ -817,6 +866,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
         sh = g_shared;
     }
     g_roster = sh.roster_mods; // OD-181: the cards and the details column read it this frame
+    g_join_modes = sh.join_modes; // OD-210: the Private Lobby's "Who can join" this frame
     const bool world_access = DevHost() || sh.access.Allowed(GetTickCount64());
     if (g_dev_wait >= 0) {
         g_dev_wait -= dt;
@@ -885,6 +935,7 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
                         g_screen = Screen::Confirm;
                         break;
                     case MineButton::Invite: InviteFriends(sh.mine); break; // enabled for the leader only (A3)
+                    case MineButton::JoinModes: ChangeJoinModes(sh.mine, sh.join_modes); break; // the leader only (OD-210)
                     }
                 } else if (player >= 0 && player < static_cast<int>(sh.mine.members.size()) && g_mine_col == layout::kStopMute) {
                     ToggleVoice(sh.mine.members[player], CurrentVoice());
