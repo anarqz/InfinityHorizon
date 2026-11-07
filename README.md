@@ -1,7 +1,7 @@
 # Infinity Launcher
 
-The client that runs on players' computers: a C# WPF launcher with its integrated world relay,
-a C hook and a C++ Direct3D 12 overlay. Windows x64; the Windows build also runs through
+The client that runs on players' computers: a C# WPF launcher, a C hook and a C++ Direct3D 12
+overlay. Players join the official Infinity worlds only; they host none (OD-208). Windows x64; the Windows build also runs through
 Wine/Proton. No game, Azimuth executable, player save or backend service is included.
 
 ## Install on Linux and Steam Deck
@@ -43,10 +43,7 @@ Infinity's patches to a copy of it with `git apply`, so Git must be on `PATH`.
 
 The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
 `hook/infinity.dll`, `overlay/infinity-overlay.dll`, `mod/infinity_mod.dll`,
-`mod/infinity-mod-prepare.exe`, `worlds.exe` (Infinity Worlds, the world engine, built with
-`cargo build --release --locked --target x86_64-pc-windows-msvc`; an existing `CARGO_TARGET_DIR` is
-used, `DS_COMMIT` stamps its `--version` commit, git `HEAD` by default, and `DS_PRODUCT_VERSION` its
-VERSIONINFO, `-Version` by default), their development signatures,
+`mod/infinity-mod-prepare.exe`, their development signatures,
 English/pt-BR catalogs and license notices. No private repository or game installation is needed
 to compile. Build just the managed projects with `dotnet build Infinity.sln -c Release`.
 
