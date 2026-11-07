@@ -689,6 +689,9 @@ public sealed class PlaySupervisor
         }
         // the overlay's Worlds tab: answers off the loop, the seat renewed in the background
         var worlds = overlay is null ? null : _config.Worlds?.Invoke(() => _ticket);
+        // W7b: SessionReady frames waiting for the hook's SessionReadyResult, by nonce
+        var sessionReadyWaits = new System.Collections.Concurrent.ConcurrentDictionary<uint, TaskCompletionSource<byte>>();
+        var sessionReadyNonce = 0;
         if (worlds is not null)
         {
             overlay!.Quiet = () => worlds.InOfficialLobby; // OD-192: no overlay notice in an official lobby
@@ -722,6 +725,22 @@ public sealed class PlaySupervisor
             {
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
                 await pipe.WriteAsync(follow.Encode(),ct).ConfigureAwait(false);
+            };
+            // W7b (OD-206, CR-S99 §4, lobby spec §11.3-11.4): an accepted invite's session for the hook's Party GameSessionReady, after
+            // the join was granted; only once the hook reported CaptureWhat.SessionReady (WorldsBridge.SessionReadyCapable)
+            worlds.SendSessionReady=async (session,ct)=>
+            {
+                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
+                var nonce=unchecked((uint)Interlocked.Increment(ref sessionReadyNonce));
+                if(nonce==0)nonce=unchecked((uint)Interlocked.Increment(ref sessionReadyNonce)); // 0 is never a nonce
+                var answer=new TaskCompletionSource<byte>(TaskCreationOptions.RunContinuationsAsynchronously);
+                sessionReadyWaits[nonce]=answer;
+                try
+                {
+                    await pipe.WriteAsync(new Frame.SessionReady(nonce,session.Scid,session.TemplateName,session.Name).Encode(),ct).ConfigureAwait(false);
+                    return await answer.Task.WaitAsync(ct).ConfigureAwait(false);
+                }
+                finally {sessionReadyWaits.TryRemove(nonce,out _);}
             };
             // a lobby ask's seat that never played within WorldsBridge.SeatGiveUp: the game's FINDING SESSION is cancelled
             worlds.SendCancelMatchmaking=async ct=>
@@ -913,6 +932,16 @@ public sealed class PlaySupervisor
                         // T-L5: the hook takes FollowHost's move flag (an accepted invite moves a game already in online free roam)
                         if (frame is Frame.Capture { What: CaptureWhat.FollowMove } followMove && endpoint.Greeted && worlds is not null)
                             worlds.FollowMoveCapable = followMove.Ok;
+                        // W7b: the hook fires an accepted invite's session as the game's Party GameSessionReady (FM5's route 1)
+                        if (frame is Frame.Capture { What: CaptureWhat.SessionReady } sessionReadyCapability && endpoint.Greeted && worlds is not null)
+                            worlds.SessionReadyCapable = sessionReadyCapability.Ok;
+                        if (frame is Frame.SessionReadyResult sessionReadyResult && endpoint.Greeted)
+                        {
+                            _emit(new SupervisorEvent.Note($"worlds: invite: the hook answered SessionReady {sessionReadyResult.Nonce}: result "
+                                + $"{sessionReadyResult.Result} (0x{sessionReadyResult.HResult:x8})"));
+                            if (sessionReadyWaits.TryGetValue(sessionReadyResult.Nonce, out var waiting)) waiting.TrySetResult(sessionReadyResult.Result);
+                            continue;
+                        }
                         if (frame is Frame.PrivateSession privateSession && endpoint.Greeted)
                         {
                             worlds?.PrivateSessionWritten(privateSession.Scid, privateSession.TemplateName, privateSession.Name);

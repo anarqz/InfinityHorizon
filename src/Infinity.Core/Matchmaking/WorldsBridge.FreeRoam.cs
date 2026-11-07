@@ -318,11 +318,12 @@ public sealed partial class WorldsBridge
         catch (AggregateException) { }
     }
 
-    private static string KindName(byte kind) => kind switch
+    private string KindName(byte kind) => kind switch
     {
         FreeRoamKind.CarMeet => "car meet",
         FreeRoamKind.RoadTrip => "road trip",
-        FreeRoamKind.PrivateFreeRoam => "private free roam",
+        // CR-S99 (W7b): the game's private create runs the activity its game says (FM5: a race); FH2's wording is unchanged
+        FreeRoamKind.PrivateFreeRoam => PrivateCreateActivity == WorldActivities.Race ? "private race" : "private free roam",
         FreeRoamKind.PrivateRoadTrip => "private road trip",
         _ => "free roam",
     };
