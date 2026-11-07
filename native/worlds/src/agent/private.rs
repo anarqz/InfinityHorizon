@@ -21,10 +21,11 @@ pub fn answer_is_private(answer: &Value) -> bool {
 }
 
 /// Whether an agent's world may become private: a spare (not a car meet session's group world) of
-/// free roam or Road Trip, never a car meet (§12.2 items 5 and 8). Anything else ignores the
-/// answer's `private` (a server fault), so its engine context keeps working.
+/// free roam or Road Trip, never a car meet (§12.2 items 5 and 8), or an FM5 race spare (CR-S99:
+/// private race lobbies). Anything else ignores the answer's `private` (a server fault), so its
+/// engine context keeps working.
 pub fn may_be_private(activity: &str, group: bool) -> bool {
-    !group && matches!(activity, "freeroam" | "roadtrip")
+    !group && matches!(activity, "freeroam" | "roadtrip" | "race")
 }
 
 /// The leader a `world.state` event names: a non-zero decimal XUID, else none.
@@ -97,6 +98,8 @@ mod tests {
         assert!(may_be_private("freeroam", false));
         assert!(may_be_private("roadtrip", false));
         assert!(!may_be_private("carmeet", false));
+        // CR-S99: FM5's race spare
+        assert!(may_be_private("race", false));
         assert!(
             !may_be_private("freeroam", true),
             "a car meet session's group world"
@@ -156,6 +159,11 @@ mod tests {
             context_fields(W, 5, "sao-1", "fh2", true),
             json!({"worldId": W, "serverTimeMs": 5,
                 "world": {"id": W, "game": "fh2", "host": {"official": "sao-1"}, "private": true}})
+        );
+        // an FM5 race world's context names its own game (the engine checks it)
+        assert_eq!(
+            context_fields(W, 5, "sao-1", "fm5", true)["world"]["game"],
+            "fm5"
         );
     }
 }

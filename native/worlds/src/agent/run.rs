@@ -8,8 +8,10 @@
 //!    when it ends, its worlds `DELETE`d on the server;
 //! 3. one spare open world per (mode, activity) for `freeroam` and `roadtrip` and one `carmeet`
 //!    spare for both modes (WORLDS_OFFICIAL.md §11.1): `world.open` + `PUT` with a client-minted
-//!    id kept for its retries; an announce per world every 15 s with `world.state`'s peers, each
-//!    answer feeding `world.context` then `world.admission`; an idle extra world closed (`DELETE`);
+//!    id kept for its retries; FM5's `race` one spare per mode too (CR-S99 §5: `game: "fm5"`,
+//!    `maxPlayers` ≤ 16), within the same `maxWorlds`; an announce per world every 15 s with
+//!    `world.state`'s peers, each answer feeding `world.context` then `world.admission`; an idle
+//!    extra world closed (`DELETE`);
 //! 4. `catalog.need` answered with `catalog.parts`;
 //! 5. a car meet's `world.gameSession.request` answered from `POST …/game-sessions` (a call off
 //!    the loop, at most 14 s; DEDICATED_SERVER.md §4.4), `session: null` when refused or late;
@@ -371,7 +373,7 @@ impl Agent {
     fn update_activities(&mut self) {
         let base: Vec<&'static str> = match &self.cfg.activities {
             Some(a) => a.clone(),
-            None => config::ACTIVITIES
+            None => config::ALL_ACTIVITIES
                 .iter()
                 .copied()
                 .filter(|a| self.hello_activities.iter().any(|h| h == a))
@@ -389,6 +391,17 @@ impl Agent {
                 .field("roadTrip", self.road_trip.is_some())
                 .emit();
         }
+    }
+
+    /// The engine's seats per world (`--max-seats` = worlds × this): FH2's `maxPlayers`, or
+    /// FM5's when a `race` world is placed and seats more (CR-S99 §5). The engine is spawned with
+    /// the activities of the hello before it; a later hello adding `race` gets its seats at the
+    /// next engine start.
+    fn seats_per_world(&self) -> u8 {
+        self.activities
+            .iter()
+            .map(|a| self.cfg.max_players_of(a))
+            .fold(self.cfg.max_players, u8::max)
     }
 
     fn stopped(&self) -> i32 {
@@ -415,7 +428,7 @@ impl Agent {
             generation += 1;
             let started = Instant::now();
             let cap = self.cfg.max_worlds;
-            let seats = cap * usize::from(self.cfg.max_players);
+            let seats = cap * usize::from(self.seats_per_world());
             let mut child =
                 match engine::spawn(&self.cfg.bind.to_string(), &self.cfg.control, cap, seats) {
                     Ok(c) => c,
@@ -609,7 +622,8 @@ impl Agent {
                 }
                 let mut peers = ids(ev.get("peers"));
                 peers.dedup();
-                peers.truncate(12);
+                // the world's seats: 12 for FH2, up to 16 for an FM5 race (CR-S99 §1)
+                peers.truncate(usize::from(self.cfg.max_players_of(w.activity)));
                 let grants = ev
                     .get("admission")
                     .and_then(|a| a.get("grants"))
@@ -1033,9 +1047,15 @@ impl Agent {
         let time = self.server_ms();
         // §12.2 item 5 (T-L9): a promoted spare comes back `private: true`; from then on it is
         // no spare, closes as a group world, and its engine runs the private session (one way)
+        let game = self
+            .worlds
+            .iter()
+            .find(|w| w.id == id)
+            .map_or(GAME, |w| config::game_of(w.activity));
         let private = match self.worlds.iter_mut().find(|w| w.id == id) {
             Some(w) => {
-                // only a spare of free roam or Road Trip is ever promoted (§12.2 items 5, 8)
+                // only a spare of free roam or Road Trip (§12.2 items 5, 8), or an FM5 race
+                // (CR-S99), is ever promoted
                 if private::answer_is_private(&answer)
                     && !w.private
                     && private::may_be_private(w.activity, w.group)
@@ -1058,7 +1078,7 @@ impl Agent {
         // the official host is this VM's own id, never copied from the answer (§6.3)
         let context = control.request_retry(
             "world.context",
-            private::context_fields(id, time, &self.cfg.vm_id, GAME, private),
+            private::context_fields(id, time, &self.cfg.vm_id, game, private),
         );
         if let Err(e) = context {
             self.engine_refused("world.context", &e);
@@ -1096,7 +1116,6 @@ impl Agent {
         if now < self.open_after || self.ring.is_empty() {
             return;
         }
-        let max = usize::from(self.cfg.max_players);
         // a group world closes once it emptied again, or nobody came within the seats' hold; a
         // private world as a group world (§12.2 item 10; A11's 10 minutes is `GROUP_HOLD`)
         let ended = self.worlds.iter().find(|w| {
@@ -1120,6 +1139,7 @@ impl Agent {
             return;
         }
         for (mode, activity) in spare_groups(&self.cfg.modes, &self.activities) {
+            let max = usize::from(self.cfg.max_players_of(activity));
             let group: Vec<&World> = self
                 .worlds
                 .iter()
@@ -1177,14 +1197,17 @@ impl Agent {
             .or_insert_with(uuid_v4)
             .clone();
         // `carmeet` without `carMeetLobby`: the official car meet lobby (both locations and their
-        // free roam, DEDICATED_SERVER.md §16 decision 10)
-        let opened = control.request_retry(
-            "world.open",
-            json!({"worldId": id, "game": GAME,
-                "host": {"kind": "official", "vmId": self.cfg.vm_id},
-                "activity": activity, "maxPlayers": self.cfg.max_players,
-                "races": true, "requireProof": true}),
-        );
+        // free roam, DEDICATED_SERVER.md §16 decision 10); `race` an FM5 world (CR-S99 §5), which
+        // has no FH2 field
+        let game = config::game_of(activity);
+        let max_players = self.cfg.max_players_of(activity);
+        let mut fields = json!({"worldId": id, "game": game,
+            "host": {"kind": "official", "vmId": self.cfg.vm_id},
+            "activity": activity, "maxPlayers": max_players, "requireProof": true});
+        if game == GAME {
+            fields["races"] = Value::Bool(true);
+        }
+        let opened = control.request_retry("world.open", fields);
         if let Err(e) = opened {
             self.engine_refused("world.open", &e);
             match e.code.as_str() {
@@ -1197,8 +1220,8 @@ impl Agent {
             self.open_failed();
             return;
         }
-        let body = json!({"game": GAME, "mode": mode, "activity": activity,
-            "maxPlayers": self.cfg.max_players})
+        let body = json!({"game": game, "mode": mode, "activity": activity,
+            "maxPlayers": max_players})
         .to_string();
         let reply = self.client.call(
             "PUT",
@@ -1372,13 +1395,14 @@ impl Agent {
 /// The placement groups, each kept with one spare: (mode, activity) for `freeroam` and
 /// `roadtrip`, and one `carmeet` group for both modes, stored under the first mode
 /// (WORLDS_OFFICIAL.md §11.1: `any_mode`, `mode` = the agent's first mode). Free roam first, the
-/// car meet lobby, then Road Trip: the order spares are restored in.
+/// car meet lobby, then Road Trip: the order spares are restored in. FM5's `race` comes after
+/// FH2's, one spare per mode (CR-S99 §5), within the same `maxWorlds`.
 fn spare_groups(
     modes: &[&'static str],
     activities: &[&'static str],
 ) -> Vec<(&'static str, &'static str)> {
     let mut groups = Vec::new();
-    for activity in config::ACTIVITIES {
+    for activity in config::ALL_ACTIVITIES {
         if !activities.contains(&activity) {
             continue;
         }
@@ -1481,6 +1505,22 @@ mod tests {
             ]
         );
         assert!(spare_groups(&config::MODES, &[]).is_empty());
+    }
+
+    /// CR-S99 §5: FM5's race spares, one per mode, after FH2's; all of them fit the default cap.
+    #[test]
+    fn fm5_race_spares_follow_fh2s_one_per_mode() {
+        assert_eq!(
+            spare_groups(&config::MODES, &["race"]),
+            vec![("hardcore", "race"), ("noob", "race")]
+        );
+        let all = spare_groups(&config::MODES, &config::ALL_ACTIVITIES);
+        assert_eq!(
+            all[all.len() - 2..],
+            [("hardcore", "race"), ("noob", "race")]
+        );
+        assert_eq!(all.len(), 7);
+        assert!(all.len() <= config::DEFAULT_MAX_WORLDS as usize);
     }
 
     #[test]

@@ -683,7 +683,12 @@ impl Server {
 
     fn world_open(&mut self, io: &mut dyn Io, o: Obj) -> CmdResult {
         let id = world_id_of(o)?;
-        let spec = world::parse_open(o, self.cfg.profile)?;
+        // the game's own seat ceiling (FH2 12, FM5 16); an unknown game is refused below
+        let cap = world::game_of(o)
+            .ok()
+            .and_then(|g| self.cfg.games.iter().find(|x| x.id() == g))
+            .map_or(world::MAX_PLAYERS_DEFAULT, |g| g.max_players());
+        let spec = world::parse_open(o, self.cfg.profile, cap)?;
         let Some(game) = self.cfg.games.iter().find(|g| g.id() == spec.game).cloned() else {
             return Err(CmdError::bad("game"));
         };

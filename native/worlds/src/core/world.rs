@@ -78,7 +78,11 @@ pub fn game_of<'a>(o: Obj<'a>) -> Result<&'a str, CmdError> {
     }
 }
 
-pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
+/// `maxPlayers`' ceiling for a game that names none, and for an unknown game (FH2's 12).
+pub const MAX_PLAYERS_DEFAULT: u8 = 12;
+
+/// `max_players`: the named game's ceiling of `maxPlayers` ([`super::game::Game::max_players`]).
+pub fn parse_open(o: Obj, profile: Profile, max_players: u8) -> Result<OpenSpec, CmdError> {
     let game = game_of(o)?.to_string();
     // OD-186 item 7: a tagged host; private worlds take only `player`, public only `official`
     let host = Obj::new(o.obj("host")?, "host");
@@ -101,7 +105,7 @@ pub fn parse_open(o: Obj, profile: Profile) -> Result<OpenSpec, CmdError> {
         }
         (xuid, None, host.bool("isPlayer")?)
     };
-    let max_players = o.int("maxPlayers", 1, 12)? as u8;
+    let max_players = o.int("maxPlayers", 1, u64::from(max_players))? as u8;
     // public worlds: proof forced (contract §4.3)
     let require_proof = o.bool("requireProof")? || profile == Profile::Public;
     let dev_lan_peers = o.opt_bool("devLanPeers", false)?;

@@ -23,13 +23,30 @@ pub const ACTIVITIES: [&str; 3] = ["freeroam", "carmeet", "roadtrip"];
 /// The one activity whose world admits both modes (OD-180, WORLDS_OFFICIAL.md §11.1).
 pub const MIXED: &str = "carmeet";
 /// The default `--max-worlds`: one spare per (freeroam, mode) and (roadtrip, mode) and one car
-/// meet spare (2 + 2 + 1) with room for three more; the engine's public cap (§8: 8 × 40 MiB
-/// reserved fits the 400 MB limit) and `--max-seats` 8 × 12 = 96.
+/// meet spare (2 + 2 + 1) with room for three more (two of them FM5's race spares, one per mode,
+/// when `race` is placed); the engine's public cap (§8: 8 × 40 MiB reserved fits the 400 MB
+/// limit) and `--max-seats` 8 × 12 = 96 (8 × 16 = 128 when `race` is placed).
 pub const DEFAULT_MAX_WORLDS: u64 = 8;
 /// The pools an official world may serve (`OfficialWorldSettings.mode`).
 pub const MODES: [&str; 2] = ["hardcore", "noob"];
-/// The one game module this build hosts.
+/// FH2, the game of the activities above.
 pub const GAME: &str = "fh2";
+/// FM5's official activity (CR-S99 §1, §5; OD-206): a private race lobby, one spare per mode.
+pub const FM5_ACTIVITIES: [&str; 1] = ["race"];
+pub const FM5: &str = "fm5";
+/// Every activity this agent may place, FH2's then FM5's: the order spares are restored in.
+pub const ALL_ACTIVITIES: [&str; 4] = ["freeroam", "carmeet", "roadtrip", "race"];
+/// FM5's `maxPlayers` default and ceiling (CR-S99 §1: 16 seats).
+pub const FM5_MAX_PLAYERS: u64 = 16;
+
+/// The game an activity's world runs: `race` is FM5's (CR-S99 §5), the others FH2's.
+pub fn game_of(activity: &str) -> &'static str {
+    if FM5_ACTIVITIES.contains(&activity) {
+        FM5
+    } else {
+        GAME
+    }
+}
 
 /// The server's base URL, validated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,8 +71,10 @@ pub struct AgentConfig {
     pub modes: Vec<&'static str>,
     /// The most worlds this VM keeps open (the engine's `--max-worlds`, 1-8, default 8).
     pub max_worlds: usize,
-    /// Each world's `maxPlayers` (guests, 2-12).
+    /// Each FH2 world's `maxPlayers` (guests, 2-12).
     pub max_players: u8,
+    /// Each FM5 world's `maxPlayers` (2-16, default 16; CR-S99 §5).
+    pub fm5_max_players: u8,
     /// Seconds between one world's announces (1-15; 15 in production).
     pub announce_seconds: u64,
 }
@@ -71,6 +90,7 @@ const OPTIONS: &[(&str, &str)] = &[
     ("--modes", "FI_WORLDS_MODES"),
     ("--max-worlds", "FI_WORLDS_MAX_WORLDS"),
     ("--max-players", "FI_WORLDS_MAX_PLAYERS"),
+    ("--fm5-max-players", "FI_WORLDS_FM5_MAX_PLAYERS"),
     ("--announce-seconds", "FI_WORLDS_ANNOUNCE_SECONDS"),
 ];
 
@@ -155,7 +175,7 @@ pub fn parse(
     };
     let activities = match value("FI_WORLDS_ACTIVITIES") {
         None => None,
-        Some(t) => Some(list(&t, &ACTIVITIES).ok_or("FI_WORLDS_ACTIVITIES")?),
+        Some(t) => Some(list(&t, &ALL_ACTIVITIES).ok_or("FI_WORLDS_ACTIVITIES")?),
     };
     let modes = match value("FI_WORLDS_MODES") {
         None => MODES.to_vec(),
@@ -165,6 +185,9 @@ pub fn parse(
         (1..=8).contains(&n)
     })? as usize;
     let max_players = int("FI_WORLDS_MAX_PLAYERS", 12, &|n| (2..=12).contains(&n))? as u8;
+    let fm5_max_players = int("FI_WORLDS_FM5_MAX_PLAYERS", FM5_MAX_PLAYERS, &|n| {
+        (2..=FM5_MAX_PLAYERS).contains(&n)
+    })? as u8;
     let announce_seconds = int("FI_WORLDS_ANNOUNCE_SECONDS", 15, &|n| (1..=15).contains(&n))?;
     Ok(AgentConfig {
         server,
@@ -177,8 +200,20 @@ pub fn parse(
         modes,
         max_worlds,
         max_players,
+        fm5_max_players,
         announce_seconds,
     })
+}
+
+impl AgentConfig {
+    /// The `maxPlayers` of an activity's worlds (its game's setting).
+    pub fn max_players_of(&self, activity: &str) -> u8 {
+        if game_of(activity) == FM5 {
+            self.fm5_max_players
+        } else {
+            self.max_players
+        }
+    }
 }
 
 /// A comma list of distinct names out of `allowed`, at least one.
@@ -431,6 +466,63 @@ mod tests {
         assert_eq!(
             with(&[], &["--bind", "[::]:1", "--bind=[::]:2"]),
             Err("FI_WORLDS_BIND")
+        );
+    }
+
+    /// CR-S99 §5: `race` is FM5's activity, its worlds seat up to 16; FH2's are unchanged.
+    #[test]
+    fn race_is_fm5s_activity_with_its_own_seats() {
+        assert_eq!(game_of("race"), "fm5");
+        for a in ACTIVITIES {
+            assert_eq!(game_of(a), "fh2", "{a}");
+        }
+        let key = if cfg!(windows) {
+            "C:\\fi-worlds\\agent.key"
+        } else {
+            "/var/lib/fi-worlds/agent.key"
+        };
+        let c = with(
+            &[("FI_WORLDS_KEY_FILE", key)],
+            &["--activities", "race,freeroam"],
+        )
+        .unwrap();
+        assert_eq!(c.activities, Some(vec!["race", "freeroam"]));
+        assert_eq!((c.max_players, c.fm5_max_players), (12, 16));
+        assert_eq!(
+            (c.max_players_of("freeroam"), c.max_players_of("race")),
+            (12, 16)
+        );
+        let c = with(
+            &[
+                ("FI_WORLDS_KEY_FILE", key),
+                ("FI_WORLDS_FM5_MAX_PLAYERS", "8"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(c.max_players_of("race"), 8);
+        for bad in ["1", "17", "016"] {
+            assert_eq!(
+                with(
+                    &[
+                        ("FI_WORLDS_KEY_FILE", key),
+                        ("FI_WORLDS_FM5_MAX_PLAYERS", bad)
+                    ],
+                    &[]
+                ),
+                Err("FI_WORLDS_FM5_MAX_PLAYERS"),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            with(
+                &[
+                    ("FI_WORLDS_KEY_FILE", key),
+                    ("FI_WORLDS_ACTIVITIES", "race,race")
+                ],
+                &[]
+            ),
+            Err("FI_WORLDS_ACTIVITIES")
         );
     }
 
