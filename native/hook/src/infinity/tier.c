@@ -238,7 +238,8 @@ int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char
             what[n] = 0;
         }
         if (class_name && call && tier_equal(class_name, comma, L"Forza.WebServices.User") &&
-            (tier_equal(call, method_length, L"Logon") || tier_equal(call, method_length, L"GetPermissionsTable") ||
+            (tier_equal(call, method_length, L"Logon") || tier_equal(call, method_length, L"Logon2") ||
+             tier_equal(call, method_length, L"GetPermissionsTable") ||
              tier_equal(call, method_length, L"GetEconomySettings"))) {
             return FI_ROUTE_PASS;
         }

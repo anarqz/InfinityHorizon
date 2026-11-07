@@ -38,4 +38,5 @@
 #define GAME_IMAGE_SIZE 0x3a18000u
 #define GAME_TIMESTAMP 0x565501edu
 #define ARRAY_COUNT(array) (sizeof(array) / sizeof((array)[0]))
+#include "game_profile.h"
 #endif

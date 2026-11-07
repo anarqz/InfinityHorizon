@@ -53,13 +53,13 @@ static int azimuth_has_game_headers(const unsigned char *base) {
     return nt.Signature == IMAGE_NT_SIGNATURE &&
            nt.FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
            !(nt.FileHeader.Characteristics & IMAGE_FILE_DLL) &&
-           nt.FileHeader.TimeDateStamp == GAME_TIMESTAMP &&
+           nt.FileHeader.TimeDateStamp == fi_game_profile()->timestamp &&
            nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
-           nt.OptionalHeader.SizeOfImage == GAME_IMAGE_SIZE;
+           nt.OptionalHeader.SizeOfImage == fi_game_profile()->image_size;
 }
 
 static int azimuth_image_is_complete(unsigned char *base) {
-    uintptr_t p = (uintptr_t)base, end = p + GAME_IMAGE_SIZE;
+    uintptr_t p = (uintptr_t)base, end = p + fi_game_profile()->image_size;
     if (end < p) {
         return 0;
     }
@@ -175,9 +175,9 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
     if (!path_join(file_path, exe_path, L"data\\azimuth.ini")) {
         goto path_error;
     }
-    n = GetPrivateProfileStringW(L"title-1a96545b", L"folder", L"", azimuth_folder, 32768,
+    n = GetPrivateProfileStringW(fi_game_profile()->title_section, L"folder", L"", azimuth_folder, 32768,
                                  file_path);
-    if (!n) {
+    if (!n && fi_game_is_fh2()) {
         n = GetPrivateProfileStringW(L"launcher", L"game_folder", L"", azimuth_folder, 32768,
                                      file_path);
     }
@@ -202,8 +202,10 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
     }
     return 1;
 path_error:
-    status_set("REFUSED: cannot resolve the FH2 game folder from "
-               "data/azimuth.ini. No patches applied.");
+    status_set(fi_game_is_fh2() ? "REFUSED: cannot resolve the FH2 game folder from "
+                                  "data/azimuth.ini. No patches applied."
+                                : "REFUSED: cannot resolve the FM5 game folder from "
+                                  "data/azimuth.ini. No patches applied.");
     log_start(mod_directory);
     return 0;
 }
@@ -267,6 +269,18 @@ void fi_eo_game_mapped(unsigned char *game, HINSTANCE module) {
     if (InterlockedCompareExchange(&started, 1, 0)) {
         return;
     }
+    /* OD-206: chosen once, from the image, before its folder is looked up. An unknown image stays
+       on FH2's profile, and azimuth_has_game_headers refuses it below. */
+    IMAGE_DOS_HEADER dos;
+    IMAGE_NT_HEADERS64 nt;
+    if (memory_read(game, &dos, sizeof(dos)) && dos.e_magic == IMAGE_DOS_SIGNATURE && dos.e_lfanew >= 64 &&
+        dos.e_lfanew <= 4096 && memory_read(game + dos.e_lfanew, &nt, sizeof(nt))) {
+        const FiGameProfile *profile = fi_game_profile_lookup(nt.FileHeader.TimeDateStamp, nt.OptionalHeader.SizeOfImage);
+        if (profile) {
+            fi_game_selected = profile;
+            fi_game_selected_image = game;
+        }
+    }
     if (!azimuth_resolve_game_paths(module)) {
         return;
     }
@@ -280,6 +294,7 @@ void fi_eo_game_mapped(unsigned char *game, HINSTANCE module) {
                          "ExtraOptions.Infinity.\r\n";
         const char digits[] = "0123456789abcdef";
         uintptr_t value = (uintptr_t)game;
+        memory_copy(message + sizeof("AZIMUTH: mapped ") - 1, fi_game_profile()->name, 3);
         for (unsigned i = 0; i < 16; ++i) {
             message[sizeof("AZIMUTH: mapped FH2 image at 0x") - 1 + i] =
                 digits[(value >> (60 - 4 * i)) & 15];

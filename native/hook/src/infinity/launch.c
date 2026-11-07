@@ -1141,12 +1141,12 @@ static unsigned launch_private_kind(const wchar_t *method, const wchar_t *url, c
     if (!launch_body_member(body, size, "gameServerPlatform") || launch_body_member(body, size, "matchmaking")) return 0;
     const unsigned char *hopper = launch_body_member(body, size, "hopperId");
     if (!hopper) return 0;
-    const unsigned char *end = body + size;
-    while (hopper < end && (*hopper == ' ' || *hopper == '\t' || *hopper == '\r' || *hopper == '\n')) ++hopper;
-    unsigned value = 0, digits = 0;
-    for (; hopper < end && *hopper >= '0' && *hopper <= '9' && digits < 6; ++hopper, ++digits) value = value * 10 + (unsigned)(*hopper - '0');
-    if (!digits || (hopper < end && *hopper >= '0' && *hopper <= '9')) return 0;
-    if (value == 2) return LAUNCH_KIND_PRIVATE_FREE_ROAM;
+    int parsed;
+    if (!fi_hopper_parse(hopper, body + size, &parsed)) return 0;
+    /* FH2's private create says hopper 2, FM5's -1 (OD-206; the lobby spec's joiner needs -1) */
+    if (parsed == fi_game_profile()->private_hopper) return LAUNCH_KIND_PRIVATE_FREE_ROAM;
+    if (parsed < 0) return 0;
+    unsigned value = (unsigned)parsed;
     static volatile LONG logged;
     if (!InterlockedExchange(&logged, 1)) {
         launch_log("PRIVATE CREATE: a private-looking session write with hopperId ", 1, value,
@@ -1894,12 +1894,15 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(5, fi_livery_remote_ready());
     fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
     fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
-    fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
-    fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
-    fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
-    fi_launch_capture(LAUNCH_CAPTURE_WATCH_PER_CAR, 1); /* NR-5: the per-car speed floor, Observed layout 2 */
     fi_launch_capture(LAUNCH_CAPTURE_PRIVATE_CREATE, 1); /* T-L6: kinds 3/4 once the launcher answers Capture{12, 1} */
-    fi_launch_capture(LAUNCH_CAPTURE_FOLLOW_MOVE, 1);    /* T-L5: FollowHost's move flag */
+    /* OD-206: free roam, Watch's car decoding, parts and follow are FH2's; FM5 does not advertise them */
+    if (fi_game_is_fh2()) {
+        fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
+        fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
+        fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
+        fi_launch_capture(LAUNCH_CAPTURE_WATCH_PER_CAR, 1); /* NR-5: the per-car speed floor, Observed layout 2 */
+        fi_launch_capture(LAUNCH_CAPTURE_FOLLOW_MOVE, 1);    /* T-L5: FollowHost's move flag */
+    }
     return 1;
 }
 
