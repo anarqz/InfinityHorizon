@@ -1334,7 +1334,14 @@ fn the_leader_is_granted_after_its_first_options_on_the_same_counter() {
         vec![(nerd::OBJECT_UPDATE, 1)]
     );
     assert!(lab.drain(first).is_empty(), "not echoed to the owner");
-    assert_eq!(lab.peer(first).options_seq, 40);
+    // Q2: the owner's seq 40 is its send counter; the server's next message to it is still 2
+    assert_eq!(lab.peer(first).options_seq, 1);
+    lab.race.owner = Some(second);
+    lab.race.sync_owner();
+    assert_eq!(
+        option_seqs(&lab.drain(first)),
+        vec![(nerd::GRANT_OWNERSHIP, 2)]
+    );
 }
 
 #[test]
@@ -1421,44 +1428,40 @@ fn a_late_joiners_full_update_has_the_owners_changes() {
     assert_eq!(options.len(), 1);
     let (ident, o, payload) = &options[0];
     assert_eq!((*ident, o.seq), (nerd::OBJECT_UPDATE, 0));
-    let read = super::options::parse(payload);
-    assert!(read.complete());
     assert_eq!(
-        read.vars,
+        vars_of(payload),
         vec![(0, 2, 8), (2, 1, 3), (3, 3, 32), (227, 1, 3), (228, 5, 32)]
     );
 }
 
 #[test]
-fn a_write_with_a_var_of_unknown_width_is_replayed_in_order() {
+fn every_var_merges_and_a_bad_write_is_dropped_whole() {
     let mut lab = Lab::private();
-    let (first, late) = (at(1), at(2));
+    let (first, second) = (at(1), at(2));
     lab.connect(first);
-    lab.options_update(first, 5, 1, &owner_payload(&[(3, 3, 32)]));
-    // var 100 (a bucket var, width not read) then laps: not merged, kept as it is
-    let odd = owner_payload(&[(100, 0b101, 6), (228, 7, 32)]);
-    lab.options_update(first, 6, 2, &odd);
-    // a later write that reads still goes after it
-    let after = owner_payload(&[(228, 9, 32)]);
-    lab.options_update(first, 7, 3, &after);
-    assert_eq!(lab.race.options.value(228), Some(race::DEFAULT_LAPS));
-    let options = options_messages(&lab.connect(late));
+    lab.connect(second);
+    // a bucket var (100, 2 bits) and laps: both merged now
+    lab.options_update(first, 5, 1, &owner_payload(&[(100, 2, 2), (228, 7, 32)]));
+    assert_eq!(lab.race.options.value(100), Some(2));
+    assert_eq!(lab.race.options.value(228), Some(7));
     assert_eq!(
-        options
-            .iter()
-            .map(|(i, o, _)| (*i, o.seq))
-            .collect::<Vec<_>>(),
-        vec![
-            (nerd::OBJECT_UPDATE, 0),
-            (nerd::OBJECT_UPDATE, 1),
-            (nerd::OBJECT_UPDATE, 2)
-        ]
+        option_seqs(&lab.drain(second)),
+        vec![(nerd::OBJECT_UPDATE, 1)]
     );
-    assert_eq!(super::options::parse(&options[0].2).vars[1], (3, 3, 32));
-    assert_eq!(options[1].2, odd);
-    assert_eq!(options[2].2, after);
-    let unread = super::options::parse(&odd).unread;
-    assert_eq!(unread, Some((Some(100), odd.len())));
+    let before = lab.race.options.clone();
+    // an index past 290, after a good var: nothing merged, nothing relayed
+    lab.options_update(first, 6, 2, &owner_payload(&[(3, 9, 32), (291, 1, 1)]));
+    // a payload that ends inside laps
+    let cut = Writer::from_bits(&owner_payload(&[(228, 9, 32)]).bytes(), 0, 9 + 20);
+    lab.options_update(first, 7, 3, &cut);
+    assert_eq!(lab.race.options, before);
+    assert!(lab.drain(second).is_empty());
+    // and the next good one takes the next seq: no gap
+    lab.options_update(first, 8, 4, &owner_payload(&[(3, 9, 32)]));
+    assert_eq!(
+        option_seqs(&lab.drain(second)),
+        vec![(nerd::OBJECT_UPDATE, 2)]
+    );
 }
 
 #[test]
@@ -1482,7 +1485,7 @@ fn the_next_leader_is_granted_the_full_values_when_the_owner_leaves() {
     // seq 0 its first push, 1 the relayed Update, 2 the grant
     assert_eq!((*ident, o.seq), (nerd::GRANT_OWNERSHIP, 2));
     assert_eq!(payload, &lab.race.options.full());
-    assert_eq!(super::options::parse(payload).vars[3], (228, 4, 32));
+    assert_eq!(vars_of(payload)[3], (228, 4, 32));
     assert_eq!(lab.race.owner, Some(second));
     // the new owner's Updates are taken, the old one's never were relayed to it again
     lab.options_update(second, 7, 0, &owner_payload(&[(228, 6, 32)]));
@@ -1556,4 +1559,193 @@ fn a_world_made_private_grants_its_leader() {
     assert_eq!((granted[0].0, granted[0].1.seq), (nerd::GRANT_OWNERSHIP, 1));
     assert!(to(at(2)).is_empty());
     assert_eq!(world.state()["leader"], X1.to_string());
+}
+
+/// (index, value, width) of each var of an options payload (values past 64 bits as 0).
+fn vars_of(payload: &Writer) -> Vec<(u32, u64, usize)> {
+    super::options::parse(payload)
+        .unwrap()
+        .iter()
+        .map(|v| (v.index, v.number().unwrap_or(0), v.value.len()))
+        .collect()
+}
+
+impl Lab {
+    /// The console acks every packet the server has in flight to it.
+    fn ack_all(&mut self, from: SocketAddr, ident: u16) {
+        let last = self.peer(from).in_flight.iter().map(|f| f.ident).max();
+        if let Some(ack) = last {
+            let data = nerd::packet(&[nerd::ping(1)], ident, ack, 0xFFFF_FFFF).unwrap();
+            self.receive(&data, from);
+        }
+        assert!(self.peer(from).in_flight.is_empty());
+    }
+}
+
+/// Every var of GameOptions at once (strings at their longest, 24 chars): about 14 k bits.
+fn every_var() -> Writer {
+    let mut w = Writer::new();
+    for index in 0..super::options::VARS as u32 {
+        w.put(u64::from(index), nerd::GAME_OPTIONS_INDEX_BITS);
+        match super::options::width(index).unwrap() {
+            super::options::Width::Bits(n) => {
+                w.put(u64::from(index) & 1, n);
+            }
+            super::options::Width::String => {
+                w.put(24, 5);
+                for c in 0..24u64 {
+                    w.put(u64::from(b'a') + c, 16);
+                }
+            }
+        }
+    }
+    w
+}
+
+#[test]
+fn a_lost_options_packet_goes_again_at_its_seq_and_never_leaves_a_gap() {
+    let mut lab = Lab::private();
+    let (first, second) = (at(1), at(2));
+    lab.connect(first);
+    lab.connect(second);
+    lab.ack_all(second, 10);
+    lab.options_update(first, 5, 1, &owner_payload(&[(3, 3, 32)]));
+    // lost: never acked, past the 8 tries other packets get
+    let mut seen = Vec::new();
+    let mut now = 0;
+    while now < race::RESEND_MS * u64::from(race::RESEND_TRIES + 4) {
+        now += race::RESEND_MS + 1;
+        lab.receive(&packet(vec![nerd::ping(1)], 0x8000), first);
+        lab.race.tick(now);
+        seen.extend(option_seqs(&lab.drain(second)));
+    }
+    assert!(seen.len() > race::RESEND_TRIES as usize, "{seen:?}");
+    assert!(
+        seen.iter().all(|s| *s == (nerd::OBJECT_UPDATE, 1)),
+        "{seen:?}"
+    );
+    // acked at last: the next one is the next seq
+    lab.ack_all(second, 11);
+    lab.options_update(first, 6, 2, &owner_payload(&[(228, 2, 32)]));
+    assert_eq!(
+        option_seqs(&lab.drain(second)),
+        vec![(nerd::OBJECT_UPDATE, 2)]
+    );
+}
+
+#[test]
+fn grants_updates_and_revokes_interleave_with_contiguous_seqs() {
+    let mut lab = Lab::private();
+    let (a, b, c) = (at(1), at(2), at(3));
+    let mut got: Vec<(SocketAddr, Vec<(u8, u8)>)> = Vec::new();
+    for x in [a, b, c] {
+        let seqs = option_seqs(&lab.connect(x));
+        got.push((x, seqs));
+    }
+    let collect = |lab: &mut Lab, got: &mut Vec<(SocketAddr, Vec<(u8, u8)>)>| {
+        for (x, seqs) in got.iter_mut() {
+            seqs.extend(option_seqs(&lab.drain(*x)));
+        }
+    };
+    lab.options_update(a, 5, 9, &owner_payload(&[(3, 3, 32)]));
+    lab.options_update(b, 5, 9, &owner_payload(&[(3, 4, 32)])); // not the owner: dropped
+    lab.options_update(a, 6, 200, &owner_payload(&[(228, 2, 32)]));
+    collect(&mut lab, &mut got);
+    // b holds the options while a leads: revoke b, grant a
+    lab.race.owner = Some(b);
+    lab.race.sync_owner();
+    lab.options_update(a, 7, 3, &owner_payload(&[(4, 1, 8)]));
+    collect(&mut lab, &mut got);
+    // a leaves: b leads and is granted
+    lab.receive(
+        &packet(
+            vec![Writer::new().push(u64::from(nerd::CLOSE), nerd::ID_BITS)],
+            8,
+        ),
+        a,
+    );
+    lab.options_update(b, 9, 0, &owner_payload(&[(2, 1, 3)]));
+    collect(&mut lab, &mut got);
+    for (x, seqs) in &got {
+        let numbers: Vec<u8> = seqs.iter().map(|s| s.1).collect();
+        let want: Vec<u8> = (0..numbers.len() as u8).collect();
+        assert_eq!(numbers, want, "{x}: {seqs:?}");
+    }
+    let kinds = |x: SocketAddr| -> Vec<u8> {
+        got.iter()
+            .find(|g| g.0 == x)
+            .unwrap()
+            .1
+            .iter()
+            .map(|s| s.0)
+            .collect()
+    };
+    let (u, g, t) = (
+        nerd::OBJECT_UPDATE,
+        nerd::GRANT_OWNERSHIP,
+        nerd::TRANSFER_OWNERSHIP,
+    );
+    assert_eq!(kinds(a), vec![u, g, g]);
+    assert_eq!(kinds(b), vec![u, u, u, t, u, g]);
+    assert_eq!(kinds(c), vec![u, u, u, u, u]);
+}
+
+#[test]
+fn no_options_packet_is_longer_than_a_relay_leg_carries() {
+    let mut lab = Lab::private();
+    let (first, second, late) = (at(1), at(2), at(3));
+    lab.connect(first);
+    lab.connect(second);
+    let all = every_var();
+    assert!(all.len() > 13_000, "{}", all.len());
+    lab.options_update(first, 5, 1, &all);
+    let relayed = lab.drain(second);
+    let joined = lab.connect(late);
+    // and a leader change hands the whole table over in a grant
+    lab.receive(
+        &packet(
+            vec![Writer::new().push(u64::from(nerd::CLOSE), nerd::ID_BITS)],
+            6,
+        ),
+        first,
+    );
+    let granted = lab.drain(second);
+    for (what, packets) in [("relay", &relayed), ("join", &joined), ("grant", &granted)] {
+        for p in packets {
+            assert!(
+                p.len() <= race::PACKET_MAX_BYTES,
+                "{what}: {} bytes",
+                p.len()
+            );
+        }
+        let options = options_messages(packets);
+        assert!(options.len() > 1, "{what}: cut into several messages");
+        let seqs: Vec<u8> = options.iter().map(|o| o.1.seq).collect();
+        let first_seq = seqs[0];
+        assert!(
+            seqs.iter()
+                .enumerate()
+                .all(|(i, s)| usize::from(*s) == (usize::from(first_seq) + i) % 255),
+            "{what}: {seqs:?}"
+        );
+        let mut vars = Vec::new();
+        for (_, _, payload) in &options {
+            vars.extend(super::options::parse(payload).unwrap());
+        }
+        if what == "relay" {
+            assert_eq!(
+                super::options::encode(&vars),
+                all,
+                "the owner's bits, in order"
+            );
+        } else {
+            assert_eq!(vars, lab.race.options.vars(), "{what}: the whole table");
+        }
+    }
+    assert_eq!(
+        options_messages(&granted).last().unwrap().0,
+        nerd::GRANT_OWNERSHIP,
+        "the grant carries the table's last part"
+    );
+    assert_eq!(lab.race.options.vars().len(), super::options::VARS);
 }

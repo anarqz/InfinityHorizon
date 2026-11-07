@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use super::{
     nerd::{self, Fields, Handle, Object, Walked, Writer},
-    options::{self, Applied, Options},
+    options::{self, Options},
 };
 use crate::core::{
     game::{Admit, GameEvent, Send},
@@ -82,6 +82,31 @@ pub fn seq_after(seq: u8) -> u8 {
     ((u16::from(seq) + 1) % 255) as u8
 }
 
+/// The seq before `seq` (mod 255).
+pub fn seq_before(seq: u8) -> u8 {
+    ((u16::from(seq) + 254) % 255) as u8
+}
+
+/// The longest packet the server sends options in (bytes, header included): a relay leg carries
+/// at most this much ([`crate::core::legs::MAX_PAYLOAD`]), below FH2's 1372-byte packet limit.
+pub const PACKET_MAX_BYTES: usize = crate::core::legs::MAX_PAYLOAD;
+/// The longest options payload in one message (bits): with its message head (35 bits) and the
+/// packet header it stays inside [`PACKET_MAX_BYTES`]. A long table (a full one is about 12.5-14
+/// k bits, lobby spec §13.7) goes as several Updates.
+pub const OPTIONS_CHUNK_BITS: usize = 8 * 1024;
+
+/// A GameOptions Update from the server (router 6, Transfer handle, id 0).
+fn options_update(seq: u8, payload: &Writer) -> Writer {
+    nerd::object_update(
+        nerd::ROUTER_LOBBY,
+        nerd::HANDLE_TRANSFER,
+        0,
+        seq,
+        payload,
+        None,
+    )
+}
+
 /// Why a peer left (the `peer.left` reason, contract §4.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Why {
@@ -120,6 +145,8 @@ pub(super) struct InFlight {
     messages: Vec<Writer>,
     pub(super) sent: u64,
     tries: u32,
+    /// Resent until acked (options: a console's options seqs never have a gap).
+    pub(super) forever: bool,
 }
 
 /// A console's object, kept so a later joiner gets it: its Create, then every update in order.
@@ -161,9 +188,9 @@ pub(super) struct Peer {
     console_vars: [bool; 16],
     saw_grid: bool,
     server_seq: Option<u8>,
-    /// The last seq of this console's GameOptions link (lobby spec §13): the options Updates the
-    /// server sends it, its grant and its revoke share this one counter. While it owns the
-    /// options, its own Updates move it (INFERRED: its link is its own counter then).
+    /// The last seq the server sent on this console's GameOptions receive queue (lobby spec §13.7
+    /// Q1, Q2): the options Updates, the grant and the revoke share this one counter. The
+    /// console's own Updates as owner run on its separate send counter and never move this one.
     pub(super) options_seq: u8,
     pub(super) in_flight: Vec<InFlight>,
 }
@@ -318,7 +345,7 @@ impl Race {
             next_grid: 0,
             results: BTreeMap::new(),
             resent: 0,
-            options: Options::new(game_options(DEFAULT_TRACK, DEFAULT_LAPS)),
+            options: Options::new(&game_options(DEFAULT_TRACK, DEFAULT_LAPS)),
             leader_owns_options: false,
             owner: None,
             dropped: 0,
@@ -402,10 +429,9 @@ impl Race {
     }
 
     /// Moves the options' ownership to the leader, when it is not the owner already (lobby spec
-    /// §13): the old owner, while still here, gets a revoke (12) first; then the leader a grant
-    /// (11) with the full current values. With a tail (writes not merged) the grant is empty: the
-    /// leader already applied every write through the relay, and the table alone would undo the
-    /// tail's. No owner path starts a race.
+    /// §13.3): the old owner, while still here, gets a revoke (12) first; then the leader a grant
+    /// (11) with the full current values, since its copy may lag (a table too long for one grant
+    /// goes first as Updates, the grant carrying its last part). No owner path starts a race.
     pub(super) fn sync_owner(&mut self) {
         if !self.leader_owns_options {
             return;
@@ -421,7 +447,7 @@ impl Race {
             let index = self.peers[pos].index;
             let revoke =
                 nerd::transfer_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, seq);
-            self.send(old, vec![revoke], true, 0);
+            self.send_options(old, vec![(seq, revoke)]);
             note("options.revoked", json!({"peer": index, "seq": seq}));
         }
         let Some(new) = want else {
@@ -430,21 +456,56 @@ impl Race {
         let Some(pos) = self.position(new) else {
             return;
         };
-        let payload = if self.options.tail().is_empty() {
-            self.options.full()
-        } else {
-            Writer::new()
-        };
-        let seq = self.peers[pos].take_options_seq();
-        let index = self.peers[pos].index;
-        let grant =
-            nerd::grant_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, seq, &payload);
-        self.send(new, vec![grant], true, 0);
+        let mut parts = options::chunks(self.options.vars(), OPTIONS_CHUNK_BITS);
+        let last = parts.pop().unwrap_or_default();
+        let p = &mut self.peers[pos];
+        let mut messages: Vec<(u8, Writer)> = parts
+            .iter()
+            .map(|part| {
+                let seq = p.take_options_seq();
+                (seq, options_update(seq, part))
+            })
+            .collect();
+        let seq = p.take_options_seq();
+        let index = p.index;
+        let grant = nerd::grant_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, seq, &last);
+        messages.push((seq, grant));
+        self.send_options(new, messages);
         self.owner = Some(new);
         note(
             "options.granted",
-            json!({"peer": index, "seq": seq, "bits": payload.len()}),
+            json!({"peer": index, "seq": seq, "bits": self.options.full().len()}),
         );
+    }
+
+    /// Options messages (each with its seq, in seq order) to `to` (lobby spec §13.7 Q4): packed
+    /// into packets of at most [`PACKET_MAX_BYTES`], each sent again until the console acks it (a
+    /// gap in a console's options seqs stalls it forever; a repeat is dropped harmlessly). If a
+    /// packet cannot go, the console's counter goes back to before it, so no seq is ever skipped.
+    pub(super) fn send_options(&mut self, to: SocketAddr, messages: Vec<(u8, Writer)>) {
+        let mut packets: Vec<(u8, Vec<Writer>)> = Vec::new();
+        let mut bits = 0;
+        for (seq, m) in messages {
+            let fits = packets.last().is_some_and(|_| {
+                nerd::HEADER_LEN + (bits + m.len()).div_ceil(8) <= PACKET_MAX_BYTES
+            });
+            if !fits {
+                packets.push((seq, Vec::new()));
+                bits = 0;
+            }
+            bits += m.len();
+            if let Some(last) = packets.last_mut() {
+                last.1.push(m);
+            }
+        }
+        for (first, messages) in packets {
+            if !self.send_packet(to, messages, true, 0, true) {
+                if let Some(pos) = self.position(to) {
+                    self.peers[pos].options_seq = seq_before(first);
+                }
+                return;
+            }
+        }
     }
 
     /// Sends `messages` to the peer at `address` in one packet, sequenced (a new id, kept for its
@@ -456,12 +517,24 @@ impl Race {
         sequenced: bool,
         tries: u32,
     ) {
+        self.send_packet(address, messages, sequenced, tries, false);
+    }
+
+    /// [`Race::send`]; `forever`: resent until acked, never given up. Whether it went.
+    fn send_packet(
+        &mut self,
+        address: SocketAddr,
+        messages: Vec<Writer>,
+        sequenced: bool,
+        tries: u32,
+        forever: bool,
+    ) -> bool {
         let Some(pos) = self.position(address) else {
-            return;
+            return false;
         };
         let xuid = self.peers[pos].xuid;
         if !self.allowed(xuid, address) {
-            return;
+            return false;
         }
         let now = self.now;
         let p = &mut self.peers[pos];
@@ -469,7 +542,7 @@ impl Race {
         let (ack, bits) = p.ack();
         let Some(data) = nerd::packet(&messages, ident, ack, bits) else {
             self.dropped += 1;
-            return;
+            return false;
         };
         self.out.push(Send { to: address, data });
         if sequenced {
@@ -478,8 +551,10 @@ impl Race {
                 messages,
                 sent: now,
                 tries,
+                forever,
             });
         }
+        true
     }
 
     /// A Close to the peer at `pos`, unsequenced (it is leaving: nothing waits for its ack).
@@ -496,7 +571,8 @@ impl Race {
 
     /// Sequenced packets a console has not acked go again under a new id; on a real network losing
     /// a StartRace would strand a player. The game drops what it already applied by the objects'
-    /// own seq; the rest are events.
+    /// own seq; the rest are events. Options packets are never given up (W16, Q4): the console
+    /// leaves by its quiet timeout instead.
     pub(super) fn resend_lost(&mut self, address: SocketAddr, now: u64) {
         let Some(pos) = self.position(address) else {
             return;
@@ -507,9 +583,9 @@ impl Race {
                 if let Some(p) = self.position(address) {
                     self.peers[p].in_flight.push(f);
                 }
-            } else if f.tries < RESEND_TRIES {
+            } else if f.forever || f.tries < RESEND_TRIES {
                 self.resent += 1;
-                self.send(address, f.messages, true, f.tries + 1);
+                self.send_packet(address, f.messages, true, f.tries + 1, f.forever);
             } else {
                 note("send.gave_up", json!([self.peers[pos].index, f.tries]));
             }
@@ -1008,9 +1084,11 @@ impl Race {
 
     /// A router-6 object message from a console. Only the options' owner's Update of the
     /// GameOptions (Transfer handle, id 0) counts (lobby spec §13); any other is dropped, as every
-    /// router-6 message was before W16. Its seq is the owner's own counter, so any is taken. It is
-    /// logged var by var (the set the owner writes is OPEN), merged, and relayed to every other
-    /// console as the server's Transfer Update with that console's next seq.
+    /// router-6 message was before W16. Its seq is the owner's own send counter (§13.7 Q2): any
+    /// is taken, and it never moves the server's counter to that console. It is read whole with
+    /// every var's width (one naming an index past 290 or ending inside a value is dropped whole
+    /// and logged), logged var by var (the set the owner writes is OPEN), merged, and relayed to
+    /// every other console as the server's Transfer Update at that console's next seq.
     ///
     /// Lobby kind 7 only: there `0x140554e40` sets Ready on remote players, so an owner's Update
     /// aimed at another player's object would have to be dropped. Private lobbies are kind 5 and
@@ -1027,34 +1105,37 @@ impl Race {
         let Some(pos) = self.position(from) else {
             return;
         };
+        let index = self.peers[pos].index;
         let payload = nerd::payload_of(data, o);
-        let parsed = options::parse(&payload);
-        let applied = self.options.apply(&payload, &parsed);
-        let p = &mut self.peers[pos];
-        p.options_seq = o.seq;
-        let index = p.index;
+        let vars = match options::parse(&payload) {
+            Ok(vars) => vars,
+            Err(why) => {
+                let reason = match why {
+                    options::Refused::Unknown { index } => json!({"unknown": index}),
+                    options::Refused::Truncated { index } => json!({"truncated": index}),
+                };
+                note(
+                    "options.owner_update_dropped",
+                    json!({"peer": index, "seq": o.seq, "bits": payload.len(), "reason": reason}),
+                );
+                return;
+            }
+        };
+        self.options.merge(&vars);
         if crate::log::enabled(crate::log::Level::Info) {
             // parsed indexes and values only, never raw payload bytes; capped per line (MACBOOK, W16)
-            let vars: Vec<Value> = parsed
-                .vars
+            let logged: Vec<Value> = vars
                 .iter()
                 .take(OWNER_UPDATE_LOG_VARS)
-                .map(|(i, v, w)| json!([i, v, w]))
+                .map(|v| json!([v.index, v.number(), v.value.len()]))
                 .collect();
-            let (unknown, unread) = match parsed.unread {
-                Some((i, bits)) => (json!(i), json!(bits)),
-                None => (Value::Null, json!(0)),
-            };
             note(
                 "options.owner_update",
-                json!({"peer": index, "seq": o.seq, "bits": payload.len(), "count": parsed.vars.len(), "vars": vars,
-                "unknown": unknown, "unread": unread, "applied": match applied {
-                    Applied::Merged => "merged",
-                    Applied::Tail => "tail",
-                    Applied::Lost => "lost",
-                }}),
+                json!({"peer": index, "seq": o.seq, "bits": payload.len(), "count": vars.len(),
+                    "vars": logged}),
             );
         }
+        let parts = options::chunks(&vars, OPTIONS_CHUNK_BITS);
         for other in self.racers() {
             if other == from {
                 continue;
@@ -1062,16 +1143,15 @@ impl Race {
             let Some(at) = self.position(other) else {
                 continue;
             };
-            let seq = self.peers[at].take_options_seq();
-            let message = nerd::object_update(
-                nerd::ROUTER_LOBBY,
-                nerd::HANDLE_TRANSFER,
-                0,
-                seq,
-                &payload,
-                None,
-            );
-            self.send(other, vec![message], true, 0);
+            let p = &mut self.peers[at];
+            let messages = parts
+                .iter()
+                .map(|part| {
+                    let seq = p.take_options_seq();
+                    (seq, options_update(seq, part))
+                })
+                .collect();
+            self.send_options(other, messages);
         }
     }
 
@@ -1144,10 +1224,11 @@ impl Race {
 
     /// SessionHost first: the lobby scene initializes once and only if it already exists (lobby
     /// spec §0). Then a first GameOptions, pushed through the Transfer handle (the spec's option
-    /// 2) at the console's first options seq (0): the full table with the owner's merged changes,
-    /// then the owner's unmerged writes in order (W16). In a private lobby whose options nobody
-    /// owns yet, the leader's grant (11, empty after the full Update) closes the same packet, so
-    /// it comes after them and before any Ready.
+    /// 2) from the console's first options seq (0): the table, the server's defaults with the
+    /// owner's changes merged (only the vars ever written: the console has FM5's defaults for the
+    /// rest), cut into Updates that fit a packet. In a private lobby whose options nobody owns
+    /// yet, the leader's grant (11, empty after the full Update) follows on the same queue, before
+    /// any Ready.
     fn send_lobby(&mut self, to: SocketAddr) {
         let host = nerd::object_create(
             nerd::ROUTER_LOBBY,
@@ -1161,31 +1242,30 @@ impl Race {
         let Some(pos) = self.position(to) else {
             return;
         };
-        let full = self.options.full();
-        let mut options = Vec::with_capacity(2 + self.options.tail().len());
-        for payload in std::iter::once(&full).chain(self.options.tail()) {
-            let seq = self.peers[pos].take_options_seq();
-            options.push(nerd::object_update(
-                nerd::ROUTER_LOBBY,
-                nerd::HANDLE_TRANSFER,
-                0,
-                seq,
-                payload,
-                None,
-            ));
-        }
         let grant = self.leader_owns_options
             && self.owner.is_none()
             && self.leader_peer().map(|p| p.address) == Some(to);
+        let parts = options::chunks(self.options.vars(), OPTIONS_CHUNK_BITS);
+        let p = &mut self.peers[pos];
+        let mut options: Vec<(u8, Writer)> = parts
+            .iter()
+            .map(|part| {
+                let seq = p.take_options_seq();
+                (seq, options_update(seq, part))
+            })
+            .collect();
         if grant {
-            let seq = self.peers[pos].take_options_seq();
-            let index = self.peers[pos].index;
-            options.push(nerd::grant_ownership(
-                nerd::ROUTER_LOBBY,
-                nerd::HANDLE_TRANSFER,
-                0,
+            let seq = p.take_options_seq();
+            let index = p.index;
+            options.push((
                 seq,
-                &Writer::new(),
+                nerd::grant_ownership(
+                    nerd::ROUTER_LOBBY,
+                    nerd::HANDLE_TRANSFER,
+                    0,
+                    seq,
+                    &Writer::new(),
+                ),
             ));
             self.owner = Some(to);
             note(
@@ -1194,7 +1274,7 @@ impl Race {
             );
         }
         self.send(to, vec![host], true, 0);
-        self.send(to, options, true, 0);
+        self.send_options(to, options);
         self.send_history(to);
     }
 
