@@ -20,7 +20,7 @@
 #include "../core/sha256.h"
 #include "offsets.h"
 #include "../core/support.h"
-#include "fm5_patches.h"
+#include "game_patches.h"
 #include <stddef.h>
 #include <winhttp.h>
 
@@ -1324,9 +1324,9 @@ static int net_answer_no_line(NetRequest *request) {
     static volatile LONG logged_count;
     static SRWLOCK logged_lock = SRWLOCK_INIT;
     static const unsigned char empty_reply[12] = {0};
-    /* OD-206: an FM5 ticket holds no save line, yet its career goes through OnlineProfile to the server
-       (plan A2, M7), so the FH2 line gate does not apply to it */
-    if (fi_tier_universe() || !fi_game_is_fh2()) {
+    /* OD-206: FM5's ticket holds no save line, yet its career goes through OnlineProfile to the server
+       (plan A2, M7): the gate is only for a game with the cloud line */
+    if (fi_tier_universe() || !fi_game_has(FI_FEATURE_CLOUD_LINE)) {
         return 0;
     }
     const char *json = 0;
@@ -1422,7 +1422,7 @@ static int net_answer_foreign(NetRequest *request) {
 /* The game's livery calls in a launcher session (livery_world.c, CR-S59): logged, never answered
    here; they go on to the server, which keeps every ticket's liveries. */
 static int net_answer_livery(NetRequest *request) {
-    if (fi_launch_protocol() && fi_game_is_fh2()) {
+    if (fi_launch_protocol() && fi_game_has(FI_FEATURE_LIVERIES)) {
         fi_livery_route(buffer_wide(&request->request_headers), request->request_body.data,
                         request->request_body.size);
     }
@@ -1433,7 +1433,7 @@ static int net_answer_livery(NetRequest *request) {
    server answers UpdateAll (200, bin/xtsw: status 0, code 0, no message, no results). */
 static int net_hold_progress(NetRequest *request) {
     static const unsigned char empty_reply[12] = {0};
-    if (!fi_game_is_fh2()) {
+    if (!fi_game_has(FI_FEATURE_CLOUD_LINE)) {
         return 0; /* OD-206: FH2's UpdateAll layout and limits */
     }
     if (!azimuth_progress_hold(buffer_wide(&request->request_headers), request->request_body.data,
@@ -1634,7 +1634,7 @@ static DWORD WINAPI net_worker(void *parameter) {
     int held_off = 0; /* T-L6: a private create the launcher could not seat is answered offline here */
     if (net_mode == NET_MODE_PROXY && !request->aborted) {
         /* a private free roam session opens this PC's world before the server sees it (never under the launcher) */
-        if (fi_game_is_fh2()) {
+        if (fi_game_has(FI_FEATURE_FREE_ROAM)) {
             azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
                                      request->request_body.data, request->request_body.size);
         }
@@ -1666,7 +1666,7 @@ static DWORD WINAPI net_worker(void *parameter) {
         answered = 0;
         error = E_ABORT;
     }
-    if (answered && net_mode == NET_MODE_PROXY && fi_launch_protocol() && fi_game_is_fh2()) {
+    if (answered && net_mode == NET_MODE_PROXY && fi_launch_protocol() && fi_game_has(FI_FEATURE_LIVERIES)) {
         fi_livery_reply(buffer_wide(&request->request_headers), request->request_body.data, request->request_body.size,
                         (unsigned)request->status, request->response_body.data, request->response_body.size);
     }
@@ -1860,9 +1860,7 @@ static HRESULT net_co_create_instance(REFCLSID clsid, void *outer, DWORD context
             return CLASS_E_NOAGGREGATION;
         }
         net_log_once(&net_seen_xhr, "NETWORK: game created its first IXMLHTTPRequest2.\r\n");
-        if (!fi_game_is_fh2()) {
-            fm5_first_request();
-        }
+        game_first_request();
         NetRequest *request = net_alloc(sizeof(*request));
         if (!request) {
             return E_OUTOFMEMORY;

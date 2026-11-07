@@ -1895,8 +1895,8 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
     fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
     fi_launch_capture(LAUNCH_CAPTURE_PRIVATE_CREATE, 1); /* T-L6: kinds 3/4 once the launcher answers Capture{12, 1} */
-    /* OD-206: free roam, Watch's car decoding, parts and follow are FH2's; FM5 does not advertise them */
-    if (fi_game_is_fh2()) {
+    /* OD-206: free roam, Watch's car decoding, parts and follow are at FH2's addresses and layouts */
+    if (fi_game_has(FI_FEATURE_FREE_ROAM)) {
         fi_launch_capture(LAUNCH_CAPTURE_FREE_ROAM, 1);    /* CR-L40: FreeRoamNeed/FreeRoamReady */
         fi_launch_capture(LAUNCH_CAPTURE_WATCH, 1);        /* AC-2: Watch/Observed */
         fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
