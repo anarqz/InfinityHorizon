@@ -64,12 +64,17 @@ typedef struct {
     const FiGameWatch *watches;
     unsigned watch_count;
     /* Polled readiness (none: the game's own detour, FH2's game_ready.c, or no readiness at all). Ready while
-       every term holds and the 4 bytes at heartbeat_offset of *heartbeat_global changed within the last second.
-       The generation changes with ready and with the two identity pointers. */
+       every term holds and the 4 bytes at heartbeat_offset of *heartbeat_global changed within the last
+       heartbeat_window_ms (fi_ready_heartbeat_fresh). The generation changes with ready and with the two identity pointers. */
     const FiReadyTerm *ready_terms;
     unsigned ready_term_count;
     unsigned heartbeat_global, heartbeat_offset;
     unsigned ready_identity[2];
+    unsigned heartbeat_window_ms;
+    /* W7b (OD-206, CR-S99 4, lobby spec 11.3-11.4, route 1): the game takes an invite by Party GameSessionReady. The hook keeps
+       the delegate the game adds at IPartyStatics slot 16 (freeroam.c), reports Capture 14, and fires it on the launcher's
+       SessionReady (launch.c). 0: slot 16 is only observed, as for FH2. */
+    int party_session_ready;
 } FiGameProfile;
 
 /* FM5 1.0.0.20 (docs/launcher/FM5_INFINITY_HANDOFF.md 3).
@@ -82,6 +87,13 @@ static const FiGamePatch fi_fm5_patches[] = {
      {0x48, 0x8b, 0x01, 0xc7, 0x40, 0x3c, 0x03, 0x00, 0x00, 0x00, 0xc3}, "privilege answer forced to NoIssue"},
     {0x32ef84u, 2, {0x74, 0x9f}, {0x90, 0x90}, "hopper screen ignores Party state 6 (diagnostic)"},
     {0x32ef93u, 1, {0x75}, {0xeb}, "hopper screen takes the party ready branch (diagnostic)"},
+    /* W7b (OD-206, lobby spec 11.4 Option A, 11.7 attempt 1): ValidatePartyGameSessionRequest's roster check (0x140be50f0)
+       fails an invited session unless the Party roster holds another member of it, and Azimuth's roster never does. Its
+       "no member" branch at 0x140be51a5 (mov dword [rdi+0Ch],19h) stores 0x18 instead, the value of the found branch at
+       0x140be5196, which then calls +0x10 on the lookup result (a release, INFERRED; nothing to release here). Only byte
+       0x140be51a8 changes; all seven are checked. VERIFIED bytes (coordinator, against the binary). */
+    {0xbe51a5u, 7, {0xc7, 0x47, 0x0c, 0x19, 0x00, 0x00, 0x00}, {0xc7, 0x47, 0x0c, 0x18, 0x00, 0x00, 0x00},
+     "invited session passes the Party roster check (W7b, lobby spec 11.4)"},
 };
 
 /* The states the hopper screen decides on (response spec 9). */
@@ -115,14 +127,26 @@ static const FiReadyTerm fi_fm5_ready[] = {
     {0x25d0398u, 0x48u, 8, FI_READY_EQ, 0},     /* F+0x48 null in menus */
 };
 
+/* FM5's heartbeat window: the game clamps a frame's delta at 4000 ms (0x14013f841, cmp 0FA0h), so a gap of a few seconds is a
+   normal hitch, and T2's stall of just over 1 s dropped GAME READY for one poll (SAURON). A race start is still seen at once:
+   L+0x40 is 1 for the whole load and race. */
+#define FI_FM5_HEARTBEAT_WINDOW_MS 3000u
+
 static const FiGameProfile fi_game_profiles[] = {
     {FI_GAME_FH2, "FH2", GAME_TIMESTAMP, GAME_IMAGE_SIZE, FI_FEATURES_ALL, L"title-1a96545b", L"media\\stripped\\gamedbRC.slt", 2,
-     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}},
+     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0},
     {FI_GAME_FM5, "FM5", 0x53d8d1f2u, 0x279d000u, 0, L"title-7b35d917", L"media\\db\\gamedb.slt", -1,
      fi_fm5_patches, sizeof(fi_fm5_patches) / sizeof(fi_fm5_patches[0]),
      fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0]),
-     fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u}},
+     fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u},
+     FI_FM5_HEARTBEAT_WINDOW_MS, 1},
 };
+
+/* The polled heartbeat's term (game_patches.h game_ready_thread): it changed at `beat_at` (0: never seen change) and is
+   fresh while no more than `window_ms` have passed since. Pure, for tests. */
+static inline int fi_ready_heartbeat_fresh(unsigned long long beat_at, unsigned long long now, unsigned window_ms) {
+    return beat_at && now >= beat_at && now - beat_at <= window_ms;
+}
 
 __declspec(selectany) const FiGameProfile *volatile fi_game_selected;
 __declspec(selectany) unsigned char *volatile fi_game_selected_image;
