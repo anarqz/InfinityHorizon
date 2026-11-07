@@ -156,17 +156,24 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
     case 8: ToggleSidebar(); break;
     case 9: Navigate(Nav::Down); break;
     case 10: Navigate(Nav::Right); break;
-    case 11: DevRequest(1); break; // the keyboard, as a password
-    case 12: DevRequest(2); break; // the keyboard, as a world name
+    // 11, 12 (the on-screen keyboard) and 17 (the lobby code) went with T-L3: no-ops
     case 13: Navigate(Nav::Accept); break;
     case 14: Navigate(Nav::X); break;
     case 15: Navigate(Nav::Menu); break;
     case 16: Navigate(Nav::Up); break;
-    case 17: DevRequest(3); break; // the world code
     case 18: Navigate(Nav::Back); break;
     case 19: Navigate(Nav::TabRight); break;
     case 20: OpenPlayerCard("2535100000000042", "RallyFox98"); break; // as the game's PLAYER DETAILS would
     case 21: Navigate(Nav::Left); break;
+    case 22: { // T-L3: a synthetic invite prompt, as the launcher's 0x23 would
+        InvitePromptFrame p;
+        p.id = "dev-invite-1";
+        p.from = "Synthetic#00117";
+        p.activity = "freeroam";
+        p.expires = 120;
+        SetInvitePrompt(p);
+        break;
+    }
     default: break;
     }
 }

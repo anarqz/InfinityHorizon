@@ -30,6 +30,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "fonts.h"
+#include "lobby_policy.h"
 #include "style.h"
 #include "toast_schedule.h"
 #include "ui_layout.h"
@@ -759,8 +760,9 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
 
     // tabs
     const char *icons[] = {kIconHome, kIconWorld, kIconPeople, kIconSettings};
-    // OD-192: the lobby tab is "User Lobbies" (hosting one's own lobby), or the "Official Lobby" pane while in an official one
-    const char *names[] = {T("Home", "Início"), WorldsOfficial() ? T("Official Lobby", "Lobby oficial") : T("User Lobbies", "Lobbies de usuários"),
+    // OD-204 item 4 (T-L3): one roster tab, the lobby this player is in: "Private Lobby" in a private official lobby, else
+    // "Current Lobby" (an official one or any other; its pane's tag says which)
+    const char *names[] = {T("Home", "Início"), WorldsPrivate() ? T("Private Lobby", "Lobby privado") : T("Current Lobby", "Lobby atual"),
                            T("Friends", "Amigos"), T("Settings", "Ajustes")};
     const float tw = (pw - 2 * pad) / kTabs;
     for (int i = 0; i < kTabs; ++i) {
@@ -874,11 +876,13 @@ void SetConnectionDetails(uint8_t state, const std::string &text) {
     g_model.connection_at = GetTickCount64();
 }
 
-// OD-192: the one gate and the one hold of every notice. None shows in an official lobby (official play stays vanilla);
-// the launcher already sends its holds halved (OverlayNotices.Shortened), and this overlay's own default and bounds are
-// half of what they were (4.6 s, 1..30 s).
-void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl) {
-    if (WorldsOfficial()) return;
+// OD-192: the one gate and the one hold of every notice. None shows in an official lobby (official play stays vanilla), a
+// private one included, except what the launcher marks always (T-L3, lobby_policy.h ToastShows: a private create's result and
+// hold, the flagged Hardcore message with its time left); invite prompts are their own modal (invite.cpp), never a notice. The
+// launcher already sends its holds halved (OverlayNotices.Shortened), and this overlay's own default and bounds are half of what
+// they were (4.6 s, 1..30 s).
+void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl, bool always) {
+    if (!ToastShows(WorldsOfficial(), always ? kToastAlways : 0)) return;
     std::lock_guard<std::mutex> lock(g_lock);
     const float hold = ttl ? std::clamp(ttl / 10.0f, 0.5f, 15.0f) : 2.3f;
     g_toasts.Push({kind, title, body, 0, hold});
@@ -918,16 +922,11 @@ void Navigate(Nav nav) {
         if (nav == Nav::Down) g_connection_scroll += 80 * s;
         return;
     }
-    if (CodeEntryOpen()) {
-        CodeEntryNavigate(nav);
-        return;
-    }
-    if (KeyboardOpen()) {
-        KeyboardNavigate(nav);
-        return;
-    }
     if (!g_open) {
         return;
+    }
+    if (InviteNavigate(nav)) {
+        return; // T-L3: an invite prompt is modal while the guide is open
     }
     if (PaneNavigate(nav)) {
         return; // an open player or launcher pane holds the controller
@@ -1028,30 +1027,9 @@ void LoadFonts(float scale) {
     ImGui::GetIO().FontDefault = f.body;
     Log("fonts: Selawik and Fluent UI System Icons, embedded, at scale %.2f", s);
 }
-std::atomic<int> g_dev_request{0};
-void DevRequest(int request) { g_dev_request = request; }
-
 void DrawUi(float width, float height, float dt) {
-    const int request = g_dev_request.exchange(0);
-    if (request == 1 || request == 2) {
-        KeyboardRequest r;
-        r.title = request == 1 ? T("Lobby password", "Senha do lobby") : T("Lobby name", "Nome do lobby");
-        r.hint = request == 1 ? T("The password the host gave you", "A senha que o anfitrião passou") : T("Sunday drive", "Passeio de domingo");
-        r.secret = request == 1;
-        r.max = request == 1 ? 64 : 48;
-        OpenKeyboard(r, [request](bool ok, const std::string &text) {
-            Log("keyboard: %s, %zu bytes", ok ? "done" : "cancelled", text.size());
-            if (ok && request == 2) {
-                PushToast(ToastKind::Success, T("Lobby name", "Nome do lobby"), text);
-            }
-        });
-    }
-    if (request == 3) {
-        OpenCodeEntry(T("Enter the lobby code", "Digite o código do lobby"), "0123456789", [](bool join, const std::string &code) {
-            Log("code: %s, %zu characters", join ? "join" : "back", code.size());
-        });
-    }
     PaneTick(dt);
+    InviteMouse(width, height); // T-L3: a modal invite prompt takes its clicks before the guide sees them
     Model snapshot;
     {
         std::lock_guard<std::mutex> lock(g_lock);
@@ -1081,8 +1059,7 @@ void DrawUi(float width, float height, float dt) {
         }
         ImGui::End();
     }
-    DrawKeyboard(width, height, dt);
-    DrawCodeEntry(width, height, dt);
+    DrawInvitePrompt(width, height, dt);
     UpdateToasts(dl, width, height, dt);
 }
 

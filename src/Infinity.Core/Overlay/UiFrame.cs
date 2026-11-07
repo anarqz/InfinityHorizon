@@ -70,14 +70,15 @@ public enum UiDirection
 /// Same envelope as the control pipe, its own type space 0x01-0x1A (0x07-0x10: worlds, OD-54, OD-63;
 /// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
 /// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
-/// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5;
-/// native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
-/// never sees it.
+/// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5; 0x23-0x24: the private lobby's invite
+/// prompt and its answer, OD-204 T-L3, protocol 6; native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
+/// never sees it. T-L3 reserved the player-hosting frames (0x07-0x0C, 0x14, 0x15, WorldAction 1/3, VoiceOp 1/6): a T-L3 overlay
+/// never sends them and ignores them, and this launcher still codes and answers them (its hosting code goes with T-L8).
 /// </summary>
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 5;
+    public const ushort ProtocolVersion = 6;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -108,8 +109,17 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 5 (the game's PLAYER ACTIONS friend and report items, OD-193 F-2).</summary>
     public const byte FirstProtocol5Type = 0x1F;
 
+    /// <summary>The lowest type that needs protocol 6 (the private lobby's invite prompt, OD-204 T-L3).</summary>
+    public const byte FirstProtocol6Type = 0x23;
+
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x22;
+    public const byte LastType = 0x24;
+
+    /// <summary>T-L3: an invite id on the pipe (<see cref="InvitePrompt"/>, <see cref="InviteAnswer"/>), in bytes of [A-Za-z0-9:._-].</summary>
+    public const int MaxInviteId = 64;
+
+    /// <summary>T-L3: <see cref="InvitePrompt"/>'s activity, in UTF-8 bytes, and the longest time it may stay (seconds).</summary>
+    public const int MaxInviteActivity = 16, MaxInviteSeconds = 3600;
 
     /// <summary>OD-181: the players a <see cref="RosterMods"/> names (the "my world" roster's own bound).</summary>
     public const int MaxRosterMembers = 16;
@@ -167,8 +177,11 @@ public abstract record UiFrame
         public override UiDirection Direction => UiDirection.ToOverlay;
     }
 
-    /// <summary>0x03, launcher → overlay: <see cref="UiLevel"/>, icon, lifetime in tenths of a second, localised text.</summary>
-    public sealed record Toast(byte Level, byte Icon, ushort TtlDs, string Text) : UiFrame
+    /// <summary>
+    /// 0x03, launcher → overlay: <see cref="UiLevel"/>, icon, lifetime in tenths of a second, localised text. <c>Flags</c> (T-L3, an
+    /// additive byte after the text, written only when not 0; an older overlay ignores it): <see cref="UiToastFlags"/>.
+    /// </summary>
+    public sealed record Toast(byte Level, byte Icon, ushort TtlDs, string Text, byte Flags = 0) : UiFrame
     {
         public override byte Type => 0x03;
 
@@ -272,11 +285,13 @@ public abstract record UiFrame
     /// <c>Transport</c> and <c>Notice</c> are written even when unknown): the world is an official one (the overlay shows its
     /// Official Lobby pane, offers no lobby option and shows no notice). <c>Private</c> (OD-204, T-L6, after <c>Official</c>, written
     /// only when true and only with <c>Official</c>): a private official world, created in the game's own menu (the overlay's
-    /// Private Lobby pane is T-L3's; an older overlay ignores the byte).
+    /// Private Lobby pane, T-L3; an older overlay ignores the byte). <c>Leader</c> (OD-204, T-L3, after <c>Private</c>, written only
+    /// when private and known): the lobby leader's decimal XUID (WORLDS_OFFICIAL §12.8b); the overlay enables Invite friends for the
+    /// leader only, so empty (unknown) lets nobody invite.
     /// </summary>
     public sealed record MyWorld(byte Role, string WorldId, string Name, string Host, string Code, byte Audience, byte Players, byte Max,
         bool Named, IReadOnlyList<MemberRow> Members, bool AnyMode = false, byte Transport = UiTransport.Unknown, string Notice = "",
-        bool Official = false, bool Private = false) : UiFrame
+        bool Official = false, bool Private = false, string Leader = "") : UiFrame
     {
         public override byte Type => 0x0E;
 
@@ -614,6 +629,42 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x23, launcher → overlay (protocol 6, OD-204 T-L3, WORLDS_OFFICIAL §12.5): a friend invited this player to a private lobby; the
+    /// overlay shows a modal Accept / Decline (never a toast: toasts follow OD-192's quiet rule). <c>InviteId</c> 1-64 bytes of
+    /// [A-Za-z0-9:._-], echoed by <see cref="InviteAnswer"/>; <c>FromGamertag</c> 1-64 bytes (shown; never a XUID); <c>Activity</c>
+    /// at most 16 bytes (<c>freeroam</c>, <c>roadtrip</c>, anything else shown as a lobby); <c>ExpiresInSec</c> 1-3600, or 0 to
+    /// withdraw the prompt of that id (then the gamertag and activity may be empty). A prompt that runs out goes without an answer.
+    /// </summary>
+    public sealed record InvitePrompt(string InviteId, string FromGamertag, string Activity, ushort ExpiresInSec) : UiFrame
+    {
+        public override byte Type => 0x23;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        /// <summary>The prompt of <paramref name="inviteId"/> goes (answered elsewhere, expired or cancelled).</summary>
+        public static InvitePrompt Withdraw(string inviteId) => new(inviteId, "", "", 0);
+
+        internal void Validate()
+        {
+            PaneKey(InviteId, "invite id");
+            Limit(FromGamertag, 64, "invite gamertag");
+            Limit(Activity, MaxInviteActivity, "invite activity");
+            if (ExpiresInSec > MaxInviteSeconds) throw new ProtocolException("invite expiry past an hour");
+            if (ExpiresInSec != 0 && FromGamertag.Length == 0) throw new ProtocolException("an invite names its inviter");
+        }
+    }
+
+    /// <summary>0x24, overlay → launcher (protocol 6, T-L3): the player's answer to <see cref="InvitePrompt"/> <c>InviteId</c>.</summary>
+    public sealed record InviteAnswer(string InviteId, bool Accept) : UiFrame
+    {
+        public override byte Type => 0x24;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate() => PaneKey(InviteId, "invite id");
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -666,10 +717,12 @@ public abstract record UiFrame
                 w.Str(s.Detail);
                 break;
             case Toast t:
+                if (t.Flags > UiToastFlags.All) throw new ProtocolException("invalid toast flags");
                 w.U8(t.Level);
                 w.U8(t.Icon);
                 w.U16(t.TtlDs);
                 w.Str(t.Text);
+                if (t.Flags != 0) w.U8(t.Flags); // T-L3: only when set (the bytes of every older toast stand)
                 break;
             case Panel p:
                 w.Flag(p.Open);
@@ -760,6 +813,11 @@ public abstract record UiFrame
                     w.Str(m.Notice);
                     if (m.Official) w.Flag(true); // OD-192
                     if (m.Private) w.Flag(true); // OD-204 (T-L6)
+                    if (m.Private && m.Leader.Length != 0) // OD-204 (T-L3): the leader, only when known
+                    {
+                        CheckXuid(m.Leader, "MyWorld.leader");
+                        w.Str(m.Leader);
+                    }
                 }
                 break;
             case WorldAction a:
@@ -943,6 +1001,18 @@ public abstract record UiFrame
                 w.U8(d.Result);
                 w.U8(d.State);
                 break;
+            case InvitePrompt p:
+                p.Validate();
+                w.Str(p.InviteId);
+                w.Str(p.FromGamertag);
+                w.Str(p.Activity);
+                w.U16(p.ExpiresInSec);
+                break;
+            case InviteAnswer a:
+                a.Validate();
+                w.Str(a.InviteId);
+                w.Flag(a.Accept);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -989,7 +1059,7 @@ public abstract record UiFrame
         {
             0x01 => new UiHello(r.U16(), r.U32(), r.Str()),
             0x02 => new Status(r.Str(), r.U8(), r.U8(), r.Str()),
-            0x03 => new Toast(r.U8(), r.U8(), r.U16(), r.Str()),
+            0x03 => new Toast(r.U8(), r.U8(), r.U16(), r.Str(), r.IsEmpty ? (byte)0 : r.U8()),
             0x04 => new Panel(r.Flag("Panel.open")),
             0x05 => new UiEvent(r.U8(), r.Str()),
             0x06 => new Bye(r.U8()),
@@ -1020,13 +1090,15 @@ public abstract record UiFrame
             0x1F => new PlayerStateQuery(r.Str()),
             0x20 => new PlayerState(r.Str(), r.U8()),
             0x21 => new PlayerActionRequest(r.U32(), r.Str(), r.U8(), r.U8()),
-            _ => new PlayerActionDone(r.U32(), r.Str(), r.U8(), r.U8()),
+            0x22 => new PlayerActionDone(r.U32(), r.Str(), r.U8(), r.U8()),
+            0x23 => new InvitePrompt(r.Str(), r.Str(), r.Str(), r.U16()),
+            _ => new InviteAnswer(r.Str(), r.Flag("InviteAnswer.accept")),
         };
         r.End();
         switch (frame)
         {
             case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
-                or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone:
+                or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1099,7 +1171,13 @@ public abstract record UiFrame
         if (transport > UiTransport.Direct || (transport == UiTransport.Unknown && !official)) throw new ProtocolException("invalid MyWorld.transport");
         var isPrivate = !r.IsEmpty && r.Flag("MyWorld.private"); // OD-204 (T-L6): only after an official flag of 1
         if (isPrivate && !official) throw new ProtocolException("a private MyWorld is an official one");
-        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, notice, official, isPrivate);
+        var leader = ""; // OD-204 (T-L3): only after a private flag, and only when known (an empty one is never written)
+        if (isPrivate && !r.IsEmpty)
+        {
+            leader = r.Str();
+            CheckXuid(leader, "MyWorld.leader");
+        }
+        return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, notice, official, isPrivate, leader);
     }
 
     /// <summary>
@@ -1236,6 +1314,22 @@ public abstract record UiIncoming
 
     /// <summary>Protocol 5 (OD-193 F-2): one of our PLAYER ACTIONS items was chosen; answer with <see cref="UiFrame.PlayerActionDone"/>.</summary>
     public sealed record PlayerAct(UiFrame.PlayerActionRequest Request) : UiIncoming;
+
+    /// <summary>Protocol 6 (OD-204 T-L3): the player answered an invite prompt (the launcher's accept and decline are T-L4/T-L5's).</summary>
+    public sealed record InviteAnswer(UiFrame.InviteAnswer Answer) : UiIncoming;
+}
+
+/// <summary><c>Toast.flags</c> (T-L3), an additive byte after the text.</summary>
+public static class UiToastFlags
+{
+    /// <summary>
+    /// The notice shows even in an official lobby, a private one included: a private create's result and its hold, and the flagged
+    /// Hardcore message with its time left (<see cref="Matchmaking.PrivateLobbyNotices"/>). Every other notice follows OD-192's quiet
+    /// rule (<see cref="Supervisor.OverlayChannel.Quiet"/>, the overlay's PushToast). Invite prompts are their own frame.
+    /// </summary>
+    public const byte Always = 1;
+
+    public const byte All = Always;
 }
 
 /// <summary>
@@ -1608,7 +1702,8 @@ public sealed class UiSession
     {
         ArgumentNullException.ThrowIfNull(frame);
         return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
-            && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5);
+            && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5)
+            && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1645,13 +1740,15 @@ public sealed class UiSession
             return new UiIncoming.Hello(hello.OverlayVersion, [_status]);
         }
         if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
-            || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5)
+            || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5
+            || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }
         return frame switch
         {
             UiFrame.UiHello => throw new ProtocolException("second UiHello"),
+            UiFrame.InviteAnswer a => new UiIncoming.InviteAnswer(a),
             UiFrame.PlayerStateQuery q => new UiIncoming.PlayerStateAsk(q),
             UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),
             UiFrame.VoiceCommand v => new UiIncoming.Voice(v),

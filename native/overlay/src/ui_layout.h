@@ -84,12 +84,12 @@ inline PlayerRow LayoutPlayerRow(float x, float y, float w, float h, float gap) 
     return {{x, y, x + w - side - gap, y + h}, {x + w - side, y, x + w, y + h}};
 }
 
-// Where the controller goes in my lobby: items 0..first_player-1 are the buttons above the players (one stop each),
+// Where the controller goes in the lobby: items 0..first_player-1 are the buttons above the players (one stop each),
 // then each player is two stops side by side (card, mute). Up/Down keep the column between players; Right on a card
 // goes to its mute button, Left on a mute button back to the card.
 enum class Move : uint8_t { Up, Down, Left, Right };
 struct LobbyFocus {
-    int item = 0; // 0 the close or leave button, [1 the host's voice switch], then the players
+    int item = 0; // the buttons above the players (Leave lobby, then Invite friends in a private lobby), then the players
     int col = 0;  // on a player: kStopCard or kStopMute
 };
 // True: used. False: the guide may use it (Left/Right change the tab off a player's card or a button).
@@ -117,16 +117,13 @@ inline bool MoveLobbyFocus(LobbyFocus &f, Move move, int first_player, int count
 }
 
 // ---------------------------------------------------------------- a player's details
-enum class MemberItem : uint8_t { Volume, Mute, MuteForLobby, Remove, Friend, Report, Back };
+enum class MemberItem : uint8_t { Volume, Mute, Friend, Report, Back };
 
-// The details' controls in focus order. `moderate`: this player hosts and the other is not the host (mute for the
-// lobby, remove). friend_state (MemberRow): 0 none, 1 friends, 2 request sent, 3 request received, 4 this player.
-inline std::vector<MemberItem> MemberItems(bool moderate, uint8_t friend_state) {
+// The details' controls in focus order (OD-204 item 4: Report, Friends, Mute and the voice volume; T-L3 removed the host's mute
+// for the lobby and remove, which only served player-hosted lobbies). friend_state (MemberRow): 0 none, 1 friends, 2 request
+// sent, 3 request received, 4 this player.
+inline std::vector<MemberItem> MemberItems(uint8_t friend_state) {
     std::vector<MemberItem> out{MemberItem::Volume, MemberItem::Mute};
-    if (moderate) {
-        out.push_back(MemberItem::MuteForLobby);
-        out.push_back(MemberItem::Remove);
-    }
     if (friend_state == 0 || friend_state == 2 || friend_state == 3) out.push_back(MemberItem::Friend);
     out.push_back(MemberItem::Report);
     out.push_back(MemberItem::Back);

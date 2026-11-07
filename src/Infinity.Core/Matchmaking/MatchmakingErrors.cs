@@ -82,8 +82,17 @@ public static class ConflictReasons
     /// </summary>
     public const string ClientUpdate = "client_update";
 
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, §3.1, CR-S96): a join or a private create naming a region other than the world's, or an invite to
+    /// a friend in another region (A8, OD-205).
+    /// </summary>
+    public const string Region = "region";
+
+    /// <summary>OD-204 (MATCHMAKING_API §2.10, WORLDS_OFFICIAL §12.8b): <c>POST …/invites</c> from anyone but the private lobby's current leader.</summary>
+    public const string NotLeader = "not_leader";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect, LobbiesFull, ClientUpdate];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect, LobbiesFull, ClientUpdate, Region, NotLeader];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch
@@ -158,6 +167,16 @@ public sealed record MmError(
 
     /// <summary><c>details.game</c> (<c>GAME.WRONG_POOL</c>).</summary>
     public string? Game => Detail("game");
+
+    /// <summary>
+    /// <c>details.until</c> of a 409 <c>pool</c> (OD-204 A10, CR-S96: the server adds it to every pool refusal): when the flagged
+    /// Hardcore profile's isolation ends. Null when absent (an older server) or unreadable.
+    /// </summary>
+    public DateTimeOffset? Until => Detail("until") is { } until
+        && DateTimeOffset.TryParse(until, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var at)
+        ? at
+        : null;
 
     private string? Detail(string name) =>
         Details is { ValueKind: JsonValueKind.Object } d && d.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
