@@ -7,10 +7,13 @@
 //! A world runs one private race lobby: `activity: "race"` (required in the public profile,
 //! refused in the private one, as FH2's), at most 16 players (CR-S99 §1). It takes no other
 //! game-scoped field and answers no game command. It may become a private official world (CR-S99:
-//! private race lobbies); FM5 has no known session privacy message, so that only marks the world
-//! and names its leader in `world.state`.
+//! private race lobbies); FM5 has no known session privacy message, so that marks the world, names
+//! its leader in `world.state` and gives that leader the game's options (W16: the GameOptions
+//! object's ownership, lobby spec §13), so the lobby's creator picks track and laps on FM5's own
+//! options screen. A public world keeps them the server's.
 
 pub mod nerd;
+pub mod options;
 pub mod race;
 
 #[cfg(test)]
@@ -190,11 +193,14 @@ impl GameWorld for Fm5World {
     }
 
     /// FM5 has no known session privacy message (lobby spec: none found, unlike FH2's
-    /// SessionHostSynced `PrivacyMode`), so nothing is sent: the world is marked private and its
-    /// leader (the longest-present player) is named in `world.state` for the invites route.
-    fn set_private(&mut self, _out: &mut Vec<Send>) {
+    /// SessionHostSynced `PrivacyMode`): the world is marked private, its leader (the
+    /// longest-present player, the engine's own rule, reported to the agent in `world.state`) is
+    /// named for the invites route, and that leader is granted the GameOptions (W16).
+    fn set_private(&mut self, out: &mut Vec<Send>) {
         if self.supports_private() {
             self.private = true;
+            self.race.give_options_to_leader();
+            self.flush(out);
         }
     }
 }
