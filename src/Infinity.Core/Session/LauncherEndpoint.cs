@@ -62,6 +62,9 @@ public abstract record EndpointEvent
 
     /// <summary>Frame 0x29 from the hook (T-L4): the game's Invite friends, completed in the hook.</summary>
     public sealed record InviteFriendsAsked : EndpointEvent;
+
+    /// <summary>Frame 0x2b from the hook (W7b): what its <see cref="Frame.SessionReady"/> with this nonce did.</summary>
+    public sealed record SessionReadyAnswered(uint Nonce, byte Result, uint HResult) : EndpointEvent;
 }
 
 /// <summary>
@@ -177,6 +180,7 @@ public sealed class LauncherEndpoint
             Frame.Car c => new EndpointEvent.CarChanged(c.CarKey),
             Frame.PrivateSession p => new EndpointEvent.PrivateSessionWritten(p.Scid, p.TemplateName, p.Name),
             Frame.InviteFriends => new EndpointEvent.InviteFriendsAsked(),
+            Frame.SessionReadyResult s => new EndpointEvent.SessionReadyAnswered(s.Nonce, s.Result, s.HResult),
             _ => throw new ProtocolException($"unexpected frame from hook: type 0x{frame.Type:x2}"),
         };
         return ([], evt);

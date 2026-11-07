@@ -64,10 +64,29 @@ public sealed partial class WorldsBridge
     /// </summary>
     public bool FollowMoveCapable { get; set; }
 
+    /// <summary>
+    /// W7b (OD-206, CR-S99 §4, lobby spec §11.3-11.4, route 1): the hook fires an accepted invite's session as the game's Party
+    /// <c>GameSessionReady</c> (<see cref="Session.CaptureWhat.SessionReady"/>, reported ok in this session: FM5). Then an accept joins
+    /// the private race first and hands the game the host's session (<see cref="SendSessionReady"/>) instead of FollowHost; the game
+    /// shows its own Join popup and the player accepts it there. Off (FH2): FollowHost, unchanged.
+    /// </summary>
+    public bool SessionReadyCapable { get; set; }
+
+    /// <summary>
+    /// W7b: sends <see cref="Session.Frame.SessionReady"/> with the host's session and returns the hook's
+    /// <see cref="Session.Frame.SessionReadyResult"/> result (<see cref="Session.SessionReadyResults"/>). Throws when it cannot be sent;
+    /// cancelled at <see cref="SessionReadyBudget"/>.
+    /// </summary>
+    public Func<GameSessionReference, CancellationToken, Task<byte>>? SendSessionReady { get; set; }
+
+    /// <summary>W7b: how long the hook has to answer SessionReady (it only builds the reference and invokes the game's delegate).</summary>
+    public static readonly TimeSpan SessionReadyBudget = TimeSpan.FromSeconds(10);
+
     private int _inviteAccepting;
 
-    // the accepted invite's move: the private world, its grant, the ask kind, when FollowHost went (timestamp), when the game asked (0 not yet)
-    private sealed record InviteMove(string WorldId, string Grant, byte Kind, long Since, long AskedAt = 0);
+    // the accepted invite's move: the private world, its grant, the ask kind, when the game was asked in (timestamp), when the game asked
+    // for its lobby (0 not yet), and what asked it in (FollowHost; W7b: SessionReady)
+    private sealed record InviteMove(string WorldId, string Grant, byte Kind, long Since, long AskedAt = 0, string Via = "FollowHost");
     private InviteMove? _inviteMove;
     private Task _inviteWatch = Task.CompletedTask;
 
@@ -93,15 +112,18 @@ public sealed partial class WorldsBridge
     {
         var accepted = _clock.GetTimestamp();
         if (string.IsNullOrEmpty(invite.WorldId)) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no world");
-        // a private lobby runs free roam or a Road Trip, never a car meet (MATCHMAKING_API §2.10)
-        if (invite.Activity is { } named && named != WorldActivities.FreeRoam && named != WorldActivities.RoadTrip)
+        // W7b (CR-S99 §4): a game that takes the invite by Party GameSessionReady (FM5) runs private races; FH2's path is unchanged
+        var bySession = SessionReadyCapable;
+        // a private lobby runs free roam or a Road Trip, never a car meet (MATCHMAKING_API §2.10); FM5's runs a race (CR-S99 §1)
+        if (invite.Activity is { } named && (bySession ? named != WorldActivities.Race : named != WorldActivities.FreeRoam && named != WorldActivities.RoadTrip))
             return Refused(PrivateLobbyNotices.InviteJoinFailed, $"the invite's lobby runs {named}");
         var kind = invite.Activity == WorldActivities.RoadTrip ? FreeRoamKind.RoadTrip : FreeRoamKind.FreeRoam;
         if (!OnlineOpen) return Refused(PrivateLobbyNotices.InviteJoinFailed, "online is closed");
         if (invite.Left <= TimeSpan.Zero) return Refused(PrivateLobbyNotices.InviteExpired, "the invite expired before it was accepted");
-        if (SendFollowHost is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "no game pipe to move the game with");
+        if (bySession ? SendSessionReady is null : SendFollowHost is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "no game pipe to move the game with");
+        if (bySession && invite.Session is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no game session (route 1 needs it)");
         if (OwnWorld) return NotNowText(_text("worlds.close_before_join"), "this player hosts a lobby");
-        if (GameReadiness.CurrentGeneration is null) return NotNowText(_text("worlds.load_game"), "the game is not loaded");
+        if (GameReadiness.CurrentGeneration is not { } generation) return NotNowText(_text("worlds.load_game"), "the game is not loaded");
         if (_seat.GrantId is not null && Volatile.Read(ref _seatWorld) == invite.WorldId)
         {
             _log($"worlds: invite: accepted; the seat is already in {invite.WorldId}");
@@ -116,7 +138,9 @@ public sealed partial class WorldsBridge
         if (GameBetweenLobbies() is { } between) return NotNow(PrivateLobbyNotices.InviteBusy, between);
         if (GameInEvent() is { } inEvent) return NotNow(PrivateLobbyNotices.InviteLeaveEvent, inEvent);
         var inLobby = Volatile.Read(ref _gameInWorld) != 0;
-        if (inLobby && !FollowMoveCapable) return NotNow(PrivateLobbyNotices.InviteLeaveLobby, "the game plays in a lobby and this hook cannot move it (no Capture 13)");
+        if (inLobby && !FollowMoveCapable && !bySession) return NotNow(PrivateLobbyNotices.InviteLeaveLobby, "the game plays in a lobby and this hook cannot move it (no Capture 13)");
+        // lobby spec §11.4 "State needed": the game's Join popup shows on its main menu or hopper screen; in a lobby it waits (INFERRED)
+        if (inLobby && bySession) return NotNow(PrivateLobbyNotices.InviteLeaveLobby, "the game plays in a lobby (its Join popup shows on the main menu or the hopper screen)");
 
         _log($"worlds: invite: accepted; joining private lobby {invite.WorldId} ({invite.Activity ?? "activity not said"}; the game {(inLobby ? "plays in a lobby" : "is in no lobby")})");
         UiFrame.JoinResult joined;
@@ -133,7 +157,9 @@ public sealed partial class WorldsBridge
             }
         }
         if (joined.Result == UiJoin.Reserved && Volatile.Read(ref _seatWorld) is { } world && world == invite.WorldId && _seat.GrantId is { } grant)
-            return await MoveIntoAsync(world, grant, kind, invite.Activity ?? ActivityOf(kind)!, inLobby, cancellation).ConfigureAwait(false);
+            return bySession
+                ? await SessionReadyIntoAsync(world, grant, kind, invite.Activity ?? WorldActivities.Race, invite.Session!, generation, cancellation).ConfigureAwait(false)
+                : await MoveIntoAsync(world, grant, kind, invite.Activity ?? ActivityOf(kind)!, inLobby, cancellation).ConfigureAwait(false);
         if (joined.Result == UiJoin.Reserved)
         {
             // never expected (JoinCoreAsync releases a grant of another world): the seat is not this invite's, so it is let go
@@ -181,6 +207,56 @@ public sealed partial class WorldsBridge
         return new(InviteAcceptOutcome.Moving, PrivateLobbyNotices.Done(PrivateLobbyNotices.Text(_text, PrivateLobbyNotices.InviteJoining)));
     }
 
+    // W7b (OD-206, CR-S99 §2 item 4 and §4, lobby spec §11.3-11.4, route 1): the seat is held (the join came first: the game reads
+    // the session at once, 0x140be4ee0, and must find the real hostName). The readiness generation taken before the join is checked
+    // again here, as JoinAsync did during and after it; then the hook fires the game's Party GameSessionReady with the host's session
+    // ({scid, templateName, name} of GET /launcher/v1/invites). The game shows its own Join popup and the player accepts it there (no
+    // automation); the move's watch then bounds the connect as FollowHost's does (InviteMoveBudget, no lobby ask in this route).
+    private async Task<InviteAcceptAnswer> SessionReadyIntoAsync(string world, string grant, byte kind, string activity, GameSessionReference session,
+        uint generation, CancellationToken cancellation)
+    {
+        if (!GameReadiness.Matches(generation))
+        {
+            await ReleaseUnprovenSeatAsync(grant, "an accepted invite's game changed during the join").ConfigureAwait(false);
+            return Refused(PrivateLobbyNotices.InviteJoinFailed, $"the game's readiness changed during the join; the seat in {world} is let go");
+        }
+        Volatile.Write(ref _seatPrivate, world); // T-L6's private class, as MoveIntoAsync
+        Volatile.Write(ref _seatOfficial, world);
+        lock (_mineState) _seatActivity = (world, activity);
+        Volatile.Write(ref _recentlyLeft, null);
+        Volatile.Write(ref _privateLeft, null);
+        var move = new InviteMove(world, grant, kind, _clock.GetTimestamp(), Via: "SessionReady");
+        Volatile.Write(ref _inviteMove, move);
+        string? failure = null;
+        try
+        {
+            using var budget = new CancellationTokenSource(SessionReadyBudget, _clock);
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation, budget.Token);
+            var result = await SendSessionReady!(session, bounded.Token).ConfigureAwait(false);
+            if (result != Session.SessionReadyResults.Invoked) failure = $"the hook answered SessionReady with result {result}" + result switch
+            {
+                Session.SessionReadyResults.NoDelegate => " (the game never added its GameSessionReady delegate)",
+                Session.SessionReadyResults.NoReference => " (no MultiplayerSessionReference)",
+                _ => " (the game refused it)",
+            };
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ProtocolException or ObjectDisposedException or OperationCanceledException)
+        {
+            failure = $"SessionReady not answered ({error.GetType().Name})";
+        }
+        if (failure is null && !GameReadiness.Matches(generation)) failure = "the game's readiness changed while SessionReady was answered";
+        if (failure is not null)
+        {
+            Interlocked.CompareExchange(ref _inviteMove, null, move);
+            await ReleaseUnprovenSeatAsync(grant, "an accepted invite's SessionReady failed").ConfigureAwait(false);
+            return Refused(PrivateLobbyNotices.InviteJoinFailed, $"{failure}; the seat in {world} is let go");
+        }
+        _log($"worlds: invite: seated in {(activity == WorldActivities.Race ? "private race" : "private lobby")} {world}; the game was handed the host's session {session.Name} "
+            + $"(SessionReady, Party GameSessionReady); the player accepts the game's own Join popup; it has {(int)InviteMoveBudget.TotalSeconds} s to connect");
+        Volatile.Write(ref _inviteWatch, Task.Run(() => InviteMoveWatchAsync(move), CancellationToken.None));
+        return new(InviteAcceptOutcome.Moving, PrivateLobbyNotices.Done(PrivateLobbyNotices.Text(_text, PrivateLobbyNotices.InviteJoining)));
+    }
+
     /// <summary>
     /// T-L5: the game is in a car meet or an online Road Trip (or moving into a car meet's session): it is never pulled out of it. Null:
     /// it is in free roam, in no lobby, or its lobby is not known as an event.
@@ -212,7 +288,7 @@ public sealed partial class WorldsBridge
         while (Volatile.Read(ref _inviteMove) is { AskedAt: 0 } move && _seat.GrantId == move.Grant)
         {
             if (Interlocked.CompareExchange(ref _inviteMove, move with { AskedAt = _clock.GetTimestamp() }, move) != move) continue;
-            _log($"worlds: invite: the game asks for its {KindName(kind)} {(int)_clock.GetElapsedTime(move.Since).TotalSeconds} s after FollowHost; "
+            _log($"worlds: invite: the game asks for its {KindName(kind)} {(int)_clock.GetElapsedTime(move.Since).TotalSeconds} s after {move.Via}; "
                 + $"{move.WorldId} has {(int)PrivateSeatGiveUp.TotalSeconds} s to play");
             return;
         }
@@ -243,7 +319,7 @@ public sealed partial class WorldsBridge
                 if (Volatile.Read(ref _inviteMove) is not { } move || move.Grant != started.Grant) return; // another accept, or ended
                 if (Played(move.Grant))
                 {
-                    End(move, $"the game reached private lobby {move.WorldId} {(int)_clock.GetElapsedTime(move.Since).TotalSeconds} s after FollowHost");
+                    End(move, $"the game reached private lobby {move.WorldId} {(int)_clock.GetElapsedTime(move.Since).TotalSeconds} s after {move.Via}");
                     return;
                 }
                 if (_seat.GrantId is { } other && other != move.Grant)
@@ -258,7 +334,7 @@ public sealed partial class WorldsBridge
                 }
                 if (move.AskedAt == 0 && _clock.GetElapsedTime(move.Since) >= InviteMoveBudget)
                 {
-                    if (!End(move, $"the game did not ask for its lobby within {(int)InviteMoveBudget.TotalSeconds} s of FollowHost; the seat in {move.WorldId} is let go")) return;
+                    if (!End(move, $"the game did not ask for its lobby within {(int)InviteMoveBudget.TotalSeconds} s of {move.Via}; the seat in {move.WorldId} is let go")) return;
                     // no CancelMatchmaking: no search of ours runs (a start the player never confirmed lands in a public lobby by its own ask)
                     await ReleaseUnprovenSeatAsync(move.Grant, "an accepted invite's game never asked for its lobby").ConfigureAwait(false);
                     _freeRoamToasts.Enqueue(PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.InviteMoveFailed));

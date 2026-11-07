@@ -65,6 +65,30 @@ public static class CaptureWhat
     /// handshake (hook → launcher only); the launcher sends the flag only after it, and a launcher that does not know it ignores it.
     /// </summary>
     public const byte FollowMove = 13;
+
+    /// <summary>
+    /// W7b (OD-206, CR-S99 §4, lobby spec §11.3-11.4, route 1): the hook takes <see cref="Frame.SessionReady"/> and answers
+    /// <see cref="Frame.SessionReadyResult"/>: an accepted invite's session is fired as the game's Party <c>GameSessionReady</c>
+    /// (FM5). Sent with ok=1 at every handshake by a hook whose game profile has it (hook → launcher only); the launcher sends
+    /// <see cref="Frame.SessionReady"/> only after it (an older hook refuses an unknown frame as a protocol error).
+    /// </summary>
+    public const byte SessionReady = 14;
+}
+
+/// <summary><see cref="Frame.SessionReadyResult"/> results (W7b, the hook's session_ready.h).</summary>
+public static class SessionReadyResults
+{
+    /// <summary>The game's kept <c>GameSessionReady</c> delegate was invoked and answered S_OK: the game shows its own Join popup.</summary>
+    public const byte Invoked = 0;
+
+    /// <summary>The game never added the delegate (or removed it): nothing was invoked.</summary>
+    public const byte NoDelegate = 1;
+
+    /// <summary>The <c>MultiplayerSessionReference</c> could not be made: nothing was invoked.</summary>
+    public const byte NoReference = 2;
+
+    /// <summary>The delegate was invoked and answered a failure.</summary>
+    public const byte Failed = 3;
 }
 
 /// <summary><see cref="Frame.Observed"/> kinds; the platform's names are <see cref="Matchmaking.ObservationKinds"/>.</summary>
@@ -355,6 +379,38 @@ public abstract record Frame
     public sealed record InviteFriends : Frame
     {
         public override byte Type => 0x29;
+    }
+
+    /// <summary>
+    /// launcher → hook (0x2a, W7b, OD-206, CR-S99 §4, lobby spec §11.3-11.4): <c>{u32 LE nonce, str scid, str templateName, str name}</c>,
+    /// the host's private session an accepted invite joins, from <c>GET /launcher/v1/invites</c> <c>session</c>, sent only after the
+    /// launcher's <c>POST /mm/v1/join {worldId}</c> was granted (the game reads the session at once). The hook fires the game's Party
+    /// <c>GameSessionReady</c> with it and answers <see cref="SessionReadyResult"/> with the same nonce. Each part is
+    /// <c>[A-Za-z0-9._-]{1,128}</c>, the nonce never 0. Only to a hook that reported <see cref="CaptureWhat.SessionReady"/>.
+    /// </summary>
+    public sealed record SessionReady(uint Nonce, string Scid, string TemplateName, string Name) : Frame
+    {
+        public override byte Type => 0x2a;
+
+        internal void Validate()
+        {
+            if (Nonce == 0) throw new ProtocolException("Invalid session ready nonce");
+            new PrivateSession(Scid, TemplateName, Name).Validate();
+        }
+    }
+
+    /// <summary>
+    /// hook → launcher (0x2b, W7b): <c>{u32 LE nonce, u8 result, u32 LE HRESULT}</c>, what <see cref="SessionReady"/> did, one of
+    /// <see cref="SessionReadyResults"/> (the HRESULT of a failure, else 0).
+    /// </summary>
+    public sealed record SessionReadyResult(uint Nonce, byte Result, uint HResult = 0) : Frame
+    {
+        public override byte Type => 0x2b;
+
+        internal static void Validate(byte result)
+        {
+            if (result > SessionReadyResults.Failed) throw new ProtocolException("Invalid session ready result");
+        }
     }
 
     /// <summary>
@@ -716,6 +772,12 @@ public abstract record Frame
                 w.Str(session.Scid); w.Str(session.TemplateName); w.Str(session.Name); break;
             case InviteFriends:
                 break;
+            case SessionReady ready:
+                ready.Validate();
+                w.U32(ready.Nonce); w.Str(ready.Scid); w.Str(ready.TemplateName); w.Str(ready.Name); break;
+            case SessionReadyResult answered:
+                SessionReadyResult.Validate(answered.Result);
+                w.U32(answered.Nonce); w.U8(answered.Result); w.U32(answered.HResult); break;
             case Progress progress:
                 w.U32(progress.Level); w.U64(progress.Credits); break;
             case Car car:
@@ -852,6 +914,8 @@ public abstract record Frame
             0x27 => r.U8() == PlayerParts.Layout ? DecodePlayerParts(ref r) : throw new ProtocolException("Unknown player parts layout"),
             0x28 => new PrivateSession(r.Str(), r.Str(), r.Str()),
             0x29 => new InviteFriends(),
+            0x2a => new SessionReady(r.U32(), r.Str(), r.Str(), r.Str()),
+            0x2b => new SessionReadyResult(r.U32(), r.U8(), r.U32()),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
@@ -866,6 +930,8 @@ public abstract record Frame
         if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
         if (frame is FreeRoamNeed need) FreeRoamNeed.Validate(need.Kind);
         if (frame is PrivateSession privateSession) privateSession.Validate();
+        if (frame is SessionReady sessionReady) sessionReady.Validate();
+        if (frame is SessionReadyResult sessionReadyResult) SessionReadyResult.Validate(sessionReadyResult.Result);
         if (frame is Car car) Car.Validate(car.CarKey);
         if (frame is FollowHost follow) FollowHost.Validate(follow.LobbyType);
         if(frame is RelayClock relayClock && relayClock.UnixSeconds is 0 or >long.MaxValue)throw new ProtocolException("Invalid relay clock");
