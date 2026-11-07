@@ -1799,8 +1799,11 @@ static HRESULT STDMETHODCALLTYPE fr_party_local_users(FrWrap *self, uintptr_t a,
    launcher's join was granted) fi_party_session_ready invokes it: delegate slot 3, Invoke(delegate, sender NULL, args), args a
    hook-owned IInspectable whose slot 6 get_GameSession hands out an AddRef'd MultiplayerSessionReference of the host's session.
    The game (0x140bd64e0) reads the ref from args under PartyManager's lock and shows its own Join popup; a person accepts it.
-   INFERRED (spec 11.4 item 5, logged on every call): a raw args pointer without a QueryInterface first, a NULL sender, a call
-   from a thread that is not the game's, and slot 17 as the matching remove_ (add_/remove_ pairs 16/17 to 24/25). */
+   VERIFIED (SAURON, lobby spec 11.9): the reference factory's order (this, name, scid, template, out) and its getters (slot 6
+   SessionName, 7 ServiceConfigurationId, 8 SessionTemplateName); FM5 never calls slot 17 (no site reaches +0x88), so the latest
+   add_ is the one kept, every add_ is logged, and nothing relies on 17 (its handler stays for a token that matches).
+   INFERRED (spec 11.4 item 5, logged on every call): a raw args pointer without a QueryInterface first, a NULL sender, and a call
+   from a thread that is not the game's. OPEN: whether the game adds at slot 16 again after boot. */
 static const GUID fr_iid_session_ref_factory = {0x9cf4368e, 0x8e57, 0x437d, {0xbe, 0x98, 0xbe, 0x6b, 0x5c, 0xdc, 0x54, 0x22}};
 static SRWLOCK fr_ready_lock = SRWLOCK_INIT;
 static FrCom *fr_ready_delegate;      /* one reference of ours, or null */
