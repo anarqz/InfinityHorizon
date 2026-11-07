@@ -679,6 +679,7 @@ public sealed class PlaySupervisor
         using var onlineStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, _online.Cancellation);
         using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid, new Overlay.UiFrame.Status("", Overlay.UiTier.Free, Overlay.UiState.Running, ""));
         Task<bool>? overlayNext = null;
+        Task? inboxRun = null; // T-L4: the invite inbox's poll (one per session, from the overlay's first hello)
         Task? connectionQuery = null;
         long? lastConnectionQuery = null;
         if (overlay is not null)
@@ -913,6 +914,14 @@ public sealed class PlaySupervisor
                             worlds?.PrivateSessionWritten(privateSession.Scid, privateSession.TemplateName, privateSession.Name);
                             continue;
                         }
+                        // T-L4 (OD-204, WORLDS_OFFICIAL §12.5): the game's Invite friends, completed in the hook: the friend picker or a notice
+                        if (frame is Frame.InviteFriends && endpoint.Greeted)
+                        {
+                            if (!suspended && tokensOpen && worlds is not null && overlay is not null)
+                                _ = InviteFriendsAsync(worlds, overlay, fromGame: true, onlineStop.Token);
+                            else _emit(new SupervisorEvent.Note("worlds: invite: the game's Invite friends with no online lobby session; nothing to open"));
+                            continue;
+                        }
                         try { state = await OnFrame(frame, endpoint, pipe, token, state, tokensOpen ? onlineStop.Token : stop.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException) when (_online.IsPaused && !stop.IsCancellationRequested)
                         { pipe.Dispose(); hookGone = true; nextFrame = null; break; }
@@ -1107,6 +1116,23 @@ public sealed class PlaySupervisor
                                 if (worlds?.VoiceFrame() is { } helloVoice) await overlay.SendFrameAsync(helloVoice, stop.Token).ConfigureAwait(false);
                                 if (_config.OverlayStatus is { } overlayStatus)
                                     _ = overlayStatus.AttachAsync(overlay.SendFrameAsync, stop.Token);
+                                // T-L4: the invite inbox polls while online once an overlay that shows prompts (protocol 6+) is there; every
+                                // hello sends the pending prompts again (one sent before it was dropped: T-L3's open item)
+                                if (worlds?.Inbox is { } inbox && !suspended && tokensOpen && overlay.Protocol >= 6)
+                                {
+                                    var inboxOverlay = overlay;
+                                    var inboxStop = onlineStop.Token;
+                                    inboxRun ??= Task.Run(() => inbox.RunAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop), inboxStop);
+                                    _ = inbox.ResendAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop);
+                                }
+                                break;
+                            case Overlay.UiIncoming.PickerAsk when worlds is not null && !suspended:
+                                // T-L4: the Private Lobby pane's Invite friends
+                                _ = InviteFriendsAsync(worlds, overlay, fromGame: false, onlineStop.Token);
+                                break;
+                            case Overlay.UiIncoming.InviteSend send when worlds is not null && !suspended:
+                                // T-L4: a friend chosen in the picker: one invite, one notice, the picker refreshed
+                                _ = InviteSendAsync(worlds, overlay, send.Request.Xuid, onlineStop.Token);
                                 break;
                             case Overlay.UiIncoming.Panel panel:
                                 _config.OverlayStatus?.Panel(panel.Open);
@@ -1183,9 +1209,12 @@ public sealed class PlaySupervisor
                                     unanswerable.Request.Xuid, unanswerable.Request.Kind == Overlay.UiPlayerAction.Report ? Overlay.UiPlayerResult.ReportFailed
                                         : Overlay.UiPlayerResult.ActionFailed, Overlay.UiPlayerState.Unknown)), stop.Token, always: true);
                                 break;
+                            case Overlay.UiIncoming.InviteAnswer answer when worlds?.Inbox is { } answered:
+                                // OD-204 (T-L4): Decline calls the decline route; Accept is T-L5's (logged, the prompt stays answered)
+                                _ = InviteAnswerAsync(answered, overlay, answer.Answer, onlineStop.Token);
+                                break;
                             case Overlay.UiIncoming.InviteAnswer answer:
-                                // OD-204 (T-L3): the overlay's Accept or Decline; acting on it (join, decline route) is T-L4/T-L5's
-                                _emit(new SupervisorEvent.Note($"overlay: invite {(answer.Answer.Accept ? "accepted" : "declined")} (T-L4/T-L5 act on it; nothing is sent yet)"));
+                                _emit(new SupervisorEvent.Note($"overlay: invite {(answer.Answer.Accept ? "accepted" : "declined")} with no inbox in this session"));
                                 break;
                             case Overlay.UiIncoming.Act a when worlds is not null && !suspended:
                                 // the result, then the world as it is now
@@ -1276,6 +1305,58 @@ public sealed class PlaySupervisor
         catch (ProtocolException error)
         {
             _emit(new SupervisorEvent.Note("overlay: answer not sent: " + error.Message));
+        }
+    }
+
+    /// <summary>
+    /// T-L4 (OD-204, WORLDS_OFFICIAL §12.5): Invite friends (the hook's InviteFriends, or the Private Lobby pane's 0x26): the friend
+    /// picker (0x25, protocol 7) in a private lobby this player leads, else one notice marked always.
+    /// </summary>
+    private async Task InviteFriendsAsync(Matchmaking.WorldsBridge worlds, OverlayChannel overlay, bool fromGame, CancellationToken cancellation)
+    {
+        try
+        {
+            var answer = await worlds.InviteFriendsAsync(fromGame, cancellation).ConfigureAwait(false);
+            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
+            if (answer.Picker is { } picker)
+            {
+                if (overlay.Accepts(picker)) await overlay.SendIfAcceptedAsync(picker, cancellation).ConfigureAwait(false);
+                else _emit(new SupervisorEvent.Note($"worlds: invite: this overlay (protocol {overlay.Protocol}) has no friend picker"));
+            }
+            if (answer.Notice is { } notice) await overlay.ToastAsync(notice, cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException or InvalidOperationException or HttpRequestException)
+        {
+            if (!cancellation.IsCancellationRequested) _emit(new SupervisorEvent.Note("worlds: invite: Invite friends not answered (" + error.GetType().Name + ")"));
+        }
+    }
+
+    /// <summary>T-L4: a friend chosen in the picker: one invite call, one notice, the picker refreshed.</summary>
+    private async Task InviteSendAsync(Matchmaking.WorldsBridge worlds, OverlayChannel overlay, string xuid, CancellationToken cancellation)
+    {
+        try
+        {
+            var answer = await worlds.InviteSendAsync(xuid, cancellation).ConfigureAwait(false);
+            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
+            await overlay.ToastAsync(answer.Notice, cancellation).ConfigureAwait(false);
+            if (answer.Picker is { } picker) await overlay.SendIfAcceptedAsync(picker, cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException or InvalidOperationException or HttpRequestException)
+        {
+            if (!cancellation.IsCancellationRequested) _emit(new SupervisorEvent.Note("worlds: invite: not sent (" + error.GetType().Name + ")"));
+        }
+    }
+
+    /// <summary>T-L4: the player's answer to an invite prompt (Decline: the decline route; Accept: T-L5's).</summary>
+    private static async Task InviteAnswerAsync(Matchmaking.InviteInbox inbox, OverlayChannel overlay, Overlay.UiFrame.InviteAnswer answer, CancellationToken cancellation)
+    {
+        try
+        {
+            if (await inbox.AnswerAsync(answer.InviteId, answer.Accept, cancellation).ConfigureAwait(false) is { } notice && !cancellation.IsCancellationRequested)
+                await overlay.ToastAsync(notice, cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException)
+        {
         }
     }
 

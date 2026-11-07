@@ -67,6 +67,14 @@ public interface IMatchmakingApi
 
     Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, CancellationToken cancellation = default);
 
+    /// <summary>
+    /// T-L4 (OD-204, WORLDS_OFFICIAL §12.5): the invite with the user action's <c>Idempotency-Key</c> (one per action; its retry reuses
+    /// it). The route is idempotent by state (200 with the pending invite, MATCHMAKING_API §3.4), so a server that ignores the header
+    /// answers the same.
+    /// </summary>
+    Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, string idempotencyKey, CancellationToken cancellation) =>
+        InviteAsync(worldId, xuid, cancellation);
+
     Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default);
 
     /// <summary>OD-112: a request to join with the caller's mod set (null: vanilla, no body).</summary>
@@ -262,6 +270,13 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         return SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/invites", new InviteRequest { Xuid = xuid }, cancellation);
     }
 
+    public Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, string idempotencyKey, CancellationToken cancellation)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(xuid);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        return SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/invites", new InviteRequest { Xuid = xuid }, cancellation, idempotencyKey);
+    }
+
     public Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default) =>
         RequestAsync(worldId, null, cancellation);
 
@@ -392,7 +407,8 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     private static string Code(string code) =>
         WorldCode.Normalize(code) ?? throw new ArgumentException("a world code is 8 digits (XXXX-XXXX)", nameof(code));
 
-    private async Task<MmResult<T>> SendAsync<T>(HttpMethod method, string route, object? body, CancellationToken cancellation)
+    private async Task<MmResult<T>> SendAsync<T>(HttpMethod method, string route, object? body, CancellationToken cancellation,
+        string? idempotencyKey = null)
     {
         string token;
         lock (_cleanupGate)
@@ -413,6 +429,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
             {Version=HttpVersion.Version11,VersionPolicy=HttpVersionPolicy.RequestVersionOrLower};
         request.Headers.TryAddWithoutValidation("X-Fi-Client", clientHeader);
         request.Headers.TryAddWithoutValidation("X-Fi-Session", token);
+        if (idempotencyKey is not null) request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
         if (body is not null)
         {
             request.Content = JsonContent.Create(body, body.GetType(), options: ApiClient.Json);

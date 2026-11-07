@@ -112,6 +112,11 @@ public sealed partial class ShellViewModel
                 RelayFailureKey = dedicatedWorlds is null ? null : () => dedicatedWorlds.FailureKey,
                 Social = new Infinity.Core.Matchmaking.WorldSocial(session.Api, ct => session.Tokens.AccessAsync(ct)),
                 PlayerActions = playerActions,
+                // T-L4 (OD-204): the invite inbox (GET /launcher/v1/invites every 10 s while online) and its decline route
+                Inbox = new Infinity.Core.Matchmaking.InviteInbox(
+                    async ct => await session.Api.InvitesAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), null, ct).ConfigureAwait(false),
+                    async (id, ct) => await session.Api.DeclineInviteAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), id, ct).ConfigureAwait(false),
+                    key => S[key], log: Log),
                 ModSet = mods,
                 ModName = LobbyModName, // OD-181: the catalog's names of the mods players declare
                 Gamertag = gamertag,

@@ -7,7 +7,7 @@
 //   and where lobbies come from.
 // - A private official lobby (MyWorld.is_private) is the Private Lobby: its players with Report, Friends, Mute and the voice
 //   volume, Leave lobby (A12, OD-196) and Invite friends, enabled for the current lobby leader only (lobby_policy.h InviteGateOf;
-//   the friend picker it opens is T-L4's). Any other official lobby is the Official Lobby (OD-192): the same pane without Invite.
+//   it asks the launcher for the friend picker, friend_picker.cpp, T-L4). Any other official lobby is the Official Lobby (OD-192): the same pane without Invite.
 //   A lobby the launcher itself hosts (the player-hosted code stays until T-L8) shows its players; it is closed from the launcher.
 // - No overlay notice in an official lobby, a private one included (OD-192), except what the launcher marks always (ui.cpp
 //   PushToast, T-L3); this tab's own action results follow the same rule.
@@ -119,10 +119,19 @@ void Act(uint8_t action, const MemberRow &member, uint8_t reason) {
     }
 }
 
-// Invite friends (T-L3): the friend picker is T-L4's (the hook's slot 9 and the launcher's invites route); nothing is sent yet.
+// Invite friends (T-L4): the launcher answers 0x26 with the friend picker (0x25, open) or a notice; the dev host opens a synthetic one.
 void InviteFriends(const MyWorld &m) {
     if (InviteGateOf(m) != InviteGate::Allowed) return;
-    Log("invite: picker: T-L4 (Invite friends chosen in the Private Lobby pane; nothing is sent yet)");
+    if (DevHost()) {
+        FriendPickerFrame p;
+        p.flags = kPickerOpen;
+        p.friends = {{"2", "Synthetic#00230", kPickerInLobby}, {"4", "Synthetic#00311", kPickerAvailable},
+                     {"5", "Synthetic#00412", kPickerInvited}, {"6", "Synthetic#00519", kPickerOffline}};
+        SetFriendPicker(p);
+        return;
+    }
+    SendFriendPickerAsk();
+    Log("invite: Invite friends chosen in the Private Lobby pane; the launcher answers with its friend picker");
 }
 
 // the dev host's fake launcher
@@ -182,9 +191,9 @@ float WrappedHeight(ImFont *font, float width, const char *text) {
     return font->CalcTextSizeA(font->FontSize, FLT_MAX, width, text).y;
 }
 
-// a modal right pane or invite prompt holds the input: the tab underneath takes no clicks
+// a modal right pane, invite prompt or friend picker holds the input: the tab underneath takes no clicks
 bool Clicked(ImVec2 a, ImVec2 b) {
-    return !PaneModal() && !InvitePromptOpen() && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0);
+    return !PaneModal() && !InvitePromptOpen() && !FriendPickerOpen() && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0);
 }
 
 bool g_accept = false; // A, applied at draw time on the focused item

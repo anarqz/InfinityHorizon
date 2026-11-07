@@ -174,6 +174,14 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
         SetInvitePrompt(p);
         break;
     }
+    case 23: { // T-L4: a synthetic friend picker, as the launcher's 0x25 with the open flag would
+        FriendPickerFrame p;
+        p.flags = kPickerOpen;
+        p.friends = {{"4", "Synthetic#00311", kPickerAvailable}, {"5", "Synthetic#00412", kPickerInvited},
+                     {"2", "Synthetic#00230", kPickerInLobby}, {"6", "Synthetic#00519", kPickerOffline}};
+        SetFriendPicker(p);
+        break;
+    }
     default: break;
     }
 }

@@ -139,6 +139,13 @@ public record WorldView : World
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Private { get; init; }
 
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, CR-S96, main c94d4039): a private official world's effective leader (member XUID), only in
+    /// <c>GET /mm/v1/seat</c>'s (and a renew's) world to a reader seated in it; omitted while nobody leads. It may lag one announce
+    /// and the seat poll, so the invites route's 409 <c>not_leader</c> still has its notice. T-L4 fills <c>MyWorld.Leader</c> from it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Leader { get; init; }
+
     public required bool Invited { get; init; }
 
     /// <summary>Only to the host of a <c>friends</c> or <c>private</c> world: 8 digits.</summary>
@@ -423,6 +430,14 @@ public sealed record Heartbeat
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? InProgress { get; init; }
+
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, WORLDS_OFFICIAL §12.8b): a private official world's current leader (member XUID), sent by the
+    /// world agent only, when someone leads. A player host's launcher never writes it (null: left out; an older server refuses the
+    /// member as unknown). The DTO member mirrors the contract (T-L4); this client sends none.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Leader { get; init; }
 }
 
 /// <summary>The host's answer to <c>PUT</c> and the announce: the world as its host sees it (<c>code</c> included) and the punches.</summary>
@@ -549,6 +564,14 @@ public sealed record JoinRequest
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Private { get; init; }
+
+    /// <summary>
+    /// OD-205 (MATCHMAKING_API §2.10): the caller's region, a declared <c>FI_WORLDS</c> region; the quick join and the private create
+    /// filter by it. T-L4: the DTO member only; this client NEVER sets it yet (a server without a region configuration answers
+    /// 400 <c>REQUEST.INVALID {field: "region"}</c>), so it stays null and is left out.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Region { get; init; }
 }
 
 /// <summary>A reserved seat (<c>expiresAt</c> ≤ 60 s away, renewable up to <c>holdUntil</c>).</summary>
@@ -689,6 +712,13 @@ public sealed record SeatAnswer
 
     /// <summary>OD-149 (§3.9): the caller is isolated by the anti-cheat system until then; absent otherwise (and from older servers).</summary>
     public CallerPool? Pool { get; init; }
+
+    /// <summary>
+    /// OD-204 (MATCHMAKING_API §2.10, WORLDS_OFFICIAL §12.6 "Crash or reconnect"): the open private official world this account may
+    /// rejoin (a crash, a restart); absent: none, or an older server. T-L4: a rejoin asks it first by world id.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PrivateWorldId { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/seat/renew</c> body.</summary>

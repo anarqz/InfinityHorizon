@@ -232,6 +232,10 @@ int fi_launch_lobby_pending(void);
 int fi_launch_private_create(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
                              volatile LONG *aborted);
 unsigned fi_launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
+/* T-L4 (OD-204, WORLDS_OFFICIAL 12.5): the game's Invite friends (SystemUI slot 9). 1: the launcher serves private lobbies
+   (Capture{12, 1}): the slot completes locally and InviteFriends (0x29) asks the launcher for its friend picker. 0: forward the
+   slot to Azimuth as before (an older launcher, or no private lobbies). */
+int fi_launch_invite_friends(void);
 /* W-10 (freeroam.c): the Party calls still watched (async, Started), logged with `why`; and
    follow.c's game-thread check after a CancelMatchmaking. */
 void azimuth_freeroam_pending_log(const char *why);
