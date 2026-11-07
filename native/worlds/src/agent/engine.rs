@@ -252,7 +252,6 @@ pub fn spawn(
     let exe = std::env::current_exe()?;
     Command::new(exe)
         .args(serve_args(bind, control, max_worlds, max_seats))
-        .env_remove("FI_DS_CONTROL_SECRET")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
