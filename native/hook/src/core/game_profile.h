@@ -43,6 +43,14 @@ typedef struct {
     unsigned global, offset, bytes, kind;
 } FiGameWatch;
 
+/* A game whose main update the hook does not detour has its readiness (the launcher's Event 5) polled from
+   these terms: each reads a pointer at `global`, then `bytes` (1 to 8) at `offset`, and compares it with `value`. */
+enum { FI_READY_EQ = 0, FI_READY_NE = 1, FI_READY_GE = 2 };
+typedef struct {
+    unsigned global, offset, bytes, op;
+    unsigned long long value;
+} FiReadyTerm;
+
 typedef struct {
     FiGameId id;
     char name[4];
@@ -55,6 +63,13 @@ typedef struct {
     unsigned patch_count;
     const FiGameWatch *watches;
     unsigned watch_count;
+    /* Polled readiness (none: the game's own detour, FH2's game_ready.c, or no readiness at all). Ready while
+       every term holds and the 4 bytes at heartbeat_offset of *heartbeat_global changed within the last second.
+       The generation changes with ready and with the two identity pointers. */
+    const FiReadyTerm *ready_terms;
+    unsigned ready_term_count;
+    unsigned heartbeat_global, heartbeat_offset;
+    unsigned ready_identity[2];
 } FiGameProfile;
 
 /* FM5 1.0.0.20 (docs/launcher/FM5_INFINITY_HANDOFF.md 3).
@@ -89,12 +104,24 @@ static const FiGameWatch fi_fm5_watches[] = {
     {"FM5 WATCH ready F", 0x25d0398u, 0, 0, FI_WATCH_POINTER_ONCE},
 };
 
+/* SAURON's R8 (lobby spec 12, static, verified by T1's first values): S=*0x14261d1a0, L=*0x1425e6e40,
+   F=*0x1425d0398 (the heartbeat writer's own object, set for the whole run). */
+static const FiReadyTerm fi_fm5_ready[] = {
+    {0x261d1a0u, 0x10u, 8, FI_READY_NE, 0},     /* S+0x10 set */
+    {0x261d1a0u, 0x38u, 4, FI_READY_GE, 2},     /* S+0x38 >= 2 */
+    {0x261d1a0u, 0x38u, 4, FI_READY_NE, 3},     /* ... and not 3 */
+    {0x261d1a0u, 0x114f8u, 4, FI_READY_EQ, 1},  /* S+0x114f8 == 1 */
+    {0x25e6e40u, 0x40u, 4, FI_READY_NE, 1},     /* L+0x40 != 1: no race loading or running */
+    {0x25d0398u, 0x48u, 8, FI_READY_EQ, 0},     /* F+0x48 null in menus */
+};
+
 static const FiGameProfile fi_game_profiles[] = {
     {FI_GAME_FH2, "FH2", GAME_TIMESTAMP, GAME_IMAGE_SIZE, FI_FEATURES_ALL, L"title-1a96545b", L"media\\stripped\\gamedbRC.slt", 2,
-     0, 0, 0, 0},
+     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}},
     {FI_GAME_FM5, "FM5", 0x53d8d1f2u, 0x279d000u, 0, L"title-7b35d917", L"media\\db\\gamedb.slt", -1,
      fi_fm5_patches, sizeof(fi_fm5_patches) / sizeof(fi_fm5_patches[0]),
-     fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0])},
+     fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0]),
+     fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u}},
 };
 
 __declspec(selectany) const FiGameProfile *volatile fi_game_selected;

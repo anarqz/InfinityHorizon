@@ -86,12 +86,63 @@ static DWORD WINAPI game_watch_thread(void *parameter) {
     }
 }
 
+/* Every term of the selected game's polled readiness, plus its heartbeat (W9). Read only, every 250 ms;
+   the publishing (and its 500 ms cadence and 1.5 s freshness) is game_ready.c's, as for FH2. */
+static int game_ready_term(unsigned char *image, const FiReadyTerm *term) {
+    unsigned char *object = 0;
+    unsigned long long value = 0;
+    if (term->bytes > sizeof(value) || !memory_read(image + term->global, &object, sizeof(object)) || !object ||
+        !memory_read(object + term->offset, &value, term->bytes)) {
+        return 0;
+    }
+    return term->op == FI_READY_EQ ? value == term->value : term->op == FI_READY_NE ? value != term->value : value >= term->value;
+}
+
+static DWORD WINAPI game_ready_thread(void *parameter) {
+    const FiGameProfile *game = fi_game_profile();
+    unsigned char *image = parameter;
+    unsigned beat = 0;
+    ULONGLONG beat_at = 0;
+    int logged = -1;
+    for (;;) {
+        ULONGLONG now = GetTickCount64();
+        unsigned char *beat_object = 0;
+        unsigned value = 0;
+        if (memory_read(image + game->heartbeat_global, &beat_object, sizeof(beat_object)) && beat_object &&
+            memory_read(beat_object + game->heartbeat_offset, &value, sizeof(value)) && value != beat) {
+            beat = value;
+            beat_at = now;
+        }
+        int ready = beat_at && now - beat_at <= 1000;
+        for (unsigned i = 0; ready && i < game->ready_term_count; ++i) {
+            ready = game_ready_term(image, &game->ready_terms[i]);
+        }
+        void *identity[2] = {0, 0};
+        for (unsigned i = 0; i < 2; ++i) {
+            memory_read(image + game->ready_identity[i], &identity[i], sizeof(identity[i]));
+        }
+        fi_game_ready_polled(ready, identity[0], identity[1]);
+        if (ready != logged) {
+            logged = ready;
+            log_append(ready ? "GAME READY: 1 (the launcher may seat this game in a lobby).\r\n"
+                             : "GAME READY: 0.\r\n");
+        }
+        Sleep(250);
+    }
+}
+
 static void game_first_request(void) {
     static volatile LONG done;
     const FiGameProfile *game = fi_game_profile();
     unsigned char *image = fi_game_selected_image;
-    if (!image || (!game->patch_count && !game->watch_count) || InterlockedExchange(&done, 1)) {
+    if (!image || (!game->patch_count && !game->watch_count && !game->ready_term_count) || InterlockedExchange(&done, 1)) {
         return;
+    }
+    if (game->ready_term_count) {
+        HANDLE ready = CreateThread(0, 0, game_ready_thread, image, 0, 0);
+        if (ready) {
+            CloseHandle(ready);
+        }
     }
     for (unsigned i = 0; i < game->patch_count; ++i) {
         const FiGamePatch *patch = &game->patches[i];

@@ -93,6 +93,10 @@ static void gr_observe(int ready, void *player, void *record, void *car, unsigne
     }
 }
 
+void fi_game_ready_polled(int ready, void *first, void *second) {
+    gr_observe(ready, first, second, 0, 0, GetTickCount64());
+}
+
 int fi_game_ready(unsigned *generation) {
     AcquireSRWLockShared(&gr_lock);
     int ready = gr_state.ready && GetTickCount64() - gr_state.sampled <= GR_FRESH_MS;
