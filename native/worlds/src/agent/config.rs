@@ -206,6 +206,16 @@ pub fn parse(
 }
 
 impl AgentConfig {
+    /// The engine's `--max-seats` for these placed activities: every world at the largest
+    /// `maxPlayers` among them (FH2's when none seats more).
+    pub fn engine_seats(&self, activities: &[&str]) -> usize {
+        let per_world = activities
+            .iter()
+            .map(|a| self.max_players_of(a))
+            .fold(self.max_players, u8::max);
+        self.max_worlds * usize::from(per_world)
+    }
+
     /// The `maxPlayers` of an activity's worlds (its game's setting).
     pub fn max_players_of(&self, activity: &str) -> u8 {
         if game_of(activity) == FM5 {
@@ -467,6 +477,66 @@ mod tests {
             with(&[], &["--bind", "[::]:1", "--bind=[::]:2"]),
             Err("FI_WORLDS_BIND")
         );
+    }
+
+    /// T2 (SAURON, 2026-11-07): the engine refused `--max-seats` 128 and restarted forever. Every
+    /// placement and setting the agent allows gives seats the engine's public profile accepts;
+    /// FH2's default stays 96.
+    #[test]
+    fn the_engines_seats_fit_its_public_bound_for_every_placement() {
+        let key = if cfg!(windows) {
+            "C:\\fi-worlds\\agent.key"
+        } else {
+            "/var/lib/fi-worlds/agent.key"
+        };
+        let base = with(&[("FI_WORLDS_KEY_FILE", key)], &[]).unwrap();
+        assert_eq!(base.engine_seats(&ACTIVITIES), 96);
+        assert_eq!(base.engine_seats(&ALL_ACTIVITIES), 128);
+        assert_eq!(base.engine_seats(&FM5_ACTIVITIES), 128);
+        let placements: [&[&str]; 4] = [&ACTIVITIES, &FM5_ACTIVITIES, &ALL_ACTIVITIES, &[]];
+        for worlds in 1..=8 {
+            for fh2 in 2..=12u8 {
+                for fm5 in 2..=16u8 {
+                    let c = AgentConfig {
+                        max_worlds: worlds,
+                        max_players: fh2,
+                        fm5_max_players: fm5,
+                        ..base.clone()
+                    };
+                    for placed in placements {
+                        let seats = c.engine_seats(placed) as u64;
+                        assert!(
+                            (1..=crate::cli::PUBLIC_MAX_SEATS).contains(&seats),
+                            "{worlds} worlds, {fh2}/{fm5} seats, {placed:?}: {seats}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The agent's exact engine arguments pass the engine's own parser (the control socket is a
+    /// Unix one, so this runs on Linux).
+    #[cfg(unix)]
+    #[test]
+    fn the_engines_arguments_parse() {
+        let base = with(
+            &[("FI_WORLDS_KEY_FILE", "/var/lib/fi-worlds/agent.key")],
+            &[],
+        )
+        .unwrap();
+        for placed in [&ACTIVITIES[..], &ALL_ACTIVITIES[..], &FM5_ACTIVITIES[..]] {
+            let args = super::super::engine::serve_args(
+                "0.0.0.0:5101",
+                std::path::Path::new("/run/fi-ds/control.sock"),
+                base.max_worlds,
+                base.engine_seats(placed),
+            );
+            assert!(
+                crate::cli::parse(&args[1..], &|_| None).is_ok(),
+                "{placed:?}: {args:?}"
+            );
+        }
     }
 
     /// CR-S99 §5: `race` is FM5's activity, its worlds seat up to 16; FH2's are unchanged.

@@ -226,6 +226,23 @@ fn read_lines(stream: UnixStream, pending: Pending, generation: u64, events: Sen
 
 /// Spawns `worlds serve --profile public` from this executable, its stdout and stderr shared with
 /// the agent's (both are JSON lines to the VM's log; nothing here reads them).
+/// `worlds serve`'s arguments for the agent's engine (the tests parse exactly these).
+pub fn serve_args(bind: &str, control: &Path, max_worlds: usize, max_seats: usize) -> Vec<String> {
+    vec![
+        "serve".into(),
+        "--profile".into(),
+        "public".into(),
+        "--bind".into(),
+        bind.into(),
+        "--control".into(),
+        format!("unix:{}", control.display()),
+        "--max-worlds".into(),
+        max_worlds.to_string(),
+        "--max-seats".into(),
+        max_seats.to_string(),
+    ]
+}
+
 pub fn spawn(
     bind: &str,
     control: &Path,
@@ -234,12 +251,7 @@ pub fn spawn(
 ) -> std::io::Result<Child> {
     let exe = std::env::current_exe()?;
     Command::new(exe)
-        .arg("serve")
-        .args(["--profile", "public", "--bind", bind])
-        .arg("--control")
-        .arg(format!("unix:{}", control.display()))
-        .args(["--max-worlds", &max_worlds.to_string()])
-        .args(["--max-seats", &max_seats.to_string()])
+        .args(serve_args(bind, control, max_worlds, max_seats))
         .env_remove("FI_DS_CONTROL_SECRET")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())

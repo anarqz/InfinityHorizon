@@ -89,6 +89,10 @@ pub fn parse_role(args: &[String]) -> Result<Role, Invalid> {
 /// The environment variable of the secret (read once, then removed by `main`).
 pub const SECRET_ENV: &str = "FI_DS_CONTROL_SECRET";
 
+/// The public profile's `--max-seats` ceiling: `--max-worlds`' 8 at FM5's 16 seats (CR-S99 §1; OD-206 W6).
+/// FH2's own agent default stays 8 × 12 = 96.
+pub const PUBLIC_MAX_SEATS: u64 = 128;
+
 pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Command, Invalid> {
     let mut given: Vec<(&'static str, String)> = Vec::new();
     let mut version = false;
@@ -198,7 +202,7 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
         int("--max-worlds", 1, &|n| n == 1)?
     } as usize;
     let max_seats = if public {
-        int("--max-seats", 48, &|n| (1..=96).contains(&n))?
+        int("--max-seats", 48, &|n| (1..=PUBLIC_MAX_SEATS).contains(&n))?
     } else {
         int("--max-seats", 12, &|n| (1..=12).contains(&n))?
     } as usize;
