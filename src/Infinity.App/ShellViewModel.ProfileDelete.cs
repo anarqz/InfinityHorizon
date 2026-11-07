@@ -49,7 +49,7 @@ public sealed partial class ShellViewModel
     public bool CanConfirmDeleteProfile => _deleting is not null && Idle && !Playing && _session is not null
         && string.Equals(_deleteTyped.Trim(), DeleteProfileName, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>The rows' "Delete from the cloud" links are enabled (never while playing, hosting or busy).</summary>
+    /// <summary>The rows' "Delete from the cloud" links are enabled (never while playing or busy).</summary>
     public bool CanAskDeleteProfile => Idle && !Playing && _session?.Me is not null && !OfflineMode;
 
     /// <summary>A row's "Delete from the cloud": an account profile only (a local-only row has nothing in the cloud), never while playing.</summary>

@@ -61,9 +61,8 @@ public sealed partial class WorldsBridge
         { throw new InvalidDataException("Authenticated UDP socket context unavailable"); }
         finally { if(key is not null)CryptographicOperations.ZeroMemory(key); }
     }
-    private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation,string? transport=null)
+    private async Task<bool> SendProofAsync(RelayGrant relay,string world,string grant,long epoch,CancellationToken cancellation)
     {
-        ObserveSeatTransport(grant,transport); // OD-160's notice: the seat's transport as the server gave it
         if(!ProofFor(relay))return true;
         Frame.RelayContext frame;
         try { frame=ProofFrame(relay,world,grant,out _); }
@@ -114,7 +113,7 @@ public sealed partial class WorldsBridge
         // T35: the server's answer shows no seat (it ended: released, expired, kicked, its world closed): the hook stops using it
         if(seat is null)return ClearSeatProofAsync("the server shows no seat",epoch);
         if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync("the seat has no grant",epoch,success:false);
-        return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation,seat.Transport);
+        return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation);
     }
     private async Task<bool> ClearSeatProofAsync(string why,long epoch,bool success=true) {await ClearProofAsync(why,CancellationToken.None,epoch).ConfigureAwait(false);return success;}
     /// <summary>Clears the hook's socket context; <paramref name="why"/> goes to the log line (T35).</summary>

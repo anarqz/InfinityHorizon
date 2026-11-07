@@ -1,7 +1,8 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE). */
 /* The game's car database (OD-208: what is left of world.c once players host no world): its
    SHA-256 goes with every request to the server, and a database changed mid-session cuts the
-   game off the online world and tells the server (POST /infinity/v1/worlds/left). */
+   game off the online world and tells the launcher (Event 8, world left), which leaves the seat
+   (DELETE /mm/v1/seat; OD-208: the Beta's POST /infinity/v1/worlds/left is gone). */
 #include "infinity.h"
 #include "../core/logging.h"
 #include "../core/sha256.h"
@@ -17,14 +18,6 @@ static void world_add(WorldText *t, const char *text) {
         t->data[t->size++] = *text++;
     }
     t->data[t->size] = 0;
-}
-
-static const wchar_t *world_token_header(void) {
-    static wchar_t header[1200];
-    if (!azimuth_account_token() || !azimuth_account_auth_header(header, ARRAY_COUNT(header))) {
-        return 0;
-    }
-    return header;
 }
 
 /* The car database changed during the session (world_car_db_tampered). */
@@ -156,12 +149,11 @@ const wchar_t *azimuth_world_car_db_header(void) {
     return world_car_db_ready ? world_car_db_header : 0;
 }
 
-/* The car database changed during the session: off the world, and the server is told (it
-   drops this player from the world it is in). The
+/* The car database changed during the session: off the world, and the launcher is told (it
+   leaves this player's seat, DELETE /mm/v1/seat). The
    X-Fh2-CarDb header now says "changed", so the server keeps this game out of every world
    until it restarts. */
 static void world_car_db_tampered(void) {
-    static char reply[256];
     if (InterlockedExchange(&world_car_db_changed, 1)) {
         return;
     }
@@ -169,6 +161,5 @@ static void world_car_db_tampered(void) {
     static const wchar_t changed[] = L"X-Fh2-CarDb: changed";
     memory_copy(world_car_db_header, changed, sizeof(changed));
     azimuth_freeroam_cut();
-    azimuth_net_call(L"POST", L"/infinity/v1/worlds/left", world_token_header(), "{\"reason\":\"cars\"}", reply,
-                     sizeof(reply));
+    fi_launch_event(FI_EVENT_WORLD_LEFT, "cars");
 }

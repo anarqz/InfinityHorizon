@@ -52,7 +52,6 @@ typedef struct {
     wchar_t server[256];      /* Server (default https://api.infinity-horizon.com) */
     int auto_update;          /* AutoUpdate 0/1 (1) */
     int freeroam;             /* FreeRoam 0/1 (1) */
-    int freeroam_direct;      /* FreeRoamDirect 0/1 (0) */
     wchar_t freeroam_world[128]; /* FreeRoamWorld host:port ("") */
     int carstate;             /* CarState: FI_CARSTATE_* (auto) */
     int language;             /* Language: FI_LANG_* (auto) */
@@ -166,6 +165,8 @@ void fi_launch_event(unsigned kind, const char *detail);
 /* 7 (OD-121): the server's X-Fi-Activity-State for this session (detail "active|menu|idle|no_signal"
    with ";evict_in=N" while eviction is enforced): the launcher warns through the overlay. */
 #define FI_EVENT_ACTIVITY 7u
+/* OD-208: the game left the online world on its own (detail "cars": the car database changed); the launcher leaves the seat */
+#define FI_EVENT_WORLD_LEFT 8u
 #define FI_NOTICE_INFO 0u
 #define FI_NOTICE_WARNING 1u
 #define FI_NOTICE_ERROR 2u
@@ -278,9 +279,8 @@ void fi_player_actions_apply(unsigned char *game_image);
 int fi_voice_send(const uint8_t *datagram, uint32_t size);
 int fi_voice_received(const unsigned char *d, int n);
 int fi_voice_shape(const unsigned char *d, size_t n, unsigned kind, unsigned attribute);
-/* the sockets voice uses: proxy.c (passthrough) and livery_world.c (LAN); OD-208: never a host's */
+/* the sockets voice uses: proxy.c and livery_world.c (LAN); OD-208: never a host's */
 int azimuth_proxy_world_ready(void);
-int azimuth_proxy_passthrough(void);
 int azimuth_world_lan_ready(void);
 /* activity.c (OD-121): the odometer, input idle and screen wrappers (launcher sessions only). */
 void fi_activity_apply(unsigned char *game_image);
@@ -329,9 +329,8 @@ int fi_udp_sign(unsigned char *p, size_t n, const unsigned char *key);
 int fi_udp_verify(const unsigned char *p, size_t n, const unsigned char *key);
 int azimuth_proxy_proof_mode(void);
 /* proxy.c (F3): the joining player's UDP proxy between the game and a world on another
-   PC (STUN, the punch exchange, the source filter). start returns 1 with `local` (a 28-byte
+   PC (STUN, the FIUP proof, the source filter; a launcher session only, OD-208). start returns 1 with `local` (a 28-byte
    sockaddr_in6) when the game should send there instead of `world`. */
-void azimuth_proxy_configure(int direct);
 int azimuth_proxy_start(const void *world, void *local);
 void azimuth_proxy_stop(void);
 /* Sends to the world from the proxy's socket (the address the relay knows this player by); 0
@@ -400,8 +399,6 @@ int azimuth_carstate_needs_position(void *car);
 /* What car `car` (at `position`, NULL if unknown) should show, when it is a player's: 1 and the
    state, else 0. */
 int azimuth_carstate_wanted(void *car, const float position[3], int *lights, int *roof);
-/* TEST CONNECTION's free roam part (about 1.5 s: STUN from a socket of its own). */
-void azimuth_proxy_nat_test(wchar_t *out, size_t cap);
 /* The legacy or launcher-ticket gamertag used for local identity replies. */
 const wchar_t *azimuth_account_gamertag(void);
 /* The active profile is Noob (its own save, no progress gates), from the server's word. */

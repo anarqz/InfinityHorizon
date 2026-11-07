@@ -9,7 +9,7 @@ public sealed partial class ApiClient
 
     /// <summary>
     /// <c>GET /launcher/v1/friends[?asXuid=]</c>: friends with their tier and presence;
-    /// <paramref name="asXuid"/> (a live profile of the caller's account) adds <c>playing.joinable</c>.
+    /// <paramref name="asXuid"/> (a live profile of the caller's account) adds the server's <c>playing.joinable</c> (OD-208: not read; a player world's).
     /// </summary>
     public Task<FriendList> FriendsAsync(string access, string? asXuid = null, CancellationToken cancellation = default) =>
         SendAsync<FriendList>(HttpMethod.Get, Core, "/launcher/v1/friends" + AsXuid(asXuid), null, access, idempotent: false, cancellation);

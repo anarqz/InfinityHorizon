@@ -16,7 +16,7 @@ public enum PresenceActivity
     /// <summary>The game is ready (local player and car present) and the profile is in no world.</summary>
     FreeRoam,
 
-    /// <summary>Seated in or hosting a world.</summary>
+    /// <summary>Seated in a world.</summary>
     Lobby,
 }
 
