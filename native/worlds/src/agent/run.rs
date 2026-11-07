@@ -6,9 +6,10 @@
 //! 1. `GET /mm/v1/official/hello` (retried with backoff): the server's clock and grant keys;
 //! 2. the engine child, its controller `hello`, `keys.set`, `catalog.set`; restarted with backoff
 //!    when it ends, its worlds `DELETE`d on the server;
-//! 3. one spare open world per (mode, activity) for `freeroam` and `roadtrip` and one `carmeet`
-//!    spare for both modes (WORLDS_OFFICIAL.md §11.1): `world.open` + `PUT` with a client-minted
-//!    id kept for its retries; FM5's `race` one spare per mode too (CR-S99 §5: `game: "fm5"`,
+//! 3. one mixed (`mode: "any"`) spare open world per (game, activity) (OD-210, CR-S101 §2.11)
+//!    for `freeroam` and `roadtrip`, and one `carmeet` spare for both modes under the first mode
+//!    as before (WORLDS_OFFICIAL.md §11.1): `world.open` + `PUT` with a client-minted id kept for
+//!    its retries; FM5's `race` one mixed spare too (CR-S99 §5: `game: "fm5"`,
 //!    `maxPlayers` ≤ 16), within the same `maxWorlds`; an announce per world every 15 s with
 //!    `world.state`'s peers, each answer feeding `world.context` then `world.admission`; an idle
 //!    extra world closed (`DELETE`);
@@ -131,7 +132,8 @@ struct Agent {
     road_trip: Option<Map<String, Value>>,
     worlds: Vec<World>,
     deletions: Vec<Deletion>,
-    /// The minted id of the next world of a (mode, activity), reused by its retries.
+    /// The minted id of the next world of a (mode, activity), reused by its retries (`mode` is
+    /// `"any"` for a mixed spare, OD-210).
     minted: HashMap<(&'static str, &'static str), String>,
     open_after: Instant,
     open_failures: u32,
@@ -1102,7 +1104,8 @@ impl Agent {
         }
     }
 
-    /// One spare open world per (mode, activity), at most the cap; an idle extra closed.
+    /// One spare open world per (game, activity), mixed (OD-210, CR-S101, W14), at most the cap;
+    /// an idle extra closed.
     fn place(&mut self, control: &Control, now: Instant) {
         if now < self.open_after || self.ring.is_empty() {
             return;
@@ -1118,18 +1121,20 @@ impl Agent {
             self.close(control, &id, "group_ended");
             return;
         }
-        // worlds of an activity or mode no longer placed close once idle
+        // worlds of an activity or mode no longer placed close once idle (OD-210, CR-S101: a
+        // spare's mode is its activity's `spare_mode`, `"any"` when every mode is served)
         let stray = self.worlds.iter().find(|w| {
             !w.group
                 && !w.private
-                && (!self.activities.contains(&w.activity) || !self.cfg.modes.contains(&w.mode))
+                && (!self.activities.contains(&w.activity)
+                    || w.mode != config::spare_mode(&self.cfg.modes, w.activity))
                 && idle_for(w, now) >= IDLE_CLOSE
         });
         if let Some(id) = stray.map(|w| w.id.clone()) {
             self.close(control, &id, "idle");
             return;
         }
-        for (mode, activity) in spare_groups(&self.cfg.modes, &self.activities) {
+        for (mode, activity) in config::spare_groups(&self.cfg.modes, &self.activities) {
             let max = usize::from(self.cfg.max_players_of(activity));
             let group: Vec<&World> = self
                 .worlds
@@ -1383,29 +1388,6 @@ impl Agent {
     }
 }
 
-/// The placement groups, each kept with one spare: (mode, activity) for `freeroam` and
-/// `roadtrip`, and one `carmeet` group for both modes, stored under the first mode
-/// (WORLDS_OFFICIAL.md §11.1: `any_mode`, `mode` = the agent's first mode). Free roam first, the
-/// car meet lobby, then Road Trip: the order spares are restored in. FM5's `race` comes after
-/// FH2's, one spare per mode (CR-S99 §5), within the same `maxWorlds`.
-fn spare_groups(
-    modes: &[&'static str],
-    activities: &[&'static str],
-) -> Vec<(&'static str, &'static str)> {
-    let mut groups = Vec::new();
-    for activity in config::ALL_ACTIVITIES {
-        if !activities.contains(&activity) {
-            continue;
-        }
-        if activity == config::MIXED {
-            groups.extend(modes.first().map(|m| (*m, activity)));
-        } else {
-            groups.extend(modes.iter().map(|m| (*m, activity)));
-        }
-    }
-    groups
-}
-
 /// `GameModeSession {name, templateName, world: {worldId, activity}}` of a `game-sessions`
 /// answer (MATCHMAKING_API §3.8; WORLDS_OFFICIAL.md §11.4): the group world's id a UUID and its
 /// activity `freeroam` or `roadtrip`.
@@ -1465,54 +1447,6 @@ fn end_child(child: &mut Child, wait: Duration) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn one_spare_per_mode_for_free_roam_and_road_trip_and_one_car_meet_lobby() {
-        let all = spare_groups(&config::MODES, &config::ACTIVITIES);
-        assert_eq!(
-            all,
-            vec![
-                ("hardcore", "freeroam"),
-                ("noob", "freeroam"),
-                ("hardcore", "carmeet"),
-                ("hardcore", "roadtrip"),
-                ("noob", "roadtrip"),
-            ]
-        );
-        // 2 + 1 + 2 spares fit the default cap with room
-        assert!(all.len() < config::DEFAULT_MAX_WORLDS as usize);
-        // the car meet lobby is stored under the first mode, whatever the order of the list
-        assert_eq!(
-            spare_groups(&["noob", "hardcore"], &["carmeet"]),
-            vec![("noob", "carmeet")]
-        );
-        // without a catalog (no roadtrip placed) or with one mode
-        assert_eq!(
-            spare_groups(&["noob"], &["roadtrip", "freeroam", "carmeet"]),
-            vec![
-                ("noob", "freeroam"),
-                ("noob", "carmeet"),
-                ("noob", "roadtrip")
-            ]
-        );
-        assert!(spare_groups(&config::MODES, &[]).is_empty());
-    }
-
-    /// CR-S99 §5: FM5's race spares, one per mode, after FH2's; all of them fit the default cap.
-    #[test]
-    fn fm5_race_spares_follow_fh2s_one_per_mode() {
-        assert_eq!(
-            spare_groups(&config::MODES, &["race"]),
-            vec![("hardcore", "race"), ("noob", "race")]
-        );
-        let all = spare_groups(&config::MODES, &config::ALL_ACTIVITIES);
-        assert_eq!(
-            all[all.len() - 2..],
-            [("hardcore", "race"), ("noob", "race")]
-        );
-        assert_eq!(all.len(), 7);
-        assert!(all.len() <= config::DEFAULT_MAX_WORLDS as usize);
-    }
 
     #[test]
     fn a_game_session_answer_needs_its_name_and_template() {

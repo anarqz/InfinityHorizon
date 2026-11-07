@@ -142,7 +142,14 @@ fn serve(stream: TcpStream, log: Log, sessions: u16) {
                 ),
                 ("PUT", Some(w)) => {
                     let settings: Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(settings["mode"], "noob");
+                    // OD-210, CR-S101 (W14): a mixed spare (`"any"`) per (game, activity) from an
+                    // agent serving both modes; the car meet lobby keeps the first mode as before
+                    // (its test serves Noob only)
+                    if settings["activity"] == "carmeet" {
+                        assert_eq!(settings["mode"], "noob", "{settings}");
+                    } else {
+                        assert_eq!(settings["mode"], "any", "{settings}");
+                    }
                     if settings["activity"] == "race" {
                         // CR-S99 §5: an FM5 race world, up to 16 seats
                         assert_eq!(settings["game"], "fm5", "{settings}");
@@ -245,7 +252,6 @@ fn hello_open_announce_admission_and_delete_end_to_end() {
         .env("FI_WORLDS_BIND", "127.0.0.1:0")
         .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
         .env("FI_WORLDS_ACTIVITIES", "freeroam")
-        .env("FI_WORLDS_MODES", "noob")
         .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -362,7 +368,6 @@ fn an_fm5_race_spare_opens_announces_admits_and_is_deleted() {
         .env("FI_WORLDS_BIND", "127.0.0.1:0")
         .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
         .env("FI_WORLDS_ACTIVITIES", "race")
-        .env("FI_WORLDS_MODES", "noob")
         .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -385,7 +390,8 @@ fn an_fm5_race_spare_opens_announces_admits_and_is_deleted() {
         v["ev"] == "agent.world.opened"
     });
     assert_eq!(opened["activity"], "race", "{opened}");
-    assert_eq!(opened["mode"], "noob", "{opened}");
+    // OD-210, CR-S101 (W14): one mixed spare, both modes served by default
+    assert_eq!(opened["mode"], "any", "{opened}");
     let world = opened["world"].as_str().unwrap().to_string();
     let admitted = wait_line(&rx, "admitted", |v| {
         v["ev"] == "agent.world.admission" && v["punches"] == 1
