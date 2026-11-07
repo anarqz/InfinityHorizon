@@ -24,7 +24,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>A save folder exists already (CR-L36: an offline identity never reuses one).</summary>
     /// <summary>Azimuth keeps every profile's save in <c>&lt;saves&gt;\player-1\User_&lt;hex&gt;</c> (AzimuthSaves.List).</summary>
-    private bool SaveFolderExists(string name) => _install is { } install && Directory.Exists(Path.Combine(AzimuthSaves.SavesRoot(install.Root), "player-1", name));
+    private bool SaveFolderExists(string name) => _install is { } install && Directory.Exists(Path.Combine(AzimuthSaves.SavesRoot(install.Root, CurrentGame), "player-1", name));
 
     /// <summary>The row of a local profile: the picker's <see cref="Profile"/> shape, never sent anywhere.</summary>
     /// <summary>OD-118: offline the create button makes a profile on this PC, not on an account.</summary>
@@ -119,7 +119,7 @@ public sealed partial class ShellViewModel
     {
         if (_install is null || ParseXuid(target) is not { } xuid) return false;
         SaveProfile? azimuth;
-        try { azimuth = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root), AzimuthSaves.FolderFor(xuid)).FirstOrDefault(s => s.IsOffline); }
+        try { azimuth = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid)).FirstOrDefault(s => s.IsOffline); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Azimuth career not read: " + e.Message); return false; }
         if (azimuth is null) { Log("saves: no Azimuth career to adopt"); return false; }
         _saveTarget = target;

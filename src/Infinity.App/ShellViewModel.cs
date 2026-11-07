@@ -36,6 +36,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public ShellViewModel(Strings strings, ServerConfig config, string stateDirectory)
     {
         S = strings;
+        Games.CollectionChanged += (_, _) => FillGameCards();
         _config = config;
         config.Validate();
         _stateDirectory = config.StateDirectory(stateDirectory);
@@ -87,9 +88,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _loginOpen = false; _pending = null; Message = null;
         DisengageOnline(); // OD-118: from here until SIGN IN, not a single request to Infinity
         RememberLaunchMode(LaunchModeStore.Offline);
-        Games.Clear();
-        Games.Add(OfflineGame);
-        Gate = _gate.PlayOffline().ChooseGame(OfflineGame.Id);
+        FillOfflineGames();
+        var offline = _gate.PlayOffline();
+        Gate = GameToChooseAlone() is { } alone ? offline.ChooseGame(alone) : offline;
+        ResetContentLocation();
         FillProfiles();
         EnsureModCatalog(); // T1f: offline, Play needs the (GitHub) catalog's requirements; never wait for Mods to be opened
         // OD-118 T1c: the profile last chosen offline is chosen again (top bar no longer says "no profile" after a restart).
@@ -364,7 +366,17 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         ArgumentNullException.ThrowIfNull(game);
         Gate = _gate.ChooseGame(game.Id);
+        RememberGame(game.Id);
+        ResetContentLocation();
         FillProfiles();
+    }
+
+    /// <summary>The game folder and its check belong to one game: read again for the one now chosen.</summary>
+    private void ResetContentLocation()
+    {
+        if (_contentLocationGame == CurrentGame) return;
+        ClearIntegrity();
+        _contentLocationLoaded = false;
     }
 
     public void ChooseProfile(Profile profile)
@@ -382,7 +394,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         if (Playing || _busy || DedicatedActive) return;
         OpenHome();
-        if (_session is not null)
+        if (_session is not null || (OfflineMode && Games.Count > 1))
         {
             Gate = _gate with { Game = null, ProfileTag = null, ProfileKey = null };
         }
@@ -457,18 +469,15 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _loginOpen = false;
         LeaveAccount();
         _onMods = _onSetup = _onBugReport = _onNews = false;
-        Games.Clear();
-        foreach (var game in session.Info.Games ?? [])
-        {
-            Games.Add(game);
-        }
+        FillServerGames(session.Info.Games ?? []);
         var gate = _gate.SignIn(session.Email ?? (me.Profiles.Count > 0 ? ProfileName.Plain(me.Profiles[0].Gamertag) : me.AccountId[..8]));
         // One game served: choose it for the player, as the owner's flow only asks when there is a choice.
-        if (Games.Count == 1)
+        if (GameToChooseAlone() is { } alone)
         {
-            gate = gate.ChooseGame(Games[0].Id);
+            gate = gate.ChooseGame(alone);
         }
         Gate = gate;
+        ResetContentLocation();
         FillProfiles();
         if (session.Deletion is not null)
         {

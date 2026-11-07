@@ -24,7 +24,7 @@ public sealed partial class ShellViewModel
         {
             if (_install is null) return [];
             IReadOnlyList<SaveProfile> saves;
-            try { saves = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root)); }
+            try { saves = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
             var game = _gate.Game ?? "";
             return [.. saves.Select(s => Profiles.FirstOrDefault(p => p.Mode == "hardcore" && p.Game == game && HardcoreSave(p) == s.Folder))
@@ -79,7 +79,7 @@ public sealed partial class ShellViewModel
     {
         if (_install is null || HardcoreSave(source) is not { } folder) return false;
         SaveProfile? save;
-        try { save = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root)).FirstOrDefault(s => s.Folder == folder); }
+        try { save = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)).FirstOrDefault(s => s.Folder == folder); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Hardcore career not read: " + e.Message); return false; }
         if (save is null) { Log("saves: the Hardcore career has no sealed save on this PC"); return false; }
         Log("saves: the new Noob profile starts from a Hardcore career (" + folder + ")");

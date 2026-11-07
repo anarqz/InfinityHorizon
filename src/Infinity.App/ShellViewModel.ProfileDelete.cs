@@ -105,7 +105,7 @@ public sealed partial class ShellViewModel
                 SetDeleteStatus(DeleteRefusalText(outcome)); // in the panel, which stays open for another try
                 return;
             }
-            var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root), LocalProfiles, session.Me?.AccountId ?? session.Tokens.AccountId,
+            var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root, CurrentGame), LocalProfiles, session.Me?.AccountId ?? session.Tokens.AccountId,
                 profile, CloudSaveClient() is { } client ? client.Saves.Forget : null, DateTime.UtcNow);
             foreach (var path in cleanup.Archived) Log("profiles: archived " + path);
             foreach (var path in cleanup.NotArchived) Log("profiles: not archived (in use) " + path);

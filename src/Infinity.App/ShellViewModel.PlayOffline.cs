@@ -152,8 +152,10 @@ public sealed partial class ShellViewModel
             ModRuntimePackage? runtime = null;
             IReadOnlyList<string> overrides = [];
             var hasNative = false;
+            var fullFeatures = CurrentGame.FullFeatures;
             await Task.Run(() =>
             {
+                if (!fullFeatures) return; // OD-206: this game has no mods
                 var prepared = factory().PrepareForLaunch(); // locks enforced, Wine overrides reconciled (paired with their removal)
                 overrides = prepared.DllOverrides; hasNative = prepared.HasEnabledNative;
             });
@@ -167,7 +169,7 @@ public sealed partial class ShellViewModel
                 plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
                 _nativePlanPath = plan.Environment.FirstOrDefault(v => v.Name == "FI_MOD_PLAN").Value;
             }
-            PrepareAzimuth(install);
+            if (!PrepareAzimuth(install)) { Message = PrepareAzimuthFailed; return; }
             var environment = OfflineLaunchEnvironment(profile, plan?.Environment, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.

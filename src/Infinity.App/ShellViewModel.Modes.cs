@@ -183,11 +183,11 @@ public sealed partial class ShellViewModel
     /// <summary>OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says).</summary>
     private SessionSaves? SessionSavesFor(Profile profile)
     {
-        if (_install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
+        if (!CurrentGame.FullFeatures || _install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
         {
             return null;
         }
-        return new SessionSaves(client.Saves, client.Api, ct => session.Tokens.AccessAsync(ct), AzimuthSaves.SavesRoot(_install.Root), xuid,
+        return new SessionSaves(client.Saves, client.Api, ct => session.Tokens.AccessAsync(ct), AzimuthSaves.SavesRoot(_install.Root, CurrentGame), xuid,
             (step, detail) => _ui.Post(_ => RenderSave(step, detail), null))
         {
             ResolveConflict = AskSaveConflictAsync,
@@ -346,7 +346,7 @@ public sealed partial class ShellViewModel
         {
             return false;
         }
-        var root = AzimuthSaves.SavesRoot(_install.Root);
+        var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         if (head.IsCloudExpired())
         {
             RenderSave(SaveStep.CloudExpired, null); // retention: nothing to bring down; this PC's save is the one kept
