@@ -3,8 +3,7 @@
 //
 // - The lobby tab is one roster pane (OD-204 item 4): the lobby this player is in and its players, never a list, a code or a
 //   create form (OD-204 item 2: the game's own menus create, invite and join). Its kind names it: a private official lobby is the
-//   Private Lobby, any other official one the Official Lobby, a player-hosted one (the launcher may still hold one until T-L8) a
-//   user lobby.
+//   Private Lobby, any other one the Official Lobby: players host no lobby (OD-208), so every seat is in an official one.
 // - Who may invite from the Private Lobby pane: ONE rule, the current lobby leader (A3, WORLDS_OFFICIAL §12.8b), read from
 //   MyWorld.leader and this player's own roster row. An unknown leader (the field is not on the pipe yet, or not said) invites
 //   nobody. Replace InviteGateOf, nothing else, when the rule changes.
@@ -24,13 +23,11 @@
 
 namespace fi {
 
-enum class LobbyKind : uint8_t { None, User, Official, Private };
+enum class LobbyKind : uint8_t { None, Official, Private };
 
 inline LobbyKind LobbyKindOf(const MyWorld &m) {
     if (m.role == 0) return LobbyKind::None;
-    if (m.official && m.is_private) return LobbyKind::Private;
-    if (m.official) return LobbyKind::Official;
-    return LobbyKind::User;
+    return m.official && m.is_private ? LobbyKind::Private : LobbyKind::Official;
 }
 
 // This player's own roster row (friend state 4, "you"), or null.

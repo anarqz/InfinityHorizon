@@ -1186,13 +1186,9 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.Event e:
                                 _emit(new SupervisorEvent.OverlayEvent(e.Kind, e.Detail));
                                 break;
-                            case Overlay.UiIncoming.Worlds w when worlds is not null && !suspended:
-                                _ = ReplyAsync(overlay, async () => await worlds.ListAsync(w.Query, stop.Token).ConfigureAwait(false), stop.Token);
-                                break;
-                            case Overlay.UiIncoming.WorldsV2 w when worlds is not null && !suspended:
-                                // OD-112: the modded filter, each row's players and mods, and whether they match this session's set.
-                                _ = ReplyAsync(overlay, async () => await worlds.ListV2Async(w.Query, stop.Token).ConfigureAwait(false), stop.Token,
-                                    () => new Overlay.UiFrame.WorldsListV2(w.Query.Filter, w.Query.Modded, 2, _config.Text?["worlds.list_failed"] ?? "The lobby list is unavailable.", []));
+                            case Overlay.UiIncoming.Reserved reserved:
+                                // OD-208: a player-hosting frame (lobby list, join by code, create, close, kick): decoded, refused, unanswered
+                                _emit(new SupervisorEvent.Note($"overlay: reserved frame 0x{reserved.Type:x2}{(reserved.Action != 0 ? $" action {reserved.Action}" : "")} refused"));
                                 break;
                             case Overlay.UiIncoming.PlayerDetails details when worlds is not null:
                                 // OD-112: the player card's pane, from what this launcher already holds (no request); a pane
@@ -1205,12 +1201,6 @@ public sealed class PlaySupervisor
                                 break;
                             case Overlay.UiIncoming.PaneClick click:
                                 _emit(new SupervisorEvent.Note($"overlay: pane action {click.Request.ActionId} ignored"));
-                                break;
-                            case Overlay.UiIncoming.Join j when worlds is not null && !suspended:
-                                _ = ReplyAsync(overlay, async () => await worlds.JoinAsync(j.Request, stop.Token).ConfigureAwait(false), stop.Token);
-                                break;
-                            case Overlay.UiIncoming.Create c when worlds is not null && !suspended:
-                                _ = ReplyAsync(overlay, async () => await worlds.CreateAsync(c.Request, stop.Token).ConfigureAwait(false), stop.Token);
                                 break;
                             case Overlay.UiIncoming.Mine when worlds is not null && !suspended:
                                 // the world, then its voice chat (OD-154; a protocol 3 overlay only: the channel drops it for older ones)

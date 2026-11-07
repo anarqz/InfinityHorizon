@@ -11,7 +11,7 @@
 // - OD-210 (CR-S101, W14): the Private Lobby also shows "Who can join" (Everyone, Hardcore only, Noob only; FM5: no Hardcore) from
 //   the launcher's 0x28; the current leader's A moves it to the next choice (0x29, PUT …/modes), everyone else reads it. It applies to
 //   new joins only: nobody already here is removed (kicking stays the leader's).
-//   A lobby the launcher itself hosts (the player-hosted code stays until T-L8) shows its players; it is closed from the launcher.
+// - Players host no lobby (OD-208): every lobby here is an official one. MyWorld role 1 (hosting) is reserved and shown as a seat.
 // - No overlay notice in an official lobby, a private one included (OD-192), except what the launcher marks always (ui.cpp
 //   PushToast, T-L3); this tab's own action results follow the same rule.
 // - Each player is their card (the name; a green border while they talk) with the big mute button beside it; A on the card opens
@@ -91,7 +91,7 @@ int g_button = 0;            // a details or confirm screen's focus
 int g_buttons = 0;           // how many buttons the current card has
 uint64_t g_seen_mine = 0, g_seen_action = 0;
 
-// The buttons above the players, in focus order (T-L3): Leave lobby (every lobby but one the launcher hosts, OD-196, A12), then
+// The buttons above the players, in focus order (T-L3): Leave lobby (every seated lobby, OD-196, A12), then
 // Invite friends in a private lobby. Rebuilt by DrawMine every frame.
 enum class MineButton : uint8_t { Leave, Invite, JoinModes };
 LobbyJoinModesFrame g_join_modes; // OD-210: the render thread's copy of Shared::join_modes
@@ -266,11 +266,8 @@ void DrawNoLobby(ImDrawList *dl, float x, float y, float w, const Shared &sh) {
 
 // ---------------------------------------------------------------- my world (OD-63)
 const char *MemberStatus(const MemberRow &m) {
-    switch (m.role) {
-    case 0: return T("Host", "Anfitrião");
-    case 1: return T("In the lobby", "No lobby");
-    default: return T("On the way", "Chegando");
-    }
+    // role 0 (a player host) is reserved since OD-208: an official lobby has no host
+    return m.role == 2 ? T("On the way", "Chegando") : T("In the lobby", "No lobby");
 }
 
 const char *FriendStatus(uint8_t state) {
@@ -423,11 +420,7 @@ struct MineClick {
 };
 
 const char *LobbyTag(LobbyKind kind) {
-    switch (kind) {
-    case LobbyKind::Private: return T("PRIVATE LOBBY", "LOBBY PRIVADO");
-    case LobbyKind::Official: return T("OFFICIAL LOBBY", "LOBBY OFICIAL");
-    default: return T("PLAYER-HOSTED LOBBY", "LOBBY HOSPEDADO POR JOGADOR");
-    }
+    return kind == LobbyKind::Private ? T("PRIVATE LOBBY", "LOBBY PRIVADO") : T("OFFICIAL LOBBY", "LOBBY OFICIAL");
 }
 
 MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, const MyWorld &m) {
@@ -443,8 +436,7 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
     dl->PopClipRect();
     y += 42 * s;
     // OD-141: the lobby's modes are fixed while it is open, so they are shown, never offered
-    const std::string sub = (kind == LobbyKind::User && m.role != 1 && !m.host.empty() ? m.host + " · " : std::string()) +
-                            (m.any_mode ? std::string(kAnyModeBadge) + " · " : std::string()) + std::to_string(m.players) + "/" +
+    const std::string sub = (m.any_mode ? std::string(kAnyModeBadge) + " · " : std::string()) + std::to_string(m.players) + "/" +
                             std::to_string(m.max) + T(" players", " jogadores");
     TextAt(dl, f.small, ImVec2(x, y), kTextDim, sub.c_str());
     if (m.transport != kTransportUnknown && !m.notice.empty()) { // OD-160: the official relay or a direct connection, as the launcher says
@@ -476,21 +468,11 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
         y += 20 * s;
         TextAt(dl, f.small, ImVec2(x, y), kAmber, T("No microphone: you can listen", "Sem microfone: você pode ouvir"));
     }
-    y += 28 * s;
-    if (m.role == 2 && kind == LobbyKind::User) {
-        Wrapped(dl, f.small, ImVec2(x, y), w, kAmber, T("Pick the host's online mode in the game's menu to join it.", "Escolha no menu do jogo o modo online do host para entrar nele."));
-        y += 30 * s;
-    }
-    y += 6 * s;
+    y += 34 * s;
     g_mine_buttons.clear();
-    if (m.role == 1) {
-        // a lobby the launcher itself hosts (player-hosted, until T-L8): the overlay offers no host action any more (T-L3)
-        Wrapped(dl, f.small, ImVec2(x, y), w, kTextDim, T("This lobby is hosted from the Infinity Launcher: close it there.", "Este lobby é hospedado pelo Infinity Launcher: feche-o por lá."));
-        y += 30 * s;
-    }
     // OD-196 (W-11, reverses W-9), A12 (OD-204): every lobby this player holds a seat in keeps Leave lobby, an official or a private
     // one included, so a player whose game shows no Horizon Solo option can still leave. Item 0 whenever the player is seated.
-    if (m.role != 1) {
+    {
         const float bh = 52 * s;
         const ImVec2 a(x, y), b(x + w, y + bh);
         Button(dl, a, b, g_mine_focus == 0, false, T("Leave lobby", "Sair do lobby"));
@@ -532,7 +514,7 @@ MineClick DrawMine(ImDrawList *dl, float x, float y, float w, float bottom, cons
         y += 24 * s;
     }
     y += 10 * s;
-    // the buttons changed (private to official, a lobby the launcher hosts): the focus goes back to the top instead of
+    // the buttons changed (private to official): the focus goes back to the top instead of
     // silently landing on another control
     static size_t last_buttons = 0;
     if (g_mine_buttons.size() != last_buttons) {

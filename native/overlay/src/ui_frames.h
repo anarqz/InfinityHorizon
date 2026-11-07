@@ -84,6 +84,8 @@
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
 // Reserved (T-L3, OD-204 item 2): this overlay never sends 0x07, 0x09, 0x0B, 0x14, WorldAction 1/3 or VoiceOp 1/6 any more, and it
 // decodes and ignores 0x08, 0x0A, 0x0C and 0x15 from a launcher that still sends them; their ids and layouts stay reserved.
+// Protocol 9 (OD-208): players host no world. A protocol 9 launcher decodes those reserved overlay frames and refuses them (no
+// answer), and never sends 0x08, 0x0A, 0x0C or 0x15; MyWorld role 1 (hosting), host and code stay in the layout, reserved.
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -94,7 +96,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 8;
+constexpr uint16_t kUiProtocol = 9;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
