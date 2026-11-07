@@ -99,6 +99,12 @@ pub trait Game: std::marker::Send + Sync {
     /// The `game` id of `world.open` and of the world context (`"fh2"`).
     fn id(&self) -> &'static str;
 
+    /// The ceiling of `world.open`'s `maxPlayers` for this game: 12 (FH2) unless the game says
+    /// otherwise (FM5 16, CR-S99 §1).
+    fn max_players(&self) -> u8 {
+        super::world::MAX_PLAYERS_DEFAULT
+    }
+
     /// Validates `world.open`'s game-scoped fields and makes the world's game side. Errors are
     /// `bad_request` naming the field. Also returns the notices of the open (catalog missing...).
     fn open(&self, info: OpenInfo) -> Result<(Box<dyn GameWorld>, Vec<Notice>), CmdError>;

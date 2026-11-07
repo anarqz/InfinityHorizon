@@ -138,16 +138,22 @@ fn serve(stream: TcpStream, log: Log, sessions: u16) {
                     200,
                     json!({"serverTimeMs": now_s() * 1000,
                         "grantVerifyKeys": [{"kid": KID, "publicKey": encode_base64(SigningKey::from_bytes(&GRANT_SEED).verifying_key().as_bytes())}],
-                        "activities": ["freeroam", "carmeet", "roadtrip"]}),
+                        "activities": ["freeroam", "carmeet", "roadtrip", "race"]}),
                 ),
                 ("PUT", Some(w)) => {
                     let settings: Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(settings["game"], "fh2");
                     assert_eq!(settings["mode"], "noob");
-                    assert!(
-                        settings["activity"] == "freeroam" || settings["activity"] == "carmeet",
-                        "{settings}"
-                    );
+                    if settings["activity"] == "race" {
+                        // CR-S99 §5: an FM5 race world, up to 16 seats
+                        assert_eq!(settings["game"], "fm5", "{settings}");
+                        assert_eq!(settings["maxPlayers"], 16, "{settings}");
+                    } else {
+                        assert_eq!(settings["game"], "fh2");
+                        assert!(
+                            settings["activity"] == "freeroam" || settings["activity"] == "carmeet",
+                            "{settings}"
+                        );
+                    }
                     (201, json!({"id": w, "punches": []}))
                 }
                 ("POST", Some(w)) if target.ends_with("/game-sessions") => {
@@ -325,6 +331,88 @@ fn hello_open_announce_admission_and_delete_end_to_end() {
     // the engine was shut down with it: nobody answers on its control socket
     std::thread::sleep(Duration::from_millis(300));
     assert!(std::os::unix::net::UnixStream::connect(&control).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// CR-S99 §5 (OD-206, W6): an FM5 race spare. The agent opens `game: "fm5"`, `activity: "race"`
+/// on its engine, `PUT`s it with `maxPlayers` 16 (the fake asserts both), announces it, applies
+/// its punch (the engine's FM5 world takes the context and admits the joiner) and `DELETE`s it on
+/// SIGTERM.
+#[test]
+fn an_fm5_race_spare_opens_announces_admits_and_is_deleted() {
+    let dir = std::env::temp_dir().join(format!("fi-agent-fm5-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("agent.key");
+    std::fs::write(&key, format!("{}\n", encode_base64(&AGENT_SEED))).unwrap();
+    let control = dir.join("ctl").join("control.sock");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let log: Log = Arc::default();
+    let server_log = log.clone();
+    std::thread::spawn(move || fake(listener, server_log, 201));
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .arg("agent")
+        .env_clear()
+        .env("FI_WORLDS_SERVER_URL", format!("http://127.0.0.1:{port}"))
+        .env("FI_WORLDS_VM_ID", VM)
+        .env("FI_WORLDS_KEY_FILE", &key)
+        .env("FI_WORLDS_BIND", "127.0.0.1:0")
+        .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
+        .env("FI_WORLDS_ACTIVITIES", "race")
+        .env("FI_WORLDS_MODES", "noob")
+        .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let stdout = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            let v: Value = serde_json::from_str(&line).expect("stdout carries JSON lines only");
+            if tx.send(v).is_err() {
+                return;
+            }
+        }
+    });
+
+    let opened = wait_line(&rx, "agent.world.opened", |v| {
+        v["ev"] == "agent.world.opened"
+    });
+    assert_eq!(opened["activity"], "race", "{opened}");
+    assert_eq!(opened["mode"], "noob", "{opened}");
+    let world = opened["world"].as_str().unwrap().to_string();
+    let admitted = wait_line(&rx, "admitted", |v| {
+        v["ev"] == "agent.world.admission" && v["punches"] == 1
+    });
+    assert_eq!(admitted["admitted"], 1, "{admitted}");
+    assert_eq!(admitted["world"], world.as_str());
+
+    Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(Instant::now() < until, "the agent did not stop");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0));
+    let target = format!("/mm/v1/official/worlds/{world}");
+    let calls = log.lock().unwrap().clone();
+    let at = |m: &str, t: &str| calls.iter().position(|(cm, ct)| cm == m && ct == t);
+    let put = at("PUT", &target).expect("PUT");
+    let announce = at("POST", &format!("{target}/announce")).expect("announce");
+    let delete = at("DELETE", &target).expect("DELETE");
+    assert!(put < announce && announce < delete, "{calls:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
