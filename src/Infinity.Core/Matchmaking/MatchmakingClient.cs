@@ -337,9 +337,10 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     {
         // OD-190 (WORLDS_OFFICIAL §11.2): neither a world id nor a code is a quick join, which names its activity (car meets too)
         var quick = worldId is null && code is null;
-        if (activity is not null && !(quick ? WorldActivities.Placement : WorldActivities.All).Contains(activity))
+        // fm5-9: a join by world id or code names the world's activity, FM5's race included (CR-S99); T3's invite accept threw here
+        if (activity is not null && !(quick ? WorldActivities.Placement : WorldActivities.Joinable).Contains(activity))
         {
-            throw new ArgumentException(quick ? "freeroam, carmeet or roadtrip" : "freeroam or roadtrip", nameof(activity));
+            throw new ArgumentException(quick ? "freeroam, carmeet or roadtrip" : "freeroam, roadtrip or race", nameof(activity));
         }
         if (quick && activity is null)
         {

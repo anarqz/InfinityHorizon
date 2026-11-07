@@ -173,7 +173,9 @@ public sealed partial class WorldsBridge
         var text = reason == PrivateLobbyNotices.InviteJoinFailed && !string.IsNullOrWhiteSpace(joined.Message) && refusal is not null
             ? joined.Message
             : PrivateLobbyNotices.Text(_text, reason, reason == ConflictReasons.Pool ? PoolTimeLeft() : null);
-        _log($"worlds: invite: join of {invite.WorldId} refused ({reason}{(refusal is null || refusal == reason ? string.Empty : ", " + refusal)})");
+        // fm5-9: the join's own result and words too, so a refusal made before any request (T3: a local check) is never silent
+        _log($"worlds: invite: join of {invite.WorldId} refused ({reason}{(refusal is null || refusal == reason ? string.Empty : ", " + refusal)}; " +
+             $"result {joined.Result}{(string.IsNullOrWhiteSpace(joined.Message) ? string.Empty : ": " + joined.Message)})");
         return new(InviteAcceptOutcome.Refused, PrivateLobbyNotices.Toast(text));
     }
 
