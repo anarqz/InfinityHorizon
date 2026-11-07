@@ -85,6 +85,9 @@ public static class WorldActivities
     public const string FreeRoam = "freeroam";
     public const string RoadTrip = "roadtrip";
 
+    /// <summary>CR-S99 (OD-206): an FM5 official world, private or not, runs races; FM5 has no other activity.</summary>
+    public const string Race = "race";
+
     /// <summary>OD-190 (WORLDS_OFFICIAL §11.1): an official world that runs car meets; a player world's activity is never one.</summary>
     public const string CarMeet = "carmeet";
 

@@ -66,6 +66,9 @@ public sealed partial class WorldsBridge
     /// </summary>
     public bool PrivateCreateCapable { get; set; }
 
+    /// <summary>CR-S99: the activity of the game's private creates when its game says one (FM5: race); null keeps the kind's own.</summary>
+    public string? PrivateCreateActivity { get; set; }
+
     /// <summary>The seat's world is a private official world (as last known).</summary>
     public bool InPrivateLobby => _seat.GrantId is not null && SeatPrivate(Volatile.Read(ref _seatWorld));
 
@@ -165,7 +168,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     private async Task<byte> PrivateCreateCoreAsync(byte kind, CancellationToken cancellation)
     {
-        var activity = ActivityOf(kind) ?? WorldActivities.FreeRoam;
+        var activity = PrivateCreateActivity ?? ActivityOf(kind) ?? WorldActivities.FreeRoam;
         if (!PrivateCreateCapable) return Decided(kind, FreeRoamResult.None, "no private lobby (private creates are off in this session)");
         var started = _clock.GetTimestamp();
         using var budget = new CancellationTokenSource(FreeRoamAskBudget, _clock);
