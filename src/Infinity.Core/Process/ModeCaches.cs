@@ -48,6 +48,10 @@ public sealed class ModeCaches
     public static ModeCaches Fh2(string azimuth) =>
         new(azimuth, Path.Combine(azimuth, Relative(Fh2StashDir)), Fh2Caches);
 
+    /// <summary>The set of <paramref name="game"/> for the Azimuth folder <paramref name="azimuth"/>; each game has its own stash.</summary>
+    public static ModeCaches For(string azimuth, GameDefinition game) =>
+        new(azimuth, Path.Combine(azimuth, Relative(game.StashDir)), game.Caches);
+
     public string StashRoot => _stashRoot;
 
     private string JournalPath => Path.Combine(_stashRoot, "journal.json");

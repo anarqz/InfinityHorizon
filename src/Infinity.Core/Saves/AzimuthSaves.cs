@@ -63,6 +63,14 @@ public static class AzimuthSaves
         return Path.Combine(azimuthRoot, "data", "titles", "1A96545B", "saves");
     }
 
+    /// <summary><c>&lt;azimuth&gt;\data\titles\&lt;title&gt;\saves</c> of <paramref name="game"/>.</summary>
+    public static string SavesRoot(string azimuthRoot, Infinity.Core.Process.GameDefinition game)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(game);
+        return Path.Combine(azimuthRoot, "data", "titles", game.TitleId, "saves");
+    }
+
     /// <summary><c>User_&lt;XUID upper hex&gt;</c> (ACCOUNTS.md §2).</summary>
     public static string FolderFor(ulong xuid) => "User_" + xuid.ToString("X", CultureInfo.InvariantCulture);
 
