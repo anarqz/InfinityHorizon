@@ -621,6 +621,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         _log("worlds: join refused: the server wants this session's mods");
                         return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.mods_failed"));
                     }
+                    if (answer.Error?.Kind == MmErrorKind.WorldNotFound) Volatile.Write(ref _lastJoinRefusal, PrivateLobbyNotices.Closed); // T-L5's wording
                     return new UiFrame.JoinResult(UiJoin.Closed, _text(answer.Error?.Kind == MmErrorKind.WorldNotFound ? "worlds.closed" : "worlds.join_failed"));
                 }
                 switch (join.Status)
@@ -689,6 +690,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     case JoinStatuses.Code:
                         return new UiFrame.JoinResult(UiJoin.Code, _text(code is null ? "worlds.code_needed" : "worlds.code_wrong"));
                     case JoinStatuses.Closed:
+                        Volatile.Write(ref _lastJoinRefusal, PrivateLobbyNotices.Closed); // T-L5's wording
                         return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.closed"));
                     case JoinStatuses.RateLimited:
                         return new UiFrame.JoinResult(UiJoin.SlowDown, _text("worlds.slow_down"));

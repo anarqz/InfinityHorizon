@@ -58,6 +58,13 @@ public static class CaptureWhat
     /// kinds; the hook sends them only after it. A launcher that does not answer keeps today's path (the write goes on).
     /// </summary>
     public const byte PrivateCreate = 12;
+
+    /// <summary>
+    /// T-L5 (OD-204, WORLDS_OFFICIAL §12.5): the hook takes <see cref="Frame.FollowHost"/> with its move flag (a third byte), so an
+    /// accepted invite moves a game that is already in online free roam (follow.c's fh_already would skip it). Sent with ok=1 at every
+    /// handshake (hook → launcher only); the launcher sends the flag only after it, and a launcher that does not know it ignores it.
+    /// </summary>
+    public const byte FollowMove = 13;
 }
 
 /// <summary><see cref="Frame.Observed"/> kinds; the platform's names are <see cref="Matchmaking.ObservationKinds"/>.</summary>
@@ -394,10 +401,21 @@ public abstract record Frame
     /// the hook starts the game's own matchmaking for that lobby type (<see cref="FollowHostLobby"/>: 1 Road Trip, 2 free roam),
     /// as the pause menu's ONLINE ROAD TRIP / ONLINE FREE ROAM does, so the game's FINDING SESSION banner asks the player to
     /// confirm with (X). Nothing happens when the game is already in, or already looking for, that lobby type.
+    /// <para>
+    /// T-L5 (OD-204, WORLDS_OFFICIAL §12.5): <paramref name="Move"/> adds a third byte, flags with bit 0 set (<c>{u8 lobbyType, u8 public,
+    /// u8 1}</c>): an accepted invite's move into another world. The hook then starts the matchmaking even when the game is already in
+    /// that lobby type (follow.c skips its fh_already for it), never when the game is connected with another lobby type (a car meet or a
+    /// Road Trip: an event), and not when a start of that type is queued already. Sent only to a hook that reported
+    /// <see cref="CaptureWhat.FollowMove"/>: an older hook refuses a third byte as a malformed frame. Without the flag the frame is the
+    /// OD-151 two bytes, unchanged.
+    /// </para>
     /// </summary>
-    public sealed record FollowHost(byte LobbyType, bool Public) : Frame
+    public sealed record FollowHost(byte LobbyType, bool Public, bool Move = false) : Frame
     {
         public override byte Type => 0x23;
+
+        /// <summary>T-L5: the flags byte's move bit (the only one defined; any other is a protocol error on both sides).</summary>
+        public const byte MoveFlag = 1;
 
         internal static void Validate(byte lobby)
         {
@@ -705,7 +723,9 @@ public abstract record Frame
                 w.U32(unchecked((uint)car.CarKey)); break;
             case FollowHost follow:
                 FollowHost.Validate(follow.LobbyType);
-                w.U8(follow.LobbyType); w.Flag(follow.Public); break;
+                w.U8(follow.LobbyType); w.Flag(follow.Public);
+                if (follow.Move) w.U8(FollowHost.MoveFlag); // T-L5: only with the flag, so OD-151's two bytes stay as they were
+                break;
             case CancelMatchmaking:
                 break;
             case Watch watch:
@@ -823,7 +843,9 @@ public abstract record Frame
             0x20 => new FreeRoamReady(r.U32(), r.U8()),
             0x21 => new Progress(r.U32(), r.U64()),
             0x22 => new Car(unchecked((int)r.U32())),
-            0x23 => new FollowHost(r.U8(), r.Flag("follow-host public")),
+            0x23 => length.Value - 1 == 3
+                ? new FollowHost(r.U8(), r.Flag("follow-host public"), r.U8() == FollowHost.MoveFlag ? true : throw new ProtocolException("Invalid follow-host flags"))
+                : new FollowHost(r.U8(), r.Flag("follow-host public")),
             0x24 => new CancelMatchmaking(),
             0x25 => r.U8() == Watch.Layout ? DecodeWatch(ref r) : throw new ProtocolException("Unknown watch layout"),
             0x26 => DecodeObserved(ref r),

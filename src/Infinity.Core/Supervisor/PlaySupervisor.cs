@@ -909,6 +909,9 @@ public sealed class PlaySupervisor
                             catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException)
                             { _emit(new SupervisorEvent.Note("worlds: private creates off (Capture 12 not sent: " + error.GetType().Name + ")")); }
                         }
+                        // T-L5: the hook takes FollowHost's move flag (an accepted invite moves a game already in online free roam)
+                        if (frame is Frame.Capture { What: CaptureWhat.FollowMove } followMove && endpoint.Greeted && worlds is not null)
+                            worlds.FollowMoveCapable = followMove.Ok;
                         if (frame is Frame.PrivateSession privateSession && endpoint.Greeted)
                         {
                             worlds?.PrivateSessionWritten(privateSession.Scid, privateSession.TemplateName, privateSession.Name);
@@ -1210,8 +1213,9 @@ public sealed class PlaySupervisor
                                         : Overlay.UiPlayerResult.ActionFailed, Overlay.UiPlayerState.Unknown)), stop.Token, always: true);
                                 break;
                             case Overlay.UiIncoming.InviteAnswer answer when worlds?.Inbox is { } answered:
-                                // OD-204 (T-L4): Decline calls the decline route; Accept is T-L5's (logged, the prompt stays answered)
-                                _ = InviteAnswerAsync(answered, overlay, answer.Answer, onlineStop.Token);
+                                // OD-204 (T-L4): Decline calls the decline route; T-L5: Accept joins the invite's private lobby and moves the game
+                                // (paused or suspended: no lobby bridge, so an accept changes nothing)
+                                _ = InviteAnswerAsync(answered, suspended ? null : worlds, overlay, answer.Answer, onlineStop.Token);
                                 break;
                             case Overlay.UiIncoming.InviteAnswer answer:
                                 _emit(new SupervisorEvent.Note($"overlay: invite {(answer.Answer.Accept ? "accepted" : "declined")} with no inbox in this session"));
@@ -1347,13 +1351,21 @@ public sealed class PlaySupervisor
         }
     }
 
-    /// <summary>T-L4: the player's answer to an invite prompt (Decline: the decline route; Accept: T-L5's).</summary>
-    private static async Task InviteAnswerAsync(Matchmaking.InviteInbox inbox, OverlayChannel overlay, Overlay.UiFrame.InviteAnswer answer, CancellationToken cancellation)
+    /// <summary>
+    /// T-L4: the player's answer to an invite prompt (Decline: the decline route). T-L5: Accept goes to the bridge
+    /// (<see cref="Matchmaking.WorldsBridge.AcceptInviteAsync"/>: the join, the proof, FollowHost), and the prompt is withdrawn whatever
+    /// the outcome (an accept that could not be served now comes back later from the inbox).
+    /// </summary>
+    private static async Task InviteAnswerAsync(Matchmaking.InviteInbox inbox, Matchmaking.WorldsBridge? worlds, OverlayChannel overlay,
+        Overlay.UiFrame.InviteAnswer answer, CancellationToken cancellation)
     {
         try
         {
-            if (await inbox.AnswerAsync(answer.InviteId, answer.Accept, cancellation).ConfigureAwait(false) is { } notice && !cancellation.IsCancellationRequested)
-                await overlay.ToastAsync(notice, cancellation).ConfigureAwait(false);
+            var notice = await inbox.AnswerAsync(answer.InviteId, answer.Accept, cancellation,
+                answer.Accept && worlds is not null ? worlds.AcceptInviteAsync : null).ConfigureAwait(false);
+            if (cancellation.IsCancellationRequested) return;
+            if (answer.Accept) await overlay.SendIfAcceptedAsync(Overlay.UiFrame.InvitePrompt.Withdraw(answer.InviteId), cancellation).ConfigureAwait(false);
+            if (notice is not null) await overlay.ToastAsync(notice, cancellation).ConfigureAwait(false);
         }
         catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException)
         {

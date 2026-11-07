@@ -375,7 +375,7 @@ int fi_netobs_session_text(char *out, size_t capacity, long id, const unsigned c
 /* follow.c (OD-151): a seated guest's game starts its own matchmaking for the host's new activity
    (the launcher's FollowHost; the player confirms with (X)). Applied with car meets (free roam on). */
 void fi_follow_apply(unsigned char *game_image);
-void fi_follow_host(unsigned lobby, unsigned is_public);
+void fi_follow_host(unsigned lobby, unsigned is_public, int move);
 /* The launcher's CancelMatchmaking (0x24): it gave up on its seat; the game's own matchmaking
    disconnect is sent on the module's next update (follow.c). */
 void fi_follow_cancel(void);

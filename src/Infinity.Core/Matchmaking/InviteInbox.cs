@@ -44,8 +44,14 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
     private readonly object _lock = new();
     private readonly Dictionary<string, Shown> _shown = new(StringComparer.Ordinal);
 
-    // a prompt this inbox sent: its invite, its local deadline (the clock's), whether the player answered it
-    private sealed record Shown(UiFrame.InvitePrompt Prompt, long Deadline, bool Answered);
+    // a prompt this inbox sent: its invite, its local deadline (the clock's), whether the player answered it; T-L5: the invite's world and
+    // game session (the accept's join), and ReofferAt (the clock's): an accept the launcher could not serve now (the game in an event, another
+    // lobby request in flight) is shown again from then while the server still lists it; 0 none
+    private sealed record Shown(UiFrame.InvitePrompt Prompt, long Deadline, bool Answered, string WorldId = "", string? Activity = null,
+        GameSessionReference? Session = null, long ReofferAt = 0);
+
+    /// <summary>T-L5: how long an accept the launcher could not serve now waits before its prompt shows again (while still pending).</summary>
+    public static readonly TimeSpan ReofferAfter = TimeSpan.FromSeconds(30);
 
     /// <summary>The ids of the prompts pending now, unanswered (tests).</summary>
     public IReadOnlyCollection<string> Pending
@@ -130,8 +136,18 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
             {
                 if (Prompt(invite, serverNow) is not { } prompt) continue;
                 listed.Add(invite.Id);
-                if (_shown.ContainsKey(invite.Id)) continue;
-                _shown[invite.Id] = new Shown(prompt, now + (long)(prompt.ExpiresInSec * (double)_clock.TimestampFrequency), false);
+                if (_shown.TryGetValue(invite.Id, out var known))
+                {
+                    // T-L5: an accept that could not be served then is shown again once its wait is over (with the time it has left)
+                    if (!known.Answered && known.ReofferAt > 0 && known.ReofferAt <= now && known.Deadline > now)
+                    {
+                        _shown[invite.Id] = known with { ReofferAt = 0 };
+                        outgoing.Add(Left(known, now));
+                    }
+                    continue;
+                }
+                _shown[invite.Id] = new Shown(prompt, now + (long)(prompt.ExpiresInSec * (double)_clock.TimestampFrequency), false,
+                    invite.World.Id, invite.World.Activity, invite.Session);
                 outgoing.Add(prompt);
             }
             foreach (var (id, shown) in _shown.ToList())
@@ -155,21 +171,31 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
         List<UiFrame.InvitePrompt> again;
         lock (_lock)
         {
-            again = _shown.Values.Where(s => !s.Answered && s.Deadline > now)
-                .Select(s => s.Prompt with { ExpiresInSec = (ushort)Math.Clamp(Math.Ceiling((s.Deadline - now) / (double)_clock.TimestampFrequency), 1, UiFrame.MaxInviteSeconds) })
-                .ToList();
+            again = _shown.Values.Where(s => !s.Answered && s.Deadline > now && s.ReofferAt <= now).Select(s => Left(s, now)).ToList();
         }
         if (again.Count > 0) _log($"invites: {again.Count} pending prompt(s) sent again (the overlay said hello)");
         foreach (var prompt in again) await send(prompt, cancellation).ConfigureAwait(false);
     }
 
+    // a shown prompt with the seconds its local deadline leaves (at least 1)
+    private UiFrame.InvitePrompt Left(Shown shown, long now) => shown.Prompt with
+    {
+        ExpiresInSec = (ushort)Math.Clamp(Math.Ceiling((shown.Deadline - now) / (double)_clock.TimestampFrequency), 1, UiFrame.MaxInviteSeconds),
+    };
+
     /// <summary>
-    /// The player's answer to a prompt (0x24): Decline calls the decline route; Accept waits for T-L5 (logged; the prompt stays answered).
-    /// Returns one notice to show, or null (nothing to say).
+    /// The player's answer to a prompt (0x24): Decline calls the decline route; Accept (T-L5) hands the invite's world to
+    /// <paramref name="join"/> (the bridge's <see cref="WorldsBridge.AcceptInviteAsync"/>: the join, the proof, FollowHost). An accept it
+    /// could not serve now (<see cref="InviteAcceptOutcome.NotNow"/>) shows its prompt again after <see cref="ReofferAfter"/> while the
+    /// server still lists it; every other outcome leaves it answered. A second answer to the same prompt is ignored. Returns one notice
+    /// to show, or null (nothing to say).
     /// </summary>
-    public async Task<UiFrame.Toast?> AnswerAsync(string inviteId, bool accept, CancellationToken cancellation)
+    public async Task<UiFrame.Toast?> AnswerAsync(string inviteId, bool accept, CancellationToken cancellation,
+        Func<InviteAccept, CancellationToken, Task<InviteAcceptAnswer>>? join = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(inviteId);
+        Shown answered;
+        long now;
         lock (_lock)
         {
             if (!_shown.TryGetValue(inviteId, out var shown) || shown.Answered)
@@ -177,12 +203,39 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                 _log("invites: an answer for no pending prompt; ignored");
                 return null;
             }
-            _shown[inviteId] = shown with { Answered = true };
+            now = _clock.GetTimestamp();
+            _shown[inviteId] = answered = shown with { Answered = true, ReofferAt = 0 };
         }
         if (accept)
         {
-            _log("invites: accepted; joining it is T-L5's (the join, the proof and FollowHost): nothing is sent yet");
-            return null;
+            if (join is null)
+            {
+                _log("invites: accepted with no lobby bridge in this session; nothing is sent");
+                return null;
+            }
+            var left = TimeSpan.FromSeconds((answered.Deadline - now) / (double)_clock.TimestampFrequency);
+            InviteAcceptAnswer result;
+            try
+            {
+                result = await join(new InviteAccept(inviteId, answered.WorldId, answered.Activity, left, answered.Session), cancellation).ConfigureAwait(false);
+            }
+            catch (Exception error) when (!cancellation.IsCancellationRequested && error is ApiException or HttpRequestException
+                or OperationCanceledException or IOException or InvalidOperationException or TimeoutException)
+            {
+                _log($"invites: accept failed ({error.GetType().Name})");
+                return PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.InviteJoinFailed);
+            }
+            if (result.Outcome == InviteAcceptOutcome.NotNow)
+            {
+                lock (_lock)
+                {
+                    if (_shown.TryGetValue(inviteId, out var still) && still.Answered)
+                        _shown[inviteId] = still with { Answered = false, ReofferAt = _clock.GetTimestamp() + (long)(ReofferAfter.TotalSeconds * _clock.TimestampFrequency) };
+                }
+                _log($"invites: accepted, but not now; the prompt shows again in {(int)ReofferAfter.TotalSeconds} s while the invite is pending");
+            }
+            else _log($"invites: accepted ({result.Outcome.ToString().ToLowerInvariant()})");
+            return result.Notice;
         }
         try
         {

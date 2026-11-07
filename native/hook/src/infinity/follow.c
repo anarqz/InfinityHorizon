@@ -21,6 +21,14 @@
    older than FH_PENDING_MS, or one that arrives when the launcher session is no longer live, is
    dropped.
 
+   Moving into an accepted invite's lobby (T-L5, OD-204; FollowHost's move flag, Capture 13). The launcher has already taken the
+   seat in the private lobby; the game must leave its current session by its own matchmaking. fh_already would skip a game already
+   in that lobby type (an invitee in public free roam: HANDOFF 11.8 M2), so a move skips only a queued start of the same type; it
+   starts anyway when the game is connected in online free roam, or in nothing; it never starts when the game is connected with any
+   other lobby type (a Road Trip, 1, or a car meet, 3 or 6: an event the player is in), which is logged and left to the launcher's
+   bound (its seat is let go there). Nothing else changes: the player still confirms with (X), and a stale or closed
+   request is dropped as any other.
+
    Giving up (CancelMatchmaking, 0x24). When the launcher gave up on a lobby ask's seat (it did not
    start playing within 15 s), the same detour, on the module's next Update, sends the game's own
    cancel the way Update itself does (game+0x80905e): the no-data queued send FUN_141903d50 (game+
@@ -84,7 +92,8 @@ typedef void (*FhDeleteFn)(void *block);
 static unsigned char *fh_game;
 static FhUpdateFn fh_update_original;
 static volatile LONG fh_tried;
-/* the asked follow: 0 none, else 0x10000 | public << 8 | lobby type; fh_pending_at its tick */
+/* the asked follow: 0 none, else 0x10000 | move << 17 | public << 8 | lobby type; fh_pending_at its tick */
+#define FH_PENDING_MOVE 0x20000u
 static volatile LONG fh_pending;
 static volatile LONG64 fh_pending_at;
 /* CancelMatchmaking: fh_cancel_ready once the send's and the delete's bytes were as expected;
@@ -229,6 +238,30 @@ static int fh_already(unsigned char *module, unsigned lobby) {
            memory_read(module + FH_LOBBY_OFFSET, &current, 1) && current == lobby;
 }
 
+/* T-L5: a move into an accepted invite's lobby of type `lobby`. 1 when it must not start: a start of `lobby` is queued already
+   (a stale one of another type is freed, as fh_already does), or the game is connected with any lobby type but online free roam
+   (a Road Trip, a car meet: an event, never pulled out of it, whatever the invite's type). Connected in free roam, or in nothing:
+   0, it starts (fh_already's skip of free roam is the case a move exists for). */
+static int fh_move_blocked(unsigned char *module, unsigned lobby) {
+    unsigned char *queued = 0;
+    if (memory_read_pointer(module + FH_QUEUED_OFFSET, (void **)&queued)) {
+        unsigned char queued_lobby = 0;
+        if (memory_read(queued, &queued_lobby, 1) && queued_lobby == lobby) {
+            fh_log_lobby("FOLLOW: an invite's move: already queued (lobby type ", lobby, ").\r\n");
+            return 1;
+        }
+        fh_log_lobby("FOLLOW: an invite's move: a stale queued start (lobby type ", queued_lobby,
+                     fh_queued_free(module, queued) ? ") was dropped.\r\n" : ") stays (the game's delete is not as expected).\r\n");
+    }
+    unsigned connected = (unsigned)fh_connected;
+    if (connected && connected != FH_LOBBY_FREE_ROAM) {
+        fh_log_lobby("FOLLOW: an invite's move is refused: the game is connected with lobby type ", connected,
+                     " (an event); it is not pulled out (the launcher lets the seat go).\r\n");
+        return 1;
+    }
+    return 0;
+}
+
 static void fh_update(void *module, float dt) {
     if (fh_cancel && InterlockedExchange(&fh_cancel, 0)) {
         if (GetTickCount64() - (ULONGLONG)fh_cancel_at > FH_PENDING_MS || !fi_launch_live() || fi_launch_suspended()) {
@@ -253,8 +286,17 @@ static void fh_update(void *module, float dt) {
     LONG pending = fh_pending ? InterlockedExchange(&fh_pending, 0) : 0;
     if (pending) {
         unsigned lobby = (unsigned)pending & 0xffu, is_public = ((unsigned)pending >> 8) & 1u;
+        int move = ((unsigned)pending & FH_PENDING_MOVE) != 0;
         if (GetTickCount64() - (ULONGLONG)fh_pending_at > FH_PENDING_MS || !fi_launch_live() || fi_launch_suspended()) {
-            log_append("FOLLOW: a host change came too late or online is closed; dropped.\r\n");
+            log_append(move ? "FOLLOW: an invite's move came too late or online is closed; dropped.\r\n"
+                            : "FOLLOW: a host change came too late or online is closed; dropped.\r\n");
+        } else if (move) {
+            if (!fh_move_blocked(module, lobby)) {
+                FhStartArgument argument = {(unsigned char)lobby, (unsigned char)is_public, {0, 0}, -1, -1};
+                ((FhStartFn)(uintptr_t)(fh_game + FH_START_RVA))(module, &argument);
+                fh_log_lobby("FOLLOW: an invite's move: matchmaking started for lobby type ", lobby,
+                             " (the player confirms; the game leaves its current session itself).\r\n");
+            }
         } else if (fh_already(module, lobby)) {
             log_append(lobby == FH_LOBBY_ROAD_TRIP ? "FOLLOW: the host is in Online Road Trip; the game is already there.\r\n"
                                                    : "FOLLOW: the host is in Online Free Roam; the game is already there.\r\n");
@@ -336,17 +378,18 @@ void fi_follow_left(void) {
                      "; kept.\r\n");
     }
 }
-/* FollowHost from the launcher (launch.c's reader; lobby 1 or 2, already validated). */
-void fi_follow_host(unsigned lobby, unsigned is_public) {
+/* FollowHost from the launcher (launch.c's reader; lobby 1 or 2, already validated; move: T-L5's flag). */
+void fi_follow_host(unsigned lobby, unsigned is_public, int move) {
     if (lobby != FH_LOBBY_ROAD_TRIP && lobby != FH_LOBBY_FREE_ROAM) {
         return;
     }
     if (!fh_update_original) {
-        log_append("FOLLOW: the host changed activity, but the matchmaking module is not patched here; ignored.\r\n");
+        log_append(move ? "FOLLOW: an invite's move, but the matchmaking module is not patched here; ignored.\r\n"
+                        : "FOLLOW: the host changed activity, but the matchmaking module is not patched here; ignored.\r\n");
         return;
     }
     InterlockedExchange64(&fh_pending_at, (LONG64)GetTickCount64());
-    InterlockedExchange(&fh_pending, (LONG)(0x10000u | (is_public ? 0x100u : 0u) | lobby));
+    InterlockedExchange(&fh_pending, (LONG)(0x10000u | (move ? FH_PENDING_MOVE : 0u) | (is_public ? 0x100u : 0u) | lobby));
 }
 
 /* CancelMatchmaking from the launcher (launch.c's reader; its empty payload already checked). */
