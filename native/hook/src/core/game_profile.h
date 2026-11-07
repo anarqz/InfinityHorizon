@@ -29,10 +29,18 @@ typedef struct {
     const char *what;
 } FiGamePatch;
 
+/* How a watch row logs. */
+enum {
+    FI_WATCH_VALUE = 0,        /* the value (bytes 1 to 4), at each change */
+    FI_WATCH_NONNULL = 1,      /* a pointer (bytes 8): 1 set, 0 null, at each change */
+    FI_WATCH_HEARTBEAT = 2,    /* a counter (bytes 4): 1 while it changed within the last second, 0 when it stopped */
+    FI_WATCH_POINTER_ONCE = 3  /* the pointer at `global` itself, in hex, once it is set (offset and bytes unused) */
+};
+
 /* Read only, for reverse engineering: a pointer at `global`, then `bytes` at `offset` in what it points to. */
 typedef struct {
     const char *label;
-    unsigned global, offset, bytes;
+    unsigned global, offset, bytes, kind;
 } FiGameWatch;
 
 typedef struct {
@@ -63,19 +71,22 @@ static const FiGamePatch fi_fm5_patches[] = {
 
 /* The states the hopper screen decides on (response spec 9). */
 static const FiGameWatch fi_fm5_watches[] = {
-    {"FM5 WATCH party state +48", 0x261d198u, 0x48u, 4},
-    {"FM5 WATCH party requested +4c", 0x261d198u, 0x4cu, 4},
-    {"FM5 WATCH party flag +290", 0x261d198u, 0x290u, 1},
-    {"FM5 WATCH cloud config +11510", 0x261d1a0u, 0x11510u, 4},
-    {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4},
-    {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4},
-    {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4},
+    {"FM5 WATCH party state +48", 0x261d198u, 0x48u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH party requested +4c", 0x261d198u, 0x4cu, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH party flag +290", 0x261d198u, 0x290u, 1, FI_WATCH_VALUE},
+    {"FM5 WATCH cloud config +11510", 0x261d1a0u, 0x11510u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4, FI_WATCH_VALUE},
     /* R8 (lobby spec 12): the game-ready predicate's terms, to verify it on the first boot. F+0x5c, the frame
        timestamp, changes every frame and is not logged here. */
-    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4},
-    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4},
-    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4},
-    {"FM5 WATCH ready F+48", 0x25d0398u, 0x48u, 4},
+    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH ready F+48 (set in a race)", 0x25d0398u, 0x48u, 8, FI_WATCH_NONNULL},
+    /* the predicate's main risk: the frame timestamp stopping on some screen */
+    {"FM5 WATCH ready heartbeat F+5c", 0x25d0398u, 0x5cu, 4, FI_WATCH_HEARTBEAT},
+    {"FM5 WATCH ready F", 0x25d0398u, 0, 0, FI_WATCH_POINTER_ONCE},
 };
 
 static const FiGameProfile fi_game_profiles[] = {
