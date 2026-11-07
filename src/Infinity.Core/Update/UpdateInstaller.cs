@@ -28,9 +28,6 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
         // Accepted from 1.0.12 so a later release may ship them; until 1.0.12 is the floor their texts live in NOTICE,
         // because 1.0.10/1.0.11 updaters refuse any path outside their own list.
         "licenses/Markdig-LICENSE.txt", "licenses/NotoEmoji-LICENSE.txt",
-        // Infinity Worlds next to infinity.exe (DEDICATED_SERVER.md §2.4, CR-L50). Older updaters refuse it, so a
-        // release ships it only once the floor admits a launcher with this list.
-        "worlds.exe", "worlds.exe.sig",
     };
     public const int MaxFiles = 128;
     public const long MaxPackageBytes = 1024L * 1024 * 1024;
