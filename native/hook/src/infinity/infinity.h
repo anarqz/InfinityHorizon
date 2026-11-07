@@ -239,6 +239,11 @@ unsigned fi_launch_private_kind(const wchar_t *method, const wchar_t *url, const
    (Capture{12, 1}): the slot completes locally and InviteFriends (0x29) asks the launcher for its friend picker. 0: forward the
    slot to Azimuth as before (an older launcher, or no private lobbies). */
 int fi_launch_invite_friends(void);
+/* W7b (OD-206, CR-S99 4, lobby spec 11.3-11.4, route 1; freeroam.c): fire the GameSessionReady delegate the game added at
+   IPartyStatics slot 16 with an args object whose slot 6 hands out a MultiplayerSessionReference of exactly this session (sender
+   NULL). Only for a profile with party_session_ready. Returns a session_ready.h FI_SESSION_READY_* result; `hresult` gets the
+   failing HRESULT (S_OK otherwise). Every step is logged, without a XUID or a gamertag. */
+unsigned fi_party_session_ready(const char *scid, const char *template_name, const char *name, unsigned *hresult);
 /* W-10 (freeroam.c): the Party calls still watched (async, Started), logged with `why`; and
    follow.c's game-thread check after a CancelMatchmaking. */
 void azimuth_freeroam_pending_log(const char *why);
@@ -441,6 +446,9 @@ void azimuth_update_offer(const char *latest, const char *release);
 
 /* net.c: an HSTRING made by Azimuth's WindowsCreateString. */
 HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
+/* net.c: a WinRT activation factory from Azimuth's providers, as the game's own activation gets it (W7b: the
+   MultiplayerSessionReference factory). Not filtered, not traced. */
+HRESULT azimuth_net_activate(const wchar_t *name, const void *iid, void **out);
 /* freeroam.c: free roam online ([FreeRoam] Enabled=1). The filter may wrap a WinRT
    class's statics that Azimuth answered; it returns 1 if it did. */
 void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable);

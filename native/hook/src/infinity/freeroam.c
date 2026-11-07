@@ -35,6 +35,7 @@
 
    [hook] FreeRoam=0 turns all of it off (on by default since fh2online.46). */
 #include "infinity.h"
+#include "session_ready.h"
 #include "../core/logging.h"
 #include "../core/support.h"
 
@@ -1791,6 +1792,285 @@ static HRESULT STDMETHODCALLTYPE fr_party_local_users(FrWrap *self, uintptr_t a,
     return result;
 }
 
+/* ------------------------------------------------------ GameSessionReady */
+/* W7b (OD-206, CR-S99 4, lobby spec 11.3-11.4, route 1; FM5 only, by the profile's party_session_ready): the game adds its
+   GameSessionReady delegate at IPartyStatics slot 16 (add_, handler and &token; FM5's caller 0x140be6550). The add_ still goes
+   to Azimuth (for its token); the hook keeps one reference to the handler. On the launcher's SessionReady (launch.c, after the
+   launcher's join was granted) fi_party_session_ready invokes it: delegate slot 3, Invoke(delegate, sender NULL, args), args a
+   hook-owned IInspectable whose slot 6 get_GameSession hands out an AddRef'd MultiplayerSessionReference of the host's session.
+   The game (0x140bd64e0) reads the ref from args under PartyManager's lock and shows its own Join popup; a person accepts it.
+   INFERRED (spec 11.4 item 5, logged on every call): a raw args pointer without a QueryInterface first, a NULL sender, a call
+   from a thread that is not the game's, and slot 17 as the matching remove_ (add_/remove_ pairs 16/17 to 24/25). */
+static const GUID fr_iid_session_ref_factory = {0x9cf4368e, 0x8e57, 0x437d, {0xbe, 0x98, 0xbe, 0x6b, 0x5c, 0xdc, 0x54, 0x22}};
+static SRWLOCK fr_ready_lock = SRWLOCK_INIT;
+static FrCom *fr_ready_delegate;      /* one reference of ours, or null */
+static unsigned long long fr_ready_token; /* the token Azimuth's add_ wrote, 0 when none */
+/* W-13: no COM call under fr_ready_lock, so a SessionReady takes the kept reference out (borrowed) and puts it back after; a
+   remove_ of its token meanwhile marks it dropped, and an add_ meanwhile keeps the newer one. */
+static int fr_ready_borrowed, fr_ready_dropped;
+
+static void fr_ready_line(const char *text) {
+    FR_LINE(line);
+    fr_text(&line, "FREEROAM: GameSessionReady (W7b): ");
+    fr_text(&line, text);
+    fr_end(&line);
+}
+
+static HRESULT STDMETHODCALLTYPE fr_party_add_session_ready(FrWrap *self, uintptr_t a, uintptr_t b, uintptr_t c,
+                                                            uintptr_t d, uintptr_t e, uintptr_t f) {
+    if (!fi_game_profile()->party_session_ready) return fr_observe16(self, a, b, c, d, e, f); /* FH2: observed, as before */
+    FrCall6 call = (FrCall6)((void *const *)(const void *)self->inner->lpVtbl)[16];
+    HRESULT result = call(self->inner, a, b, c, d, e, f);
+    fr_observed(self, 16, fr_obs_next(self->observe, 16), result, "forwarded (W7b: GameSessionReady add_, its delegate is kept)",
+                a, b, c, d, e, f);
+    FrCom *handler = (FrCom *)a;
+    if (!fr_obs_com(handler)) {
+        fr_ready_line("add_ passed no COM handler; nothing kept.");
+        return result;
+    }
+    unsigned long long token = 0;
+    if (SUCCEEDED(result) && b) memory_read((const void *)b, &token, sizeof(token));
+    handler->lpVtbl->AddRef(handler);
+    AcquireSRWLockExclusive(&fr_ready_lock);
+    FrCom *old = fr_ready_delegate;
+    fr_ready_delegate = handler;
+    fr_ready_token = token;
+    ReleaseSRWLockExclusive(&fr_ready_lock);
+    if (old) old->lpVtbl->Release(old);
+    FR_LINE(line);
+    fr_text(&line, "FREEROAM: GameSessionReady (W7b): delegate kept from IPartyStatics.16 (Azimuth's add_ 0x");
+    fr_hex(&line, (unsigned)result, 8);
+    fr_text(&line, token ? ", token set" : ", no token");
+    fr_text(&line, old ? "; it replaces the one kept before)." : ").");
+    fr_end(&line);
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE fr_party_remove_session_ready(FrWrap *self, uintptr_t a, uintptr_t b, uintptr_t c,
+                                                               uintptr_t d, uintptr_t e, uintptr_t f) {
+    if (!fi_game_profile()->party_session_ready) return fr_observe17(self, a, b, c, d, e, f); /* FH2: observed, as before */
+    FrCall6 call = (FrCall6)((void *const *)(const void *)self->inner->lpVtbl)[17];
+    HRESULT result = call(self->inner, a, b, c, d, e, f);
+    fr_observed(self, 17, fr_obs_next(self->observe, 17), result, "forwarded (W7b: GameSessionReady remove_, INFERRED)",
+                a, b, c, d, e, f);
+    AcquireSRWLockExclusive(&fr_ready_lock);
+    FrCom *old = fr_ready_delegate && (unsigned long long)a == fr_ready_token ? fr_ready_delegate : 0;
+    if (old) fr_ready_delegate = 0, fr_ready_token = 0;
+    int dropped = !old && fr_ready_borrowed && (unsigned long long)a == fr_ready_token;
+    if (dropped) fr_ready_dropped = 1, fr_ready_token = 0;
+    ReleaseSRWLockExclusive(&fr_ready_lock);
+    if (old) old->lpVtbl->Release(old);
+    fr_ready_line(old || dropped ? "the kept delegate's token was removed (IPartyStatics.17); it is no longer kept."
+                                 : "IPartyStatics.17 named another token; the kept delegate stays.");
+    return result;
+}
+
+/* The args object (GameSessionReadyEventArgs as FUN_14014cda0 reads it, INFERRED): IInspectable, then slot 6 get_GameSession. */
+typedef struct {
+    void *const *lpVtbl;
+    volatile LONG references;
+    FrCom *reference;
+} FrReadyArgs;
+static volatile LONG fr_ready_queries;
+
+static void fr_guid_text(FrLine *line, const GUID *guid) {
+    fr_hex(line, guid->Data1, 8);
+    fr_text(line, "-");
+    fr_hex(line, guid->Data2, 4);
+    fr_text(line, "-");
+    fr_hex(line, guid->Data3, 4);
+    fr_text(line, "-");
+    for (unsigned i = 0; i < 8; ++i) {
+        if (i == 2) fr_text(line, "-");
+        fr_hex(line, guid->Data4[i], 2);
+    }
+}
+
+static HRESULT STDMETHODCALLTYPE fr_ready_args_query(FrReadyArgs *self, REFIID iid, void **out) {
+    if (!out) return E_POINTER;
+    /* generous (spec 11.4 item 5): every interface is this object; each asked IID is logged, the first 16 */
+    if (iid && InterlockedIncrement(&fr_ready_queries) <= 16) {
+        FR_LINE(line);
+        fr_text(&line, "FREEROAM: GameSessionReady (W7b): args QueryInterface {");
+        fr_guid_text(&line, iid);
+        fr_text(&line, "} answered with the args object.");
+        fr_end(&line);
+    }
+    InterlockedIncrement(&self->references);
+    *out = self;
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE fr_ready_args_add_ref(FrReadyArgs *self) { return (ULONG)InterlockedIncrement(&self->references); }
+static ULONG STDMETHODCALLTYPE fr_ready_args_release(FrReadyArgs *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) {
+        if (self->reference) self->reference->lpVtbl->Release(self->reference);
+        fr_free(self);
+    }
+    return (ULONG)left;
+}
+static HRESULT STDMETHODCALLTYPE fr_ready_args_session(FrReadyArgs *self, FrCom **out) {
+    if (!out) return E_POINTER;
+    *out = self->reference;
+    if (self->reference) self->reference->lpVtbl->AddRef(self->reference);
+    fr_ready_line("the game read args slot 6 (get_GameSession): the session reference was handed out.");
+    return self->reference ? S_OK : E_FAIL;
+}
+static HRESULT STDMETHODCALLTYPE fr_ready_args_other(FrReadyArgs *self) {
+    (void)self;
+    fr_ready_line("the game called an args slot past 6 (not in the spec): E_NOTIMPL.");
+    return FR_E_NOTIMPL;
+}
+static void *const fr_ready_args_vtable[12] = {
+    (void *)(uintptr_t)fr_ready_args_query,   (void *)(uintptr_t)fr_ready_args_add_ref,
+    (void *)(uintptr_t)fr_ready_args_release, (void *)(uintptr_t)fr_iids,
+    (void *)(uintptr_t)fr_class_name,         (void *)(uintptr_t)fr_trust,
+    (void *)(uintptr_t)fr_ready_args_session, (void *)(uintptr_t)fr_ready_args_other,
+    (void *)(uintptr_t)fr_ready_args_other,   (void *)(uintptr_t)fr_ready_args_other,
+    (void *)(uintptr_t)fr_ready_args_other,   (void *)(uintptr_t)fr_ready_args_other};
+
+static void fr_ascii_wide(const char *text, wchar_t *out, size_t capacity) {
+    size_t n = 0;
+    while (text && text[n] && n + 1 < capacity) {
+        out[n] = (wchar_t)(unsigned char)text[n];
+        ++n;
+    }
+    out[n] = 0;
+}
+
+/* The made reference's three HSTRING getters (slots 6 to 8, INFERRED: the class has three string properties) against what was
+   passed, for the log: which slot answers which part. */
+static void fr_ready_reference_log(FrCom *reference, const wchar_t parts[3][FI_SESSION_READY_PART + 1]) {
+    static const char *const names[3] = {"session name", "scid", "template"};
+    FR_LINE(line);
+    fr_text(&line, "FREEROAM: GameSessionReady (W7b): the reference reads back");
+    for (unsigned slot = 6; slot <= 8; ++slot) {
+        typedef HRESULT(STDMETHODCALLTYPE * GetFn)(FrCom *, void **);
+        void *text = 0;
+        wchar_t got[FI_SESSION_READY_PART + 1];
+        HRESULT result = ((GetFn)((void *const *)(const void *)reference->lpVtbl)[slot])(reference, &text);
+        size_t n = SUCCEEDED(result) ? fr_hstring(text, got, ARRAY_COUNT(got)) : 0;
+        fr_text(&line, slot == 6 ? ": slot " : ", slot ");
+        fr_number(&line, slot);
+        fr_text(&line, " ");
+        const char *which = 0;
+        for (unsigned i = 0; n && i < 3 && !which; ++i) {
+            if (fr_wide_equal(got, parts[i])) which = names[i];
+        }
+        if (FAILED(result)) {
+            fr_text(&line, "0x");
+            fr_hex(&line, (unsigned)result, 8);
+        } else {
+            fr_text(&line, which ? which : n ? "another text" : "empty");
+        }
+    }
+    fr_text(&line, ".");
+    fr_end(&line);
+}
+
+static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *template_name, const char *name, unsigned *hresult);
+
+unsigned fi_party_session_ready(const char *scid, const char *template_name, const char *name, unsigned *hresult) {
+    if (hresult) *hresult = S_OK;
+    FR_LINE(start);
+    fr_text(&start, "FREEROAM: GameSessionReady (W7b): the launcher's SessionReady for session ");
+    fr_text(&start, name);
+    fr_text(&start, " (template ");
+    fr_text(&start, template_name);
+    fr_text(&start, "), on thread ");
+    fr_number(&start, GetCurrentThreadId());
+    fr_text(&start, " (not the game's: any thread is INFERRED).");
+    fr_end(&start);
+    if (!fi_game_profile()->party_session_ready) {
+        fr_ready_line("this game does not take it (no party_session_ready); nothing invoked.");
+        return FI_SESSION_READY_NO_DELEGATE;
+    }
+    AcquireSRWLockExclusive(&fr_ready_lock);
+    FrCom *delegate = fr_ready_borrowed ? 0 : fr_ready_delegate; /* launch.c fires one at a time */
+    if (delegate) fr_ready_delegate = 0, fr_ready_borrowed = 1, fr_ready_dropped = 0;
+    ReleaseSRWLockExclusive(&fr_ready_lock);
+    if (!delegate) {
+        fr_ready_line("no delegate is kept (the game never added one at IPartyStatics.16); nothing invoked.");
+        return FI_SESSION_READY_NO_DELEGATE;
+    }
+    unsigned outcome = fr_ready_fire(delegate, scid, template_name, name, hresult);
+    AcquireSRWLockExclusive(&fr_ready_lock);
+    int keep = !fr_ready_dropped && !fr_ready_delegate; /* not removed, and no newer add_ meanwhile */
+    if (keep) fr_ready_delegate = delegate;
+    fr_ready_borrowed = fr_ready_dropped = 0;
+    ReleaseSRWLockExclusive(&fr_ready_lock);
+    if (!keep) {
+        delegate->lpVtbl->Release(delegate);
+        fr_ready_line("the delegate was removed or replaced while it was fired; the older one is let go.");
+    }
+    return outcome;
+}
+
+/* fi_party_session_ready's work on the borrowed delegate (its reference stays the caller's). */
+static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *template_name, const char *name, unsigned *hresult) {
+    /* the reference: factory 9cf4368e slot 6 (+0x30), Create(sessionName, serviceConfigurationId, sessionTemplateName, &out).
+       The order is the XDK's constructor, INFERRED: FM5's wrapper 0x140be6d50 passes its three arguments through in order, and
+       its callers (0x140bd9de0, 0x140bda670, 0x140bdbe09) pass strings at +0x30, +0x10, +0x50 of an object whose roles were not
+       read. The read-back below logs which getter answers which part. */
+    wchar_t parts[3][FI_SESSION_READY_PART + 1];
+    fr_ascii_wide(name, parts[0], ARRAY_COUNT(parts[0]));
+    fr_ascii_wide(scid, parts[1], ARRAY_COUNT(parts[1]));
+    fr_ascii_wide(template_name, parts[2], ARRAY_COUNT(parts[2]));
+    void *texts[3] = {0, 0, 0}; /* Azimuth's HSTRINGs; the hook has no WindowsDeleteString, so these few bytes are not freed */
+    HRESULT result = S_OK;
+    for (unsigned i = 0; i < 3 && SUCCEEDED(result); ++i) result = azimuth_net_make_hstring(parts[i], &texts[i]);
+    FrCom *factory = 0, *reference = 0;
+    if (SUCCEEDED(result)) {
+        result = azimuth_net_activate(L"Windows.Xbox.Multiplayer.MultiplayerSessionReference", &fr_iid_session_ref_factory,
+                                      (void **)&factory);
+        if (SUCCEEDED(result) && !factory) result = E_NOINTERFACE;
+    }
+    if (SUCCEEDED(result)) {
+        typedef HRESULT(STDMETHODCALLTYPE * CreateFn)(FrCom *, void *, void *, void *, FrCom **);
+        result = ((CreateFn)((void *const *)(const void *)factory->lpVtbl)[6])(factory, texts[0], texts[1], texts[2], &reference);
+        if (SUCCEEDED(result) && !reference) result = E_POINTER;
+    }
+    if (factory) factory->lpVtbl->Release(factory);
+    if (FAILED(result)) {
+        FR_LINE(line);
+        fr_text(&line, "FREEROAM: GameSessionReady (W7b): no MultiplayerSessionReference (0x");
+        fr_hex(&line, (unsigned)result, 8);
+        fr_text(&line, "); nothing invoked.");
+        fr_end(&line);
+        if (hresult) *hresult = (unsigned)result;
+        return FI_SESSION_READY_NO_REFERENCE;
+    }
+    fr_ready_reference_log(reference, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
+    FrReadyArgs *args = fr_alloc(sizeof(*args));
+    if (!args) {
+        reference->lpVtbl->Release(reference);
+        if (hresult) *hresult = (unsigned)E_OUTOFMEMORY;
+        return FI_SESSION_READY_NO_REFERENCE;
+    }
+    args->lpVtbl = fr_ready_args_vtable;
+    args->references = 1;
+    args->reference = reference; /* takes the factory's reference */
+    FR_LINE(call);
+    fr_text(&call, "FREEROAM: GameSessionReady (W7b): Invoke(delegate, sender NULL, args 0x");
+    fr_hex(&call, (unsigned long long)(uintptr_t)args, 16);
+    fr_text(&call, ") at delegate slot 3, raw args pointer without QueryInterface (both INFERRED).");
+    fr_end(&call);
+    typedef HRESULT(STDMETHODCALLTYPE * InvokeFn)(FrCom *, void *, void *);
+    result = ((InvokeFn)((void *const *)(const void *)delegate->lpVtbl)[3])(delegate, 0, args);
+    FR_LINE(done);
+    fr_text(&done, "FREEROAM: GameSessionReady (W7b): Invoke returned 0x");
+    fr_hex(&done, (unsigned)result, 8);
+    fr_text(&done, SUCCEEDED(result) ? "; the game shows its own Join popup if its checks pass (lobby spec 11.3 steps 2-8)."
+                                     : "; the game refused it.");
+    fr_end(&done);
+    fr_ready_args_release(args);
+    if (FAILED(result)) {
+        if (hresult) *hresult = (unsigned)result;
+        return FI_SESSION_READY_FAILED;
+    }
+    return FI_SESSION_READY_INVOKED;
+}
+
 /* W-10 Q4: what is still pending when the launcher releases the game's matchmaking (a world closed
    or a seat left before the game played): the watched async Party/SystemUI outs, by interface and
    slot, without touching them. */
@@ -1844,6 +2124,9 @@ static void fr_build_vtables(void) {
     fr_vtable_observed(fr_party_statics_vtable);
     fr_party_statics_vtable[6] = (void *)(uintptr_t)fr_party_register6;
     fr_party_statics_vtable[7] = (void *)(uintptr_t)fr_party_register7;
+    /* W7b: GameSessionReady add_/remove_; each is fr_observe16/17 unless the selected game has party_session_ready */
+    fr_party_statics_vtable[16] = (void *)(uintptr_t)fr_party_add_session_ready;
+    fr_party_statics_vtable[17] = (void *)(uintptr_t)fr_party_remove_session_ready;
     fr_vtable_observed(fr_observed_vtable);
     fr_vtable_observed(fr_party_1594_vtable);
     fr_party_1594_vtable[6] = (void *)(uintptr_t)fr_party_local_users;

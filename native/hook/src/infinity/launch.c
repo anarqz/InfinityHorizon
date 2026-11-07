@@ -20,6 +20,7 @@
 #include "infinity.h"
 #include "sign.h"
 #include "overlay_host.h"
+#include "session_ready.h"
 #include "../core/logging.h"
 #include "../core/support.h"
 #include "../core/sha256.h"
@@ -70,6 +71,8 @@ enum {
     FRAME_PLAYER_PARTS = 0x27,    /* hook -> launcher, NR-6: another player's model and part rows (watch.c) */
     FRAME_PRIVATE_SESSION = 0x28, /* hook -> launcher, T-L6: {str scid, str templateName, str name} of a held private create */
     FRAME_INVITE_FRIENDS = 0x29,  /* hook -> launcher, T-L4: {} the game's Invite friends (SystemUI slot 9), completed here */
+    FRAME_SESSION_READY = 0x2a,   /* launcher -> hook, W7b: {u32 nonce, str scid, str templateName, str name} (session_ready.h) */
+    FRAME_SESSION_READY_RESULT = 0x2b, /* hook -> launcher, W7b: {u32 nonce, u8 result 0-3, u32 HRESULT} */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -104,6 +107,11 @@ enum {
    ignores an unknown Capture. */
 #define LAUNCH_CAPTURE_FOLLOW_MOVE 13u
 #define LAUNCH_FOLLOW_MOVE 1u
+/* W7b (OD-206, CR-S99 4, lobby spec 11.3-11.4, route 1): this hook takes SessionReady (0x2a) and answers SessionReadyResult
+   (0x2b): an accepted invite's session, fired as the game's Party GameSessionReady (freeroam.c). Sent once with ok=1 at every
+   handshake (hook -> launcher only), for a profile with party_session_ready; a launcher sends SessionReady only after it, and an
+   older launcher ignores an unknown Capture. */
+#define LAUNCH_CAPTURE_SESSION_READY 14u
 /* FreeRoamNeed kinds 3 and 4 (T-L6): a private free roam or a private Road Trip created in the game's own menu. */
 #define LAUNCH_KIND_PRIVATE_FREE_ROAM 3u
 #define LAUNCH_KIND_PRIVATE_ROAD_TRIP 4u
@@ -1110,8 +1118,8 @@ typedef struct {
         lower_name[LAUNCH_SESSION_TEXT + 1];
 } LaunchSessionRef;
 
-static unsigned launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
-                                    LaunchSessionRef *ref) {
+/* The URL part alone: a PUT to the session itself (no sub-path), its parts into `ref`. */
+static int launch_session_put(const wchar_t *method, const wchar_t *url, LaunchSessionRef *ref) {
     static const wchar_t host[] = L"sessiondirectory.xboxlive.com";
     if (!method || !url || !launch_wide_starts(method, L"put") || method[3]) return 0;
     const wchar_t *at = url;
@@ -1134,6 +1142,13 @@ static unsigned launch_private_kind(const wchar_t *method, const wchar_t *url, c
     if (!launch_session_segment(&at, ref->name, 0) || (*at && *at != L'?' && *at != L'#')) return 0;
     if (!launch_session_segment(&name_at, lower, 1)) return 0;
     memory_copy(ref->lower_name, lower, sizeof(lower));
+    return 1;
+}
+
+static unsigned launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
+                                    LaunchSessionRef *ref) {
+    if (!launch_session_put(method, url, ref)) return 0;
+    const char *lower = ref->lower_name;
     static const char server_made[] = "fh2inf-"; /* a server-made session (group, invitation, move) */
     size_t prefix = 0;
     while (prefix < sizeof(server_made) - 1 && lower[prefix] == server_made[prefix]) ++prefix;
@@ -1172,9 +1187,104 @@ static int launch_queue_private_session(const LaunchSessionRef *ref) {
     return n && launch_queue(frame, n);
 }
 
+/* --------------------------------------------------------- session ready */
+/* W7b (OD-206, CR-S99 2 item 4 and 4, lobby spec 11.3-11.4, route 1). The launcher's SessionReady names the host's private session
+   after its POST /mm/v1/join {worldId} was granted (the game GETs the session at once, 0x140be4ee0, so the join comes first). A
+   worker thread fires the game's kept GameSessionReady (freeroam.c fi_party_session_ready) and queues SessionReadyResult; the
+   reader loop never waits on the game. The session's name is kept here: the joiner's own writes of that session (its member PUT,
+   CR-S96 "added on first read or write") are another player's session, never a private create, and each is logged (OPEN, lobby
+   spec 11.4: must it clear "reserved" or carry a member index?). The body itself is in infinity-network.jsonl (net_capture). */
+static char launch_join_session[LAUNCH_SESSION_TEXT + 1]; /* lower case, under launch_private_lock */
+
+/* One SessionReady at a time (the launcher accepts one invite at a time): its parsed frame, owned by the worker while busy. */
+static FiSessionReadyRef launch_ready_job;
+static volatile LONG launch_ready_busy;
+
+static void launch_session_ready_answer(unsigned nonce, unsigned result, unsigned hresult) {
+    unsigned char payload[9];
+    fi_session_ready_result(payload, nonce, result, hresult);
+    int queued = launch_queue_frame(FRAME_SESSION_READY_RESULT, payload, sizeof(payload));
+    launch_log(queued ? "SessionReady: answered the launcher (SessionReadyResult, result "
+                      : "SessionReady: SessionReadyResult could not be queued (result ",
+               1, result, ").");
+}
+
+static DWORD WINAPI launch_session_ready_thread(void *parameter) {
+    (void)parameter;
+    unsigned hresult = 0;
+    unsigned result = fi_party_session_ready(launch_ready_job.scid, launch_ready_job.template_name, launch_ready_job.name, &hresult);
+    launch_session_ready_answer(launch_ready_job.nonce, result, hresult);
+    InterlockedExchange(&launch_ready_busy, 0);
+    return 0;
+}
+
+/* SessionReady from the reader loop: 1 handled, 0 a frame that does not parse (a protocol error). */
+static int launch_session_ready(const unsigned char *payload, size_t size) {
+    FiSessionReadyRef ref;
+    if (!fi_session_ready_parse(payload, size, &ref)) {
+        launch_log("REFUSED: a SessionReady frame that does not parse.", 0, 0, "");
+        return 0;
+    }
+    if (fi_launch_suspended()) return 1;
+    if (InterlockedCompareExchange(&launch_ready_busy, 1, 0)) {
+        launch_log("SessionReady: another one is still being fired; answered failed, nonce ", 1, ref.nonce, ".");
+        launch_session_ready_answer(ref.nonce, FI_SESSION_READY_FAILED, (unsigned)E_PENDING);
+        return 1;
+    }
+    memory_copy(&launch_ready_job, &ref, sizeof(ref));
+    char lower[LAUNCH_SESSION_TEXT + 1];
+    size_t n = 0;
+    for (; ref.name[n]; ++n) lower[n] = (char)launch_lower((wchar_t)(unsigned char)ref.name[n]);
+    lower[n] = 0;
+    AcquireSRWLockExclusive(&launch_private_lock);
+    memory_copy(launch_join_session, lower, n + 1);
+    ReleaseSRWLockExclusive(&launch_private_lock);
+    launch_log("SessionReady: an accepted invite's session (the launcher's join was granted first); firing the game's "
+               "GameSessionReady (W7b, route 1), nonce ", 1, ref.nonce, ".");
+    HANDLE thread = CreateThread(0, 0, launch_session_ready_thread, 0, 0, 0);
+    if (!thread) {
+        launch_log("SessionReady: no thread to fire it on (error ", 1, GetLastError(), "); answered failed.");
+        launch_session_ready_answer(ref.nonce, FI_SESSION_READY_FAILED, (unsigned)E_FAIL);
+        InterlockedExchange(&launch_ready_busy, 0);
+        return 1;
+    }
+    CloseHandle(thread);
+    return 1;
+}
+
+/* A write of the session SessionReady named (1: log it and forward it as it is). Never logs a XUID or a gamertag. */
+static int launch_join_write(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size) {
+    LaunchSessionRef ref;
+    if (!launch_join_session[0] || !launch_session_put(method, url, &ref)) return 0; /* no SessionReady yet (always for FH2) */
+    AcquireSRWLockShared(&launch_private_lock);
+    int ours = launch_join_session[0] && text_equal_ignore_case(launch_join_session, ref.lower_name);
+    ReleaseSRWLockShared(&launch_private_lock);
+    if (!ours) return 0;
+    char line[360];
+    line[0] = 0;
+    launch_text_add(line, sizeof(line), "JOIN SESSION: the game writes to the host's session ");
+    launch_text_add(line, sizeof(line), ref.name);
+    launch_text_add(line, sizeof(line), " (PUT, body ");
+    launch_number(line, sizeof(line), size);
+    launch_text_add(line, sizeof(line), " bytes; \"members\" ");
+    launch_text_add(line, sizeof(line), launch_body_member(body, size, "members") ? "yes" : "no");
+    launch_text_add(line, sizeof(line), ", \"me\" ");
+    launch_text_add(line, sizeof(line), launch_body_member(body, size, "me") ? "yes" : "no");
+    launch_text_add(line, sizeof(line), ", \"reserved\" ");
+    launch_text_add(line, sizeof(line), launch_body_member(body, size, "reserved") ? "yes" : "no");
+    launch_text_add(line, sizeof(line), ", \"index\" ");
+    launch_text_add(line, sizeof(line), launch_body_member(body, size, "index") ? "yes" : "no");
+    launch_text_add(line, sizeof(line), ", \"memberId\" ");
+    launch_text_add(line, sizeof(line), launch_body_member(body, size, "memberId") ? "yes" : "no");
+    launch_text_add(line, sizeof(line), "); forwarded (W7b; body in infinity-network.jsonl).");
+    launch_log(line, 0, 0, "");
+    return 1;
+}
+
 int fi_launch_private_create(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size,
                              volatile LONG *aborted) {
     if (!fi_launch_protocol()) return 0;
+    if (launch_join_write(method, url, body, size)) return 0; /* W7b: the invited player's write of the host's session */
     LaunchSessionRef ref;
     unsigned kind = launch_private_kind(method, url, body, size, &ref);
     if (!kind) return 0;
@@ -1903,6 +2013,8 @@ static int launch_go_online(const LaunchTicket *t) {
         fi_launch_capture(LAUNCH_CAPTURE_WATCH_PER_CAR, 1); /* NR-5: the per-car speed floor, Observed layout 2 */
         fi_launch_capture(LAUNCH_CAPTURE_FOLLOW_MOVE, 1);    /* T-L5: FollowHost's move flag */
     }
+    /* W7b: an invite by Party GameSessionReady (FM5's route 1) */
+    if (fi_game_profile()->party_session_ready) fi_launch_capture(LAUNCH_CAPTURE_SESSION_READY, 1);
     return 1;
 }
 
@@ -2201,6 +2313,9 @@ static int launch_session_frame(void) {
                    0, 0, "");
         return 1;
     }
+    case FRAME_SESSION_READY:
+        /* W7b: only a launcher that read this hook's Capture 14 sends it; a hook without party_session_ready answers no delegate */
+        return launch_session_ready(r.at, r.left);
     case FRAME_WATCH:
         /* AC-2: the Hardcore world's rules (or the clear); a malformed one is a protocol error */
         if (fi_launch_suspended()) return 1;
