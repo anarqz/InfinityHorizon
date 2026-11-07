@@ -30,7 +30,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     control::proto::{self, CmdError, CmdResult},
     core::{
-        Profile, events,
+        events,
         fields::{Obj, parse_xuid},
         game::{Admit, Game, GameCtx, GameEvent, GameWorld, Notice, OpenInfo, Send},
         rng::Rng,
@@ -190,11 +190,9 @@ impl Default for Voice {
 pub struct Watch {
     /// MATCHMAKING_API §3.9 `WatchRules`, verbatim.
     pub rules: Value,
-    /// What the engines measure against (`PeerWatchRules.From(rules, forceSpeed)`).
+    /// What the engines measure against (`PeerWatchRules.From(rules, false)`).
     pub engine_rules: WatchRules,
-    pub self_xuid: Option<u64>,
     pub parts: bool,
-    pub force_speed: bool,
 }
 
 fn xuid_list(o: Obj, key: &str, max: usize) -> Result<Vec<u64>, CmdError> {
@@ -221,36 +219,29 @@ pub fn parse_voice(o: Obj) -> Result<Voice, CmdError> {
     Ok(Voice { mode, lobby_muted })
 }
 
-/// `world.watch` (and `world.open.watch`); `Ok(None)` is `rules: null` (stop).
-pub fn parse_watch(o: Obj, profile: Profile, is_player: bool) -> Result<Option<Watch>, CmdError> {
+/// `world.watch` (and `world.open.watch`); `Ok(None)` is `rules: null` (stop). An official world
+/// has no host's own game: `self` is refused, and so is `forceSpeed: true`.
+pub fn parse_watch(o: Obj) -> Result<Option<Watch>, CmdError> {
     let rules = match o.map.get("rules") {
         Some(Value::Null) => None,
         Some(v @ Value::Object(_)) => Some(v.clone()),
         _ => return Err(o.bad("rules")),
     };
-    let self_xuid = if o.has("self") {
-        if !is_player {
-            return Err(o.bad("self"));
-        }
-        Some(o.xuid("self")?)
-    } else {
-        None
-    };
+    if o.has("self") {
+        return Err(o.bad("self"));
+    }
     let parts = o.bool("parts")?;
-    let force_speed = o.opt_bool("forceSpeed", false)?;
-    if force_speed && profile == Profile::Public {
+    if o.opt_bool("forceSpeed", false)? {
         return Err(o.bad("forceSpeed"));
     }
     let Some(rules) = rules else {
         return Ok(None);
     };
-    let engine_rules = watch_rules(&rules, force_speed).ok_or_else(|| o.bad("rules"))?;
+    let engine_rules = watch_rules(&rules, false).ok_or_else(|| o.bad("rules"))?;
     Ok(Some(Watch {
         rules,
         engine_rules,
-        self_xuid,
         parts,
-        force_speed,
     }))
 }
 
@@ -321,41 +312,33 @@ impl Game for Fh2 {
             Voice::default()
         };
         let watch = if o.has("watch") {
-            parse_watch(
-                Obj::new(o.obj("watch")?, "watch"),
-                info.profile,
-                info.is_player,
-            )?
+            parse_watch(Obj::new(o.obj("watch")?, "watch"))?
         } else {
             None
         };
-        // OD-186 item 4: one activity per public world; refused in private
-        let activity = match (info.profile, o.has("activity")) {
-            (Profile::Private, true) => return Err(o.bad("activity")),
-            (Profile::Private, false) => None,
-            (Profile::Public, _) => Some(match o.str("activity")? {
-                "freeroam" => Activity::Lobby(EngineKind::FreeRoam),
-                "roadtrip" => Activity::Lobby(EngineKind::RoadTrip),
-                // OD-190: without a location, the official car meet lobby (both locations and
-                // the free roam its invitations land in)
-                "carmeet" if !o.has("carMeetLobby") => Activity::CarMeet,
-                "carmeet" => match o.int("carMeetLobby", 3, 6)? {
-                    3 => Activity::Lobby(EngineKind::CarMeet3),
-                    6 => Activity::Lobby(EngineKind::CarMeet6),
-                    _ => return Err(o.bad("carMeetLobby")),
-                },
-                _ => return Err(o.bad("activity")),
-            }),
+        // OD-186 item 4: one activity per world
+        let activity = match o.str("activity")? {
+            "freeroam" => Activity::Lobby(EngineKind::FreeRoam),
+            "roadtrip" => Activity::Lobby(EngineKind::RoadTrip),
+            // OD-190: without a location, the official car meet lobby (both locations and the
+            // free roam its invitations land in)
+            "carmeet" if !o.has("carMeetLobby") => Activity::CarMeet,
+            "carmeet" => match o.int("carMeetLobby", 3, 6)? {
+                3 => Activity::Lobby(EngineKind::CarMeet3),
+                6 => Activity::Lobby(EngineKind::CarMeet6),
+                _ => return Err(o.bad("carMeetLobby")),
+            },
+            _ => return Err(o.bad("activity")),
         };
         if o.has("carMeetLobby")
             && !matches!(
                 activity,
-                Some(Activity::Lobby(EngineKind::CarMeet3 | EngineKind::CarMeet6))
+                Activity::Lobby(EngineKind::CarMeet3 | EngineKind::CarMeet6)
             )
         {
             return Err(o.bad("carMeetLobby"));
         }
-        let mut settings = RelaySettings::for_profile(info.profile);
+        let mut settings = RelaySettings::new();
         if o.has("settings") {
             settings.apply(o.obj("settings")?)?;
         }
@@ -369,7 +352,6 @@ impl Game for Fh2 {
             road_trip: None,
         };
         let mut world = Fh2World {
-            is_player: info.is_player,
             races,
             voice,
             watch,
@@ -387,7 +369,6 @@ impl Game for Fh2 {
             next_rid: 1,
             now: 0,
             dropped: 0,
-            last_activity: std::cell::Cell::new(None),
             events: Vec::new(),
             private: false,
             #[cfg(feature = "test-hooks")]
@@ -399,8 +380,7 @@ impl Game for Fh2 {
             return Err(CmdError::bad("settings"));
         }
         let mut notices = Vec::new();
-        if world.road_trip_catalog().is_none()
-            && activity.is_none_or(|a| a == Activity::Lobby(EngineKind::RoadTrip))
+        if world.road_trip_catalog().is_none() && activity == Activity::Lobby(EngineKind::RoadTrip)
         {
             notices.push(Notice {
                 id: N_NO_ROADTRIP,
@@ -418,7 +398,6 @@ const MAX_SESSIONS: usize = 16;
 /// One FH2 world's game side: its engines (free roam, the car meets, Road Trip; contract §7)
 /// and the routing of a host socket between them.
 pub struct Fh2World {
-    is_player: bool,
     races: bool,
     voice: Voice,
     watch: Option<Watch>,
@@ -429,8 +408,8 @@ pub struct Fh2World {
     /// The seeds of the engines made later.
     rng: Rng,
     store: Arc<Mutex<CatalogStore>>,
-    /// A public world's one activity (`None`: private, every lobby type).
-    activity: Option<Activity>,
+    /// The world's one activity.
+    activity: Activity,
     engines: BTreeMap<EngineKind, Engine>,
     /// Where an endpoint's datagrams go once it was admitted outside the base engine.
     routes: HashMap<SocketAddr, EngineKind>,
@@ -443,8 +422,6 @@ pub struct Fh2World {
     /// The voice blocks of both sources (§6.4), shared with every engine's policy.
     voice_blocks: Arc<Mutex<VoiceBlockTable>>,
     dropped: u64,
-    /// OD-150: the activity the host's own game was last seen in.
-    last_activity: std::cell::Cell<Option<&'static str>>,
     /// Events for the core (peer.synced, peer.left, peer.rejected, requests, notices).
     events: Vec<GameEvent>,
     /// A private official world (WORLDS_OFFICIAL.md §12.8b): every engine, made now or later, is
@@ -455,7 +432,7 @@ pub struct Fh2World {
     debug_session: debug::DebugSession,
 }
 
-/// A public world's one activity (OD-186 item 4).
+/// A world's one activity (OD-186 item 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activity {
     /// One engine: free roam, Road Trip, or one car meet location (`carMeetLobby` 3 or 6).
@@ -486,9 +463,10 @@ impl Activity {
 }
 
 impl Fh2World {
-    /// The engine every other lobby type goes to: free roam, or a public world's activity.
+    /// The engine every other lobby type goes to: the activity's (free roam for the car meet
+    /// lobby).
     fn base_kind(&self) -> EngineKind {
-        self.activity.map_or(EngineKind::FreeRoam, Activity::base)
+        self.activity.base()
     }
 
     fn road_trip_catalog(&self) -> Option<Arc<engine::roadtrip::RoadTripCatalog>> {
@@ -524,7 +502,7 @@ impl Fh2World {
                 )),
             )?;
             // OD-190/OD-191: the official car meet lobby (Road Trip sessions, JoinTypes)
-            if self.activity == Some(Activity::CarMeet) {
+            if self.activity == Activity::CarMeet {
                 e.set_official_car_meet(true);
             }
             // the world's voice and watch apply to every engine, made now or later
@@ -571,10 +549,11 @@ impl Fh2World {
                             .emit();
                         self.notice(N_NO_ROADTRIP, None);
                     }
-                    // the reference engine's free roam takes it (private); a public world refuses
+                    // a Road Trip or car meet world refuses it; a free roam world's engine takes
+                    // it, as the reference engine's free roam does
                     if matches!(
                         self.activity,
-                        Some(Activity::Lobby(EngineKind::RoadTrip) | Activity::CarMeet)
+                        Activity::Lobby(EngineKind::RoadTrip) | Activity::CarMeet
                     ) {
                         return None;
                     }
@@ -583,10 +562,7 @@ impl Fh2World {
             }
             _ => EngineKind::FreeRoam,
         };
-        match self.activity {
-            Some(a) if !a.serves(want) => None,
-            _ => Some(want),
-        }
+        self.activity.serves(want).then_some(want)
     }
 
     /// The endpoint is seated in `target` (a datagram, or a held open taken in after its proof):
@@ -839,8 +815,8 @@ impl Fh2World {
         changed
     }
 
-    fn watch_cmd(&mut self, o: Obj, ctx: &mut GameCtx) -> CmdResult {
-        let w = parse_watch(o, ctx.profile, self.is_player)?;
+    fn watch_cmd(&mut self, o: Obj) -> CmdResult {
+        let w = parse_watch(o)?;
         self.watch = w;
         let mut engines = std::mem::take(&mut self.engines);
         for e in engines.values_mut() {
@@ -851,14 +827,14 @@ impl Fh2World {
         Ok(Map::new())
     }
 
-    /// The world's watch on one engine: its rules, the host's own XUID, and the catalog store
-    /// for the parts rule when asked for (`None`: stop).
+    /// The world's watch on one engine: its rules (no host's own XUID: an official world has
+    /// none), and the catalog store for the parts rule when asked for (`None`: stop).
     fn apply_watch(&self, e: &mut Engine) {
         let now = self.now as i64;
         match &self.watch {
             Some(w) => e.set_watch(
                 Some(w.engine_rules.clone()),
-                w.self_xuid.unwrap_or(0),
+                0,
                 true,
                 w.parts.then(|| self.store.clone()),
                 now,
@@ -962,26 +938,21 @@ impl GameWorld for Fh2World {
     fn spec(&self) -> Value {
         json!({
             "races": self.races,
-            "activity": self.activity.map(|a| match a {
+            "activity": match self.activity {
                 Activity::Lobby(k) => k.as_str(),
                 Activity::CarMeet => "carmeet",
-            }),
+            },
             "voice": {"mode": self.voice.mode.as_str(), "lobbyMuted": self.voice.lobby_muted},
-            "watch": self.watch.as_ref().map(|w| json!({
-                "rules": w.rules, "self": w.self_xuid, "parts": w.parts, "forceSpeed": w.force_speed,
-            })),
+            "watch": self.watch.as_ref().map(|w| json!({"rules": w.rules, "parts": w.parts})),
             "settings": format!("{:?}", self.settings),
         })
     }
 
     fn lobbies(&self) -> Vec<&'static str> {
-        let road_trip = self.road_trip_catalog().is_some();
         match self.activity {
-            None if road_trip => vec!["carmeet", "roadtrip"],
-            None => vec!["carmeet"],
-            Some(Activity::Lobby(EngineKind::FreeRoam)) => Vec::new(),
-            Some(Activity::Lobby(EngineKind::RoadTrip)) => vec!["roadtrip"],
-            Some(_) => vec!["carmeet"],
+            Activity::Lobby(EngineKind::FreeRoam) => Vec::new(),
+            Activity::Lobby(EngineKind::RoadTrip) => vec!["roadtrip"],
+            _ => vec!["carmeet"],
         }
     }
 
@@ -995,7 +966,7 @@ impl GameWorld for Fh2World {
                 Map::new()
             }),
             "world.voiceBlocks" => self.voice_blocks(o),
-            "world.watch" => self.watch_cmd(o, ctx),
+            "world.watch" => self.watch_cmd(o),
             "world.gameSession.answer" => self.game_session_answer(o, ctx.now),
             _ => return None,
         })
@@ -1026,10 +997,10 @@ impl GameWorld for Fh2World {
         self.drain_events();
     }
 
-    fn next_tick(&self, profile: Profile, now: u64) -> Option<u64> {
+    fn next_tick(&self, now: u64) -> Option<u64> {
         let engines = if self.engines.values().all(Engine::is_idle) {
             None
-        } else if self.synced() > 0 || profile == Profile::Private {
+        } else if self.synced() > 0 {
             Some(now + 20)
         } else {
             Some(now + 100)
@@ -1090,34 +1061,20 @@ impl GameWorld for Fh2World {
         let mut m = Map::new();
         m.insert("peers".into(), json!(peers));
         m.insert("lobbyPlayers".into(), json!(lobby));
-        // OD-150: the engine the host's own (loopback) game synced in last: Road Trip or free
-        // roam; a car meet keeps the last value; a public world says its own activity
-        let latest = self
-            .engines
-            .iter()
-            .filter_map(|(k, e)| e.loopback_synced_at().map(|at| (at, *k)))
-            .max();
-        let host_in = self.is_player && latest.is_some();
-        if host_in {
-            match latest.map(|l| l.1) {
-                Some(EngineKind::FreeRoam) => self.last_activity.set(Some("freeroam")),
-                Some(EngineKind::RoadTrip) => self.last_activity.set(Some("roadtrip")),
-                _ => {}
-            }
-        }
+        // the world says its own activity
         let activity = match self.activity {
-            Some(Activity::Lobby(EngineKind::FreeRoam)) => json!("freeroam"),
-            Some(Activity::Lobby(EngineKind::RoadTrip)) => json!("roadtrip"),
-            Some(_) => json!("carmeet"),
-            None => self.last_activity.get().map_or(Value::Null, |a| json!(a)),
+            Activity::Lobby(EngineKind::FreeRoam) => "freeroam",
+            Activity::Lobby(EngineKind::RoadTrip) => "roadtrip",
+            _ => "carmeet",
         };
-        m.insert("activity".into(), activity);
+        m.insert("activity".into(), json!(activity));
         m.insert("engines".into(), Value::Object(engines));
         // OD-194: a Road Trip past its vote takes no newcomers (the agent announces it)
         if self.engines.values().any(|e| e.road_trip_in_progress()) {
             m.insert("inProgress".into(), Value::Bool(true));
         }
-        m.insert("hostInWorld".into(), Value::Bool(host_in));
+        // an official world has no host's own game (contract §4.5)
+        m.insert("hostInWorld".into(), Value::Bool(false));
         // §12.8b (T-L9): the agent announces the leader (absent for a public world)
         if self.private {
             m.insert("private".into(), Value::Bool(true));
@@ -1131,7 +1088,7 @@ impl GameWorld for Fh2World {
     fn supports_private(&self) -> bool {
         matches!(
             self.activity,
-            Some(Activity::Lobby(EngineKind::FreeRoam | EngineKind::RoadTrip))
+            Activity::Lobby(EngineKind::FreeRoam | EngineKind::RoadTrip)
         )
     }
 
@@ -1188,10 +1145,10 @@ mod debug {
     }
 
     impl DebugSession {
-        pub fn from_env(activity: Option<Activity>) -> DebugSession {
+        pub fn from_env(activity: Activity) -> DebugSession {
             let xuids = std::env::var(ENV)
                 .ok()
-                .filter(|_| activity == Some(Activity::CarMeet))
+                .filter(|_| activity == Activity::CarMeet)
                 .map(|v| {
                     v.split(',')
                         .map(str::trim)

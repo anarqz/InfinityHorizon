@@ -1,11 +1,8 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! The control channel (contract §3): framing, replies and errors, and the two transports (a Unix
-//! stream socket the engine listens on, Linux; the launcher's named pipe the engine connects to,
-//! Windows and Proton).
+//! The control channel (contract §3): framing, replies and errors, and its transport (a Unix
+//! stream socket the engine listens on, Linux; the agent of the Worlds host connects to it).
 
 pub mod framing;
-#[cfg(windows)]
-pub mod pipe;
 pub mod proto;
 #[cfg(unix)]
 pub mod unix;
@@ -31,19 +28,10 @@ pub const COMMAND_QUEUE: usize = 256;
 /// Lines waiting for a connection's writer before the loop keeps them in its own queues.
 pub const WRITER_QUEUE: usize = 64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transport {
-    /// Unix stream socket: protected by the file system, no secret.
-    Unix,
-    /// The launcher's named pipe: `hello.secret` must match.
-    Pipe,
-}
-
 /// What a transport tells the loop.
 pub enum ControlMsg {
     Opened {
         conn: ConnId,
-        transport: Transport,
         writer: SyncSender<String>,
         inflight: Arc<AtomicUsize>,
     },
@@ -68,8 +56,8 @@ pub fn guarded(hub: &crate::runtime::HubTx, what: &'static str, body: impl FnOnc
 
 /// The reader side of a connection: frames lines, answers framing errors and `busy` itself,
 /// hands requests to the loop. Its own answers never block it: past a full writer queue they
-/// wait in `backlog`, which the transport drains between reads (on Windows the same thread
-/// reads and writes the pipe, so a blocking send there would wait on itself forever).
+/// wait in `backlog`, which the transport drains between reads (a blocking send from the
+/// reading thread could wait on a writer that is itself waiting).
 pub struct Feeder {
     pub conn: ConnId,
     pub writer: SyncSender<String>,
@@ -94,7 +82,7 @@ impl Feeder {
         }
     }
 
-    /// The answers still waiting, oldest first (the pipe writes them itself).
+    /// The answers still waiting, oldest first.
     pub fn take_backlog(&self) -> Vec<String> {
         self.backlog.borrow_mut().drain(..).collect()
     }
@@ -166,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_flood_of_bad_lines_never_blocks_the_reader_on_its_own_writer() {
-        // nobody drains the writer queue: the pipe thread is busy reading, as on Windows
+        // nobody drains the writer queue: the reader is busy reading
         let (writer, lines) = std::sync::mpsc::sync_channel::<String>(WRITER_QUEUE);
         let (hub, _loop) = std::sync::mpsc::sync_channel(4);
         let (done, finished) = std::sync::mpsc::channel();

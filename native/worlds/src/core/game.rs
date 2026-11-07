@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 //! The boundary between the game-agnostic core and a game module (OD-186): the core owns the
-//! transport, the control channel, admission, limits, relay legs and logs; a game module owns
+//! transport, the control channel, admission, limits and logs; a game module owns
 //! everything game-specific (its wire codec, engines, side channels, game-scoped settings, the
 //! anti-cheat watch, catalogs). `world.open` names the game (`game`, e.g. `"fh2"`); the core
 //! finds its `Game` and asks it for the world's `GameWorld`, then drives that through this trait
@@ -10,10 +10,10 @@ use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use serde_json::{Map, Value};
 
-use super::{Profile, fields::Obj, rng::Rng};
+use super::{fields::Obj, rng::Rng};
 use crate::control::proto::{CmdError, CmdResult};
 
-/// A datagram a game world sends; the core maps it to the world's socket (or a relay leg).
+/// A datagram a game world sends; the core sends it on the public socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Send {
     pub to: SocketAddr,
@@ -76,9 +76,6 @@ pub enum GameEvent {
 pub struct OpenInfo<'a> {
     /// The whole `world.open` request: the game reads its game-scoped fields from it.
     pub request: Obj<'a>,
-    pub profile: Profile,
-    pub host_xuid: u64,
-    pub is_player: bool,
     pub max_players: u8,
     /// The world's random source (seeds the game draws at creation).
     pub rng: &'a mut Rng,
@@ -88,7 +85,6 @@ pub struct OpenInfo<'a> {
 
 /// What a game world command may use.
 pub struct GameCtx {
-    pub profile: Profile,
     pub now: u64,
     /// Notices raised by the command (the core sends them).
     pub notices: Vec<Notice>,
@@ -137,7 +133,7 @@ pub trait GameWorld: std::marker::Send {
     fn tick(&mut self, now: u64, out: &mut Vec<Send>);
 
     /// When the game next needs `tick`; `None` when idle (no tick for an idle world).
-    fn next_tick(&self, profile: Profile, now: u64) -> Option<u64>;
+    fn next_tick(&self, now: u64) -> Option<u64>;
 
     /// Synced players (the host's own game included when it is in).
     fn synced(&self) -> usize;

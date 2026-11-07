@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! `worlds`: Infinity Worlds, the world engine, one program for private worlds (a child process
-//! of the launcher, one world each) and public worlds (a long-lived process on a Worlds host VM).
+//! `worlds`: Infinity Worlds, the world engine of official worlds: a long-lived process on a
+//! Worlds host VM serving its worlds on one public UDP socket (players host no world, OD-208).
 //!
 //! Layers:
 //!   - `core`: the deterministic, I/O-free server: control commands, worlds, admission state,
@@ -15,7 +15,8 @@
 //!   - `fm5`: the Forza Motorsport 5 module (OD-206, CR-S99, W6): FM5's NerdCore widths and the
 //!     race lobby, ported from the LAN lab's `tools/fm5-probe`.
 //!   - `runtime`: the single network loop thread, the sockets, the control transports.
-//!   - game-agnostic network pieces: `net` (bind), `stun`, `nat`, `upnp`.
+//!   - game-agnostic network pieces: `net` (the public socket), `stun` (the side channels'
+//!     framing).
 //!   - `agent`: `worlds agent`, the world agent of a Worlds host (WORLDS_OFFICIAL.md §4): signed
 //!     calls to the server's official routes, the engine's supervisor and controller, the
 //!     server-side catalog reader (Linux; the signature and the configuration are portable).
@@ -32,11 +33,9 @@ pub mod fh2;
 pub mod fm5;
 pub mod log;
 pub mod log_ids;
-pub mod nat;
 pub mod net;
 pub mod runtime;
 pub mod stun;
-pub mod upnp;
 
 /// The control protocol versions this build speaks (contract §10).
 pub const PROTO_MIN: u32 = 1;
@@ -50,8 +49,8 @@ pub fn registered_games(fh2_catalog: fh2::Catalog) -> Vec<std::sync::Arc<dyn cor
     ]
 }
 
-/// The build's version (contract §10: `hello.build.version`, compared with the launcher's own
-/// version): `DS_PRODUCT_VERSION` when set at build time (the launcher's build sets it to its
+/// The build's version (contract §10: `hello.build.version`, compared with the agent's own
+/// version): `DS_PRODUCT_VERSION` when set at build time (the release build sets it to its
 /// version), the crate version otherwise.
 pub const VERSION: &str = match option_env!("DS_PRODUCT_VERSION") {
     Some(v) if !v.is_empty() => v,

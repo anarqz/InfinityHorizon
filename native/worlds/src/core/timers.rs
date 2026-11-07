@@ -19,8 +19,6 @@ pub enum Timer {
     EngineTick(String),
     /// The drain's deadline.
     Drain,
-    /// A world's network timers (relay legs, STUN, punches, UPnP, `diag`).
-    NetTick(String),
 }
 
 #[derive(Debug, Default)]

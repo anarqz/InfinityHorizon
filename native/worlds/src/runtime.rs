@@ -6,27 +6,26 @@
 //! feed the hub; no thread runs per world and no world state lives outside the loop.
 //!
 //! Why a hub, not a readiness poll: std has no poll over a UDP socket, a control stream and a
-//! timer, and the crate stays dependency-light (no C, cross-builds for Windows without a C
-//! toolchain). A later step can swap the hub for `mio` without touching `core`.
+//! timer, and the crate stays dependency-light. A later step can swap the hub for `mio` without
+//! touching `core`.
 
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
     net::{SocketAddr, UdpSocket},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
     },
     time::{Duration, Instant},
 };
 
 use crate::{
-    cli::{Endpoint, RunConfig},
+    cli::RunConfig,
     control::{ConnId, ControlMsg},
-    core::{BoundWorld, Config, Io, PUBLIC_SOCKET, Profile, Server, SockId},
-    log, log_ids,
-    net::{self, BindFailure},
+    core::{Config, Io, Server},
+    log, log_ids, net,
 };
 
 /// Messages for the loop.
@@ -37,8 +36,8 @@ pub enum Hub {
         conn: ConnId,
         closer: Box<dyn Fn() + Send>,
     },
+    /// A datagram on the public socket.
     Datagram {
-        sock: SockId,
         from: SocketAddr,
         data: Vec<u8>,
     },
@@ -87,47 +86,34 @@ pub mod exit {
     pub const FAULT: i32 = 70;
 }
 
+/// The system side: the public socket (its reader feeds the hub) and the process's measures.
 struct RtIo {
-    hub: HubTx,
-    sockets: HashMap<SockId, (UdpSocket, bool)>,
-    /// Each socket's reader: its stop flag and its thread, joined when the socket is released.
-    stops: HashMap<SockId, (Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
-    next_sock: SockId,
+    /// The public socket and whether it is dual-stack.
+    socket: (UdpSocket, bool),
 }
 
 impl RtIo {
-    fn add_socket(
-        &mut self,
-        sock: SockId,
-        socket: UdpSocket,
-        dual: bool,
-        timeout: bool,
-    ) -> std::io::Result<()> {
+    /// Starts the public socket's reader. It runs for the process's life (the loop never stops
+    /// it: the process exits).
+    fn start(hub: HubTx, socket: UdpSocket, dual: bool) -> std::io::Result<RtIo> {
         net::quiet_connreset(&socket);
         let reader = socket.try_clone()?;
         let stop = Arc::new(AtomicBool::new(false));
-        if timeout {
-            reader.set_read_timeout(Some(Duration::from_millis(500)))?;
-        }
-        let hub = self.hub.clone();
-        let flag = stop.clone();
-        let thread = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("ds-udp".into())
             .spawn(move || {
-                let r = catch_unwind(AssertUnwindSafe(|| {
-                    read_socket(reader, sock, hub.clone(), flag)
-                }));
+                let r = catch_unwind(AssertUnwindSafe(|| read_socket(reader, hub.clone(), stop)));
                 if r.is_err() {
                     let _ = hub.send(Hub::Fatal("udp reader"));
                 }
             })?;
-        self.sockets.insert(sock, (socket, dual));
-        self.stops.insert(sock, (stop, thread));
-        Ok(())
+        Ok(RtIo {
+            socket: (socket, dual),
+        })
     }
 }
 
-fn read_socket(socket: UdpSocket, sock: SockId, hub: HubTx, stop: Arc<AtomicBool>) {
+fn read_socket(socket: UdpSocket, hub: HubTx, stop: Arc<AtomicBool>) {
     let mut buf = vec![0u8; RECV_BUFFER];
     let mut errors = 0u32;
     while !stop.load(Ordering::Acquire) {
@@ -136,12 +122,10 @@ fn read_socket(socket: UdpSocket, sock: SockId, hub: HubTx, stop: Arc<AtomicBool
             Ok((n, from)) => {
                 errors = 0;
                 let mut msg = Hub::Datagram {
-                    sock,
                     from,
                     data: buf[..n].to_vec(),
                 };
-                // never parked on a full hub once stopped: the loop joins this thread when it
-                // releases the socket, and it is the loop that drains the hub
+                // never parked on a full hub once stopped: it is the loop that drains the hub
                 loop {
                     match hub.try_send(msg) {
                         Ok(()) => break,
@@ -180,43 +164,6 @@ fn read_socket(socket: UdpSocket, sock: SockId, hub: HubTx, stop: Arc<AtomicBool
 }
 
 impl Io for RtIo {
-    fn bind_world(&mut self, port: u16) -> Result<BoundWorld, BindFailure> {
-        let bound = net::bind_world(port)?;
-        let local = bound.socket.local_addr().map_err(|_| BindFailure::Other)?;
-        self.next_sock += 1;
-        let sock = self.next_sock;
-        self.add_socket(sock, bound.socket, bound.dual, true)
-            .map_err(|_| BindFailure::Other)?;
-        Ok(BoundWorld {
-            sock,
-            port: local.port(),
-            dual: bound.dual,
-        })
-    }
-
-    /// Frees the world's port before returning: the reader's clone of the socket is closed too
-    /// (woken by an empty datagram to itself, else by its 500 ms read timeout), so an immediate
-    /// re-bind of the same port succeeds.
-    fn release_world(&mut self, sock: SockId) {
-        let reader = self.stops.remove(&sock);
-        if let Some((stop, _)) = &reader {
-            stop.store(true, Ordering::Release);
-        }
-        if let Some((socket, _)) = self.sockets.remove(&sock)
-            && let Ok(local) = socket.local_addr()
-        {
-            let wake: SocketAddr = if local.is_ipv6() {
-                (std::net::Ipv6Addr::LOCALHOST, local.port()).into()
-            } else {
-                (std::net::Ipv4Addr::LOCALHOST, local.port()).into()
-            };
-            let _ = socket.send_to(&[], wake);
-        }
-        if let Some((_, thread)) = reader {
-            let _ = thread.join();
-        }
-    }
-
     fn memory_used_bytes(&self) -> u64 {
         crate::alloc::live_bytes() as u64
     }
@@ -313,13 +260,12 @@ impl Conn {
 /// its own thread. Returns the exit code.
 pub fn run(rc: RunConfig) -> i32 {
     let (hub, rx) = mpsc::sync_channel::<Hub>(HUB_QUEUE);
-    let mut cfg = Config::new(rc.profile);
+    let mut cfg = Config::new();
     cfg.max_worlds = rc.max_worlds;
     cfg.max_seats = rc.max_seats;
     cfg.memory_limit_mb = rc.memory_limit_mb;
     cfg.drain_seconds = rc.drain_seconds;
     cfg.stats_seconds = rc.stats_seconds;
-    cfg.control_secret = rc.secret.clone();
     if let Some(k) = &rc.grant_keys {
         cfg.keys = k.clone();
     }
@@ -331,100 +277,75 @@ pub fn run(rc: RunConfig) -> i32 {
         log::info(log_ids::DS_CATALOG).field("ignored", true).emit();
     }
     cfg.games = crate::registered_games(catalog);
-    let ids = Arc::new(AtomicU64::new(1));
-    // the control endpoint
-    match &rc.control {
-        #[cfg(unix)]
-        Endpoint::Unix(path) => {
-            use crate::control::unix;
-            match unix::listen(path) {
-                Ok(listener) => {
-                    if unix::serve(listener, hub.clone(), ids.clone()).is_err() {
-                        log::error(log_ids::DS_CONTROL_UNAVAILABLE).emit();
-                        return exit::CONTROL_UNAVAILABLE;
-                    }
-                }
-                Err(unix::ListenError::DirectoryMode(mode)) => {
-                    log::error(log_ids::DS_CONTROL_DIR_MODE)
-                        .field("mode", format!("{mode:o}"))
-                        .emit();
-                    return exit::CONTROL_UNAVAILABLE;
-                }
-                Err(unix::ListenError::DirectoryOwner) => {
-                    log::error(log_ids::DS_CONTROL_UNAVAILABLE)
-                        .field("reason", "dir_owner")
-                        .emit();
-                    return exit::CONTROL_UNAVAILABLE;
-                }
-                Err(unix::ListenError::InUse) => {
-                    log::error(log_ids::DS_CONTROL_UNAVAILABLE)
-                        .field("reason", "in_use")
-                        .emit();
-                    return exit::CONTROL_UNAVAILABLE;
-                }
-                Err(unix::ListenError::Io(e)) => {
-                    log::error(log_ids::DS_CONTROL_UNAVAILABLE)
-                        .msg(&e.to_string())
-                        .emit();
+    // the control endpoint: a Unix socket (Linux, the Worlds host); another build has none
+    #[cfg(unix)]
+    {
+        use crate::control::unix;
+        let crate::cli::Endpoint::Unix(path) = &rc.control;
+        let ids = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        match unix::listen(path) {
+            Ok(listener) => {
+                if unix::serve(listener, hub.clone(), ids).is_err() {
+                    log::error(log_ids::DS_CONTROL_UNAVAILABLE).emit();
                     return exit::CONTROL_UNAVAILABLE;
                 }
             }
-        }
-        #[cfg(windows)]
-        Endpoint::Pipe(name) => {
-            use crate::control::pipe;
-            let started = pipe::connect(name)
-                .and_then(|f| pipe::serve(f, ids.fetch_add(1, Ordering::Relaxed), hub.clone()));
-            if let Err(e) = started {
+            Err(unix::ListenError::DirectoryMode(mode)) => {
+                log::error(log_ids::DS_CONTROL_DIR_MODE)
+                    .field("mode", format!("{mode:o}"))
+                    .emit();
+                return exit::CONTROL_UNAVAILABLE;
+            }
+            Err(unix::ListenError::DirectoryOwner) => {
+                log::error(log_ids::DS_CONTROL_UNAVAILABLE)
+                    .field("reason", "dir_owner")
+                    .emit();
+                return exit::CONTROL_UNAVAILABLE;
+            }
+            Err(unix::ListenError::InUse) => {
+                log::error(log_ids::DS_CONTROL_UNAVAILABLE)
+                    .field("reason", "in_use")
+                    .emit();
+                return exit::CONTROL_UNAVAILABLE;
+            }
+            Err(unix::ListenError::Io(e)) => {
                 log::error(log_ids::DS_CONTROL_UNAVAILABLE)
                     .msg(&e.to_string())
                     .emit();
                 return exit::CONTROL_UNAVAILABLE;
             }
         }
-        #[allow(unreachable_patterns)]
-        _ => {
-            log::error(log_ids::DS_CONTROL_UNAVAILABLE)
-                .field("reason", "unsupported")
-                .emit();
-            return exit::CONTROL_UNAVAILABLE;
-        }
     }
-    let mut io = RtIo {
-        hub: hub.clone(),
-        sockets: HashMap::new(),
-        stops: HashMap::new(),
-        next_sock: PUBLIC_SOCKET,
-    };
-    if rc.profile == Profile::Public {
-        let bound = rc.bind.ok_or(BindFailure::Other).and_then(net::bind_public);
-        let bound = match bound {
-            Ok(b) => b,
-            Err(e) => {
-                log::error(log_ids::DS_START_FAILED)
-                    .field("what", "socket")
-                    .field("reason", e.reason())
-                    .emit();
-                return exit::START_FAILED;
-            }
-        };
-        if io
-            .add_socket(PUBLIC_SOCKET, bound.socket, bound.dual, false)
-            .is_err()
-        {
+    #[cfg(not(unix))]
+    if matches!(rc.control, crate::cli::Endpoint::Unix(_)) {
+        log::error(log_ids::DS_CONTROL_UNAVAILABLE)
+            .field("reason", "unsupported")
+            .emit();
+        return exit::CONTROL_UNAVAILABLE;
+    }
+    let bound = match net::bind_public(rc.bind) {
+        Ok(b) => b,
+        Err(e) => {
             log::error(log_ids::DS_START_FAILED)
                 .field("what", "socket")
+                .field("reason", e.reason())
                 .emit();
             return exit::START_FAILED;
         }
-        cfg.public_socket = true;
-    }
+    };
+    let Ok(mut io) = RtIo::start(hub.clone(), bound.socket, bound.dual) else {
+        log::error(log_ids::DS_START_FAILED)
+            .field("what", "socket")
+            .emit();
+        return exit::START_FAILED;
+    };
+    cfg.public_socket = true;
     #[cfg(unix)]
     if let Err(e) = signals::install(hub.clone()) {
         log::warn(log_ids::DS_SIGNAL).msg(&e.to_string()).emit();
     }
     log::info(log_ids::DS_STARTED)
-        .field("profile", rc.profile.as_str())
+        .field("profile", crate::cli::PROFILE)
         .field("version", crate::VERSION)
         .field("commit", crate::commit())
         .field("proto", crate::PROTO_MAX)
@@ -513,11 +434,10 @@ fn run_loop(
             match m {
                 Hub::Control(ControlMsg::Opened {
                     conn,
-                    transport,
                     writer,
                     inflight,
                 }) => {
-                    server.connect(conn, transport);
+                    server.connect(conn);
                     conns.insert(
                         conn,
                         Conn {
@@ -545,9 +465,9 @@ fn run_loop(
                 }
                 Hub::Control(ControlMsg::Closed { conn }) => {
                     conns.remove(&conn);
-                    server.disconnect(io, now, conn);
+                    server.disconnect(now, conn);
                 }
-                Hub::Datagram { sock, from, data } => server.datagram(io, now, sock, from, &data),
+                Hub::Datagram { from, data } => server.datagram(io, now, from, &data),
                 Hub::Signal(s) => {
                     log::info(log_ids::DS_SIGNAL)
                         .field("signal", if s == Signal::Term { "term" } else { "int" })
@@ -566,9 +486,7 @@ fn run_loop(
         }
         server.tick(io, mono());
         for d in server.take_datagrams() {
-            let Some((socket, dual)) = io.sockets.get(&d.sock) else {
-                continue;
-            };
+            let (socket, dual) = &io.socket;
             let to = crate::stun::endpoint_for_socket(d.to, *dual);
             match socket.send_to(&d.data, to) {
                 Ok(_) => server.note_sent(1),
@@ -607,7 +525,7 @@ fn run_loop(
                 c.stalled_since = None;
             }
             if Some(id) == controller {
-                server.controller_stalled(io, mono());
+                server.controller_stalled(mono());
             }
         }
         if let Some(code) = server.exit_code() {
@@ -751,13 +669,12 @@ mod tests {
         let (hub, rx) = mpsc::sync_channel::<Hub>(16);
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let reader = std::thread::spawn(move || read_socket(socket, 7, hub, flag));
+        let reader = std::thread::spawn(move || read_socket(socket, hub, flag));
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
         sender.send_to(&[1u8; 3000], to).unwrap();
         sender.send_to(&[2u8; 10], to).unwrap();
         match rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Hub::Datagram { sock, data, .. }) => {
-                assert_eq!(sock, 7);
+            Ok(Hub::Datagram { data, .. }) => {
                 assert_eq!(
                     data,
                     vec![2u8; 10],
@@ -781,7 +698,7 @@ mod tests {
         hub.send(Hub::Fatal("filler")).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let reader = std::thread::spawn(move || read_socket(socket, 7, hub, flag));
+        let reader = std::thread::spawn(move || read_socket(socket, hub, flag));
         UdpSocket::bind("127.0.0.1:0")
             .unwrap()
             .send_to(&[1u8; 8], to)
@@ -796,21 +713,37 @@ mod tests {
     }
 
     #[test]
-    fn a_released_world_port_can_be_bound_again_at_once() {
-        let (hub, _loop) = mpsc::sync_channel::<Hub>(64);
-        let mut io = RtIo {
-            hub,
-            sockets: HashMap::new(),
-            stops: HashMap::new(),
-            next_sock: PUBLIC_SOCKET,
-        };
-        let first = io.bind_world(0).expect("a free port");
-        io.release_world(first.sock);
-        let again = io
-            .bind_world(first.port)
-            .expect("the released port is free");
-        assert_eq!(again.port, first.port);
-        io.release_world(again.sock);
+    fn the_public_socket_feeds_the_hub_and_a_taken_port_is_in_use() {
+        let bound = net::bind_public("127.0.0.1:0".parse().unwrap()).expect("a free port");
+        let to = bound.socket.local_addr().unwrap();
+        assert!(!bound.dual, "a literal address is a plain bind");
+        // the same port again: in use, never another port
+        assert_eq!(
+            net::bind_public(to).err(),
+            Some(net::BindFailure::InUse),
+            "the port never moves"
+        );
+        let (hub, rx) = mpsc::sync_channel::<Hub>(16);
+        let io = RtIo::start(hub, bound.socket, bound.dual).expect("the reader starts");
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(&[3u8; 12], to).unwrap();
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Hub::Datagram { from, data }) => {
+                assert_eq!(from, sender.local_addr().unwrap());
+                assert_eq!(data, vec![3u8; 12]);
+            }
+            _ => panic!("no datagram"),
+        }
+        // the loop answers on the same socket
+        let (socket, dual) = &io.socket;
+        let back = crate::stun::endpoint_for_socket(sender.local_addr().unwrap(), *dual);
+        socket.send_to(b"ok", back).unwrap();
+        sender
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buf = [0u8; 8];
+        let (n, from) = sender.recv_from(&mut buf).unwrap();
+        assert_eq!((&buf[..n], from), (&b"ok"[..], to));
     }
 
     #[test]

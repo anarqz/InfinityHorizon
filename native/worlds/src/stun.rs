@@ -1,19 +1,15 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 // Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
-//! STUN framing (RFC 8489, RFC 5389 wire format) for the world socket: the 20-byte header, the
-//! attribute walk, Binding request/success with XOR-MAPPED-ADDRESS, and the private indications
-//! the side channels ride in (contract §5.3). No I/O, no authentication: MESSAGE-INTEGRITY and
-//! FINGERPRINT are carried past, never checked. Also the endpoint canonical form every module
-//! compares with (an IPv4-mapped IPv6 address is the IPv4 one).
+//! STUN framing (RFC 8489, RFC 5389 wire format) as the side channels use it (contract §5.3):
+//! the 20-byte header, the attribute walk and the private indications the hook's car state,
+//! voice and roster ride in. No I/O, no authentication, no Binding: an official world runs no
+//! STUN to a host and no NAT discovery (WORLDS_OFFICIAL.md §6). Also the endpoint canonical form
+//! every module compares with (an IPv4-mapped IPv6 address is the IPv4 one).
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 
 /// The magic cookie (RFC 8489 §5).
 pub const MAGIC_COOKIE: u32 = 0x2112_A442;
-/// Binding request (method 0x001, class request).
-pub const BINDING_REQUEST: u16 = 0x0001;
-/// Binding success response (method 0x001, class success).
-pub const BINDING_SUCCESS: u16 = 0x0101;
 /// The 96-bit transaction ID.
 pub type TxId = [u8; 12];
 
@@ -22,26 +18,6 @@ pub const HEADER_LEN: usize = 20;
 /// The largest datagram taken as STUN: RFC 8489 §6.1's 548 bytes for IPv4 paths without a known
 /// MTU; anything longer is a game datagram, never STUN.
 pub const MAX_LEN: usize = 548;
-
-/// MAPPED-ADDRESS (RFC 8489 §14.1), read only when no XOR form is present.
-const ATTR_MAPPED: u16 = 0x0001;
-/// XOR-MAPPED-ADDRESS (RFC 8489 §14.2).
-const ATTR_XOR_MAPPED: u16 = 0x0020;
-/// The pre-RFC 5389 code point some servers still send for XOR-MAPPED-ADDRESS.
-const ATTR_XOR_MAPPED_LEGACY: u16 = 0x8020;
-const FAMILY_V4: u8 = 0x01;
-const FAMILY_V6: u8 = 0x02;
-
-/// What the world reads from a STUN message: its type, its transaction, and the address a
-/// (XOR-)MAPPED-ADDRESS reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Decoded {
-    /// The message type (class and method, RFC 8489 §5).
-    pub msg_type: u16,
-    pub transaction: TxId,
-    /// The reflexive transport address a (XOR-)MAPPED-ADDRESS carried.
-    pub reflexive: Option<SocketAddr>,
-}
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([bytes[at], bytes[at + 1]])
@@ -129,66 +105,6 @@ pub fn attribute_strict(data: &[u8], kind: u16, wanted: u16) -> Option<&[u8]> {
     first
 }
 
-/// The cookie followed by the transaction: the XOR key of the address forms (RFC 8489 §14.2).
-fn xor_key(txid: &[u8]) -> [u8; 16] {
-    let mut key = [0u8; 16];
-    key[..4].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
-    key[4..].copy_from_slice(txid);
-    key
-}
-
-/// A (XOR-)MAPPED-ADDRESS value: `0, family, port, address`. `key` undoes the XOR form.
-fn decode_address(value: &[u8], key: Option<&[u8; 16]>) -> Option<SocketAddr> {
-    if value.len() < 8 {
-        return None;
-    }
-    let width = match value[1] {
-        FAMILY_V4 => 4,
-        FAMILY_V6 if value.len() >= 20 => 16,
-        _ => return None,
-    };
-    let mut raw = [0u8; 16];
-    raw[..width].copy_from_slice(&value[4..4 + width]);
-    let mut port = u16_at(value, 2);
-    if let Some(k) = key {
-        port ^= u16_at(k, 0);
-        for (b, m) in raw.iter_mut().zip(k.iter()).take(width) {
-            *b ^= m;
-        }
-    }
-    let ip = if width == 4 {
-        IpAddr::V4(Ipv4Addr::new(raw[0], raw[1], raw[2], raw[3]))
-    } else {
-        IpAddr::V6(Ipv6Addr::from(raw))
-    };
-    Some(SocketAddr::new(ip, port))
-}
-
-/// Reads a message of any type. An XOR-MAPPED-ADDRESS (either code point) wins over a plain
-/// MAPPED-ADDRESS; unknown attributes are skipped; a truncated attribute refuses the whole message.
-pub fn decode(data: &[u8]) -> Option<Decoded> {
-    let header = data.get(..HEADER_LEN).filter(|_| is_framed(data))?;
-    let mut txid: TxId = [0; 12];
-    txid.copy_from_slice(&header[8..]);
-    let key = xor_key(&txid);
-    let mut found = None;
-    for item in attributes(data) {
-        let (tag, value) = item.ok()?;
-        match tag {
-            ATTR_XOR_MAPPED | ATTR_XOR_MAPPED_LEGACY => {
-                found = decode_address(value, Some(&key)).or(found);
-            }
-            ATTR_MAPPED if found.is_none() => found = decode_address(value, None),
-            _ => {}
-        }
-    }
-    Some(Decoded {
-        msg_type: u16_at(header, 0),
-        transaction: txid,
-        reflexive: found,
-    })
-}
-
 /// A message of `kind` with these attributes in order, each padded with zeros to 32 bits.
 pub fn indication(kind: u16, txid: &TxId, attrs: &[(u16, &[u8])]) -> Vec<u8> {
     let body: usize = attrs.iter().map(|(_, v)| padded(v.len())).sum();
@@ -205,32 +121,6 @@ pub fn indication(kind: u16, txid: &TxId, attrs: &[(u16, &[u8])]) -> Vec<u8> {
         at += padded(value.len());
     }
     out
-}
-
-/// A Binding request with no attributes.
-pub fn request_binding(txid: &TxId) -> [u8; 20] {
-    let mut out = [0u8; HEADER_LEN];
-    out[..2].copy_from_slice(&BINDING_REQUEST.to_be_bytes());
-    out[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
-    out[8..].copy_from_slice(txid);
-    out
-}
-
-/// The Binding success for `txid` telling the requester the address it was `seen` from (canonical:
-/// an IPv4-mapped source is answered with the IPv4 family).
-pub fn answer_binding(txid: &TxId, seen: SocketAddr) -> Vec<u8> {
-    let who = plain_endpoint(seen);
-    let key = xor_key(txid);
-    let (family, ip): (u8, Vec<u8>) = match who.ip() {
-        IpAddr::V4(v4) => (FAMILY_V4, v4.octets().to_vec()),
-        IpAddr::V6(v6) => (FAMILY_V6, v6.octets().to_vec()),
-    };
-    let mut value = Vec::with_capacity(4 + ip.len());
-    value.push(0);
-    value.push(family);
-    value.extend_from_slice(&(who.port() ^ u16_at(&key, 0)).to_be_bytes());
-    value.extend(ip.iter().zip(key.iter()).map(|(b, m)| b ^ m));
-    indication(BINDING_SUCCESS, txid, &[(ATTR_XOR_MAPPED, &value)])
 }
 
 /// A fresh random transaction ID (RFC 8489 §5: uniformly random). Should the OS source fail,
@@ -281,12 +171,9 @@ mod tests {
             .collect()
     }
 
-    const RFC5769_TXID: TxId = [
-        0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
-    ];
-
     /// RFC 5769 §2.1, the sample request: SOFTWARE, PRIORITY, ICE-CONTROLLED, USERNAME,
-    /// MESSAGE-INTEGRITY and FINGERPRINT; nothing in it is an address.
+    /// MESSAGE-INTEGRITY and FINGERPRINT, walked whole (the side channels' attribute walk on a
+    /// real message).
     #[test]
     fn rfc5769_sample_request_walks_whole() {
         let m = hex("000100582112a442b7e7a701bc34d686fa87dfae
@@ -298,23 +185,16 @@ mod tests {
              80280004e57a3bcf");
         assert_eq!(m.len(), 108);
         assert!(is_framed(&m));
-        let p = decode(&m).unwrap();
+        assert_eq!(attribute(&m, 0x0001, 0x0006), Some(&b"evtj:h6vY"[..]));
         assert_eq!(
-            p,
-            Decoded {
-                msg_type: BINDING_REQUEST,
-                transaction: RFC5769_TXID,
-                reflexive: None
-            }
-        );
-        assert_eq!(
-            attribute(&m, BINDING_REQUEST, 0x0006),
+            attribute_strict(&m, 0x0001, 0x0006),
             Some(&b"evtj:h6vY"[..])
         );
-        assert_eq!(attribute(&m, BINDING_SUCCESS, 0x0006), None);
+        assert_eq!(attribute(&m, 0x0101, 0x0006), None, "another message type");
+        assert_eq!(attribute(&m, 0x0001, 0x7fff), None, "no such attribute");
     }
 
-    /// RFC 5769 §2.2, the sample IPv4 response with its SOFTWARE and integrity attributes.
+    /// RFC 5769 §2.2, the sample IPv4 response: its attributes walk, the address value as sent.
     #[test]
     fn rfc5769_sample_ipv4_response() {
         let m = hex("0101003c2112a442b7e7a701bc34d686fa87dfae
@@ -322,60 +202,34 @@ mod tests {
              002000080001a147e112a643
              000800142b91f599fd9e90c38c7489f92af9ba53f06be7d7
              80280004c07d4c96");
-        let p = decode(&m).unwrap();
-        assert_eq!(p.msg_type, BINDING_SUCCESS);
-        assert_eq!(p.reflexive, Some("192.0.2.1:32853".parse().unwrap()));
-    }
-
-    #[test]
-    fn xor_form_beats_the_plain_one_in_either_order() {
-        let t = random_txid();
-        let xor = answer_binding(&t, "198.51.100.9:4000".parse().unwrap());
-        let xor_value = attribute(&xor, BINDING_SUCCESS, ATTR_XOR_MAPPED).unwrap();
-        let plain = [0, FAMILY_V4, 0x0f, 0xa0, 10, 0, 0, 1];
-        let want: SocketAddr = "198.51.100.9:4000".parse().unwrap();
-        for attrs in [
-            [(ATTR_MAPPED, &plain[..]), (ATTR_XOR_MAPPED, xor_value)],
-            [
-                (ATTR_XOR_MAPPED_LEGACY, xor_value),
-                (ATTR_MAPPED, &plain[..]),
-            ],
-        ] {
-            let m = indication(BINDING_SUCCESS, &t, &attrs);
-            assert_eq!(decode(&m).unwrap().reflexive, Some(want));
-        }
-        let only_plain = indication(BINDING_SUCCESS, &t, &[(ATTR_MAPPED, &plain[..])]);
+        assert!(is_framed(&m));
         assert_eq!(
-            decode(&only_plain).unwrap().reflexive,
-            Some("10.0.0.1:4000".parse().unwrap())
+            attribute(&m, 0x0101, 0x0020),
+            Some(&hex("0001a147e112a643")[..])
         );
-    }
-
-    #[test]
-    fn answer_sizes_follow_the_family() {
-        let t = random_txid();
-        assert_eq!(request_binding(&t).len(), 20);
-        assert_eq!(
-            answer_binding(&t, "[::ffff:192.0.2.4]:9".parse().unwrap()).len(),
-            32
-        );
-        assert_eq!(
-            answer_binding(&t, "[2001:db8::4]:9".parse().unwrap()).len(),
-            44
-        );
+        // SOFTWARE is 11 bytes, padded to 12 on the wire: the walk reads past the padding
+        assert_eq!(attribute(&m, 0x0101, 0x8022), Some(&b"test vector"[..]));
     }
 
     #[test]
     fn shape_limits() {
         let t = random_txid();
+        assert_ne!(t, random_txid());
         let big = indication(0x3e99, &t, &[(0xc0ff, &[0u8; MAX_LEN - 24])]);
         assert_eq!(big.len(), MAX_LEN);
         assert!(is_framed(&big));
         let over = indication(0x3e99, &t, &[(0xc0ff, &[0u8; MAX_LEN - 20])]);
         assert!(!is_framed(&over));
-        let mut top = request_binding(&t);
+        let mut top = indication(0x0001, &t, &[]);
+        assert!(is_framed(&top));
         top[0] = 0x40;
         assert!(!is_framed(&top));
+        let mut cookie = indication(0x0001, &t, &[]);
+        cookie[4] ^= 1;
+        assert!(!is_framed(&cookie));
+        let mut long = indication(0x0001, &t, &[]);
+        long.push(0);
+        assert!(!is_framed(&long));
         // an odd value is padded on the wire, and the next attribute is read after the padding
         let m = indication(0x3e99, &t, &[(0xc001, &[1, 2, 3][..]), (0xc002, &[9][..])]);
         assert_eq!(m.len(), 36);
@@ -383,15 +237,25 @@ mod tests {
     }
 
     #[test]
-    fn short_or_unknown_address_values_are_ignored() {
+    fn a_truncated_attribute_ends_the_walk() {
         let t = random_txid();
-        for value in [
-            &[0u8, 1, 0, 0][..],
-            &[0, 3, 0, 1, 1, 2, 3, 4][..],
-            &[0, 2, 0, 1, 1, 2, 3, 4][..],
-        ] {
-            let m = indication(BINDING_SUCCESS, &t, &[(ATTR_XOR_MAPPED, value)]);
-            assert_eq!(decode(&m).unwrap().reflexive, None);
+        let mut m = indication(0x3e99, &t, &[(0xc001, &[1, 2, 3, 4][..])]);
+        // a second attribute declaring 64 bytes it does not have
+        m.extend_from_slice(&[0xc0, 0x02, 0x00, 0x40]);
+        let body = (m.len() - HEADER_LEN) as u16;
+        m[2..4].copy_from_slice(&body.to_be_bytes());
+        assert!(is_framed(&m));
+        assert_eq!(attribute(&m, 0x3e99, 0xc001), Some(&[1u8, 2, 3, 4][..]));
+        assert_eq!(attribute(&m, 0x3e99, 0xc002), None);
+        assert_eq!(
+            attribute_strict(&m, 0x3e99, 0xc001),
+            None,
+            "the strict walk refuses the whole message"
+        );
+        // garbage of every length never panics
+        for n in 0..64 {
+            let junk: Vec<u8> = (0..n).map(|i| (i * 37 + 11) as u8).collect();
+            let _ = attribute_strict(&junk, 0x3e99, 0xc001);
         }
     }
 

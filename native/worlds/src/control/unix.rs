@@ -19,7 +19,7 @@ use std::{
     },
 };
 
-use super::{ControlMsg, Feeder, Transport, WRITER_QUEUE, framing};
+use super::{ControlMsg, Feeder, WRITER_QUEUE, framing};
 use crate::runtime::Hub;
 
 pub const CONNECTIONS_MAX: usize = 8;
@@ -157,7 +157,6 @@ fn start_connection(
     });
     hub.send(Hub::Control(ControlMsg::Opened {
         conn,
-        transport: Transport::Unix,
         writer: writer.clone(),
         inflight: inflight.clone(),
     }))

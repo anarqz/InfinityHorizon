@@ -3,10 +3,9 @@
 //! one role per process:
 //!
 //! ```text
-//! worlds serve --profile private|public --control <endpoint> [options]   # the world engine
+//! worlds serve --profile public --control unix:<path> --bind <addr:port> [options]   # the engine
 //! worlds serve --version                 # also `worlds --version`
 //! worlds serve --health --control unix:<path>
-//! worlds serve --probe-bind <port>
 //! worlds relay                           # not implemented yet: exit 7
 //! worlds agent [options]                 # the world agent (Linux; Windows: exit 7)
 //! ```
@@ -17,7 +16,6 @@ use worlds::{
     alloc::CountingAlloc,
     cli::{self, Command, Endpoint, Role},
     log, log_ids,
-    net::{self, BindFailure},
     runtime::{self, exit},
 };
 
@@ -25,10 +23,6 @@ use worlds::{
 static ALLOC: CountingAlloc = CountingAlloc;
 
 fn main() {
-    // The secret is read once and removed from this process's environment before any other
-    // thread exists (contract §3.1).
-    let secret = std::env::var(cli::SECRET_ENV).ok();
-    remove_secret_from_env();
     let all: Vec<String> = std::env::args().skip(1).collect();
     let args = match cli::parse_role(&all) {
         Ok(Role::Serve(args)) => args,
@@ -47,13 +41,7 @@ fn main() {
             std::process::exit(exit::CONFIG);
         }
     };
-    let env = |name: &str| -> Option<String> {
-        if name == cli::SECRET_ENV {
-            secret.clone()
-        } else {
-            std::env::var(name).ok()
-        }
-    };
+    let env = |name: &str| std::env::var(name).ok();
     let command = match cli::parse(&args, &env) {
         Ok(c) => c,
         Err(field) => {
@@ -65,7 +53,6 @@ fn main() {
     };
     let code = match command {
         Command::Version => version(),
-        Command::ProbeBind(port) => probe_bind(port),
         Command::Health(endpoint) => health(&endpoint),
         Command::Run(rc) => {
             log::start(rc.log_level);
@@ -76,15 +63,6 @@ fn main() {
         }
     };
     std::process::exit(code);
-}
-
-#[allow(unsafe_code)]
-fn remove_secret_from_env() {
-    if std::env::var_os(cli::SECRET_ENV).is_some() {
-        // SAFETY: called first thing in main, before any thread is spawned, so nothing reads
-        // the environment concurrently.
-        unsafe { std::env::remove_var(cli::SECRET_ENV) };
-    }
 }
 
 /// Panics are logged (anonymised) as one line; the hook never exits: a world's fault boundary
@@ -138,28 +116,12 @@ fn version() -> i32 {
     exit::OK
 }
 
-/// Binds the world socket as `world.open` would, holds it 1 s (the firewall prompt's moment),
-/// then exits: 0 bound, 3 in use, 4 denied, 1 other (contract §2.4).
-fn probe_bind(port: u16) -> i32 {
-    match net::bind_world(port) {
-        Ok(_bound) => {
-            std::thread::sleep(Duration::from_secs(1));
-            0
-        }
-        Err(BindFailure::InUse) => 3,
-        Err(BindFailure::Denied) => 4,
-        Err(BindFailure::Other) => 1,
-    }
-}
-
 /// The VM's HEALTHCHECK: connects, `hello` (no controller) + `health`; 0 ready, 1 not.
 #[cfg(unix)]
 fn health(endpoint: &Endpoint) -> i32 {
     use std::io::{BufRead, BufReader};
     use std::os::unix::net::UnixStream;
-    let Endpoint::Unix(path) = endpoint else {
-        return 1;
-    };
+    let Endpoint::Unix(path) = endpoint;
     let Ok(mut stream) = UnixStream::connect(path) else {
         return 1;
     };

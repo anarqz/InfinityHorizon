@@ -2,14 +2,17 @@
 // Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
 //! A world's admission (contract §6.2, normative; ported from the C# `WorldRelayAdmission`,
 //! client f81d09c): the trusted clock, the 45 s host lease (`world.context` only), the verified
-//! snapshot of the punches (`world.admission`), revocations, FIUP, the network hints, and the
-//! per-packet decision the engines ask. Game-agnostic: a game module sees it through
-//! [`super::game::Admit`]. No policy never means allow-all: before a context and after any
-//! clear, everybody but nobody is denied.
+//! snapshot of the punches (`world.admission`), revocations, FIUP, and the per-packet decision
+//! the engines ask. Game-agnostic: a game module sees it through [`super::game::Admit`]. No
+//! policy never means allow-all: before a context and after any clear, everybody is denied.
+//!
+//! An official world (WORLDS_OFFICIAL.md §3, §6) has no player host and always requires proof:
+//! a joiner is admitted only once its socket proved its grant with FIUP (UDP_SOCKET_PROOF.md),
+//! never by an observed endpoint alone.
 
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -19,7 +22,6 @@ use super::{
     fiup::{self, Authority, Lookup, ProofHost},
     grant::{self, Context},
     keys::KeyRing,
-    legs::LegSpec,
 };
 
 /// The host lease (`HostLease`).
@@ -27,7 +29,6 @@ pub const HOST_LEASE_MS: u64 = 45_000;
 /// Revocations last a grant's lifetime plus the clock skew.
 const REVOKED_MS: u64 = ((grant::MAX_LIFETIME_SECS + grant::FUTURE_SKEW_SECS) * 1000) as u64;
 const REVOKED_MAX: usize = 4096;
-const HINTS_MAX: usize = 64;
 
 /// §6.2 "Time": `max(the serverTimeMs-derived clock, the monotonic clock since the first
 /// context)`, never moving back (`EffectiveNow`). Unix milliseconds.
@@ -57,38 +58,29 @@ impl TrustedClock {
     }
 }
 
-/// The world's identity and rules, fixed at `world.open`.
+/// The world's identity, fixed at `world.open`.
 #[derive(Debug, Clone)]
 pub struct Rules {
     pub world_id: String,
-    /// The host's decimal XUID (`player`), or `official:<vmId>`.
-    pub host: String,
-    /// 0 for an `official` host.
-    pub host_xuid: u64,
-    pub is_player: bool,
-    pub require_proof: bool,
-    pub dev_lan_peers: bool,
+    /// The official host's VM id (`world.open`'s `host.vmId`).
+    pub vm_id: String,
 }
 
 impl Rules {
-    /// An official world's VM id (`host` = `official:<vmId>`); `None` for a player host.
-    pub fn official(&self) -> Option<&str> {
-        self.host.strip_prefix("official:")
+    /// The host as the grants name it: `official:<vmId>` (WORLDS_OFFICIAL.md §3).
+    pub fn host(&self) -> String {
+        grant::official_host(&self.vm_id)
     }
 
-    /// The FIUP header's host field (UDP_SOCKET_PROOF.md §2): the host XUID, or the official
-    /// host tag (WORLDS_OFFICIAL.md §3).
+    /// The FIUP header's host field (UDP_SOCKET_PROOF.md §2): the official host tag
+    /// (WORLDS_OFFICIAL.md §3).
     pub fn proof_host(&self) -> u64 {
-        match self.official() {
-            Some(vm) => fiup::official_host_tag(vm),
-            None => self.host_xuid,
-        }
+        fiup::official_host_tag(&self.vm_id)
     }
 }
 
 #[derive(Debug, Clone)]
 struct Entry {
-    grant: String,
     /// Unix seconds.
     expires: i64,
     lifetime_ms: u64,
@@ -110,19 +102,16 @@ struct ProofGrant {
 
 #[derive(Debug, Default)]
 struct Snapshot {
-    entries: HashMap<(u64, SocketAddr), Entry>,
-    lan: HashMap<u64, Entry>,
     /// By grant id: the per-datagram decision finds a grant's authority in O(1).
     proofs: HashMap<[u8; 16], ProofGrant>,
 }
 
-/// One punch as the hints and kicks read it again.
+/// One punch as the kicks read it again.
 #[derive(Debug, Clone)]
 struct PunchInfo {
     xuid: String,
     grant: String,
     kicked: bool,
-    candidates: Option<Value>,
 }
 
 /// What a snapshot produced (the `world.admission` reply and the world's follow-ups).
@@ -130,11 +119,8 @@ struct PunchInfo {
 pub struct Outcome {
     pub admitted: usize,
     pub proof_grants: usize,
-    pub legs: Vec<LegSpec>,
     /// XUIDs of `kicked: true` punches (their peers are dropped).
     pub kicked: Vec<u64>,
-    /// `(grant, revision, candidates)` to punch (the NetworkHints rules).
-    pub hints: Vec<([u8; 16], u32, Vec<SocketAddr>)>,
     /// CR-S67: each XUID's latest signed `voiceBlockedUntil` (0: none).
     pub voice_blocks: BTreeMap<u64, i64>,
 }
@@ -188,136 +174,6 @@ impl Lookup for LiveProofs<'_> {
 
 fn unicast(ip: IpAddr) -> bool {
     fiup::unicast(ip)
-}
-
-/// RFC 1918 (IPv4-mapped unmapped first).
-fn private_ip(ip: IpAddr) -> bool {
-    let ip = match ip {
-        IpAddr::V6(v) => v.to_ipv4_mapped().map_or(ip, IpAddr::V4),
-        v => v,
-    };
-    matches!(ip, IpAddr::V4(v) if v.is_private())
-}
-
-fn loopback(e: SocketAddr) -> bool {
-    crate::stun::plain_endpoint(e).ip().is_loopback()
-}
-
-/// Unix milliseconds of an RFC 3339 instant (`Z` or a numeric offset, optional fraction).
-pub fn rfc3339_ms(s: &str) -> Option<i64> {
-    let b = s.as_bytes();
-    if b.len() < 20
-        || b[4] != b'-'
-        || b[7] != b'-'
-        || !matches!(b[10], b'T' | b't' | b' ')
-        || b[13] != b':'
-        || b[16] != b':'
-    {
-        return None;
-    }
-    let num = |r: std::ops::Range<usize>| -> Option<i64> {
-        let t = s.get(r)?;
-        t.bytes()
-            .all(|c| c.is_ascii_digit())
-            .then(|| t.parse().ok())?
-    };
-    let (y, mo, d, h, mi, se) = (
-        num(0..4)?,
-        num(5..7)?,
-        num(8..10)?,
-        num(11..13)?,
-        num(14..16)?,
-        num(17..19)?,
-    );
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
-        return None;
-    }
-    let mut i = 19;
-    let mut frac_ms = 0i64;
-    if b.get(i) == Some(&b'.') {
-        i += 1;
-        let start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == start {
-            return None;
-        }
-        let digits = &s[start..i.min(start + 3)];
-        frac_ms = digits.parse::<i64>().ok()? * 10i64.pow(3 - digits.len() as u32);
-    }
-    let offset_min = match b.get(i)? {
-        b'Z' | b'z' if i + 1 == b.len() => 0,
-        c @ (b'+' | b'-') if i + 6 == b.len() && b[i + 3] == b':' => {
-            let oh = num(i + 1..i + 3)?;
-            let om = num(i + 4..i + 6)?;
-            let v = oh * 60 + om;
-            if *c == b'-' { -v } else { v }
-        }
-        _ => return None,
-    };
-    // days from the civil date (proleptic Gregorian)
-    let (yy, mm) = if mo <= 2 {
-        (y - 1, mo + 9)
-    } else {
-        (y, mo - 3)
-    };
-    let era = yy.div_euclid(400);
-    let yoe = yy - era * 400;
-    let doy = (153 * mm + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let secs = days * 86_400 + h * 3600 + mi * 60 + se - offset_min * 60;
-    Some(secs * 1000 + frac_ms)
-}
-
-/// `Punch.candidates.candidates` as endpoints (UDP_SOCKET_PROOF.md §6): at most 5, at most one
-/// `public` and four `lan`, unicast, canonical text, no duplicate; `None` when any fails.
-fn candidate_endpoints(list: &Value) -> Option<Vec<SocketAddr>> {
-    let list = list.as_array()?;
-    if list.len() > 5 {
-        return None;
-    }
-    let kind = |c: &Value| c.get("kind").and_then(Value::as_str).map(str::to_string);
-    if list
-        .iter()
-        .filter(|c| kind(c).as_deref() == Some("public"))
-        .count()
-        > 1
-        || list
-            .iter()
-            .filter(|c| kind(c).as_deref() == Some("lan"))
-            .count()
-            > 4
-    {
-        return None;
-    }
-    let mut out = Vec::new();
-    for c in list {
-        if !matches!(kind(c).as_deref(), Some("public" | "lan")) {
-            return None;
-        }
-        let port = u16::try_from(c.get("port")?.as_u64()?)
-            .ok()
-            .filter(|p| *p > 0)?;
-        let text = c.get("ip")?.as_str()?;
-        let ip: IpAddr = text.parse().ok()?;
-        let ok = match ip {
-            IpAddr::V4(v) => (1..224).contains(&v.octets()[0]) && v != Ipv4Addr::BROADCAST,
-            IpAddr::V6(v) => {
-                v.to_ipv4_mapped().is_none() && !v.is_unspecified() && !v.is_multicast()
-            }
-        };
-        if !ok || ip.to_string() != text {
-            return None;
-        }
-        let e = SocketAddr::new(ip, port);
-        if out.contains(&e) {
-            return None;
-        }
-        out.push(e);
-    }
-    Some(out)
 }
 
 impl Gate {
@@ -417,7 +273,6 @@ impl Gate {
                     .unwrap_or("")
                     .to_string(),
                 kicked: p.get("kicked").and_then(Value::as_bool).unwrap_or(false),
-                candidates: p.get("candidates").filter(|c| c.is_object()).cloned(),
             })
             .collect();
         for k in infos.iter().filter(|p| p.kicked) {
@@ -432,7 +287,7 @@ impl Gate {
             }
         }
         let mut snap = Snapshot::default();
-        let host_text = self.rules.host.clone();
+        let host_text = self.rules.host();
         let world_id = self.rules.world_id.clone();
         for (p, info) in punches.iter().zip(&infos) {
             let duplicate = infos.iter().filter(|o| o.grant == info.grant).count() > 1;
@@ -449,16 +304,22 @@ impl Gate {
                 || duplicate
                 || self.revoked.contains_key(&info.grant)
                 || self.revoked.len() >= REVOKED_MAX
-                || xuid == self.rules.host_xuid
             {
                 continue;
             }
-            let observed = p.get("endpoint").and_then(|e| {
-                let ip: IpAddr = e.get("ip")?.as_str()?.parse().ok()?;
-                let port = u16::try_from(e.get("port")?.as_u64()?)
-                    .ok()
-                    .filter(|p| *p > 0)?;
-                unicast(ip).then(|| crate::stun::plain_endpoint(SocketAddr::new(ip, port)))
+            // a punch counts with an observed unicast endpoint or a FIUP key (contract §6.2); only
+            // a FIUP proof ever admits to an official world
+            let observed = p.get("endpoint").is_some_and(|e| {
+                let ip = e
+                    .get("ip")
+                    .and_then(Value::as_str)
+                    .and_then(|t| t.parse::<IpAddr>().ok());
+                let port = e
+                    .get("port")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u16::try_from(n).ok())
+                    .filter(|p| *p > 0);
+                ip.is_some_and(unicast) && port.is_some()
             });
             let mut proof_key: Option<[u8; 32]> = relay.get("udpProof").and_then(|u| {
                 let key = u.get("key")?.as_str()?;
@@ -467,7 +328,7 @@ impl Gate {
                 }
                 super::keys::decode_base64(key)?.try_into().ok()
             });
-            if observed.is_none() && !self.rules.dev_lan_peers && proof_key.is_none() {
+            if !observed && proof_key.is_none() {
                 continue;
             }
             let (claims_b64, sig_b64) = (
@@ -480,30 +341,24 @@ impl Gate {
                 peer_xuid: &info.xuid,
                 // an official world has no host-role grant (WORLDS_OFFICIAL.md §3): its punches
                 // carry the joiners' own grants
-                role: if self.rules.official().is_some() {
-                    "joiner"
-                } else {
-                    "host"
-                },
+                role: "joiner",
                 grant: Some(&info.grant),
             };
-            let (claims, raw_claims, raw_sig) =
-                match grant::verify(claims_b64, sig_b64, ring, unix, ctx) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        if let Some(k) = proof_key.as_mut() {
-                            k.fill(0);
-                        }
-                        continue;
+            let (claims, _, _) = match grant::verify(claims_b64, sig_b64, ring, unix, ctx) {
+                Ok(v) => v,
+                Err(_) => {
+                    if let Some(k) = proof_key.as_mut() {
+                        k.fill(0);
                     }
-                };
+                    continue;
+                }
+            };
             out.admitted += 1;
             let block = claims.voice_blocked_until.unwrap_or(0);
             let e = out.voice_blocks.entry(xuid).or_insert(block);
             *e = (*e).max(block);
             let lifetime = (claims.exp.saturating_mul(1000) - now_ms as i64).max(0) as u64;
             let entry = Entry {
-                grant: claims.grant.clone(),
                 expires: claims.exp,
                 lifetime_ms: lifetime.min(HOST_LEASE_MS),
                 started: mono,
@@ -519,38 +374,12 @@ impl Gate {
                     grant_bytes,
                     ProofGrant {
                         peer: xuid,
-                        entry: entry.clone(),
+                        entry,
                         authority,
                     },
                 ) {
                     old.authority.zero();
                 }
-            }
-            if let Some(o) = observed {
-                snap.entries.insert((xuid, o), entry.clone());
-            }
-            // CR-S57: only the relay the verified grant names is contacted; an official world
-            // has no relay legs (OD-189: direct; its grants carry no `relay` claim)
-            let leg_relay = match self.rules.official() {
-                Some(_) => None,
-                None => claims.relay.as_ref().and_then(|r| {
-                    r.addr
-                        .parse::<Ipv4Addr>()
-                        .ok()
-                        .map(|a| SocketAddr::new(IpAddr::V4(a), r.port))
-                }),
-            };
-            if let Some(relay) = leg_relay {
-                out.legs.push(LegSpec {
-                    grant: grant_bytes,
-                    claims: raw_claims,
-                    signature: raw_sig,
-                    relay,
-                    forward: p.get("transport").and_then(Value::as_str) == Some("relay"),
-                });
-            }
-            if self.rules.dev_lan_peers {
-                snap.lan.insert(xuid, entry);
             }
         }
         out.proof_grants = snap.proofs.len();
@@ -571,69 +400,13 @@ impl Gate {
                 p.authority.zero();
             }
         }
-        out.hints = self.hints(mono);
         out
     }
 
-    /// The punches' candidates to punch (`NetworkHints`, §6.2): at most 64, not kicked,
-    /// revision > 0, a live FIUP authority, unexpired, at most 30 s long, not from the future.
-    fn hints(&mut self, mono: u64) -> Vec<([u8; 16], u32, Vec<SocketAddr>)> {
-        let now = self.now_ms(mono) as i64;
-        let host_live = self.host_live(mono);
-        let lookup = LiveProofs {
-            snapshot: self.snapshot.as_ref(),
-            host_live,
-            unix: now / 1000,
-            mono,
-        };
-        let mut out = Vec::new();
-        for p in &self.punches {
-            if out.len() >= HINTS_MAX {
-                break;
-            }
-            let Some(c) = p.candidates.as_ref().filter(|_| !p.kicked) else {
-                continue;
-            };
-            let Some(revision) = c
-                .get("revision")
-                .and_then(Value::as_u64)
-                .and_then(|r| u32::try_from(r).ok())
-                .filter(|r| *r > 0)
-            else {
-                continue;
-            };
-            let Some(grant) = grant::uuid_bytes(&p.grant) else {
-                continue;
-            };
-            if lookup.authority(&grant).is_none() {
-                continue;
-            }
-            let (Some(generated), Some(expires)) = (
-                c.get("generatedAt")
-                    .and_then(Value::as_str)
-                    .and_then(rfc3339_ms),
-                c.get("expiresAt")
-                    .and_then(Value::as_str)
-                    .and_then(rfc3339_ms),
-            ) else {
-                continue;
-            };
-            if expires <= now || expires - generated > 30_000 || generated > now + 1000 {
-                continue;
-            }
-            if let Some(eps) = c.get("candidates").and_then(candidate_endpoints) {
-                out.push((grant, revision, eps));
-            }
-        }
-        out
-    }
-
-    /// The decision for (xuid, endpoint, kind 0 game / 1 hook), in §6.2's order.
+    /// The decision for (xuid, endpoint, kind 0 game / 1 hook), in §6.2's order: a live lease,
+    /// then the endpoint's FIUP proof of a live grant (proof is always required).
     pub fn allowed(&mut self, xuid: u64, endpoint: SocketAddr, kind: u8, mono: u64) -> bool {
         let endpoint = crate::stun::plain_endpoint(endpoint);
-        if self.rules.host_xuid != 0 && xuid == self.rules.host_xuid {
-            return self.rules.is_player && self.host_live(mono) && loopback(endpoint);
-        }
         if self.snapshot.is_none() || !self.host_live(mono) {
             return false;
         }
@@ -648,29 +421,12 @@ impl Gate {
             unix,
             mono,
         };
-        if proof.allowed(&lookup, xuid, kind, endpoint, mono, unix) {
-            return true;
-        }
-        if self.rules.require_proof {
-            return false;
-        }
-        let Some(s) = self.snapshot.as_ref() else {
-            return false;
-        };
-        if s.entries
-            .get(&(xuid, endpoint))
-            .is_some_and(|e| e.live(unix, mono))
-        {
-            return true;
-        }
-        self.rules.dev_lan_peers
-            && private_ip(endpoint.ip())
-            && s.lan.get(&xuid).is_some_and(|e| e.live(unix, mono))
+        proof.allowed(&lookup, xuid, kind, endpoint, mono, unix)
     }
 
     /// Whether `xuid` holds a live grant its endpoint can prove (a held OpenConnection waits).
     pub fn proof_expected(&mut self, xuid: u64, mono: u64) -> bool {
-        if xuid == self.rules.host_xuid || !self.host_live(mono) {
+        if !self.host_live(mono) {
             return false;
         }
         let unix = (self.now_ms(mono) / 1000) as i64;
@@ -737,18 +493,6 @@ impl Gate {
         let Some(mut s) = self.snapshot.take() else {
             return;
         };
-        let grants: Vec<String> = s
-            .entries
-            .iter()
-            .filter(|(k, _)| k.0 == xuid)
-            .map(|(_, e)| e.grant.clone())
-            .chain(s.lan.get(&xuid).map(|e| e.grant.clone()))
-            .collect();
-        for g in grants {
-            self.revoke_grant(&g, mono);
-        }
-        s.entries.retain(|k, _| k.0 != xuid);
-        s.lan.remove(&xuid);
         let id = xuid.to_string();
         let punched: Vec<String> = self
             .punches

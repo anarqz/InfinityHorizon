@@ -22,7 +22,6 @@ pub const PEER_LEFT: &str = "peer.left";
 pub const WORLD_EMPTY: &str = "world.empty";
 pub const WORLD_OCCUPIED: &str = "world.occupied";
 pub const WORLD_CLOSED: &str = "world.closed";
-pub const WORLD_NETWORK: &str = "world.network";
 pub const GAME_SESSION_REQUEST: &str = "world.gameSession.request";
 pub const WATCH_REPORT: &str = "watch.report";
 pub const PEER_REJECTED: &str = "peer.rejected";
@@ -32,13 +31,10 @@ pub const DS_DRAINING: &str = "ds.draining";
 pub const EVENTS_DROPPED: &str = "events.dropped";
 
 // notice ids (contract §4.7)
-pub const N_BIND_FAILED: &str = "ds.world.bind_failed";
 pub const N_NO_ROADTRIP: &str = "ds.world.no_roadtrip";
 pub const N_NO_PARTS: &str = "ds.world.no_parts";
 pub const N_ADMISSION_LAPSED: &str = "ds.admission.lapsed";
 pub const N_ADMISSION_CLEARED: &str = "ds.admission.cleared";
-pub const N_UPNP_MAPPED: &str = "ds.upnp.mapped";
-pub const N_UPNP_FAILED: &str = "ds.upnp.failed";
 pub const N_CAPACITY_REFUSED: &str = "ds.capacity.refused";
 pub const N_CPU_GUARD: &str = "ds.cpu.guard";
 pub const N_MEMORY_HIGH: &str = "ds.memory.high";

@@ -3,22 +3,24 @@
 Infinity Worlds: one Rust program that hosts online worlds (formerly `dedicated-server`; contract
 DEDICATED_SERVER.md, WORLDS_OFFICIAL.md). One binary, one role per process: `worlds serve` is the
 world engine described here, `worlds agent` the world agent of a Worlds host (below; Linux), and
-`worlds relay` is named but not implemented yet (exit 7). The launcher runs it as a
-child process for a private world (one world per process, its own UDP port); a Worlds host VM runs it
-as one long-lived process for official (public) worlds: several worlds on one public UDP socket
-(`--bind`), players connecting directly, no relay (OD-189). Both are
-the same build and the same code; a profile (`--profile private|public`) sets the limits.
+`worlds relay` is named but not implemented yet (exit 7). A Worlds host VM runs it as one
+long-lived process for official worlds: several worlds on one public UDP socket (`--bind`),
+players connecting directly, no relay (OD-189). There are no player-hosted worlds (OD-208): the
+launcher runs no engine, and the engine has no private profile, no world socket of its own, no
+STUN to a host, no UPnP, no punching and no relay legs (WORLDS_OFFICIAL.md §6). `--profile public`
+stays the contract's spelling.
 
 It holds no disk state, writes nothing, ships no game data, and opens no listener besides its
-world socket(s) and its control endpoint.
+public socket and its control endpoint.
 
 ## Layout
 
 - **Game-agnostic core** (`src/core`, `src/control`, `src/runtime.rs`, `src/net.rs`, `src/stun.rs`,
-  `src/nat.rs`, `src/upnp.rs`, `src/log.rs`): the control channel, worlds, admission state, limits
-  and the public memory budget, the timer wheel, events, the loop, sockets and logs. The core is
-  deterministic and I/O-free (`core::Server`): time, randomness and socket binding are supplied
-  by the caller, so the same API is driven by the process loop and by golden-vector replays.
+  `src/log.rs`): the control channel, worlds, admission state, limits and the memory budget, the
+  timer wheel, events, the loop, the public socket and logs (`stun.rs`: the side channels'
+  framing only). The core is deterministic and I/O-free (`core::Server`): time, randomness,
+  memory and CPU are supplied by the caller, so the same API is driven by the process loop and by
+  golden-vector replays.
 - **One module per game** behind `core::game::{Game, GameWorld}`: `world.open` names the game
   (`"game": "fh2"`) and every game-scoped field (`races`, `voice`, `watch`, `settings`) is parsed
   and owned by that module. `src/fh2` is Forza Horizon 2: the NerdCore codec (`codec`: written for
@@ -34,47 +36,43 @@ channel, the strict grant claims) and the platform's own crypto crates at its ve
 FIUP challenge nonce).
 
 ```sh
-cargo build --release                                    # Linux (the VM: add --target x86_64-unknown-linux-musl)
-cargo build --release --target x86_64-pc-windows-msvc    # Windows (the launcher's build; MSVC linker)
-cargo build --release --target x86_64-pc-windows-gnu     # Windows, from Linux (needs a MinGW or zig linker)
+cargo build --release --target x86_64-unknown-linux-musl   # the Worlds host VM
+cargo test                                                   # any platform (on Windows: the tests only)
 ```
 
 Set `DS_COMMIT=<40 lowercase hex>` when building to stamp the commit that `--version` and
-`hello.build.commit` report (40 zeros otherwise). On `x86_64-pc-windows-msvc`, `build.rs` writes the
-executable's VERSIONINFO (`FileDescription` "Infinity Worlds", `OriginalFilename` `worlds.exe`, contract §2.4) as a compiled
-`.res` that the MSVC linker takes directly: no resource compiler and no extra dependency.
-`DS_PRODUCT_VERSION` (the launcher's version, e.g. `2.0.5`) sets its product and file versions
-(the crate version otherwise). Other targets carry no VERSIONINFO.
+`hello.build.commit` report (40 zeros otherwise), and `DS_PRODUCT_VERSION` the version they report
+(the crate version otherwise). The client ships no `worlds.exe` any more (OD-208), so there is no
+Windows VERSIONINFO (no `build.rs`): a Windows build runs the tests, and its `serve` has no control
+endpoint (exit 3).
 
 ## Run
 
 ```text
-worlds serve --profile private|public --control <endpoint> [options]
+worlds serve --profile public --control unix:<path> --bind <addr:port> [options]
 worlds serve --version          # also: worlds --version
 worlds serve --health --control unix:<path>
-worlds serve --probe-bind <port>
 worlds agent [options]          # the world agent (Linux; Windows: exit 7)
 worlds relay                    # not implemented yet: exit 7
 ```
 
 | Option | Environment | Default |
 | --- | --- | --- |
-| `--profile` | `FI_DS_PROFILE` | required |
-| `--control` | `FI_DS_CONTROL` | required: `unix:<absolute path>` (Linux) or `pipe:\\.\pipe\fi-ds-<32 hex>` (Windows) |
-| (none) | `FI_DS_CONTROL_SECRET` | required with `pipe:`; read once, then removed from the environment |
+| `--profile` | `FI_DS_PROFILE` | required: `public` (its only value) |
+| `--control` | `FI_DS_CONTROL` | required: `unix:<absolute path>` |
 | `--game-db` | `FI_DS_GAME_DB` | none; deprecated and ignored (the catalogs come by `catalog.set` / `catalog.parts`) |
 | `--grant-keys` | `FI_DS_GRANT_VERIFY_KEYS` | none (`keys.set` replaces it) |
-| `--bind` | `FI_DS_BIND` | public: required, the one public UDP socket `addr:port` (`[::]:port` dual-stack); private: refused |
-| `--max-worlds` | `FI_DS_MAX_WORLDS` | private 1, public 4 (1-8) |
-| `--max-seats` | `FI_DS_MAX_SEATS` | private 12, public 48 (1-96) |
-| `--memory-limit-mb` | `FI_DS_MEMORY_LIMIT_MB` | private 0 (off), public 400 (at least 128) |
+| `--bind` | `FI_DS_BIND` | required: the one public UDP socket `addr:port` (`[::]:port` dual-stack) |
+| `--max-worlds` | `FI_DS_MAX_WORLDS` | 4 (1-8) |
+| `--max-seats` | `FI_DS_MAX_SEATS` | 48 (1-128) |
+| `--memory-limit-mb` | `FI_DS_MEMORY_LIMIT_MB` | 400 (128-65536) |
 | `--drain-seconds` | `FI_DS_DRAIN_SECONDS` | 25 (0-300) |
 | `--stats-seconds` | `FI_DS_STATS_SECONDS` | 60 (0 or 10-3600) |
-| `--log-level` | `FI_DS_LOG_LEVEL` | `info` (`debug` refused in the public profile) |
+| `--log-level` | `FI_DS_LOG_LEVEL` | `info` (`debug` refused) |
 
 Exit codes: 0 clean stop, 2 invalid configuration, 3 control endpoint unavailable, 4 control
 authentication failed, 5 no common protocol version, 6 public socket or budget not set up,
-7 role not implemented yet (`worlds relay`; `worlds agent` on Windows), 70 internal fault outside any world. `--probe-bind`: 0 bound, 3 in use, 4 denied, 1 other.
+7 role not implemented yet (`worlds relay`; `worlds agent` on Windows), 70 internal fault outside any world.
 
 ### `worlds agent` (WORLDS_OFFICIAL.md §4, §5; DEDICATED_SERVER.md §16)
 
@@ -110,9 +108,9 @@ drops. They never carry a player identity, an address, a key or game payload byt
 
 The control channel speaks JSON lines, protocol version 1: `hello`, `keys.set`, `capacity`,
 `health`, `stats`, `drain`, `shutdown`, and the `world.*` commands, with events back to the one
-controller session. A Unix socket (directory `0700`, socket `0600`) on Linux; on Windows the
-launcher creates the named pipe and the server connects to it (retrying for up to 5 s) and proves
-it reached the right launcher with the per-launch secret.
+controller session (`controller.kind: "vm"`, the agent). A Unix socket (directory `0700`, socket
+`0600`) on Linux, no secret (the launcher's named pipe and its per-launch secret went with
+player-hosted worlds, OD-208). A controller that leaves keeps the worlds.
 
 ## Decisions taken where the specification was silent (step 1)
 
@@ -127,13 +125,10 @@ it reached the right launcher with the per-launch secret.
   world closes (no timer with no worlds).
 - **Unix endpoint:** the directory is created `0700` when missing; an existing directory that
   group or others can enter is refused (exit 3); a stale socket nobody answers on is replaced.
-- **Pipe client:** retries opening the pipe (not created yet, busy) every 50 ms for 5 s instead of
-  `WaitNamedPipe`, and asks for identification-only impersonation. One thread reads and writes
-  (a synchronous pipe handle serialises its I/O), reading only what `PeekNamedPipe` reports.
 - **Sessions:** a request from a non-controller connection other than `hello`, `health`,
   `capacity` or `stats` is `bad_request {field: "op", reason: "controller_only"}`. `unauthorized`
-  and `proto_unsupported` end the process only for the pipe or a controller `hello`, never for a
-  health probe.
+  closes only its connection; `proto_unsupported` ends the process only for a controller `hello`,
+  never for a health probe.
 - **Event `seq`** is assigned when an event leaves the bounded queue, so a drop is reported by
   `events.dropped` before the next event and the sequence the controller reads never has an
   unexplained gap; coalescing a newer `world.state` over an unsent one is not a drop.
@@ -142,9 +137,9 @@ it reached the right launcher with the per-launch secret.
 - **Lapse without a context:** a world that never received `world.context` counts its 45 s from
   `world.open` for the self-close of a controllerless public world.
 - **`world.open` without `game`** means `"fh2"` (the only game before the field existed).
-- **`world.open`** takes the tagged host (OD-186 item 7): the private profile only `{kind: "player", xuid, isPlayer}`,
-  the public profile only `{kind: "official", vmId}` (`vmId` `[a-z0-9-]{1,32}`; grants name it `host: {official:
-  vmId}`, the FIUP header the official host tag, WORLDS_OFFICIAL.md §3). The public profile forces `requireProof`. `hello.proto` is an integer (the step-1 range `[lo, hi]` is still read).
+- **`world.open`** takes the tagged host (OD-186 item 7): only `{kind: "official", vmId}` (`vmId`
+  `[a-z0-9-]{1,32}`; grants name it `host: {official: vmId}`, the FIUP header the official host tag,
+  WORLDS_OFFICIAL.md §3). `requireProof` is read and forced; `devLanPeers: true` and `network` are refused. `hello.proto` is an integer (the step-1 range `[lo, hi]` is still read).
   `world.context` carries the context only and answers `{leaseUntilMs}`; `world.admission` carries the punches only.
 - **Panics:** a panic inside a world's command, datagram or tick closes only that world
   (`world.closed {reason: "fault"}`); the panic hook only logs (anonymised); a panic on the loop
@@ -156,9 +151,9 @@ it reached the right launcher with the per-launch secret.
 
 Step 1 was the process and its scaffold. Step 2 ported the free-roam engine (`src/fh2/engine/`)
 from the Infinity C# world engine's behaviour, judged by WINDOWS' D2 golden vectors at the engine
-level. Step 3 adds admission (`core/admission.rs`, `grant.rs`, `fiup.rs`), the relay legs
-(`core/legs.rs`), the private world's network (NAT, UPnP, granted punches) and free-roam events
-(`fh2/engine/races.rs`, `options.rs`): a world serves granted players.
+level. Step 3 adds admission (`core/admission.rs`, `grant.rs`, `fiup.rs`) and free-roam events
+(`fh2/engine/races.rs`, `options.rs`): a world serves granted players. (The private world's
+network, the relay legs and the launcher's pipe went with player-hosted worlds, OD-208.)
 The game features come next, each one passing its golden vectors recorded from the current C#
 engine, in this recommended order:
 
@@ -166,9 +161,9 @@ engine, in this recommended order:
 | --- | --- | --- | --- |
 | 0 | NerdCore codec (`src/fh2/codec/`) | fh2 | core written for Infinity from NERDCORE_WIRE.md, the C# engine and fh2-mods as references (OD-187; no code copied): bit stream, header, reliability state, objects, synced variables, every message body but 22 (none exists); every §7 variable list (7.1-7.12), checked against the corpus's object payloads (**done**) |
 | 1 | Free roam core: NerdCore handshake and refusals 1-4, acks and resends, keepalive, TimeSync, object history with `HistoryMaxEntries` (trim, then drop; 16384), queue and rate caps, quiet drop, takeover; quiet joins (T25), weather, group navigation, held opens, the car-state side channel | fh2 | **done** for free roam: the D2 Delivery, Boundary, WorldFoundation, Integration and SideChannel suites and the free-roam RelayEngineTests replay exactly |
-| 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations, network hints, the private-address rule | core | **done** (private tests `admission.rs`) |
-| 3 | Private network: STUN/NAT and UPnP wired to the world socket (lease, renewal, alternate port), punches, `world.network` | core | **done**: wired, granted punches (2 per candidate, 10 per 15 s per grant), the 5 s STUN keepalive between rounds (one IPv4 server in turn) |
-| 4 | Relay legs (FIR1 HOST role) for private worlds; the public profile's one direct socket | core | **done**: private legs; public worlds share one public socket (`--bind`), a FIUP frame routed by its grant id, every other datagram by its proven endpoint; no legs, STUN, UPnP or punches (OD-189) |
+| 2 | Admission: relay-grant verification (Ed25519), FIUP v1 proof host, held opens, kicks and revocations; proof always required (network hints and the private-address rule went with player-hosted worlds, OD-208) | core | **done** (private tests `admission.rs`) |
+| 3 | Private network: STUN/NAT and UPnP wired to the world socket, punches, `world.network` | core | **removed** (OD-208: players host no world; WORLDS_OFFICIAL.md §6) |
+| 4 | The one direct public socket (relay legs for private worlds: removed, OD-208) | core | **done**: official worlds share one public socket (`--bind`), a FIUP frame routed by its grant id, every other datagram by its proven endpoint; no legs, STUN, UPnP or punches (OD-189) |
 | 5 | Side channels: car state, control/state, their authorisation and rates | fh2 | livery is retired and dropped |
 | 6 | Engine routing by lobby type, car meet engines 3 and 6, moves between engines, weather, quiet joins, the 30 s seat behaviour | fh2 | **done** (`fh2/mod.rs`): each OpenConnection goes to its lobby's engine (made on first use), a seat follows its endpoint (AdmittedLate included), a public world runs its one `activity` (refusal 4 for the others) |
 | 7 | Races: grid, start, scores, departures, deadlines; two players for everything; event progress HUD (43/44, start line); race-end split and finishers staying participants | fh2 | **done** (RaceLifecycle, GameOptions, EventProgress suites) |
@@ -262,8 +257,8 @@ engine, in this recommended order:
   roadTrip: {events}}` carries the Road Trip rows the reference reads (event id, location, race mode,
   the mode's minimum players, the allowed classes; ≤ 1024 events, latest-wins, idempotent);
   `catalog.parts` answers the parts rule's `catalog.need` per model (64-model LRU). A Road Trip
-  OpenConnection with no catalog: `ds.world.no_roadtrip` once, and free roam takes it (private) or
-  refusal 4 (a public Road Trip world). `--game-db` is accepted and ignored.
+  OpenConnection with no catalog: `ds.world.no_roadtrip` once, and a free roam world takes it or
+  refusal 4 (a Road Trip or car meet world). `--game-db` is accepted and ignored.
 - **Keys** (decision 2): `keys.set` refuses a key that does not decode canonically, is of small
   order or lies outside the prime-order subgroup (`is_torsion_free`), as the reference's
   `ValidatePublicKeyFull`.
@@ -274,8 +269,8 @@ engine, in this recommended order:
 - **Corrections where no vector depends on the C#** (decision 4): `Clear()` also forgets the event
   and its owner; an unknown engine-level voice mode is off. The vectors settle ReleaseJoiner's
   journal targets and AssignTeams as the reference does them.
-- **Public worlds:** `world.open.activity` (and `carMeetLobby`) is required in the public profile and
-  refused in the private one; `lobbies` lists only that activity's lobby.
+- **Official worlds:** `world.open.activity` (and `carMeetLobby`) is required; `lobbies` lists only
+  that activity's lobby.
 
 ## Decisions taken for private official worlds (T-L9; WORLDS_OFFICIAL.md §12.8b, T-R3)
 
@@ -283,8 +278,8 @@ engine, in this recommended order:
   answer. The agent then sends `world.context` with `world.private: true` (every context of that
   world from then on), stops counting the world as a spare, closes it as a group world
   (`GROUP_HOLD`, counted from the promotion) and logs `agent.world.private`. One way: a context
-  without the member never makes it public again. Only a public-profile `freeroam` or `roadtrip`
-  world takes it; a car meet world, the private profile (dormant, A14) or a non-boolean value is
+  without the member never makes it public again. Only a `freeroam` or `roadtrip`
+  world takes it; a car meet world or a non-boolean value is
   `bad_request {field: "world.private"}`, and nothing changes.
 - **The engine:** SessionHostSynced `PrivacyMode` (var 1) = 1 InviteOnly, to the members and in
   every later snapshot. The leader is the longest-present synced member (earliest sync, the
@@ -315,6 +310,7 @@ contributors) was an inspiration and a reference for this work. No code from it 
 **References (owner decision OD-187, final rule).** This server was written for Infinity with these references: the
 Infinity C# world engine (the launcher's former in-process WorldServer, client `b43618a`) for every behaviour, and its
 golden vectors; our NERDCORE_WIRE.md for the game's network format; fh2-mods' code as inspiration and reference; RFC
-8489/5389 (STUN) and the UPnP IGD WANIPConnection/SSDP specifications for NAT discovery and port mapping. No code is
-copied from fh2-mods or from the retired Beta relay (`deprecated/native-relay`); the STUN, UPnP, NAT and car-state
+8489/5389 (STUN) for the side channels' framing (the UPnP and NAT discovery modules built from the UPnP IGD and SSDP
+specifications went with player-hosted worlds, OD-208). No code is
+copied from fh2-mods or from the retired Beta relay (`deprecated/native-relay`); the STUN and car-state
 modules were rewritten from those specifications for this server, and no new reverse engineering was done for it.

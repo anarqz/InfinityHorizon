@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-//! The world's UDP socket (contract §5.1 "Bind"): one IPv6 socket in dual mode (IPV6_V6ONLY off,
-//! exclusive address use) on `[::]:port`. An IPv6 "address in use" is a failure, never a fall-back;
-//! any other IPv6 error (or no IPv6 on the machine) falls back to an IPv4 socket on the same port.
-//! The port never moves.
+//! The public UDP socket every world shares (contract §5.2, "Bind" of §5.1): on `[::]:port` one
+//! IPv6 socket in dual mode (IPV6_V6ONLY off, exclusive address use). An IPv6 "address in use" is
+//! a failure, never a fall-back; any other IPv6 error (or no IPv6 on the machine) falls back to an
+//! IPv4 socket on the same port. The port never moves.
 //!
 //! std cannot set IPV6_V6ONLY before bind (std's `UdpSocket::bind` is socket+bind in one call),
 //! so the socket is made here with the system's own socket/setsockopt/bind (std already links libc
@@ -14,7 +14,7 @@ use std::{
     net::{IpAddr, SocketAddr, UdpSocket},
 };
 
-/// Why a world socket could not be bound (`bind_failed {reason}`, `--probe-bind` exit codes).
+/// Why the public socket could not be bound (`ds.start.failed {reason}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindFailure {
     InUse,
@@ -40,14 +40,14 @@ impl BindFailure {
     }
 }
 
-/// A bound world socket; `dual` is false for the IPv4-only fall-back.
+/// A bound socket; `dual` is false for the IPv4-only fall-back.
 pub struct Bound {
     pub socket: UdpSocket,
     pub dual: bool,
 }
 
-/// Binds the private world socket on `port` (§5.1).
-pub fn bind_world(port: u16) -> Result<Bound, BindFailure> {
+/// `[::]:port` dual-stack, else IPv4 on the same port (§5.1 "Bind").
+fn bind_dual(port: u16) -> Result<Bound, BindFailure> {
     match sys::bind_v6_dual(port) {
         Ok(socket) => Ok(Bound { socket, dual: true }),
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => Err(BindFailure::InUse),
@@ -61,12 +61,11 @@ pub fn bind_world(port: u16) -> Result<Bound, BindFailure> {
     }
 }
 
-/// Binds the public profile's one socket (§5.2) on `--bind`: `[::]:port` dual-stack with the
-/// IPv4 fall-back exactly as a private world's socket (§5.1); any other literal is a plain bind
-/// of that address.
+/// Binds the one public socket (§5.2) on `--bind`: `[::]:port` dual-stack with the IPv4
+/// fall-back (§5.1 "Bind"); any other literal is a plain bind of that address.
 pub fn bind_public(addr: SocketAddr) -> Result<Bound, BindFailure> {
     if addr.ip() == IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED) {
-        return bind_world(addr.port());
+        return bind_dual(addr.port());
     }
     match UdpSocket::bind(addr) {
         Ok(socket) => Ok(Bound {
@@ -97,31 +96,15 @@ pub fn norm_ip(ip: IpAddr) -> IpAddr {
 
 /// The key every per-IP limit counts under: an IPv4 address (IPv4-mapped IPv6 unmapped) as it
 /// is, an IPv6 address as its /64 (one subscriber's prefix: rotating addresses inside it share
-/// one budget). A relay leg's virtual peer keeps its whole address (its low bytes are its
-/// grant's, never one subscriber's).
+/// one budget).
 pub fn ip_key(endpoint: SocketAddr) -> IpAddr {
     match norm_ip(endpoint.ip()) {
-        IpAddr::V6(v6) if !crate::core::legs::is_virtual(endpoint) => {
+        IpAddr::V6(v6) => {
             let mut o = v6.octets();
             o[8..].fill(0);
             IpAddr::V6(o.into())
         }
         ip => ip,
-    }
-}
-
-pub fn is_loopback(ip: IpAddr) -> bool {
-    norm_ip(ip).is_loopback()
-}
-
-/// RFC 1918 / ULA / link-local: an address that never crosses the Internet.
-pub fn is_private_ip(ip: IpAddr) -> bool {
-    match norm_ip(ip) {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
-        IpAddr::V6(v6) => {
-            let s = v6.segments()[0];
-            (s & 0xfe00) == 0xfc00 || (s & 0xffc0) == 0xfe80
-        }
     }
 }
 

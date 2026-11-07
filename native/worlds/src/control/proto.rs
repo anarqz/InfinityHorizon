@@ -17,7 +17,6 @@ pub const DRAINING: &str = "draining";
 pub const CAPACITY: &str = "capacity";
 pub const EXISTS: &str = "exists";
 pub const NOT_FOUND: &str = "not_found";
-pub const BIND_FAILED: &str = "bind_failed";
 pub const NO_KEYS: &str = "no_keys";
 pub const CONTEXT_INVALID: &str = "context_invalid";
 pub const STALE: &str = "stale";

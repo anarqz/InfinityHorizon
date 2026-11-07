@@ -1,13 +1,14 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 //! `RelaySettings` (contract §7, `W/RelayState.cs`, client `03300b4`): the per-engine settings,
-//! their profile defaults (§8) and the `world.open` `settings` overrides with the C# validation
-//! (`W/RelayEngine.cs:60-72`). Unknown keys are `bad_request {field: "settings.<name>"}`.
+//! their defaults (§8: the C# ones with the official worlds' tighter caps) and the `world.open`
+//! `settings` overrides with the C# validation (`W/RelayEngine.cs:60-72`). Unknown keys are
+//! `bad_request {field: "settings.<name>"}`.
 
 use serde_json::{Map, Value};
 
-use crate::{control::proto::CmdError, core::Profile};
+use crate::control::proto::CmdError;
 
-/// The public profile's per-peer history cap (contract §8): 512 Kib, one object's hard guard.
+/// The per-peer history cap (contract §8): 512 Kib, one object's hard guard.
 pub const PUBLIC_HISTORY_MAX_BITS: u64 = 512 * 1024;
 /// The most bits an object message's prefix takes before its payload: message id 7, router 4,
 /// key and type at most 26, sequence 8, payload length 14 (59, rounded up).
@@ -50,11 +51,18 @@ pub struct RelaySettings {
     pub history_trim_entries: u64,
 }
 
+impl Default for RelaySettings {
+    fn default() -> RelaySettings {
+        RelaySettings::new()
+    }
+}
+
 impl RelaySettings {
-    /// The C# defaults, with the public profile's tighter caps (contract §8): its smaller
-    /// history cap keeps a joiner's fitted queue (eleven histories) within 1 MiB.
-    pub fn for_profile(profile: Profile) -> RelaySettings {
-        let mut s = RelaySettings {
+    /// The C# defaults with the official worlds' tighter caps (contract §8): history 512 Kib
+    /// (not 2 Mib), queue 4 Mib and 2048 messages (not 8 Mib and 4096), 8 unsynced (not 32). The
+    /// smaller history cap keeps a joiner's fitted queue (eleven histories) within 1 MiB.
+    pub fn new() -> RelaySettings {
+        RelaySettings {
             weather_seed: None,
             tag_seed: None,
             team_seed: None,
@@ -70,10 +78,10 @@ impl RelaySettings {
             game_options_gap_ms: 15_000,
             sync_complete_ms: 10_000,
             reliable_window: 128,
-            queue_max_messages: 4096,
+            queue_max_messages: 2048,
             unsynced_timeout_ms: 3000,
             max_peers_per_ip: 2,
-            max_unsynced: 32,
+            max_unsynced: 8,
             handshakes_per_second: 4,
             takeover_quiet_ms: 3000,
             rate_packets: 300,
@@ -81,18 +89,11 @@ impl RelaySettings {
             rate_bytes: 256 * 1024,
             abuse_ms: 5000,
             abuse_ban_ms: 60_000,
-            history_max_bits: 2 * 1024 * 1024,
+            history_max_bits: PUBLIC_HISTORY_MAX_BITS,
             history_max_entries: 16_384,
-            queue_max_bits: 8 * 1024 * 1024,
+            queue_max_bits: 4 * 1024 * 1024,
             history_trim_entries: 16_384,
-        };
-        if profile == Profile::Public {
-            s.history_max_bits = PUBLIC_HISTORY_MAX_BITS;
-            s.queue_max_bits = 4 * 1024 * 1024;
-            s.queue_max_messages = 2048;
-            s.max_unsynced = 8;
         }
-        s
     }
 
     /// Makes a join's snapshot fit the joiner's reliable queue (contract §8): the snapshot holds
@@ -190,19 +191,17 @@ mod tests {
 
     #[test]
     fn a_full_world_of_histories_fits_one_joiners_queue() {
-        for profile in [Profile::Private, Profile::Public] {
-            let mut s = RelaySettings::for_profile(profile);
-            s.fit_join_snapshot(12);
-            // eleven others at their caps, prefixes included: the snapshot fits the queue
-            assert!(s.history_trim_entries * 11 <= s.queue_max_messages);
-            let snapshot = s.history_max_bits + s.history_trim_entries * SNAPSHOT_PREFIX_BITS;
-            assert!(snapshot * 11 <= s.queue_max_bits);
-        }
-        let private = RelaySettings::for_profile(Profile::Private);
-        assert_eq!(private.history_max_bits, 2 * 1024 * 1024);
-        let mut s = private;
+        let mut s = RelaySettings::new();
+        s.fit_join_snapshot(12);
+        // eleven others at their caps, prefixes included: the snapshot fits the queue
+        assert!(s.history_trim_entries * 11 <= s.queue_max_messages);
+        let snapshot = s.history_max_bits + s.history_trim_entries * SNAPSHOT_PREFIX_BITS;
+        assert!(snapshot * 11 <= s.queue_max_bits);
+        let defaults = RelaySettings::new();
+        assert_eq!(defaults.history_max_bits, PUBLIC_HISTORY_MAX_BITS);
+        let mut s = defaults;
         s.fit_join_snapshot(1);
-        assert_eq!(s.history_trim_entries, 4096);
+        assert_eq!(s.history_trim_entries, 2048);
         assert_eq!(
             s.history_max_entries, 16_384,
             "the drop rule is the reference's"
@@ -212,7 +211,7 @@ mod tests {
     #[test]
     fn the_public_worst_case_fits_the_section_8_reservation() {
         for seats in 1..=12usize {
-            let mut s = RelaySettings::for_profile(Profile::Public);
+            let mut s = RelaySettings::new();
             s.fit_join_snapshot(seats);
             // a joiner's queue stays within 1 MiB at any world size
             assert!(

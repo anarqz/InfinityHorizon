@@ -3,7 +3,7 @@ name = "worlds"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
-description = "Infinity Worlds: the world engine for private (launcher) and public (Worlds host VM) worlds"
+description = "Infinity Worlds: the world engine of official worlds (a Worlds host VM)"
 publish = false
 
 # A standalone crate with its own workspace (not part of any other workspace).
@@ -23,7 +23,7 @@ default = []
 # checks. Never enabled in a release build.
 test-hooks = []
 
-# Exact pins; no C code, so the Windows build needs no C toolchain. serde/serde_json: the control
+# Exact pins; no C code in the engine (a Windows build runs the tests without a C toolchain). serde/serde_json: the control
 # channel's JSON and the strict grant claims. The crypto is the platform's own crates at the same
 # versions (fi-relay, fi-auth, matchmaking): ed25519-dalek verifies relay grants (contract §6.2),
 # hmac + sha2 are FIUP v1's HMAC-SHA256 (UDP_SOCKET_PROOF.md), getrandom the FIUP challenge nonce.

@@ -552,7 +552,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::{super::testkit, *};
-    use crate::{core::Profile, fh2::RelaySettings};
+    use crate::fh2::RelaySettings;
 
     /// Admits everyone and has a controller to ask for sessions.
     struct Asks;
@@ -579,7 +579,7 @@ mod tests {
 
     fn car_meet() -> Engine {
         let settings = super::super::EngineSettings {
-            relay: RelaySettings::for_profile(Profile::Public),
+            relay: RelaySettings::new(),
             max_players: 12,
             races: true,
             car_meet_lobby: Some(3),
