@@ -3,7 +3,7 @@ using System.Globalization;
 using System.Numerics;
 using Infinity.Core.Matchmaking;
 
-namespace Infinity.Core.WorldServer;
+namespace Infinity.Core.Official;
 
 /// <summary>
 /// The rules one player measures the others' cars against (MATCHMAKING_API §3.9): <see cref="WatchRules"/> as read from the

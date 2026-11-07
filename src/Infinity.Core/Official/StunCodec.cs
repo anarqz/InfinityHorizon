@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Security.Cryptography;
 
-namespace Infinity.Core.WorldServer;
+namespace Infinity.Core.Official;
 
 internal sealed record StunMessage(ushort Kind, byte[] Transaction, IPEndPoint? Mapped);
 

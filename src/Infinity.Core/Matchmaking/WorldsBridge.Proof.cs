@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Infinity.Core.Session;
-using Infinity.Core.WorldServer;
+using Infinity.Core.Official;
 
 namespace Infinity.Core.Matchmaking;
 

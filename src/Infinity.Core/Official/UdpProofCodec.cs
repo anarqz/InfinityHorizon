@@ -5,7 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Infinity.Core.WorldServer;
+namespace Infinity.Core.Official;
 
 /// <summary>FIUP v1 fixed frames. Credentials never enter the returned packet or its display.</summary>
 internal static class UdpProofCodec
