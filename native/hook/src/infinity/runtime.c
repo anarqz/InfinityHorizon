@@ -17,6 +17,9 @@ static volatile LONG fi_game_called;
    have changed, and where its features went for a player who came from the hook that had them
    inside. Once, from the first of the triggers below. */
 static void fi_game_first(const char *where) {
+    if (!fi_game_is_fh2()) {
+        return; /* OD-206: no ExtraOptions features, expansions or their notice on FM5 */
+    }
     if (where) {
         log_append("EO: looked at from ");
         log_append(where);
@@ -61,7 +64,7 @@ void fi_game_callback_from(const char *where) {
    for it): if no game callback came yet, after ExtraOptions (if any) has left its "Waiting"
    state. */
 void fi_game_callback_late(void) {
-    if (fi_game_called) {
+    if (fi_game_called || !fi_game_is_fh2()) {
         return;
     }
     fi_eo_settle(10000);
@@ -74,14 +77,18 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     fi_cfg_load(root, bin);
     /* before the player's ExtraOptions runs (it repairs save commit markers right after this
        DllMain when its DisableAzimuthSaveChecksums=1): which save revisions have no commit now */
-    azimuth_cloud_note_unsealed(bin);
+    if (fi_game_is_fh2()) {
+        azimuth_cloud_note_unsealed(bin);
+    }
     log_set_enabled(fi_cfg()->log);
     azimuth_lang_force(fi_cfg()->language);
     status_set("OK: ForzaInfinity hook initialized.");
     log_start(bin);
     log_set_directory(bin);
     fi_cfg_flush_log();
-    azimuth_apply_livery_compatibility();
+    if (fi_game_is_fh2()) {
+        azimuth_apply_livery_compatibility();
+    }
     azimuth_apply_network(bin);
     /* the car database's SHA-256 goes with every request (the server only lets the game's own
        cars play online) */
@@ -90,6 +97,12 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     }
     azimuth_apply_freeroam(game_image, bin, executable_path);
     azimuth_apply_account(bin);
+    /* OD-206: FM5 takes the network, the free roam replacements, the account and the launcher's pipe.
+       Everything below is at FH2's addresses. */
+    if (!fi_game_is_fh2()) {
+        log_append("GAME: FM5 1.0.0.20; FH2's game features stay off.\r\n");
+        return 1;
+    }
     /* OD-73: no game page, menu or text is edited any more; the language is only read */
     azimuth_lang_apply(game_image);
     azimuth_apply_expansions(game_image);

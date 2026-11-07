@@ -961,11 +961,10 @@ void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const u
 
 /* ------------------------------------------------------------ the car database */
 /* Players only meet with the same cars installed (imported FM5 cars are rows in it): the
-   SHA-256 of the game's media\stripped\gamedbRC.slt goes with every request to the server
+   SHA-256 of the game's car database (FiGameProfile.car_db; FH2's media\stripped\gamedbRC.slt) goes with every request to the server
    (X-Fh2-CarDb, azimuth_net.c) and the server keeps worlds apart by it. Hashed once, on a
    thread of its own, when the game starts. */
 
-#define WORLD_CAR_DB L"media\\stripped\\gamedbRC.slt"
 #define WORLD_HASH_CHUNK 65536u
 
 static wchar_t world_car_db_path[PATH_CAPACITY];
@@ -1057,12 +1056,14 @@ void azimuth_world_hash_car_db(const wchar_t *executable) {
         ++n;
     }
     world_car_db_path[slash] = 0;
-    static const wchar_t rest[] = WORLD_CAR_DB;
-    if (slash + ARRAY_COUNT(rest) >= ARRAY_COUNT(world_car_db_path)) {
+    const wchar_t *rest = fi_game_profile()->car_db;
+    size_t rest_length = 0;
+    while (rest[rest_length]) ++rest_length;
+    if (slash + rest_length + 1 >= ARRAY_COUNT(world_car_db_path)) {
         InterlockedExchange(&world_car_db_state, 2);
         return;
     }
-    memory_copy(world_car_db_path + slash, rest, sizeof(rest));
+    memory_copy(world_car_db_path + slash, rest, (rest_length + 1) * sizeof(wchar_t));
     HANDLE thread = CreateThread(0, 0, world_hash_car_db, 0, 0, 0);
     if (thread) {
         CloseHandle(thread);

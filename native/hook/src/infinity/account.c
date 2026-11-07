@@ -908,6 +908,11 @@ static void account_apply(const wchar_t *directory) {
         account_apply_launch(directory);
         return;
     }
+    if (!fi_game_is_fh2()) {
+        /* OD-206: the Beta protocol's cloud, self-update and relay are FH2's */
+        log_append("ACCOUNT: FM5 goes online only through the launcher.\r\n");
+        return;
+    }
     if (!azimuth_net_proxy_enabled() || !(account_server = azimuth_net_server_name())) {
         return;
     }
