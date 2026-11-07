@@ -86,7 +86,6 @@ public sealed partial class WorldsBridge
         var world = answer!.Value is { } view && view.Id == mine.WorldId ? view : null;
         Volatile.Write(ref _joinModesWorld, new JoinModesWorld(mine.WorldId, world?.Modes ?? modes,
             world?.Game ?? Volatile.Read(ref _joinModesWorld)?.Game ?? InviteGame));
-        if (world is not null) ObserveNoticeWorld(world); // OD-160's notice reads the world's modes too
         _log($"worlds: who can join: {mine.WorldId} admits {modes} from now on (players already in it stay)");
         var who = _text(PrivateLobbyNotices.JoinModesChoiceKeys[UiJoinModes.Of(world?.Modes ?? modes)]);
         var notice = PrivateLobbyNotices.Done(PrivateLobbyNotices.Text(_text, PrivateLobbyNotices.JoinModesSet).Replace("{who}", who, StringComparison.Ordinal));

@@ -10,7 +10,6 @@ public static class MatchmakingErrorCodes
 {
     public const string WorldNotFound = "MM.WORLD_NOT_FOUND";
     public const string NotHost = "MM.NOT_HOST";
-    public const string AlreadyHosting = "MM.ALREADY_HOSTING";
     public const string GrantInvalid = "MM.GRANT_INVALID";
     /// <summary>CR-S69 (OD-129): no route answers it any more; an older server's is a generic refusal (<see cref="MmErrorKind.Other"/>).</summary>
     public const string VipRequired = "PORTAL.VIP_REQUIRED";
@@ -116,8 +115,6 @@ public enum MmErrorKind
     /// <summary><c>MM.NOT_HOST</c>: another host's world, or a closed one.</summary>
     NotHost,
 
-    /// <summary><c>MM.ALREADY_HOSTING {worldId}</c>: the profile already hosts <see cref="MmError.WorldId"/>.</summary>
-    AlreadyHosting,
 
     /// <summary><c>MM.GRANT_INVALID</c>.</summary>
     GrantInvalid,
@@ -156,9 +153,6 @@ public sealed record MmError(
     JsonElement? Details,
     TimeSpan? RetryAfter)
 {
-    /// <summary><c>details.worldId</c> (<c>MM.ALREADY_HOSTING</c>).</summary>
-    public string? WorldId => Detail("worldId");
-
     /// <summary><c>details.reason</c> (<c>PORTAL.CONFLICT</c>).</summary>
     public string? Reason => Detail("reason");
 
@@ -187,7 +181,6 @@ public sealed record MmError(
     {
         MatchmakingErrorCodes.WorldNotFound => MmErrorKind.WorldNotFound,
         MatchmakingErrorCodes.NotHost => MmErrorKind.NotHost,
-        MatchmakingErrorCodes.AlreadyHosting => MmErrorKind.AlreadyHosting,
         MatchmakingErrorCodes.GrantInvalid => MmErrorKind.GrantInvalid,
         MatchmakingErrorCodes.NotFound => MmErrorKind.NotFound,
         MatchmakingErrorCodes.Conflict => MmErrorKind.Conflict,

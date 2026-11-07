@@ -96,10 +96,7 @@ int fi_voice_send(const uint8_t *datagram, uint32_t size) {
     if (!vn_up(datagram, size)) return VN_E_SHAPE;
     if (fi_cfg()->launch == FI_LAUNCH_OFFLINE || !fi_launch_network_allowed()) return VN_E_OFF;
     int joined = azimuth_proxy_world_ready() || azimuth_world_lan_ready();
-    if (!joined) {
-        /* FreeRoamDirect (outside FIUP) leaves the game on its own socket: no hook socket the relay knows */
-        return azimuth_proxy_passthrough() ? VN_E_OFF : VN_E_NO_WORLD;
-    }
+    if (!joined) return VN_E_NO_WORLD;
     if (!vn_rate_take(GetTickCount64())) return VN_E_RATE;
     int sent = azimuth_proxy_send_world(datagram, (int)size) || azimuth_world_lan_send(datagram, (int)size);
     return sent ? VN_SENT : VN_E_NO_WORLD;

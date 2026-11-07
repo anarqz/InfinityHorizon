@@ -153,12 +153,6 @@ public record WorldView : World
     /// <summary>OD-112: the players embedded on the list's rows, one world and by-code (≤ 12, host first unless dedicated); absent elsewhere.</summary>
     public IReadOnlyList<ListMember>? Members { get; init; }
 
-    /// <summary>CR-S57 (§5b): <c>relay</c> = the lobby was born on a relay; absent on older servers (reads as direct).</summary>
-    public string Transport { get; init; } = Transports.Direct;
-
-    /// <summary>The world's relay, only when <see cref="Transport"/> is <c>relay</c> (shown "via &lt;name&gt;").</summary>
-    public WorldRelay? Relay { get; init; }
-
     /// <summary>
     /// OD-149 (§3.9): a pineapple world, hosted by a profile the anti-cheat system isolated, for the world's whole life; only
     /// isolated profiles join it (a clean caller reads <c>canJoin: false, why: "pool"</c>). Absent on older servers (false).
@@ -193,14 +187,6 @@ public sealed record CallerPool
 public static class Transports
 {
     public const string Direct = "direct", Relay = "relay";
-}
-
-/// <summary>A world's relay (CR-S57): its announce key and name (untrusted display text).</summary>
-public sealed record WorldRelay
-{
-    public required string PublicKey { get; init; }
-
-    public required string Name { get; init; }
 }
 
 /// <summary>CR-S57 signed <c>relay</c> claim: the relay both sides meet at (its key, host, binding and rendezvous ports).</summary>

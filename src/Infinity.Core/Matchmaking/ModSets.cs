@@ -8,13 +8,13 @@ namespace Infinity.Core.Matchmaking;
 /// <summary>Where a session's lobby mod set stands (OD-112, docs/launcher/MODDED_LOBBIES.md §2).</summary>
 public enum ModSetPhase
 {
-    /// <summary>Mods are planned but not confirmed yet: no hosting, no announce, no join (never as vanilla).</summary>
+    /// <summary>Mods are planned but not confirmed yet: no join (never as vanilla).</summary>
     NotReady,
 
     /// <summary><see cref="ModSetState.Mods"/> is the set to send (empty: vanilla).</summary>
     Ready,
 
-    /// <summary>The set cannot be known (a mod failed, the plan did not build): no hosting and no join.</summary>
+    /// <summary>The set cannot be known (a mod failed, the plan did not build): no join.</summary>
     Failed,
 }
 
@@ -157,7 +157,7 @@ public sealed record RuntimeModReportEntry(string Id, string Version, byte[] Bin
 
 /// <summary>
 /// N-H2's source: the launch plan's set becomes the lobby set only when the native runtime reports it actually
-/// initialized. Not ready while native mods are planned and no ready report arrived (no hosting, no announce,
+/// initialized. Not ready while native mods are planned and no ready report arrived (no join,
 /// never as vanilla); a report counts only with this launch's nonce and plan digest (<c>NativeModPlan.Nonce</c>,
 /// <c>NativeModPlan.PlanSha256</c>), and a ready one only when every planned native mod is initialized with the
 /// binary and settings hashes it was planned with and echoes its own fingerprint. Plan mods the runtime does not

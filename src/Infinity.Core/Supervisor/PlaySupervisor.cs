@@ -839,6 +839,11 @@ public sealed class PlaySupervisor
                         {
                             _ = worlds.FreeRoamLeftAsync(stop.Token);
                         }
+                        // OD-208: the game left the online world on its own (its car database changed): the seat goes now
+                        if (frame is Frame.Event { Kind: HookEvents.WorldLeft } left && worlds is not null)
+                        {
+                            _ = worlds.GameLeftOnlineAsync(left.Detail, stop.Token);
+                        }
                         // live (test.9): back from a Road Trip the game opens its free roam connection (Event 3) around
                         // closing the Road Trip one (Event 4); joining again calls off the pending close or leave
                         if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } && worlds is not null)

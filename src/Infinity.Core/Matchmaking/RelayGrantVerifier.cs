@@ -30,8 +30,8 @@ public sealed record RelayGrantClaims
 }
 
 /// <summary>
-/// Exact fi_protocol::matchmaking::RelayGrantHost mirror (WORLDS_OFFICIAL.md §3): exactly one of <c>{xuid}</c> (player-hosted,
-/// unchanged bytes) or <c>{official: vmId}</c> (a Worlds host); both or neither is refused by the verifier.
+/// Exact fi_protocol::matchmaking::RelayGrantHost mirror (WORLDS_OFFICIAL.md §3): <c>{xuid}</c> (a player host's, the contract's) or
+/// <c>{official: vmId}</c> (a Worlds host). OD-208: this client verifies only the official one; a player host's is refused.
 /// </summary>
 public sealed record RelayGrantHost
 {
@@ -70,7 +70,7 @@ public static class OfficialHost
     public static ulong HostField(RelayGrantHost host)
     {
         ArgumentNullException.ThrowIfNull(host);
-        return host.Official is { } vmId ? Tag(vmId) : ulong.Parse(host.Xuid ?? throw new InvalidDataException(), NumberStyles.None, CultureInfo.InvariantCulture);
+        return host.Official is { } vmId ? Tag(vmId) : throw new InvalidDataException(); // OD-208: an official host only
     }
 }
 
@@ -209,7 +209,7 @@ public static class RelayGrantVerifier
             || (Int128)verified.Iat - nowUnix > FutureSkewSeconds
             || !Uuid(verified.Grant) || !Uuid(verified.World) || !Uuid(verified.Sub)
             || !Xuid(verified.Xuid) || !ValidHost(verified)
-            || verified.Relay is { } relay && !ValidRelay(relay) || verified.VoiceBlockedUntil is < 0) throw Invalid();
+            || verified.Relay is not null || verified.VoiceBlockedUntil is < 0) throw Invalid(); // OD-208: official worlds are direct
         if (verified.Exp <= nowUnix) throw new RelayGrantException(RelayGrantFailure.Expired);
         if (!string.Equals(verified.World, context.WorldId, StringComparison.Ordinal)
             || !string.Equals(verified.Host.Xuid, context.HostXuid, StringComparison.Ordinal)
@@ -234,31 +234,12 @@ public static class RelayGrantVerifier
         catch (FormatException) { throw Invalid(); }
     }
 
-    /// <summary>CR-S57 <c>relay</c>: a 32-byte key in canonical base64, an IPv4 literal or a DNS name, two non-zero ports.</summary>
-    internal static bool ValidRelay(RelayGrantRelay relay)
-    {
-        byte[] key;
-        try { key = Convert.FromBase64String(relay.Key); }
-        catch (FormatException) { return false; }
-        if (key.Length != 32 || Convert.ToBase64String(key) != relay.Key || relay.Binding == 0 || relay.Port == 0) return false;
-        var addr = relay.Addr;
-        if (addr is not { Length: >= 1 and <= 253 } || addr.StartsWith('.') || addr.EndsWith('.') || addr.Contains("..", StringComparison.Ordinal)) return false;
-        if (System.Net.IPAddress.TryParse(addr, out var ip))
-            return ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && addr.Count(c => c == '.') == 3;
-        return addr.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '-')
-            && addr.Split('.').All(label => label.Length is >= 1 and <= 63 && label[0] != '-' && label[^1] != '-');
-    }
-
     /// <summary>
-    /// WORLDS_OFFICIAL.md §3: exactly one host member. An official host's grant is a joiner's (the engine is the host) and carries no
-    /// <c>relay</c> claim (official worlds are direct, OD-189).
+    /// WORLDS_OFFICIAL.md §3, OD-208: only <c>host: {official: vmId}</c>. An official host's grant is a joiner's (the engine is the
+    /// host) and carries no <c>relay</c> claim (official worlds are direct, OD-189); a player host's <c>{xuid}</c> is refused.
     /// </summary>
-    private static bool ValidHost(RelayGrantClaims claims) => claims.Host switch
-    {
-        { Xuid: { } xuid, Official: null } => Xuid(xuid),
-        { Xuid: null, Official: { } vmId } => OfficialHost.ValidVmId(vmId) && claims.Role == "joiner" && claims.Relay is null,
-        _ => false,
-    };
+    private static bool ValidHost(RelayGrantClaims claims) => claims.Host is { Xuid: null, Official: { } vmId }
+        && OfficialHost.ValidVmId(vmId) && claims.Role == "joiner" && claims.Relay is null;
 
     private static bool Uuid(string value) => Guid.TryParseExact(value, "D", out var id) && id != Guid.Empty
         && string.Equals(id.ToString("D"), value, StringComparison.Ordinal);

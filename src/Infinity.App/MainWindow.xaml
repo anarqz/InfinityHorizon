@@ -414,26 +414,6 @@
                     <TextBlock Text="{Binding S[server.address_hint]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" />
                   </StackPanel>
                   <TextBlock Text="{Binding ServerEditText}" FontSize="12" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                  <TextBlock Text="{Binding S[picker.relay_title]}" FontSize="16" FontWeight="SemiBold" Margin="0,18,0,6" />
-                  <ListBox x:Name="RelayList" ItemsSource="{Binding RelayItems}" SelectedItem="{Binding RelayPick}" MaxHeight="220"
-                           ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[picker.relay_title]}">
-                    <ListBox.ItemTemplate>
-                      <DataTemplate>
-                        <StackPanel Margin="4,6">
-                          <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="380" />
-                            <Border Margin="8,0,0,0" Padding="6,1" CornerRadius="3" BorderThickness="1" BorderBrush="{StaticResource InfinityFaint}" VerticalAlignment="Center"
-                                    Visibility="{Binding HasBadge, Converter={StaticResource Visible}}">
-                              <TextBlock Text="{Binding Badge}" FontSize="10" Foreground="{StaticResource InfinityMuted}" />
-                            </Border>
-                          </StackPanel>
-                          <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                        </StackPanel>
-                      </DataTemplate>
-                    </ListBox.ItemTemplate>
-                  </ListBox>
-                  <CheckBox Content="{Binding S[picker.official_only]}" IsChecked="{Binding RelayOfficialOnly}" Margin="0,8,0,0" />
-                  <TextBlock Text="{Binding S[picker.relay_note]}" FontSize="11" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap" Margin="0,6,0,0" />
                   <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                     <Button Content="{Binding S[server.save]}" Click="OnServerSave" Style="{StaticResource AccentButtonStyle}" Padding="18,6" />
                     <Button Content="{Binding S[server.cancel]}" Click="OnServerCancel" Margin="10,0,0,0" Padding="18,6" />

@@ -16,7 +16,7 @@ public sealed record ExtraOptionsPlannedMod(string Folder, string ModId, ModEntr
 /// <item><see cref="Planned"/>, before the launch: every enabled <c>mods\</c> folder with something to load, less the folders the
 /// caller names cosmetic (catalog mods whose manifest changes nothing for other players), less the parity-exempt mods (OD-166,
 /// <see cref="ParityExemptions"/>). It sets the gate's <c>modded</c> flag.</item>
-/// <item><see cref="State"/>: not ready (no hosting, no join, never vanilla) until this run's <c>FH2_ExtraOptions.log</c> answers for
+/// <item><see cref="State"/>: not ready (no join, never vanilla) until this run's <c>FH2_ExtraOptions.log</c> answers for
 /// every planned mod (<see cref="Refresh"/>); then ready with the mods ExtraOptions reports loaded, a failed one left out. Nothing
 /// loaded fails the set. <see cref="Expire"/> settles the rest at the supervisor's deadline.</item>
 /// </list>

@@ -1,20 +1,16 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE). */
-/* FH2Online free roam over the Internet: the joining player's side.
+/* FH2Online free roam over the Internet: the joining player's side, in a launcher session only
+   (OD-208: the launcher is the only way online; there is no Beta punch exchange any more).
 
    The game talks NerdCore from its socket ([::]:5100) to the address the association gives it.
    For a world on another PC that address becomes this proxy's, [::1]:<port>, and the proxy's own
-   dual-stack socket reaches the world:
-   1. STUN (RFC 5389) to two public servers: this socket's public address and the NAT's kind.
-   2. POST /infinity/v1/worlds/punch with those addresses: the server answers the world's
-      addresses (its LAN on the same network, the host's address, its STUN and UPnP ones) and
-      asks the host's relay to punch towards ours, so that the host's NAT lets us in.
-   3. Every candidate is probed (STUN Binding requests, which the relay answers, and the game's
-      own packets) until one answers; that one is the world. Packets from any other address
-      never reach the game (the source filter), and only the game's packets (from loopback) go
-      to the world.
-   Nothing answering for PX_GIVE_UP_MS is logged; the game's packets keep going to the session's
-   address, as before F3. [FreeRoam] Direct=1 turns the proxy off (the game then sends to the
-   session's address itself). */
+   dual-stack socket reaches the official world:
+   1. STUN (RFC 5389) to two public servers: this socket's public addresses, for the seat's network
+      hint (the launcher's SeatNetworkRequest; the world agent punches towards them).
+   2. The grant's FIUP socket proof (UDP_SOCKET_PROOF.md) picks the world among its candidates.
+   3. Packets from any other address never reach the game (the source filter), and only the
+      game's packets (from loopback) go to the world.
+   Nothing proved within 30 s ends the attempt with the "direct connection" notice. */
 #include "infinity.h"
 #include "../core/logging.h"
 #include "../core/support.h"
@@ -84,7 +80,6 @@ static struct {
     PxNtopFn ntop;
 } px;
 
-static int px_direct;
 static SRWLOCK px_lock = SRWLOCK_INIT;
 /* px_generation: each proxy thread stops once it changes. */
 static volatile LONG px_generation, px_loaded;
@@ -194,38 +189,9 @@ static void px_number(PxLine *l, unsigned long long v) {
     px_text(l, t);
 }
 
-/* `a` as text: a.b.c.d:port or [v6]:port (out: at least 64 bytes). */
-static void px_format(const PxAddr *a, char *out, size_t capacity) {
-    wchar_t wide[64];
-    PxLine l;
-    l.size = 0;
-    l.text[0] = 0;
-    unsigned port = (unsigned)((a->port >> 8) | ((a->port & 0xff) << 8));
-    int v4 = 1;
-    for (int i = 0; i < 10; ++i) {
-        v4 &= a->address[i] == 0;
-    }
-    v4 &= a->address[10] == 0xff && a->address[11] == 0xff;
-    wide[0] = 0;
-    if (v4) {
-        px.ntop(PX_AF_INET, a->address + 12, wide, ARRAY_COUNT(wide));
-    } else {
-        px_text(&l, "[");
-        px.ntop(PX_AF_INET6, a->address, wide, ARRAY_COUNT(wide));
-    }
-    for (size_t i = 0; wide[i] && i < ARRAY_COUNT(wide); ++i) {
-        char c[2] = {(char)wide[i], 0};
-        px_text(&l, c);
-    }
-    px_text(&l, v4 ? ":" : "]:");
-    px_number(&l, port);
-    size_t n = l.size < capacity - 1 ? l.size : capacity - 1;
-    memory_copy(out, l.text, n);
-    out[n] = 0;
-}
-
 /* "a.b.c.d:port" or "[v6]:port" (n characters) -> `out` (IPv4 as ::ffff:a.b.c.d). */
-static int px_parse(const char *text, size_t n, PxAddr *out) {
+/* OD-208: no server reply is parsed any more (the punch exchange is gone); proxy_test.c builds its addresses with it */
+__attribute__((unused)) static int px_parse(const char *text, size_t n, PxAddr *out) {
     wchar_t host[64];
     size_t start = 0, end = 0, colon = 0;
     if (n < 4 || n >= ARRAY_COUNT(host)) {
@@ -422,96 +388,14 @@ static int px_is_candidate(const PxAddr *a) {
     return found;
 }
 
-/* The server's {"world":["ip:port",...]} -> candidates. */
-static void px_take_world(const char *reply) {
-    const char *at = text_find(reply, text_length(reply), "\"world\":[");
-    if (!at) {
-        return;
-    }
-    for (at += 9; *at && *at != ']';) {
-        if (*at != '"') {
-            ++at;
-            continue;
-        }
-        const char *start = ++at;
-        while (*at && *at != '"') ++at;
-        PxAddr a;
-        if (px_parse(start, (size_t)(at - start), &a)) {
-            px_add_candidate(&a);
-        }
-        if (*at == '"') ++at;
-    }
-}
-
-/* POST worlds/punch with this socket's public addresses (a thread: the proxy keeps relaying). */
-static DWORD WINAPI px_signal(void *argument) {
-    LONG generation = (LONG)(intptr_t)argument;
-    if (!fi_launch_network_allowed() || px_generation != generation) return 0;
-    static char body[512], reply[2048];
-    PxLine l;
-    l.size = 0;
-    l.text[0] = 0;
-    px_text(&l, "{\"candidates\":[");
-    unsigned listed = 0;
-    for (unsigned i = 0; i < px_stun_count && listed < 3; ++i) {
-        if (!px_mapped_seen[i]) continue;
-        int dup = 0;
-        for (unsigned j = 0; j < i; ++j) dup |= px_mapped_seen[j] && px_same(&px_mapped[j], &px_mapped[i]);
-        if (dup) continue;
-        char a[72];
-        px_format(&px_mapped[i], a, sizeof(a));
-        px_text(&l, listed++ ? ",\"" : "\"");
-        px_text(&l, a);
-        px_text(&l, "\"");
-    }
-    px_text(&l, "],\"port\":");
-    px_number(&l, px_local_port);
-    px_text(&l, "}");
-    memory_copy(body, l.text, l.size + 1);
-    static wchar_t header[1200];
-    azimuth_account_auth_header(header, ARRAY_COUNT(header));
-    if (!fi_launch_network_allowed() || px_generation != generation) return 0;
-    DWORD status = azimuth_net_call(L"POST", L"/infinity/v1/worlds/punch", header, body, reply, sizeof(reply));
-    if (px_generation != generation || !fi_launch_network_allowed()) {
-        return 0;
-    }
-    PxLine m;
-    m.size = 0;
-    m.text[0] = 0;
-    px_text(&m, "PROXY: punch exchange answered ");
-    px_number(&m, status);
-    px_text(&m, status == 200 ? "; probing the world's addresses.\r\n" : "; probing the session's address only.\r\n");
-    log_append(m.text);
-    if (status == 200) {
-        px_take_world(reply);
-    }
-    return 0;
-}
-
 /* ----------------------------------------------------------------- the loop */
-
-static void px_log_world(const PxAddr *a, const char *how, DWORD after) {
-    char text[72];
-    px_format(a, text, sizeof(text));
-    PxLine l;
-    l.size = 0;
-    l.text[0] = 0;
-    px_text(&l, "PROXY: the world answered at ");
-    px_text(&l, text);
-    px_text(&l, " (");
-    px_text(&l, how);
-    px_text(&l, ", ");
-    px_number(&l, after);
-    px_text(&l, " ms).\r\n");
-    log_append(l.text);
-}
 
 static void px_pick(const PxAddr *a, const char *how, DWORD started) {
     if (!px_have_world) {
         px_world = *a;
         InterlockedExchange(&px_have_world,1);
-        if(px_proof_required())log_append("PROXY: authenticated UDP route selected.\r\n");
-        else px_log_world(a, how, (DWORD)GetTickCount64() - started);
+        (void)how;(void)started;
+        log_append("PROXY: authenticated UDP route selected.\r\n");
     }
 }
 
@@ -688,7 +572,7 @@ static DWORD WINAPI px_thread(void *argument) {
             px_proof_tick(proof_context);
         }
         int direct_probes=1; /* OD-208: an official world is direct only (no relay leg) */
-        /* the punch exchange once STUN answered (or gave up waiting) */
+        /* the seat's network hint once STUN answered (or gave up waiting) */
         if (!signalled) {
             unsigned answered = 0;
             for (unsigned i = 0; i < px_stun_count; ++i) answered += px_mapped_seen[i];
@@ -696,8 +580,6 @@ static DWORD WINAPI px_thread(void *argument) {
                 if(answered<px_stun_count)px_diag(8,2,0);
                 if(!px_external_port(GetTickCount64()))px_diag(10,2,0);
                 signalled = 1;
-                HANDLE t = px_proof_required() ? 0 : CreateThread(0, 0, px_signal, (void *)(intptr_t)generation, 0, 0);
-                if (t) CloseHandle(t);
             }
         }
         if (direct_probes && !px_have_world && now - last_probe >= PX_PROBE_MS && now - started < PX_SPRAY_MS) {
@@ -735,19 +617,19 @@ static DWORD WINAPI px_thread(void *argument) {
         if (px_stun_parse(packet, n, &kind, &txid, &mapped, &has_mapped)) {
             if (kind == 0x3E91) {
                 /* the relay passing another player's headlights and roof (azimuth_carstate.c) */
-                if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
+                if (px_have_world && px_hook_proved && px_same(&from, &px_world)) {
                     azimuth_carstate_received(packet, n);
                 }
             } else if (kind == 0x3E95) {
                 /* the world's watch roster (watch.c, AC-2), with car state's source checks */
-                if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
+                if (px_have_world && px_hook_proved && px_same(&from, &px_world)) {
                     fi_watch_roster(packet, n);
                 }
             } else if (kind == 0x3E92) {
                 /* the retired livery channel (OD-66, CR-S59): an older relay's message, dropped unread */
             } else if (kind == 0x3E93 || kind == 0x3E94) {
                 /* voice chat (voice_net.c), with car state's source checks: from the world, the hook proved */
-                if (px_have_world && (!px_proof_required() || px_hook_proved) && px_same(&from, &px_world)) {
+                if (px_have_world && px_hook_proved && px_same(&from, &px_world)) {
                     fi_voice_received(packet, n);
                 }
             } else if (kind == 0x0101) {
@@ -758,11 +640,8 @@ static DWORD WINAPI px_thread(void *argument) {
                         px_mapped_at[i]=GetTickCount64();px_stun_attempts[i]=2;px_stun_accepted[i]=1;px_diag(28,2,0);
                     }
                 }
-                if (memory_equal(txid, px_txid[PX_STUN_SERVERS], 12) && px_is_candidate(&from)) {
-                    if(!px_proof_required())px_pick(&from, "STUN", started);
-                }
             } else if (kind == 0x0001 && px_is_candidate(&from)) {
-                /* the host's relay punching towards us */
+                /* the world agent punching towards us (the seat's network hint) */
                 px_binding_success(txid, &from);
             }
             continue;
@@ -779,19 +658,11 @@ static DWORD WINAPI px_thread(void *argument) {
             fi_follow_datagram(packet, (size_t)n); /* an OpenConnection says the lobby type the game is in (follow.c) */
             if (px_have_world) {
                 px_send(packet, n, &px_world);
-            } else if(!px_proof_required()) {
-                LONG targets = now - started < PX_SPRAY_MS ? px_candidate_count : 1;
-                for (LONG i = 0; i < targets && i < PX_CANDIDATES; ++i) {
-                    px_send(packet, n, &px_candidates[i]);
-                }
             }
             continue;
         }
         /* from the Internet: only the world reaches the game */
-        if (!px_proof_required() && !px_have_world && px_is_candidate(&from)) {
-            px_pick(&from, "NerdCore", started);
-        }
-        if (px_have_world && (!px_proof_required() || (px_proof_current() && px_game_proved)) && px_same(&from, &px_world) && have_game) {
+        if (px_have_world && px_proof_current() && px_game_proved && px_same(&from, &px_world) && have_game) {
             fi_watch_datagram(packet, (size_t)n); /* AC-2: the other players' cars, measured in a Hardcore world (watch.c) */
             px_send(packet, n, &game);
         }
@@ -822,7 +693,7 @@ int azimuth_proxy_send_world(const void *data, int size) {
         int ready=fi_udp_context_get(context,&serial);fi_udp_zero(context,89);
         if(!ready || serial!=px_proof_serial)return 0;
     }
-    if (!fi_launch_network_allowed() || s == PX_INVALID || !px_have_world || (px_direct && !px_proof_required())
+    if (!fi_launch_network_allowed() || s == PX_INVALID || !px_have_world
         || (px_proof_required() && (!px_hook_proved || GetTickCount64()-px_hook_at>=45000))) {
         return 0;
     }
@@ -832,9 +703,6 @@ int azimuth_proxy_send_world(const void *data, int size) {
 int azimuth_proxy_proof_mode(void) {return px_proof_required() && px_socket!=PX_INVALID;}
 /* voice_net.c: a world this proxy forwards to (sends may still wait for the hook's proof). */
 int azimuth_proxy_world_ready(void) {return px_socket!=PX_INVALID && px_have_world;}
-/* voice_net.c: [hook] FreeRoamDirect outside FIUP, the game on its own socket (no hook socket for the relay). */
-int azimuth_proxy_passthrough(void) {return px_direct && !px_proof_required();}
-
 /* --------------------------------------------------------------------- setup */
 
 static int px_load(void) {
@@ -894,28 +762,15 @@ static void px_resolve_stun(void) {
     }
 }
 
-/* A world on this network: an IPv4-mapped RFC 1918 address (10/8, 172.16/12, 192.168/16). The
-   server hands a joiner the host's LAN address when both share a public address
-   (MATCHMAKING_API.md 4a): no NAT between them, so the game goes there directly. */
-static int px_private_v4(const PxAddr *a) {
-    const unsigned char *b = a->address;
-    for (int i = 0; i < 10; ++i) {
-        if (b[i]) {
-            return 0;
-        }
-    }
-    return b[10] == 0xff && b[11] == 0xff &&
-           (b[12] == 10 || (b[12] == 172 && b[13] >= 16 && b[13] <= 31) || (b[12] == 192 && b[13] == 168));
-}
-
-void azimuth_proxy_configure(int direct) {
-    px_direct = direct;
-}
-
 /* Called with the world the session named (CreateAssociationAsync). For a world on another PC
    it starts the proxy and returns 1 with `local` = the address the game should use. */
 int azimuth_proxy_start(const void *world, void *local) {
-    if (!fi_launch_network_allowed()) return px_proof_required() ? -1 : 0;
+    if (!fi_launch_protocol()) {
+        /* OD-208: the launcher is the only way online (no Beta punch exchange, no FreeRoamDirect) */
+        log_append("PROXY: off: online play needs the launcher.\r\n");
+        return -1;
+    }
+    if (!fi_launch_network_allowed()) return -1;
     PxAddr target, here;
     memory_copy(&target, world, sizeof(target));
     int proof_required=px_proof_required();
@@ -923,18 +778,11 @@ int azimuth_proxy_start(const void *world, void *local) {
         unsigned char context[89];unsigned long serial;
         int ready=fi_udp_context_get(context,&serial);fi_udp_zero(context,sizeof(context));
         if(!ready)return -1;
-        px_direct=0;
     }
-    /* [hook] FreeRoamDirect is every profile's diagnostic (OD-140: no tier gate, in any protocol) */
-    if (px_direct || px_loopback(&target)) {
+    if (px_loopback(&target)) {
         return 0;
     }
     if(!px_load())return proof_required ? -1 : 0;
-    if (!proof_required && fi_launch_protocol() && px_private_v4(&target)) {
-        /* OD-54, local network first: the launcher's host relay on this LAN, reached directly */
-        log_append("PROXY: the world is on this network; the game goes to it directly.\r\n");
-        return 0;
-    }
     azimuth_proxy_stop();
     if(proof_required && px_socket!=PX_INVALID)return -1; /* No overlapping actor may overwrite proof state. */
     px_proof_reset();px_proof_serial=0;
@@ -1005,116 +853,4 @@ void azimuth_proxy_stop(void) {
             Sleep(10);
         }
     }
-}
-
-/* ------------------------------------------------------- TEST CONNECTION */
-
-static void px_report(wchar_t *out, size_t cap, const wchar_t *text) {
-    size_t n = 0;
-    while (out[n] && n + 1 < cap) ++n;
-    text = azimuth_tr(text);
-    while (text && *text && n + 1 < cap) out[n++] = *text++;
-    out[n] = 0;
-}
-
-static void px_report_raw(wchar_t *out, size_t cap, const char *text) {
-    size_t n = 0;
-    while (out[n] && n + 1 < cap) ++n;
-    while (text && *text && n + 1 < cap) out[n++] = (wchar_t)(unsigned char)*text++;
-    out[n] = 0;
-}
-
-/* Settings > Infinity > TEST CONNECTION, free roam part: STUN from a socket of its own (this
-   network's public address, IPv6, the NAT's kind). Takes about 1.5 s. OD-208: this PC hosts no world. */
-void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
-    if (!fi_launch_network_allowed()) return;
-    px_report(out, cap, L"\n\nFREE ROAM (worlds over the Internet)");
-    if (!px_load()) {
-        return;
-    }
-    px_resolve_stun();
-    UINT_PTR s = px.socket(PX_AF_INET6, PX_SOCK_DGRAM, PX_IPPROTO_UDP);
-    PxAddr seen[PX_STUN_SERVERS];
-    int got[PX_STUN_SERVERS] = {0};
-    static unsigned char tx[PX_STUN_SERVERS][12], packet[PX_PACKET], from_raw[64];
-    if (s != PX_INVALID) {
-        DWORD off = 0, timeout = 100;
-        px.setsockopt(s, PX_IPPROTO_IPV6, PX_IPV6_V6ONLY, (const char *)&off, sizeof(off));
-        px.setsockopt(s, PX_SOL_SOCKET, PX_SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-        PxAddr any;
-        for (size_t i = 0; i < sizeof(any); ++i) ((unsigned char *)&any)[i] = 0;
-        any.family = PX_AF_INET6;
-        if (px.bind(s, &any, (int)sizeof(any)) == 0) {
-            for (unsigned i = 0; i < px_stun_count; ++i) {
-                if (!fi_launch_network_allowed()) break;
-                unsigned char m[20] = {0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42};
-                px_new_txid(tx[i]);
-                memory_copy(m + 8, tx[i], 12);
-                px.sendto(s, (const char *)m, 20, 0, &px_stun[i], (int)sizeof(px_stun[i]));
-            }
-            DWORD started = (DWORD)GetTickCount64();
-            unsigned answered = 0;
-            while (fi_launch_network_allowed() && answered < px_stun_count &&
-                   (DWORD)GetTickCount64() - started < PX_STUN_WAIT_MS) {
-                int from_size = (int)sizeof(from_raw);
-                int n = px.recvfrom(s, (char *)packet, sizeof(packet), 0, from_raw, &from_size);
-                if (n <= 0) continue;
-                PxAddr from, mapped;
-                px_from(from_raw, &from);
-                unsigned kind = 0;
-                const unsigned char *txid = 0;
-                int has = 0;
-                if (!px_stun_parse(packet, n, &kind, &txid, &mapped, &has) || kind != 0x0101 || !has) continue;
-                for (unsigned i = 0; i < px_stun_count; ++i) {
-                    if (!got[i] && memory_equal(txid, tx[i], 12) && px_same(&from, &px_stun[i])) {
-                        got[i] = 1;
-                        seen[i] = mapped;
-                        ++answered;
-                    }
-                }
-            }
-        }
-        px.closesocket(s);
-    }
-    /* IPv4 answers decide the NAT; any IPv6 answer means IPv6 works */
-    int v4 = 0, v6 = 0, same = 1;
-    PxAddr first4;
-    for (unsigned i = 0; i < px_stun_count; ++i) {
-        int server_v4 = px_stun[i].address[10] == 0xff && px_stun[i].address[11] == 0xff;
-        if (!got[i]) continue;
-        if (server_v4) {
-            if (!v4) first4 = seen[i];
-            else same &= px_same(&first4, &seen[i]);
-            ++v4;
-        } else {
-            ++v6;
-        }
-    }
-    if (!v4 && !v6) {
-        px_report(out, cap, L"\nNo answer from the STUN servers: this network seems to block UDP. Playing with players outside "
-                            L"your network will not work until it allows it (a firewall, or a school or work network).");
-    } else {
-        if (v4) {
-            char text[72];
-            px_format(&first4, text, sizeof(text));
-            /* the port is this test's own: only the address means something to the player */
-            for (size_t i = 0; text[i]; ++i) {
-                if (text[i] == ':') {
-                    text[i] = 0;
-                    break;
-                }
-            }
-            px_report(out, cap, L"\nYour address on the Internet: ");
-            px_report_raw(out, cap, text);
-        }
-        px_report(out, cap, v6 ? L"\nIPv6: yes." : L"\nIPv6: no.");
-        if (v4 >= 2 && same) {
-            px_report(out, cap, L"\nNAT: moderate (cone).");
-        } else if (v4 >= 2) {
-            px_report(out, cap, L"\nNAT: strict (symmetric).");
-        } else {
-            px_report(out, cap, L"\nNAT: not measured (only one STUN server answered).");
-        }
-    }
-    px_report(out, cap, L"\nGuide: github.com/anarqz/ForzaInfinity/blob/main/docs/FREEROAM.md");
 }

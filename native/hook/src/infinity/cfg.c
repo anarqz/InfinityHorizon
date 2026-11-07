@@ -392,9 +392,6 @@ static void cfg_read_hook(FiConfig *c) {
     if (cfg_lookup(L"hook", L"FreeRoam", v, ARRAY_COUNT(v), 0)) {
         c->freeroam = cfg_bool(L"FreeRoam", v, 1);
     }
-    if (cfg_lookup(L"hook", L"FreeRoamDirect", v, ARRAY_COUNT(v), 0)) {
-        c->freeroam_direct = cfg_bool(L"FreeRoamDirect", v, 0);
-    }
     if (cfg_lookup(L"hook", L"FreeRoamWorld", v, ARRAY_COUNT(v), 0)) {
         if (!v[0] || (cfg_server_ok(v) && wlen(v) < ARRAY_COUNT(c->freeroam_world) && !wstarts(v, L"http"))) {
             wcopy(c->freeroam_world, ARRAY_COUNT(c->freeroam_world), v, wlen(v));
@@ -494,10 +491,6 @@ static void cfg_read_legacy(FiConfig *c, char *migrated, size_t cap) {
         c->freeroam = 0;
         CFG_MIGRATED("FreeRoam");
     }
-    if (cfg_legacy_value(L"FreeRoam", L"Direct", v, ARRAY_COUNT(v)) && v[0] == L'1') {
-        c->freeroam_direct = 1;
-        CFG_MIGRATED("FreeRoamDirect");
-    }
     if (cfg_legacy_value(L"FreeRoam", L"World", v, ARRAY_COUNT(v)) && v[0]) {
         if (cfg_server_ok(v) && !wstarts(v, L"http") && wlen(v) < ARRAY_COUNT(c->freeroam_world)) {
             wcopy(c->freeroam_world, ARRAY_COUNT(c->freeroam_world), v, wlen(v));
@@ -528,7 +521,7 @@ static size_t cfg_block(const FiConfig *c, int from_legacy, wchar_t *out, size_t
         L"[hook]",
         L"; ForzaInfinity hook settings. Every key is optional; a missing key uses its default:",
         L"; NetMode=Proxy (or Capture, Off), Server=https://api.infinity-horizon.com, AutoUpdate=1,",
-        L"; FreeRoam=1, FreeRoamDirect=0, FreeRoamWorld= (host:port), CarState=auto (or off),",
+        L"; FreeRoam=1, FreeRoamWorld= (host:port), CarState=auto (or off),",
         L"; Language=auto (or en, pt-BR), Log=1.",
     };
     static wchar_t keys[1024];
@@ -568,9 +561,6 @@ static size_t cfg_block(const FiConfig *c, int from_legacy, wchar_t *out, size_t
     }
     if (c->freeroam != d.freeroam) {
         CFG_KEY_LINE(L"FreeRoam=0");
-    }
-    if (c->freeroam_direct != d.freeroam_direct) {
-        CFG_KEY_LINE(L"FreeRoamDirect=1");
     }
     if (c->freeroam_world[0]) {
         CFG_KEY(L"FreeRoamWorld=");
@@ -792,7 +782,7 @@ static void cfg_take_installer(int encoding, size_t size) {
     d.has_hook_section = 1;
     if (d.net_mode == cfg_values.net_mode && wequal(d.server, cfg_values.server) &&
         d.auto_update == cfg_values.auto_update && d.freeroam == cfg_values.freeroam &&
-        d.freeroam_direct == cfg_values.freeroam_direct && wequal(d.freeroam_world, cfg_values.freeroam_world)) {
+        wequal(d.freeroam_world, cfg_values.freeroam_world)) {
         return; /* it says what [hook] says */
     }
     size_t chars = cfg_block(&d, 1, block, ARRAY_COUNT(block));
@@ -842,7 +832,6 @@ static void cfg_note_values(const FiConfig *c) {
     cfg_note_wide(c->server);
     cfg_note(c->auto_update ? " AutoUpdate=1" : " AutoUpdate=0");
     cfg_note(c->freeroam ? " FreeRoam=1" : " FreeRoam=0");
-    cfg_note(c->freeroam_direct ? " FreeRoamDirect=1" : " FreeRoamDirect=0");
     cfg_note(" FreeRoamWorld=");
     cfg_note_wide(c->freeroam_world);
     cfg_note(c->carstate == FI_CARSTATE_OFF ? " CarState=off" : " CarState=auto");

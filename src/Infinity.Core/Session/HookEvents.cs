@@ -36,6 +36,12 @@ public static class HookEvents
     public const byte Activity = 7;
 
     /// <summary>
+    /// OD-208: the game left the online world on its own (hook cardb.c: detail <c>cars</c>, the car database changed mid-session):
+    /// the launcher leaves the seat at once (<c>DELETE /mm/v1/seat</c>, <see cref="Matchmaking.WorldsBridge.GameLeftOnlineAsync"/>).
+    /// </summary>
+    public const byte WorldLeft = 8;
+
+    /// <summary>
     /// An <see cref="Activity"/> detail as the overlay's idle warning: only when it carries <c>evict_in</c> (the seat
     /// goes to a waiting player in N seconds); null otherwise, or when the detail is malformed.
     /// </summary>

@@ -36,8 +36,6 @@ public sealed record FriendPlaying
     /// <summary><c>in_world</c>: the world it hosts or holds a seat in.</summary>
     public string? WorldId { get; init; }
 
-    /// <summary>Only with <c>?asXuid=</c>, only <c>in_world</c>: a join of that profile would be granted now, the code aside.</summary>
-    public bool? Joinable { get; init; }
 
     /// <summary>
     /// OD-190 (CORE_API §4.1): only when <see cref="WorldId"/> is an official, non-group world the friend holds a live seat in, its

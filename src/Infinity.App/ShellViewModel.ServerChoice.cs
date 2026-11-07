@@ -84,7 +84,6 @@ public sealed partial class ShellViewModel
         _serverAddress = _config.Custom ? _config.Server.GetLeftPart(UriPartial.Authority) : string.Empty;
         _serverEditError = null;
         _serverPick = null;
-        _relayPick = null;
         OpenPickers(); // OD122-L9: the beholder's servers and relays
         Changed(string.Empty);
     }
@@ -114,7 +113,6 @@ public sealed partial class ShellViewModel
             Changed(string.Empty);
             return false;
         }
-        SaveRelayChoice();
         _serverEditing = false;
         Log(custom is null ? "server: official server chosen" : _serverPick?.Kind == ServerPickItem.ListedKind ? "server: listed server chosen" : "server: custom server chosen");
         var same = custom is null ? !_config.Custom : _config.Custom && _config.Server == custom;

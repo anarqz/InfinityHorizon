@@ -110,7 +110,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     public Session.GameReadiness GameReadiness { get; init; } = gameReadiness ?? new(clock);
 
-    /// <summary>Explicit diagnostic only: no seats, joins, hosting or authority changes.</summary>
+    /// <summary>Explicit diagnostic only: no seats, joins or authority changes.</summary>
     public async Task<UiFrame.ConnectionDetails> ConnectionDetailsAsync(string endpoints, CancellationToken cancellation)
     {
         var started = System.Diagnostics.Stopwatch.StartNew();
@@ -127,7 +127,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         // OD-208: players host no world, so no relay of this PC measures a public address, NAT or UPnP any more
         var text = endpoints + "\n\n" + _text("connection.matchmaking") + ": " + result + "\n" + _text("connection.response") + ": " + started.ElapsedMilliseconds + " ms"
             + (TransportText() is { } transport ? "\n" + _text("connection.transport") + ": " + transport : "")
-            + (ConnectionNotice() is { } notice ? "\n" + notice : "") + "\n\n" + _text("connection.snapshot"); // OD-160's notice
+            + "\n\n" + _text("connection.snapshot"); // OD-208: no OD-160 relay notice (official worlds are direct)
         return new(state, text);
     }
 
@@ -451,7 +451,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             return new(UiJoin.NotAllowed, _text("worlds.load_game"));
                         }
                         var proofInstalled=false;
-                        try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation,grant.Transport).ConfigureAwait(false);}
+                        try {proofInstalled=await SendProofAsync(grant.Relay,grant.WorldId,grant.Id,joinEpoch,cancellation).ConfigureAwait(false);}
                         catch(Exception error) when(HostFailure(error)) { _log($"worlds: socket proof context failed: {error.GetType().Name}"); }
                         if(!proofInstalled || joinEpoch!=Volatile.Read(ref _mineEpoch))
                         {
@@ -616,7 +616,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// An omitted roster uses the bounded legacy members route; a failed read retains valid state.
     /// </summary>
     public async Task<UiFrame.MyWorld> MyWorldAsync(CancellationToken cancellation) =>
-        WithConnection(await MineAsync(background: false, cancellation).ConfigureAwait(false));
+        await MineAsync(background: false, cancellation).ConfigureAwait(false);
 
     /// <summary>The players of the world as last read (no request): the launcher's moderation panel lists them (CR-S62).</summary>
     public IReadOnlyList<MemberRow> LastMembers => Volatile.Read(ref _mineSnapshot).Members;
@@ -632,7 +632,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>Periodic reconciliation sleeps after an idle free session has a confirmed empty seat.</summary>
     public async Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) =>
-        WithConnection(await MineAsync(background: true, cancellation).ConfigureAwait(false));
+        await MineAsync(background: true, cancellation).ConfigureAwait(false);
 
     /// <summary>An explicit UI/action/reconnect asks for one fresh reconciliation without erasing a good roster.</summary>
     public void RequestReconcile()
@@ -776,7 +776,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     _lastRosterAt = DateTimeOffset.TryParse(boundedRoster!.GeneratedAt, System.Globalization.CultureInfo.InvariantCulture,
                         System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
                 }
-                ObserveNoticeWorld(world); // OD-160's notice: the world's modes and transport
                 ObserveJoinModes(world); // OD-210 (W14): the private lobby's "Who can join"
                 ObserveActivity(seat);
                 CrashContext?.ObserveWorld(role == UiWorldRole.Seated ? new(seat.WorldId, world.Private == true ? "private" : "everyone", Now, named,
@@ -894,6 +893,23 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     {
         try { await ClearProofAsync(why, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception error) when (HostFailure(error)) { }
+    }
+
+    /// <summary>
+    /// OD-208: the hook says the game left the online world on its own (Event 8, <paramref name="why"/> <c>cars</c>: its car database
+    /// changed mid-session). The seat is left at once, on purpose (never rejoined): <c>DELETE /mm/v1/seat</c>.
+    /// </summary>
+    public async Task GameLeftOnlineAsync(string why, CancellationToken cancellation)
+    {
+        CancelFreeRoamLeave();
+        InvalidateMine(reset: true);
+        LeftOnPurpose();
+        var held = _seat.GrantId is not null;
+        _seat.Left();
+        await ClearSeatEndAsync("the game left the online world (" + why + ")").ConfigureAwait(false);
+        _log($"worlds: the game left the online world ({why}); {(held ? "leaving its seat" : "no seat held")}");
+        try { Observe(await _mm.LeaveSeatAsync(cancellation).ConfigureAwait(false)); }
+        catch (Exception e) when (HostFailure(e)) { } // the seat lapses on its own within 60 s
     }
 
     /// <summary>The play session is ending: the seat is let go (idempotent on the server).</summary>

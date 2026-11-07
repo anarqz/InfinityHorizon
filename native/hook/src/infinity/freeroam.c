@@ -29,9 +29,8 @@
    The world's address travels in the session as the server's
    secureDeviceAddress: base64 of "fh2inf:<host>:<port>" (an IPv6 host in
    brackets). [hook] FreeRoamWorld=<host>:<port> (Infinity.cfg) overrides it for tests. A world on
-   another PC is reached through azimuth_proxy.c (F3: STUN, punching, the source
-   filter); [hook] FreeRoamDirect=1 sends the game straight to it instead. Both are every
-   profile's (OD-140: no tier gate).
+   another PC is reached through proxy.c (STUN, the FIUP proof, the source filter; a launcher
+   session only, OD-208). FreeRoamWorld is every profile's (OD-140: no tier gate).
 
    [hook] FreeRoam=0 turns all of it off (on by default since fh2online.46). */
 #include "infinity.h"
@@ -2419,7 +2418,7 @@ static void fr_apply_patches(void) {
 
 /* ------------------------------------------------------------------ setup */
 
-/* Infinity.cfg [hook] FreeRoam, FreeRoamWorld and FreeRoamDirect (cfg.c, read at start). */
+/* Infinity.cfg [hook] FreeRoam and FreeRoamWorld (cfg.c, read at start). */
 void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable) {
     const FiConfig *config = fi_cfg();
     fr_enabled = config->freeroam != 0;
@@ -2442,7 +2441,6 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
         ++n;
     }
     fr_world_override[n] = 0;
-    azimuth_proxy_configure(config->freeroam_direct != 0);
     fr_base64_encode("fh2inf:local", fr_local_base64, ARRAY_COUNT(fr_local_base64));
     fr_build_vtables();
     if (fi_game_has(FI_FEATURE_FREE_ROAM)) { /* OD-206: at FH2's addresses */

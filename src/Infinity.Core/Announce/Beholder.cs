@@ -153,13 +153,8 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
 /// </summary>
 public static class OfficialNodes
 {
-    /// <summary>"Infinity Sao Paulo 1" (the official relay on the Vultr VM).</summary>
-    public static IReadOnlySet<string> Relays { get; } = new HashSet<string>(StringComparer.Ordinal) { "1EEeJWDweWn7PHOmTQ+j1ikK1IYLmftD8Vu9A5/AjJA=" };
-
     /// <summary>"Infinity Beta" (the owner's server behind https://play.infinity-horizon.com).</summary>
     public static IReadOnlySet<string> Servers { get; } = new HashSet<string>(StringComparer.Ordinal) { "n/JK6+KV3riBQMvX4LzQwUpW6hUxF0jNG+pEmsJN6Nw=" };
-
-    public static bool IsOfficialRelay(Listing relay) => Relays.Contains(relay.PublicKey);
 
     public static bool IsOfficialServer(Listing server) => Servers.Contains(server.PublicKey);
 }
@@ -170,7 +165,7 @@ public sealed record Reachability(TimeSpan? RoundTrip)
     public bool Online => RoundTrip is not null;
 }
 
-/// <summary>OD122-L9: a listed server's state (its <c>/launcher/v1/info</c> round trip) and a relay's (a STUN binding to its endpoint).</summary>
+/// <summary>OD122-L9: a listed server's state (its <c>/launcher/v1/info</c> round trip). OD-208: relays are never chosen or probed.</summary>
 public static class NodeProbe
 {
     /// <summary>A server's <c>/launcher/v1/info</c>, timed; a server whose address is not a valid custom server is never contacted.</summary>
@@ -194,50 +189,6 @@ public static class NodeProbe
         }
     }
 
-    /// <summary>
-    /// A relay's latency: up to three STUN binding requests to its <c>host:port</c> (IPv4 literal or name), 1 s each, the median of the
-    /// answers whose transaction matches. No relay traffic beyond this (the fallback is a later CR).
-    /// </summary>
-    public static async Task<Reachability> RelayAsync(string endpoint, CancellationToken cancellation = default)
-    {
-        if (!TryEndpoint(endpoint, out var host, out var port)) return new(null);
-        IPAddress? address;
-        try
-        {
-            address = IPAddress.TryParse(host, out var literal) ? literal
-                : (await Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, cancellation).ConfigureAwait(false)).FirstOrDefault();
-        }
-        catch (SocketException) { return new(null); }
-        if (address is null || address.AddressFamily != AddressFamily.InterNetwork) return new(null);
-        using var udp = new UdpClient(AddressFamily.InterNetwork);
-        var times = new List<TimeSpan>();
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            var transaction = RandomNumberGenerator.GetBytes(12);
-            var clock = Stopwatch.StartNew();
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            timeout.CancelAfter(TimeSpan.FromSeconds(1));
-            try
-            {
-                await udp.SendAsync(StunCodec.BindingRequest(transaction), new IPEndPoint(address, port), timeout.Token).ConfigureAwait(false);
-                while (true)
-                {
-                    var answer = await udp.ReceiveAsync(timeout.Token).ConfigureAwait(false);
-                    if (StunCodec.Parse(answer.Buffer) is { Kind: StunCodec.BindingSuccessKind } message && message.Transaction.AsSpan().SequenceEqual(transaction))
-                    {
-                        times.Add(clock.Elapsed);
-                        break;
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) { }
-            catch (SocketException) { }
-        }
-        if (times.Count == 0) return new(null);
-        times.Sort();
-        return new(times[times.Count / 2]);
-    }
-
     /// <summary><c>host:port</c> with a port 1-65535 and an ASCII host.</summary>
     public static bool TryEndpoint(string endpoint, out string host, out int port)
     {
@@ -248,52 +199,4 @@ public static class NodeProbe
         host = endpoint[..colon];
         return host.Length <= 253 && host.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '-');
     }
-}
-
-/// <summary>
-/// OD122-L9: the relay the player chose (<c>relay-choice.json</c> in the state root): automatic (lowest latency) unless a listed relay's
-/// endpoint was picked, and whether only official relays may be used. Nothing sends relay traffic yet (the fallback CR uses it).
-/// </summary>
-public static class RelayChoice
-{
-    public const string FileName = "relay-choice.json";
-
-    /// <summary>
-    /// The saved choice. OD-160 removed OD-146's "always relay" switch: a file that still carries <c>alwaysRelay</c> reads as before
-    /// (the unknown property is ignored) and the next write drops it.
-    /// </summary>
-    public sealed record Saved(string? Endpoint, bool OfficialOnly);
-
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-
-    public static Saved Read(string root)
-    {
-        try
-        {
-            var path = Path.Combine(root, FileName);
-            if (!File.Exists(path)) return new(null, false);
-            var saved = JsonSerializer.Deserialize<Saved>(File.ReadAllText(path), Json) ?? new(null, false);
-            return saved.Endpoint is { } endpoint && !NodeProbe.TryEndpoint(endpoint, out _, out _) ? saved with { Endpoint = null } : saved;
-        }
-        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
-        {
-            return new(null, false);
-        }
-    }
-
-    public static void Write(string root, Saved choice)
-    {
-        ArgumentNullException.ThrowIfNull(choice);
-        Directory.CreateDirectory(root);
-        var path = Path.Combine(root, FileName);
-        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(choice, Json));
-        File.Move(path + ".tmp", path, overwrite: true);
-    }
-
-    /// <summary>"Automatic": the reachable relay with the lowest round trip (allowed by <paramref name="allowed"/>), or null.</summary>
-    public static Listing? Automatic(IEnumerable<(Listing Relay, Reachability State)> measured, Func<Listing, bool>? allowed = null) => measured
-        .Where(m => m.State.RoundTrip is not null && (allowed?.Invoke(m.Relay) ?? true))
-        .OrderBy(m => m.State.RoundTrip)
-        .Select(m => m.Relay)
-        .FirstOrDefault();
 }
