@@ -3840,6 +3840,11 @@ static HRESULT net_make_hstring(const wchar_t *text, void **out) {
 HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out) {
     return net_azimuth_base && net_offsets ? net_make_hstring(text, out) : E_FAIL;
 }
+HRESULT azimuth_net_activate(const wchar_t *name, const void *iid, void **out) {
+    if (!name || !iid || !out) return E_POINTER;
+    *out = 0;
+    return net_azimuth_base && net_offsets ? net_activate_raw(name, iid, out, 0) : E_FAIL;
+}
 static HRESULT STDMETHODCALLTYPE net_result_get_0(NetTokenResult *self, void **out) {
     (void)self;
     return net_make_hstring(L"fh2online-signature", out); /* Signature */
