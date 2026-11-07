@@ -40,8 +40,8 @@ public sealed partial class ShellViewModel
     public ObservableCollection<ManifestOptionItem> ModOptions { get; } = [];
     public bool OnMods => _onMods;
     public bool ShowMods => (InShell || DevelopmentMods) && _onMods && !ShowPickSave;
-    // OD-206 (W11 first step): mods, ExtraOptions' card and its INI are FH2's until mods declare their games; on FM5 the page
-    // would write FH2_ExtraOptions.ini
+    // OD-206 (W11 first step): every mod, its card and its settings file are FH2's until mods declare their games; on a game
+    // without FH2's features the page would write FH2's settings
     public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy && CurrentGame.FullFeatures;
     public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null && _externalMod is null;
     public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking;
