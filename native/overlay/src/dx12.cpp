@@ -567,23 +567,39 @@ LRESULT CALLBACK DummyProc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindo
 } // namespace
 
 bool InstallRenderHooks() {
+    // OD-206 (T3, 2026-11-07): the factory's swapchain creators go in FIRST, from a bare DXGI factory (no device, a few ms).
+    // A swapchain created before them has no known queue and gets no overlay; FM5 creates its swapchain about 250 ms after the
+    // game is mapped, while the dummy device below takes about 200 ms (FH2's first frame comes later and never raced).
+    IDXGIFactory4 *factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        return false;
+    }
+    void **factory_vtbl = *reinterpret_cast<void ***>(factory);
+    // IDXGIFactory::CreateSwapChain 10, IDXGIFactory2::CreateSwapChainForHwnd 15, ForCoreWindow 16, ForComposition 24
+    if (!(Hook(factory_vtbl[10], reinterpret_cast<void *>(&HookCreateSwapChain), reinterpret_cast<void **>(&g_create)) &&
+          Hook(factory_vtbl[15], reinterpret_cast<void *>(&HookForHwnd), reinterpret_cast<void **>(&g_for_hwnd)) &&
+          Hook(factory_vtbl[16], reinterpret_cast<void *>(&HookForCoreWindow), reinterpret_cast<void **>(&g_for_core)) &&
+          Hook(factory_vtbl[24], reinterpret_cast<void *>(&HookForComposition), reinterpret_cast<void **>(&g_for_composition)))) {
+        SafeRelease(factory);
+        return false;
+    }
     WNDCLASSEXW wc{sizeof(wc), CS_CLASSDC, DummyProc, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr, L"FiOverlayDummy", nullptr};
     RegisterClassExW(&wc);
     HWND window = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
     if (!window) {
+        SafeRelease(factory);
         return false;
     }
     bool ok = false;
     ID3D12Device *device = nullptr;
     ID3D12CommandQueue *queue = nullptr;
-    IDXGIFactory4 *factory = nullptr;
     IDXGISwapChain1 *swapchain = nullptr;
     do {
         if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
             break;
         }
         D3D12_COMMAND_QUEUE_DESC qd{D3D12_COMMAND_LIST_TYPE_DIRECT, 0, D3D12_COMMAND_QUEUE_FLAG_NONE, 0};
-        if (FAILED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue))) || FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        if (FAILED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue)))) {
             break;
         }
         DXGI_SWAP_CHAIN_DESC1 sd{};
@@ -594,17 +610,12 @@ bool InstallRenderHooks() {
         sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         sd.BufferCount = 2;
         sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        if (FAILED(factory->CreateSwapChainForHwnd(queue, window, &sd, nullptr, nullptr, &swapchain))) {
+        // the original creator (the trampoline), so the dummy swapchain is never remembered as one of the game's
+        if (FAILED(g_for_hwnd(factory, queue, window, &sd, nullptr, nullptr, &swapchain))) {
             break;
         }
         void **chain = *reinterpret_cast<void ***>(swapchain);
-        void **factory_vtbl = *reinterpret_cast<void ***>(factory);
-        // IDXGIFactory::CreateSwapChain 10, IDXGIFactory2::CreateSwapChainForHwnd 15, ForCoreWindow 16, ForComposition 24
-        ok = Hook(factory_vtbl[10], reinterpret_cast<void *>(&HookCreateSwapChain), reinterpret_cast<void **>(&g_create)) &&
-             Hook(factory_vtbl[15], reinterpret_cast<void *>(&HookForHwnd), reinterpret_cast<void **>(&g_for_hwnd)) &&
-             Hook(factory_vtbl[16], reinterpret_cast<void *>(&HookForCoreWindow), reinterpret_cast<void **>(&g_for_core)) &&
-             Hook(factory_vtbl[24], reinterpret_cast<void *>(&HookForComposition), reinterpret_cast<void **>(&g_for_composition)) &&
-             Hook(chain[8], reinterpret_cast<void *>(&HookPresent), reinterpret_cast<void **>(&g_present)) &&
+        ok = Hook(chain[8], reinterpret_cast<void *>(&HookPresent), reinterpret_cast<void **>(&g_present)) &&
              Hook(chain[13], reinterpret_cast<void *>(&HookResize), reinterpret_cast<void **>(&g_resize)) &&
              Hook(chain[22], reinterpret_cast<void *>(&HookPresent1), reinterpret_cast<void **>(&g_present1));
     } while (false);
