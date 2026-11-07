@@ -23,7 +23,9 @@ public sealed partial class ShellViewModel
     /// </summary>
     public bool CanChooseHardcore
     {
-        get { var can = _session?.Me is not null; InspectCanChooseHardcore(ref can); return can; }
+        // OD-206 (plan A1): a game without FH2's features has no Hardcore; the server refuses one (400 profile.mode), and the refused
+        // profile would stay on this PC only, playable offline alone (T1, 2026-11-07)
+        get { var can = _session?.Me is not null && CurrentGame.FullFeatures; InspectCanChooseHardcore(ref can); return can; }
     }
 
     partial void InspectCanChooseHardcore(ref bool can);
