@@ -488,29 +488,7 @@ public partial class MainWindow : Window
     private void OnSaveIni(object sender, RoutedEventArgs e) => _vm.SaveIni();
 
 
-    // OD-109: the dedicated lobby pane. Opening focuses its first field (or Stop while running) for the
-    // controller; Escape (the controller's B) closes it and returns focus to the globe.
-    private void OnToggleLobbyPane(object sender, RoutedEventArgs e)
-    {
-        _vm.ToggleLobbyPane();
-        if (_vm.ShowLobbyPane)
-            _ = Dispatcher.InvokeAsync(() =>
-            {
-                if (_vm.DedicatedActive) LobbyStopButton.Focus();
-                else LobbyNameBox.Focus();
-            }, System.Windows.Threading.DispatcherPriority.Input);
-        else LobbyButton.Focus();
-    }
-
-    private void OnLobbyPaneKey(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key != System.Windows.Input.Key.Escape || !_vm.ShowLobbyPane) return;
-        _vm.CloseLobbyPane();
-        LobbyButton.Focus();
-        e.Handled = true;
-    }
-
-    // CR-S62: the moderation pane, like the lobby pane: opening focuses its first control, Escape (B) closes it.
+    // CR-S62: the moderation pane: opening focuses its first control, Escape (B) closes it.
     private void OnToggleModerationPane(object sender, RoutedEventArgs e)
     {
         _vm.ToggleModerationPane();
@@ -543,25 +521,6 @@ public partial class MainWindow : Window
     }
 
     private async void OnModerationApply(object sender, RoutedEventArgs e) => await _vm.ApplyModerationAsync();
-
-    private async void OnStartLobby(object sender, RoutedEventArgs e)
-    {
-        await _vm.StartLobbyAsync();
-        // After the bindings have shown or hidden the buttons.
-        _ = Dispatcher.BeginInvoke(() => { if (_vm.DedicatedActive && _vm.ShowLobbyPane) LobbyStopButton.Focus(); },
-            System.Windows.Threading.DispatcherPriority.Loaded);
-    }
-
-    private async void OnStopLobby(object sender, RoutedEventArgs e)
-    {
-        await _vm.StopLobbyAsync();
-        _ = Dispatcher.BeginInvoke(() => { if (_vm.ShowLobbyPane) LobbyCreateButton.Focus(); },
-            System.Windows.Threading.DispatcherPriority.Loaded);
-    }
-
-    private void OnLobbyFewer(object sender, RoutedEventArgs e) => _vm.LobbyFewer();
-
-    private void OnLobbyMore(object sender, RoutedEventArgs e) => _vm.LobbyMore();
 
     private void OnNavSetup(object sender, RoutedEventArgs e) => _vm.OpenSetup();
 

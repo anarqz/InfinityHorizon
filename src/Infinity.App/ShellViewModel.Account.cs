@@ -15,6 +15,18 @@ public sealed partial class ShellViewModel
     }
     partial void InspectDeletion(ref Deletion? deletion);
 
+    /// <summary>The signed-in account's selected profile for the selected game (its mode decides the Hardcore rules).</summary>
+    private Profile? LobbyProfile
+    {
+        get
+        {
+            var profile = _session?.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game);
+            InspectLobbyProfile(ref profile);
+            return profile;
+        }
+    }
+    partial void InspectLobbyProfile(ref Profile? profile);
+
     public bool ShowAccount => SignedIn && _onAccount && !ShowPickSave;
     public bool HasDeletionPending => AccountDeletion is not null;
     public bool CanRequestDeletion => CanChangeIdentity && !HasDeletionPending &&

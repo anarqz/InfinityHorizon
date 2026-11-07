@@ -257,7 +257,6 @@ public sealed partial class ShellViewModel
     {
         _launcherUpdatePhase = UpdatePhase.Required; _updateSupport = false;
         _integrity?.Revoke();
-        StopDedicated("lobby.update_required");
         Changed(string.Empty);
     }
 

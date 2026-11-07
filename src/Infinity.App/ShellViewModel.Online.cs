@@ -141,7 +141,6 @@ public sealed partial class ShellViewModel
         _onlineStatus = null;
         _onlineSupport = false;
         _playOnlineActivity?.TryPause(pause);
-        _dedicated?.Pause(pause);
         _integrity?.Revoke();
         _nativeFlow.Clear();
         _signIn?.Cancel();

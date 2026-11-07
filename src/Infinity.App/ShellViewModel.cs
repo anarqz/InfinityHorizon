@@ -63,7 +63,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public int SidebarWidth => InShell ? 220 : 0;
 
-    public bool CanChangeIdentity => InShell && !Playing && !_busy && !LauncherUpdateBusy && !DedicatedActive;
+    public bool CanChangeIdentity => InShell && !Playing && !_busy && !LauncherUpdateBusy;
 
     public bool ShowWelcome => !InShell && _pending is null && !_loginOpen && !_onMods;
 
@@ -392,7 +392,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Re-opens the game picker (top bar "change").</summary>
     public void ChangeGame()
     {
-        if (Playing || _busy || DedicatedActive) return;
+        if (Playing || _busy) return;
         OpenHome();
         if (_session is not null || (OfflineMode && Games.Count > 1))
         {
@@ -403,7 +403,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Re-opens the profile picker (top bar "change").</summary>
     public void ChangeProfile()
     {
-        if (Playing || _busy || DedicatedActive) return;
+        if (Playing || _busy) return;
         OpenHome();
         if (_gate.Game is not null)
         {
@@ -426,7 +426,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     public void SignOut()
     {
         // A dedicated lobby is stopped first (its gate leave needs this session's tokens): CanChangeIdentity hides sign-out meanwhile.
-        if (Playing || _busy || DedicatedActive) return;
+        if (Playing || _busy) return;
         _nativeFlow.Clear();
         LeaveAccount(); _onNews = false;
         _onMods = _onSetup = _onBugReport = _loginOpen = false;
@@ -643,9 +643,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         _newsClient?.Dispose();
         if (_pickerHttp.IsValueCreated) _pickerHttp.Value.Dispose();
-        // OD-109: the dedicated lobby's DELETE and gate leave start first and run beside the play
-        // session's own cleanup; both finish (bounded) before the session's token manager is disposed.
-        var dedicated = _dedicated is { Active: true } host ? Task.Run(host.StopAsync) : Task.CompletedTask;
         _integrityLifetime.Cancel();
         StopPresenceForExit(); // OD-136: the Discord card is cleared when the launcher exits
         DisposeOnlineStatus();
@@ -662,14 +659,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         catch (AggregateException)
         {
             // it ended with an error: nothing more to wait for
-        }
-        try
-        {
-            dedicated.Wait(TimeSpan.FromSeconds(12));
-        }
-        catch (AggregateException)
-        {
-            // the stop is bounded and logged; the world lapses 45 s after its last announce
         }
         _signIn?.Cancel();
         _nativeFlow.Dispose();
