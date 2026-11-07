@@ -342,12 +342,13 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
 
     /// <summary>
     /// OD-204 (MATCHMAKING_API §2.10): the private create, <c>POST /mm/v1/join {activity, private: true}</c> (<paramref name="activity"/>
-    /// <c>freeroam</c> or <c>roadtrip</c>). Answered as any join (a 429 reads as <c>status: "rate_limited"</c>).
+    /// one of <see cref="WorldActivities.PrivateCreate"/>: FH2's <c>freeroam</c> or <c>roadtrip</c>, FM5's <c>race</c>, CR-S99). Answered as
+    /// any join (a 429 reads as <c>status: "rate_limited"</c>).
     /// </summary>
     public Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, string? nat,
         IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation)
     {
-        if (!WorldActivities.All.Contains(activity)) throw new ArgumentException("freeroam or roadtrip", nameof(activity));
+        if (!WorldActivities.PrivateCreate.Contains(activity)) throw new ArgumentException("freeroam, roadtrip or race", nameof(activity));
         return PostJoinAsync(new JoinRequest
         {
             Mods = mods is { Count: > 0 } ? mods : null,

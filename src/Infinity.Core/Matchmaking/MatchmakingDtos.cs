@@ -93,6 +93,10 @@ public static class WorldActivities
 
     public static IReadOnlyList<string> All { get; } = [FreeRoam, RoadTrip];
 
+    /// <summary>CR-S99 §1: what a private create may ask for, every game's (FH2 free roam and Road Trip, FM5 race); the server
+    /// refuses an activity the ticket's game does not run.</summary>
+    public static IReadOnlyList<string> PrivateCreate { get; } = [FreeRoam, RoadTrip, Race];
+
     /// <summary>OD-190 (WORLDS_OFFICIAL §11.2): what a quick join (<c>POST /mm/v1/join {activity}</c>, no world id, no code) asks for.</summary>
     public static IReadOnlyList<string> Placement { get; } = [FreeRoam, CarMeet, RoadTrip];
 }
