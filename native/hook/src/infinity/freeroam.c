@@ -1974,24 +1974,236 @@ static void fr_ascii_wide(const char *text, wchar_t *out, size_t capacity) {
     out[n] = 0;
 }
 
-/* The made reference's three HSTRING getters (slots 6 to 8, INFERRED: the class has three string properties) against what was
-   passed, for the log: which slot answers which part. */
-static void fr_ready_reference_log(FrCom *reference, const wchar_t parts[3][FI_SESSION_READY_PART + 1]) {
-    static const char *const names[3] = {"session name", "scid", "template"};
+/* fm5-10 (T3 on SAURON, 2026-11-07; W7b, OD-206, lobby spec 11.9): Azimuth's reference read back empty at slots 6, 7 and 8, and
+   the game then sent GET .../sessiontemplates//sessions/ (400). The call shape was the game's (wrapper 0x140be6d50, VERIFIED);
+   the strings were not: the game makes its HSTRINGs with its own resolved combase!WindowsCreateString, the pointer in its IAT
+   slot at image RVA hstring_create_rva (FM5 0x101bca0, called through 0x140136a80), and the hook made them with Azimuth's maker
+   (the FR_HSTRING_MAGIC layout). That this difference is the cause is INFERRED. So the strings now come from the game's
+   function, Azimuth's maker only when that pointer is unusable, and a reference that still does not read back is replaced by
+   the hook's own (fr_ready_own_reference). */
+typedef HRESULT(WINAPI *FrCreateStringFn)(const wchar_t *text, unsigned length, void **out);
+static const char *const fr_ready_part_names[3] = {"session name", "scid", "template"};
+static const char *const fr_ready_getter_names[3] = {"SessionName", "ServiceConfigurationId", "SessionTemplateName"};
+
+/* Where code lies: 1 in the selected game's image, 2 in a loaded module (its base in *module_out), 0 neither. */
+static int fr_ready_code_where(const void *code, const unsigned char *image, size_t image_size, HMODULE *module_out) {
+    HMODULE module = 0;
+    if (module_out) *module_out = 0;
+    if (!code) return 0;
+    if (image && image_size && (const unsigned char *)code >= image && (size_t)((const unsigned char *)code - image) < image_size) {
+        return 1;
+    }
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)code,
+                            &module) ||
+        !module) {
+        return 0;
+    }
+    if (module_out) *module_out = module;
+    return 2;
+}
+
+static void fr_ready_where_text(FrLine *line, const void *code) {
+    HMODULE module = 0;
+    const int where = fr_ready_code_where(code, fi_game_selected_image, fi_game_profile()->image_size, &module);
+    if (where == 1) {
+        fr_text(line, " (in the game image)");
+    } else if (where == 2) {
+        fr_text(line, " (in a loaded module 0x");
+        fr_hex(line, (unsigned long long)(uintptr_t)module, 16);
+        fr_text(line, ")");
+    } else {
+        fr_text(line, " (not code we know)");
+    }
+}
+
+/* The game's WindowsCreateString: the pointer in its IAT slot at image + rva, read without faulting. Null unless the slot lies
+   in the image and holds a pointer to code of the image or of a loaded module. *slot_out is the pointer read, *where_out as
+   fr_ready_code_where. */
+static FrCreateStringFn fr_ready_creator(const unsigned char *image, size_t image_size, unsigned rva, void **slot_out,
+                                         int *where_out) {
+    void *pointer = 0;
+    *slot_out = 0;
+    *where_out = 0;
+    if (!image || !rva || image_size < sizeof(pointer) || rva > image_size - sizeof(pointer) ||
+        !memory_read(image + rva, &pointer, sizeof(pointer))) {
+        return 0;
+    }
+    *slot_out = pointer;
+    *where_out = fr_ready_code_where(pointer, image, image_size, 0);
+    return *where_out ? (FrCreateStringFn)(uintptr_t)pointer : 0;
+}
+
+/* One HSTRING: the game's WindowsCreateString when there is one, else Azimuth's maker (fm5-10). */
+static HRESULT fr_ready_string(FrCreateStringFn create, const wchar_t *text, void **out) {
+    if (!out) return E_POINTER;
+    *out = 0;
+    return create ? create(text, (unsigned)fr_wide_length(text), out) : azimuth_net_make_hstring(text, out);
+}
+
+/* An HSTRING's text, for W7b's read-back only (FH2's fr_hstring stays Azimuth's layout only): Azimuth's layout (FR_HSTRING_MAGIC
+   at +0) or Windows' and Wine's (flags 0 or 1 at +0, INFERRED from the public 0x18-byte HSTRING_HEADER); both keep the length at
+   +4 and the text pointer at +0x10. Null is the empty string. */
+static size_t fr_ready_text(void *value, wchar_t *out, size_t capacity) {
+    struct {
+        unsigned magic, length;
+        unsigned long long reserved;
+        const wchar_t *text;
+    } header;
+    out[0] = 0;
+    if (!value || !memory_read(value, &header, sizeof(header)) || (header.magic != FR_HSTRING_MAGIC && header.magic > 1) ||
+        !header.text) {
+        return 0;
+    }
+    size_t length = header.length < capacity - 1 ? header.length : capacity - 1;
+    if (length && !memory_read(header.text, out, length * sizeof(wchar_t))) length = 0;
+    out[length] = 0;
+    return length;
+}
+
+/* The first 16 bytes at an HSTRING, in hex (null and unreadable said so). */
+static void fr_ready_bytes(FrLine *line, const void *value) {
+    unsigned char bytes[16];
+    if (!value) {
+        fr_text(line, "null");
+        return;
+    }
+    if (!memory_read(value, bytes, sizeof(bytes))) {
+        fr_text(line, "unreadable");
+        return;
+    }
+    for (unsigned i = 0; i < sizeof(bytes); ++i) fr_hex(line, bytes[i], 2);
+}
+
+/* The hook's own MultiplayerSessionReference (fm5-10 fallback): an IInspectable whose slots 6, 7 and 8 answer SessionName,
+   ServiceConfigurationId and SessionTemplateName (lobby spec 11.9 getter order), each a new HSTRING made as the reference's
+   strings were (the game's WindowsCreateString when usable, so the game can free it with its own WindowsDeleteString). The
+   class's own IID is not known (INFERRED: the game calls the getters on the raw pointer from args slot 6), so QueryInterface
+   answers every interface but the classic COM ones, IUnknown aside, with this object, and logs the first 16 it was asked. */
+typedef struct {
+    void *const *lpVtbl;
+    volatile LONG references;
+    FrCreateStringFn create;
+    wchar_t parts[3][FI_SESSION_READY_PART + 1]; /* name, scid, template */
+} FrReadyReference;
+static volatile LONG fr_ready_reference_queries;
+
+static HRESULT STDMETHODCALLTYPE fr_ready_ref_query(FrReadyReference *self, REFIID iid, void **out) {
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!iid) return E_POINTER;
+    if (fr_is_classic_com(iid)) return E_NOINTERFACE;
+    if (!fr_guid_is(iid, &fr_iid_unknown) && !fr_guid_is(iid, &fr_iid_inspectable) && !fr_guid_is(iid, &fr_iid_agile) &&
+        InterlockedIncrement(&fr_ready_reference_queries) <= 16) {
+        FR_LINE(line);
+        fr_text(&line, "FREEROAM: GameSessionReady (W7b): the hook's own reference QueryInterface {");
+        fr_guid_text(&line, iid);
+        fr_text(&line, "} answered with the reference (its IID is not known, INFERRED).");
+        fr_end(&line);
+    }
+    InterlockedIncrement(&self->references);
+    *out = self;
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE fr_ready_ref_add_ref(FrReadyReference *self) {
+    return (ULONG)InterlockedIncrement(&self->references);
+}
+static ULONG STDMETHODCALLTYPE fr_ready_ref_release(FrReadyReference *self) {
+    LONG left = InterlockedDecrement(&self->references);
+    if (!left) fr_free(self);
+    return (ULONG)left;
+}
+static HRESULT STDMETHODCALLTYPE fr_ready_ref_name(FrReadyReference *self, void **out) {
+    return fr_ready_string(self->create, self->parts[0], out); /* slot 6 SessionName */
+}
+static HRESULT STDMETHODCALLTYPE fr_ready_ref_scid(FrReadyReference *self, void **out) {
+    return fr_ready_string(self->create, self->parts[1], out); /* slot 7 ServiceConfigurationId (INFERRED, spec 11.9) */
+}
+static HRESULT STDMETHODCALLTYPE fr_ready_ref_template(FrReadyReference *self, void **out) {
+    return fr_ready_string(self->create, self->parts[2], out); /* slot 8 SessionTemplateName */
+}
+static HRESULT STDMETHODCALLTYPE fr_ready_ref_other(FrReadyReference *self) {
+    (void)self;
+    fr_ready_line("the game called the hook's own reference past slot 8 (not in the spec): E_NOTIMPL.");
+    return FR_E_NOTIMPL;
+}
+static void *const fr_ready_reference_vtable[16] = {
+    (void *)(uintptr_t)fr_ready_ref_query,    (void *)(uintptr_t)fr_ready_ref_add_ref,
+    (void *)(uintptr_t)fr_ready_ref_release,  (void *)(uintptr_t)fr_iids,
+    (void *)(uintptr_t)fr_class_name,         (void *)(uintptr_t)fr_trust,
+    (void *)(uintptr_t)fr_ready_ref_name,     (void *)(uintptr_t)fr_ready_ref_scid,
+    (void *)(uintptr_t)fr_ready_ref_template, (void *)(uintptr_t)fr_ready_ref_other,
+    (void *)(uintptr_t)fr_ready_ref_other,    (void *)(uintptr_t)fr_ready_ref_other,
+    (void *)(uintptr_t)fr_ready_ref_other,    (void *)(uintptr_t)fr_ready_ref_other,
+    (void *)(uintptr_t)fr_ready_ref_other,    (void *)(uintptr_t)fr_ready_ref_other};
+
+/* One reference of the caller's, or null when out of memory. */
+static FrCom *fr_ready_own_reference(FrCreateStringFn create, const wchar_t parts[3][FI_SESSION_READY_PART + 1]) {
+    FrReadyReference *self = fr_alloc(sizeof(*self));
+    if (!self) return 0;
+    self->lpVtbl = fr_ready_reference_vtable;
+    self->references = 1;
+    self->create = create;
+    memory_copy(self->parts, parts, sizeof(self->parts));
+    return (FrCom *)self;
+}
+
+/* A reference's three HSTRING getters (slots 6 to 8, lobby spec 11.9) against what was passed, for the log: its vtable and
+   QueryInterface, one line per getter (HRESULT, the HSTRING and its first 16 bytes, the text; session name, scid and template
+   are not personal), then which slot answers which part. 1 when slots 6, 7 and 8 read back name, scid and template. */
+static int fr_ready_reference_log(FrCom *reference, const wchar_t parts[3][FI_SESSION_READY_PART + 1], const char *label) {
+    void *vtable = 0, *query = 0;
+    if (memory_read(reference, &vtable, sizeof(vtable)) && vtable) memory_read(vtable, &query, sizeof(query));
+    {
+        FR_LINE(head);
+        fr_text(&head, "FREEROAM: GameSessionReady (W7b): ");
+        fr_text(&head, label);
+        fr_text(&head, " 0x");
+        fr_hex(&head, (unsigned long long)(uintptr_t)reference, 16);
+        fr_text(&head, ", vtable 0x");
+        fr_hex(&head, (unsigned long long)(uintptr_t)vtable, 16);
+        fr_text(&head, ", QueryInterface 0x");
+        fr_hex(&head, (unsigned long long)(uintptr_t)query, 16);
+        fr_ready_where_text(&head, query);
+        fr_text(&head, ".");
+        fr_end(&head);
+    }
+    int matched = 1;
     FR_LINE(line);
-    fr_text(&line, "FREEROAM: GameSessionReady (W7b): the reference reads back");
+    fr_text(&line, "FREEROAM: GameSessionReady (W7b): ");
+    fr_text(&line, label);
+    fr_text(&line, " reads back");
     for (unsigned slot = 6; slot <= 8; ++slot) {
         typedef HRESULT(STDMETHODCALLTYPE * GetFn)(FrCom *, void **);
-        void *text = 0;
+        void *text = 0; /* not freed: the hook has no WindowsDeleteString */
         wchar_t got[FI_SESSION_READY_PART + 1];
         HRESULT result = ((GetFn)((void *const *)(const void *)reference->lpVtbl)[slot])(reference, &text);
-        size_t n = SUCCEEDED(result) ? fr_hstring(text, got, ARRAY_COUNT(got)) : 0;
+        size_t n = SUCCEEDED(result) ? fr_ready_text(text, got, ARRAY_COUNT(got)) : 0;
+        if (!n) got[0] = 0;
+        {
+            FR_LINE(one);
+            fr_text(&one, "FREEROAM: GameSessionReady (W7b): ");
+            fr_text(&one, label);
+            fr_text(&one, " slot ");
+            fr_number(&one, slot);
+            fr_text(&one, " ");
+            fr_text(&one, fr_ready_getter_names[slot - 6]);
+            fr_text(&one, " -> 0x");
+            fr_hex(&one, (unsigned)result, 8);
+            fr_text(&one, ", HSTRING 0x");
+            fr_hex(&one, (unsigned long long)(uintptr_t)(SUCCEEDED(result) ? text : 0), 16);
+            fr_text(&one, " [");
+            fr_ready_bytes(&one, SUCCEEDED(result) ? text : 0);
+            fr_text(&one, "], text \"");
+            fr_wide(&one, got, n);
+            fr_text(&one, "\".");
+            fr_end(&one);
+        }
         fr_text(&line, slot == 6 ? ": slot " : ", slot ");
         fr_number(&line, slot);
         fr_text(&line, " ");
         const char *which = 0;
         for (unsigned i = 0; n && i < 3 && !which; ++i) {
-            if (fr_wide_equal(got, parts[i])) which = names[i];
+            if (fr_wide_equal(got, parts[i])) which = fr_ready_part_names[i];
         }
         if (FAILED(result)) {
             fr_text(&line, "0x");
@@ -1999,9 +2211,69 @@ static void fr_ready_reference_log(FrCom *reference, const wchar_t parts[3][FI_S
         } else {
             fr_text(&line, which ? which : n ? "another text" : "empty");
         }
+        matched &= SUCCEEDED(result) && n && fr_wide_equal(got, parts[slot - 6]);
     }
     fr_text(&line, ".");
     fr_end(&line);
+    return matched;
+}
+
+/* The three strings (name, scid, template) for the reference factory, from the game's WindowsCreateString when the selected
+   row has a usable one, else from Azimuth's maker; logs the source and each HSTRING's first 16 bytes. *create_out is the
+   function used (null: Azimuth's), which the hook's own reference uses too. */
+static HRESULT fr_ready_strings(const wchar_t parts[3][FI_SESSION_READY_PART + 1], void *texts[3], FrCreateStringFn *create_out) {
+    const FiGameProfile *game = fi_game_profile();
+    void *slot = 0;
+    int where = 0;
+    FrCreateStringFn create = fr_ready_creator(fi_game_selected_image, game->image_size, game->hstring_create_rva, &slot, &where);
+    HRESULT result = S_OK, game_result = S_OK;
+    for (unsigned i = 0; i < 3 && create && SUCCEEDED(result); ++i) result = fr_ready_string(create, parts[i], &texts[i]);
+    if (create && FAILED(result)) game_result = result, create = 0, result = S_OK;
+    if (!create) {
+        for (unsigned i = 0; i < 3 && SUCCEEDED(result); ++i) result = fr_ready_string(0, parts[i], &texts[i]);
+    }
+    FR_LINE(line);
+    fr_text(&line, "FREEROAM: GameSessionReady (W7b): strings by ");
+    if (create) {
+        fr_text(&line, "the game's WindowsCreateString 0x");
+        fr_hex(&line, (unsigned long long)(uintptr_t)slot, 16);
+        fr_text(&line, " (its IAT slot at image RVA 0x");
+        fr_hex(&line, game->hstring_create_rva, 8);
+        fr_text(&line, where == 1 ? ", in the game image)." : ", in a loaded module).");
+    } else {
+        fr_text(&line, "Azimuth's HSTRING maker (fallback): ");
+        if (!game->hstring_create_rva) {
+            fr_text(&line, "this game's row has no hstring_create_rva.");
+        } else if (!fi_game_selected_image) {
+            fr_text(&line, "no game image is selected.");
+        } else if (FAILED(game_result)) {
+            fr_text(&line, "the game's WindowsCreateString 0x");
+            fr_hex(&line, (unsigned long long)(uintptr_t)slot, 16);
+            fr_text(&line, " answered 0x");
+            fr_hex(&line, (unsigned)game_result, 8);
+            fr_text(&line, ".");
+        } else {
+            fr_text(&line, "the IAT slot at image RVA 0x");
+            fr_hex(&line, game->hstring_create_rva, 8);
+            fr_text(&line, " holds 0x");
+            fr_hex(&line, (unsigned long long)(uintptr_t)slot, 16);
+            fr_text(&line, ", not code of the game image or a loaded module.");
+        }
+    }
+    fr_end(&line);
+    for (unsigned i = 0; i < 3 && SUCCEEDED(result); ++i) {
+        FR_LINE(bytes);
+        fr_text(&bytes, "FREEROAM: GameSessionReady (W7b): HSTRING ");
+        fr_text(&bytes, fr_ready_part_names[i]);
+        fr_text(&bytes, " 0x");
+        fr_hex(&bytes, (unsigned long long)(uintptr_t)texts[i], 16);
+        fr_text(&bytes, " [");
+        fr_ready_bytes(&bytes, texts[i]);
+        fr_text(&bytes, "].");
+        fr_end(&bytes);
+    }
+    *create_out = create;
+    return result;
 }
 
 static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *template_name, const char *name, unsigned *hresult);
@@ -2052,14 +2324,32 @@ static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *tem
     fr_ascii_wide(name, parts[0], ARRAY_COUNT(parts[0]));
     fr_ascii_wide(scid, parts[1], ARRAY_COUNT(parts[1]));
     fr_ascii_wide(template_name, parts[2], ARRAY_COUNT(parts[2]));
-    void *texts[3] = {0, 0, 0}; /* Azimuth's HSTRINGs; the hook has no WindowsDeleteString, so these few bytes are not freed */
-    HRESULT result = S_OK;
-    for (unsigned i = 0; i < 3 && SUCCEEDED(result); ++i) result = azimuth_net_make_hstring(parts[i], &texts[i]);
+    void *texts[3] = {0, 0, 0}; /* the hook has no WindowsDeleteString, so these few bytes are not freed */
+    FrCreateStringFn create = 0;
+    HRESULT result = fr_ready_strings((const wchar_t(*)[FI_SESSION_READY_PART + 1])parts, texts, &create); /* fm5-10 */
     FrCom *factory = 0, *reference = 0;
     if (SUCCEEDED(result)) {
         result = azimuth_net_activate(L"Windows.Xbox.Multiplayer.MultiplayerSessionReference", &fr_iid_session_ref_factory,
                                       (void **)&factory);
         if (SUCCEEDED(result) && !factory) result = E_NOINTERFACE;
+    }
+    if (SUCCEEDED(result)) {
+        /* fm5-10: whether this is the factory the game gets cannot be seen from here (the game activates the same class through
+           Azimuth too, so the same object is INFERRED); its pointer, vtable and QueryInterface are logged to compare. */
+        void *vtable = 0, *query = 0;
+        if (memory_read(factory, &vtable, sizeof(vtable)) && vtable) memory_read(vtable, &query, sizeof(query));
+        FR_LINE(seen);
+        fr_text(&seen, "FREEROAM: GameSessionReady (W7b): factory {");
+        fr_guid_text(&seen, &fr_iid_session_ref_factory);
+        fr_text(&seen, "} 0x");
+        fr_hex(&seen, (unsigned long long)(uintptr_t)factory, 16);
+        fr_text(&seen, ", vtable 0x");
+        fr_hex(&seen, (unsigned long long)(uintptr_t)vtable, 16);
+        fr_text(&seen, ", QueryInterface 0x");
+        fr_hex(&seen, (unsigned long long)(uintptr_t)query, 16);
+        fr_ready_where_text(&seen, query);
+        fr_text(&seen, "; the game's own is the same object only INFERRED.");
+        fr_end(&seen);
     }
     if (SUCCEEDED(result)) {
         typedef HRESULT(STDMETHODCALLTYPE * CreateFn)(FrCom *, void *, void *, void *, FrCom **);
@@ -2076,7 +2366,24 @@ static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *tem
         if (hresult) *hresult = (unsigned)result;
         return FI_SESSION_READY_NO_REFERENCE;
     }
-    fr_ready_reference_log(reference, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
+    /* fm5-10 fallback: a reference that does not read back name, scid and template at slots 6 to 8 (T3: all three empty) is
+       replaced by the hook's own, whose getters answer them (lobby spec 11.9). */
+    if (fr_ready_reference_log(reference, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts, "the reference")) {
+        fr_ready_line("the args hand out Azimuth's reference (it reads back name, scid and template).");
+    } else {
+        FrCom *own = fr_ready_own_reference(create, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
+        if (own) {
+            reference->lpVtbl->Release(reference);
+            reference = own;
+            fr_ready_reference_log(reference, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts, "the hook's own reference");
+            fr_ready_line(create ? "the args hand out the hook's own reference (fm5-10: Azimuth's did not read back), its strings "
+                                   "by the game's WindowsCreateString."
+                                 : "the args hand out the hook's own reference (fm5-10: Azimuth's did not read back), its strings "
+                                   "by Azimuth's HSTRING maker.");
+        } else {
+            fr_ready_line("the hook's own reference could not be allocated; the args hand out Azimuth's as it is.");
+        }
+    }
     FrReadyArgs *args = fr_alloc(sizeof(*args));
     if (!args) {
         reference->lpVtbl->Release(reference);

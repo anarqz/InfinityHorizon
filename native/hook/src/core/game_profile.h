@@ -75,6 +75,10 @@ typedef struct {
        the delegate the game adds at IPartyStatics slot 16 (freeroam.c), reports Capture 14, and fires it on the launcher's
        SessionReady (launch.c). 0: slot 16 is only observed, as for FH2. */
     int party_session_ready;
+    /* fm5-10 (W7b, OD-206, lobby spec 11.9): the image RVA of the game's own IAT slot for combase!WindowsCreateString (FM5:
+       0x101bca0, read through 0x140136a80). The hook makes the session reference's HSTRINGs with the function stored there, as
+       the game's wrapper 0x140be6d50 does (that Azimuth's reference wants the game's strings is INFERRED). 0: none (FH2). */
+    unsigned hstring_create_rva;
 } FiGameProfile;
 
 /* FM5 1.0.0.20 (docs/launcher/FM5_INFINITY_HANDOFF.md 3).
@@ -134,12 +138,12 @@ static const FiReadyTerm fi_fm5_ready[] = {
 
 static const FiGameProfile fi_game_profiles[] = {
     {FI_GAME_FH2, "FH2", GAME_TIMESTAMP, GAME_IMAGE_SIZE, FI_FEATURES_ALL, L"title-1a96545b", L"media\\stripped\\gamedbRC.slt", 2,
-     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0},
+     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0},
     {FI_GAME_FM5, "FM5", 0x53d8d1f2u, 0x279d000u, 0, L"title-7b35d917", L"media\\db\\gamedb.slt", -1,
      fi_fm5_patches, sizeof(fi_fm5_patches) / sizeof(fi_fm5_patches[0]),
      fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0]),
      fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u},
-     FI_FM5_HEARTBEAT_WINDOW_MS, 1},
+     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u},
 };
 
 /* The polled heartbeat's term (game_patches.h game_ready_thread): it changed at `beat_at` (0: never seen change) and is
