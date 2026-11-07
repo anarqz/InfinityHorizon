@@ -25,13 +25,13 @@ public static class AntiCheatPool
     }
 }
 
-// OD-149 (§3.9): the pineapple pool. Every list marks pineapple worlds (Row: kind bit 1, lock 9 for a clean player); a clean
-// player's join of one is refused with a clear text; an isolated player sees the red notice with the time left and, when its
-// seat in a clean world ends or its clean world closes for the pool, is moved to the first pineapple world it can join (OD-208:
-// it never opens one; the server places flagged players). Hardcore only: a Noob session never reads or acts on a pool.
+// OD-149 (§3.9): the pineapple pool. A clean player's join of a pineapple world is refused (409 pool) with a clear text; an
+// isolated player sees the red notice with the time left (pool.until) and, when its seat in a clean world ends for the pool, is
+// moved by a quick join the server places (OD-208: no list is read and no world is opened). Hardcore only: a Noob session never
+// reads or acts on a pool.
 public sealed partial class WorldsBridge
 {
-    /// <summary>How long the automatic move to a pineapple world looks for one (the free roam ask's own budget).</summary>
+    /// <summary>How long the automatic move to a pineapple world may take (the free roam ask's own budget).</summary>
     public static readonly TimeSpan PoolMoveBudget = TimeSpan.FromSeconds(18);
 
     // the caller's isolation end (UTC ticks of the server's instant); 0: not isolated, as the last list or seat read said
@@ -80,7 +80,7 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// A join answered 409 <c>PORTAL.CONFLICT {reason: "pool"}</c>: a clean player's join of a pineapple world, or an isolated
-    /// player's join of a clean one. Answered as <see cref="UiJoin.Closed"/> (the overlay refreshes its list and shows the text;
+    /// player's join of a clean one. Answered as <see cref="UiJoin.Closed"/> (the text says why;
     /// the free roam ask tries its next world). Null for any other answer.
     /// </summary>
     private UiFrame.JoinResult? PoolRefusal(MmError? error)
@@ -106,8 +106,8 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>
-    /// The move (§3.9 "on the flag"): the free roam ask's own path joins the first pineapple world this player may join (the
-    /// candidates of an isolated player are pineapple worlds only), then asks the game to look for free roam
+    /// The move (§3.9 "on the flag"): the free roam ask's own quick join (the server places a flagged caller), then asks the game
+    /// to look for free roam
     /// (<see cref="Session.Frame.FollowHost"/>, which lands it in the new seat). One move at a time.
     /// </summary>
     private void StartPoolMove(string why)

@@ -33,10 +33,6 @@ void fi_mod_host_wait(unsigned ms);
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size);
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size);
 int azimuth_proxy_relay_candidates(const unsigned char *payload,size_t size);
-/* CR-S57 joiner relay fallback: RelayLeg (launcher frame 0x1d) in, RelayFallback (0x1e) out. */
-int azimuth_proxy_relay_leg(const unsigned char *payload,size_t size);
-void azimuth_proxy_relay_leg_clear(void);
-int fi_launch_relay_fallback(const unsigned char grant[16],unsigned state);
 /* CR-L41.3 Discord presence (launch.c): Progress (0x21) after an UpdateAll the hook lets through,
    Car (0x22) from the readiness sample's current car key (current+0x40, `now_ms` GetTickCount64);
    each sent only in a live session and only when changed (Car also held 1 s and at most one per
@@ -61,7 +57,6 @@ typedef struct {
     int carstate;             /* CarState: FI_CARSTATE_* (auto) */
     int language;             /* Language: FI_LANG_* (auto) */
     int log;                  /* Log 0/1 (1) */
-    int relay_legacy;         /* RelayCommand: 0 auto, 1 legacy */
     int encoding;             /* FI_CFG_*: how Infinity.cfg is written (FI_CFG_NONE: no file) */
     int has_hook_section;     /* the file has [hook] now */
     int launch;               /* FI_LAUNCH_*: started by the launcher (FI_LAUNCH set) */
@@ -370,8 +365,8 @@ void fi_netobs_answer_text(char *out, size_t capacity, long id, unsigned status,
    identity, tokens as lengths); 0 when the body is not a session. Logged by fi_netobs_answer for
    sessiondirectory answers when it changed for the URL. */
 int fi_netobs_session_text(char *out, size_t capacity, long id, const unsigned char *body, size_t size);
-/* follow.c (OD-151): a seated guest's game starts its own matchmaking for the host's new activity
-   (the launcher's FollowHost; the player confirms with (X)). Applied with car meets (free roam on). */
+/* follow.c (OD-151): the game starts its own matchmaking for the launcher's FollowHost move
+   (the player confirms with (X)). Applied with car meets (free roam on). */
 void fi_follow_apply(unsigned char *game_image);
 void fi_follow_host(unsigned lobby, unsigned is_public, int move);
 /* The launcher's CancelMatchmaking (0x24): it gave up on its seat; the game's own matchmaking

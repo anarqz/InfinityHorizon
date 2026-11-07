@@ -66,7 +66,7 @@ public sealed partial class WorldsBridge
         if (Voice is { } voice)
         {
             voice.Observe(worldId, role);
-            if (role != UiWorldRole.Hosting) voice.WorldSaid(worldId, world.Voice);
+            voice.WorldSaid(worldId, world.Voice);
         }
         if (roster is null) return;
         var self = roster.Items.FirstOrDefault(m => m.Friend == "self" || _ownXuid is not null && m.Xuid == _ownXuid);

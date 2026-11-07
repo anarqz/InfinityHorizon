@@ -31,7 +31,7 @@ public sealed partial class WorldsBridge
             if(!OnlineOpen || epoch!=Volatile.Read(ref _mineEpoch)
                 || !DateTimeOffset.TryParse(answer.GeneratedAt,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out var generated)
                 || _lastSeatAt is {} previous && generated<previous
-                || answer.Seat is {} seat && (seat.World.Id!=seat.WorldId || seat.State is not (SeatStates.Hosting or SeatStates.Reserved or SeatStates.Seated)
+                || answer.Seat is {} seat && (seat.World.Id!=seat.WorldId || seat.State is not (SeatStates.Reserved or SeatStates.Seated)
                     || expectedGrant is not null && seat.GrantId!=expectedGrant))return false;
             epoch=Interlocked.Increment(ref _mineEpoch);return true;
         }
@@ -113,7 +113,6 @@ public sealed partial class WorldsBridge
         if(!NeedsProof && !ProofFor(seat?.Relay))return ProofInstalled ? ClearSeatProofAsync("the seat's grant carries no proof",epoch) : Task.FromResult(true);
         // T35: the server's answer shows no seat (it ended: released, expired, kicked, its world closed): the hook stops using it
         if(seat is null)return ClearSeatProofAsync("the server shows no seat",epoch);
-        if(seat.State==SeatStates.Hosting)return ClearSeatProofAsync("this player hosts its world",epoch);
         if(seat.Relay is null || seat.GrantId is null)return ClearSeatProofAsync("the seat has no grant",epoch,success:false);
         return SendProofAsync(seat.Relay,seat.WorldId,seat.GrantId,epoch,cancellation,seat.Transport);
     }

@@ -154,7 +154,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     private bool StageSeat(SeatAnswer value)
     {
-        if (value.Seat is not { GrantId: { } grant } seat || seat.State == SeatStates.Hosting || seat.World.Id != seat.WorldId) return false;
+        if (value.Seat is not { GrantId: { } grant } seat || seat.World.Id != seat.WorldId) return false;
         if (_seat.GrantId is not { } held || held == grant || Volatile.Read(ref _gameInWorld) == 0 || !Played(held)) return false;
         if (Volatile.Read(ref _seatWorld) is not { } playing || playing == seat.WorldId) return false;
         var before = Volatile.Read(ref _staged);

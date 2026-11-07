@@ -49,7 +49,7 @@ public static class PrivateLobbyPolicy
 // the hook holds that session write and asks here (FreeRoamNeed kinds 3/4). The launcher calls the private create
 // (POST /mm/v1/join {activity, private: true}), installs the grant's FIUP proof context as any official join does, and answers
 // Ready; the hook then lets the write through. A refusal answers none with one bilingual notice, and the hook fails the write
-// (NET_OFFLINE_ERROR). The seat is a third class: official transport (direct, FIUP), a player world's lifetime (kept past the
+// (NET_OFFLINE_ERROR). The seat is a third class: official transport (direct, FIUP), a held seat's lifetime (kept past the
 // 30 s rule, rejoined by world id, exempt from test.11, never moved by a quick join).
 public sealed partial class WorldsBridge
 {
@@ -127,8 +127,8 @@ public sealed partial class WorldsBridge
         _log($"worlds: private create: the game writes its session (template {templateName})");
     }
 
-    // W-14 wording for a kept seat: a private lobby's or a player world's
-    private string KeptSeat(string world) => SeatPrivate(world) ? "a private lobby's seat" : "a player world's seat";
+    // W-14 wording for a kept seat (OD-208: only a private lobby's is kept past the grace)
+    private const string KeptSeat = "a private lobby's seat";
 
     /// <summary>
     /// T-L6: a lobby ask while the seat is in a private world (<see cref="PrivateLobbyPolicy"/>): Ready when the world runs it, else
@@ -187,7 +187,7 @@ public sealed partial class WorldsBridge
                 firstAsk ??= _clock.GetElapsedTime(started);
                 Volatile.Write(ref _lobbiesFullAfter, -1);
                 asks++;
-                joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty, string.Empty), activity, token, kind, privateCreate: true).ConfigureAwait(false);
+                joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty), activity, token, kind, privateCreate: true).ConfigureAwait(false);
                 if (joined.Result == UiJoin.Reserved || Volatile.Read(ref _lobbiesFullAfter) is not (var ticks and >= 0) || !OnlineOpen) break;
                 var after = ticks > 0 ? TimeSpan.FromTicks(Math.Max(ticks, TimeSpan.TicksPerSecond)) : PrivateCreateFullRetry;
                 var now = _clock.GetElapsedTime(started);

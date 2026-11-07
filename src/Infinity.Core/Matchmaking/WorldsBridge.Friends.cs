@@ -10,11 +10,11 @@ namespace Infinity.Core.Matchmaking;
 public sealed partial class WorldsBridge
 {
     /// <summary>
-    /// Whether "Join friend" is offered for <paramref name="playing"/>: an official world by its <c>officialActivity</c> (the server's
-    /// join decides, <c>joinable</c> is not read for it), a player world by <c>joinable</c> (CORE_API §4.1).
+    /// Whether "Join friend" is offered for <paramref name="playing"/>: a friend in an official world, by its <c>officialActivity</c> (the
+    /// server's join decides; OD-208: there is no player world, so <c>joinable</c> is never read).
     /// </summary>
-    public static bool JoinFriendOffered(FriendPlaying? playing) => playing is { State: "in_world", WorldId: { Length: > 0 } }
-        && (playing.OfficialActivity is { } activity ? WorldActivities.Placement.Contains(activity) : playing.Joinable == true);
+    public static bool JoinFriendOffered(FriendPlaying? playing) => playing is { State: "in_world", WorldId: { Length: > 0 }, OfficialActivity: { } activity }
+        && WorldActivities.Placement.Contains(activity);
 
     /// <summary>
     /// "Join friend": <c>POST /mm/v1/join {worldId}</c> through the overlay's own join. A seat held elsewhere answers <c>locked</c>: it is
@@ -25,7 +25,7 @@ public sealed partial class WorldsBridge
     {
         ArgumentNullException.ThrowIfNull(friend);
         if (!JoinFriendOffered(friend) || friend.WorldId is not { } world) return new(UiJoin.Closed, _text("worlds.closed"));
-        var joined = await JoinAsync(new UiFrame.JoinWorld(world, string.Empty), cancellation).ConfigureAwait(false);
+        var joined = await JoinAsync(new UiFrame.JoinWorld(world), cancellation).ConfigureAwait(false);
         if (joined.Result == UiJoin.Reserved && friend.OfficialActivity is { } activity && Volatile.Read(ref _seatWorld) == world)
         {
             Volatile.Write(ref _seatOfficial, world);

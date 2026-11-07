@@ -58,13 +58,12 @@ enum {
     FRAME_RELAY_CONTEXT = 0x16,
     FRAME_MODS_REPORT = 0x1b,
     FRAME_CUSTOM_TRUST = 0x1c,
-    FRAME_RELAY_LEG = 0x1d,      /* launcher -> hook, CR-S57: the joiner's relay leg (proxy.c) */
-    FRAME_RELAY_FALLBACK = 0x1e, /* hook -> launcher, CR-S57: {grant[16], u8 state 1-4} */
+    /* 0x1d RelayLeg and 0x1e RelayFallback (CR-S57) are retired (OD-208: official worlds are direct only) */
     FRAME_FREE_ROAM_NEED = 0x1f,  /* hook -> launcher, CR-L40: {u32 nonce, u8 kind} */
     FRAME_FREE_ROAM_READY = 0x20, /* launcher -> hook, CR-L40: {u32 nonce, u8 result 0-2} */
     FRAME_PROGRESS = 0x21,        /* hook -> launcher, CR-L41.3: {u32 level, u64 credits} */
     FRAME_CAR = 0x22,             /* hook -> launcher, CR-L41.3: {i32 carKey} */
-    FRAME_FOLLOW_HOST = 0x23,     /* launcher -> hook, OD-151: {u8 lobby type 1-2, u8 public 0-1} (follow.c) */
+    FRAME_FOLLOW_HOST = 0x23,     /* launcher -> hook, OD-151: {u8 lobby type 1-2, u8 public 0-1}, the move (follow.c) */
     FRAME_CANCEL_MATCHMAKING = 0x24, /* launcher -> hook: {} (the launcher gave up on its seat; follow.c) */
     FRAME_WATCH = 0x25,           /* launcher -> hook, AC-2: the Hardcore world's watch rules, version 0 clears (watch.c) */
     FRAME_OBSERVED = 0x26,        /* hook -> launcher, AC-2: one ended episode of another player's car (watch.c) */
@@ -82,9 +81,6 @@ enum {
 #ifndef LAUNCH_CAR_MIN_MS
 #define LAUNCH_CAR_MIN_MS 5000u
 #endif
-/* Capture.what 7 (CR-S57): this hook's joiner proxy speaks the relay fallback (RelayLeg and
-   RelayFallback); sent once with ok=1 at every handshake. */
-#define LAUNCH_CAPTURE_RELAY_JOINER 7u
 /* Capture.what 8 (CR-L40): this hook asks the launcher for a lobby before FREE ROAM ONLINE's
    matchmaking request (FreeRoamNeed/FreeRoamReady); sent once with ok=1 at every handshake. */
 #define LAUNCH_CAPTURE_FREE_ROAM 8u
@@ -274,7 +270,6 @@ static void launch_suspend(unsigned reason) {
     InterlockedExchange(&launch_refresh_sent, 1);
     azimuth_freeroam_suspend();
     fi_udp_context_clear();
-    azimuth_proxy_relay_leg_clear();
     fi_watch_stop();
     azimuth_proxy_stop();
     azimuth_world_lan_left();
@@ -653,13 +648,7 @@ static int launch_queue_frame(unsigned type, const void *payload, size_t size) {
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size) {
     return fi_launch_live() && size==25 && launch_queue_frame(0x17,payload,size);
 }
-/* RelayFallback (0x1e, CR-S57): 1 direct failed, moving to the relay; 2 relay ok; 3 relay
-   unavailable for good; 4 direct ok. */
-int fi_launch_relay_fallback(const unsigned char grant[16],unsigned state) {
-    if(!fi_launch_live() || state<1 || state>4)return 0;
-    unsigned char payload[17];memory_copy(payload,grant,16);payload[16]=(unsigned char)state;
-    return launch_queue_frame(FRAME_RELAY_FALLBACK,payload,sizeof(payload));
-}
+
 
 /* ------------------------------------------------------- Discord presence */
 /* CR-L41.3 (DISCORD_PRESENCE.md 2): what the launcher's presence shows from the game. Both go out
@@ -2001,7 +1990,6 @@ static int launch_go_online(const LaunchTicket *t) {
        if the handshake ran first; every reconnect also gets the current fail-closed value. */
     fi_launch_capture(5, fi_livery_remote_ready());
     fi_launch_capture(6, 1); /* CR-L32: terminal OnlineSuspend is understood */
-    fi_launch_capture(LAUNCH_CAPTURE_RELAY_JOINER, 1); /* CR-S57: RelayLeg/RelayFallback */
     fi_launch_capture(LAUNCH_CAPTURE_PRIVATE_CREATE, 1); /* T-L6: kinds 3/4 once the launcher answers Capture{12, 1} */
     /* OD-206: free roam, Watch's car decoding, parts and follow are at FH2's addresses and layouts */
     if (fi_game_has(FI_FEATURE_FREE_ROAM)) {
@@ -2209,10 +2197,7 @@ static int launch_session_frame(void) {
     case 0x18:
         if(fi_launch_suspended())return 1;
         return azimuth_proxy_relay_candidates(r.at,r.left);
-    case FRAME_RELAY_LEG:
-        /* Malformed or foreign legs are logged and ignored there, never a protocol error. */
-        if(fi_launch_suspended()) { azimuth_proxy_relay_leg_clear();return 1; }
-        azimuth_proxy_relay_leg(r.at,r.left);return 1;
+
     case FRAME_RELAY_CONTEXT:
         if (fi_launch_suspended()) { fi_udp_context_clear();return 1; }
         return fi_udp_context_set(r.at,r.left);
@@ -2250,7 +2235,7 @@ static int launch_session_frame(void) {
     case FRAME_FREE_ROAM_READY:
         return launch_free_roam_ready(&r);
     case FRAME_FOLLOW_HOST: {
-        /* OD-151: the seated guest's host changed activity; the game asks the player (follow.c). T-L5: an optional third byte,
+        /* the launcher's FollowHost move; the game asks the player (follow.c). T-L5: an optional third byte,
            flags, exactly 1 (bit 0): an accepted invite's move (Capture 13); any other value is a protocol error */
         unsigned lobby = (unsigned)launch_le(&r, 1), is_public = (unsigned)launch_le(&r, 1), flags = 0, has_flags = 0;
         if (!r.bad && r.left == 1) {

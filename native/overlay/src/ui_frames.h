@@ -5,16 +5,9 @@
 // length of type + body, u8 type), little-endian fields, strings u16 LE length + UTF-8, flags 0/1.
 //
 // Overlay -> launcher:
-//   0x14 WorldsQueryV2{u8 filter (1 friends, 2 close to me, 3 global, 4 all: every lobby, CR-L40),
-//        u8 notFull, u8 modded (0: every lobby of the filter, modded or not; 1, an OD-112 overlay: modded only)}
 //   0x17 PlayerDetailsQuery{str xuid (decimal), str gamertag (may be empty)}
 //   0x18 PaneActionClick{str paneId, str actionId} (enabled actions only)
 // Launcher -> overlay:
-//   0x15 WorldsListV2{u8 filter, u8 modded, u8 status, str message, u8 count <= 50, count x LobbyRow},
-//        the rows already ordered: matching ones (lock 0; modsMatch before OD-181) first, then the others
-//        LobbyRow{str id, str name, str host, u8 players, u8 max, u8 kind, u8 audience, u8 lock,
-//        u8 ping, u8 friendHost, u8 modded, u8 modsMatch, u8 anyMode (OD-141: open to Hardcore and Noob),
-//        u8 members <= 12 x {str gamertag, u8 tier, u8 role}, u8 mods <= 32 x {str id, str version}}
 //   0x16 DetailPane{str paneId (empty closes), str title, str subtitle, str avatarKey, u8 sections
 //        <= 8 x {u8 kind (0 key/value rows, 1 items), str heading, u8 entries <= 32 x {str primary,
 //        str secondary, u8 icon}}, u8 actions <= 4 x {str id, str label, u8 enabled}}
@@ -24,13 +17,9 @@
 //   0x1A Avatar{u16 width, u16 height, width * height * 4 bytes of straight-alpha RGBA}: square,
 //        <= 128 (the launcher sends 96: 128 x 128 cannot fit the 64 KiB frame); {0, 0} clears it
 // Protocol 1 frames with a CR-L43 (OD-141) field, also coded here so the golden vectors cover them:
-//   0x0B CreateWorld{str name, u8 audience, u8 maxPlayers, u8 latency, u8 anyMode (0 the host's own mode, 1 open
-//        to Hardcore and Noob)}; the launcher reads a frame without anyMode (an older overlay) as 0
 //   0x0E MyWorld{u8 role, str worldId, str name, str host, str code, u8 audience, u8 players, u8 max, u8 named,
 //        u8 count <= 16 x {str xuid, str gamertag, u8 tier, u8 role, u8 friend}, u8 anyMode}; an older launcher's
 //        frame ends after the members (anyMode 0), and as before trailing bytes are ignored
-//   0x0B CreateWorld also carries u8 voice after anyMode (OD-154, CR-L46: the lobby's voice mode, 0 off, 1 open, 2
-//        proximity; absent: open)
 // Protocol 3 (OD-154, docs/launcher/VOICE_CHAT.md §11): voice chat
 //   0x1B VoiceState, launcher -> overlay {u8 flags, u8 micMode (0 open, 1 muted, 2 push-to-talk),
 //        u8 count <= 16 x {str xuid (decimal), str gamertag (<= 64 B), u8 state, u8 volume (1..100)}, u8 voiceVolume
@@ -43,15 +32,14 @@
 //   0x1C VoiceCommand, overlay -> launcher {u8 op, str xuid (decimal, empty for ops 1, 3, 4, 5, 7, 8), u8 value}:
 //        op 1 the lobby's voice mode (the host; value 0 off, 1 open, 2 proximity), 2 mute a player (1) or unmute (0), 3 mute (1) or unmute
 //        (0) everyone, 4 the mic mode (value as micMode), 5 voice on/off in the settings, 6 mute a player for the
-//        whole lobby (the host), 7 the voice chat volume, 8 this player's microphone volume, 9 a player's volume
+//        whole lobby (ops 1 and 6 are retired: players host no lobby, OD-208), 7 the voice chat volume, 8 this player's microphone volume, 9 a player's volume
 //        (ops 7-9: value 1..100, VOICE_CHAT.md §15)
 //   0x1D VoiceDevice, overlay -> launcher {u8 flow (0 microphone, 1 output), str id, str name} (each <= 256 B; an empty
 //        id is the system default and comes with an empty name): the device the player picked (§15)
 // Protocol 4 (OD-181, CR-L48): players may mix mods; every player shows the mods it declared
 //   0x1E RosterMods, launcher -> overlay {str worldId (<= 64 B; empty: no world, nobody listed), u8 count <= 16 x {str xuid
 //        (decimal), u8 mods 1..32 x {str name (<= 64 B: the catalog's name, else the mod's id), str version (<= 16 B)}}}, sent
-//        after every 0x0E MyWorld: only the players with mods (anyone else uses none). LobbyRow.modsMatch is always 1 since
-//        OD-181 (mods never block a join) and LobbyRow's mod id is that same display name.
+//        after every 0x0E MyWorld: only the players with mods (anyone else uses none).
 // Protocol 5 (OD-193 F-2): the game's own PLAYER ACTIONS popup gets ADD / REMOVE / ACCEPT / CANCEL FRIEND and REPORT PLAYER (the
 // hook adds the items and asks through this overlay's fi_overlay_player_* exports; the launcher holds the friend list and the calls)
 //   0x1F PlayerStateQuery, overlay -> launcher {str xuid (decimal)}
@@ -82,10 +70,9 @@
 // Additive fields of older frames (an older reader ignores them):
 //   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
-// Reserved (T-L3, OD-204 item 2): this overlay never sends 0x07, 0x09, 0x0B, 0x14, WorldAction 1/3 or VoiceOp 1/6 any more, and it
-// decodes and ignores 0x08, 0x0A, 0x0C and 0x15 from a launcher that still sends them; their ids and layouts stay reserved.
-// Protocol 9 (OD-208): players host no world. A protocol 9 launcher decodes those reserved overlay frames and refuses them (no
-// answer), and never sends 0x08, 0x0A, 0x0C or 0x15; MyWorld role 1 (hosting), host and code stay in the layout, reserved.
+// Protocol 9 (OD-208): players host no world. The lobby list, join by code, create and hosted frames (0x07-0x0C, 0x14, 0x15),
+// WorldAction 1/3 and VoiceOp 1/6 are gone from the pipe (either end ignores or refuses them as unknown); MyWorld's role 1
+// (hosting) is retired, and its host, code and audience fields stay in the layout (the code always empty).
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -97,8 +84,7 @@
 namespace fi {
 
 constexpr uint16_t kUiProtocol = 9;
-// CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
-constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
+constexpr size_t kMaxLobbyMods = 32; // OD-181: a roster player's declared mods
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
 constexpr size_t kMaxPaneSections = 8, kMaxPaneEntries = 32, kMaxPaneActions = 4;
 // UiFrame.cs' text limits in UTF-8 bytes: the launcher refuses anything longer, so neither side sends it
@@ -143,30 +129,8 @@ inline bool PaneKey(const std::string &id) {
 enum class PaneIcon : uint8_t { None, Player, Host, Supporter, Mod, Warning, Check };
 constexpr uint8_t kPaneIconMax = static_cast<uint8_t>(PaneIcon::Check);
 
-struct LobbyMember {
-    std::string gamertag;
-    uint8_t tier = 0; // 0 Infinity Racer, 1 Infinity Supporter (the badge only, CR-S69)
-    uint8_t role = 0; // 0 host, 1 in the world, 2 seat reserved
-};
 struct LobbyMod {
     std::string id, version;
-};
-
-struct WorldRow {
-    std::string id, name, host;
-    uint8_t players = 0, max = 0;
-    uint8_t kind = 0;      // bit 0 an Infinity Supporter host (the badge), bit 1 a pineapple world (OD-149)
-    uint8_t audience = 0;  // 0 everyone, 1 supporters, 2 friends, 3 private
-    uint8_t lock = 0;      // 0 joinable, 1 tier (an older server's; shown as 6), 2 friends, 3 code, 4 full, 5 latency, 6 other,
-                           // 7 another mode (a Hardcore world), 8 another mode (a Noob world), 9 a pineapple world (OD-149)
-    uint8_t ping = 0;      // 0 unknown, 1 good, 2 fair, 3 poor
-    bool friend_host = false;
-    // protocol 2 (OD-112)
-    bool modded = false;
-    bool mods_match = true; // OD-181: always true from the launcher; read and ignored (mods are shown, never a lock)
-    bool any_mode = false;  // OD-141: open to Hardcore and Noob (the "Hardcore + Noob" badge; never locked for mode)
-    std::vector<LobbyMember> members;
-    std::vector<LobbyMod> mods;
 };
 
 struct PaneEntry {
@@ -191,7 +155,7 @@ struct DetailPane {
     std::vector<PaneAction> actions;
 };
 
-// "My world" (OD-63): the world this profile hosts or holds a seat in, and its players. The XUID
+// "My world" (OD-63): the world this profile holds a seat in, and its players. The XUID
 // is the key of an action, never shown (OD-61).
 struct MemberRow {
     std::string xuid, gamertag;
@@ -200,7 +164,7 @@ struct MemberRow {
     uint8_t friend_state = 0; // 0 none, 1 friends, 2 request sent, 3 asked you, 4 you
 };
 struct MyWorld {
-    uint8_t role = 0; // 0 none, 1 hosting, 2 seat reserved, 3 seated
+    uint8_t role = 0; // 0 none, 2 seat reserved, 3 seated (1, hosting, is retired: OD-208)
     std::string world, name, host, code;
     uint8_t audience = 0, players = 0, max = 0;
     bool named = false; // false: the server gave no roster (only the host is known)
@@ -289,13 +253,6 @@ struct Reader {
 } // namespace wire
 
 // ---------------------------------------------------------------- overlay -> launcher bodies
-inline std::vector<uint8_t> EncodeWorldsQueryV2(uint8_t filter, bool not_full, bool modded) {
-    std::vector<uint8_t> b;
-    wire::U8(b, filter);
-    wire::Flag(b, not_full);
-    wire::Flag(b, modded);
-    return b;
-}
 // The game's gamertag is untrusted text: cut to the launcher's 512 bytes on a code point, or dropped
 // when it is not UTF-8, so it can never be the frame that closes the pipe.
 inline std::vector<uint8_t> EncodePlayerDetailsQuery(const std::string &xuid, const std::string &gamertag) {
@@ -310,21 +267,8 @@ inline std::vector<uint8_t> EncodePaneActionClick(const std::string &pane, const
     wire::Str(b, action);
     return b;
 }
-// The lobby's voice mode on the pipe (CR-L46): 0x0B's voice and VoiceOp::LobbyVoice's value.
+// The lobby's voice mode on the pipe (CR-L46): VoiceState's lobby mode.
 enum : uint8_t { kLobbyVoiceOff = 0, kLobbyVoiceOpen = 1, kLobbyVoiceProximity = 2, kLobbyVoiceMax = kLobbyVoiceProximity };
-
-// 0x0B (protocol 1; anyMode CR-L43; voice OD-154, its mode CR-L46)
-inline std::vector<uint8_t> EncodeCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode,
-                                              uint8_t voice = kLobbyVoiceOpen) {
-    std::vector<uint8_t> b;
-    wire::Str(b, name);
-    wire::U8(b, audience);
-    wire::U8(b, max_players);
-    wire::U8(b, latency);
-    wire::Flag(b, any_mode);
-    wire::U8(b, voice > kLobbyVoiceMax ? kLobbyVoiceOpen : voice);
-    return b;
-}
 
 // ---------------------------------------------------------------- voice chat (protocol 3, OD-154)
 enum class MicMode : uint8_t { Open, Muted, PushToTalk };
@@ -738,30 +682,6 @@ inline bool DecodeJoinModesSet(const uint8_t *body, size_t size, uint8_t &modes)
     return true;
 }
 
-// ---------------------------------------------------------------- reserved frames (T-L3)
-// 0x08, 0x0A and 0x0C (protocol 1: the list, a join's and a create's answers) from a launcher that still sends them: read to the
-// end of their layout (so a malformed one is told apart in the log) and ignored. 0x15 uses DecodeWorldsListV2.
-inline bool ReservedFrameReads(uint8_t type, const uint8_t *body, size_t size) {
-    wire::Reader r{body, size};
-    switch (type) {
-    case 0x08: {
-        r.U8();
-        r.U8();
-        r.Str();
-        const uint8_t count = r.U8();
-        for (uint8_t i = 0; i < count && r.ok; ++i) {
-            r.Str(); r.Str(); r.Str();
-            for (int k = 0; k < 7; ++k) r.U8();
-        }
-        break;
-    }
-    case 0x0A: r.U8(); r.Str(); break;
-    case 0x0C: r.U8(); r.Str(); r.Str(); r.Str(); break;
-    default: return false;
-    }
-    return r.ok;
-}
-
 // 0x1E (protocol 4): strict, as the launcher writes it (UiFrame.RosterMods.Validate)
 inline bool DecodeRosterMods(const uint8_t *body, size_t size, RosterMods &out) {
     wire::Reader r{body, size};
@@ -878,143 +798,6 @@ inline std::vector<uint8_t> EncodePlayerActionDone(const PlayerActionDone &d) {
 }
 
 // ---------------------------------------------------------------- launcher -> overlay bodies
-struct WorldsListV2 {
-    uint8_t filter = 0;
-    bool modded = false;
-    uint8_t status = 0; // 0 ok, 2 error
-    std::string message;
-    std::vector<WorldRow> rows;
-};
-
-inline bool DecodeWorldsListV2(const uint8_t *body, size_t size, WorldsListV2 &out) {
-    wire::Reader r{body, size};
-    WorldsListV2 l;
-    l.filter = r.U8();
-    l.modded = r.Flag();
-    l.status = r.U8();
-    l.message = r.Text();
-    const size_t count = r.Count(kMaxLobbyRows);
-    for (size_t i = 0; i < count && r.ok; ++i) {
-        WorldRow w;
-        w.id = r.Text();
-        w.name = r.Text();
-        w.host = r.Text();
-        w.players = r.U8();
-        w.max = r.U8();
-        w.kind = r.U8();
-        w.audience = r.U8();
-        w.lock = r.U8();
-        w.ping = r.U8();
-        w.friend_host = r.Flag();
-        w.modded = r.Flag();
-        w.mods_match = r.Flag();
-        w.any_mode = r.Flag();
-        const size_t members = r.Count(kMaxLobbyMembers);
-        for (size_t m = 0; m < members && r.ok; ++m) {
-            LobbyMember p;
-            p.gamertag = r.Text(kMaxGamertag);
-            p.tier = r.U8();
-            p.role = r.U8();
-            if (p.tier > 1 || p.role > 2) r.ok = false;
-            w.members.push_back(std::move(p));
-        }
-        const size_t mods = r.Count(kMaxLobbyMods);
-        for (size_t m = 0; m < mods && r.ok; ++m) {
-            LobbyMod mod;
-            mod.id = r.Text(kMaxModId);
-            mod.version = r.Text(kMaxModVersion);
-            w.mods.push_back(std::move(mod));
-        }
-        if (!w.modded && !w.mods.empty()) r.ok = false;
-        l.rows.push_back(std::move(w));
-    }
-    if (!r.Done()) return false;
-    out = std::move(l);
-    return true;
-}
-
-inline std::vector<uint8_t> EncodeWorldsListV2(const WorldsListV2 &l) {
-    std::vector<uint8_t> b;
-    wire::U8(b, l.filter);
-    wire::Flag(b, l.modded);
-    wire::U8(b, l.status);
-    wire::Str(b, l.message);
-    wire::U8(b, static_cast<uint8_t>(l.rows.size()));
-    for (const auto &w : l.rows) {
-        wire::Str(b, w.id);
-        wire::Str(b, w.name);
-        wire::Str(b, w.host);
-        wire::U8(b, w.players);
-        wire::U8(b, w.max);
-        wire::U8(b, w.kind);
-        wire::U8(b, w.audience);
-        wire::U8(b, w.lock);
-        wire::U8(b, w.ping);
-        wire::Flag(b, w.friend_host);
-        wire::Flag(b, w.modded);
-        wire::Flag(b, w.mods_match);
-        wire::Flag(b, w.any_mode);
-        wire::U8(b, static_cast<uint8_t>(w.members.size()));
-        for (const auto &m : w.members) {
-            wire::Str(b, m.gamertag);
-            wire::U8(b, m.tier);
-            wire::U8(b, m.role);
-        }
-        wire::U8(b, static_cast<uint8_t>(w.mods.size()));
-        for (const auto &m : w.mods) {
-            wire::Str(b, m.id);
-            wire::Str(b, m.version);
-        }
-    }
-    return b;
-}
-
-// OD-149 (2.0.1): pineapple worlds and the isolated player's notice ride on the protocol 3 frames as they are (no new field,
-// so the 2.0.0 layout and golden vectors stand): WorldRow.kind bit 1 a pineapple world (bit 0 stays the Supporter host),
-// WorldRow.lock 9 a pineapple world this (clean) player cannot join, and WorldsListV2.status 3 a good list for a player the
-// anti-cheat system isolated, its message "<seconds left>\n<dispute link>". An older overlay reads kind 3 as no badge, lock 9
-// as "not joinable" and status 3 as a good list whose message it ignores.
-constexpr uint8_t kKindSupporter = 1, kKindPineapple = 2, kLockPool = 9, kListIsolated = 3;
-constexpr uint32_t kMaxPoolSeconds = 7 * 24 * 3600; // the server's longest isolation is 48 h; anything past a week is refused
-
-struct PoolNotice {
-    bool isolated = false;
-    uint32_t seconds = 0; // left when the list was answered
-    std::string link;     // https only; empty: none to show
-};
-
-inline PoolNotice ParsePoolNotice(uint8_t status, const std::string &message) {
-    PoolNotice n;
-    if (status != kListIsolated) return n;
-    const size_t cut = message.find('\n');
-    const std::string digits = message.substr(0, cut);
-    if (digits.empty() || digits.size() > 7) return n;
-    uint32_t seconds = 0;
-    for (char c : digits) {
-        if (c < '0' || c > '9') return n;
-        seconds = seconds * 10 + static_cast<uint32_t>(c - '0');
-    }
-    if (seconds == 0 || seconds > kMaxPoolSeconds) return n;
-    n.isolated = true;
-    n.seconds = seconds;
-    if (cut != std::string::npos) {
-        const std::string link = message.substr(cut + 1);
-        if (link.rfind("https://", 0) == 0 && link.size() <= 256 && link.find_first_of(" \r\n\t") == std::string::npos) n.link = link;
-    }
-    return n;
-}
-
-// "1 h 23 min", "2 h" or "23 min": rounded up to the minute, at least 1 min (the same words in English and pt-BR,
-// as the launcher's AntiCheatPool.TimeLeft).
-inline std::string PoolTimeLeft(uint64_t seconds) {
-    uint64_t minutes = (seconds + 59) / 60;
-    if (minutes < 1) minutes = 1;
-    const uint64_t hours = minutes / 60, rest = minutes % 60;
-    if (hours == 0) return std::to_string(rest) + " min";
-    if (rest == 0) return std::to_string(hours) + " h";
-    return std::to_string(hours) + " h " + std::to_string(rest) + " min";
-}
-
 inline bool DecodeDetailPane(const uint8_t *body, size_t size, DetailPane &out) {
     wire::Reader r{body, size};
     DetailPane p;

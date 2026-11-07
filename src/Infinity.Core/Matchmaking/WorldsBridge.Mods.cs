@@ -3,8 +3,7 @@ using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
 
-// OD-112 (docs/launcher/MODDED_LOBBIES.md §2-§3): the session's mod set on joins, the lobby rows (the pool move's list) and the
-// player details pane.
+// OD-112 (docs/launcher/MODDED_LOBBIES.md §2-§3): the session's mod set on joins, the roster's mods and the player details pane.
 public sealed partial class WorldsBridge
 {
     /// <summary>The session's lobby mod set (OD-112); the default is vanilla. Joining waits for it to be ready.</summary>
@@ -30,7 +29,7 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// OD-181 (CR-L48): the catalog's name of a mod by its multiplayer id (the localized name, or null when the catalog does
-    /// not know it); the lobby list, the player details and the roster's mods show it with the version, else the id.
+    /// not know it); the player details and the roster's mods show it with the version, else the id.
     /// </summary>
     public Func<string, string?>? ModName { get; init; }
 
@@ -41,23 +40,6 @@ public sealed partial class WorldsBridge
         var name = names?.Invoke(mod.Id);
         var shown = Clip(string.IsNullOrWhiteSpace(name) ? mod.Id : name.Trim(), 64);
         return new LobbyMod(shown.Length == 0 ? Clip(mod.Id, 64) : shown, Clip(mod.Version, 16));
-    }
-
-    /// <summary>
-    /// One matchmaking world as a protocol 2 row with the host's mods (<c>WorldView.mods</c>) as shown. OD-181 (CR-L48)
-    /// retired the equal-set join rule: <c>ModsMatch</c> is always true, so no overlay blocks a join over mods.
-    /// </summary>
-    public static LobbyRow LobbyRow(WorldView world, bool lockedSection, Func<string, string?>? names = null)
-    {
-        ArgumentNullException.ThrowIfNull(world);
-        var mods = world.Mods ?? [];
-        var modded = mods.Count > 0;
-        var members = (world.Members ?? []).Take(UiFrame.MaxLobbyMembers)
-            .Select(m => new LobbyMember(Clip(m.Gamertag, 64), UiTier.Of(m.Tier),
-                m.Role switch { "host" => (byte)0, "seated" => (byte)1, _ => (byte)2 }))
-            .ToList();
-        var shown = mods.Take(UiFrame.MaxLobbyMods).Select(m => ShownMod(m, names)).ToList();
-        return new LobbyRow(Row(world, lockedSection), modded, true, members, shown, WorldModes.OpenToBoth(world));
     }
 
     /// <summary>

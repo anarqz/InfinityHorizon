@@ -91,7 +91,7 @@ public sealed partial class ShellViewModel
                 () => ownXuids, target => bridge?.RosterWorldOf(target), log: Log);
             return _playWorlds = bridge = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], ProofClock(session), mode,
-                () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
+                () => Infinity.Core.Matchmaking.LocalNetwork.LanAddresses(mm), xuid, Log,
                 checkWorldAccess: ct => CheckWorldAccessAsync(integrityApplies, integrity, ct),
                 // CR-S69: invites and requests to join reach every ticket, so no tier skips the background seat read
                 onlineActivity: onlineActivity, idleWhenNoWorld: false)

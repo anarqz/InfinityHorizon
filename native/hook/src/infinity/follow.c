@@ -1,8 +1,8 @@
 /* ForzaInfinity hook, GPL-3.0-or-later (see LICENSE).
 
-   Following the host's activity (OD-151). When a seated guest's host goes from online free roam to
-   an online Road Trip (or back), the launcher sends FollowHost{lobby type, public} (launch.c). The
-   guest's game then starts its own matchmaking for that lobby type, exactly as the pause menu's
+   The launcher's FollowHost move (OD-151's frame; OD-208: no player host is followed any more: an accepted
+   invite, a private create and the anti-cheat move use it). The launcher sends FollowHost{lobby type,
+   public} (launch.c); the game then starts its own matchmaking for that lobby type, exactly as the pause menu's
    ONLINE ROAD TRIP / ONLINE FREE ROAM does: the game shows its FINDING SESSION banner and the player
    still confirms with (X). Nothing here moves a player by itself.
 

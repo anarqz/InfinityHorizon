@@ -105,7 +105,7 @@ public sealed partial class ShellViewModel
         try
         {
             using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            var result = await worlds.JoinAsync(new UiFrame.JoinWorld(worldId, string.Empty), bound.Token);
+            var result = await worlds.JoinAsync(new UiFrame.JoinWorld(worldId), bound.Token);
             if (result.Result == UiJoin.Reserved)
             {
                 _pendingJoin = null;

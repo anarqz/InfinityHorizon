@@ -425,15 +425,7 @@ static void cfg_read_hook(FiConfig *c) {
     if (cfg_lookup(L"hook", L"Log", v, ARRAY_COUNT(v), 0)) {
         c->log = cfg_bool(L"Log", v, 1);
     }
-    if (cfg_lookup(L"hook", L"RelayCommand", v, ARRAY_COUNT(v), 0)) {
-        if (wequal(v, L"auto")) {
-            c->relay_legacy = 0;
-        } else if (wequal(v, L"legacy")) {
-            c->relay_legacy = 1;
-        } else {
-            cfg_invalid(L"RelayCommand", v, "auto");
-        }
-    }
+
     if (cfg_lookup(L"hook", L"VoiceUi", v, ARRAY_COUNT(v), 0)) {
         /* retired with hook 0.3.0+fh2online.114: the voice chat in the game's UI is always on
            (voice_ui.c, still only on the verified game bytes); the line is left as it is */
@@ -537,7 +529,7 @@ static size_t cfg_block(const FiConfig *c, int from_legacy, wchar_t *out, size_t
         L"; ForzaInfinity hook settings. Every key is optional; a missing key uses its default:",
         L"; NetMode=Proxy (or Capture, Off), Server=https://api.infinity-horizon.com, AutoUpdate=1,",
         L"; FreeRoam=1, FreeRoamDirect=0, FreeRoamWorld= (host:port), CarState=auto (or off),",
-        L"; Language=auto (or en, pt-BR), Log=1, RelayCommand=auto (or legacy).",
+        L"; Language=auto (or en, pt-BR), Log=1.",
     };
     static wchar_t keys[1024];
     size_t n = 0, k = 0;
@@ -592,9 +584,6 @@ static size_t cfg_block(const FiConfig *c, int from_legacy, wchar_t *out, size_t
     }
     if (c->log != d.log) {
         CFG_KEY_LINE(L"Log=0");
-    }
-    if (c->relay_legacy != d.relay_legacy) {
-        CFG_KEY_LINE(L"RelayCommand=legacy");
     }
     keys[k] = 0;
     for (size_t i = 0; i < ARRAY_COUNT(header); ++i) {
@@ -799,7 +788,6 @@ static void cfg_take_installer(int encoding, size_t size) {
     d.carstate = cfg_values.carstate;
     d.language = cfg_values.language;
     d.log = cfg_values.log;
-    d.relay_legacy = cfg_values.relay_legacy;
     d.encoding = cfg_values.encoding;
     d.has_hook_section = 1;
     if (d.net_mode == cfg_values.net_mode && wequal(d.server, cfg_values.server) &&
@@ -861,7 +849,6 @@ static void cfg_note_values(const FiConfig *c) {
     cfg_note(c->language == FI_LANG_EN ? " Language=en" : c->language == FI_LANG_PT_BR ? " Language=pt-BR"
                                                                                       : " Language=auto");
     cfg_note(c->log ? " Log=1" : " Log=0");
-    cfg_note(c->relay_legacy ? " RelayCommand=legacy" : " RelayCommand=auto");
 }
 
 static void cfg_load_files(const wchar_t *root, const wchar_t *bin) {

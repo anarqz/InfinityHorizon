@@ -138,7 +138,7 @@ public sealed partial class ShellViewModel
         if (game)
         {
             var mine = _playWorlds?.LastMyWorld;
-            if (mine is { Role: UiWorldRole.Hosting or UiWorldRole.Seated } inWorld && JoinLink.IsWorldId(inWorld.WorldId))
+            if (mine is { Role: UiWorldRole.Seated } inWorld && JoinLink.IsWorldId(inWorld.WorldId))
             {
                 activity = PresenceActivity.Lobby;
                 world = new PresenceWorld(inWorld.WorldId.ToLowerInvariant(), AudienceName(inWorld.Audience), inWorld.Players, inWorld.Max,
@@ -166,13 +166,8 @@ public sealed partial class ShellViewModel
         };
     }
 
-    private static string AudienceName(byte audience) => audience switch
-    {
-        0 => "everyone",
-        1 => "supporters",
-        2 => "friends",
-        _ => "private",
-    };
+    // MyWorld.audience: 3 a private official lobby (never offered to join), 0 every other (OD-208: no host picks one)
+    private static string AudienceName(byte audience) => audience == 0 ? "everyone" : "private";
 
     /// <summary>Without the overlay nothing reads "my world" during play; the presence reads it (throttled by the bridge) every 30 s.</summary>
     private void PollPresenceWorld()

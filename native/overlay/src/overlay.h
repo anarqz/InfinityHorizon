@@ -159,7 +159,7 @@ void SendPaneAction(const std::string &pane, const std::string &action);
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value); // 0x1C
 void SendVoiceDevice(VoiceFlow flow, const std::string &id, const std::string &name); // 0x1D (§15)
 void SendMyWorldQuery();
-// action: 2 leave, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other). 1 close and 3 kick stay reserved (T-L3).
+// action: 2 leave, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other). 1 close and 3 kick are retired (OD-208).
 void SendWorldAction(uint8_t action, const std::string &xuid, const std::string &gamertag, uint8_t reason);
 void SendInviteAnswer(const std::string &invite, bool accept); // 0x24 (protocol 6, T-L3)
 void SendFriendPickerAsk();                                   // 0x26 (protocol 7, T-L4): the pane's Invite friends

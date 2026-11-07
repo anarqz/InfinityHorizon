@@ -163,14 +163,6 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
     private static bool Loadable(ExtraOptionsMod mod) =>
         mod.Enabled && mod.ManifestError is null && (mod.HasMedia || mod.HasDatabase || mod.HasStrings || mod.Plugins > 0);
 
-    /// <summary>A dedicated host runs no game: its set is the plan itself, ready at once.</summary>
-    public static IModSetSource ReadyWithPlan(IReadOnlyList<ExtraOptionsPlannedMod> plan)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        return new LaunchPlanModSetSource([.. plan.OrderBy(p => p.Entry.Id, StringComparer.Ordinal)
-            .Select(p => new PlannedMod(p.Entry, p.ModId, p.Entry.Version, false, null, null))]);
-    }
-
     /// <summary>The contract's id form (MATCHMAKING_API.md §2.7): lower case, <c>[a-z0-9._-]</c>, a letter or digit first, at most 64.</summary>
     public static string LobbyId(string id)
     {

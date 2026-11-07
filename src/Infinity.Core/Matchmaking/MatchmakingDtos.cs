@@ -45,7 +45,7 @@ public record World
 
     public required WorldHost Host { get; init; }
 
-    /// <summary>The host's tier: <c>free</c> | <c>supporter</c> (who may join is <see cref="WorldView.Audience"/>).</summary>
+    /// <summary>The host's tier: <c>free</c> | <c>supporter</c>.</summary>
     public required string Kind { get; init; }
 
     public required string Mode { get; init; }
@@ -58,13 +58,6 @@ public record World
 
     /// <summary>One of <see cref="PingClasses"/>; optional in both mirrors (the contract's §2.1 writes it unconditionally).</summary>
     public string? PingClass { get; init; }
-
-    public string? Message { get; init; }
-
-    /// <summary>Deprecated alias of <see cref="WorldView.NeedsCode"/>.</summary>
-    public required bool Locked { get; init; }
-
-    public required bool Races { get; init; }
 
     public required string Since { get; init; }
 }
@@ -107,37 +100,21 @@ public static class WorldActivities
 /// <summary>A world as one caller sees it (MATCHMAKING_API.md §2.1).</summary>
 public record WorldView : World
 {
-    /// <summary>One of <see cref="WorldAudiences"/>.</summary>
-    public required string Audience { get; init; }
-
     /// <summary>
     /// OD-141 (CR-S76, §2.8): one of <see cref="WorldModes"/>, the host's mode or <c>any</c> (Hardcore and Noob).
     /// Absent from a server before CR-S76 (null here): read it as <see cref="World.Mode"/> (<see cref="WorldModes.OpenToBoth"/>).
     /// </summary>
     public string? Modes { get; init; }
 
-    public required bool NeedsCode { get; init; }
-
     public required uint OpenSeats { get; init; }
 
     /// <summary>The estimated caller → host round trip, rounded to 10 ms; absent when unlocated.</summary>
     public uint? RttMs { get; init; }
 
-    /// <summary>The host's latency limit: 60, 100 or 150 (<see cref="MaxRttSteps"/>).</summary>
-    public uint? MaxRttMs { get; init; }
-
     public required bool CanJoin { get; init; }
 
     /// <summary>One of <see cref="WorldWhy"/>, only when <see cref="CanJoin"/> is false.</summary>
     public string? Why { get; init; }
-
-    public required bool FriendHost { get; init; }
-
-    /// <summary>
-    /// OD-180.2 (S29, CR-S85): the host's game is not in the world and its launcher holds it for the other players.
-    /// Omitted when false; null here reads as false.
-    /// </summary>
-    public bool? HostAway { get; init; }
 
     /// <summary>§2.9 (OD-188/189): hosted by a Worlds host of <c>FI_WORLDS</c>, not a player (its <see cref="World.Host"/> is official). Omitted when false.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Official { get; init; }
@@ -157,16 +134,6 @@ public record WorldView : World
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Leader { get; init; }
 
     public required bool Invited { get; init; }
-
-    /// <summary>Only to the host of a <c>friends</c> or <c>private</c> world: 8 digits.</summary>
-    public string? Code { get; init; }
-
-    /// <summary>
-    /// OD-109: hosted by a dedicated lobby (a launcher with no game). Its host is not a player:
-    /// <see cref="World.Players"/> and <see cref="World.MaxPlayers"/> count guests only. Servers without
-    /// dedicated support omit it, so it is not <c>required</c> here (absent reads as false).
-    /// </summary>
-    public bool Dedicated { get; init; }
 
     /// <summary>
     /// The lobbies the host's world server runs besides free roam (<see cref="LobbyKinds"/>); empty for older hosts, which
@@ -226,12 +193,6 @@ public sealed record CallerPool
 public static class Transports
 {
     public const string Direct = "direct", Relay = "relay";
-}
-
-/// <summary>CR-S57: a launcher's NAT test.</summary>
-public static class NatTypes
-{
-    public const string Open = "open", Restricted = "restricted", Symmetric = "symmetric";
 }
 
 /// <summary>A world's relay (CR-S57): its announce key and name (untrusted display text).</summary>
@@ -298,41 +259,12 @@ public sealed record RequestToJoin
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ModEntry>? Mods { get; init; }
-
-    /// <summary>
-    /// OD-160 (§3.4, §5b "Relay by mode"): the asker's measured relay round trips, same rules as <see cref="JoinRequest.Relays"/>, so an
-    /// acceptance into a relay-born world seats it on the world's relay (without it: 409 <c>launcher_update_required</c> there).
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyDictionary<string, int>? Relays { get; init; }
 }
 
-public sealed record ListViewer
-{
-    public required bool Located { get; init; }
-
-    public string? Region { get; init; }
-}
-
-/// <summary><c>GET /mm/v1/worlds?filter=&amp;notFull=</c> → 200 (OD-58: at most 5 items and 3 locked).</summary>
-public sealed record WorldList
-{
-    public required string Filter { get; init; }
-
-    public required IReadOnlyList<WorldView> Items { get; init; }
-
-    /// <summary>Always empty since OD-129; an older server listed up to 3 Supporter-only worlds here for a free ticket (<c>why: "tier"</c>).</summary>
-    public required IReadOnlyList<WorldView> Locked { get; init; }
-
-    public required string GeneratedAt { get; init; }
-
-    public required ListViewer Viewer { get; init; }
-
-    /// <summary>OD-149 (§3.9): the caller is isolated by the anti-cheat system until then; absent otherwise (and from older servers).</summary>
-    public CallerPool? Pool { get; init; }
-}
-
-/// <summary>The host's relay UDP port and up to 4 private LAN addresses (TypeScript <c>AnnouncePort</c>).</summary>
+/// <summary>
+/// The joiner's UDP port and up to 4 private LAN addresses on <see cref="SeatNetworkRequest"/> (TypeScript <c>AnnouncePort</c>; the
+/// name is the contract's).
+/// </summary>
 public sealed record AnnouncePort
 {
     public required ushort Port { get; init; }
@@ -347,113 +279,6 @@ public sealed record AnnounceExternalPort
 {
     public required ushort Port { get; init; }
     public required string Source { get; init; }
-}
-
-/// <summary><c>PUT /mm/v1/worlds/{worldId}</c> body (§2.5): open or change the host's world.</summary>
-public sealed record WorldSettings
-{
-    public required string Name { get; init; }
-
-    /// <summary>OD-146 (§5b): <c>relay</c> makes a Noob world relay-born. OD-160 removed the launcher's switch: this client never sets it.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Transport { get; init; }
-
-    public required string Mode { get; init; }
-
-    /// <summary>
-    /// OD-141 (CR-S76, §2.8): the host's own mode or <c>any</c> (<see cref="WorldModes"/>); null: left out (the server
-    /// takes the host's mode). Fixed once the world opens: another value is 409 <c>PORTAL.CONFLICT {reason: "modes"}</c>;
-    /// the other mode alone is 409 <c>PORTAL.MODE_MISMATCH</c>.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Modes { get; init; }
-
-    public required uint MaxPlayers { get; init; }
-
-    public required string Audience { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public uint? MaxRttMs { get; init; }
-
-    public required bool Races { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Message { get; init; }
-
-    /// <summary>The XUIDs that may join (≤ 256), for every host (OD-129).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<string>? Allow { get; init; }
-
-    public required AnnouncePort Endpoint { get; init; }
-
-    /// <summary>OD-112: the host's mod set (null: vanilla, left out); fixed once the world opens (another set is 409 <c>PORTAL.CONFLICT {reason: "mods"}</c>).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<ModEntry>? Mods { get; init; }
-
-    /// <summary>The lobbies this host's world server runs besides free roam (<see cref="LobbyKinds"/>, distinct); null: left out.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<string>? Lobbies { get; init; }
-
-    /// <summary>OD-150: what the world runs now (<see cref="WorldActivities"/>); null: left out (unchanged; a new world is free roam).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Activity { get; init; }
-
-    /// <summary>CR-S57: the host's NAT test, read when the world opens (<see cref="NatTypes"/>).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Nat { get; init; }
-
-    /// <summary>CR-S57: measured relay round trips (announce key → ms, ≤ 16, 0-5000).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyDictionary<string, int>? Relays { get; init; }
-
-    /// <summary>CR-S67: the lobby's voice setting (<see cref="VoiceModes"/>); null: left out (unchanged; a new world is open).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Voice { get; init; }
-}
-
-/// <summary><c>POST /mm/v1/worlds/{worldId}/announce</c> body, every 15 s: <c>peers</c> are who is in the world now (≤ 11).</summary>
-public sealed record Heartbeat
-{
-    public required IReadOnlyList<string> Peers { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public AnnouncePort? Endpoint { get; init; }
-
-    /// <summary>OD-150: the host's game changed activity (<see cref="WorldActivities"/>); null: left out (unchanged).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Activity { get; init; }
-
-    /// <summary>CR-S67: the host changed the lobby's voice setting (<see cref="VoiceModes"/>); null: left out (unchanged).</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Voice { get; init; }
-
-    /// <summary>
-    /// OD-180.2 (S29, CR-S85): the host's game is away and its launcher holds the world for the other players. Absent means
-    /// false on every heartbeat; null here is never written (a server before CR-S85 refuses the field).
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? HostAway { get; init; }
-
-    /// <summary>
-    /// OD-194 (CR-S91), official worlds only (their world agent sends it): past the point newcomers may join. Absent means false;
-    /// a player host's launcher never writes it (null).
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? InProgress { get; init; }
-
-    /// <summary>
-    /// OD-204 (MATCHMAKING_API §2.10, WORLDS_OFFICIAL §12.8b): a private official world's current leader (member XUID), sent by the
-    /// world agent only, when someone leads. A player host's launcher never writes it (null: left out; an older server refuses the
-    /// member as unknown). The DTO member mirrors the contract (T-L4); this client sends none.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Leader { get; init; }
-}
-
-/// <summary>The host's answer to <c>PUT</c> and the announce: the world as its host sees it (<c>code</c> included) and the punches.</summary>
-public sealed record WorldAnnounced : WorldView
-{
-    public required IReadOnlyList<Punch> Punches { get; init; }
 }
 
 /// <summary>Base64 of the canonical claims and the base64 Ed25519 signature over <c>"fi-relay-grant-v1\n"</c> ‖ claims.</summary>
@@ -480,96 +305,27 @@ public sealed record RelayUdpProof
     }
 }
 
-public sealed record PeerEndpoint
-{
-    public required string Ip { get; init; }
-
-    public required ushort Port { get; init; }
-}
-
-/// <summary>One grant the host's relay must allow, or drop (<c>kicked</c>).</summary>
-public sealed record Punch
-{
-    public NetworkHints? Candidates { get; init; }
-    public required string GrantId { get; init; }
-
-    public required string Xuid { get; init; }
-
-    public PeerEndpoint? Endpoint { get; init; }
-
-    public required RelayGrant Relay { get; init; }
-
-    public required bool Kicked { get; init; }
-
-    /// <summary>CR-S57: <c>relay</c> = hold a relay leg for this grant; absent on older servers (direct).</summary>
-    public string Transport { get; init; } = Transports.Direct;
-}
-
-/// <summary>Existing GET /mm/v1/punches response (fi_protocol::matchmaking::Punches).</summary>
-public sealed record Punches
-{
-    public required IReadOnlyList<Punch> Items { get; init; }
-}
-
-/// <summary><c>POST /mm/v1/worlds/{worldId}/moderation</c> body (<c>until</c>: <c>ban</c> only).</summary>
-public sealed record Moderation
-{
-    /// <summary>One of <see cref="ModerationActions"/>.</summary>
-    public required string Action { get; init; }
-
-    public required string Xuid { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Until { get; init; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Reason { get; init; }
-}
-
-public sealed record ModerationResult
-{
-    public required string Action { get; init; }
-
-    public required string Xuid { get; init; }
-
-    public string? Until { get; init; }
-}
-
-/// <summary><c>POST /mm/v1/join</c> body: a world id, a code (8 digits), or both; or neither with an activity (OD-190's quick join).</summary>
+/// <summary><c>POST /mm/v1/join</c> body: an official world's id, or none with an activity (OD-190's quick join, or the private create).</summary>
 public sealed record JoinRequest
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WorldId { get; init; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Code { get; init; }
-
     /// <summary>OD-112: the caller's mod set (null: vanilla, left out; every launcher up to 1.0.8 sends none).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ModEntry>? Mods { get; init; }
 
-    /// <summary>CR-S57: the joiner's NAT test.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Nat { get; init; }
-
-    /// <summary>CR-S57: the joiner's measured relay round trips.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyDictionary<string, int>? Relays { get; init; }
-
-    /// <summary>OD-146 (§5b): <c>relay</c> asks for a relay-born seat. OD-160 removed the launcher's switch: this client never sets it.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Transport { get; init; }
 
     /// <summary>
     /// OD-150: the activity asked for (<see cref="WorldActivities"/>); a world running another is 409 <c>{reason: "activity"}</c>; null: any.
-    /// OD-190: alone (no world id, no code) it is a quick join into an official world (<see cref="WorldActivities.Placement"/>).
+    /// OD-190: alone (no world id) it is a quick join into an official world (<see cref="WorldActivities.Placement"/>).
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Activity { get; init; }
 
     /// <summary>
     /// OD-204 (MATCHMAKING_API §2.10, CR-S96): <c>true</c> with an <see cref="Activity"/> (<c>freeroam</c> or <c>roadtrip</c>) and no
-    /// world id or code is the private create: the caller's own private official world, or a spare promoted for it. Null: left out
+    /// world id is the private create: the caller's own private official world, or a spare promoted for it. Null: left out
     /// (every other join; an older server refuses the member as unknown).
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -735,40 +491,6 @@ public sealed record SeatAnswer
 public sealed record SeatRenew
 {
     public required string GrantId { get; init; }
-
-    /// <summary>
-    /// CR-S57: <c>relay</c> once the joiner's punch failed and it moved to the grant's relay. OD-160: <c>direct</c> once a relay-born
-    /// seat could not reach its relay and plays direct with the host instead.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Transport { get; init; }
-}
-
-/// <summary><see cref="GameModeSessionRequest.Kind"/>: <c>freeroam</c> only for now.</summary>
-public static class GameModeSessionKinds
-{
-    public const string FreeRoam = "freeroam";
-}
-
-/// <summary>
-/// <c>POST /mm/v1/worlds/{worldId}/game-sessions</c> body (§3.8): the shared session a car meet invitation takes its joiners to.
-/// <c>xuids</c>: decimal, 1-12, distinct; the host or players seated in this world.
-/// </summary>
-public sealed record GameModeSessionRequest
-{
-    public const int MaxMembers = 12;
-    public required string Kind { get; init; }
-    public required IReadOnlyList<string> Xuids { get; init; }
-}
-
-/// <summary>201 of <c>…/game-sessions</c>: the session every joiner is sent to (<c>name</c> and <c>templateName</c>).</summary>
-public sealed record GameModeSession
-{
-    public required string Kind { get; init; }
-    public required string Scid { get; init; }
-    public required string TemplateName { get; init; }
-    public required string Name { get; init; }
-    public required IReadOnlyList<string> Members { get; init; }
 }
 
 /// <summary><c>POST /mm/v1/worlds/{worldId}/invites</c> body: any XUID of the friend account (a handle works).</summary>
