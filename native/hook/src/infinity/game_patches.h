@@ -86,7 +86,7 @@ static DWORD WINAPI game_watch_thread(void *parameter) {
     }
 }
 
-/* Every term of the selected game's polled readiness, plus its heartbeat (W9). Read only, every 250 ms;
+/* Every term of the selected game's polled readiness, plus its heartbeat within the row's heartbeat_window_ms (W9). Read only, every 250 ms;
    the publishing (and its 500 ms cadence and 1.5 s freshness) is game_ready.c's, as for FH2. */
 static int game_ready_term(unsigned char *image, const FiReadyTerm *term) {
     unsigned char *object = 0;
@@ -113,7 +113,8 @@ static DWORD WINAPI game_ready_thread(void *parameter) {
             beat = value;
             beat_at = now;
         }
-        int ready = beat_at && now - beat_at <= 1000;
+        /* the row's window (FM5 3000 ms: a frame gap of a few seconds is a normal hitch, game_profile.h) */
+        int ready = fi_ready_heartbeat_fresh(beat_at, now, game->heartbeat_window_ms);
         for (unsigned i = 0; ready && i < game->ready_term_count; ++i) {
             ready = game_ready_term(image, &game->ready_terms[i]);
         }
