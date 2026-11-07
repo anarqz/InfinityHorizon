@@ -17,8 +17,8 @@ static volatile LONG fi_game_called;
    have changed, and where its features went for a player who came from the hook that had them
    inside. Once, from the first of the triggers below. */
 static void fi_game_first(const char *where) {
-    if (!fi_game_is_fh2()) {
-        return; /* OD-206: no ExtraOptions features, expansions or their notice on FM5 */
+    if (!fi_game_has(FI_FEATURE_GAME_MODULES)) {
+        return; /* OD-206: no ExtraOptions features, expansions or their notice on such a game */
     }
     if (where) {
         log_append("EO: looked at from ");
@@ -64,7 +64,7 @@ void fi_game_callback_from(const char *where) {
    for it): if no game callback came yet, after ExtraOptions (if any) has left its "Waiting"
    state. */
 void fi_game_callback_late(void) {
-    if (fi_game_called || !fi_game_is_fh2()) {
+    if (fi_game_called || !fi_game_has(FI_FEATURE_GAME_MODULES)) {
         return;
     }
     fi_eo_settle(10000);
@@ -77,7 +77,7 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     fi_cfg_load(root, bin);
     /* before the player's ExtraOptions runs (it repairs save commit markers right after this
        DllMain when its DisableAzimuthSaveChecksums=1): which save revisions have no commit now */
-    if (fi_game_is_fh2()) {
+    if (fi_game_has(FI_FEATURE_CLOUD_LINE)) {
         azimuth_cloud_note_unsealed(bin);
     }
     log_set_enabled(fi_cfg()->log);
@@ -86,7 +86,7 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     log_start(bin);
     log_set_directory(bin);
     fi_cfg_flush_log();
-    if (fi_game_is_fh2()) {
+    if (fi_game_has(FI_FEATURE_LIVERIES)) {
         azimuth_apply_livery_compatibility();
     }
     azimuth_apply_network(bin);
@@ -97,10 +97,12 @@ int fi_runtime_initialize(unsigned char *game_image, const wchar_t *executable_p
     }
     azimuth_apply_freeroam(game_image, bin, executable_path);
     azimuth_apply_account(bin);
-    /* OD-206: FM5 takes the network, the free roam replacements, the account and the launcher's pipe.
+    /* OD-206: every game takes the network, the free roam replacements, the account and the launcher's pipe.
        Everything below is at FH2's addresses. */
-    if (!fi_game_is_fh2()) {
-        log_append("GAME: FM5 1.0.0.20; FH2's game features stay off.\r\n");
+    if (!fi_game_has(FI_FEATURE_GAME_MODULES)) {
+        log_append("GAME: ");
+        log_append(fi_game_profile()->name);
+        log_append("; the game modules stay off.\r\n");
         return 1;
     }
     /* OD-73: no game page, menu or text is edited any more; the language is only read */

@@ -2000,7 +2000,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
     azimuth_proxy_configure(config->freeroam_direct != 0);
     fr_base64_encode("fh2inf:local", fr_local_base64, ARRAY_COUNT(fr_local_base64));
     fr_build_vtables();
-    if (fi_game_is_fh2()) { /* OD-206: FH2's addresses */
+    if (fi_game_has(FI_FEATURE_FREE_ROAM)) { /* OD-206: at FH2's addresses */
         fr_apply_patches();
         fi_carmeet_apply(game_image);
         fi_follow_apply(game_image);

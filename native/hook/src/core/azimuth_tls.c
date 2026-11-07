@@ -177,7 +177,7 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
     }
     n = GetPrivateProfileStringW(fi_game_profile()->title_section, L"folder", L"", azimuth_folder, 32768,
                                  file_path);
-    if (!n && fi_game_is_fh2()) {
+    if (!n && fi_game_profile()->id == FI_GAME_FH2) {
         n = GetPrivateProfileStringW(L"launcher", L"game_folder", L"", azimuth_folder, 32768,
                                      file_path);
     }
@@ -202,10 +202,10 @@ static int azimuth_resolve_game_paths(HINSTANCE instance) {
     }
     return 1;
 path_error:
-    status_set(fi_game_is_fh2() ? "REFUSED: cannot resolve the FH2 game folder from "
-                                  "data/azimuth.ini. No patches applied."
-                                : "REFUSED: cannot resolve the FM5 game folder from "
-                                  "data/azimuth.ini. No patches applied.");
+    status_set(fi_game_profile()->id == FI_GAME_FH2 ? "REFUSED: cannot resolve the FH2 game folder from "
+                                                      "data/azimuth.ini. No patches applied."
+                                                    : "REFUSED: data/azimuth.ini names no folder for this game. "
+                                                      "No patches applied.");
     log_start(mod_directory);
     return 0;
 }
