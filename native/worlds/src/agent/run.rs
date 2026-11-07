@@ -393,17 +393,6 @@ impl Agent {
         }
     }
 
-    /// The engine's seats per world (`--max-seats` = worlds × this): FH2's `maxPlayers`, or
-    /// FM5's when a `race` world is placed and seats more (CR-S99 §5). The engine is spawned with
-    /// the activities of the hello before it; a later hello adding `race` gets its seats at the
-    /// next engine start.
-    fn seats_per_world(&self) -> u8 {
-        self.activities
-            .iter()
-            .map(|a| self.cfg.max_players_of(a))
-            .fold(self.cfg.max_players, u8::max)
-    }
-
     fn stopped(&self) -> i32 {
         log::info(log_ids::AGENT_STOPPED).emit();
         exit::OK
@@ -428,7 +417,9 @@ impl Agent {
             generation += 1;
             let started = Instant::now();
             let cap = self.cfg.max_worlds;
-            let seats = cap * usize::from(self.seats_per_world());
+            // CR-S99 §5: FM5's seats when `race` is placed. The engine is spawned with the activities
+            // of the hello before it; a later hello adding `race` gets its seats at the next start.
+            let seats = self.cfg.engine_seats(&self.activities);
             let mut child =
                 match engine::spawn(&self.cfg.bind.to_string(), &self.cfg.control, cap, seats) {
                     Ok(c) => c,
