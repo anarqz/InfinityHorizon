@@ -75,9 +75,10 @@ typedef struct {
        the delegate the game adds at IPartyStatics slot 16 (freeroam.c), reports Capture 14, and fires it on the launcher's
        SessionReady (launch.c). 0: slot 16 is only observed, as for FH2. */
     int party_session_ready;
-    /* fm5-10 (W7b, OD-206, lobby spec 11.9): the image RVA of the game's own IAT slot for combase!WindowsCreateString (FM5:
-       0x101bca0, read through 0x140136a80). The hook makes the session reference's HSTRINGs with the function stored there, as
-       the game's wrapper 0x140be6d50 does (that Azimuth's reference wants the game's strings is INFERRED). 0: none (FH2). */
+    /* fm5-10, fm5-11 (W7b, OD-206, lobby spec 11.9): the image RVA of the game's own IAT slot for combase!WindowsCreateString
+       (FM5: 0x101bca0, read through 0x140136a80; T3 VERIFIED it holds 0x14017f370 in azimuth.exe, Azimuth's FSH2 layout). The
+       hook's own session reference makes its HSTRINGs with the function stored there, so the game frees them with its own
+       WindowsDeleteString. 0: none (FH2). */
     unsigned hstring_create_rva;
 } FiGameProfile;
 
