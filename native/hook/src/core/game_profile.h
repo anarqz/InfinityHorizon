@@ -70,6 +70,12 @@ static const FiGameWatch fi_fm5_watches[] = {
     {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4},
     {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4},
     {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4},
+    /* R8 (lobby spec 12): the game-ready predicate's terms, to verify it on the first boot. F+0x5c, the frame
+       timestamp, changes every frame and is not logged here. */
+    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4},
+    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4},
+    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4},
+    {"FM5 WATCH ready F+48", 0x25d0398u, 0x48u, 4},
 };
 
 static const FiGameProfile fi_game_profiles[] = {
