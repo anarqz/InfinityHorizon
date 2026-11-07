@@ -580,7 +580,7 @@ public sealed class PlaySupervisor
                 await pipe.WriteAsync(candidates.Encode(),ct).ConfigureAwait(false);
             };
 
-            // OD-151 follow-up: a seated guest's game follows its host's activity through the game's own matchmaking
+            // FollowHost (0x23): the bridge's queued move (OD-149's anti-cheat move) goes to the game's own matchmaking
             worlds.SendFollowHost=async (follow,ct)=>
             {
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
@@ -740,8 +740,6 @@ public sealed class PlaySupervisor
                                 _=worlds.NetworkHintAsync(hint,onlineStop.Token);
                             continue;
                         }
-                        // OD-208: an official world is direct only: an older hook's relay fallback report is never answered (no leg is pushed)
-                        if(frame is Frame.RelayFallback)continue;
                         // AC-2: the hook's measurement of another player's car (only after a Watch frame); posted off this loop
                         if(frame is Frame.Observed observed)
                         {
@@ -835,8 +833,8 @@ public sealed class PlaySupervisor
                         }
                         // OD-148 (refines OD-57): the game left free roam (the hook's Event 4). A car meet or an online
                         // Road Trip leaves it before asking for its lobby, so the world (or seat) is kept for
-                        // WorldsBridge.FreeRoamLeftGrace; a FreeRoamNeed meanwhile keeps it, else it closes (host) or is
-                        // left (joiner) as before. Announces and seat renewals go on meanwhile; the session's end still acts at once.
+                        // WorldsBridge.FreeRoamLeftGrace; a FreeRoamNeed meanwhile keeps it, else the seat is left as before.
+                        // Seat renewals go on meanwhile; the session's end still acts at once.
                         if (frame is Frame.Event { Kind: HookEvents.FreeRoamLeft } && worlds is not null)
                         {
                             _ = worlds.FreeRoamLeftAsync(stop.Token);
@@ -1033,10 +1031,6 @@ public sealed class PlaySupervisor
                                 break;
                             case Overlay.UiIncoming.Event e:
                                 _emit(new SupervisorEvent.OverlayEvent(e.Kind, e.Detail));
-                                break;
-                            case Overlay.UiIncoming.Reserved reserved:
-                                // OD-208: a player-hosting frame (lobby list, join by code, create, close, kick): decoded, refused, unanswered
-                                _emit(new SupervisorEvent.Note($"overlay: reserved frame 0x{reserved.Type:x2}{(reserved.Action != 0 ? $" action {reserved.Action}" : "")} refused"));
                                 break;
                             case Overlay.UiIncoming.PlayerDetails details when worlds is not null:
                                 // OD-112: the player card's pane, from what this launcher already holds (no request); a pane

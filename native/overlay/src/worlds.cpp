@@ -11,7 +11,7 @@
 // - OD-210 (CR-S101, W14): the Private Lobby also shows "Who can join" (Everyone, Hardcore only, Noob only; FM5: no Hardcore) from
 //   the launcher's 0x28; the current leader's A moves it to the next choice (0x29, PUT …/modes), everyone else reads it. It applies to
 //   new joins only: nobody already here is removed (kicking stays the leader's).
-// - Players host no lobby (OD-208): every lobby here is an official one. MyWorld role 1 (hosting) is reserved and shown as a seat.
+// - Players host no lobby (OD-208): every lobby here is an official one (MyWorld role 1, hosting, is retired).
 // - No overlay notice in an official lobby, a private one included (OD-192), except what the launcher marks always (ui.cpp
 //   PushToast, T-L3); this tab's own action results follow the same rule.
 // - Each player is their card (the name; a green border while they talk) with the big mute button beside it; A on the card opens

@@ -6,10 +6,10 @@ using System.Net.Sockets;
 namespace Infinity.Core.Matchmaking;
 
 /// <summary>
-/// This PC's LAN addresses, which a seat's network hint carries (SeatNetworkRequest). OD-208: the launcher hosts no world, so the
-/// former host relay's addressing is all that is left of it (the integrated relay and the Rust infinity-relay.exe are gone).
+/// This PC's LAN addresses, which the joiner's seat network request carries (<see cref="SeatNetworkRequest"/>, its endpoint's <c>lan</c>).
+/// OD-208: the launcher hosts no world; this was the former host relay's addressing (named LocalNetwork since).
 /// </summary>
-public static class HostRelay
+public static class LocalNetwork
 {
     /// <summary>
     /// This PC's private IPv4 addresses (RFC 1918), at most 4, for a seat's network hint (the FIRST one is used first), so the

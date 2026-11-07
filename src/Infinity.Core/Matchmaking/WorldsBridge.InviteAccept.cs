@@ -148,7 +148,7 @@ public sealed partial class WorldsBridge
         {
             try
             {
-                joined = await JoinAsync(new UiFrame.JoinWorld(invite.WorldId, string.Empty), invite.Activity, bounded.Token, kind).ConfigureAwait(false);
+                joined = await JoinAsync(new UiFrame.JoinWorld(invite.WorldId), invite.Activity, bounded.Token, kind).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (budget.IsCancellationRequested && !cancellation.IsCancellationRequested)
             {

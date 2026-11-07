@@ -40,7 +40,7 @@ public sealed partial class WorldsBridge
     /// <summary>
     /// OD-160's lobby notice (MATCHMAKING_API §5b "The lobby notice"): true the relay notice, false the direct one, null none. A Noob-only
     /// world (or no seat or world, or a world not read yet) shows none; a Hardcore world (modes hardcore/any) shows the relay notice only
-    /// while the server still says the world and this seat are on a relay (an older player world), else the direct notice.
+    /// while the server still says the world and this seat are on a relay (an official world never is: OD-208), else the direct notice.
     /// </summary>
     private bool? RelayNotice()
     {

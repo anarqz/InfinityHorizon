@@ -67,16 +67,15 @@ public enum UiDirection
 
 /// <summary>
 /// One UI-pipe frame between the launcher and the overlay (<c>&lt;control pipe&gt;-ui</c>; overlay_ui.rs).
-/// Same envelope as the control pipe, its own type space 0x01-0x1A (0x07-0x10: worlds, OD-54, OD-63;
-/// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
+/// Same envelope as the control pipe, its own type space 0x01-0x1A (0x0D-0x10: the lobby the player is in, OD-63;
+/// 0x16-0x18: the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
 /// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
 /// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5; 0x23-0x24: the private lobby's invite
 /// prompt and its answer, OD-204 T-L3, protocol 6; 0x25-0x27: the private lobby's friend picker and its invite, OD-204 T-L4,
 /// protocol 7; 0x28-0x29: the private lobby's "Who can join", OD-210 CR-S101 W14, protocol 8; native/overlay/src/ui_frames.h and
 /// pipe.cpp are the other end). The hook
-/// never sees it. T-L3 reserved the player-hosting frames (0x07-0x0C, 0x14, 0x15, WorldAction 1/3, VoiceOp 1/6): a T-L3 overlay
-/// never sends them and ignores them. Protocol 9 (OD-208): players host no world, so this launcher still codes them (the golden
-/// vectors) but answers none: <see cref="UiSession"/> turns 0x07, 0x09, 0x0B, 0x14 and WorldAction 1/3 into <see cref="UiIncoming.Reserved"/>.
+/// never sees it. Protocol 9 (OD-208): players host no world, so the lobby list, join by code, create and hosted frames
+/// (0x07-0x0C, 0x14, 0x15) and WorldAction close (1) and kick (3) are gone from the pipe; either end refuses them as unknown.
 /// </summary>
 public abstract record UiFrame
 {
@@ -86,9 +85,8 @@ public abstract record UiFrame
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
 
-    // CR-L40 §2.2: every lobby of the game in one list; a row's players and mods are dropped from the
-    // tail when the whole list would pass the 64 KiB frame (see WorldsBridge.FitLobbyRows).
-    public const int MaxLobbyRows = 50, MaxLobbyMembers = 12, MaxLobbyMods = 32;
+    /// <summary>OD-181: a roster player's declared mods, at most this many.</summary>
+    public const int MaxLobbyMods = 32;
     public const int MaxPaneSections = 8, MaxPaneEntries = 32, MaxPaneActions = 4, MaxPaneText = 512, MaxPaneId = 64;
 
     /// <summary>CR-L40 §1.3: the server's host in <see cref="ServerStatus"/>, in UTF-8 bytes.</summary>
@@ -224,59 +222,11 @@ public abstract record UiFrame
         public override UiDirection Direction => UiDirection.Both;
     }
 
-    /// <summary>0x07, overlay → launcher: the list for a filter (1 friends, 2 near, 3 global; OD-58), full ones left out or not.</summary>
-    public sealed record WorldsQuery(byte Filter, bool NotFull) : UiFrame
-    {
-        public override byte Type => 0x07;
+    /// <summary>The bridge's join of an official world by id (an empty id: a quick join). Not a pipe frame: 0x09 is retired (OD-208).</summary>
+    public sealed record JoinWorld(string WorldId);
 
-        public override UiDirection Direction => UiDirection.ToLauncher;
-    }
-
-    /// <summary>0x08, launcher → overlay: the list (status 0 ok, 2 error with a localised message), at most 16 rows.</summary>
-    public sealed record WorldsList(byte Filter, byte Result, string Message, IReadOnlyList<WorldRow> Rows) : UiFrame
-    {
-        public override byte Type => 0x08;
-
-        public override UiDirection Direction => UiDirection.ToOverlay;
-    }
-
-    /// <summary>0x09, overlay → launcher: join a world by id, or by its 8-digit code (one of them empty).</summary>
-    public sealed record JoinWorld(string WorldId, string Code) : UiFrame
-    {
-        public override byte Type => 0x09;
-
-        public override UiDirection Direction => UiDirection.ToLauncher;
-    }
-
-    /// <summary>0x0A, launcher → overlay: <see cref="UiJoin"/> and a localised message.</summary>
-    public sealed record JoinResult(byte Result, string Message) : UiFrame
-    {
-        public override byte Type => 0x0A;
-
-        public override UiDirection Direction => UiDirection.ToOverlay;
-    }
-
-    /// <summary>
-    /// 0x0B, overlay → launcher: open a world (audience 0 everyone, 1 supporters, 2 friends, 3 private; latency 0 any,
-    /// 1 &lt; 150, 2 &lt; 100, 3 &lt; 60 ms; <c>AnyMode</c> u8 0 the host's own mode, 1 open to Hardcore and Noob, OD-141).
-    /// An overlay before CR-L43 sends no <c>AnyMode</c> byte: the host's own mode. <c>Voice</c> (OD-154, after
-    /// <c>AnyMode</c>; CR-L46): the lobby's voice mode, <see cref="UiLobbyVoice"/> (0 off, 1 open, 2 proximity; an overlay before
-    /// CR-L46 sends 0 or 1); an overlay before OD-154 sends none: open.
-    /// </summary>
-    public sealed record CreateWorld(string Name, byte Audience, byte MaxPlayers, byte Latency, bool AnyMode = false, byte Voice = UiLobbyVoice.Open) : UiFrame
-    {
-        public override byte Type => 0x0B;
-
-        public override UiDirection Direction => UiDirection.ToLauncher;
-    }
-
-    /// <summary>0x0C, launcher → overlay: the world opened (status 0) with its code, or why not.</summary>
-    public sealed record Hosted(byte Result, string WorldId, string Code, string Message) : UiFrame
-    {
-        public override byte Type => 0x0C;
-
-        public override UiDirection Direction => UiDirection.ToOverlay;
-    }
+    /// <summary>The bridge's join result: <see cref="UiJoin"/> and a localised message. Not a pipe frame: 0x0A is retired (OD-208).</summary>
+    public sealed record JoinResult(byte Result, string Message);
 
     /// <summary>0x0D, overlay → launcher: "my world" (the Worlds tab is shown; every 5 s while it is).</summary>
     public sealed record MyWorldQuery : UiFrame
@@ -324,37 +274,6 @@ public abstract record UiFrame
         public override byte Type => 0x10;
 
         public override UiDirection Direction => UiDirection.ToOverlay;
-    }
-
-    /// <summary>
-    /// 0x14, overlay → launcher (protocol 2): <see cref="WorldsQuery"/> (filter 4 every lobby, CR-L40) plus the
-    /// modded filter (false: every lobby of the filter, modded or not, CR-L40; true, an OD-112 overlay: modded only).
-    /// </summary>
-    public sealed record WorldsQueryV2(byte Filter, bool NotFull, bool Modded) : UiFrame
-    {
-        public override byte Type => 0x14;
-
-        public override UiDirection Direction => UiDirection.ToLauncher;
-    }
-
-    /// <summary>
-    /// 0x15, launcher → overlay (protocol 2): the answer to <see cref="WorldsQueryV2"/>, echoing its filter
-    /// and modded toggle; each row embeds its players and mods so the overlay's hover pane needs no request.
-    /// </summary>
-    public sealed record WorldsListV2(byte Filter, bool Modded, byte Result, string Message, IReadOnlyList<LobbyRow> Rows) : UiFrame
-    {
-        public override byte Type => 0x15;
-
-        public override UiDirection Direction => UiDirection.ToOverlay;
-
-        /// <summary>A protocol 1 answer as a protocol 2 one: every row vanilla and matching, no details; null (the modded filter) is an empty list.</summary>
-        public static WorldsListV2 FromVanilla(WorldsQueryV2 query, WorldsList? list)
-        {
-            ArgumentNullException.ThrowIfNull(query);
-            if (list is null) return new(query.Filter, query.Modded, 0, "", []);
-            return new(list.Filter, query.Modded, list.Result, list.Message,
-                list.Rows.Take(MaxLobbyRows).Select(row => new LobbyRow(row, false, true, [], [])).ToList());
-        }
     }
 
     /// <summary>
@@ -837,53 +756,6 @@ public abstract record UiFrame
             case Bye b:
                 w.U8(b.Reason);
                 break;
-            case WorldsQuery q:
-                w.U8(q.Filter);
-                w.Flag(q.NotFull);
-                break;
-            case WorldsList l:
-                w.U8(l.Filter);
-                w.U8(l.Result);
-                w.Str(l.Message);
-                var rows = l.Rows.Take(16).ToList();
-                w.U8((byte)rows.Count);
-                foreach (var row in rows)
-                {
-                    w.Str(row.Id);
-                    w.Str(row.Name);
-                    w.Str(row.Host);
-                    w.U8(row.Players);
-                    w.U8(row.Max);
-                    w.U8(row.Kind);
-                    w.U8(row.Audience);
-                    w.U8(row.Lock);
-                    w.U8(row.Ping);
-                    w.U8(row.FriendHost ? (byte)1 : (byte)0);
-                }
-                break;
-            case JoinWorld j:
-                w.Str(j.WorldId);
-                w.Str(j.Code);
-                break;
-            case JoinResult r:
-                w.U8(r.Result);
-                w.Str(r.Message);
-                break;
-            case CreateWorld c:
-                w.Str(c.Name);
-                w.U8(c.Audience);
-                w.U8(c.MaxPlayers);
-                w.U8(c.Latency);
-                w.Flag(c.AnyMode);
-                if (c.Voice > UiLobbyVoice.Max) throw new ProtocolException("invalid CreateWorld.voice");
-                w.U8(c.Voice);
-                break;
-            case Hosted h:
-                w.U8(h.Result);
-                w.Str(h.WorldId);
-                w.Str(h.Code);
-                w.Str(h.Message);
-                break;
             case MyWorldQuery:
                 break;
             case MyWorld m:
@@ -923,6 +795,7 @@ public abstract record UiFrame
                 }
                 break;
             case WorldAction a:
+                if (a.Action is not (UiWorldAction.Leave or UiWorldAction.AddFriend or UiWorldAction.Report)) throw new ProtocolException("invalid WorldAction.action");
                 w.U8(a.Action);
                 w.Str(a.Xuid);
                 w.Str(a.Gamertag);
@@ -932,50 +805,6 @@ public abstract record UiFrame
                 w.U8(r.Action);
                 w.U8(r.Result);
                 w.Str(r.Message);
-                break;
-            case WorldsQueryV2 q:
-                w.U8(q.Filter);
-                w.Flag(q.NotFull);
-                w.Flag(q.Modded);
-                break;
-            case WorldsListV2 l:
-                Bound(l.Rows.Count, MaxLobbyRows, "lobby rows");
-                w.U8(l.Filter);
-                w.Flag(l.Modded);
-                w.U8(l.Result);
-                w.Str(l.Message);
-                w.U8((byte)l.Rows.Count);
-                foreach (var row in l.Rows)
-                {
-                    row.Validate();
-                    var world = row.World;
-                    w.Str(world.Id);
-                    w.Str(world.Name);
-                    w.Str(world.Host);
-                    w.U8(world.Players);
-                    w.U8(world.Max);
-                    w.U8(world.Kind);
-                    w.U8(world.Audience);
-                    w.U8(world.Lock);
-                    w.U8(world.Ping);
-                    w.Flag(world.FriendHost);
-                    w.Flag(row.Modded);
-                    w.Flag(row.ModsMatch);
-                    w.Flag(row.AnyMode);
-                    w.U8((byte)row.Members.Count);
-                    foreach (var member in row.Members)
-                    {
-                        w.Str(member.Gamertag);
-                        w.U8(member.Tier);
-                        w.U8(member.Role);
-                    }
-                    w.U8((byte)row.Mods.Count);
-                    foreach (var mod in row.Mods)
-                    {
-                        w.Str(mod.Id);
-                        w.Str(mod.Version);
-                    }
-                }
                 break;
             case DetailPane p:
                 p.Validate();
@@ -1176,7 +1005,8 @@ public abstract record UiFrame
         {
             return null;
         }
-        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > LastType)
+        // OD-208: the lobby list, join by code, create and hosted frames (0x07-0x0C, 0x14, 0x15) are gone: unknown, as any other
+        if (buffer.Length >= 5 && buffer[4] is < 0x01 or > LastType or (>= 0x07 and <= 0x0C) or 0x14 or 0x15)
         {
             throw new ProtocolException($"unknown ui frame type 0x{buffer[4]:x2}");
         }
@@ -1193,21 +1023,14 @@ public abstract record UiFrame
             0x04 => new Panel(r.Flag("Panel.open")),
             0x05 => new UiEvent(r.U8(), r.Str()),
             0x06 => new Bye(r.U8()),
-            0x07 => new WorldsQuery(r.U8(), r.Flag("WorldsQuery.notFull")),
-            0x08 => DecodeList(ref r),
-            0x09 => new JoinWorld(r.Str(), r.Str()),
-            0x0A => new JoinResult(r.U8(), r.Str()),
-            0x0B => DecodeCreate(ref r),
-            0x0C => new Hosted(r.U8(), r.Str(), r.Str(), r.Str()),
             0x0D => new MyWorldQuery(),
             0x0E => DecodeMine(ref r),
-            0x0F => new WorldAction(r.U8(), r.Str(), r.Str(), r.U8()),
+            0x0F => r.U8() is var action and (UiWorldAction.Leave or UiWorldAction.AddFriend or UiWorldAction.Report)
+                ? new WorldAction(action, r.Str(), r.Str(), r.U8()) : throw new ProtocolException("invalid WorldAction.action"),
             0x10 => new ActionResult(r.U8(), r.U8(), r.Str()),
             0x11 => new GameReadiness(r.Flag("GameReadiness.ready")),
             0x12 => new WorldAccess(r.Flag("WorldAccess.allowed"), r.Str()),
             0x13 => new ConnectionDetails(r.U8(), r.Str()),
-            0x14 => new WorldsQueryV2(r.U8(), r.Flag("WorldsQueryV2.notFull"), r.Flag("WorldsQueryV2.modded")),
-            0x15 => DecodeListV2(ref r),
             0x16 => DecodePane(ref r),
             0x17 => new PlayerDetailsQuery(r.Str(), r.Str()),
             0x18 => new PaneActionClick(r.Str(), r.Str()),
@@ -1327,52 +1150,6 @@ public abstract record UiFrame
         return new MyWorld(role, id, name, host, code, audience, players, max, named, members, anyMode, transport, notice, official, isPrivate, leader);
     }
 
-    /// <summary>
-    /// 0x0B: an overlay before CR-L43 ends after <c>latency</c> (the host's own mode); one before OD-154 after
-    /// <c>anyMode</c> (voice chat open).
-    /// </summary>
-    private static CreateWorld DecodeCreate(ref WireReader r)
-    {
-        var name = r.Str();
-        var audience = r.U8();
-        var players = r.U8();
-        var latency = r.U8();
-        var anyMode = !r.IsEmpty && r.Flag("CreateWorld.anyMode");
-        var voice = r.IsEmpty ? UiLobbyVoice.Open : r.U8();
-        if (voice > UiLobbyVoice.Max) throw new ProtocolException("invalid CreateWorld.voice");
-        return new CreateWorld(name, audience, players, latency, anyMode, voice);
-    }
-
-    private static WorldsListV2 DecodeListV2(ref WireReader r)
-    {
-        var filter = r.U8();
-        var modded = r.Flag("WorldsListV2.modded");
-        var status = r.U8();
-        var message = r.Str();
-        var count = r.U8();
-        Bound(count, MaxLobbyRows, "lobby rows");
-        var rows = new List<LobbyRow>(count);
-        for (var i = 0; i < count; ++i)
-        {
-            var world = new WorldRow(r.Str(), r.Str(), r.Str(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8(), r.Flag("LobbyRow.friendHost"));
-            var rowModded = r.Flag("LobbyRow.modded");
-            var match = r.Flag("LobbyRow.modsMatch");
-            var anyMode = r.Flag("LobbyRow.anyMode");
-            var memberCount = r.U8();
-            Bound(memberCount, MaxLobbyMembers, "lobby members");
-            var members = new List<LobbyMember>(memberCount);
-            for (var m = 0; m < memberCount; ++m) members.Add(new LobbyMember(r.Str(), r.U8(), r.U8()));
-            var modCount = r.U8();
-            Bound(modCount, MaxLobbyMods, "lobby mods");
-            var mods = new List<LobbyMod>(modCount);
-            for (var m = 0; m < modCount; ++m) mods.Add(new LobbyMod(r.Str(), r.Str()));
-            var row = new LobbyRow(world, rowModded, match, members, mods, anyMode);
-            row.Validate();
-            rows.Add(row);
-        }
-        return new WorldsListV2(filter, modded, status, message, rows);
-    }
-
     private static DetailPane DecodePane(ref WireReader r)
     {
         var id = r.Str();
@@ -1401,19 +1178,6 @@ public abstract record UiFrame
         return pane;
     }
 
-    private static WorldsList DecodeList(ref WireReader r)
-    {
-        var filter = r.U8();
-        var status = r.U8();
-        var message = r.Str();
-        var count = r.U8();
-        var rows = new List<WorldRow>(count);
-        for (var i = 0; i < count; ++i)
-        {
-            rows.Add(new WorldRow(r.Str(), r.Str(), r.Str(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8(), r.U8() != 0));
-        }
-        return new WorldsList(filter, status, message, rows);
-    }
 }
 
 /// <summary>What the launcher learns from one overlay frame.</summary>
@@ -1434,15 +1198,8 @@ public abstract record UiIncoming
 
     public sealed record Mine : UiIncoming;
 
-    /// <summary>Leave (2), friend (4) or report (5); close (1) and kick (3) arrive as <see cref="Reserved"/>.</summary>
+    /// <summary>Leave (2), friend (4) or report (5).</summary>
     public sealed record Act(UiFrame.WorldAction Request) : UiIncoming;
-
-    /// <summary>
-    /// OD-208: a reserved player-hosting frame (the lobby list 0x07/0x14, join by code 0x09, create 0x0B, WorldAction close 1 and
-    /// kick 3). Decoded, then refused: nothing answers it.
-    /// </summary>
-    public sealed record Reserved(byte Type, byte Action = 0) : UiIncoming;
-
     /// <summary>The game's player card: answer with a <see cref="UiFrame.DetailPane"/> <c>player:&lt;xuid&gt;</c>.</summary>
     public sealed record PlayerDetails(UiFrame.PlayerDetailsQuery Request) : UiIncoming;
 
@@ -1594,7 +1351,7 @@ public static class UiVoice
     /// <summary>The lobby's switch is known (the host's own, or the host's relay said it).</summary>
     public const byte LobbyKnown = 2;
 
-    /// <summary>This player hosts the lobby: it may change the switch and mute a player for everyone.</summary>
+    /// <summary>Retired with player hosting (OD-208): the launcher never sets it; the bit stays the layout's.</summary>
     public const byte MayChange = 4;
 
     /// <summary>Voice chat is on in this player's settings.</summary>
@@ -1652,39 +1409,6 @@ public static class UiVoiceOp
 }
 
 /// <summary>
-/// One row of <see cref="UiFrame.WorldsListV2"/> (OD-112): the protocol 1 <see cref="WorldRow"/>, whether
-/// the world is modded, <c>ModsMatch</c> (OD-181 retired the equal-set rule: the launcher always sends true, so no
-/// overlay blocks a join over mods; an overlay before OD-181 blocked on false), its players (host first unless dedicated,
-/// at most 12) and the host's mods (sorted by id, at most 32; empty for a vanilla world). Members carry no XUID (OD-61).
-/// <c>AnyMode</c> (OD-141, CR-L43; on the wire after
-/// <c>ModsMatch</c>): the world is open to Hardcore and Noob, the row's "Hardcore + Noob" badge; such a world is never
-/// locked for mode.
-/// </summary>
-public sealed record LobbyRow(WorldRow World, bool Modded, bool ModsMatch, IReadOnlyList<LobbyMember> Members, IReadOnlyList<LobbyMod> Mods,
-    bool AnyMode = false)
-{
-    internal void Validate()
-    {
-        UiFrame.Bound(Members.Count, UiFrame.MaxLobbyMembers, "lobby members");
-        UiFrame.Bound(Mods.Count, UiFrame.MaxLobbyMods, "lobby mods");
-        if (!Modded && Mods.Count != 0) throw new ProtocolException("a vanilla lobby lists no mods");
-        foreach (var member in Members)
-        {
-            UiFrame.Limit(member.Gamertag, 64, "member gamertag");
-            if (member.Tier > UiTier.Supporter || member.Role > 2) throw new ProtocolException("invalid lobby member");
-        }
-        foreach (var mod in Mods)
-        {
-            UiFrame.Limit(mod.Id, 64, "mod id");
-            UiFrame.Limit(mod.Version, 16, "mod version");
-        }
-    }
-}
-
-/// <summary><c>Tier</c> <see cref="UiTier"/>; <c>Role</c> 0 host, 1 in the world, 2 seat reserved.</summary>
-public sealed record LobbyMember(string Gamertag, byte Tier, byte Role);
-
-/// <summary>
 /// A mod of a lobby or a player, display only (MODDED_LOBBIES.md §2): <c>Id</c> the text shown, the catalog's name when the
 /// launcher knows the mod (OD-181), else the manifest's multiplayer <c>compatibilityId</c>; <c>Version</c> its revision.
 /// </summary>
@@ -1726,14 +1450,6 @@ public static class UiPaneIcon
 }
 
 /// <summary>
-/// One row of the overlay's world list: <c>Kind</c> bit 0 an Infinity Supporter host, bit 1 a pineapple world (OD-149),
-/// <c>Audience</c> 0-3, <c>Lock</c> 0 joinable / 1 tier / 2 friends / 3 code / 4 full / 5 latency /
-/// 6 other / 7 another mode, the world Hardcore / 8 another mode, the world Noob (CR-L40) / 9 a pineapple world
-/// (OD-149), <c>Ping</c> 0 unknown / 1 good / 2 fair / 3 poor.
-/// </summary>
-public sealed record WorldRow(string Id, string Name, string Host, byte Players, byte Max, byte Kind, byte Audience, byte Lock, byte Ping, bool FriendHost);
-
-/// <summary>
 /// One player of <see cref="UiFrame.MyWorld"/>: <c>Tier</c> <see cref="UiTier"/>, <c>Role</c> 0 host /
 /// 1 seated / 2 reserved, <c>Friend</c> <see cref="UiFriend"/>. The XUID is the action key, never shown (OD-61).
 /// </summary>
@@ -1743,7 +1459,7 @@ public sealed record MemberRow(string Xuid, string Gamertag, byte Tier, byte Rol
 public static class UiWorldRole
 {
     public const byte None = 0;
-    public const byte Hosting = 1;
+    // 1 (a host's own world) is retired: players host no world (OD-208)
     public const byte Reserved = 2;
     public const byte Seated = 3;
 }
@@ -1772,14 +1488,10 @@ public static class UiFriend
 /// <summary><c>WorldAction.action</c>.</summary>
 public static class UiWorldAction
 {
-    /// <summary>The host closes its world.</summary>
-    public const byte Close = 1;
+    // 1 (the host closes its world) and 3 (the host kicks a player) are retired: players host no world (OD-208).
 
     /// <summary>A seat holder leaves its seat.</summary>
     public const byte Leave = 2;
-
-    /// <summary>The host kicks a player.</summary>
-    public const byte Kick = 3;
 
     /// <summary>A friend request (or the acceptance of theirs) by gamertag.</summary>
     public const byte AddFriend = 4;
@@ -1878,41 +1590,13 @@ public static class UiServerStatus
     public const byte All = Known | Capacity | Live | Profiles;
 }
 
-/// <summary><c>WorldsQueryV2.filter</c> and <c>LobbyRow.lock</c> values added by CR-L40.</summary>
-public static class UiLobby
-{
-    public const byte FilterFriends = 1, FilterNear = 2, FilterGlobal = 3, FilterAll = 4;
-
-    /// <summary>Another mode's world: the world is Hardcore / Noob.</summary>
-    public const byte LockHardcore = 7, LockNoob = 8;
-
-    /// <summary>
-    /// OD-149 (§3.9, 2.0.1): a pineapple world a clean player cannot join (<c>why: "pool"</c>). Same byte as before: an overlay
-    /// before 2.0.1 reads it as an unknown lock (dimmed, not joinable).
-    /// </summary>
-    public const byte LockPool = 9;
-
-    /// <summary>
-    /// OD-149 (2.0.1): bit 1 of <see cref="WorldRow.Kind"/>, a pineapple world (the row's pineapple mark and the focus notice); bit 0
-    /// stays the Supporter host. An overlay before 2.0.1 compares <c>kind == 1</c>, so it only loses the Supporter badge on such a row.
-    /// </summary>
-    public const byte KindSupporter = 1, KindPineapple = 2;
-
-    /// <summary>
-    /// OD-149 (2.0.1): <see cref="UiFrame.WorldsListV2"/> status of a good list for a player the anti-cheat system isolated: its
-    /// message is <c>"&lt;seconds left&gt;\n&lt;dispute link&gt;"</c> and the overlay draws the red notice with a live countdown. An
-    /// overlay before 2.0.1 draws the rows of any status but 1 and 2 and ignores the message.
-    /// </summary>
-    public const byte ListIsolated = 3;
-}
-
-/// <summary><c>JoinResult.status</c> (the overlay's worlds.cpp reads 0 and 3; the rest is a refusal).</summary>
+/// <summary><see cref="UiFrame.JoinResult"/>'s result (0 reserved; the rest is a refusal).</summary>
 public static class UiJoin
 {
     public const byte Reserved = 0;
     public const byte Full = 1;
     public const byte NotAllowed = 2;
-    public const byte Code = 3;
+    // 3 (a lobby code needed) is retired with lobby codes (OD-208)
     public const byte Closed = 4;
     public const byte SlowDown = 5;
 }
@@ -1999,17 +1683,12 @@ public sealed class UiSession
             UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),
             UiFrame.VoiceCommand v => new UiIncoming.Voice(v),
             UiFrame.VoiceDevice d => new UiIncoming.VoiceDevice(d),
-            UiFrame.WorldsQueryV2 q => new UiIncoming.Reserved(q.Type),
             UiFrame.PlayerDetailsQuery p => new UiIncoming.PlayerDetails(p),
             UiFrame.PaneActionClick c => new UiIncoming.PaneClick(c),
             UiFrame.UiEvent e => new UiIncoming.Event(e.Kind, e.Detail),
             UiFrame.Panel p => new UiIncoming.Panel(p.Open),
             UiFrame.Bye b => new UiIncoming.Bye(b.Reason),
-            UiFrame.WorldsQuery q => new UiIncoming.Reserved(q.Type),
-            UiFrame.JoinWorld j => new UiIncoming.Reserved(j.Type),
-            UiFrame.CreateWorld c => new UiIncoming.Reserved(c.Type),
             UiFrame.MyWorldQuery => new UiIncoming.Mine(),
-            UiFrame.WorldAction { Action: UiWorldAction.Close or UiWorldAction.Kick } a => new UiIncoming.Reserved(a.Type, a.Action),
             UiFrame.WorldAction a => new UiIncoming.Act(a),
             _ => throw new ProtocolException("direction checked above"),
         };

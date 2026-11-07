@@ -42,14 +42,7 @@ public interface IMatchmakingApi
     /// <summary>Retain only a short-lived credential for authenticated own-seat/host cleanup after suspension.</summary>
     void BeginCleanup() { }
     void EndCleanup() { }
-    Task<MmResult<WorldList>> ListAsync(string filter, bool notFull = false, CancellationToken cancellation = default);
-
-    /// <summary>OD-112: the list with the <c>modded</c> filter (false: vanilla worlds only, the server's default).</summary>
-    Task<MmResult<WorldList>> ListAsync(string filter, bool notFull, bool modded, CancellationToken cancellation) =>
-        ListAsync(filter, notFull, cancellation);
-
     Task<MmResult<WorldView>> GetAsync(string worldId, CancellationToken cancellation = default);
-
 
     Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, CancellationToken cancellation = default);
 
@@ -69,46 +62,28 @@ public interface IMatchmakingApi
     Task<MmResult<WorldView>> SetWorldModesAsync(string worldId, string modes, CancellationToken cancellation = default) =>
         throw new NotSupportedException("world join modes");
 
-    Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default);
+    /// <summary>
+    /// CR-S102: "Ask to join" a friend's official world (<c>POST /mm/v1/worlds/{worldId}/requests</c>) with the asker's mod set (null:
+    /// vanilla, no body); its leader answers. A server without it answers 409 <c>{reason: "official"}</c>.
+    /// </summary>
+    Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation = default);
 
-    /// <summary>OD-112: a request to join with the caller's mod set (null: vanilla, no body).</summary>
-    Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
-        RequestAsync(worldId, cancellation);
-
-    /// <summary>OD-160 (§3.4): as above, with the asker's relay round trips (2.0.1 always sends them; <c>{}</c> when none is measured).</summary>
-    Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
-        RequestAsync(worldId, mods, cancellation);
-
+    /// <summary>CR-S102: the leader accepts a request to join its world (<c>POST …/requests/{requestId}/accept</c>).</summary>
     Task<MmResult<Invite>> AcceptRequestAsync(string worldId, string requestId, CancellationToken cancellation = default);
 
-    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default);
-
-    /// <summary>OD-112: a join with the caller's mod set (null: vanilla, left out of the body).</summary>
-    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
-        JoinAsync(worldId, code, cancellation);
-
-    /// <summary>CR-S57: a join with the joiner's NAT test and relay round trips (both null: left out, direct only).</summary>
-    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) => JoinAsync(worldId, code, mods, cancellation);
-
-    /// <summary>OD-146: as above, with <paramref name="transport"/> <c>relay</c> asking for a relay-born seat.</summary>
-    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation) => JoinAsync(worldId, code, mods, nat, relays, cancellation);
-
     /// <summary>
-    /// OD-150: as above, with the <paramref name="activity"/> asked for (null: any; another is 409 <c>{reason: "activity"}</c>). OD-190:
-    /// with neither <paramref name="worldId"/> nor <paramref name="code"/>, a quick join into an official world running it.
+    /// <c>POST /mm/v1/join</c>: an official world by id, with the caller's mod set (null: vanilla, left out) and the
+    /// <paramref name="activity"/> asked for (null: any; another is 409 <c>{reason: "activity"}</c>). OD-190: with no
+    /// <paramref name="worldId"/>, a quick join into an official world running it.
     /// </summary>
-    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation) =>
-        JoinAsync(worldId, code, mods, nat, relays, transport, cancellation);
+    Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, IReadOnlyList<ModEntry>? mods, string? activity, CancellationToken cancellation = default);
 
     /// <summary>
     /// OD-204 (MATCHMAKING_API §2.10, CR-S96): the private create, <c>POST /mm/v1/join {activity, private: true}</c>: the caller's own
     /// private official world, or a spare promoted for it, ending the caller's other live seat. A test double without it refuses.
     /// </summary>
-    Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) => throw new NotSupportedException("private create");
+    Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
+        throw new NotSupportedException("private create");
 
     Task<MmResult<SeatAnswer>> SeatAsync(CancellationToken cancellation = default);
 
@@ -116,19 +91,13 @@ public interface IMatchmakingApi
 
     Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default);
 
-    /// <summary>
-    /// CR-S57: <c>{grantId, transport}</c> (<c>"relay"</c>: the joiner fell back; OD-160 <c>"direct"</c>: a relay-born seat's relay was
-    /// unreachable; null: the plain renew).
-    /// </summary>
-    Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, string? transport, CancellationToken cancellation) => RenewSeatAsync(grantId, cancellation);
-
     Task<MmResult<MmNone>> LeaveSeatAsync(CancellationToken cancellation = default);
 
     Task<MmResult<MmNone>> LeaveGrantAsync(string grantId, CancellationToken cancellation = default);
 
 
     /// <summary>
-    /// The players of a world the caller hosts or holds a seat in (CR-L25, OD-63; deployed 2026-10-19).
+    /// The players of the world the caller holds a seat in (CR-L25, OD-63; deployed 2026-10-19).
     /// The default (a 404) serves only the test fakes; on a 404 the caller re-reads its seat.
     /// </summary>
     Task<MmResult<WorldMembers>> MembersAsync(string worldId, CancellationToken cancellation = default) =>
@@ -179,28 +148,6 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
 
     public Uri Matchmaking { get; } = ApiClient.CheckOrigin(matchmaking);
 
-    /// <summary><c>GET /mm/v1/worlds?filter=</c>: <paramref name="filter"/> one of <see cref="WorldFilters"/> (required, OD-58).</summary>
-    public Task<MmResult<WorldList>> ListAsync(string filter, bool notFull = false, CancellationToken cancellation = default) =>
-        ListAsync(filter, notFull, false, cancellation);
-
-    /// <summary>
-    /// OD-112: <c>&amp;modded=true</c> only when asked: an older server refuses any unknown parameter, and
-    /// <c>false</c> is the default (vanilla worlds only), so a vanilla list stays the same request.
-    /// </summary>
-    public Task<MmResult<WorldList>> ListAsync(string filter, bool notFull, bool modded, CancellationToken cancellation)
-    {
-        if (filter is null || !WorldFilters.All.Contains(filter) && filter != WorldFilters.Every)
-        {
-            throw new ArgumentException("one of global, near, friends, all", nameof(filter));
-        }
-        if (filter == WorldFilters.Every && modded)
-        {
-            throw new ArgumentException("the all filter takes no modded parameter (CR-L40)", nameof(modded));
-        }
-        var query = "?filter=" + filter + (notFull ? "&notFull=true" : "") + (modded ? "&modded=true" : "");
-        return SendAsync<WorldList>(HttpMethod.Get, "/mm/v1/worlds" + query, null, cancellation);
-    }
-
     public Task<MmResult<WorldView>> GetAsync(string worldId, CancellationToken cancellation = default) =>
         SendAsync<WorldView>(HttpMethod.Get, World(worldId), null, cancellation);
 
@@ -239,84 +186,50 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         return SendAsync<WorldView>(HttpMethod.Put, World(worldId) + "/modes", new WorldJoinModes { Modes = modes }, cancellation);
     }
 
-    public Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default) =>
-        RequestAsync(worldId, null, cancellation);
-
-    /// <summary>OD-112: the asker's set as <c>{mods}</c>; a vanilla request keeps the empty body.</summary>
-    public Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
-        RequestAsync(worldId, mods, null, cancellation);
-
-    /// <summary>OD-160: with the asker's relay round trips (<c>{}</c> is sent as such); a vanilla request without either keeps the empty body.</summary>
-    public Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
+    /// <summary>CR-S102: the asker's set as <c>{mods}</c>; a vanilla request keeps the empty body.</summary>
+    public Task<MmResult<Invite>> RequestAsync(string worldId, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation = default) =>
         SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests",
-            mods is { Count: > 0 } || relays is not null ? new RequestToJoin { Mods = mods is { Count: > 0 } ? mods : null, Relays = relays } : null, cancellation);
-
+            mods is { Count: > 0 } ? new RequestToJoin { Mods = mods } : null, cancellation);
     public Task<MmResult<Invite>> AcceptRequestAsync(string worldId, string requestId, CancellationToken cancellation = default) =>
         SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/requests/" + Id(requestId, nameof(requestId)) + "/accept", null, cancellation);
 
     /// <summary>
-    /// <c>POST /mm/v1/join {worldId?, code?}</c> (at least one, or OD-190's quick join <c>{activity}</c>). The code is sent as its 8 digits;
-    /// one that is not 8 digits (with or without the hyphen) throws before sending. A 429 answers
-    /// <c>status: "rate_limited"</c> with <c>retryAfterSeconds</c> (from <c>Retry-After</c> when
-    /// the body is the generic error body).
+    /// <c>POST /mm/v1/join {worldId}</c> (an official world by id), or OD-190's quick join <c>{activity}</c>. A 429 answers
+    /// <c>status: "rate_limited"</c> with <c>retryAfterSeconds</c> (from <c>Retry-After</c> when the body is the generic error body).
+    /// <paramref name="mods"/> is the caller's set (null or empty: vanilla, left out of the body).
     /// </summary>
-    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, CancellationToken cancellation = default) =>
-        JoinAsync(worldId, code, null, cancellation);
-
-    /// <summary>OD-112: <paramref name="mods"/> is the caller's set (null or empty: vanilla, left out of the body).</summary>
-    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation) =>
-        JoinAsync(worldId, code, mods, null, null, cancellation);
-
-    /// <summary>CR-S57: <paramref name="relays"/> is sent as given (also <c>{}</c>); null leaves <c>nat</c>/<c>relays</c> out.</summary>
-    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation) =>
-        JoinAsync(worldId, code, mods, nat, relays, null, cancellation);
-
-    public Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, string? transport, CancellationToken cancellation) =>
-        JoinAsync(worldId, code, mods, nat, relays, transport, null, cancellation);
-
-    public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, string? code, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, string? transport, string? activity, CancellationToken cancellation)
+    public async Task<MmResult<JoinAnswer>> JoinAsync(string? worldId, IReadOnlyList<ModEntry>? mods, string? activity, CancellationToken cancellation = default)
     {
-        // OD-190 (WORLDS_OFFICIAL §11.2): neither a world id nor a code is a quick join, which names its activity (car meets too)
-        var quick = worldId is null && code is null;
-        // fm5-9: a join by world id or code names the world's activity, FM5's race included (CR-S99); T3's invite accept threw here
+        // OD-190 (WORLDS_OFFICIAL §11.2): no world id is a quick join, which names its activity (car meets too)
+        var quick = worldId is null;
+        // fm5-9: a join by world id names the world's activity, FM5's race included (CR-S99); T3's invite accept threw here
         if (activity is not null && !(quick ? WorldActivities.Placement : WorldActivities.Joinable).Contains(activity))
         {
             throw new ArgumentException(quick ? "freeroam, carmeet or roadtrip" : "freeroam, roadtrip or race", nameof(activity));
         }
         if (quick && activity is null)
         {
-            throw new ArgumentException("a world id, a code, both, or a quick join's activity");
+            throw new ArgumentException("a world id, or a quick join's activity");
         }
         var body = new JoinRequest
         {
             WorldId = worldId is null ? null : Id(worldId, nameof(worldId)),
-            Code = code is null ? null : Code(code),
             Mods = mods is { Count: > 0 } ? mods : null,
-            Nat = nat,
-            Relays = relays,
-            Transport = transport,
             Activity = activity,
         };
         return await PostJoinAsync(body, cancellation).ConfigureAwait(false);
     }
-
     /// <summary>
     /// OD-204 (MATCHMAKING_API §2.10): the private create, <c>POST /mm/v1/join {activity, private: true}</c> (<paramref name="activity"/>
     /// one of <see cref="WorldActivities.PrivateCreate"/>: FH2's <c>freeroam</c> or <c>roadtrip</c>, FM5's <c>race</c>, CR-S99). Answered as
     /// any join (a 429 reads as <c>status: "rate_limited"</c>).
     /// </summary>
-    public Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, string? nat,
-        IReadOnlyDictionary<string, int>? relays, CancellationToken cancellation)
+    public Task<MmResult<JoinAnswer>> PrivateCreateAsync(string activity, IReadOnlyList<ModEntry>? mods, CancellationToken cancellation)
     {
         if (!WorldActivities.PrivateCreate.Contains(activity)) throw new ArgumentException("freeroam, roadtrip or race", nameof(activity));
         return PostJoinAsync(new JoinRequest
         {
             Mods = mods is { Count: > 0 } ? mods : null,
-            Nat = nat,
-            Relays = relays,
             Activity = activity,
             Private = true,
         }, cancellation);
@@ -344,10 +257,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         SendAsync<SeatAnswer>(HttpMethod.Get, "/mm/v1/seat?includeMembers=true", null, cancellation);
 
     public Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default) =>
-        RenewSeatAsync(grantId, null, cancellation);
-
-    public Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, string? transport, CancellationToken cancellation) =>
-        SendAsync<SeatAnswer>(HttpMethod.Post, "/mm/v1/seat/renew", new SeatRenew { GrantId = Id(grantId, nameof(grantId)), Transport = transport }, cancellation);
+        SendAsync<SeatAnswer>(HttpMethod.Post, "/mm/v1/seat/renew", new SeatRenew { GrantId = Id(grantId, nameof(grantId)) }, cancellation);
 
     /// <summary><c>DELETE /mm/v1/seat</c> → 204: leaves the caller's live seat, whatever its id.</summary>
     public Task<MmResult<MmNone>> LeaveSeatAsync(CancellationToken cancellation = default) =>
@@ -364,9 +274,6 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     }
 
     private static string World(string worldId) => "/mm/v1/worlds/" + Uri.EscapeDataString(Id(worldId, nameof(worldId)));
-
-    private static string Code(string code) =>
-        WorldCode.Normalize(code) ?? throw new ArgumentException("a world code is 8 digits (XXXX-XXXX)", nameof(code));
 
     private async Task<MmResult<T>> SendAsync<T>(HttpMethod method, string route, object? body, CancellationToken cancellation,
         string? idempotencyKey = null)

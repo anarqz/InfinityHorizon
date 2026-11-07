@@ -44,7 +44,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     public void RecordUdpDiagnostic(Session.Frame.UdpDiagnostic frame)=>_udpDiagnostics.Native(frame);
     // this profile's XUID: its own roster row and actions
     private readonly string? _ownXuid = ownXuid;
-    private readonly Func<IReadOnlyList<string>> _lan = lanAddresses ?? HostRelay.LanAddresses;
+    private readonly Func<IReadOnlyList<string>> _lan = lanAddresses ?? LocalNetwork.LanAddresses;
     private readonly IMatchmakingApi _mm = mm ?? throw new ArgumentNullException(nameof(mm));
     private readonly Func<string, string> _text = text ?? throw new ArgumentNullException(nameof(text));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
@@ -118,7 +118,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         byte state;
         try
         {
-            var reply = await _mm.ListAsync("global", cancellation: cancellation).ConfigureAwait(false);
+            var reply = await _mm.SeatAsync(cancellation).ConfigureAwait(false); // a plain read of the caller's seat: reachability only
             result = _text(reply.Ok ? "connection.accepted" : "connection.refused") + " (HTTP " + (int)reply.Status + ")";
             state = reply.Ok ? (byte)1 : (byte)2;
         }
@@ -324,7 +324,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     private int _joinAttempt;
     public Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation)
     {
-        Volatile.Write(ref _hostLeft, null); // OD-190: the player's own join is no placement to explain
         return JoinAsync(request, null, cancellation);
     }
 
@@ -352,7 +351,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             return new(UiJoin.NotAllowed, DeniedMessage(denied, "join"));
         if (GameReadiness.CurrentGeneration is not { } generation)
             return new(UiJoin.NotAllowed, _text("worlds.load_game"));
-        var worldId = string.IsNullOrEmpty(request.WorldId) ? null : request.WorldId; // OD-208: a join frame's code is never sent
+        var worldId = string.IsNullOrEmpty(request.WorldId) ? null : request.WorldId; // empty: a quick join
         // OD-112: the session's set goes with every join; planned mods not confirmed yet never join as vanilla.
         var (mods, modsRefusal) = WireMods();
         if (modsRefusal is not null) return new(UiJoin.NotAllowed, _text(modsRefusal));
@@ -365,8 +364,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
                 var answer = await OperationAsync(_joinRetry, token => privateCreate && activity is not null
-                        ? _mm.PrivateCreateAsync(activity, mods, null, null, token)
-                        : _mm.JoinAsync(worldId, null, mods, null, null, null, activity, token), cancellation,
+                        ? _mm.PrivateCreateAsync(activity, mods, token)
+                        : _mm.JoinAsync(worldId, mods, activity, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -477,10 +476,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
                             return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         }
-                        // where the host is now, so the player picks that mode in the game (never "go to free roam" blindly)
-                        return new UiFrame.JoinResult(UiJoin.Reserved, ListedActivity(grant.WorldId) is { } hostActivity
-                            ? _text("worlds.reserved_mode").Replace("{mode}", ActivityName(hostActivity), StringComparison.Ordinal)
-                            : _text("worlds.reserved"));
+                        return new UiFrame.JoinResult(UiJoin.Reserved, _text("worlds.reserved"));
                     case JoinStatuses.Locked when attempt == 0:
                         // A used seat in this lobby is also Locked: never destroy a live seat on that ambiguity.
                         if (join.Locked is not { } locked || worldId is null || locked.WorldId == worldId)
@@ -498,8 +494,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         continue;
                     case JoinStatuses.Full:
                         return new UiFrame.JoinResult(UiJoin.Full, _text("worlds.full"));
-                    case JoinStatuses.Code: // OD-208: no lobby code is ever sent, so a world that needs one is not joinable here
-                        return new UiFrame.JoinResult(UiJoin.NotAllowed, _text("worlds.join_failed"));
                     case JoinStatuses.Closed:
                         Volatile.Write(ref _lastJoinRefusal, PrivateLobbyNotices.Closed); // T-L5's wording
                         return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.closed"));
@@ -582,7 +576,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 }
                 var after = _seat.Observe(seat, Now);
                 // OD-191: the renewed seat's world (a grant taken over from it too)
-                if (seat.Seat is { State: not SeatStates.Hosting, GrantId: { } renewedGrant } renewedWorld && _seat.GrantId == renewedGrant) SeatWorldIs(renewedWorld.WorldId);
+                if (seat.Seat is { GrantId: { } renewedGrant } renewedWorld && _seat.GrantId == renewedGrant) SeatWorldIs(renewedWorld.WorldId);
                 if (seat.Seat is { } renewedSeat) ObserveActivity(renewedSeat);
                 ObservePool(seat.Pool);
                 // A successful renew is authoritative too: an older in-flight GET cannot undo it.
@@ -592,7 +586,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 {
                     InvalidateMine(reset: true);
                     _log(SeatEndedLine(seat.Ended, grantId)); // T35: with its reason
-                    ObserveHostLeft(seat.Ended, grantId);
+                    ObserveSeatEnded(seat.Ended, grantId);
                 }
                 // OD-149: isolated by the anti-cheat system: the seat in a clean world ended, the launcher moves the player
                 if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text("worlds.pool_moved");
@@ -708,7 +702,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // T35: the joiner's seat ending on the server is said with its reason (released: the host's heartbeat no
                     // longer listed this player), so a cleared relay leg is never silent
                     if (heldGrant is not null) _log(SeatEndedLine(value.Ended, heldGrant));
-                    ObserveHostLeft(value.Ended, heldGrant); // OD-190: the next placement says the host left
+                    ObserveSeatEnded(value.Ended, heldGrant); // T-L6: a released private seat is rejoined first
                     ObservePrivateRejoin(value.PrivateWorldId, value.Ended, value.GeneratedAt); // T-L4 (a): the server's private world to rejoin comes first
                     _seat.Observe(value, Now);
                     // OD-149: the seat this launcher held ended because the anti-cheat system isolated the player: it is moved
@@ -723,7 +717,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             }
             var role = seat.State switch
             {
-                SeatStates.Hosting => UiWorldRole.Hosting,
                 SeatStates.Seated => UiWorldRole.Seated,
                 _ => UiWorldRole.Reserved,
             };
@@ -756,13 +749,9 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             {
                 if (_mineId == seat.WorldId && _mineSnapshot.Named) { _mineUncertain = true; return _mineSnapshot; }
                 // §2.9: an official world's host is no player: no host row (its name is the world's host below)
-                if (world.Host.Xuid is { } hostXuid)
-                    members.Add(new MemberRow(hostXuid, world.Host.Gamertag ?? string.Empty, UiTier.Of(world.Host.Tier), 0,
-                        role == UiWorldRole.Hosting ? UiFriend.Self : UiFriend.None));
             }
-            var row = Row(world, false);
-            // CR-S67/S68: the world's voice mode for a joiner, the roster's voice blocks for the host's relay, this player's own block
-            if (role is UiWorldRole.Hosting or UiWorldRole.Seated && epoch == Volatile.Read(ref _mineEpoch))
+            // CR-S67/S68: the world's voice mode for a joiner, this player's own voice block
+            if (role == UiWorldRole.Seated && epoch == Volatile.Read(ref _mineEpoch))
                 ObserveVoice(seat.WorldId, role, world, named ? boundedRoster : null);
             lock (_mineState)
             {
@@ -773,7 +762,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 if (seat.State != SeatStates.Reserved || seat.GrantId is not null && seat.ExpiresAt is not null
                     && seat.HoldUntil is not null && _seat.GrantId != seat.GrantId) _seat.Observe(value, Now);
                 // OD-191 (W-4 review): a grant taken over from the read (a group seat, an accepted request, a restart) names its world
-                if (seat.State != SeatStates.Hosting && seat.GrantId is { } readGrant && _seat.GrantId == readGrant)
+                if (seat.GrantId is { } readGrant && _seat.GrantId == readGrant)
                 {
                     ObserveGroupSeat(Volatile.Read(ref _seatWorld), seat); // OD-191: a car meet seat's move to its group world
                     SeatWorldIs(seat.WorldId);
@@ -790,19 +779,18 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 ObserveNoticeWorld(world); // OD-160's notice: the world's modes and transport
                 ObserveJoinModes(world); // OD-210 (W14): the private lobby's "Who can join"
                 ObserveActivity(seat);
-                CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
+                CrashContext?.ObserveWorld(role == UiWorldRole.Seated ? new(seat.WorldId, world.Private == true ? "private" : "everyone", Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,
                         m.Role switch { 0 => "host", 1 => "seated", _ => "reserved" })).ToArray()) : null);
                 // OD-181 (CR-L48): every player's declared mods, for the overlay's roster and the player details
                 Volatile.Write(ref _rosterMods, RosterModsOf(seat.WorldId, named
-                    ? boundedRoster!.Items.Select(i => (i.Xuid, i.Role == "host", i.Mods))
-                    : world.Host.Xuid is { } host ? [(host, true, (IReadOnlyList<ModEntry>?)null)] : [], world.Mods, ModName));
+                    ? boundedRoster!.Items.Select(i => (i.Xuid, i.Role == "host", i.Mods)) : [], world.Mods, ModName));
                 // OD-204 (T-L6): only with the official flag (a private world is an official one; the frame refuses it alone)
-                var privateMine = role != UiWorldRole.Hosting && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)
+                var privateMine = (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)
                     && (world.Private == true || SeatPrivate(seat.WorldId));
-                return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.DisplayName, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
-                    WorldModes.OpenToBoth(world), Official: role != UiWorldRole.Hosting
-                        && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId), // OD-192
+                return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.DisplayName, string.Empty, privateMine ? (byte)3 : (byte)0,
+                    (byte)Math.Min(world.Players, 255u), (byte)Math.Min(world.MaxPlayers, 255u), named, members, WorldModes.OpenToBoth(world),
+                    Official: world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId, // OD-192 (OD-208: the lobby code and audience bytes stay 0)
                     // OD-204 (T-L6): only with the official flag (a private world is an official one; the frame refuses it alone)
                     Private: privateMine,
                     // OD-204 (T-L4, CR-S96 c94d4039): the seat read's world.leader (private worlds, seated readers, omitted while nobody
@@ -847,7 +835,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
             });
     }
 
-    /// <summary>The overlay's actions on its world (OD-63): leave, add a friend, report (OD-208: close and kick are reserved).</summary>
+    /// <summary>The overlay's actions on its world (OD-63): leave, add a friend, report.</summary>
     public async Task<UiFrame.ActionResult> ActAsync(UiFrame.WorldAction request, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -930,43 +918,5 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         {
             // the seat lapses on its own within 60 s
         }
-    }
-
-    /// <summary>One matchmaking row as the overlay draws it (never an address).</summary>
-    public static WorldRow Row(WorldView world, bool lockedSection)
-    {
-        ArgumentNullException.ThrowIfNull(world);
-        var why = world.CanJoin && !lockedSection ? null : lockedSection ? "tier" : world.Why;
-        byte lockReason = why switch
-        {
-            null => 0,
-            "tier" => 1, // CR-S69: only an older server's; the overlay says "Not available", never an upsell
-            "friends" => 2,
-            "code" => 3,
-            "full" => 4,
-            "latency" => 5,
-            // CR-L40: the all list carries other modes' worlds; CR-L43: never a world open to both modes (an
-            // inconsistent answer is "not available", never dimmed as another mode's)
-            "mode" => WorldModes.OpenToBoth(world) ? (byte)6 : ModeLock(world.Mode),
-            WorldWhy.Pool => UiLobby.LockPool, // OD-149: a pineapple world, only for players the anti-cheat system isolated
-            _ => 6,
-        };
-        byte ping = world.PingClass switch
-        {
-            PingClasses.Local or PingClasses.Near => 1,
-            PingClasses.Far => 2,
-            PingClasses.Remote => 3,
-            _ => 0,
-        };
-        byte audience = world.Audience switch
-        {
-            WorldAudiences.Supporters => 1,
-            WorldAudiences.Friends => 2,
-            WorldAudiences.Private => 3,
-            _ => 0,
-        };
-        return new WorldRow(world.Id, world.Name, world.Host.DisplayName,(byte)Math.Min(world.Players, 255u), (byte)Math.Min(world.MaxPlayers, 255u),
-            (byte)((world.Kind == WorldKinds.Supporter ? UiLobby.KindSupporter : 0) | (world.Pool ? UiLobby.KindPineapple : 0)),
-            audience, lockReason, ping, world.FriendHost);
     }
 }

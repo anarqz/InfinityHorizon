@@ -62,7 +62,7 @@ public partial class MainWindow : Window
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
         vm.ServerChangeRestartRequested += () => Dispatcher.BeginInvoke(RestartOnServerChoice);
-        // One launcher per state folder (launcher.lock): a second one cannot host a dedicated lobby (OD-109).
+        // One launcher per state folder (launcher.lock).
         _ = vm.AcquireInstanceLockAsync();
         ContentRendered += async (_, _) => await vm.ConfirmUpdatedStartupAsync(cli);
         var azimuth = Array.IndexOf(cli, "--azimuth") is var i and >= 0 && i + 1 < cli.Length ? cli[i + 1] : Environment.GetEnvironmentVariable("FI_AZIMUTH");

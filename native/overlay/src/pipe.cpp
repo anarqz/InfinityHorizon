@@ -12,30 +12,25 @@
 // 0x11 GameReadiness{u8 ready}, lease 1.5 s; 0x12 WorldAccess{u8 allowed, str message},
 // an independent 10 s lease. Missing/malformed/expired installation access stays denied.
 //
-// Worlds (OD-54/57/58), RESERVED since T-L3 (OD-204 item 2: the game's own menus create, invite and join): this overlay never
-// sends 0x07 WorldsQuery, 0x09 JoinWorld, 0x0B CreateWorld or 0x14 WorldsQueryV2 any more, and it reads and ignores 0x08
-// WorldsList, 0x0A JoinResult, 0x0C Hosted and 0x15 WorldsListV2 from a launcher that still sends them (ui_frames.h has their
-// layouts; a mixed DEV launcher and overlay never close the pipe over them).
+// Worlds (OD-54/57/58): the lobby list, join by code, create and hosted frames (0x07-0x0C, 0x14, 0x15) are gone (OD-208: players
+// host no world; the game's own menus create, invite and join, OD-204 item 2). Any of them from an older launcher is an unknown
+// frame here, ignored.
 //
 // My world (OD-63): overlay -> launcher 0x0D MyWorldQuery{} (on explicit open/action/refresh while the lobby tab is
-// shown); 0x0F WorldAction{u8 action (2 leave, 4 add friend, 5 report; 1 close and 3 kick reserved since T-L3), str xuid,
+// shown); 0x0F WorldAction{u8 action (2 leave, 4 add friend, 5 report; 1 close and 3 kick are retired, OD-208), str xuid,
 // str gamertag, u8 reason (1 cheating, 2 abuse, 3 other)}. Launcher -> overlay 0x0E MyWorld{u8 role
-// (0 none, 1 hosting, 2 reserved, 3 seated), str worldId, str name, str host, str code, u8 audience,
+// (0 none, 2 reserved, 3 seated; 1 hosting is retired), str worldId, str name, str host, str code (empty), u8 audience,
 // u8 players, u8 max, u8 named, u8 count, count x {str xuid, str gamertag, u8 tier, u8 role (0 host,
 // 1 seated, 2 reserved), u8 friend (0 none, 1 friends, 2 outgoing, 3 incoming, 4 self)}, u8 anyMode (OD-141)};
 // 0x10 ActionResult{u8 action, u8 status (0 done, 1 refused), str message}.
 //
-// Protocol 2 (OD-112; layouts in ui_frames.h): this overlay asks with 0x14 WorldsQueryV2 (filter 4
-// all by default, modded 0: every lobby, CR-L40) instead of 0x07 and still reads a 0x08 answer as
-// vanilla; 0x15 WorldsListV2 rows (at most 50, ordered by the launcher) carry modded, modsMatch,
-// players and mods; 0x16 DetailPane is the right pane; 0x17 PlayerDetailsQuery and 0x18
+// Protocol 2 (OD-112; layouts in ui_frames.h): 0x16 DetailPane is the right pane; 0x17 PlayerDetailsQuery and 0x18
 // PaneActionClick go to the launcher. 0x19 ServerStatus and 0x1A Avatar (CR-L40 §1.3) fill the
 // guide's bottom block and its header avatar.
 //
 // Protocol 3 (OD-154; layouts in ui_frames.h): 0x1B VoiceState from the launcher (the lobby's voice chat, the mic
-// mode, each player's mute and talking state); 0x1C VoiceCommand to it (the host's lobby switch, mutes, the mic
-// mode, voice on/off, the volumes) and 0x1D VoiceDevice (the chosen microphone or output, VOICE_CHAT.md §15). 0x0B
-// CreateWorld ends with u8 voice.
+// mode, each player's mute and talking state); 0x1C VoiceCommand to it (mutes, the mic mode, voice on/off, the
+// volumes) and 0x1D VoiceDevice (the chosen microphone or output, VOICE_CHAT.md §15).
 //
 // Protocol 4 (OD-181): 0x1E RosterMods from the launcher after each 0x0E, the mods each player of my world declared
 // (players may mix mods; modsMatch is always 1 and is ignored).
@@ -64,7 +59,6 @@
 #include "player_actions.h"
 #include "fi_overlay.h"
 
-#include <atomic>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -103,21 +97,9 @@ bool Queue(uint8_t type, const std::vector<uint8_t> &body) {
 
 using Reader = wire::Reader;
 
-// T-L3: a reserved frame (0x08, 0x0A, 0x0C, 0x15) from a launcher that still sends it: logged once per type, never shown.
-void Reserved(uint8_t type, bool well_formed) {
-    static std::atomic<uint32_t> seen{0};
-    const uint32_t bit = 1u << (type & 0x1F);
-    if (!(seen.fetch_or(bit) & bit)) Log("ui pipe: reserved frame 0x%02x %s (T-L3: no lobby list, code or create)", type, well_formed ? "ignored" : "malformed, ignored");
-}
-
 void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
     Reader r{body, size};
     switch (type) {
-    case 0x15: {
-        WorldsListV2 list;
-        Reserved(type, DecodeWorldsListV2(body, size, list));
-        break;
-    }
     case 0x23: { // protocol 6 (T-L3): the invite prompt
         InvitePromptFrame prompt;
         if (DecodeInvitePrompt(body, size, prompt)) SetInvitePrompt(prompt);
@@ -213,9 +195,6 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         PushToast(kind, nl == std::string::npos ? t.text : t.text.substr(0, nl), nl == std::string::npos ? "" : t.text.substr(nl + 1), t.ttl, t.always());
         break;
     }
-    case 0x08:
-    case 0x0A:
-    case 0x0C: Reserved(type, ReservedFrameReads(type, body, size)); break; // T-L3: no list, join by code or create
     case 0x0E: {
         MyWorld m;
         if (DecodeMyWorld(body, size, m)) SetMyWorld(std::move(m)); // ui_frames.h (anyMode CR-L43, private T-L6, leader T-L3)

@@ -7,8 +7,8 @@
    state down 0xC0F6), and hands them to FiOverlayHost.voice_send. This file only checks their
    shape and moves them, exactly as car state (carstate.c, kind 0x3E91) travels:
 
-   - sent from the socket the world knows this player by (OD-208: never a host's): the proxy socket to the world (azimuth_proxy_send_world,
-     FIR1 data through a fallback relay, and only once the hook's kind is proved under FIUP); a
+   - sent from the socket the world knows this player by: the proxy socket to the world
+     (azimuth_proxy_send_world, only once the hook's kind is proved under FIUP); a
      world on this network the game reached directly, the hook's own LAN socket (livery_world.c);
    - received on those same sockets, with the source checks car state has there (proxy.c: from
      the world, the hook's kind proved),

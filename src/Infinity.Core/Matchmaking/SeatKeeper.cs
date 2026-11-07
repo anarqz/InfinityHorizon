@@ -12,7 +12,7 @@ public enum SeatStep
     /// <summary><c>POST /mm/v1/seat/renew {grantId}</c> now.</summary>
     Renew,
 
-    /// <summary>The seat is seated or hosting: the host's announce keeps it, no renew.</summary>
+    /// <summary>The seat is seated: the world's own announce keeps it, no renew.</summary>
     Seated,
 
     /// <summary>No seat to keep (<see cref="SeatDecision.Why"/>): stop renewing.</summary>
@@ -37,7 +37,7 @@ public readonly record struct SeatDecision(SeatStep Step, string? GrantId, DateT
 
 /// <summary>
 /// When to renew a reserved seat (MATCHMAKING_API.md §3.2): every 20 s while it is
-/// <c>reserved</c>, never past its <c>holdUntil</c>, and not at all once it is seated, hosting,
+/// <c>reserved</c>, never past its <c>holdUntil</c>, and not at all once it is seated,
 /// ended or gone. Pure: no timers, no I/O; every call takes <c>now</c>, which must be on the
 /// server's clock (<c>ApiClient.ServerNow</c>), since the instants it compares are the server's.
 /// </summary>

@@ -425,7 +425,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void SignOut()
     {
-        // A dedicated lobby is stopped first (its gate leave needs this session's tokens): CanChangeIdentity hides sign-out meanwhile.
         if (Playing || _busy) return;
         _nativeFlow.Clear();
         LeaveAccount(); _onNews = false;
