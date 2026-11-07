@@ -2,7 +2,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
-namespace Infinity.Core.WorldServer;
+namespace Infinity.Core.Official;
 
 /// <summary>The upgrade rows one car model can carry, by slot, as this player's own game database lists them.</summary>
 internal sealed class ModelParts(uint model, IReadOnlySet<uint>[] bySlot)

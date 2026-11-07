@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Net;
 using Infinity.Core.Overlay;
 using Infinity.Core.Session;
-using Infinity.Core.WorldServer;
+using Infinity.Core.Official;
 
 namespace Infinity.Core.Matchmaking;
 

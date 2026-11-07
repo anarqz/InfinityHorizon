@@ -112,7 +112,7 @@ public sealed partial class ShellViewModel
                 // CR-S68: the voice_blocked notice's end (GET /core/v1/me/notices), told once per block in the player's language
                 AccountNotices = async ct => (await session.Api.AccountNoticesAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), ct).ConfigureAwait(false)).Items,
                 // NR-6: the parts rule judges the other players' cars against this PC's own game database (read-only)
-                GameDatabase = ContentLocation?.Mount is { } gameMount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(gameMount) : null,
+                GameDatabase = ContentLocation?.Mount is { } gameMount ? Infinity.Core.Official.GameDatabase.Find(gameMount) : null,
             };
         };
     }

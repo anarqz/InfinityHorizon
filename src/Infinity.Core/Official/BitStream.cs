@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-namespace Infinity.Core.WorldServer;
+namespace Infinity.Core.Official;
 
 internal enum WireError { Truncated, LengthLimit, UnknownMessage, UnknownRouter, InvalidValue }
 

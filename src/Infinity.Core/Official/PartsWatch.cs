@@ -2,7 +2,7 @@
 using System.Globalization;
 using Infinity.Core.Matchmaking;
 
-namespace Infinity.Core.WorldServer;
+namespace Infinity.Core.Official;
 
 /// <summary>
 /// NR-6: the car a player object (router 1) describes, as far as its writes can be read. SAURON V9: var 103 ModelId (u32, the car's

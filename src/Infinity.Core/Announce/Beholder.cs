@@ -7,7 +7,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Infinity.Core.Api;
 using Infinity.Core.Auth;
-using Infinity.Core.WorldServer;
+using Infinity.Core.Official;
 
 namespace Infinity.Core.Announce;
 
