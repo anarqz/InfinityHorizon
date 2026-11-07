@@ -1819,6 +1819,26 @@ static void fr_ready_line(const char *text) {
     fr_end(&line);
 }
 
+/* fm5-9 (T3 on SAURON, 2026-11-07): FM5's GameSessionReady delegate is a C++/CX object whose vtable and code are in the
+   game image Azimuth maps by hand, which Windows knows as no module, so fr_obs_com refused it ("add_ passed no COM handler").
+   Its QueryInterface also counts when it lies inside the selected game's image; the null and readable checks stay. W7b only:
+   FH2's observer keeps fr_obs_com. Fills the vtable and QueryInterface read, for the log; 1 in the image, 2 in a module. */
+static int fr_ready_handler(void *object, const unsigned char *image, size_t image_size, void **vtable_out, void **query_out) {
+    void *vtable = 0, *query = 0;
+    *vtable_out = 0;
+    *query_out = 0;
+    if (!object || !memory_read(object, &vtable, sizeof(vtable)) || !vtable || !memory_read(vtable, &query, sizeof(query)) ||
+        !query) {
+        return 0;
+    }
+    *vtable_out = vtable;
+    *query_out = query;
+    if (image && image_size && (const unsigned char *)query >= image && (size_t)((const unsigned char *)query - image) < image_size) {
+        return 1;
+    }
+    return fr_obs_com(object) ? 2 : 0;
+}
+
 static HRESULT STDMETHODCALLTYPE fr_party_add_session_ready(FrWrap *self, uintptr_t a, uintptr_t b, uintptr_t c,
                                                             uintptr_t d, uintptr_t e, uintptr_t f) {
     if (!fi_game_profile()->party_session_ready) return fr_observe16(self, a, b, c, d, e, f); /* FH2: observed, as before */
@@ -1827,7 +1847,20 @@ static HRESULT STDMETHODCALLTYPE fr_party_add_session_ready(FrWrap *self, uintpt
     fr_observed(self, 16, fr_obs_next(self->observe, 16), result, "forwarded (W7b: GameSessionReady add_, its delegate is kept)",
                 a, b, c, d, e, f);
     FrCom *handler = (FrCom *)a;
-    if (!fr_obs_com(handler)) {
+    void *vtable = 0, *query = 0;
+    const int where = fr_ready_handler(handler, fi_game_selected_image, fi_game_profile()->image_size, &vtable, &query);
+    {
+        FR_LINE(seen);
+        fr_text(&seen, "FREEROAM: GameSessionReady (W7b): add_ handler 0x");
+        fr_hex(&seen, (unsigned long long)a, 16);
+        fr_text(&seen, ", vtable 0x");
+        fr_hex(&seen, (unsigned long long)(uintptr_t)vtable, 16);
+        fr_text(&seen, ", QueryInterface 0x");
+        fr_hex(&seen, (unsigned long long)(uintptr_t)query, 16);
+        fr_text(&seen, where == 1 ? " (in the game image)." : where == 2 ? " (in a loaded module)." : " (not code we know).");
+        fr_end(&seen);
+    }
+    if (!where) {
         fr_ready_line("add_ passed no COM handler; nothing kept.");
         return result;
     }
