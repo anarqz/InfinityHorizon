@@ -72,7 +72,6 @@ public sealed partial class ShellViewModel
         var integrityApplies = IntegrityApplies; // OD-113
         var integrity = integrityApplies ? _integrity : null;
         var relayKeys = IntegratedRelayKeys(mm);
-        var relayReports = RelayReports;
         // OD-193 F-2: this account's own profiles get no friend item in the game's PLAYER ACTIONS (read here, on the shell's thread)
         IReadOnlyCollection<string> ownXuids = Profiles.Select(p => p.Xuid).Append(xuid).Where(x => !string.IsNullOrEmpty(x)).ToHashSet(StringComparer.Ordinal);
         return ticket =>
@@ -108,8 +107,6 @@ public sealed partial class ShellViewModel
                 ModName = LobbyModName, // OD-181: the catalog's names of the mods players declare
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
-                RelayReports=relayReports.ReportAsync,
-                ForceRelay=Infinity.Core.Matchmaking.RelayForce.Enabled(Log), // FI_RELAY_FORCE=1 (test switch): joins straight to the relay
                 // OD-154: voice chat's settings and this profile's mute history (voice.json), shown by the overlay
                 Voice = voiceRoom,
                 // CR-S68: the voice_blocked notice's end (GET /core/v1/me/notices), told once per block in the player's language

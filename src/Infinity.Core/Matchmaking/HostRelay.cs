@@ -5,58 +5,15 @@ using System.Net.Sockets;
 
 namespace Infinity.Core.Matchmaking;
 
-/// <summary>The host's relay as the bridge sees it (a fake in tests).</summary>
-public interface IHostRelay : IDisposable
-{
-    /// <summary>The relay's UDP port (the host's game reaches it on loopback; joiners on the LAN).</summary>
-    ushort Port { get; }
-
-    bool Running { get; }
-
-    /// <summary>The XUIDs (decimal) of the players synced in the world now (every lobby: while any but the host's own remain,
-    /// the host's game leaving never closes the world, OD-180.2).</summary>
-    Task<IReadOnlyList<string>> PeersAsync(CancellationToken cancellation);
-
-    /// <summary>Drops a player (the server's <c>kicked</c> punch, the host's moderation).</summary>
-    void Kick(string xuid);
-
-    /// <summary>
-    /// The players synced now in the world's Road Trip and car meets (not its free roam): while there are any, leaving free
-    /// roam never closes the world (OD-148). A relay without those lobbies says 0.
-    /// </summary>
-    int LobbyPlayers => 0;
-
-    /// <summary>The lobbies its world server runs besides free roam (<see cref="LobbyKinds"/>); null: none said (an older relay).</summary>
-    IReadOnlyList<string>? Lobbies => null;
-
-    /// <summary>
-    /// OD-150: what the host's own game runs in this world now (<see cref="WorldActivities"/>); null while unknown (the world's
-    /// activity is then left as it is). A car meet does not change it.
-    /// </summary>
-    string? Activity => null;
-
-    /// <summary>
-    /// AC-2 (MATCHMAKING_API §3.9): measure the other players' cars against <paramref name="rules"/> (null: stop), never
-    /// <paramref name="self"/>'s; each ended episode goes to <paramref name="report"/> (which only queues). A relay without a
-    /// world server of its own ignores it.
-    /// </summary>
-    void Watch(WorldServer.PeerWatchRules? rules, ulong self, Action<WorldServer.PeerWatchReport>? report) { }
-}
-
 /// <summary>
-/// The hosted world's addressing: its default port and the LAN addresses it advertises. The relay
-/// itself is <see cref="IntegratedWorldRelay"/>, inside the launcher; the standalone Rust
-/// <c>infinity-relay.exe</c> (the Beta's <c>dedicated_server</c>) was retired on 2026-10-20 and
-/// kept as reference in deprecated/native-relay.
+/// This PC's LAN addresses, which a seat's network hint carries (SeatNetworkRequest). OD-208: the launcher hosts no world, so the
+/// former host relay's addressing is all that is left of it (the integrated relay and the Rust infinity-relay.exe are gone).
 /// </summary>
 public static class HostRelay
 {
-    public const ushort DefaultPort = 5101;
-
     /// <summary>
-    /// This PC's private IPv4 addresses (RFC 1918), at most 4: the world's <c>endpoint.lan</c>, handed
-    /// only to joiners on the host's public address (MATCHMAKING_API.md §2.5). The server gives a
-    /// joiner the FIRST one, so the adapter with the default gateway comes first, and virtual
+    /// This PC's private IPv4 addresses (RFC 1918), at most 4, for a seat's network hint (the FIRST one is used first), so the
+    /// adapter with the default gateway comes first, and virtual
     /// adapters (Hyper-V / WSL vEthernet, VPNs, VirtualBox, VMware, TAP) are left out.
     /// </summary>
     public static IReadOnlyList<string> LanAddresses()
@@ -85,7 +42,7 @@ public static class HostRelay
     /// The address this PC reaches <paramref name="server"/> from: the local end of a UDP socket
     /// "connected" to it (no packet is sent; the OS just picks the route). Under Wine every Linux
     /// bridge looks like an ordinary adapter (SAURON: docker0, br-*), so this is the robust choice:
-    /// when it is a private IPv4 it is the world's only LAN address; otherwise the ranked list.
+    /// when it is a private IPv4 it is this PC's only LAN address; otherwise the ranked list.
     /// </summary>
     public static IReadOnlyList<string> LanAddresses(Uri server)
     {

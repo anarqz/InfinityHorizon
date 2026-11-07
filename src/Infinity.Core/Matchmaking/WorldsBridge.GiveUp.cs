@@ -30,9 +30,7 @@ public sealed partial class WorldsBridge
     private SeatTaken? _seatTaken;
     // the grant that started playing (the hook's join event, or its direct/relay report); a seat that played is never given up
     private string? _seatPlayedGrant;
-    // the grant whose relay the hook reported unreachable (the give-up's reason)
-    private string? _unreachableGrant;
-    // the grant given up or dropped unproven: no relay leg is pushed for it again
+    // the grant given up or dropped unproven: an accepted invite's move into it ends (InviteAccept)
     private string? _givenUpGrant;
     private CancellationTokenSource? _giveUp;
 
@@ -121,8 +119,6 @@ public sealed partial class WorldsBridge
     private string GiveUpReason(string grant)
     {
         if (NeedsProof && !ProofInstalled) return "no proof";
-        if (Volatile.Read(ref _unreachableGrant) == grant || Volatile.Read(ref _refusedGrant) == grant || Volatile.Read(ref _fallbackGrant) == grant)
-            return "no route";
         return "the game never connected";
     }
 
