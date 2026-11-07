@@ -73,6 +73,12 @@
 //        str gamertag (1..64 B), u8 state (0 available, 1 in this lobby, 2 invited: pending, 3 offline)}}; friends only
 //   0x26 FriendPickerAsk, overlay -> launcher {}: the Private Lobby pane's Invite friends (the launcher answers 0x25 or a notice)
 //   0x27 InviteSend, overlay -> launcher {str xuid}: an available friend chosen; the launcher answers one notice and a fresh 0x25
+// Protocol 8 (OD-210, CR-S101 MATCHMAKING_API §2.11, W14): the private lobby's "Who can join"
+//   0x28 LobbyJoinModes, launcher -> overlay {str worldId (<= 64 B; empty: no private lobby, modes 0 and offered 0), u8 modes (0 Everyone,
+//        1 Hardcore only, 2 Noob only: WorldView.modes), u8 offered (bit n: choice n is offered; bit 0 always with a world; FM5: no
+//        Hardcore)}, sent after every 0x0E MyWorld
+//   0x29 JoinModesSet, overlay -> launcher {u8 modes}: the current leader's choice (PUT /mm/v1/worlds/{id}/modes); the launcher answers
+//        one notice and a fresh 0x28. New joins only: players already in the lobby stay
 // Additive fields of older frames (an older reader ignores them):
 //   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
@@ -88,7 +94,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 7;
+constexpr uint16_t kUiProtocol = 8;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
@@ -683,6 +689,50 @@ inline bool DecodeInviteSend(const uint8_t *body, size_t size, std::string &xuid
     if (r.ok && !PickerXuid(x)) r.ok = false;
     if (!r.Done()) return false;
     xuid = std::move(x);
+    return true;
+}
+
+// ---------------------------------------------------------------- protocol 8: "Who can join" (OD-210, CR-S101, W14)
+enum : uint8_t { kJoinEveryone = 0, kJoinHardcoreOnly = 1, kJoinNoobOnly = 2, kJoinModesMax = kJoinNoobOnly };
+constexpr uint8_t kOfferEveryone = 1, kOfferHardcore = 2, kOfferNoob = 4, kOfferAll = kOfferEveryone | kOfferHardcore | kOfferNoob;
+struct LobbyJoinModesFrame {
+    std::string world; // the private lobby it belongs to; empty: none
+    uint8_t modes = kJoinEveryone;
+    uint8_t offered = 0;
+    bool Offers(uint8_t choice) const { return choice <= kJoinModesMax && (offered & (1u << choice)) != 0; }
+};
+// Strict, as the launcher writes it (UiFrame.LobbyJoinModes.Validate).
+inline bool DecodeLobbyJoinModes(const uint8_t *body, size_t size, LobbyJoinModesFrame &out) {
+    wire::Reader r{body, size};
+    LobbyJoinModesFrame f;
+    f.world = r.Text(kMaxPaneId);
+    f.modes = r.U8();
+    f.offered = r.U8();
+    if (r.ok && (f.modes > kJoinModesMax || f.offered > kOfferAll)) r.ok = false;
+    if (r.ok && f.world.empty() && (f.modes != kJoinEveryone || f.offered != 0)) r.ok = false;
+    if (r.ok && !f.world.empty() && (f.offered & kOfferEveryone) == 0) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(f);
+    return true;
+}
+inline std::vector<uint8_t> EncodeLobbyJoinModes(const LobbyJoinModesFrame &f) {
+    std::vector<uint8_t> b;
+    wire::Str(b, f.world);
+    wire::U8(b, f.modes);
+    wire::U8(b, f.offered);
+    return b;
+}
+inline std::vector<uint8_t> EncodeJoinModesSet(uint8_t modes) {
+    std::vector<uint8_t> b;
+    wire::U8(b, modes > kJoinModesMax ? kJoinEveryone : modes);
+    return b;
+}
+inline bool DecodeJoinModesSet(const uint8_t *body, size_t size, uint8_t &modes) {
+    wire::Reader r{body, size};
+    const uint8_t m = r.U8();
+    if (r.ok && m > kJoinModesMax) r.ok = false;
+    if (!r.Done()) return false;
+    modes = m;
     return true;
 }
 

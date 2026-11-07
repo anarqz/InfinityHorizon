@@ -984,6 +984,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
                 }
                 ObserveNoticeWorld(world); // OD-160's notice: the world's modes and transport
+                ObserveJoinModes(world); // OD-210 (W14): the private lobby's "Who can join"
                 ObserveActivity(seat);
                 CrashContext?.ObserveWorld(role is UiWorldRole.Hosting or UiWorldRole.Seated ? new(seat.WorldId, world.Audience, Now, named,
                     members.Take(12).Select(m => new CrashParticipant(m.Xuid, m.Gamertag,

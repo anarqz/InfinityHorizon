@@ -1167,6 +1167,10 @@ public sealed class PlaySupervisor
                                 // T-L4: a friend chosen in the picker: one invite, one notice, the picker refreshed
                                 _ = InviteSendAsync(worlds, overlay, send.Request.Xuid, onlineStop.Token);
                                 break;
+                            case Overlay.UiIncoming.JoinModesSet joinModes when worlds is not null && !suspended:
+                                // OD-210 (CR-S101, W14): the private lobby's leader chose who can join; one notice, the lobby again
+                                _ = JoinModesSetAsync(worlds, overlay, joinModes.Request.Modes, onlineStop.Token);
+                                break;
                             case Overlay.UiIncoming.Panel panel:
                                 _config.OverlayStatus?.Panel(panel.Open);
                                 break;
@@ -1215,6 +1219,7 @@ public sealed class PlaySupervisor
                                     .ContinueWith(async _ =>
                                     {
                                         await overlay.SendIfAcceptedAsync(worlds.RosterModsFrame(), stop.Token).ConfigureAwait(false);
+                                        await overlay.SendIfAcceptedAsync(worlds.JoinModesFrame(), stop.Token).ConfigureAwait(false); // OD-210 (protocol 8)
                                         if (worlds.VoiceFrame() is { } voice) await overlay.SendFrameAsync(voice, stop.Token).ConfigureAwait(false);
                                     }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
                                 break;
@@ -1382,6 +1387,25 @@ public sealed class PlaySupervisor
     }
 
     /// <summary>
+    /// OD-210 (CR-S101, W14): the private lobby's "Who can join" from its leader: one <c>PUT …/modes</c>, one notice, then the lobby
+    /// and its control as they are now (a changed one at once, the refused one as it was).
+    /// </summary>
+    private async Task JoinModesSetAsync(Matchmaking.WorldsBridge worlds, OverlayChannel overlay, byte choice, CancellationToken cancellation)
+    {
+        try
+        {
+            if (await worlds.SetJoinModesAsync(choice, cancellation).ConfigureAwait(false) is not { } answer) return;
+            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
+            await overlay.ToastAsync(answer.Notice, cancellation).ConfigureAwait(false);
+            await overlay.SendIfAcceptedAsync(answer.Frame ?? worlds.JoinModesFrame(), cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException or InvalidOperationException or HttpRequestException)
+        {
+            if (!cancellation.IsCancellationRequested) _emit(new SupervisorEvent.Note("worlds: who can join: not answered (" + error.GetType().Name + ")"));
+        }
+    }
+
+    /// <summary>
     /// T-L4: the player's answer to an invite prompt (Decline: the decline route). T-L5: Accept goes to the bridge
     /// (<see cref="Matchmaking.WorldsBridge.AcceptInviteAsync"/>: the join, the proof, FollowHost), and the prompt is withdrawn whatever
     /// the outcome (an accept that could not be served now comes back later from the inbox).
@@ -1422,6 +1446,7 @@ public sealed class PlaySupervisor
                 var mine = await worlds.PollMyWorldAsync(cancellation).ConfigureAwait(false);
                 await overlay.SendFrameAsync(mine, cancellation).ConfigureAwait(false);
                 await overlay.SendIfAcceptedAsync(worlds.RosterModsFrame(), cancellation).ConfigureAwait(false); // OD-181
+                await overlay.SendIfAcceptedAsync(worlds.JoinModesFrame(), cancellation).ConfigureAwait(false); // OD-210 (W14)
                 foreach (var toast in worlds.LobbyToasts()) await overlay.ToastAsync(toast, cancellation).ConfigureAwait(false);
                 await worlds.FollowHostAsync(cancellation).ConfigureAwait(false);
                 await worlds.WatchTickAsync(cancellation).ConfigureAwait(false); // AC-2: rules to the hook or world server, observations posted

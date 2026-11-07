@@ -55,6 +55,30 @@ inline InviteGate InviteGateOf(const MyWorld &m) {
     return self && !self->xuid.empty() && self->xuid == m.leader ? InviteGate::Allowed : InviteGate::NotLeader;
 }
 
+// OD-210 (CR-S101 §2.11, W14): the Private Lobby pane's "Who can join" (0x28 LobbyJoinModes). Shown in a private lobby once the
+// launcher said its value for this very world; only the current leader may change it (the invite rule above, InviteGateOf), everyone
+// else sees it read-only. A change applies to new joins only: nobody already in the lobby is removed (kicking stays the leader's).
+enum class JoinModesGate : uint8_t {
+    Allowed,    // this player leads: A moves to the next offered choice (0x29)
+    Hidden,     // not a private lobby, or its value not known yet for this world: no control
+    ReadOnly,   // another player leads, or the leader is not known: shown, disabled
+};
+
+inline JoinModesGate JoinModesGateOf(const MyWorld &m, const LobbyJoinModesFrame &j) {
+    if (LobbyKindOf(m) != LobbyKind::Private || j.world.empty() || j.world != m.world) return JoinModesGate::Hidden;
+    return InviteGateOf(m) == InviteGate::Allowed ? JoinModesGate::Allowed : JoinModesGate::ReadOnly;
+}
+
+// The choice after the current one, among the offered ones (Everyone, Hardcore only, Noob only, then Everyone again; FM5 skips
+// Hardcore). The current one when nothing else is offered.
+inline uint8_t NextJoinModes(const LobbyJoinModesFrame &j) {
+    for (uint8_t step = 1; step <= kJoinModesMax + 1; ++step) {
+        const uint8_t c = static_cast<uint8_t>((j.modes + step) % (kJoinModesMax + 1));
+        if (j.Offers(c)) return c;
+    }
+    return j.modes;
+}
+
 // The notice rule: true when a toast with these flags shows now.
 inline bool ToastShows(bool in_official_lobby, uint8_t flags) { return !in_official_lobby || (flags & kToastAlways) != 0; }
 

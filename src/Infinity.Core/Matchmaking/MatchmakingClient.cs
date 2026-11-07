@@ -75,6 +75,14 @@ public interface IMatchmakingApi
     Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, string idempotencyKey, CancellationToken cancellation) =>
         InviteAsync(worldId, xuid, cancellation);
 
+    /// <summary>
+    /// OD-210 (CR-S101, MATCHMAKING_API §2.11, W14): <c>PUT /mm/v1/worlds/{worldId}/modes</c> <see cref="WorldJoinModes"/> → 200
+    /// <see cref="WorldView"/>: who may join a private official world from now on; its current leader only (else 409 <c>not_leader</c>).
+    /// A test double without it refuses.
+    /// </summary>
+    Task<MmResult<WorldView>> SetWorldModesAsync(string worldId, string modes, CancellationToken cancellation = default) =>
+        throw new NotSupportedException("world join modes");
+
     Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default);
 
     /// <summary>OD-112: a request to join with the caller's mod set (null: vanilla, no body).</summary>
@@ -275,6 +283,16 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
         ArgumentException.ThrowIfNullOrEmpty(xuid);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
         return SendAsync<Invite>(HttpMethod.Post, World(worldId) + "/invites", new InviteRequest { Xuid = xuid }, cancellation, idempotencyKey);
+    }
+
+    /// <summary>
+    /// OD-210 (CR-S101 §2.11, W14): <c>PUT /mm/v1/worlds/{worldId}/modes {modes}</c>, one of <see cref="WorldModes"/>; anything else
+    /// throws before sending. Idempotent by state (the same modes again answers the same <see cref="WorldView"/>).
+    /// </summary>
+    public Task<MmResult<WorldView>> SetWorldModesAsync(string worldId, string modes, CancellationToken cancellation = default)
+    {
+        if (modes is null || !WorldModes.All.Contains(modes)) throw new ArgumentException("one of any, hardcore, noob", nameof(modes));
+        return SendAsync<WorldView>(HttpMethod.Put, World(worldId) + "/modes", new WorldJoinModes { Modes = modes }, cancellation);
     }
 
     public Task<MmResult<Invite>> RequestAsync(string worldId, CancellationToken cancellation = default) =>

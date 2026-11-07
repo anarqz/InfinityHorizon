@@ -52,6 +52,9 @@
 // refreshes the friend picker (friend_picker.cpp); 0x26 FriendPickerAsk is the Private Lobby pane's Invite friends; 0x27 InviteSend
 // carries the chosen friend's XUID.
 //
+// Protocol 8 (OD-210, CR-S101, W14; layouts in ui_frames.h, the rule in lobby_policy.h): 0x28 LobbyJoinModes from the launcher is the
+// private lobby's "Who can join" (after every 0x0E); 0x29 JoinModesSet carries the leader's choice.
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
@@ -119,6 +122,12 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         InvitePromptFrame prompt;
         if (DecodeInvitePrompt(body, size, prompt)) SetInvitePrompt(prompt);
         else Log("ui pipe: malformed InvitePrompt ignored");
+        break;
+    }
+    case 0x28: { // protocol 8 (OD-210, W14): the private lobby's "Who can join"
+        LobbyJoinModesFrame modes;
+        if (DecodeLobbyJoinModes(body, size, modes)) SetLobbyJoinModes(std::move(modes));
+        else Log("ui pipe: malformed LobbyJoinModes ignored");
         break;
     }
     case 0x25: { // protocol 7 (T-L4): the friend picker
@@ -388,6 +397,8 @@ void SendInviteAnswer(const std::string &invite, bool accept) { Queue(0x24, Enco
 void SendFriendPickerAsk() { Queue(0x26, {}); }
 
 void SendInviteSend(const std::string &xuid) { Queue(0x27, EncodeInviteSend(xuid)); }
+
+void SendJoinModesSet(uint8_t modes) { Queue(0x29, EncodeJoinModesSet(modes)); }
 
 } // namespace fi
 

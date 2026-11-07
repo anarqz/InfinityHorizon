@@ -72,14 +72,15 @@ public enum UiDirection
 /// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
 /// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5; 0x23-0x24: the private lobby's invite
 /// prompt and its answer, OD-204 T-L3, protocol 6; 0x25-0x27: the private lobby's friend picker and its invite, OD-204 T-L4,
-/// protocol 7; native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
+/// protocol 7; 0x28-0x29: the private lobby's "Who can join", OD-210 CR-S101 W14, protocol 8; native/overlay/src/ui_frames.h and
+/// pipe.cpp are the other end). The hook
 /// never sees it. T-L3 reserved the player-hosting frames (0x07-0x0C, 0x14, 0x15, WorldAction 1/3, VoiceOp 1/6): a T-L3 overlay
 /// never sends them and ignores them, and this launcher still codes and answers them (its hosting code goes with T-L8).
 /// </summary>
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 7;
+    public const ushort ProtocolVersion = 8;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -116,8 +117,11 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 7 (the private lobby's friend picker, OD-204 T-L4).</summary>
     public const byte FirstProtocol7Type = 0x25;
 
+    /// <summary>The lowest type that needs protocol 8 (the private lobby's "Who can join", OD-210, CR-S101, W14).</summary>
+    public const byte FirstProtocol8Type = 0x28;
+
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x27;
+    public const byte LastType = 0x29;
 
     /// <summary>T-L4: the most friends one <see cref="FriendPicker"/> lists (the launcher keeps the first ones, available ones first).</summary>
     public const int MaxPickerFriends = 100;
@@ -721,6 +725,47 @@ public abstract record UiFrame
         internal void Validate() => CheckXuid(Xuid, "invite xuid");
     }
 
+    /// <summary>
+    /// 0x28, launcher → overlay (protocol 8, OD-210, CR-S101 §2.11, W14): the private lobby's "Who can join", sent after every
+    /// <see cref="MyWorld"/>. <c>WorldId</c> the private official world it belongs to (empty: none, nothing shown); <c>Modes</c>
+    /// <see cref="UiJoinModes"/> as <c>WorldView.modes</c> says; <c>Offered</c> the choices the world's game has
+    /// (<see cref="UiJoinModes.OfferedOf"/>: FM5 has no Hardcore). The overlay lets only the current leader change it (the invite rule).
+    /// </summary>
+    public sealed record LobbyJoinModes(string WorldId, byte Modes, byte Offered) : UiFrame
+    {
+        public override byte Type => 0x28;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        /// <summary>No private lobby: the overlay shows no control.</summary>
+        public static LobbyJoinModes None { get; } = new(string.Empty, UiJoinModes.Everyone, 0);
+
+        internal void Validate()
+        {
+            Limit(WorldId, MaxPaneId, "join modes world");
+            if (Modes > UiJoinModes.Max || Offered > UiJoinModes.OfferAll) throw new ProtocolException("invalid join modes");
+            if (WorldId.Length == 0 && (Modes != UiJoinModes.Everyone || Offered != 0)) throw new ProtocolException("no world has no join modes");
+            if (WorldId.Length != 0 && (Offered & UiJoinModes.OfferEveryone) == 0) throw new ProtocolException("Everyone is always offered");
+        }
+    }
+
+    /// <summary>
+    /// 0x29, overlay → launcher (protocol 8, OD-210, CR-S101, W14): the private lobby's leader chose who can join from now on
+    /// (<see cref="UiJoinModes"/>): <c>PUT /mm/v1/worlds/{worldId}/modes</c>; the launcher answers one notice, a fresh <see cref="MyWorld"/>
+    /// and <see cref="LobbyJoinModes"/>. Players already in the lobby stay.
+    /// </summary>
+    public sealed record JoinModesSet(byte Modes) : UiFrame
+    {
+        public override byte Type => 0x29;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate()
+        {
+            if (Modes > UiJoinModes.Max) throw new ProtocolException("invalid join modes");
+        }
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -1087,6 +1132,16 @@ public abstract record UiFrame
                 s.Validate();
                 w.Str(s.Xuid);
                 break;
+            case LobbyJoinModes j: // OD-210 (W14)
+                j.Validate();
+                w.Str(j.WorldId);
+                w.U8(j.Modes);
+                w.U8(j.Offered);
+                break;
+            case JoinModesSet s:
+                s.Validate();
+                w.U8(s.Modes);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -1169,14 +1224,16 @@ public abstract record UiFrame
             0x24 => new InviteAnswer(r.Str(), r.Flag("InviteAnswer.accept")),
             0x25 => DecodePicker(ref r),
             0x26 => new FriendPickerAsk(),
-            _ => new InviteSend(r.Str()),
+            0x27 => new InviteSend(r.Str()),
+            0x28 => new LobbyJoinModes(r.Str(), r.U8(), r.U8()),
+            _ => new JoinModesSet(r.U8()),
         };
         r.End();
         switch (frame)
         {
             case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
                 or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast
-                or FriendPicker or InviteSend:
+                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1412,6 +1469,52 @@ public abstract record UiIncoming
 
     /// <summary>Protocol 7 (OD-204 T-L4): a friend chosen in the picker: invite it, then one notice and the refreshed picker.</summary>
     public sealed record InviteSend(UiFrame.InviteSend Request) : UiIncoming;
+
+    /// <summary>Protocol 8 (OD-210, CR-S101, W14): the private lobby's leader chose who can join; one notice, then the lobby again.</summary>
+    public sealed record JoinModesSet(UiFrame.JoinModesSet Request) : UiIncoming;
+}
+
+/// <summary>
+/// OD-210 (CR-S101 §2.11, W14): the private lobby's "Who can join" on the pipe (<see cref="UiFrame.LobbyJoinModes"/>,
+/// <see cref="UiFrame.JoinModesSet"/>) and its <c>WorldView.modes</c> / <c>WorldJoinModes.modes</c> values.
+/// </summary>
+public static class UiJoinModes
+{
+    /// <summary>Everyone (<c>any</c>), the default of every private lobby.</summary>
+    public const byte Everyone = 0;
+
+    /// <summary>Hardcore only (<c>hardcore</c>).</summary>
+    public const byte HardcoreOnly = 1;
+
+    /// <summary>Noob only (<c>noob</c>).</summary>
+    public const byte NoobOnly = 2;
+
+    public const byte Max = NoobOnly;
+
+    /// <summary><see cref="UiFrame.LobbyJoinModes.Offered"/>: one bit per choice (bit n is choice n).</summary>
+    public const byte OfferEveryone = 1, OfferHardcore = 2, OfferNoob = 4, OfferAll = OfferEveryone | OfferHardcore | OfferNoob;
+
+    /// <summary>A <c>WorldView.modes</c> (or, from an older server, its <c>mode</c>) as a choice; anything else reads as Everyone.</summary>
+    public static byte Of(string? modes) => modes switch
+    {
+        Matchmaking.WorldModes.Hardcore => HardcoreOnly,
+        Matchmaking.WorldModes.Noob => NoobOnly,
+        _ => Everyone,
+    };
+
+    /// <summary>The <c>WorldJoinModes.modes</c> the route takes for a choice.</summary>
+    public static string ToServer(byte choice) => choice switch
+    {
+        HardcoreOnly => Matchmaking.WorldModes.Hardcore,
+        NoobOnly => Matchmaking.WorldModes.Noob,
+        _ => Matchmaking.WorldModes.Any,
+    };
+
+    /// <summary>The choices a game's world has (CR-S101): FM5 has no Hardcore (the server answers 400 <c>modes</c>), FH2 all three.</summary>
+    public static byte OfferedOf(string? game) => game == "fm5" ? (byte)(OfferEveryone | OfferNoob) : OfferAll;
+
+    /// <summary>Whether <paramref name="choice"/> is offered in <paramref name="offered"/>.</summary>
+    public static bool Offers(byte offered, byte choice) => choice <= Max && (offered & (1 << choice)) != 0;
 }
 
 /// <summary><see cref="UiFrame.FriendPicker"/>'s flags (T-L4).</summary>
@@ -1842,7 +1945,8 @@ public sealed class UiSession
         ArgumentNullException.ThrowIfNull(frame);
         return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
             && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5)
-            && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6) && (frame.Type < UiFrame.FirstProtocol7Type || Protocol >= 7);
+            && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6) && (frame.Type < UiFrame.FirstProtocol7Type || Protocol >= 7)
+            && (frame.Type < UiFrame.FirstProtocol8Type || Protocol >= 8);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1880,7 +1984,8 @@ public sealed class UiSession
         }
         if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
             || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5
-            || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6 || frame.Type >= UiFrame.FirstProtocol7Type && Protocol < 7)
+            || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6 || frame.Type >= UiFrame.FirstProtocol7Type && Protocol < 7
+            || frame.Type >= UiFrame.FirstProtocol8Type && Protocol < 8)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }
@@ -1889,6 +1994,7 @@ public sealed class UiSession
             UiFrame.UiHello => throw new ProtocolException("second UiHello"),
             UiFrame.FriendPickerAsk => new UiIncoming.PickerAsk(),
             UiFrame.InviteSend s => new UiIncoming.InviteSend(s),
+            UiFrame.JoinModesSet m => new UiIncoming.JoinModesSet(m),
             UiFrame.InviteAnswer a => new UiIncoming.InviteAnswer(a),
             UiFrame.PlayerStateQuery q => new UiIncoming.PlayerStateAsk(q),
             UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),
