@@ -1,0 +1,38 @@
+--- a/adapters/azimuth.c
++++ b/adapters/azimuth.c
+@@ -10,6 +10,9 @@
+ #endif
+ 
+ #define FH2_TITLE_ID 0x1a96545bu
++/* ExtraOptions.Infinity (OD-206): FM5 reaches the Infinity hook and nothing else here. Upstream's
++   FH2_ENABLE_FM5 (features/fm5.c, which forces OfflineVIP) stays off. */
++#define FI_FM5_TITLE_ID 0x7b35d917u
+ 
+ typedef struct {
+     AzimuthBuild build;
+@@ -140,7 +143,7 @@ static unsigned package_title(const void *package) {
+ }
+ 
+ static int supported_title(unsigned title) {
+-    if (title == FH2_TITLE_ID) return 1;
++    if (title == FH2_TITLE_ID || title == FI_FM5_TITLE_ID) return 1;
+ #ifdef FH2_ENABLE_FM5
+     if (title == FM5_TITLE_ID) return 1;
+ #endif
+@@ -232,7 +235,15 @@ static void *on_map_game(void *output, const void *folder, const void *package,
+                 notify_refusal();
+         } else
+ #endif
+-        if (!mapped ||
++        if (title == FI_FM5_TITLE_ID) {
++            /* Never FH2's runtime, settings, save adapter or DLL loader: fi_eo_game_mapped checks the
++               image against the build it knows and refuses any other. */
++            if (!mapped) {
++                refuse("REFUSED: Azimuth's mapped game could not be read. No game patches applied.");
++            } else {
++                fi_eo_game_mapped(game, mod_instance);
++            }
++        } else if (!mapped ||
+             !memory_read(game, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
+             dos.e_lfanew < 64 || dos.e_lfanew > 4096 ||
+             !memory_read(game + dos.e_lfanew, &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
