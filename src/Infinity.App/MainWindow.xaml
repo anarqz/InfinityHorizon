@@ -877,14 +877,30 @@
           </ScrollViewer>
 
           <!-- Choose a game. -->
-          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="460"
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="900"
                       Visibility="{Binding ShowPickGame, Converter={StaticResource Visible}}">
-            <TextBlock Text="{Binding S[shell.pick_game]}" Style="{StaticResource PageTitle}" Margin="0,0,0,18" />
-            <ItemsControl ItemsSource="{Binding Games}">
+            <TextBlock Text="{Binding S[shell.pick_game]}" Style="{StaticResource PageTitle}" Margin="10,0,10,18" />
+            <ItemsControl ItemsSource="{Binding GameCards}" Focusable="False">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <WrapPanel HorizontalAlignment="Center" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Button Content="{Binding Title}" Margin="0,5" Padding="20,16" FontSize="16" FontWeight="Bold"
-                          HorizontalContentAlignment="Left" IsEnabled="{Binding Accepting}" Click="OnChooseGame" />
+                  <!-- OD-206: the game's own tile, from the folder data\azimuth.ini names. -->
+                  <Button Margin="10" Padding="0" Width="280" IsEnabled="{Binding Info.Accepting}" Click="OnChooseGame"
+                          AutomationProperties.Name="{Binding Title}" HorizontalContentAlignment="Stretch" ToolTip="{Binding Title}">
+                    <StackPanel>
+                      <Grid Height="280" Background="{StaticResource InfinitySurface}" ClipToBounds="True">
+                        <TextBlock Text="{Binding Title}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" TextAlignment="Center"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" Foreground="{StaticResource InfinityBorder}" />
+                        <Image Source="{Binding Cover}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               RenderOptions.BitmapScalingMode="HighQuality" />
+                      </Grid>
+                      <TextBlock Text="{Binding Title}" Margin="14,12" FontSize="16" FontWeight="Bold" TextTrimming="CharacterEllipsis" TextAlignment="Center" />
+                    </StackPanel>
+                  </Button>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>

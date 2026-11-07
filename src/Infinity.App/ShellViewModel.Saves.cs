@@ -66,7 +66,7 @@ public sealed partial class ShellViewModel
         IReadOnlyList<SaveProfile> saves;
         try
         {
-            saves = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root), AzimuthSaves.FolderFor(xuid));
+            saves = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -115,7 +115,7 @@ public sealed partial class ShellViewModel
             Message = S["saves.game_running"];
             return;
         }
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
+        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         if (ParseXuid(target) is not { } xuid)
         {
             return;

@@ -302,7 +302,7 @@ public sealed partial class ShellViewModel
         }
         Log("seed: reading the source's newest sealed revision on this PC");
         Message = S["seed.checking"];
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
+        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         PackedRevision? packed;
         try { packed = await Task.Run(() => ProfileSeed.ReadSource(savesRoot, sourceXuid)); }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
@@ -351,7 +351,7 @@ public sealed partial class ShellViewModel
         if (_seedOffer is not { Result.Outcome: SeedCheckOutcome.Accepted } offer) return;
         if (Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
         if (_install is null || CloudSaveClient() is not { } client || ParseXuid(offer.Target) is not { } targetXuid || ParseXuid(offer.Source) is not { } sourceXuid) return;
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
+        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         var adopted = false;
         await Run(async () =>
         {

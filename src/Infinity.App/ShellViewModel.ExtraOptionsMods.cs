@@ -168,6 +168,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<IModSetSource?> ExtraOptionsModSetAsync(AzimuthInstall install, DateTime launchUtc)
     {
+        if (!CurrentGame.FullFeatures) return VanillaModSet.Instance;
         var cosmetic = HardcoreSafeFolders(); var exempt = ParityExemptionsNow;
         try
         {

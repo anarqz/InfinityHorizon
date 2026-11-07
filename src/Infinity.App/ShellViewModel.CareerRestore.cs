@@ -37,7 +37,7 @@ public sealed partial class ShellViewModel
                 || !ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)) return false;
             try
             {
-                var root = AzimuthSaves.SavesRoot(_install.Root);
+                var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
                 return FreshStartArchives.ArchiveNames(root, xuid).Count > 0
                     || (CloudSaveClient() is { } client && RestoreUndo.Unsettled(client.Saves, root, xuid)); // the way out stays reachable
             }
@@ -84,7 +84,7 @@ public sealed partial class ShellViewModel
     /// <summary>An undo is owed and could not be paid: "Keep this career on this PC" is offered, so the player is never trapped.</summary>
     public bool CanKeepRestoredCareer => _restoreWaiting is { } profile && _install is not null && CloudSaveClient() is { } client
         && ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)
-        && RestoreUndo.Stuck(client.Saves, AzimuthSaves.SavesRoot(_install.Root), xuid);
+        && RestoreUndo.Stuck(client.Saves, AzimuthSaves.SavesRoot(_install.Root, CurrentGame), xuid);
 
     /// <summary>"Keep this career on this PC": the debt and the restore record go; the save follows the normal rules (nothing deleted).</summary>
     public void KeepRestoredCareer()
@@ -101,7 +101,7 @@ public sealed partial class ShellViewModel
     {
         if (_install is null || CloudSaveClient() is not { } client || ChosenProfile is not { Mode: "hardcore" } profile
             || !ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)
-            || !RestoreUndo.Unsettled(client.Saves, AzimuthSaves.SavesRoot(_install.Root), xuid)) return;
+            || !RestoreUndo.Unsettled(client.Saves, AzimuthSaves.SavesRoot(_install.Root, CurrentGame), xuid)) return;
         Log("restore: the Play stopped while the restored career waits for the cloud: offering to set it aside");
         _restoreWaiting = profile;
         Changed(string.Empty);
@@ -123,7 +123,7 @@ public sealed partial class ShellViewModel
         if (_restoreWaiting is not { } profile || _session is not { } session || CloudSaveClient() is not { } client || _install is null
             || ParseXuid(profile) is not { } xuid) return;
         if (Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
+        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         await Run(async () =>
         {
             var result = RestoreUndo.SetAsideResult.NotUndone;
@@ -159,7 +159,7 @@ public sealed partial class ShellViewModel
     {
         if (_install is not null && CloudSaveClient() is { } waiting && ChosenProfile is { Mode: "hardcore" } chosen
             && ulong.TryParse(chosen.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var chosenXuid)
-            && RestoreUndo.Unsettled(waiting.Saves, AzimuthSaves.SavesRoot(_install.Root), chosenXuid))
+            && RestoreUndo.Unsettled(waiting.Saves, AzimuthSaves.SavesRoot(_install.Root, CurrentGame), chosenXuid))
         {
             _restoreWaiting = chosen; // a restore is pending (or its undo owed): the way out, not a second restore
             Changed(string.Empty);
@@ -167,7 +167,7 @@ public sealed partial class ShellViewModel
         }
         if (!CanRestoreCareer || ChosenProfile is not { Mode: "hardcore" } profile || _session is not { } session || CloudSaveClient() is not { } client
             || _install is null || ParseXuid(profile) is not { } xuid) return Task.CompletedTask;
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
+        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         return Run(async () =>
         {
             SaveHead? head;
@@ -218,7 +218,7 @@ public sealed partial class ShellViewModel
         _restorePick = row;
         _restoreUnsent = _install is not null && CloudSaveClient() is { } client
             && ulong.TryParse(_restoreProfile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)
-            && CareerRestore.HasUnsentProgress(client.Saves, AzimuthSaves.SavesRoot(_install.Root), xuid);
+            && CareerRestore.HasUnsentProgress(client.Saves, AzimuthSaves.SavesRoot(_install.Root, CurrentGame), xuid);
         Changed(string.Empty);
     }
 
@@ -245,7 +245,7 @@ public sealed partial class ShellViewModel
         if (_restoreProfile is not { } profile || _restorePick is not { } pick || _session is not { } session || CloudSaveClient() is not { } client
             || _install is null || ParseXuid(profile) is not { } xuid) return;
         if (Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root);
+        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         await Run(async () =>
         {
             Message = S["restore.checking"];

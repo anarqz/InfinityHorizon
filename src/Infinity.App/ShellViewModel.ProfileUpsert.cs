@@ -187,7 +187,7 @@ public sealed partial class ShellViewModel
     private string ContinueNoobSave(LocalProfile profile)
     {
         if (_install is not { } install) return "";
-        var outcome = ProfileUpsert.ContinueOfflineSave(AzimuthSaves.SavesRoot(install.Root), _stateDirectory, profile, DateTime.UtcNow);
+        var outcome = ProfileUpsert.ContinueOfflineSave(AzimuthSaves.SavesRoot(install.Root, CurrentGame), _stateDirectory, profile, DateTime.UtcNow);
         Log("profiles: offline save of " + profile.Id + ": " + outcome);
         return outcome switch
         {

@@ -119,7 +119,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync(bool hardcore = false)
     {
-        if (ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
+        if (!CurrentGame.FullFeatures || ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
         ModLaunchPreparation prepared;
         for (var attempt = 0; ; attempt++)
         {

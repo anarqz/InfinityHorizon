@@ -192,7 +192,7 @@ public partial class MainWindow : Window
 
     private async void OnCreateAccount(object sender, RoutedEventArgs e) => await _vm.CreateAccountAsync();
 
-    private void OnChooseGame(object sender, RoutedEventArgs e) => _vm.ChooseGame((GameInfo)((FrameworkElement)sender).DataContext);
+    private void OnChooseGame(object sender, RoutedEventArgs e) => _vm.ChooseGame(((GameCard)((FrameworkElement)sender).DataContext).Info);
 
     private async void OnConvertProfile(object sender, RoutedEventArgs e) => await _vm.AskConvertAsync(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
 

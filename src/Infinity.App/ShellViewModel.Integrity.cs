@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text.Json;
 using Infinity.Core.Api;
 using Infinity.Core.Integrity;
+using Infinity.Core.Process;
 using Infinity.Core.Matchmaking;
 using Infinity.Core.Session;
 using Infinity.Core.Supervisor;
@@ -33,7 +34,7 @@ public sealed partial class ShellViewModel
     {
         // CR-S51: the server says per profile (contentRequired); a server before CR-S51 leaves it out, which means OD-52's rule
         // (that older server's own Supporter + Hardcore admission; CR-S69 keeps the fallback so Play matches what it enforces)
-        get { var applies = LobbyProfile?.ContentRequired ?? IntegrityPolicy.Applies(_session?.Me?.Access.Tier, LobbyProfile?.Mode); InspectIntegrityApplies(ref applies); return applies; }
+        get { var applies = CurrentGame.FullFeatures && (LobbyProfile?.ContentRequired ?? IntegrityPolicy.Applies(_session?.Me?.Access.Tier, LobbyProfile?.Mode)); InspectIntegrityApplies(ref applies); return applies; }
     }
     partial void InspectIntegrityApplies(ref bool applies);
 
@@ -44,11 +45,19 @@ public sealed partial class ShellViewModel
     private bool IntegrityConfigurationReady => !IntegrityPolicy.NeedsConfiguration(IntegrityApplies, ContentLocation is not null,
         IntegrityMismatch ? InstallationState.Incompatible : null);
 
+    private GameDefinition? _contentLocationGame;
+
     private GameContentLocation? ContentLocation
     {
         get
         {
-            if (!_contentLocationLoaded) { _contentLocation = GameContentLocation.Load(_stateDirectory, StateRoot); _contentLocationLoaded = true; }
+            if (!_contentLocationLoaded)
+            {
+                var game = CurrentGame;
+                _contentLocation = game.FullFeatures ? GameContentLocation.Load(_stateDirectory, StateRoot) : GameContentLocation.Load(_stateDirectory, StateRoot, game) ?? IniContentLocation(game);
+                _contentLocationGame = game;
+                _contentLocationLoaded = true;
+            }
             return _contentLocation;
         }
     }
@@ -77,13 +86,14 @@ public sealed partial class ShellViewModel
         if (!CanChooseContent) return;
         VerificationCache.Invalidate();
         ClearIntegrity();
-        var location = GameContentLocation.Detect(folder);
+        var game = CurrentGame;
+        var location = GameContentLocation.Detect(folder, game);
         // Refused where the player is looking too (the message bar), not only on the Configure card.
         if (location is null) { _configurationHasError = true; _integrityFailed = true; _integrityStatus = S["integrity.invalid_content"]; Message = _integrityStatus; Changed(string.Empty); return; }
         try
         {
-            location.Save(_stateDirectory, StateRoot);
-            ClearIntegrity(); _contentLocation = location; _contentLocationLoaded = true;
+            location.Save(_stateDirectory, StateRoot, game);
+            ClearIntegrity(); _contentLocation = location; _contentLocationGame = game; _contentLocationLoaded = true;
             _integrityStatus = S["integrity.not_checked"];
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)

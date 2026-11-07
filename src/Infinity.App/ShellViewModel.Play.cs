@@ -37,6 +37,20 @@ public sealed partial class ShellViewModel
     private bool PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
     {
         if (install is null) return true;
+        // OD-206: a game without FH2's features only needs naming, and without that the launch stops: Azimuth would start the game named before
+        if (!CurrentGame.FullFeatures)
+        {
+            try
+            {
+                Log("azimuth: " + AzimuthTitles.EnsureTitle(install.Root, CurrentGame, ContentLocation?.PackageRoot));
+                return AzimuthTitles.Names(install.Root, CurrentGame);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Log("azimuth: title not written (" + e.GetType().Name + ")");
+                return false;
+            }
+        }
         PrepareExtraOptionsMods(install, hardcore);
         try { Log("azimuth: " + AzimuthTitles.EnsureFh2(install.Root, ContentLocation?.PackageRoot)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("azimuth: title not written (" + e.GetType().Name + ")"); }
@@ -56,6 +70,8 @@ public sealed partial class ShellViewModel
         }
         return true;
     }
+
+    private string PrepareAzimuthFailed => S[CurrentGame.FullFeatures ? "extraoptions.treasure_map_hold_failed" : "play.setup_needed"];
 
     private string? _playStatus;
     private string? _hookLine;
@@ -96,7 +112,15 @@ public sealed partial class ShellViewModel
         get => _install;
         set
         {
-            if (value != _install) { ClearIntegrity(); _install = value; }
+            if (value != _install)
+            {
+                ClearIntegrity();
+                _install = value;
+                _contentLocationLoaded = false;
+                // OD-206: the games on offer are this folder's
+                if (OfflineMode) FillOfflineGames();
+                else if (_session is { } session) FillServerGames(session.Info.Games ?? []);
+            }
             if (value is not null)
             {
                 SwitchCaches(value.Root, online: null);
@@ -196,7 +220,8 @@ public sealed partial class ShellViewModel
         {
             return;
         }
-        var carDb = integrity?.CarDbSha256 ?? string.Empty;
+        // OD-206: a game without the integrity check still declares its car database: the gate compares it with the hook's
+        var carDb = integrity?.CarDbSha256 ?? (CurrentGame.FullFeatures ? string.Empty : await CarDatabaseDigestAsync(CurrentGame));
         var development = DevServer;
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
@@ -217,12 +242,12 @@ public sealed partial class ShellViewModel
             if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
             modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
             if (!PrepareAzimuth(_install, ProfileHardcore))
-            { Message = S["extraoptions.treasure_map_hold_failed"]; await EndNativeModSessionAsync(nativePlan); return; }
+            { Message = PrepareAzimuthFailed; await EndNativeModSessionAsync(nativePlan); return; }
         }
         else
         {
             // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
-            if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = S["extraoptions.treasure_map_hold_failed"]; return; }
+            if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
             var built = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
             if (built is null) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
             modSet = built;
@@ -330,19 +355,23 @@ public sealed partial class ShellViewModel
         }
         try
         {
-            var caches = ModeCaches.Fh2(root);
+            var game = CurrentGame;
             switch (online)
             {
                 case true:
-                    caches.BeginOnline();
+                    ModeCaches.For(root, game).BeginOnline();
                     break;
                 case false:
-                    caches.EndOnline();
+                    ModeCaches.For(root, game).EndOnline();
                     break;
                 default:
-                    if (caches.Recover())
+                    // OD-206: whichever game's session was interrupted, not only the one chosen now
+                    foreach (var each in GameDefinition.All)
                     {
-                        Log("mode caches: an interrupted online session's caches were put away");
+                        if (ModeCaches.For(root, each).Recover())
+                        {
+                            Log("mode caches: an interrupted online session's caches were put away");
+                        }
                     }
                     break;
             }
