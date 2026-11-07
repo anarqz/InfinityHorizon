@@ -72,9 +72,7 @@ public sealed partial class ShellViewModel
         var integrityApplies = IntegrityApplies; // OD-113
         var integrity = integrityApplies ? _integrity : null;
         var relayKeys = IntegratedRelayKeys(mm);
-        var devLan = DevLanAdmission(mm);
         var relayReports = RelayReports;
-        var gamertag = _gate.ProfileTag; // CR-L40 §4: the name of a lobby FREE ROAM ONLINE opens
         // OD-193 F-2: this account's own profiles get no friend item in the game's PLAYER ACTIONS (read here, on the shell's thread)
         IReadOnlyCollection<string> ownXuids = Profiles.Select(p => p.Xuid).Append(xuid).Where(x => !string.IsNullOrEmpty(x)).ToHashSet(StringComparer.Ordinal);
         return ticket =>
@@ -94,11 +92,7 @@ public sealed partial class ShellViewModel
                 () => ownXuids, target => bridge?.RosterWorldOf(target), log: Log);
             return _playWorlds = bridge = new Infinity.Core.Matchmaking.WorldsBridge(
                 matchmaking, key => S[key], ProofClock(session), mode,
-                players => StartRelay(players, xuid, relayKeys, devLan, ProofClock(session)), () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
-                updateRelayWorld: static (relay, world, cancellation) => relay is Infinity.Core.Matchmaking.IWorldHostRelay hosted
-                    ? hosted.UpdateWorldAsync(world, cancellation) : Task.CompletedTask,
-                refreshRelayAdmissions: (relay, cancellation) => relay is Infinity.Core.Matchmaking.IWorldHostRelay hosted
-                    ? hosted.RefreshAdmissionsAsync(matchmaking, cancellation) : Task.CompletedTask,
+                () => Infinity.Core.Matchmaking.HostRelay.LanAddresses(mm), xuid, Log,
                 checkWorldAccess: ct => CheckWorldAccessAsync(integrityApplies, integrity, ct),
                 // CR-S69: invites and requests to join reach every ticket, so no tier skips the background seat read
                 onlineActivity: onlineActivity, idleWhenNoWorld: false)
@@ -112,7 +106,6 @@ public sealed partial class ShellViewModel
                     key => S[key], log: Log),
                 ModSet = mods,
                 ModName = LobbyModName, // OD-181: the catalog's names of the mods players declare
-                Gamertag = gamertag,
                 SocketProofRequired=SocketProofRequired,SocketProofKeys=relayKeys,
                 TrustedServerNow=session.Api.TrustedServerNow,
                 RelayReports=relayReports.ReportAsync,
@@ -163,36 +156,6 @@ public sealed partial class ShellViewModel
         try { return Infinity.Core.Matchmaking.RelayGrantVerifyKeys.Parse(configured); }
         catch (ArgumentException) { Log("worlds: invalid development relay public-key configuration"); return new(); }
 #endif
-    }
-
-    /// <summary>
-    /// The development stack sends no peer endpoint observation yet (WORLD_SERVER_PORT.md, platform
-    /// request 1), so a granted peer is admitted from any private address. Only for a private or
-    /// loopback plain-http server and matchmaking, never a release origin.
-    /// </summary>
-    private bool DevLanAdmission(Uri matchmaking) => DevServer && Infinity.Core.DevNet.PlainHttpUrl(matchmaking.OriginalString);
-
-    /// <summary>The world's relay, inside the launcher (the Rust infinity-relay.exe was retired on 2026-10-20).</summary>
-    private Infinity.Core.Matchmaking.IntegratedWorldRelay? StartRelay(uint players, string xuid, Infinity.Core.Matchmaking.RelayGrantVerifyKeys keys, bool devLan, TimeProvider? clock=null,
-        Action<System.Net.Sockets.SocketError>? bindFailed = null)
-    {
-        try
-        {
-            // T13: an online Road Trip takes its events from this PC's own game database (read-only)
-            var database = ContentLocation?.Mount is { } mount ? Infinity.Core.WorldServer.IntegratedRelayOptions.FindGameDatabase(mount) : null;
-            var relay = Infinity.Core.Matchmaking.IntegratedWorldRelay.Start(players, races: true, xuid, keys,
-                options: new Infinity.Core.WorldServer.IntegratedRelayOptions { GameDatabase = database }, devLanPeers: devLan,
-                requireSocketProof:SocketProofRequired,clock:clock);
-            Log($"worlds: relay bound on UDP {relay.Port}; awaiting world admission"
-                + (devLan ? " (development LAN admission: granted peers from private addresses, endpoint not verified)" : ""));
-            return relay;
-        }
-        catch (Exception exception) when (exception is IOException or System.Net.Sockets.SocketException or InvalidOperationException or UnauthorizedAccessException)
-        {
-            if (exception is System.Net.Sockets.SocketException socket) bindFailed?.Invoke(socket.SocketErrorCode);
-            Log("worlds: relay could not start (" + exception.GetType().Name + ")");
-            return null;
-        }
     }
 
     private void OverlayStatus(byte state, string detail) =>

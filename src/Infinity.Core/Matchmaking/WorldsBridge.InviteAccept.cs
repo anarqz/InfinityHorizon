@@ -122,7 +122,6 @@ public sealed partial class WorldsBridge
         if (invite.Left <= TimeSpan.Zero) return Refused(PrivateLobbyNotices.InviteExpired, "the invite expired before it was accepted");
         if (bySession ? SendSessionReady is null : SendFollowHost is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "no game pipe to move the game with");
         if (bySession && invite.Session is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no game session (route 1 needs it)");
-        if (OwnWorld) return NotNowText(_text("worlds.close_before_join"), "this player hosts a lobby");
         if (GameReadiness.CurrentGeneration is not { } generation) return NotNowText(_text("worlds.load_game"), "the game is not loaded");
         if (_seat.GrantId is not null && Volatile.Read(ref _seatWorld) == invite.WorldId)
         {
@@ -260,12 +259,11 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>
-    /// T-L5: the game is in a car meet or an online Road Trip (or moving into a car meet's session): it is never pulled out of it. Null:
+    /// T-L5: the game is in a car meet or an online Road Trip: it is never pulled out of it. Null:
     /// it is in free roam, in no lobby, or its lobby is not known as an event.
     /// </summary>
     private string? GameInEvent()
     {
-        if (Volatile.Read(ref _switch) is { } switching) return $"it is moving into the car meet's session in {switching.World}";
         if (Volatile.Read(ref _gameInWorld) == 0) return null;
         switch (Volatile.Read(ref _joinedKind))
         {

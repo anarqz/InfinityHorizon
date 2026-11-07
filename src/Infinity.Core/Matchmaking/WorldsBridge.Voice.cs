@@ -6,9 +6,8 @@ using Infinity.Core.Overlay;
 namespace Infinity.Core.Matchmaking;
 
 // OD-154: the overlay's voice chat (protocol 3) against the world this profile is in. The lobby's voice mode (CR-S67, CR-L46: off,
-// open, proximity) rides on the world the host opened (and changes while it is open); the mutes are this profile's
-// (Voice/VoiceRoom.cs) and are reported to the server (CR-S68); the server's voice blocks reach the host's relay from the grants and
-// from the roster (CR-S67), and this player through the roster's own row and the voice_blocked notice.
+// open, proximity) rides on the world; the mutes are this profile's (Voice/VoiceRoom.cs) and are reported to the server (CR-S68);
+// the server's voice blocks reach this player through the roster's own row and the voice_blocked notice.
 public sealed partial class WorldsBridge
 {
     /// <summary>The profile's voice chat; null leaves the overlay's voice frames unanswered (an older shell).</summary>
@@ -27,8 +26,6 @@ public sealed partial class WorldsBridge
     private bool _noticeWanted;
     private DateTimeOffset _noticesNext;
     private int _noticesReading;
-    // CR-S67: the hosted world's voice mode as this launcher last told the server (the PUT, then a heartbeat that carried a change)
-    private string? _hostedVoice;
 
     /// <summary>The voice state for the world of the last "My world" answer, or null without <see cref="Voice"/>.</summary>
     public UiFrame.VoiceState? VoiceFrame()
@@ -36,16 +33,7 @@ public sealed partial class WorldsBridge
         if (Voice is not { } voice) return null;
         var mine = Volatile.Read(ref _mineSnapshot);
         voice.Observe(mine.WorldId, mine.Role);
-        PushVoiceRules(voice);
         return voice.Frame(mine.Members);
-    }
-
-    // The host's mode and lobby mutes reach its own relay, which enforces them (RelayEngine.Voice.cs).
-    private void PushVoiceRules(Voice.VoiceRoom voice)
-    {
-        IHostRelay? relay;
-        lock (_hostState) relay = _relay;
-        if (relay is IWorldHostRelay hosted && voice.RelayRules() is { } rules) hosted.SetVoice(rules.Mode, rules.MutedForLobby);
     }
 
     /// <summary>An overlay's voice command, then the state to show (also when the command was not the player's to make).</summary>
@@ -56,7 +44,6 @@ public sealed partial class WorldsBridge
         var mine = Volatile.Read(ref _mineSnapshot);
         voice.Observe(mine.WorldId, mine.Role);
         if (!voice.Apply(command, mine.Members)) _log?.Invoke($"voice: op {command.Op} refused (not this player's to make)");
-        PushVoiceRules(voice);
         return voice.Frame(mine.Members);
     }
 
@@ -71,16 +58,8 @@ public sealed partial class WorldsBridge
         return voice.Frame(mine.Members);
     }
 
-    /// <summary>CR-S67: the voice mode the hosted world's row should carry now, when it differs from what the server was last told.</summary>
-    private string? VoiceChange()
-    {
-        if (Voice?.HostMode() is not { } mode) return null;
-        return mode == Volatile.Read(ref _hostedVoice) ? null : mode;
-    }
-
     /// <summary>
-    /// A "My world" read: the world row's voice mode for a joiner (display only), the roster's voice blocks for the host's relay
-    /// (CR-S67: the host's own block reaches it only this way), and this player's own block.
+    /// A "My world" read: the world row's voice mode (display only) and this player's own block.
     /// </summary>
     private void ObserveVoice(string worldId, byte role, WorldView world, WorldMembers? roster)
     {
@@ -90,12 +69,6 @@ public sealed partial class WorldsBridge
             if (role != UiWorldRole.Hosting) voice.WorldSaid(worldId, world.Voice);
         }
         if (roster is null) return;
-        if (role == UiWorldRole.Hosting)
-        {
-            IHostRelay? relay;
-            lock (_hostState) relay = _relay;
-            if (relay is IWorldHostRelay hosted) hosted.SetRosterVoiceBlocks(roster.Items);
-        }
         var self = roster.Items.FirstOrDefault(m => m.Friend == "self" || _ownXuid is not null && m.Xuid == _ownXuid);
         if (self is null) return;
         DateTimeOffset? until = self.VoiceBlockedUntil is { } instant && DateTimeOffset.TryParse(instant, CultureInfo.InvariantCulture,

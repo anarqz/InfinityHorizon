@@ -1,5 +1,4 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-using System.Text;
 using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
@@ -88,35 +87,4 @@ public sealed partial class WorldsBridge
             .ThenBy(r => r.World.RttMs ?? 0)
             .ThenByDescending(r => r.World.Players)
             .ToList();
-
-    /// <summary>
-    /// The rows that fit one <see cref="UiFrame.WorldsListV2"/> with <paramref name="message"/>: at most
-    /// <see cref="UiFrame.MaxLobbyRows"/>; past 64 KiB the players and mods of the last rows are dropped first
-    /// (their pane then shows the host only), and only then the last rows themselves.
-    /// </summary>
-    public static IReadOnlyList<LobbyRow> FitLobbyRows(IReadOnlyList<LobbyRow> rows, string message)
-    {
-        ArgumentNullException.ThrowIfNull(rows);
-        static int Str(string text) => 2 + Encoding.UTF8.GetByteCount(text);
-        // players, max, kind, audience, lock, ping; friendHost, modded, modsMatch (always 1 since OD-181), anyMode
-        static int Size(LobbyRow r) => Str(r.World.Id) + Str(r.World.Name) + Str(r.World.Host) + 6 + 4
-            + 1 + r.Members.Sum(m => Str(m.Gamertag) + 2) + 1 + r.Mods.Sum(m => Str(m.Id) + Str(m.Version));
-        var fitted = rows.Take(UiFrame.MaxLobbyRows).ToList();
-        // type, filter, modded, status, message, count
-        var budget = Wire.Frames.MaxFrame - (1 + 3 + Str(message ?? string.Empty) + 1);
-        var total = fitted.Sum(Size);
-        for (var i = fitted.Count - 1; i >= 0 && total > budget; --i)
-        {
-            if (fitted[i].Members.Count == 0 && fitted[i].Mods.Count == 0) continue;
-            var bare = fitted[i] with { Members = [], Mods = [] };
-            total += Size(bare) - Size(fitted[i]);
-            fitted[i] = bare;
-        }
-        while (fitted.Count > 0 && total > budget)
-        {
-            total -= Size(fitted[^1]);
-            fitted.RemoveAt(fitted.Count - 1);
-        }
-        return fitted;
-    }
 }

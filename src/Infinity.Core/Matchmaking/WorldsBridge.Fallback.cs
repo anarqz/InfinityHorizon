@@ -70,10 +70,8 @@ public sealed partial class WorldsBridge
     // the same is not pushed again (a reserved seat's grant keeps its times; a used one is re-signed each renewal and is pushed,
     // because the hook's relay hello carries those claims and the relay checks their expiry)
     private byte[]? _legSent;
-    private string? _hostedTransport;
     // a seat whose grant names no usable relay: if its direct path fails there is nothing to fall back to
     private string? _noRelayGrant;
-    private string? _hostedRelayName;
     // OD-160 relay first, direct after (MATCHMAKING_API §5b "Relay by mode"): the grant whose first leg went to the relay because the
     // server said so, and the grant the server recorded as direct (renew transport "direct" accepted) after its relay failed
     private string? _relayBornGrant;
@@ -340,15 +338,13 @@ public sealed partial class WorldsBridge
     /// <summary>
     /// OD-160's lobby notice (MATCHMAKING_API §5b "The lobby notice"): true the relay notice, false the direct one, null none. A Noob-only
     /// world (or no seat or world, or a world not read yet) shows none; a Hardcore world (modes hardcore/any) shows the relay notice when
-    /// it is on the relay and this player hosts it or its seat is on the relay, else the direct notice (for this player only).
+    /// it is on the relay and this player's seat is on the relay, else the direct notice (for this player only).
     /// </summary>
     private bool? RelayNotice()
     {
-        var hosted = HostedWorldId;
-        var worldId = hosted ?? (_seat.GrantId is not null ? Volatile.Read(ref _seatWorld) : null);
+        var worldId = _seat.GrantId is not null ? Volatile.Read(ref _seatWorld) : null;
         if (worldId is null || Volatile.Read(ref _noticeWorld) is not { } world || world.Id != worldId || !WorldModes.HardcoreWorld(world.Modes)) return null;
         if (world.Transport != Transports.Relay) return false;
-        if (hosted is not null) return true;
         return !SeatDirect(_seat.GrantId!);
     }
 
@@ -377,8 +373,6 @@ public sealed partial class WorldsBridge
     /// <summary>"Direct" / "via &lt;relay name&gt;" for the connection details; null when this session has no seat or world.</summary>
     private string? TransportText()
     {
-        if (HostedWorldId is not null)
-            return Volatile.Read(ref _hostedTransport) == Transports.Relay ? Via(Volatile.Read(ref _hostedRelayName)) : _text("connection.direct");
         if (_seat.GrantId is { } direct && Volatile.Read(ref _directFallbackGrant) == direct) return _text("connection.direct"); // OD-160
         if (_seat.GrantId is { } seat && _legGrant is null && Volatile.Read(ref _noRelayGrant) == seat) return _text("connection.direct_only");
         if (_seat.GrantId is null || _legGrant is null) return null;

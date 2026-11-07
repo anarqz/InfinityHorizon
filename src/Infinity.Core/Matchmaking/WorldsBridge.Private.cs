@@ -178,7 +178,6 @@ public sealed partial class WorldsBridge
         {
             if (await AccessAsync(token).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no private lobby (online lobbies are not allowed now)");
-            if (OwnWorld) return PrivateRefused(kind, "worlds.close_before_join", "this player hosts a lobby");
             if (WireMods().Refusal is { } mods) return PrivateRefused(kind, mods, $"mods: {mods}");
             UiFrame.JoinResult joined;
             var asks = 0;

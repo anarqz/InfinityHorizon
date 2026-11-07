@@ -9,8 +9,7 @@ using Infinity.Core.WorldServer;
 namespace Infinity.Core.Matchmaking;
 
 // AC-2 (MATCHMAKING_API §3.9, OD-147, OD-158; docs/launcher/ANTICHEAT.md): in a Hardcore world (the profile's mode Hardcore, the
-// world not open to both modes) this player measures the other players' cars, never its own: as the host in its world server, as a
-// seated joiner in its hook. The rules come from GET /mm/v1/watch once per world (never compiled in); every ended episode is posted
+// world not open to both modes) this player measures the other players' cars, never its own, as a seated player in its hook. The rules come from GET /mm/v1/watch once per world (never compiled in); every ended episode is posted
 // once to POST …/observations with an id minted here (a retry sends the same id), at most 20 a minute (bucket mm.observe).
 public sealed partial class WorldsBridge
 {
@@ -63,7 +62,7 @@ public sealed partial class WorldsBridge
 
     private sealed record PendingObservation(string WorldId, PeerObservation Observation, byte PeerIndex);
 
-    // reports land here from the world server's actor and the supervisor's frame loop; the seat loop alone drains and posts
+    // reports land here from the supervisor's frame loop; the seat loop alone drains and posts
     private readonly ConcurrentQueue<PendingObservation> _observed = new();
     private readonly List<PendingObservation> _pendingObservations = [];
     private sealed record WatchKey(string WorldId, byte Role);
@@ -75,7 +74,6 @@ public sealed partial class WorldsBridge
     private string? _hookGraceWorld;
     private DateTimeOffset _hookGraceUntil;
     internal static readonly TimeSpan HookGrace = TimeSpan.FromSeconds(10);
-    private IHostRelay? _watchRelay;
     private double _observeTokens = ObservationsPerMinute;
     private long _observeRefilledAt;
     private DateTimeOffset _observeRetryAt;
@@ -86,17 +84,17 @@ public sealed partial class WorldsBridge
     /// <summary>Observations waiting to be posted (tests and logs).</summary>
     public int PendingObservations => _pendingObservations.Count + _observed.Count;
 
-    /// <summary>A Hardcore world this player hosts or is seated in (the last "My world" answer), with the role; null otherwise.</summary>
+    /// <summary>A Hardcore world this player is seated in (the last "My world" answer), with the role; null otherwise.</summary>
     private WatchKey? WatchTarget()
     {
         var mine = Volatile.Read(ref _mineSnapshot);
         if (!OnlineOpen || _mode != WorldModes.Hardcore || mine.AnyMode || string.IsNullOrEmpty(mine.WorldId)
-            || mine.Role is not (UiWorldRole.Hosting or UiWorldRole.Seated)) return null;
+            || mine.Role != UiWorldRole.Seated) return null;
         return new(mine.WorldId, mine.Role);
     }
 
     /// <summary>
-    /// The seat loop's step: follows the world this player is in, hands the rules to the world server (host) or the hook (joiner),
+    /// The seat loop's step: follows the world this player is in, hands the rules to the hook,
     /// and posts what was observed. Failures are logged and retried; nothing here throws but cancellation.
     /// </summary>
     public async Task WatchTickAsync(CancellationToken cancellation)
@@ -107,7 +105,7 @@ public sealed partial class WorldsBridge
             await StopWatchAsync(cancellation).ConfigureAwait(false);
             _watchKey = target;
             (_watchRules, _watchApplied, _watchRulesRetryAt, _watchHookMissingLogged) = (null, false, DateTimeOffset.MinValue, false);
-            if (target is { } now) _log($"worlds: watch: Hardcore world {now.WorldId} as {(now.Role == UiWorldRole.Hosting ? "host" : "seated player")}; reading the rules");
+            if (target is { } now) _log($"worlds: watch: Hardcore world {now.WorldId} as seated player; reading the rules");
         }
         if (_watchKey is { } key && !_watchApplied)
         {
@@ -140,22 +138,6 @@ public sealed partial class WorldsBridge
     private async Task ApplyWatchAsync(WatchKey key, WatchRules rules, CancellationToken cancellation)
     {
         var force = WatchForceSpeed;
-        if (key.Role == UiWorldRole.Hosting)
-        {
-            IHostRelay? relay;
-            lock (_hostState) relay = _relay;
-            if (relay is null || HostedWorldId != key.WorldId) return; // the world server is not this world's yet
-            var self = ulong.TryParse(_ownXuid, NumberStyles.None, CultureInfo.InvariantCulture, out var own) ? own : 0;
-            var world = key.WorldId;
-            // CR-L50: the dedicated engine takes the wire rules and loads its own parts catalog (parts: this PC has one)
-            if (relay is IWireWatchRelay wire)
-                wire.WatchWire(rules, force, GameDatabase is { Length: > 0 } database && File.Exists(database), self, (report, id) => Observed(world, report, id));
-            else relay.Watch(PeerWatchRules.From(rules, force) with { Parts = Parts() }, self, report => Observed(world, report));
-            _watchRelay = relay;
-            _watchApplied = true;
-            _log($"worlds: watch: the world server measures the other players' cars (rules version {rules.Version}{(force ? ", TEST forced speed episode" : string.Empty)})");
-            return;
-        }
         if (!WatchCapable || SendWatch is null)
         {
             if (!_watchHookMissingLogged) _log("worlds: watch: this hook does not measure the other players' cars (an older hook); nothing is sent");
@@ -180,12 +162,7 @@ public sealed partial class WorldsBridge
     private async Task StopWatchAsync(CancellationToken cancellation)
     {
         lock (_hookPartsGate) { _hookParts?.Flush(); _hookParts = null; }
-        if (_watchRelay is { } relay)
-        {
-            _watchRelay = null;
-            if (relay is IWireWatchRelay wire) wire.WatchWire(null, false, false, 0, null);
-            else relay.Watch(null, 0, null);
-        }
+
         if (_hookWatching)
         {
             _hookWatching = false;
