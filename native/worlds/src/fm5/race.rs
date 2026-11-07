@@ -23,7 +23,10 @@ use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use serde_json::{Value, json};
 
-use super::nerd::{self, Fields, Handle, Object, Walked, Writer};
+use super::{
+    nerd::{self, Fields, Handle, Object, Walked, Writer},
+    options::{self, Applied, Options},
+};
 use crate::core::{
     game::{Admit, GameEvent, Send},
     rng::Rng,
@@ -33,8 +36,8 @@ use crate::core::{
 pub const ENGINE: &str = "race";
 
 /// Default race: Top Gear West Circuit (gamedb.slt Tracks id 222, 1.3 km), one lap. The lab's
-/// choice so live test races stay short (world.py); track and lap changes are not in this step
-/// (CR-S99 §6).
+/// choice so live test races stay short (world.py). In a private lobby the leader changes them on
+/// FM5's own options screen (W16, the owner path below).
 pub const DEFAULT_TRACK: u64 = 222;
 pub const DEFAULT_LAPS: u64 = 1;
 
@@ -68,6 +71,14 @@ pub const HELD_MAX: usize = 16;
 /// Infinity: a console's kept objects (payloads and updates) for later joiners, at most; past it
 /// the console is dropped (`doomed`), as FH2's history cap. The lab kept every update forever.
 pub const HISTORY_MAX_BITS: usize = 2 * 1024 * 1024;
+/// A console's GameOptions link before anything reached it (lobby spec §1: a link starts at
+/// 0xfe), so the first options message it takes is seq 0; seqs run mod 255.
+pub const OPTIONS_SEQ_START: u8 = 0xFE;
+
+/// The seq after `seq` (mod 255).
+pub fn seq_after(seq: u8) -> u8 {
+    ((u16::from(seq) + 1) % 255) as u8
+}
 
 /// Why a peer left (the `peer.left` reason, contract §4.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +159,10 @@ pub(super) struct Peer {
     console_vars: [bool; 16],
     saw_grid: bool,
     server_seq: Option<u8>,
+    /// The last seq of this console's GameOptions link (lobby spec §13): the options Updates the
+    /// server sends it, its grant and its revoke share this one counter. While it owns the
+    /// options, its own Updates move it (INFERRED: its link is its own counter then).
+    pub(super) options_seq: u8,
     pub(super) in_flight: Vec<InFlight>,
 }
 
@@ -172,8 +187,15 @@ impl Peer {
             console_vars: [false; 16],
             saw_grid: false,
             server_seq: None,
+            options_seq: OPTIONS_SEQ_START,
             in_flight: Vec::new(),
         }
+    }
+
+    /// The next seq of this console's GameOptions link, taken.
+    pub(super) fn take_options_seq(&mut self) -> u8 {
+        self.options_seq = seq_after(self.options_seq);
+        self.options_seq
     }
 
     pub(super) fn note_received(&mut self, ident: u16) {
@@ -256,8 +278,11 @@ pub(super) struct Race {
     /// Score messages seen this race, by message id.
     pub(super) results: BTreeMap<u8, u32>,
     pub(super) resent: u64,
-    pub(super) options: Vec<(u32, u64, usize)>,
-    options_seq: u8,
+    pub(super) options: Options,
+    /// A private lobby (W16): its leader owns the GameOptions. Otherwise they stay the server's.
+    pub(super) leader_owns_options: bool,
+    /// The console the options were granted to (a private lobby only).
+    pub(super) owner: Option<SocketAddr>,
     pub(super) dropped: u64,
     pub(super) events: Vec<GameEvent>,
     pub(super) out: Vec<Send>,
@@ -291,8 +316,9 @@ impl Race {
             next_grid: 0,
             results: BTreeMap::new(),
             resent: 0,
-            options: game_options(DEFAULT_TRACK, DEFAULT_LAPS),
-            options_seq: 0,
+            options: Options::new(game_options(DEFAULT_TRACK, DEFAULT_LAPS)),
+            leader_owns_options: false,
+            owner: None,
             dropped: 0,
             events: Vec::new(),
             out: Vec::new(),
@@ -356,11 +382,67 @@ impl Race {
     /// A private world's leader: the longest-present synced player (earliest sync, the earlier
     /// seat on a tie), as FH2's rule; it changes only when that player leaves.
     pub(super) fn leader(&self) -> Option<u64> {
+        self.leader_peer().map(|p| p.xuid)
+    }
+
+    fn leader_peer(&self) -> Option<&Peer> {
         self.peers
             .iter()
             .filter(|p| p.synced)
             .min_by_key(|p| (p.synced_at, p.index))
-            .map(|p| p.xuid)
+    }
+
+    /// The private lobby's leader owns the GameOptions from now on (W16; one way, as the world's
+    /// privacy).
+    pub(super) fn give_options_to_leader(&mut self) {
+        self.leader_owns_options = true;
+        self.sync_owner();
+    }
+
+    /// Moves the options' ownership to the leader, when it is not the owner already (lobby spec
+    /// §13): the old owner, while still here, gets a revoke (12) first; then the leader a grant
+    /// (11) with the full current values. With a tail (writes not merged) the grant is empty: the
+    /// leader already applied every write through the relay, and the table alone would undo the
+    /// tail's. No owner path starts a race.
+    pub(super) fn sync_owner(&mut self) {
+        if !self.leader_owns_options {
+            return;
+        }
+        let want = self.leader_peer().map(|p| p.address);
+        if want == self.owner {
+            return;
+        }
+        if let Some(old) = self.owner.take()
+            && let Some(pos) = self.position(old)
+        {
+            let seq = self.peers[pos].take_options_seq();
+            let index = self.peers[pos].index;
+            let revoke =
+                nerd::transfer_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, seq);
+            self.send(old, vec![revoke], true, 0);
+            note("options.revoked", json!({"peer": index, "seq": seq}));
+        }
+        let Some(new) = want else {
+            return;
+        };
+        let Some(pos) = self.position(new) else {
+            return;
+        };
+        let payload = if self.options.tail().is_empty() {
+            self.options.full()
+        } else {
+            Writer::new()
+        };
+        let seq = self.peers[pos].take_options_seq();
+        let index = self.peers[pos].index;
+        let grant =
+            nerd::grant_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, seq, &payload);
+        self.send(new, vec![grant], true, 0);
+        self.owner = Some(new);
+        note(
+            "options.granted",
+            json!({"peer": index, "seq": seq, "bits": payload.len()}),
+        );
     }
 
     /// Sends `messages` to the peer at `address` in one packet, sequenced (a new id, kept for its
@@ -846,6 +928,10 @@ impl Race {
     /// A console's own objects go to the others under the relay handle naming their owner. The
     /// lobby router is the server's, and only a console's own handle is forwarded.
     fn relay(&mut self, from: SocketAddr, ident: u8, o: &Object, data: &[u8]) {
+        if o.router == nerd::ROUTER_LOBBY {
+            self.owner_update(from, ident, o, data);
+            return;
+        }
         if !RELAYED.contains(&o.router) || o.form != nerd::HANDLE_OWN {
             return;
         }
@@ -918,6 +1004,73 @@ impl Race {
         }
     }
 
+    /// A router-6 object message from a console. Only the options' owner's Update of the
+    /// GameOptions (Transfer handle, id 0) counts (lobby spec §13); any other is dropped, as every
+    /// router-6 message was before W16. Its seq is the owner's own counter, so any is taken. It is
+    /// logged var by var (the set the owner writes is OPEN), merged, and relayed to every other
+    /// console as the server's Transfer Update with that console's next seq.
+    ///
+    /// Lobby kind 7 only: there `0x140554e40` sets Ready on remote players, so an owner's Update
+    /// aimed at another player's object would have to be dropped. Private lobbies are kind 5 and
+    /// router 6 holds only SessionHost and GameOptions, so nothing else is taken here.
+    fn owner_update(&mut self, from: SocketAddr, ident: u8, o: &Object, data: &[u8]) {
+        if !self.leader_owns_options
+            || self.owner != Some(from)
+            || ident != nerd::OBJECT_UPDATE
+            || o.form != nerd::HANDLE_TRANSFER
+            || o.id != 0
+        {
+            return;
+        }
+        let Some(pos) = self.position(from) else {
+            return;
+        };
+        let payload = nerd::payload_of(data, o);
+        let parsed = options::parse(&payload);
+        let applied = self.options.apply(&payload, &parsed);
+        let p = &mut self.peers[pos];
+        p.options_seq = o.seq;
+        let index = p.index;
+        if crate::log::enabled(crate::log::Level::Info) {
+            let vars: Vec<Value> = parsed
+                .vars
+                .iter()
+                .map(|(i, v, w)| json!([i, v, w]))
+                .collect();
+            let (unknown, unread) = match parsed.unread {
+                Some((i, bits)) => (json!(i), json!(bits)),
+                None => (Value::Null, json!(0)),
+            };
+            note(
+                "options.owner_update",
+                json!({"peer": index, "seq": o.seq, "bits": payload.len(), "vars": vars,
+                "unknown": unknown, "unread": unread, "applied": match applied {
+                    Applied::Merged => "merged",
+                    Applied::Tail => "tail",
+                    Applied::Lost => "lost",
+                }}),
+            );
+        }
+        for other in self.racers() {
+            if other == from {
+                continue;
+            }
+            let Some(at) = self.position(other) else {
+                continue;
+            };
+            let seq = self.peers[at].take_options_seq();
+            let message = nerd::object_update(
+                nerd::ROUTER_LOBBY,
+                nerd::HANDLE_TRANSFER,
+                0,
+                seq,
+                &payload,
+                None,
+            );
+            self.send(other, vec![message], true, 0);
+        }
+    }
+
     /// What the others already own, to a console that just joined.
     fn send_history(&mut self, to: SocketAddr) {
         let mut messages = Vec::new();
@@ -978,11 +1131,19 @@ impl Race {
         if self.synced() == 0 && self.launched {
             self.end_race(&[]);
         }
+        // W16: the owner left, so nothing to revoke; the next leader gets the options
+        if self.owner == Some(address) {
+            self.owner = None;
+        }
+        self.sync_owner();
     }
 
     /// SessionHost first: the lobby scene initializes once and only if it already exists (lobby
-    /// spec §0). Then a first GameOptions, pushed through the Transfer handle: untested, the
-    /// spec's option 2.
+    /// spec §0). Then a first GameOptions, pushed through the Transfer handle (the spec's option
+    /// 2) at the console's first options seq (0): the full table with the owner's merged changes,
+    /// then the owner's unmerged writes in order (W16). In a private lobby whose options nobody
+    /// owns yet, the leader's grant (11, empty after the full Update) closes the same packet, so
+    /// it comes after them and before any Ready.
     fn send_lobby(&mut self, to: SocketAddr) {
         let host = nerd::object_create(
             nerd::ROUTER_LOBBY,
@@ -993,17 +1154,43 @@ impl Race {
             None,
             None,
         );
-        let options = nerd::vars_payload(&self.options, nerd::GAME_OPTIONS_INDEX_BITS);
-        let update = nerd::object_update(
-            nerd::ROUTER_LOBBY,
-            nerd::HANDLE_TRANSFER,
-            0,
-            self.options_seq,
-            &options,
-            None,
-        );
+        let Some(pos) = self.position(to) else {
+            return;
+        };
+        let full = self.options.full();
+        let mut options = Vec::with_capacity(2 + self.options.tail().len());
+        for payload in std::iter::once(&full).chain(self.options.tail()) {
+            let seq = self.peers[pos].take_options_seq();
+            options.push(nerd::object_update(
+                nerd::ROUTER_LOBBY,
+                nerd::HANDLE_TRANSFER,
+                0,
+                seq,
+                payload,
+                None,
+            ));
+        }
+        let grant = self.leader_owns_options
+            && self.owner.is_none()
+            && self.leader_peer().map(|p| p.address) == Some(to);
+        if grant {
+            let seq = self.peers[pos].take_options_seq();
+            let index = self.peers[pos].index;
+            options.push(nerd::grant_ownership(
+                nerd::ROUTER_LOBBY,
+                nerd::HANDLE_TRANSFER,
+                0,
+                seq,
+                &Writer::new(),
+            ));
+            self.owner = Some(to);
+            note(
+                "options.granted",
+                json!({"peer": index, "seq": seq, "bits": 0}),
+            );
+        }
         self.send(to, vec![host], true, 0);
-        self.send(to, vec![update], true, 0);
+        self.send(to, options, true, 0);
         self.send_history(to);
     }
 
@@ -1069,6 +1256,7 @@ impl Race {
         }
         self.peers.clear();
         self.held.clear();
+        self.owner = None;
         self.end_race(&[]);
     }
 }

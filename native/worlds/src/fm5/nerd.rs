@@ -8,7 +8,8 @@
 //!
 //! Verified on FM5's real OpenConnection: the same 11-byte header and strings as FH2, version
 //! `D6ED0951`, game `Flagship`. Layouts past the handshake are the lab's; where nerd.py has no
-//! verified end (13 NeedsUpdates, the server-to-console messages) the parse stops.
+//! verified end (13 NeedsUpdates, the server-to-console messages) the parse stops. The ownership
+//! messages (11 Grant, 12 Transfer) are written from the lobby spec §13 (W16), not run yet.
 
 /// The packet header: id u16, ack u16, ack bits u32, message count u8, size u16 (little endian).
 pub const HEADER_LEN: usize = 11;
@@ -440,6 +441,61 @@ pub fn object_delete(router: u8, form: Form, ident: u32, seq: u8, peer: Option<u
     write_handle(&mut w, router, form, ident, peer);
     w.put(u64::from(seq), SEQ_BITS);
     w
+}
+
+// Ownership (lobby spec §1 and §13).
+pub const GRANT_OWNERSHIP: u8 = 11;
+pub const TRANSFER_OWNERSHIP: u8 = 12;
+
+/// ObjectGrantOwnership (11): router u3, handle, seq u8, size u14, payload (an empty one is legal).
+/// The receiver marks the object its own; the seq is the next one of the receiver's link for that
+/// object (lobby spec §13).
+pub fn grant_ownership(router: u8, form: Form, ident: u32, seq: u8, payload: &Writer) -> Writer {
+    let mut w = Writer::new()
+        .push(u64::from(GRANT_OWNERSHIP), ID_BITS)
+        .push(u64::from(router), ROUTER_BITS);
+    write_handle(&mut w, router, form, ident, None);
+    w.put(u64::from(seq), SEQ_BITS)
+        .put(payload.len() as u64, SIZE_BITS)
+        .append(payload);
+    w
+}
+
+/// ObjectTransferOwnership (12): router u3, handle, seq u8, no size and no payload. The server
+/// sends it to take an object's ownership back (lobby spec §13).
+pub fn transfer_ownership(router: u8, form: Form, ident: u32, seq: u8) -> Writer {
+    let mut w = Writer::new()
+        .push(u64::from(TRANSFER_OWNERSHIP), ID_BITS)
+        .push(u64::from(router), ROUTER_BITS);
+    write_handle(&mut w, router, form, ident, None);
+    w.put(u64::from(seq), SEQ_BITS);
+    w
+}
+
+/// Reads a Grant (11) or a Transfer (12) after its id, as this server writes them (the reader
+/// leaves after it). Not in [`read_one`]: consoles are not known to send either, and a packet
+/// that has one keeps stopping the parse there as before.
+pub fn read_ownership(r: &mut Reader, ident: u8) -> Result<Object, Malformed> {
+    let router = r.bits(ROUTER_BITS)? as u8;
+    let (id_width, _) = router_spec(router).ok_or(Malformed)?;
+    let (form, id, peer) = read_handle(r, id_width)?;
+    let seq = r.bits(SEQ_BITS)? as u8;
+    let (mut bits, mut payload_at) = (0, r.position);
+    if ident == GRANT_OWNERSHIP {
+        bits = r.bits(SIZE_BITS)? as usize;
+        payload_at = r.position;
+        r.skip(bits)?;
+    }
+    Ok(Object {
+        router,
+        form,
+        id,
+        peer,
+        kind: None,
+        seq,
+        bits,
+        payload_at,
+    })
 }
 
 /// An object's payload, as bits, from its packet.

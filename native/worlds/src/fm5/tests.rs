@@ -1189,3 +1189,371 @@ fn the_state_names_the_race_its_players_and_a_private_leader() {
     assert_eq!(world.spec(), json!({"activity": "race"}));
     assert_eq!(world.next_tick(crate::core::Profile::Public, 5), Some(25));
 }
+
+// ---- W16: the private lobby leader owns the GameOptions (lobby spec §13) ----
+
+/// Every router-6 options message in `packets` (Update 8, Grant 11, Transfer 12), in order, with
+/// its payload's bits.
+fn options_messages(packets: &[Vec<u8>]) -> Vec<(u8, Object, Writer)> {
+    let mut out = Vec::new();
+    for data in packets {
+        let count = nerd::header(data).unwrap().count;
+        let mut r = Reader::new(nerd::body(data));
+        for _ in 0..count {
+            let ident = r.bits(nerd::ID_BITS).unwrap() as u8;
+            let o = match ident {
+                nerd::GRANT_OWNERSHIP | nerd::TRANSFER_OWNERSHIP => {
+                    nerd::read_ownership(&mut r, ident).unwrap()
+                }
+                _ => match nerd::read_one(&mut r, ident).unwrap() {
+                    Some(Fields::Object(o)) => o,
+                    _ => break,
+                },
+            };
+            if o.router == nerd::ROUTER_LOBBY && ident != nerd::OBJECT_CREATE {
+                let payload = nerd::payload_of(data, &o);
+                out.push((ident, o, payload));
+            }
+        }
+    }
+    out
+}
+
+/// (message id, seq) of each options message.
+fn option_seqs(packets: &[Vec<u8>]) -> Vec<(u8, u8)> {
+    options_messages(packets)
+        .into_iter()
+        .map(|(i, o, _)| (i, o.seq))
+        .collect()
+}
+
+fn owner_payload(vars: &[(u32, u64, usize)]) -> Writer {
+    nerd::vars_payload(vars, nerd::GAME_OPTIONS_INDEX_BITS)
+}
+
+impl Lab {
+    /// A private lobby: its leader owns the options.
+    fn private() -> Lab {
+        let mut lab = Lab::new();
+        lab.race.give_options_to_leader();
+        lab
+    }
+
+    /// A GameOptions Update from `from` through the Transfer handle.
+    fn options_update(&mut self, from: SocketAddr, ident: u16, seq: u8, payload: &Writer) {
+        let m = nerd::object_update(
+            nerd::ROUTER_LOBBY,
+            nerd::HANDLE_TRANSFER,
+            0,
+            seq,
+            payload,
+            None,
+        );
+        self.receive(&packet(vec![m], ident), from);
+    }
+}
+
+#[test]
+fn grant_and_transfer_golden_vectors() {
+    let empty = Writer::new();
+    let grant = |seq, p: &Writer| {
+        nerd::grant_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, seq, p)
+    };
+    // [11 u6][router 6 u3][a=1 b=0][id u2 0][seq u8][size u14 0]
+    assert_eq!(grant(0, &empty).len(), 6 + 3 + 2 + 2 + 8 + 14);
+    assert_eq!(grant(0, &empty).bytes(), [0x8B, 0x03, 0x00, 0x00, 0x00]);
+    assert_eq!(grant(1, &empty).bytes(), [0x8B, 0x23, 0x00, 0x00, 0x00]);
+    // with a payload: var 227 (EEndConditionType) = 2, 9 + 3 bits
+    let payload = owner_payload(&[(227, 2, 3)]);
+    let g = grant(1, &payload);
+    assert_eq!(g.len(), 35 + 12);
+    assert_eq!(g.bytes(), [0x8B, 0x23, 0x80, 0x01, 0x18, 0x27]);
+    // [12 u6][router 6 u3][a=1 b=0][id u2 0][seq u8], no size, no payload
+    let t = nerd::transfer_ownership(nerd::ROUTER_LOBBY, nerd::HANDLE_TRANSFER, 0, 2);
+    assert_eq!(t.len(), 6 + 3 + 2 + 2 + 8);
+    assert_eq!(t.bytes(), [0x8C, 0x43, 0x00]);
+    // and they read back
+    let data = packet(vec![g, t], 0);
+    let read = options_messages(&[data]);
+    assert_eq!(
+        read.iter()
+            .map(|(i, o, p)| (*i, o.form, o.id, o.seq, p.value()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                nerd::GRANT_OWNERSHIP,
+                nerd::HANDLE_TRANSFER,
+                0,
+                1,
+                payload.value()
+            ),
+            (nerd::TRANSFER_OWNERSHIP, nerd::HANDLE_TRANSFER, 0, 2, 0),
+        ]
+    );
+}
+
+#[test]
+fn options_seqs_start_at_zero_after_0xfe_and_wrap_at_255() {
+    let mut peer = Peer::new(at(1), 0, 0);
+    assert_eq!(peer.options_seq, 0xFE);
+    assert_eq!(peer.take_options_seq(), 0);
+    assert_eq!(peer.take_options_seq(), 1);
+    peer.options_seq = 253;
+    assert_eq!(peer.take_options_seq(), 254);
+    assert_eq!(peer.take_options_seq(), 0, "mod 255: 255 is never a seq");
+}
+
+#[test]
+fn the_leader_is_granted_after_its_first_options_on_the_same_counter() {
+    let mut lab = Lab::private();
+    let (first, second) = (at(1), at(2));
+    let joined = lab.connect(first);
+    // SessionHost, then one packet: the full Update at seq 0, the empty grant at seq 1
+    assert_eq!(
+        option_seqs(&joined),
+        vec![(nerd::OBJECT_UPDATE, 0), (nerd::GRANT_OWNERSHIP, 1)]
+    );
+    let options = options_messages(&joined);
+    assert_eq!(options[1].1.bits, 0, "empty after the full Update");
+    assert_eq!(
+        nerd::header(&joined[2]).unwrap().count,
+        2,
+        "the grant shares the full Update's packet"
+    );
+    assert_eq!(lab.race.owner, Some(first));
+    // a second console: its own first push, no grant
+    assert_eq!(
+        option_seqs(&lab.connect(second)),
+        vec![(nerd::OBJECT_UPDATE, 0)]
+    );
+    // the owner's next Update: relayed to the second at its next seq (1); the owner's own seq is
+    // its own counter, any is taken
+    lab.options_update(first, 5, 40, &owner_payload(&[(228, 3, 32)]));
+    assert_eq!(
+        option_seqs(&lab.drain(second)),
+        vec![(nerd::OBJECT_UPDATE, 1)]
+    );
+    assert!(lab.drain(first).is_empty(), "not echoed to the owner");
+    assert_eq!(lab.peer(first).options_seq, 40);
+}
+
+#[test]
+fn an_owner_update_reaches_each_other_console_at_its_own_next_seq() {
+    let mut lab = Lab::private();
+    let (first, second, third) = (at(1), at(2), at(3));
+    lab.connect(first);
+    lab.connect(second);
+    lab.connect(third);
+    lab.peer(third).options_seq = 253;
+    let payload = owner_payload(&[(3, 3, 32), (227, 1, 3), (228, 5, 32)]);
+    lab.options_update(first, 5, 1, &payload);
+    let to_second = options_messages(&lab.drain(second));
+    let to_third = options_messages(&lab.drain(third));
+    assert_eq!(to_second.len(), 1);
+    assert_eq!(
+        (
+            to_second[0].0,
+            to_second[0].1.form,
+            to_second[0].1.id,
+            to_second[0].1.seq
+        ),
+        (nerd::OBJECT_UPDATE, nerd::HANDLE_TRANSFER, 0, 1)
+    );
+    assert_eq!(to_third[0].1.seq, 254);
+    for (_, o, p) in to_second.iter().chain(&to_third) {
+        assert_eq!(o.bits, payload.len());
+        assert_eq!(p, &payload, "the owner's bits as they came");
+    }
+    // merged; and no owner path starts a race
+    assert_eq!(lab.race.options.value(3), Some(3));
+    assert_eq!(lab.race.options.value(228), Some(5));
+    assert!(!lab.race.launched);
+    lab.options_update(first, 6, 2, &owner_payload(&[(4, 2, 8)]));
+    assert_eq!(options_messages(&lab.drain(third))[0].1.seq, 0, "wrapped");
+}
+
+#[test]
+fn a_non_owners_options_update_is_dropped() {
+    let mut lab = Lab::private();
+    let (first, second) = (at(1), at(2));
+    lab.connect(first);
+    lab.connect(second);
+    let before = lab.race.options.clone();
+    lab.options_update(second, 5, 1, &owner_payload(&[(3, 3, 32)]));
+    assert!(lab.drain(first).is_empty());
+    assert!(lab.drain(second).is_empty());
+    assert_eq!(lab.race.options, before);
+    // an owner's message on router 6 under another handle is dropped too
+    let own = nerd::object_update(
+        nerd::ROUTER_LOBBY,
+        nerd::HANDLE_OWN,
+        0,
+        1,
+        &owner_payload(&[(3, 3, 32)]),
+        None,
+    );
+    lab.receive(&packet(vec![own], 6), first);
+    assert!(lab.drain(second).is_empty());
+    assert_eq!(lab.race.options, before);
+}
+
+#[test]
+fn a_public_lobby_keeps_the_options_the_servers() {
+    let mut lab = Lab::new();
+    let (first, second) = (at(1), at(2));
+    let joined = lab.connect(first);
+    assert_eq!(option_seqs(&joined), vec![(nerd::OBJECT_UPDATE, 0)]);
+    lab.connect(second);
+    lab.options_update(first, 5, 1, &owner_payload(&[(3, 3, 32)]));
+    assert!(lab.drain(second).is_empty());
+    assert_eq!(lab.race.owner, None);
+    assert_eq!(lab.race.options.value(3), Some(race::DEFAULT_TRACK));
+}
+
+#[test]
+fn a_late_joiners_full_update_has_the_owners_changes() {
+    let mut lab = Lab::private();
+    let (first, late) = (at(1), at(2));
+    lab.connect(first);
+    lab.options_update(first, 5, 1, &owner_payload(&[(3, 3, 32), (228, 5, 32)]));
+    lab.options_update(first, 6, 2, &owner_payload(&[(0, 2, 8), (2, 1, 3)]));
+    let options = options_messages(&lab.connect(late));
+    assert_eq!(options.len(), 1);
+    let (ident, o, payload) = &options[0];
+    assert_eq!((*ident, o.seq), (nerd::OBJECT_UPDATE, 0));
+    let read = super::options::parse(payload);
+    assert!(read.complete());
+    assert_eq!(
+        read.vars,
+        vec![(0, 2, 8), (2, 1, 3), (3, 3, 32), (227, 1, 3), (228, 5, 32)]
+    );
+}
+
+#[test]
+fn a_write_with_a_var_of_unknown_width_is_replayed_in_order() {
+    let mut lab = Lab::private();
+    let (first, late) = (at(1), at(2));
+    lab.connect(first);
+    lab.options_update(first, 5, 1, &owner_payload(&[(3, 3, 32)]));
+    // var 100 (a bucket var, width not read) then laps: not merged, kept as it is
+    let odd = owner_payload(&[(100, 0b101, 6), (228, 7, 32)]);
+    lab.options_update(first, 6, 2, &odd);
+    // a later write that reads still goes after it
+    let after = owner_payload(&[(228, 9, 32)]);
+    lab.options_update(first, 7, 3, &after);
+    assert_eq!(lab.race.options.value(228), Some(race::DEFAULT_LAPS));
+    let options = options_messages(&lab.connect(late));
+    assert_eq!(
+        options
+            .iter()
+            .map(|(i, o, _)| (*i, o.seq))
+            .collect::<Vec<_>>(),
+        vec![
+            (nerd::OBJECT_UPDATE, 0),
+            (nerd::OBJECT_UPDATE, 1),
+            (nerd::OBJECT_UPDATE, 2)
+        ]
+    );
+    assert_eq!(super::options::parse(&options[0].2).vars[1], (3, 3, 32));
+    assert_eq!(options[1].2, odd);
+    assert_eq!(options[2].2, after);
+    let unread = super::options::parse(&odd).unread;
+    assert_eq!(unread, Some((Some(100), odd.len())));
+}
+
+#[test]
+fn the_next_leader_is_granted_the_full_values_when_the_owner_leaves() {
+    let mut lab = Lab::private();
+    let (first, second) = (at(1), at(2));
+    lab.connect(first);
+    lab.connect(second);
+    lab.options_update(first, 5, 1, &owner_payload(&[(228, 4, 32)]));
+    lab.drain(second);
+    lab.receive(
+        &packet(
+            vec![Writer::new().push(u64::from(nerd::CLOSE), nerd::ID_BITS)],
+            6,
+        ),
+        first,
+    );
+    let options = options_messages(&lab.drain(second));
+    assert_eq!(options.len(), 1);
+    let (ident, o, payload) = &options[0];
+    // seq 0 its first push, 1 the relayed Update, 2 the grant
+    assert_eq!((*ident, o.seq), (nerd::GRANT_OWNERSHIP, 2));
+    assert_eq!(payload, &lab.race.options.full());
+    assert_eq!(super::options::parse(payload).vars[3], (228, 4, 32));
+    assert_eq!(lab.race.owner, Some(second));
+    // the new owner's Updates are taken, the old one's never were relayed to it again
+    lab.options_update(second, 7, 0, &owner_payload(&[(228, 6, 32)]));
+    assert_eq!(lab.race.options.value(228), Some(6));
+}
+
+#[test]
+fn a_leader_change_revokes_the_old_owner_then_grants_the_new() {
+    let mut lab = Lab::private();
+    let (first, second) = (at(1), at(2));
+    lab.connect(first);
+    lab.connect(second);
+    // the second console holds the options while the first leads (a leader change with the
+    // old owner still here)
+    lab.race.owner = Some(second);
+    lab.race.sync_owner();
+    let revoked = options_messages(&lab.drain(second));
+    assert_eq!(revoked.len(), 1);
+    assert_eq!(
+        (
+            revoked[0].0,
+            revoked[0].1.form,
+            revoked[0].1.seq,
+            revoked[0].1.bits
+        ),
+        (nerd::TRANSFER_OWNERSHIP, nerd::HANDLE_TRANSFER, 1, 0)
+    );
+    let granted = options_messages(&lab.drain(first));
+    // the first: seq 0 its push, 1 its grant at join, 2 this one, with the full values
+    assert_eq!((granted[0].0, granted[0].1.seq), (nerd::GRANT_OWNERSHIP, 2));
+    assert_eq!(granted[0].2, lab.race.options.full());
+    assert_eq!(lab.race.owner, Some(first));
+    // the old owner's Updates are now dropped
+    lab.options_update(second, 5, 1, &owner_payload(&[(3, 3, 32)]));
+    assert!(lab.drain(first).is_empty());
+}
+
+#[test]
+fn a_world_made_private_grants_its_leader() {
+    use crate::core::game::GameWorld;
+    let gate = Arc::new(Gate::default());
+    let mut world = super::Fm5World {
+        race: Race::new(gate, Rng::new(1), 16),
+        activity: Some(super::ACTIVITY),
+        is_player: false,
+        host_xuid: 0,
+        private: false,
+    };
+    let mut out = Vec::new();
+    for (n, x) in [(1, X1), (2, X2)] {
+        let a = at(n);
+        world.receive(
+            &packet(vec![open_connection(nerd::VERSION, x, 7, 6)], 0),
+            a,
+            0,
+            &mut out,
+        );
+        let own = own_attempt(&out.iter().rfind(|s| s.to == a).unwrap().data);
+        let ack = nerd::open_response(0, nerd::REASON_RESPONSE_ACK, own, 7);
+        world.receive(&packet(vec![ack], 1), a, n.into(), &mut out);
+    }
+    out.clear();
+    world.set_private(&mut out);
+    let to = |a: SocketAddr| -> Vec<Vec<u8>> {
+        out.iter()
+            .filter(|s| s.to == a)
+            .map(|s| s.data.clone())
+            .collect()
+    };
+    let granted = options_messages(&to(at(1)));
+    assert_eq!((granted[0].0, granted[0].1.seq), (nerd::GRANT_OWNERSHIP, 1));
+    assert!(to(at(2)).is_empty());
+    assert_eq!(world.state()["leader"], X1.to_string());
+}
