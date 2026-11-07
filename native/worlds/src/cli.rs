@@ -8,26 +8,25 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{core::Profile, core::keys::KeyRing, log::Level};
+use crate::{core::keys::KeyRing, log::Level};
 
 /// The control endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
-    /// `unix:<absolute path>` (Linux).
+    /// `unix:<absolute path>` (served on Linux; another build parses it and refuses to start).
     Unix(PathBuf),
-    /// `pipe:\\.\pipe\fi-ds-<32 hex>` (Windows, Proton).
-    Pipe(String),
 }
+
+/// `--profile`'s only value: the engine runs official worlds only (OD-208; WORLDS_OFFICIAL.md §6).
+pub const PROFILE: &str = "public";
 
 #[derive(Debug, Clone)]
 pub struct RunConfig {
-    pub profile: Profile,
     pub control: Endpoint,
-    pub secret: Option<String>,
     pub game_db: Option<PathBuf>,
     pub grant_keys: Option<KeyRing>,
-    /// Public profile only: the one public UDP socket every world shares (contract §5.2).
-    pub bind: Option<SocketAddr>,
+    /// The one public UDP socket every world shares (contract §5.2).
+    pub bind: SocketAddr,
     pub max_worlds: usize,
     pub max_seats: usize,
     pub memory_limit_mb: u64,
@@ -39,7 +38,6 @@ pub struct RunConfig {
 #[derive(Debug, Clone)]
 pub enum Command {
     Version,
-    ProbeBind(u16),
     Health(Endpoint),
     Run(Box<RunConfig>),
 }
@@ -86,10 +84,7 @@ pub fn parse_role(args: &[String]) -> Result<Role, Invalid> {
     }
 }
 
-/// The environment variable of the secret (read once, then removed by `main`).
-pub const SECRET_ENV: &str = "FI_DS_CONTROL_SECRET";
-
-/// The public profile's `--max-seats` ceiling: `--max-worlds`' 8 at FM5's 16 seats (CR-S99 §1; OD-206 W6).
+/// The `--max-seats` ceiling: `--max-worlds`' 8 at FM5's 16 seats (CR-S99 §1; OD-206 W6).
 /// FH2's own agent default stays 8 × 12 = 96.
 pub const PUBLIC_MAX_SEATS: u64 = 128;
 
@@ -97,7 +92,6 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
     let mut given: Vec<(&'static str, String)> = Vec::new();
     let mut version = false;
     let mut health = false;
-    let mut probe: Option<String> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let (name, inline) = match arg.split_once('=') {
@@ -107,12 +101,6 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
         match name {
             "--version" if inline.is_none() => version = true,
             "--health" if inline.is_none() => health = true,
-            "--probe-bind" => {
-                probe = Some(match inline {
-                    Some(v) => v,
-                    None => it.next().cloned().ok_or("--probe-bind")?,
-                })
-            }
             _ => {
                 let (opt, _) = OPTIONS.iter().find(|(o, _)| *o == name).ok_or("argument")?;
                 if given.iter().any(|(g, _)| g == opt) {
@@ -127,21 +115,10 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
         }
     }
     if version {
-        if health || probe.is_some() || !given.is_empty() {
+        if health || !given.is_empty() {
             return Err("--version");
         }
         return Ok(Command::Version);
-    }
-    if let Some(p) = probe {
-        if health || !given.is_empty() {
-            return Err("--probe-bind");
-        }
-        let port = p
-            .parse::<u16>()
-            .ok()
-            .filter(|p| *p > 0)
-            .ok_or("--probe-bind")?;
-        return Ok(Command::ProbeBind(port));
     }
     let cli = |opt: &str| {
         given
@@ -160,27 +137,12 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
         if given.iter().any(|(g, _)| *g != "--control") {
             return Err("--health");
         }
-        return match control {
-            Endpoint::Unix(_) => Ok(Command::Health(control)),
-            // one pipe instance only: the launcher's; there is nothing to probe
-            Endpoint::Pipe(_) => Err("--health"),
-        };
+        return Ok(Command::Health(control));
     }
-    let profile = Profile::parse(&value("--profile").ok_or("--profile")?).ok_or("--profile")?;
-    let public = profile == Profile::Public;
-    let secret = match &control {
-        Endpoint::Pipe(_) => {
-            let s = env(SECRET_ENV).ok_or("FI_DS_CONTROL_SECRET")?;
-            let ok = s.len() == 64
-                && s.bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-            if !ok {
-                return Err("FI_DS_CONTROL_SECRET");
-            }
-            Some(s)
-        }
-        Endpoint::Unix(_) => None,
-    };
+    // the contract's `--profile`, kept required: `public` is its only value (OD-208)
+    if value("--profile").ok_or("--profile")? != PROFILE {
+        return Err("--profile");
+    }
     let game_db = match value("--game-db") {
         Some(p) if Path::new(&p).is_absolute() => Some(PathBuf::from(p)),
         Some(_) => return Err("--game-db"),
@@ -196,23 +158,9 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
             Some(v) => v.parse::<u64>().ok().filter(|n| ok(*n)).ok_or(opt),
         }
     };
-    let max_worlds = if public {
-        int("--max-worlds", 4, &|n| (1..=8).contains(&n))?
-    } else {
-        int("--max-worlds", 1, &|n| n == 1)?
-    } as usize;
-    let max_seats = if public {
-        int("--max-seats", 48, &|n| (1..=PUBLIC_MAX_SEATS).contains(&n))?
-    } else {
-        int("--max-seats", 12, &|n| (1..=12).contains(&n))?
-    } as usize;
-    let memory_limit_mb = if public {
-        int("--memory-limit-mb", 400, &|n| (128..=65_536).contains(&n))?
-    } else {
-        int("--memory-limit-mb", 0, &|n| {
-            n == 0 || (128..=65_536).contains(&n)
-        })?
-    };
+    let max_worlds = int("--max-worlds", 4, &|n| (1..=8).contains(&n))? as usize;
+    let max_seats = int("--max-seats", 48, &|n| (1..=PUBLIC_MAX_SEATS).contains(&n))? as usize;
+    let memory_limit_mb = int("--memory-limit-mb", 400, &|n| (128..=65_536).contains(&n))?;
     let drain_seconds = int("--drain-seconds", 25, &|n| n <= 300)?;
     let stats_seconds = int("--stats-seconds", 60, &|n| {
         n == 0 || (10..=3600).contains(&n)
@@ -221,21 +169,16 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
         None => Level::Info,
         Some(v) => Level::parse(&v).ok_or("--log-level")?,
     };
-    if public && log_level == Level::Debug {
+    if log_level == Level::Debug {
         return Err("--log-level");
     }
-    // public: the VM's public `addr:port` (the `FI_WORLDS` endpoint), required; private: none
-    // (each world binds its own port at `world.open`)
-    let bind = match (public, value("--bind")) {
-        (true, Some(text)) => Some(text.parse::<SocketAddr>().map_err(|_| "--bind")?),
-        (true, None) => return Err("--bind"),
-        (false, _) if cli("--bind").is_some() => return Err("--bind"),
-        (false, _) => None,
-    };
+    // the VM's public `addr:port` (the `FI_WORLDS` endpoint), required
+    let bind = value("--bind")
+        .ok_or("--bind")?
+        .parse::<SocketAddr>()
+        .map_err(|_| "--bind")?;
     Ok(Command::Run(Box::new(RunConfig {
-        profile,
         control,
-        secret,
         game_db,
         grant_keys,
         bind,
@@ -248,23 +191,13 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
     })))
 }
 
-/// `unix:<absolute path>` on Unix builds, `pipe:\\.\pipe\fi-ds-<32 hex>` on Windows builds.
+/// `unix:<absolute path>` (a `/`-rooted path of at most 100 bytes naming a file). Every build
+/// parses it; only a Unix build serves it (elsewhere `serve` exits 3, contract §3.1).
 pub fn parse_endpoint(s: &str) -> Option<Endpoint> {
-    if let Some(path) = s.strip_prefix("unix:") {
-        let p = PathBuf::from(path);
-        return (cfg!(unix) && p.is_absolute() && path.len() <= 100 && p.file_name().is_some())
-            .then_some(Endpoint::Unix(p));
-    }
-    if let Some(name) = s.strip_prefix("pipe:") {
-        let ok = name.strip_prefix(r"\\.\pipe\fi-ds-").is_some_and(|hex| {
-            hex.len() == 32
-                && hex
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        });
-        return (cfg!(windows) && ok).then(|| Endpoint::Pipe(name.to_string()));
-    }
-    None
+    let path = s.strip_prefix("unix:")?;
+    let p = PathBuf::from(path);
+    (path.starts_with('/') && path.len() <= 100 && p.file_name().is_some())
+        .then_some(Endpoint::Unix(p))
 }
 
 #[cfg(test)]
@@ -278,8 +211,8 @@ mod tests {
     #[test]
     fn the_first_argument_names_the_role() {
         assert_eq!(
-            parse_role(&args(&["serve", "--profile", "private"])),
-            Ok(Role::Serve(args(&["--profile", "private"])))
+            parse_role(&args(&["serve", "--profile", "public"])),
+            Ok(Role::Serve(args(&["--profile", "public"])))
         );
         assert_eq!(parse_role(&args(&["--version"])), Ok(Role::Version));
         assert_eq!(
@@ -296,7 +229,7 @@ mod tests {
         );
         for bad in [
             &[][..],
-            &["--profile", "private"],
+            &["--profile", "public"],
             &["Serve"],
             &["--version", "x"],
         ] {

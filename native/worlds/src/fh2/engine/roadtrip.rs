@@ -1329,7 +1329,7 @@ mod tests {
         super::{Event, Why, testkit},
         *,
     };
-    use crate::{core::Profile, fh2::RelaySettings};
+    use crate::fh2::RelaySettings;
 
     /// Three locations of four two-player events, one class: a vote for any group size.
     fn catalog() -> Arc<RoadTripCatalog> {
@@ -1345,7 +1345,7 @@ mod tests {
 
     fn road_trip() -> Engine {
         let settings = super::super::EngineSettings {
-            relay: RelaySettings::for_profile(Profile::Public),
+            relay: RelaySettings::new(),
             max_players: 12,
             races: true,
             car_meet_lobby: None,

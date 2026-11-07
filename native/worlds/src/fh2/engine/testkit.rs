@@ -6,7 +6,7 @@
 use std::net::SocketAddr;
 
 use super::{Engine, EngineKind, EngineSettings, Policy, random::EngineRandom, random::Seeds};
-use crate::{core::Profile, fh2::RelaySettings};
+use crate::fh2::RelaySettings;
 
 /// Admits every identity on every endpoint.
 #[derive(Debug, Default)]
@@ -30,10 +30,10 @@ impl Policy for AllowAll {
     }
 }
 
-/// A free-roam engine with events, the private profile's limits.
+/// A free-roam engine with events, the official worlds' limits.
 pub(super) fn engine() -> Engine {
     let settings = EngineSettings {
-        relay: RelaySettings::for_profile(Profile::Private),
+        relay: RelaySettings::new(),
         max_players: 12,
         races: true,
         car_meet_lobby: None,

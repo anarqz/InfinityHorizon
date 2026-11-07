@@ -87,9 +87,9 @@ pub fn seq_before(seq: u8) -> u8 {
     ((u16::from(seq) + 254) % 255) as u8
 }
 
-/// The longest packet the server sends options in (bytes, header included): a relay leg carries
-/// at most this much ([`crate::core::legs::MAX_PAYLOAD`]), below FH2's 1372-byte packet limit.
-pub const PACKET_MAX_BYTES: usize = crate::core::legs::MAX_PAYLOAD;
+/// The longest packet the server sends options in (bytes, header included): the engine's
+/// datagram bound ([`crate::core::MAX_PAYLOAD`]), below FH2's 1372-byte packet limit.
+pub const PACKET_MAX_BYTES: usize = crate::core::MAX_PAYLOAD;
 /// The longest options payload in one message (bits): with its message head (35 bits) and the
 /// packet header it stays inside [`PACKET_MAX_BYTES`]. A long table (a full one is about 12.5-14
 /// k bits, lobby spec §13.7) goes as several Updates.

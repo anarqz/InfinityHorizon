@@ -1042,9 +1042,8 @@ mod server {
     use serde_json::{Value, json};
 
     use crate::{
-        control::{ConnId, Transport},
-        core::{BoundWorld, Config, Io, Profile, Server, SockId, keys::KeyRing},
-        net::BindFailure,
+        control::ConnId,
+        core::{Config, Io, Server, keys::KeyRing},
     };
 
     const CONN: ConnId = 1;
@@ -1054,10 +1053,6 @@ mod server {
     struct NoIo;
 
     impl Io for NoIo {
-        fn bind_world(&mut self, _port: u16) -> Result<BoundWorld, BindFailure> {
-            Err(BindFailure::Other)
-        }
-        fn release_world(&mut self, _sock: SockId) {}
         fn memory_used_bytes(&self) -> u64 {
             0
         }
@@ -1071,7 +1066,7 @@ mod server {
 
     fn server() -> (Server, NoIo) {
         crate::log::mute();
-        let mut c = Config::new(Profile::Public);
+        let mut c = Config::new();
         let public = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
         c.keys = KeyRing::parse(&format!(
             "test-k1:{}",
@@ -1082,7 +1077,7 @@ mod server {
         c.public_socket = true;
         c.max_seats = 64;
         let mut s = Server::new(c, 1, 0);
-        s.connect(CONN, Transport::Unix);
+        s.connect(CONN);
         let mut io = NoIo;
         let r = s.request(
             &mut io,
@@ -1157,9 +1152,6 @@ fn the_state_names_the_race_its_players_and_a_private_leader() {
     let gate = Arc::new(Gate::default());
     let mut world = super::Fm5World {
         race: Race::new(gate, Rng::new(1), 16),
-        activity: Some(super::ACTIVITY),
-        is_player: false,
-        host_xuid: 0,
         private: false,
     };
     let mut lab_out = Vec::new();
@@ -1187,7 +1179,7 @@ fn the_state_names_the_race_its_players_and_a_private_leader() {
     assert_eq!(state["private"], true);
     assert_eq!(state["leader"], X1.to_string(), "the longest present");
     assert_eq!(world.spec(), json!({"activity": "race"}));
-    assert_eq!(world.next_tick(crate::core::Profile::Public, 5), Some(25));
+    assert_eq!(world.next_tick(5), Some(25));
 }
 
 // ---- W16: the private lobby leader owns the GameOptions (lobby spec §13) ----
@@ -1529,9 +1521,6 @@ fn a_world_made_private_grants_its_leader() {
     let gate = Arc::new(Gate::default());
     let mut world = super::Fm5World {
         race: Race::new(gate, Rng::new(1), 16),
-        activity: Some(super::ACTIVITY),
-        is_player: false,
-        host_xuid: 0,
         private: false,
     };
     let mut out = Vec::new();

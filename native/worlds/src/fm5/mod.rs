@@ -4,8 +4,8 @@
 //! `tools/fm5-probe/{nerd,world}.py`; their golden vectors are `tools/fm5-probe/test_world.py`'s
 //! (`tests`). Not run with the game from here: the lab's Python server is what raced.
 //!
-//! A world runs one private race lobby: `activity: "race"` (required in the public profile,
-//! refused in the private one, as FH2's), at most 16 players (CR-S99 §1). It takes no other
+//! A world runs one private race lobby: `activity: "race"` (required, as FH2's activity), at most
+//! 16 players (CR-S99 §1). It takes no other
 //! game-scoped field and answers no game command. It may become a private official world (CR-S99:
 //! private race lobbies); FM5 has no known session privacy message, so that marks the world, names
 //! its leader in `world.state` and gives that leader the game's options (W16: the GameOptions
@@ -26,7 +26,6 @@ use serde_json::{Map, Value, json};
 use crate::{
     control::proto::{CmdError, CmdResult},
     core::{
-        Profile,
         fields::Obj,
         game::{Game, GameCtx, GameEvent, GameWorld, Notice, OpenInfo, Send},
         rng::Rng,
@@ -58,23 +57,15 @@ impl Game for Fm5 {
         if info.max_players > MAX_PLAYERS {
             return Err(o.bad("maxPlayers"));
         }
-        let activity = match (info.profile, o.has("activity")) {
-            (Profile::Private, true) => return Err(o.bad("activity")),
-            (Profile::Private, false) => None,
-            (Profile::Public, _) => match o.str("activity")? {
-                ACTIVITY => Some(ACTIVITY),
-                _ => return Err(o.bad("activity")),
-            },
-        };
+        if o.str("activity")? != ACTIVITY {
+            return Err(o.bad("activity"));
+        }
         let world = Fm5World {
             race: Race::new(
                 info.admit.clone(),
                 Rng::new(info.rng.next_u64()),
                 usize::from(info.max_players),
             ),
-            activity,
-            is_player: info.is_player,
-            host_xuid: info.host_xuid,
             private: false,
         };
         Ok((Box::new(world), Vec::new()))
@@ -84,10 +75,6 @@ impl Game for Fm5 {
 /// One FM5 world's game side: its race lobby.
 pub struct Fm5World {
     race: Race,
-    /// A public world's activity (`None`: private).
-    activity: Option<&'static str>,
-    is_player: bool,
-    host_xuid: u64,
     /// A private official world (one way; CR-S99, WORLDS_OFFICIAL.md §12.8b).
     private: bool,
 }
@@ -100,7 +87,7 @@ impl Fm5World {
 
 impl GameWorld for Fm5World {
     fn spec(&self) -> Value {
-        json!({"activity": self.activity})
+        json!({"activity": ACTIVITY})
     }
 
     fn lobbies(&self) -> Vec<&'static str> {
@@ -127,7 +114,7 @@ impl GameWorld for Fm5World {
         self.flush(out);
     }
 
-    fn next_tick(&self, _profile: Profile, now: u64) -> Option<u64> {
+    fn next_tick(&self, now: u64) -> Option<u64> {
         // pings every 500 ms, resends after 400 ms, the grid every second
         (!self.race.is_idle()).then_some(now + 20)
     }
@@ -164,8 +151,8 @@ impl GameWorld for Fm5World {
         if self.race.launched {
             m.insert("inProgress".into(), Value::Bool(true));
         }
-        let host_in = self.is_player && xuids.contains(&self.host_xuid);
-        m.insert("hostInWorld".into(), Value::Bool(host_in));
+        // an official world has no host's own game (contract §4.5)
+        m.insert("hostInWorld".into(), Value::Bool(false));
         if self.private {
             m.insert("private".into(), Value::Bool(true));
             if let Some(x) = self.race.leader() {
@@ -189,7 +176,7 @@ impl GameWorld for Fm5World {
 
     /// CR-S99: FM5's private race lobbies.
     fn supports_private(&self) -> bool {
-        self.activity == Some(ACTIVITY)
+        true
     }
 
     /// FM5 has no known session privacy message (lobby spec: none found, unlike FH2's

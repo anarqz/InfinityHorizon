@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 // Written for Infinity; fh2-mods (conner-mcvay, MIT) used as inspiration and reference; no code copied.
-//! The public profile's official worlds (WORLDS_OFFICIAL.md §3, §6; contract §5.2, §6.3): the
+//! Official worlds (WORLDS_OFFICIAL.md §3, §6; contract §5.2, §6.3): the
 //! `official` open and context, the `{official: vmId}` grant host and the FIUP host tag, and the
 //! one direct public socket. Synthetic only: a test key, synthetic XUIDs, TEST-NET addresses.
 
@@ -9,18 +9,17 @@ use std::net::SocketAddr;
 use serde_json::{Value, json};
 
 use super::{
-    BoundWorld, Config, Io, PUBLIC_SOCKET, Profile, Server, SockId, fiup,
+    Config, Io, Server, fiup,
     grant::{self, Context, Failure},
     keys::{KeyRing, encode_base64},
 };
 use crate::{
-    control::{ConnId, Transport},
+    control::ConnId,
     fh2::engine::{
         bits::Rd,
         datagram,
         message::{self, Message},
     },
-    net::BindFailure,
 };
 
 const SEED: [u8; 32] = [7; 32];
@@ -42,10 +41,6 @@ const PROOF_KEY: [u8; 32] = [9; 32];
 struct NoIo;
 
 impl Io for NoIo {
-    fn bind_world(&mut self, _port: u16) -> Result<BoundWorld, BindFailure> {
-        Err(BindFailure::Other) // the public profile never binds a world socket
-    }
-    fn release_world(&mut self, _sock: SockId) {}
     fn memory_used_bytes(&self) -> u64 {
         0
     }
@@ -106,12 +101,12 @@ fn punch(grant: &str, world: &str, host: &str) -> Value {
 
 fn server() -> (Server, NoIo) {
     crate::log::mute();
-    let mut c = Config::new(Profile::Public);
+    let mut c = Config::new();
     c.keys = ring();
     c.games = crate::registered_games(Default::default());
     c.public_socket = true;
     let mut s = Server::new(c, 1, 0);
-    s.connect(CONN, Transport::Unix);
+    s.connect(CONN);
     let mut io = NoIo;
     let r = s.request(
         &mut io,
@@ -208,14 +203,14 @@ fn responses(s: &mut Server, to: SocketAddr) -> Vec<u8> {
 /// Runs FIUP for the game socket at `game` with `host` in the header: the ack's type, if any.
 fn prove(s: &mut Server, io: &mut NoIo, game: SocketAddr, host: u64) -> Option<u8> {
     let hello = fiup::joiner::hello(&header(host), 0, [5; 16], &PROOF_KEY);
-    s.datagram(io, 30, PUBLIC_SOCKET, game, &hello);
+    s.datagram(io, 30, game, &hello);
     let challenge = s
         .take_datagrams()
         .into_iter()
         .find(|d| d.to == game && d.data.starts_with(b"FIUP"))?
         .data;
     let response = fiup::joiner::response(&challenge, &PROOF_KEY);
-    s.datagram(io, 40, PUBLIC_SOCKET, game, &response);
+    s.datagram(io, 40, game, &response);
     let ack = s.take_datagrams().into_iter().find(|d| d.to == game)?;
     Some(ack.data[5])
 }
@@ -350,10 +345,13 @@ fn a_joiner_proven_by_fiup_with_the_official_tag_is_admitted_on_the_public_socke
         (Some(1), Some(1)),
         "{r}"
     );
-    assert_eq!(r["legs"], 0, "no relay legs on an official world");
+    assert!(
+        r.get("legs").is_none(),
+        "no relay legs on an official world: {r}"
+    );
     let game = ep("192.0.2.20:3074");
     // an unproven socket's game datagram has no world on the public socket
-    s.datagram(&mut io, 25, PUBLIC_SOCKET, game, &open_connection(J1));
+    s.datagram(&mut io, 25, game, &open_connection(J1));
     assert!(s.take_datagrams().is_empty());
     assert_eq!(s.stats.unrouted_dropped, 1);
     // a header that names the host as 0 or as a player XUID is not this world's proof
@@ -361,12 +359,12 @@ fn a_joiner_proven_by_fiup_with_the_official_tag_is_admitted_on_the_public_socke
     assert_eq!(prove(&mut s, &mut io, game, HOST_XUID), None);
     let tag = fiup::official_host_tag(VM);
     assert_eq!(prove(&mut s, &mut io, game, tag), Some(4), "the ack");
-    s.datagram(&mut io, 2000, PUBLIC_SOCKET, game, &open_connection(J1));
+    s.datagram(&mut io, 2000, game, &open_connection(J1));
     assert_eq!(responses(&mut s, game), vec![0], "admitted");
     // the same address from another port is neither proven nor routed
     let other = ep("192.0.2.20:3075");
     let dropped = s.stats.unrouted_dropped;
-    s.datagram(&mut io, 2010, PUBLIC_SOCKET, other, &open_connection(J1));
+    s.datagram(&mut io, 2010, other, &open_connection(J1));
     assert!(responses(&mut s, other).is_empty());
     assert_eq!(s.stats.unrouted_dropped, dropped + 1);
 }
@@ -390,17 +388,18 @@ fn datagrams_reach_only_the_world_that_holds_their_grant_or_binding() {
         &PROOF_KEY,
     );
     let game = ep("192.0.2.20:3074");
-    s.datagram(&mut io, 30, PUBLIC_SOCKET, game, &stranger);
+    s.datagram(&mut io, 30, game, &stranger);
     assert!(s.take_datagrams().is_empty());
     assert_eq!(s.stats.unrouted_dropped, 1);
-    // a datagram on any other socket id is not the public socket's
-    s.datagram(&mut io, 30, PUBLIC_SOCKET + 1, game, b"FIUP");
+    // a game datagram from a source no world bound yet: dropped, no answer
+    s.datagram(&mut io, 30, game, &open_connection(J1));
+    assert!(s.take_datagrams().is_empty());
     assert_eq!(s.stats.unrouted_dropped, 2);
     assert_eq!(
         prove(&mut s, &mut io, game, fiup::official_host_tag(VM)),
         Some(4)
     );
-    s.datagram(&mut io, 2000, PUBLIC_SOCKET, game, &open_connection(J1));
+    s.datagram(&mut io, 2000, game, &open_connection(J1));
     assert_eq!(responses(&mut s, game), vec![0]);
     let st = |s: &mut Server, io: &mut NoIo, w: &str| {
         call(
@@ -469,13 +468,7 @@ fn answers_by_lobby(activity: &str, car_meet_lobby: Option<u32>) -> Vec<(u32, Ve
                 prove(&mut s, &mut io, game, fiup::official_host_tag(VM)),
                 Some(4)
             );
-            s.datagram(
-                &mut io,
-                2000,
-                PUBLIC_SOCKET,
-                game,
-                &open_connection_to(J1, lobby),
-            );
+            s.datagram(&mut io, 2000, game, &open_connection_to(J1, lobby));
             (lobby, responses(&mut s, game))
         })
         .collect()

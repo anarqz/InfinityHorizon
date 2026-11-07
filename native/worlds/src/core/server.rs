@@ -13,7 +13,7 @@ use std::{
 use serde_json::{Map, Value, json};
 
 use super::{
-    Config, Datagram, Io, PUBLIC_SOCKET, Profile, SockId,
+    Config, Datagram, Io,
     admission::Shared,
     events::{self, EventQueue},
     fields::{Obj, text_id},
@@ -23,14 +23,16 @@ use super::{
     timers::{Timer, Timers},
     world::{self, Ctx, World},
 };
-use crate::nat::{NatProbe, ProbeConfig};
 use crate::{
     control::{
-        ConnId, Transport,
+        ConnId,
         proto::{self, CmdError, CmdResult},
     },
     log, log_ids,
 };
+
+/// The `profile` `hello` answers (contract §3.2): official worlds only (OD-208).
+pub const PROFILE: &str = "public";
 
 const HOUSEKEEPING_MS: u64 = 1000;
 pub(crate) const MIB: u64 = 1024 * 1024;
@@ -45,12 +47,11 @@ const CPU_WINDOW_MS: u64 = 60_000;
 const LAG_UNHEALTHY_MS: u64 = 5000;
 const LAG_WINDOW_MS: u64 = 30_000;
 const LAG_SAMPLES: usize = 512;
-/// A private child closes within 2 s of EOF; the world lapses 45 s after open without context.
+/// A world lapses 45 s after open without context.
 const NO_CONTEXT_LAPSE_MS: u64 = super::admission::HOST_LEASE_MS;
 
 #[derive(Debug)]
 struct Session {
-    transport: Transport,
     /// A request with an `op` was seen (the first one must be `hello`, §2.1).
     seen: bool,
     hello: bool,
@@ -63,7 +64,7 @@ pub struct Stats {
     pub datagrams_in: u64,
     pub datagrams_out: u64,
     pub datagrams_dropped: u64,
-    /// Public: datagrams the one socket could route to no world (§5.2).
+    /// Datagrams the public socket could route to no world (§5.2).
     pub unrouted_dropped: u64,
     pub rate_drops: u64,
     pub send_errors: u64,
@@ -137,10 +138,6 @@ impl Server {
         &self.cfg
     }
 
-    pub fn profile(&self) -> Profile {
-        self.cfg.profile
-    }
-
     fn advance(&mut self, now: u64) {
         self.now = self.now.max(now);
     }
@@ -184,14 +181,6 @@ impl Server {
 
     pub fn world_ids(&self) -> Vec<String> {
         self.worlds.keys().cloned().collect()
-    }
-
-    /// The world a private socket serves.
-    pub fn world_of_socket(&self, sock: SockId) -> Option<&str> {
-        self.worlds
-            .values()
-            .find(|w| w.sock == Some(sock))
-            .map(|w| w.id.as_str())
     }
 
     // ----- runtime measurements --------------------------------------------------------------
@@ -238,11 +227,10 @@ impl Server {
 
     // ----- sessions ---------------------------------------------------------------------------
 
-    pub fn connect(&mut self, conn: ConnId, transport: Transport) {
+    pub fn connect(&mut self, conn: ConnId) {
         self.sessions.insert(
             conn,
             Session {
-                transport,
                 seen: false,
                 hello: false,
                 controller: false,
@@ -250,8 +238,9 @@ impl Server {
         );
     }
 
-    /// A connection ended (EOF, error, or closed by us).
-    pub fn disconnect(&mut self, io: &mut dyn Io, now: u64, conn: ConnId) {
+    /// A connection ended (EOF, error, or closed by us). The worlds stay: a controller that
+    /// comes back finds them (§2.2).
+    pub fn disconnect(&mut self, now: u64, conn: ConnId) {
         self.advance(now);
         let Some(session) = self.sessions.remove(&conn) else {
             return;
@@ -264,21 +253,14 @@ impl Server {
         log::info(log_ids::DS_CONTROL_CLOSED)
             .field("controller", true)
             .emit();
-        if self.cfg.profile == Profile::Private || session.transport == Transport::Pipe {
-            // the process rule: the launcher is gone, so is the world (no Close to peers)
-            for id in self.world_ids() {
-                self.close_world(io, &id, "controller", None, false);
-            }
-            self.set_exit(0);
-        }
     }
 
     /// The controller stopped reading for 30 s while its event queue was full (§4.6).
-    pub fn controller_stalled(&mut self, io: &mut dyn Io, now: u64) {
+    pub fn controller_stalled(&mut self, now: u64) {
         let Some(conn) = self.controller else { return };
         log::error(log_ids::DS_CONTROL_STALLED).emit();
         self.closes.push(conn);
-        self.disconnect(io, now, conn);
+        self.disconnect(now, conn);
     }
 
     fn set_exit(&mut self, code: i32) {
@@ -310,13 +292,9 @@ impl Server {
         if !session.hello {
             if op != "hello" && first {
                 // §2.1: a first message that is not `hello` fails authentication; the
-                // connection closes, and the launcher's pipe (the only one) ends the process
-                let pipe = session.transport == Transport::Pipe;
+                // connection closes (never the engine)
                 log::error(log_ids::DS_CONTROL_UNAUTHORIZED).emit();
                 self.closes.push(conn);
-                if pipe {
-                    self.set_exit(4);
-                }
                 return proto::reply_err(&id, &CmdError::code(proto::UNAUTHORIZED));
             }
             if op != "hello" {
@@ -368,22 +346,6 @@ impl Server {
     }
 
     fn hello(&mut self, conn: ConnId, o: Obj) -> CmdResult {
-        let transport = self.sessions.get(&conn).map(|s| s.transport);
-        if transport == Some(Transport::Pipe) {
-            let ok = match (
-                &self.cfg.control_secret,
-                o.get("secret").and_then(Value::as_str),
-            ) {
-                (Some(want), Some(got)) => constant_time_eq(want.as_bytes(), got.as_bytes()),
-                _ => false,
-            };
-            if !ok {
-                log::error(log_ids::DS_CONTROL_UNAUTHORIZED).emit();
-                self.closes.push(conn);
-                self.set_exit(4);
-                return Err(CmdError::code(proto::UNAUTHORIZED));
-            }
-        }
         // the contract's integer (`proto: 1`); the step-1 range form `[lo, hi]` is still read
         let range = match o.get("proto") {
             Some(Value::Number(n)) => n
@@ -398,7 +360,8 @@ impl Server {
         .ok_or_else(|| CmdError::bad("proto"))?;
         let controller = if o.has("controller") {
             let c = Obj::new(o.obj("controller")?, "controller");
-            if !matches!(c.str("kind")?, "launcher" | "vm") {
+            // the Worlds host's agent; the launcher controls no world any more (OD-208)
+            if c.str("kind")? != "vm" {
                 return Err(c.bad("kind"));
             }
             let v = c.str("version")?;
@@ -418,7 +381,7 @@ impl Server {
         let hi = range.1.min(crate::PROTO_MAX as u64);
         if lo > hi {
             log::error(log_ids::DS_CONTROL_PROTO_UNSUPPORTED).emit();
-            if transport == Some(Transport::Pipe) || controller {
+            if controller {
                 self.closes.push(conn);
                 self.set_exit(5);
             }
@@ -441,7 +404,7 @@ impl Server {
             "build".into(),
             json!({"version": crate::VERSION, "commit": crate::commit()}),
         );
-        m.insert("profile".into(), json!(self.cfg.profile.as_str()));
+        m.insert("profile".into(), json!(PROFILE));
         m.insert("capacity".into(), Value::Object(self.capacity_map(None)));
         m.insert("draining".into(), Value::Bool(self.drain.is_some()));
         m.insert("worlds".into(), json!(self.world_ids()));
@@ -479,9 +442,6 @@ impl Server {
     }
 
     fn cpu_guard(&self) -> bool {
-        if self.cfg.profile != Profile::Public {
-            return false;
-        }
         let (Some(first), Some(last)) = (self.cpu_samples.front(), self.cpu_samples.back()) else {
             return false;
         };
@@ -531,9 +491,7 @@ impl Server {
     }
 
     fn ready(&self) -> bool {
-        let socket = self.cfg.profile == Profile::Private || self.cfg.public_socket;
-        let budget = self.cfg.profile == Profile::Private || self.budgeted();
-        socket && budget && !self.keys.is_empty() && self.healthy_loop()
+        self.cfg.public_socket && self.budgeted() && !self.keys.is_empty() && self.healthy_loop()
     }
 
     fn health_value(&self, io: &dyn Io) -> Map<String, Value> {
@@ -688,18 +646,14 @@ impl Server {
             .ok()
             .and_then(|g| self.cfg.games.iter().find(|x| x.id() == g))
             .map_or(world::MAX_PLAYERS_DEFAULT, |g| g.max_players());
-        let spec = world::parse_open(o, self.cfg.profile, cap)?;
+        let spec = world::parse_open(o, cap)?;
         let Some(game) = self.cfg.games.iter().find(|g| g.id() == spec.game).cloned() else {
             return Err(CmdError::bad("game"));
         };
-        let profile = self.cfg.profile;
         let gate = Shared::new(World::rules(&id, &spec));
         let admit: Arc<dyn Admit> = Arc::new(gate.clone());
         let info = |rng| OpenInfo {
             request: o,
-            profile,
-            host_xuid: spec.host_xuid,
-            is_player: spec.is_player,
             max_players: spec.max_players,
             rng,
             admit: admit.clone(),
@@ -726,7 +680,7 @@ impl Server {
         if self.seats() + spec.max_players as usize > self.cfg.max_seats {
             return Err(self.refuse("seats"));
         }
-        let reserve = if self.cfg.profile == Profile::Public && self.budgeted() {
+        let reserve = if self.budgeted() {
             WORLD_BASE_MB + SEAT_MB * spec.max_players as u64
         } else {
             0
@@ -750,50 +704,11 @@ impl Server {
         let mut rng = self.rng.clone();
         let (game_world, game_notices) = game.open(info(&mut rng))?;
         self.rng = rng;
-        // private: the socket is bound before the reply, on exactly the asked port (§5.1)
-        let bound = match &spec.network {
-            Some(n) => match io.bind_world(n.port) {
-                Ok(b) => Some(b),
-                Err(f) => {
-                    self.events.push(
-                        events::NOTICE,
-                        Some(&id),
-                        obj(
-                            json!({"id": events::N_BIND_FAILED, "level": "error", "worldId": id,
-                                   "args": {"reason": f.reason()}}),
-                        ),
-                    );
-                    return Err(CmdError::code(proto::BIND_FAILED).reason(f.reason()));
-                }
-            },
-            None => None,
-        };
         let mut w = World::new(&id, spec, game_world, gate, self.now);
         w.reserved_mb = reserve;
-        if let Some(b) = bound {
-            w.sock = Some(b.sock);
-            w.port = b.port;
-            w.dual = b.dual;
-            // STUN, UPnP and punches on the world socket (§5.1); their threads only resolve the
-            // STUN servers and talk to the router
-            if let Some(n) = &w.spec.network {
-                let config = ProbeConfig {
-                    stun_names: n.stun_names.clone(),
-                    round_ms: n.stun_interval_ms,
-                    resolve_names: n.resolve_stun,
-                    map_port: n.resolve_stun && n.map_port,
-                    ..ProbeConfig::for_port(b.port)
-                };
-                w.nat = Some(NatProbe::start(config, b.dual, self.now));
-            }
-        }
         let mut reply = Map::new();
         reply.insert("worldId".into(), json!(id));
         reply.insert("lobbies".into(), json!(w.game.lobbies()));
-        if let Some(n) = w.network_facts() {
-            reply.insert("network".into(), n);
-        }
-        w.mark_network();
         w.open_reply = reply.clone();
         for n in game_notices {
             let mut body = obj(json!({"id": n.id, "level": n.level, "worldId": id}));
@@ -806,8 +721,6 @@ impl Server {
             .world(&id)
             .field("game", w.spec.game.as_str())
             .field("maxPlayers", w.spec.max_players)
-            .field("isPlayer", w.spec.is_player)
-            .field("port", w.port)
             .emit();
         self.worlds.insert(id.clone(), w);
         self.timers
@@ -842,7 +755,6 @@ impl Server {
             worlds,
             events,
             timers,
-            cfg,
             keys,
             now,
             ..
@@ -851,7 +763,6 @@ impl Server {
             return Err(CmdError::code(proto::NOT_FOUND));
         };
         let mut ctx = Ctx {
-            profile: cfg.profile,
             keys_empty: keys.is_empty(),
             keys,
             events,
@@ -884,8 +795,7 @@ impl Server {
         }));
         match result {
             Ok(r) => {
-                let sock = self.worlds.get(&id).and_then(|w| w.sock);
-                push_sends(&mut self.out, sock, sends);
+                push_sends(&mut self.out, sends);
                 if !self.after_world_guarded(io, &id) {
                     return Err(CmdError::code(proto::INTERNAL));
                 }
@@ -914,14 +824,12 @@ impl Server {
             worlds,
             events,
             timers,
-            cfg,
             keys,
             now,
             ..
         } = self;
         let Some(w) = worlds.get_mut(id) else { return };
         let mut ctx = Ctx {
-            profile: cfg.profile,
             keys_empty: keys.is_empty(),
             keys,
             events,
@@ -930,13 +838,9 @@ impl Server {
         };
         w.emit_events(&mut ctx);
         w.emit_state(&mut ctx, false);
-        match w.game.next_tick(cfg.profile, *now) {
+        match w.game.next_tick(*now) {
             Some(at) => ctx.timers.schedule(Timer::EngineTick(id.to_string()), at),
             None => ctx.timers.cancel(&Timer::EngineTick(id.to_string())),
-        }
-        match w.net_deadline(*now) {
-            Some(at) => ctx.timers.reschedule(Timer::NetTick(id.to_string()), at),
-            None => ctx.timers.cancel(&Timer::NetTick(id.to_string())),
         }
     }
 
@@ -967,12 +871,11 @@ impl Server {
                 w.game.close_all(&mut sends);
             }));
             if closing.is_ok() {
-                push_sends(&mut self.out, w.sock, sends);
+                push_sends(&mut self.out, sends);
             }
         }
         {
             let mut ctx = Ctx {
-                profile: self.cfg.profile,
                 keys_empty: self.keys.is_empty(),
                 keys: &self.keys,
                 events: &mut self.events,
@@ -983,12 +886,8 @@ impl Server {
             let _ = catch_unwind(AssertUnwindSafe(|| w.diag(&mut ctx, true)));
             w.gate.lock().clear();
         }
-        if let Some(sock) = w.sock {
-            io.release_world(sock);
-        }
         self.timers.cancel(&Timer::StateFlush(id.to_string()));
         self.timers.cancel(&Timer::EngineTick(id.to_string()));
-        self.timers.cancel(&Timer::NetTick(id.to_string()));
         let mut body = obj(json!({"worldId": id, "reason": reason}));
         if let Some(f) = fault {
             body.insert("fault".into(), json!(f));
@@ -1011,32 +910,14 @@ impl Server {
 
     // ----- datagrams and timers ---------------------------------------------------------------
 
-    /// A datagram received on `sock` from `from`.
-    pub fn datagram(
-        &mut self,
-        io: &mut dyn Io,
-        now: u64,
-        sock: SockId,
-        from: SocketAddr,
-        data: &[u8],
-    ) {
+    /// A datagram received on the public socket from `from`: one socket for every world,
+    /// joiners straight to it (§5.2, OD-189).
+    pub fn datagram(&mut self, io: &mut dyn Io, now: u64, from: SocketAddr, data: &[u8]) {
         self.advance(now);
         self.stats.datagrams_in += 1;
         let from = crate::stun::plain_endpoint(from);
-        if self.cfg.profile == Profile::Public {
-            // one public socket for every world, joiners straight to it (§5.2, OD-189)
-            let owner = (sock == PUBLIC_SOCKET)
-                .then(|| self.public_owner(data, from))
-                .flatten();
-            let Some(id) = owner else {
-                self.stats.unrouted_dropped += 1;
-                self.stats.datagrams_dropped += 1;
-                return;
-            };
-            self.world_datagram(io, &id, from, data);
-            return;
-        }
-        let Some(id) = self.world_of_socket(sock).map(str::to_string) else {
+        let Some(id) = self.public_owner(data, from) else {
+            self.stats.unrouted_dropped += 1;
             self.stats.datagrams_dropped += 1;
             return;
         };
@@ -1078,8 +959,7 @@ impl Server {
             Ok(()) => {
                 let after = w.game.dropped();
                 self.stats.datagrams_dropped += after - before;
-                let sock = w.sock;
-                push_sends(&mut self.out, sock, sends);
+                push_sends(&mut self.out, sends);
                 self.after_world_guarded(io, &id);
             }
             Err(_) => self.fault(io, &id, "world.panic.datagram"),
@@ -1097,7 +977,6 @@ impl Server {
                 }
                 Timer::EngineTick(id) => self.engine_tick(io, &id),
                 Timer::Drain => self.check_drain(io),
-                Timer::NetTick(id) => self.net_tick(io, &id),
             }
         }
     }
@@ -1110,43 +989,10 @@ impl Server {
         let now = self.now;
         match catch_unwind(AssertUnwindSafe(|| w.game.tick(now, &mut sends))) {
             Ok(()) => {
-                let sock = w.sock;
-                push_sends(&mut self.out, sock, sends);
+                push_sends(&mut self.out, sends);
                 self.after_world_guarded(io, id);
             }
             Err(_) => self.fault(io, id, "world.panic.tick"),
-        }
-    }
-
-    fn net_tick(&mut self, io: &mut dyn Io, id: &str) {
-        let Server {
-            worlds,
-            events,
-            timers,
-            cfg,
-            keys,
-            now,
-            ..
-        } = self;
-        let Some(w) = worlds.get_mut(id) else {
-            return;
-        };
-        let mut ctx = Ctx {
-            profile: cfg.profile,
-            keys_empty: keys.is_empty(),
-            keys,
-            events,
-            timers,
-            now: *now,
-        };
-        let mut sends = Vec::new();
-        match catch_unwind(AssertUnwindSafe(|| w.net_tick(&mut ctx, &mut sends))) {
-            Ok(()) => {
-                let sock = w.sock;
-                push_sends(&mut self.out, sock, sends);
-                self.after_world_guarded(io, id);
-            }
-            Err(_) => self.fault(io, id, "world.panic.net"),
         }
     }
 
@@ -1184,7 +1030,6 @@ impl Server {
                 worlds,
                 events,
                 timers,
-                cfg,
                 keys,
                 ..
             } = self;
@@ -1192,7 +1037,6 @@ impl Server {
                 continue;
             };
             let mut ctx = Ctx {
-                profile: cfg.profile,
                 keys_empty: keys.is_empty(),
                 keys,
                 events,
@@ -1236,10 +1080,8 @@ impl Server {
     }
 }
 
-fn push_sends(out: &mut Vec<Datagram>, sock: Option<SockId>, sends: Vec<Send>) {
-    let sock = sock.unwrap_or(PUBLIC_SOCKET);
+fn push_sends(out: &mut Vec<Datagram>, sends: Vec<Send>) {
     out.extend(sends.into_iter().map(|s| Datagram {
-        sock,
         to: s.to,
         data: s.data,
     }));
@@ -1250,16 +1092,4 @@ fn obj(v: Value) -> Map<String, Value> {
         Value::Object(m) => m,
         _ => Map::new(),
     }
-}
-
-/// Compares in time independent of where the inputs differ (length is not secret: 64).
-pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        diff |= x ^ y;
-    }
-    std::hint::black_box(diff) == 0
 }

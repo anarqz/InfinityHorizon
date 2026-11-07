@@ -986,8 +986,8 @@ mod tests {
         p.objects.insert((1, 7), big);
         p.objects.insert((1, 8), small);
         let before = p.history_entries();
-        // the private profile's share fitted to 12 players: 4096 / 11
-        let cap = 372;
+        // the share fitted to 12 players: 2048 / 11
+        let cap = 186;
         assert!(before > cap + 300, "{before}");
         // the reference's pass (compaction and the per-object guard) cannot get there
         assert!(e.trim_history(s, cap) > cap);
