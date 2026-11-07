@@ -44,16 +44,16 @@ public static class BeholderAnnounce
     }
 }
 
-/// <summary><c>GET /beholder/v1/servers</c> and <c>/relays</c>: <c>{items}</c>.</summary>
+/// <summary><c>GET /beholder/v1/servers</c>: <c>{items}</c>.</summary>
 public sealed record ListingPage(IReadOnlyList<Listing> Items);
 
-/// <summary>The lists the picker shows, and whether they came from the beholder now or from the copy saved earlier.</summary>
-public sealed record BeholderLists(IReadOnlyList<Listing> Servers, IReadOnlyList<Listing> Relays, DateTimeOffset FetchedAt, bool Cached);
+/// <summary>The servers the picker shows, and whether they came from the beholder now or from the copy saved earlier.</summary>
+public sealed record BeholderLists(IReadOnlyList<Listing> Servers, DateTimeOffset FetchedAt, bool Cached);
 
 /// <summary>
-/// OD122-L9 (owner: "um seletor de servidores e uma lista de relays"): the launcher reads the beholder, the public directory servers
-/// and relays announce themselves to. Bounded (https only, 64 KiB per list, 500 items, 5 s), and the last good lists are kept in the
-/// state root so the pickers still show something while the beholder is down.
+/// OD122-L9: the launcher reads the beholder, the public directory servers announce themselves to (OD-208: its relay list is not
+/// read; no relay is ever chosen). Bounded (https only, 64 KiB, 500 items, 5 s), and the last good list is kept in the state root
+/// so the picker still shows something while the beholder is down.
 /// </summary>
 public sealed class BeholderClient(HttpClient http, Uri announcer)
 {
@@ -70,14 +70,13 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
     public Uri Announcer { get; } = announcer.Scheme == Uri.UriSchemeHttps || DevNet.PlainHttpUrl(announcer.GetLeftPart(UriPartial.Authority))
         ? announcer : throw new ArgumentException("The announcement server is https (plain http only on this PC or the LAN)", nameof(announcer));
 
-    /// <summary>Both lists now, saved for later; on any failure the saved copy (marked cached), or empty lists.</summary>
+    /// <summary>The servers now, saved for later; on any failure the saved copy (marked cached), or an empty list.</summary>
     public async Task<BeholderLists> ListsAsync(string stateRoot, CancellationToken cancellation = default)
     {
         try
         {
             var servers = await ListAsync("servers", cancellation).ConfigureAwait(false);
-            var relays = await ListAsync("relays", cancellation).ConfigureAwait(false);
-            var lists = new BeholderLists(servers, relays, DateTimeOffset.UtcNow, Cached: false);
+            var lists = new BeholderLists(servers, DateTimeOffset.UtcNow, Cached: false);
             try { Save(stateRoot, lists); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { } // a read-only state folder only loses the fallback
             return lists;
@@ -85,7 +84,7 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidDataException or IOException
             && !cancellation.IsCancellationRequested)
         {
-            return Load(stateRoot) ?? new BeholderLists([], [], DateTimeOffset.MinValue, Cached: true);
+            return Load(stateRoot) ?? new BeholderLists([], DateTimeOffset.MinValue, Cached: true);
         }
     }
 
@@ -120,13 +119,14 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
         return kept.Length > max ? kept[..max] : kept;
     }
 
-    private sealed record Saved(IReadOnlyList<Listing> Servers, IReadOnlyList<Listing> Relays, DateTimeOffset FetchedAt);
+    // an older cache's relays field is read past (the Web defaults skip unknown members)
+    private sealed record Saved(IReadOnlyList<Listing> Servers, DateTimeOffset FetchedAt);
 
     private static void Save(string root, BeholderLists lists)
     {
         Directory.CreateDirectory(root);
         var path = Path.Combine(root, CacheFileName);
-        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(new Saved(lists.Servers, lists.Relays, lists.FetchedAt), Json));
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(new Saved(lists.Servers, lists.FetchedAt), Json));
         File.Move(path + ".tmp", path, overwrite: true);
     }
 
@@ -138,7 +138,7 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
             var path = Path.Combine(root, CacheFileName);
             if (!File.Exists(path) || new FileInfo(path).Length > 4 * MaxBytes) return null;
             var saved = JsonSerializer.Deserialize<Saved>(File.ReadAllText(path), Json);
-            return saved is null ? null : new BeholderLists(Clean(saved.Servers ?? []), Clean(saved.Relays ?? []), saved.FetchedAt, Cached: true);
+            return saved is null ? null : new BeholderLists(Clean(saved.Servers ?? []), saved.FetchedAt, Cached: true);
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -165,7 +165,7 @@ public sealed record Reachability(TimeSpan? RoundTrip)
     public bool Online => RoundTrip is not null;
 }
 
-/// <summary>OD122-L9: a listed server's state (its <c>/launcher/v1/info</c> round trip). OD-208: relays are never chosen or probed.</summary>
+/// <summary>OD122-L9: a listed server's state (its <c>/launcher/v1/info</c> round trip).</summary>
 public static class NodeProbe
 {
     /// <summary>A server's <c>/launcher/v1/info</c>, timed; a server whose address is not a valid custom server is never contacted.</summary>

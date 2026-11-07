@@ -84,7 +84,7 @@ public sealed partial class ShellViewModel
         _serverAddress = _config.Custom ? _config.Server.GetLeftPart(UriPartial.Authority) : string.Empty;
         _serverEditError = null;
         _serverPick = null;
-        OpenPickers(); // OD122-L9: the beholder's servers and relays
+        OpenPickers(); // OD122-L9: the beholder's servers
         Changed(string.Empty);
     }
 

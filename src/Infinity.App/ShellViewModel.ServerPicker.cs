@@ -19,11 +19,11 @@ public sealed record ServerPickItem(string Kind, string Title, string Detail, st
 }
 
 /// <summary>
-/// OD122-L9 (owner: "na tela de signin, é preciso que exista um seletor de servidores e uma lista de relays... compatível com controle.
-/// Também deve ser permitido digitar um endereço customizado"): the CR-L39 server editor lists the beholder's servers (name, host,
+/// OD122-L9 (owner: "na tela de signin, é preciso que exista um seletor de servidores... compatível com controle. Também deve
+/// ser permitido digitar um endereço customizado"): the CR-L39 server editor lists the beholder's servers (name, host,
 /// region, round trip) beside the official server and a typed address. A listed server is saved exactly as a typed one (CustomServer
 /// rules, key pins, the official-account allow-list). OD-208: no relay is ever chosen (official worlds are direct), so the relay
-/// picker is gone. While the beholder is down the last saved lists show, marked as such.
+/// picker and the beholder's relay list are gone. While the beholder is down the last saved list shows, marked as such.
 /// </summary>
 public sealed partial class ShellViewModel
 {

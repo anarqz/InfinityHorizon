@@ -38,7 +38,8 @@ public sealed partial class WorldsBridge
             var p=hint.Payload;
             var request=new SeatNetworkRequest{GrantId=grant.ToString("D"),Revision=revision,Endpoint=new(){
                 Port=BinaryPrimitives.ReadUInt16BigEndian(p.AsSpan(20)),Lan=_lan().Take(4).ToArray(),
-                External=p[22]==0?null:new(){Port=BinaryPrimitives.ReadUInt16BigEndian(p.AsSpan(23)),Source=p[22]==1?"stun":"upnp"}}};
+                // OD-208: only a STUN mapping is an external port; source 2 (a UPnP mapping) stays the frame's value but is never produced
+                External=p[22]!=1?null:new(){Port=BinaryPrimitives.ReadUInt16BigEndian(p.AsSpan(23)),Source="stun"}}};
             var answer=await _mm.SeatNetworkAsync(request,bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
             if(answer is not {Ok:true,Value:{} value} || value.GrantId!=request.GrantId || value.WorldId!=world || value.Revision!=revision
                 || !DateTimeOffset.TryParse(value.GeneratedAt,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out var generated)
