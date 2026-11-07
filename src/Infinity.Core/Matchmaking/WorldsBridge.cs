@@ -356,14 +356,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         // OD-112: the session's set goes with every join; planned mods not confirmed yet never join as vanilla.
         var (mods, modsRefusal) = WireMods();
         if (modsRefusal is not null) return new(UiJoin.NotAllowed, _text(modsRefusal));
-        // CR-S57: only a hook that reported the relay capability gets nat and relays (also {}); without it both stay out (direct only).
-        string? nat = null;
-        IReadOnlyDictionary<string, int>? relays = null;
-        if (RelayJoinerCapable)
-        {
-            var report = await RelayReportAsync(cancellation).ConfigureAwait(false);
-            (nat, relays) = (report?.Nat, report?.Relays ?? new Dictionary<string, int>());
-        }
+        // OD-208: an official join is direct only, so neither nat nor relays is ever sent (WORLDS_OFFICIAL §3)
         try
         {
             for (var attempt = 0; attempt < 2; ++attempt)
@@ -372,8 +365,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     return new(UiJoin.NotAllowed, DeniedMessage(changed, "join"));
                 if (!GameReadiness.Matches(generation)) return new(UiJoin.NotAllowed, _text("worlds.load_game"));
                 var answer = await OperationAsync(_joinRetry, token => privateCreate && activity is not null
-                        ? _mm.PrivateCreateAsync(activity, mods, nat, relays, token)
-                        : _mm.JoinAsync(worldId, null, mods, nat, relays, null, activity, token), cancellation,
+                        ? _mm.PrivateCreateAsync(activity, mods, null, null, token)
+                        : _mm.JoinAsync(worldId, null, mods, null, null, null, activity, token), cancellation,
                     result => result.Value?.Grant is { } late ? ReleaseGrantAsync(late.Id) : Task.CompletedTask).ConfigureAwait(false);
                 if (answer is null) return new(UiJoin.SlowDown, _text("worlds.slow_down"));
                 WorldAccessDecision after;
@@ -484,7 +477,6 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                             await ReleaseGrantAsync(grant.Id, CancellationToken.None).ConfigureAwait(false);
                             return new(UiJoin.NotAllowed, _text("worlds.action_failed"));
                         }
-                        await ForceRelayAsync(grant.Id, cancellation).ConfigureAwait(false); // FI_RELAY_FORCE only
                         // where the host is now, so the player picks that mode in the game (never "go to free roam" blindly)
                         return new UiFrame.JoinResult(UiJoin.Reserved, ListedActivity(grant.WorldId) is { } hostActivity
                             ? _text("worlds.reserved_mode").Replace("{mode}", ActivityName(hostActivity), StringComparison.Ordinal)

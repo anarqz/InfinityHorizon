@@ -579,14 +579,7 @@ public sealed class PlaySupervisor
                 if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
                 await pipe.WriteAsync(candidates.Encode(),ct).ConfigureAwait(false);
             };
-            // CR-S57: the grant's relay for the hook's fallback; only built once the hook reported CaptureWhat.RelayJoiner
-            worlds.SendRelayLeg=async (leg,ct)=>
-            {
-                if(!endpoint.Greeted || endpoint.OnlineSuspended || _online.IsPaused)throw new IOException("Control context unavailable");
-                var bytes=leg.Encode();
-                try {await pipe.WriteAsync(bytes,ct).ConfigureAwait(false);}
-                finally {System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);}
-            };
+
             // OD-151 follow-up: a seated guest's game follows its host's activity through the game's own matchmaking
             worlds.SendFollowHost=async (follow,ct)=>
             {
@@ -747,14 +740,8 @@ public sealed class PlaySupervisor
                                 _=worlds.NetworkHintAsync(hint,onlineStop.Token);
                             continue;
                         }
-                        if(frame is Frame.RelayFallback fallback)
-                        {
-                            if(endpoint.Greeted && !suspended && tokensOpen && worlds is not null)
-                                _=RelayFallbackAsync(worlds,overlay,fallback,onlineStop.Token);
-                            continue;
-                        }
-                        if(frame is Frame.Capture{What:CaptureWhat.RelayJoiner} relayCapability && endpoint.Greeted && worlds is not null)
-                            worlds.RelayJoinerCapable=relayCapability.Ok;
+                        // OD-208: an official world is direct only: an older hook's relay fallback report is never answered (no leg is pushed)
+                        if(frame is Frame.RelayFallback)continue;
                         // AC-2: the hook's measurement of another player's car (only after a Watch frame); posted off this loop
                         if(frame is Frame.Observed observed)
                         {
@@ -1304,20 +1291,6 @@ public sealed class PlaySupervisor
                 return;
             }
         }
-    }
-
-    /// <summary>CR-S57: the hook's fallback report off the loop; a refusal or "the host could not be reached" is a toast.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
-        Justification = "A fire-and-forget fallback report must never leave an unobserved task exception; the failure is logged by type only.")]
-    private async Task RelayFallbackAsync(Matchmaking.WorldsBridge worlds, OverlayChannel? overlay, Frame.RelayFallback fallback, CancellationToken cancellation)
-    {
-        try
-        {
-            if (await worlds.RelayFallbackAsync(fallback, cancellation).ConfigureAwait(false) is { } text && overlay is not null)
-                await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, text), cancellation).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception error) { _emit(new SupervisorEvent.Note("worlds: relay fallback report failed (" + error.GetType().Name + ")")); }
     }
 
     // T-L6: this session's server took features: ["private_official_v1"] (OneSessionAsync's admission)

@@ -30,10 +30,7 @@ public interface IMatchmakingApi
     Task<MmResult<SeatNetworkAnswer>> SeatNetworkAsync(SeatNetworkRequest request,CancellationToken cancellation=default) =>
         Task.FromResult(new MmResult<SeatNetworkAnswer>(HttpStatusCode.NotFound,null,
             new MmError(HttpStatusCode.NotFound,"MM.WORLD_NOT_FOUND","unavailable",MmErrorKind.WorldNotFound,null,null),null));
-    /// <summary><c>POST /mm/v1/worlds/{worldId}/game-sessions</c> → 201 (§3.8): the host's car meet invitation session.</summary>
-    Task<MmResult<GameModeSession>> GameModeSessionAsync(string worldId, GameModeSessionRequest request, CancellationToken cancellation = default) =>
-        Task.FromResult(new MmResult<GameModeSession>(HttpStatusCode.NotFound, null,
-            new MmError(HttpStatusCode.NotFound, "MM.WORLD_NOT_FOUND", "unavailable", MmErrorKind.WorldNotFound, null, null), null));
+
     /// <summary><c>GET /mm/v1/watch</c> → 200 (§3.9): the peer-observation rules. The default (a 404) serves only the test fakes.</summary>
     Task<MmResult<WatchRules>> WatchAsync(CancellationToken cancellation = default) =>
         Task.FromResult(new MmResult<WatchRules>(HttpStatusCode.NotFound, null,
@@ -53,17 +50,6 @@ public interface IMatchmakingApi
 
     Task<MmResult<WorldView>> GetAsync(string worldId, CancellationToken cancellation = default);
 
-    Task<MmResult<WorldView>> ByCodeAsync(string code, CancellationToken cancellation = default);
-
-    Task<MmResult<WorldAnnounced>> PutWorldAsync(string worldId, WorldSettings settings, CancellationToken cancellation = default);
-
-    Task<MmResult<WorldAnnounced>> AnnounceAsync(string worldId, Heartbeat heartbeat, CancellationToken cancellation = default);
-
-    Task<MmResult<WorldView>> NewCodeAsync(string worldId, CancellationToken cancellation = default);
-
-    Task<MmResult<MmNone>> CloseAsync(string worldId, CancellationToken cancellation = default);
-
-    Task<MmResult<ModerationResult>> ModerationAsync(string worldId, Moderation moderation, CancellationToken cancellation = default);
 
     Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, CancellationToken cancellation = default);
 
@@ -140,10 +126,6 @@ public interface IMatchmakingApi
 
     Task<MmResult<MmNone>> LeaveGrantAsync(string grantId, CancellationToken cancellation = default);
 
-    /// <summary>The host's complete admission/revocation snapshot, MATCHMAKING_API.md §4.</summary>
-    Task<MmResult<Punches>> PunchesAsync(CancellationToken cancellation = default) =>
-        Task.FromResult(new MmResult<Punches>(HttpStatusCode.NotFound, null,
-            new MmError(HttpStatusCode.NotFound, "MM.WORLD_NOT_FOUND", "no punches", MmErrorKind.WorldNotFound, null, null), null));
 
     /// <summary>
     /// The players of a world the caller hosts or holds a seat in (CR-L25, OD-63; deployed 2026-10-19).
@@ -222,38 +204,6 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     public Task<MmResult<WorldView>> GetAsync(string worldId, CancellationToken cancellation = default) =>
         SendAsync<WorldView>(HttpMethod.Get, World(worldId), null, cancellation);
 
-    /// <summary><c>GET /mm/v1/worlds/by-code/{code}</c>: 8 digits, a hyphen allowed; anything else throws before sending (a wrong code counts against the throttle).</summary>
-    public Task<MmResult<WorldView>> ByCodeAsync(string code, CancellationToken cancellation = default) =>
-        SendAsync<WorldView>(HttpMethod.Get, "/mm/v1/worlds/by-code/" + Code(code), null, cancellation);
-
-    /// <summary><c>PUT /mm/v1/worlds/{worldId}</c>: 201 (<see cref="MmResult{T}.Created"/>) opened, 200 changed.</summary>
-    public Task<MmResult<WorldAnnounced>> PutWorldAsync(string worldId, WorldSettings settings, CancellationToken cancellation = default)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-        return SendAsync<WorldAnnounced>(HttpMethod.Put, World(worldId), settings, cancellation);
-    }
-
-    /// <summary><c>POST …/announce</c> every 15 s; 404 <c>MM.WORLD_NOT_FOUND</c>: open a new world with a new id.</summary>
-    public Task<MmResult<WorldAnnounced>> AnnounceAsync(string worldId, Heartbeat heartbeat, CancellationToken cancellation = default)
-    {
-        ArgumentNullException.ThrowIfNull(heartbeat);
-        return SendAsync<WorldAnnounced>(HttpMethod.Post, World(worldId) + "/announce", heartbeat, cancellation);
-    }
-
-    public Task<MmResult<WorldView>> NewCodeAsync(string worldId, CancellationToken cancellation = default) =>
-        SendAsync<WorldView>(HttpMethod.Post, World(worldId) + "/code", null, cancellation);
-
-    /// <summary><c>DELETE /mm/v1/worlds/{worldId}</c> → 204 (the host left free roam).</summary>
-    public Task<MmResult<MmNone>> CloseAsync(string worldId, CancellationToken cancellation = default) =>
-        SendAsync<MmNone>(HttpMethod.Delete, World(worldId), null, cancellation);
-
-    public Task<MmResult<GameModeSession>> GameModeSessionAsync(string worldId, GameModeSessionRequest request, CancellationToken cancellation = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (request.Xuids.Count is 0 or > GameModeSessionRequest.MaxMembers) throw new ArgumentException("1 to 12 XUIDs", nameof(request));
-        return SendAsync<GameModeSession>(HttpMethod.Post, World(worldId) + "/game-sessions", request, cancellation);
-    }
-
     public Task<MmResult<WorldMembers>> MembersAsync(string worldId, CancellationToken cancellation = default) =>
         SendAsync<WorldMembers>(HttpMethod.Get, World(worldId) + "/members", null, cancellation);
 
@@ -264,12 +214,6 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     {
         ArgumentNullException.ThrowIfNull(observation);
         return SendAsync<MmNone>(HttpMethod.Post, World(worldId) + "/observations", observation, cancellation);
-    }
-
-    public Task<MmResult<ModerationResult>> ModerationAsync(string worldId, Moderation moderation, CancellationToken cancellation = default)
-    {
-        ArgumentNullException.ThrowIfNull(moderation);
-        return SendAsync<ModerationResult>(HttpMethod.Post, World(worldId) + "/moderation", moderation, cancellation);
     }
 
     public Task<MmResult<Invite>> InviteAsync(string worldId, string xuid, CancellationToken cancellation = default)
@@ -399,9 +343,6 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     public Task<MmResult<SeatAnswer>> SeatWithMembersAsync(CancellationToken cancellation = default) =>
         SendAsync<SeatAnswer>(HttpMethod.Get, "/mm/v1/seat?includeMembers=true", null, cancellation);
 
-    public Task<MmResult<Punches>> PunchesAsync(CancellationToken cancellation = default) =>
-        SendAsync<Punches>(HttpMethod.Get, "/mm/v1/punches", null, cancellation);
-
     public Task<MmResult<SeatAnswer>> RenewSeatAsync(string grantId, CancellationToken cancellation = default) =>
         RenewSeatAsync(grantId, null, cancellation);
 
@@ -459,8 +400,7 @@ public sealed class MatchmakingClient(HttpClient http, Uri matchmaking, string c
     }
 
     private static bool CleanupRoute(string route) => route == "/mm/v1/seat"
-        || route.StartsWith("/mm/v1/join/", StringComparison.Ordinal) && !route[12..].Contains('/')
-        || route.StartsWith("/mm/v1/worlds/", StringComparison.Ordinal) && !route[14..].Contains('/');
+        || route.StartsWith("/mm/v1/join/", StringComparison.Ordinal) && !route[12..].Contains('/');
 
     private static async Task<MmResult<T>> ReadAsync<T>(HttpResponseMessage response, CancellationToken cancellation)
     {
