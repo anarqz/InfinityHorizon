@@ -904,6 +904,7 @@ public sealed class PlaySupervisor
                             {
                                 await pipe.WriteAsync(reply.Encode(), stop.Token).ConfigureAwait(false);
                                 worlds.PrivateCreateCapable = true;
+                                worlds.PrivateCreateActivity = Process.GameDefinition.ById(_config.Game)?.PrivateCreateActivity; // CR-S99
                                 _emit(new SupervisorEvent.Note("worlds: private creates on (the hook holds the game's private session write)"));
                             }
                             catch (Exception error) when (error is IOException or ObjectDisposedException or TimeoutException)
