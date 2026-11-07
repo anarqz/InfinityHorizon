@@ -1031,11 +1031,9 @@ static HRESULT STDMETHODCALLTYPE fr_assoc_destroy(FrAssociation *self, void **ou
     fr_log("association DestroyAsync -> completed.");
     azimuth_proxy_stop();
     fi_follow_left(); /* no lobby type until the game's next OpenConnection */
-    azimuth_world_left();
     azimuth_world_lan_left();
     if (fi_launch_protocol()) {
-        /* OD-54/OD-57: the launcher hosts; it closes the world when the game leaves free roam */
-        azimuth_world_launcher_host(0);
+        /* W-17's order: the proxy, the follow state and the LAN socket go before the launcher hears it (OD-57) */
         fi_launch_event(FI_EVENT_FREE_ROAM_LEFT, "");
     }
     return fr_completed(0, out);
@@ -1113,37 +1111,9 @@ static HRESULT STDMETHODCALLTYPE fr_template_create(FrWrap *self, FrCom *remote,
     }
     azimuth_world_lan_entered(&association->remote); /* carstate's own socket for a world on this network */
     if (fi_launch_protocol()) {
-        /* OD-54: the world is the launcher's relay on loopback when this PC hosts it (the server
-           answers the host 127.0.0.1:<port>, MATCHMAKING_API.md 4a); the launcher hears which */
-        const unsigned char *a = original_remote.address;
-        int loopback = 1;
-        for (int i = 0; i < 15 && loopback; ++i) {
-            loopback = a[i] == 0;
-        }
-        loopback = (loopback && a[15] == 1) ||
-                   (a[10] == 0xff && a[11] == 0xff && a[12] == 127 && !a[0] && !a[1] && !a[2] && !a[3] && !a[4] &&
-                    !a[5] && !a[6] && !a[7] && !a[8] && !a[9]);
+        /* OD-208: this PC hosts no world, so every world the game reaches is a join (an older launcher read host:<port>) */
         unsigned port = ((original_remote.port & 0xffu) << 8) | (original_remote.port >> 8);
-        if (loopback && port && port != 9) { /* ::1 port 9 is "nowhere" */
-            char detail[16];
-            size_t n = 0;
-            const char *head = "host:";
-            while (head[n]) {
-                detail[n] = head[n];
-                ++n;
-            }
-            char digits[6];
-            int d = 0;
-            for (unsigned p = port; p && d < 5; p /= 10) {
-                digits[d++] = (char)('0' + p % 10);
-            }
-            while (d) {
-                detail[n++] = digits[--d];
-            }
-            detail[n] = 0;
-            azimuth_world_launcher_host(port);
-            fi_launch_event(FI_EVENT_FREE_ROAM_ENTERED, detail);
-        } else if (port && port != 9) {
+        if (port && port != 9) { /* ::1 port 9 is "nowhere" */
             fi_launch_event(FI_EVENT_FREE_ROAM_ENTERED, "join"); /* never an address in a log or a frame */
         }
     }
@@ -2463,7 +2433,7 @@ void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory,
         return;
     }
     fr_game = game_image;
-    azimuth_world_set_directory(directory);
+    (void)directory;
     /* the car database is hashed from azimuth_apply_network (runtime.c), free roam on or off */
     (void)executable;
     size_t n = 0;

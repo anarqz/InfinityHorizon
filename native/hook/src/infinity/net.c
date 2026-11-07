@@ -1633,11 +1633,7 @@ static DWORD WINAPI net_worker(void *parameter) {
     HRESULT error = NET_OFFLINE_ERROR;
     int held_off = 0; /* T-L6: a private create the launcher could not seat is answered offline here */
     if (net_mode == NET_MODE_PROXY && !request->aborted) {
-        /* a private free roam session opens this PC's world before the server sees it (never under the launcher) */
-        if (fi_game_has(FI_FEATURE_FREE_ROAM)) {
-            azimuth_world_on_request(buffer_wide(&request->method), buffer_wide(&request->url),
-                                     request->request_body.data, request->request_body.size);
-        }
+
         /* a car meet's matchmaking ticket (CarMeet_qos): what it asks for, in the log (no identity) */
         if (fi_launch_free_roam_request(buffer_wide(&request->method), buffer_wide(&request->url)) == 2) {
             fi_carmeet_ticket_log(request->request_body.data, request->request_body.size);

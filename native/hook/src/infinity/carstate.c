@@ -7,9 +7,8 @@
    ExtraOptions (and older hooks) share a world unchanged.
 
    Each hook tells the world's relay its car's state with a private STUN indication (the relay's
-   carstate.rs has the format): a joining player from its proxy's socket (azimuth_proxy.c, the
-   address the relay knows it by), the host from a loopback socket of its own (its game talks to
-   the relay over loopback, with no proxy). The state goes when it changes and every second (the
+   carstate.rs has the format): from its proxy's socket (azimuth_proxy.c, the address the relay
+   knows it by; OD-208: this PC never hosts a world). The state goes when it changes and every second (the
    relay passes the others' states only to a hook that speaks). The relay passes each other
    player's state with that player's XUID and the position of its car, taken from its last
    CarPredictionFull as it is sent.
@@ -35,13 +34,6 @@
 #define CS_MATCH_METERS 15.0f
 #define CS_UNMATCH_METERS 30.0f
 
-#define CS_AF_INET 2
-#define CS_SOCK_DGRAM 2
-#define CS_IPPROTO_UDP 17
-#define CS_SOL_SOCKET 0xffff
-#define CS_SO_RCVTIMEO 0x1006
-#define CS_INVALID ((UINT_PTR)~(UINT_PTR)0)
-
 typedef struct {
     int used;
     unsigned char lights, roof;
@@ -58,177 +50,6 @@ static volatile LONG cs_remote_count;
 static int cs_lights = -1, cs_roof = -1;
 static unsigned long long cs_sent_at;
 static unsigned short cs_seq;
-
-/* ------------------------------------------------------------- the host's socket */
-
-typedef struct {
-    unsigned short family, port; /* port in network order */
-    unsigned char address[4];
-    unsigned char zero[8];
-} CsAddr4;
-
-typedef UINT_PTR(WINAPI *CsSocketFn)(int, int, int);
-typedef int(WINAPI *CsSetOptionFn)(UINT_PTR, int, int, const char *, int);
-typedef int(WINAPI *CsRecvFromFn)(UINT_PTR, char *, int, int, void *, int *);
-typedef int(WINAPI *CsSendToFn)(UINT_PTR, const char *, int, int, const void *, int);
-typedef int(WINAPI *CsCloseFn)(UINT_PTR);
-typedef int(WINAPI *CsStartupFn)(WORD, void *);
-
-static struct {
-    CsSocketFn socket;
-    CsSetOptionFn setsockopt;
-    CsRecvFromFn recvfrom;
-    CsSendToFn sendto;
-    CsCloseFn closesocket;
-    CsStartupFn startup;
-} cs;
-static volatile LONG cs_loaded;
-static UINT_PTR cs_host_socket = CS_INVALID;
-static unsigned cs_host_port;
-
-static int cs_load(void) {
-    if (cs_loaded) {
-        return cs_loaded > 0;
-    }
-    HMODULE ws2 = LoadLibraryExW(L"ws2_32.dll", 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (ws2) {
-        cs.socket = (CsSocketFn)(uintptr_t)GetProcAddress(ws2, "socket");
-        cs.setsockopt = (CsSetOptionFn)(uintptr_t)GetProcAddress(ws2, "setsockopt");
-        cs.recvfrom = (CsRecvFromFn)(uintptr_t)GetProcAddress(ws2, "recvfrom");
-        cs.sendto = (CsSendToFn)(uintptr_t)GetProcAddress(ws2, "sendto");
-        cs.closesocket = (CsCloseFn)(uintptr_t)GetProcAddress(ws2, "closesocket");
-        cs.startup = (CsStartupFn)(uintptr_t)GetProcAddress(ws2, "WSAStartup");
-    }
-    int ok = ws2 && cs.socket && cs.setsockopt && cs.recvfrom && cs.sendto && cs.closesocket && cs.startup;
-    if (ok) {
-        static unsigned char data[512]; /* WSADATA */
-        ok = cs.startup(0x0202, data) == 0;
-    }
-    cs_loaded = ok ? 1 : -1;
-    return ok;
-}
-
-static void cs_relay_address(CsAddr4 *a, unsigned port) {
-    memory_copy(a, &(CsAddr4){0}, sizeof(*a));
-    a->family = CS_AF_INET;
-    a->port = (unsigned short)((port >> 8 & 0xff) | (port & 0xff) << 8);
-    a->address[0] = 127;
-    a->address[3] = 1;
-}
-
-static unsigned cs_get16_early(const unsigned char *p) {
-    return (unsigned)(p[0] << 8 | p[1]);
-}
-
-/* 1: `from` (a sockaddr of recvfrom) is the host's relay, 127.0.0.1 at `port`. */
-static int cs_from_relay(const unsigned char *from, int size, unsigned port) {
-    CsAddr4 relay;
-    cs_relay_address(&relay, port);
-    return port && size >= (int)sizeof(CsAddr4) && memory_equal(from, &relay, 8);
-}
-
-/* Car state (the game's threads) and voice (voice_net.c, an overlay thread) share the socket:
-   only one makes it. */
-static SRWLOCK cs_host_lock = SRWLOCK_INIT;
-static int cs_host_making;          /* a thread is making the socket (cs_host_lock) */
-static volatile LONG cs_host_users; /* senders on a copy of cs_host_socket */
-
-/* The listener's socket goes: out of cs_host_socket (if still there), then closed once no sender
-   still holds a copy (a send is one non-blocking UDP datagram; bounded wait, never under the lock),
-   so a handle is never sent on after it was closed and reused. */
-static void cs_host_retire(UINT_PTR s) {
-    AcquireSRWLockExclusive(&cs_host_lock);
-    if (cs_host_socket == s) cs_host_socket = CS_INVALID;
-    ReleaseSRWLockExclusive(&cs_host_lock);
-    for (unsigned waited = 0; cs_host_users && waited < 1000; ++waited) Sleep(1);
-    cs.closesocket(s);
-}
-
-/* The relay's answers to the host's hook (the others' states, and voice for the overlay), while
-   this PC hosts. */
-static DWORD WINAPI cs_host_listen(void *argument) {
-    UINT_PTR s = (UINT_PTR)argument;
-    static unsigned char packet[1024]; /* voice is up to 548 bytes (voice_net.c) */
-    unsigned char from[64];
-    while (cs_host_socket == s) {
-        int from_size = (int)sizeof(from);
-        int n = cs.recvfrom(s, (char *)packet, sizeof(packet), 0, from, &from_size);
-        if (n > 0) {
-            if (n < 2 || (cs_get16_early(packet) != 0x3E93u && cs_get16_early(packet) != 0x3E94u)) {
-                azimuth_carstate_received(packet, n);
-            } else if (cs_from_relay(from, from_size, cs_host_port)) {
-                fi_voice_received(packet, n); /* voice down / state down from this PC's relay */
-            }
-        }
-        if (!azimuth_world_hosting()) {
-            break;
-        }
-    }
-    cs_host_retire(s);
-    return 0;
-}
-
-/* Sends to the relay from the host's loopback socket (made the first time). T32: cs_host_lock
-   guards cs_host_socket, cs_host_port, cs_host_making and cs_host_users only; the socket calls
-   run without it. */
-static int cs_host_send(const unsigned char *data, int size) {
-    unsigned port = azimuth_world_port();
-    if (!port || !cs_load()) {
-        return 0;
-    }
-    CsAddr4 relay;
-    cs_relay_address(&relay, port);
-    AcquireSRWLockExclusive(&cs_host_lock);
-    UINT_PTR s = cs_host_socket;
-    int make = 0;
-    if (s != CS_INVALID && cs_host_port == port) {
-        InterlockedIncrement(&cs_host_users); /* cs_host_retire waits for it before it closes the socket */
-    } else {
-        s = CS_INVALID;
-        make = !cs_host_making; /* one thread makes it; another's datagram meanwhile is dropped */
-        if (make) cs_host_making = 1;
-    }
-    ReleaseSRWLockExclusive(&cs_host_lock);
-    if (s != CS_INVALID) {
-        int sent = cs.sendto(s, (const char *)data, size, 0, &relay, (int)sizeof(relay)) == size;
-        InterlockedDecrement(&cs_host_users);
-        return sent;
-    }
-    if (!make) return 0;
-    s = cs.socket(CS_AF_INET, CS_SOCK_DGRAM, CS_IPPROTO_UDP);
-    int sent = 0;
-    if (s != CS_INVALID) {
-        DWORD timeout = 250;
-        cs.setsockopt(s, CS_SOL_SOCKET, CS_SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-        /* the first send binds it (an ephemeral loopback port), then it can receive */
-        sent = cs.sendto(s, (const char *)data, size, 0, &relay, (int)sizeof(relay)) == size;
-        if (!sent) {
-            cs.closesocket(s);
-            s = CS_INVALID;
-        }
-    }
-    AcquireSRWLockExclusive(&cs_host_lock);
-    if (s != CS_INVALID) {
-        cs_host_socket = s; /* the previous one's listener sees the change and retires it */
-        cs_host_port = port;
-    }
-    cs_host_making = 0;
-    ReleaseSRWLockExclusive(&cs_host_lock);
-    if (s != CS_INVALID) {
-        HANDLE t = CreateThread(0, 0, cs_host_listen, (void *)s, 0, 0);
-        if (t) {
-            CloseHandle(t);
-        }
-        log_append("CARSTATE: this PC hosts; headlights and roof go to the relay from a loopback socket.\r\n");
-    }
-    return sent;
-}
-
-/* voice_net.c: a voice datagram to this PC's relay, from the socket car state uses (the address
-   the relay knows the host's hook by). 1 sent. */
-int azimuth_carstate_host_send(const void *data, int size) {
-    return azimuth_world_hosting() && cs_host_send((const unsigned char *)data, size);
-}
 
 /* ------------------------------------------------------------------- local state */
 
@@ -267,10 +88,9 @@ void azimuth_carstate_local(int lights, int roof) {
     v[2] = (unsigned char)roof;
     cs_put16(v + 4, ++cs_seq);
     cs_put64(v + 8, xuid);
-    /* the host from its loopback socket; a joiner from its proxy's socket, or, for a world on this
-       network the game reached directly (no proxy), from the world's own LAN socket (livery_world.c) */
-    int sent = azimuth_world_hosting() ? cs_host_send(m, (int)sizeof(m))
-               : azimuth_proxy_send_world(m, (int)sizeof(m)) || azimuth_world_lan_send(m, (int)sizeof(m));
+    /* from the proxy's socket, or, for a world on this network the game reached directly (no proxy),
+       from the world's own LAN socket (livery_world.c). OD-208: this PC never hosts a world. */
+    int sent = azimuth_proxy_send_world(m, (int)sizeof(m)) || azimuth_world_lan_send(m, (int)sizeof(m));
     if (sent) {
         cs_lights = lights;
         cs_roof = roof;

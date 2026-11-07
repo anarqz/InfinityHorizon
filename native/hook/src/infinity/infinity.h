@@ -46,7 +46,7 @@ int fi_launch_car(int car_key, unsigned long long now_ms);
 
 /* cfg.c: <Azimuth>\Infinity.cfg. [hook] is the hook's (PLAN.md "Infinity.cfg [hook]"), read
    once at start (and written once, when the section is missing, from the older hooks'
-   data\bin\FH2_ExtraOptions.ini); [relay] is the launcher's, read for HOST WORLD. */
+   data\bin\FH2_ExtraOptions.ini). */
 enum { FI_NET_OFF, FI_NET_CAPTURE, FI_NET_PROXY };
 enum { FI_CARSTATE_AUTO, FI_CARSTATE_OFF };
 enum { FI_LANG_AUTO, FI_LANG_EN, FI_LANG_PT_BR };
@@ -69,11 +69,6 @@ typedef struct {
 } FiConfig;
 /* PROTOCOL: v1;pipe=<nonce>, online through launch.c; every other value plays offline. */
 enum { FI_LAUNCH_NONE, FI_LAUNCH_OFFLINE, FI_LAUNCH_PROTOCOL, FI_LAUNCH_MALFORMED, FI_LAUNCH_FILE };
-typedef struct {
-    char name[100], message[400], visibility[16], password[100]; /* UTF-8 */
-    unsigned max_players, port;
-    int races;
-} FiRelayConfig;
 void fi_cfg_load(const wchar_t *root, const wchar_t *bin);
 const FiConfig *fi_cfg(void);
 const wchar_t *fi_cfg_path(void);
@@ -82,8 +77,6 @@ const wchar_t *fi_cfg_path(void);
 int fi_cfg_migrated(void);
 /* Writes the CFG: lines of fi_cfg_load to infinity.log (once it is open). */
 void fi_cfg_flush_log(void);
-/* Infinity.cfg [relay] with the launcher's defaults and limits: 1 when the file has [relay]. */
-int fi_cfg_relay(FiRelayConfig *out);
 
 void azimuth_apply_livery_compatibility(void);
 void fi_game_ready_apply(unsigned char *game_image);
@@ -168,7 +161,7 @@ int fi_launch_refused(DWORD status);
    without a launcher session. */
 void fi_launch_event(unsigned kind, const char *detail);
 /* fi_launch_event kinds (the launcher's HookEvents): 3 the game joined a free roam world (detail
-   "host:<port>" when it is this PC's relay, "join" otherwise), 4 it left free roam, 6 a notice for
+   "join"; OD-208: never "host:<port>", this PC hosts no world), 4 it left free roam, 6 a notice for
    the player (detail "<level>|<text>", level 0 info, 1 warning, 2 error; the text already in the
    game's language, cut at 250 bytes on a UTF-8 boundary): the launcher shows it as an overlay toast
    (OD-73, instead of the pause menu's lines). */
@@ -208,8 +201,6 @@ void fi_livery_share_apply(unsigned char *game_image);
 int fi_livery_share_original_fits(unsigned size);
 int fi_livery_remote_ready(void);
 int fi_livery_remote_policy(unsigned mode);
-/* OD-54: the launcher's relay port while this PC hosts in a launcher session (0: not hosting). */
-void azimuth_world_launcher_host(unsigned port);
 void fi_launch_capture(unsigned what, int ok);
 /* CR-L40: FREE ROAM ONLINE's matchmaking request (POST momatch .../hoppers/FreeRoam_qos) first
    asks the launcher for a lobby and waits up to 20 s on the calling net worker (`aborted`: the
@@ -292,8 +283,7 @@ void fi_player_actions_apply(unsigned char *game_image);
 int fi_voice_send(const uint8_t *datagram, uint32_t size);
 int fi_voice_received(const unsigned char *d, int n);
 int fi_voice_shape(const unsigned char *d, size_t n, unsigned kind, unsigned attribute);
-/* the sockets voice uses: carstate.c (host), proxy.c (joiner; passthrough), livery_world.c (LAN) */
-int azimuth_carstate_host_send(const void *data, int size);
+/* the sockets voice uses: proxy.c (passthrough) and livery_world.c (LAN); OD-208: never a host's */
 int azimuth_proxy_world_ready(void);
 int azimuth_proxy_passthrough(void);
 int azimuth_world_lan_ready(void);
@@ -417,8 +407,6 @@ int azimuth_carstate_needs_position(void *car);
 int azimuth_carstate_wanted(void *car, const float position[3], int *lights, int *roof);
 /* TEST CONNECTION's free roam part (about 1.5 s: STUN from a socket of its own). */
 void azimuth_proxy_nat_test(wchar_t *out, size_t cap);
-/* world.c: dedicated_server.net while this PC hosts a world (1), else 0. */
-int azimuth_world_net_text(char *out, size_t cap);
 /* The legacy or launcher-ticket gamertag used for local identity replies. */
 const wchar_t *azimuth_account_gamertag(void);
 /* The active profile is Noob (its own save, no progress gates), from the server's word. */
@@ -457,20 +445,11 @@ int fi_game_ready_ticking(void);
 /* Cuts the game's traffic to the world it is in (the car database changed). */
 void azimuth_freeroam_cut(void);
 void azimuth_freeroam_suspend(void);
-/* world.c: the legacy relay lifecycle and current launcher host-port bridge. */
-void azimuth_world_set_directory(const wchar_t *directory);
-int azimuth_world_hosting(void);
-/* The relay's UDP port while this PC hosts (server.cfg Port), else 0. */
-unsigned azimuth_world_port(void);
-const wchar_t *azimuth_world_config_path(void);
-void azimuth_world_left(void);
-/* The SHA-256 of the game's car database (X-Fh2-CarDb), hashed on a thread at start. */
+/* cardb.c: the SHA-256 of the game's car database (X-Fh2-CarDb), hashed on a thread at start (OD-208: players host no world). */
 void azimuth_world_hash_car_db(const wchar_t *executable);
 const wchar_t *azimuth_world_car_db_header(void);
 /* Waits while the car database is still being hashed (at most `ms`). */
 void azimuth_world_car_db_wait(unsigned ms);
-/* Observe the game's legacy private free-roam request. */
-void azimuth_world_on_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
 /* expansions.c: Storm Island for profiles that have it (the server's /me lists it). */
 void azimuth_apply_expansions(unsigned char *game_image);
 void azimuth_expansions_granted(void);

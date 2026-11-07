@@ -1330,28 +1330,8 @@ static void px_report_raw(wchar_t *out, size_t cap, const char *text) {
     out[n] = 0;
 }
 
-/* The line of dedicated_server.net that starts with `key ` ("" when there is none). */
-static int px_net_line(const char *text, const char *key, char *out, size_t cap) {
-    size_t k = text_length(key);
-    for (const char *line = text; *line;) {
-        const char *end = line;
-        while (*end && *end != '\n' && *end != '\r') ++end;
-        if ((size_t)(end - line) > k && memory_equal(line, key, k) && line[k] == ' ') {
-            size_t n = (size_t)(end - line) - k - 1;
-            n = n < cap - 1 ? n : cap - 1;
-            memory_copy(out, line + k + 1, n);
-            out[n] = 0;
-            return 1;
-        }
-        line = *end ? end + 1 : end;
-    }
-    out[0] = 0;
-    return 0;
-}
-
 /* Settings > Infinity > TEST CONNECTION, free roam part: STUN from a socket of its own (this
-   network's public address, IPv6, the NAT's kind) and, while hosting, what the relay found
-   (dedicated_server.net). Takes about 1.5 s. */
+   network's public address, IPv6, the NAT's kind). Takes about 1.5 s. OD-208: this PC hosts no world. */
 void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
     if (!fi_launch_network_allowed()) return;
     px_report(out, cap, L"\n\nFREE ROAM (worlds over the Internet)");
@@ -1435,40 +1415,11 @@ void azimuth_proxy_nat_test(wchar_t *out, size_t cap) {
         }
         px_report(out, cap, v6 ? L"\nIPv6: yes." : L"\nIPv6: no.");
         if (v4 >= 2 && same) {
-            px_report(out, cap, L"\nNAT: moderate (cone). You can join most players' worlds and most can join yours, with no "
-                                L"port to open.");
+            px_report(out, cap, L"\nNAT: moderate (cone).");
         } else if (v4 >= 2) {
-            px_report(out, cap, L"\nNAT: strict (symmetric). You can join worlds whose host has a moderate or open NAT, but two "
-                                L"strict NATs cannot meet. Fixes: turn UPnP on in the router, ask your operator for a public IP "
-                                L"(CGNAT), or forward UDP 5101 to this PC when hosting.");
+            px_report(out, cap, L"\nNAT: strict (symmetric).");
         } else {
             px_report(out, cap, L"\nNAT: not measured (only one STUN server answered).");
-        }
-    }
-    /* the world this PC hosts */
-    static char net[1024], value[160];
-    if (azimuth_world_net_text(net, sizeof(net))) {
-        px_report(out, cap, L"\n\nYOUR WORLD");
-        if (px_net_line(net, "public", value, sizeof(value))) {
-            px_report(out, cap, L"\nPlayers reach it at ");
-            px_report_raw(out, cap, value);
-            px_report(out, cap, L".");
-        }
-        px_net_line(net, "upnp", value, sizeof(value));
-        if (!value[0] || memory_equal(value, "pending", 7)) {
-            px_report(out, cap, L"\nUPnP: still asking the router.");
-        } else if (memory_equal(value, "none", 4) || memory_equal(value, "off", 3)) {
-            px_report(out, cap, L"\nUPnP: not available on this router (players still get in by hole punching).");
-        } else if (memory_equal(value, "failed", 6)) {
-            px_report(out, cap, L"\nUPnP: the router refused (");
-            px_report_raw(out, cap, value + (text_length(value) > 7 ? 7 : text_length(value)));
-            px_report(out, cap, L"); players still get in by hole punching.");
-        } else {
-            px_report(out, cap, L"\nUPnP: the router forwarded the world's port.");
-        }
-        if (px_net_line(net, "othernat", value, sizeof(value))) {
-            px_report(out, cap, L"\nYour router is behind another router or the operator's CGNAT: players outside may not get "
-                                L"in. Put the operator's modem in bridge mode, or ask for a public IP.");
         }
     }
     px_report(out, cap, L"\nGuide: github.com/anarqz/ForzaInfinity/blob/main/docs/FREEROAM.md");

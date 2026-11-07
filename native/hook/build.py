@@ -54,7 +54,7 @@ SOURCES = [
     "src/infinity/net_observe.c",
     "src/infinity/ticket_guard.c",
     "src/infinity/freeroam.c",
-    "src/infinity/world.c",
+    "src/infinity/cardb.c",
     "src/infinity/proxy.c",
     "src/infinity/udp_proof.c",
     "src/infinity/carstate.c",
