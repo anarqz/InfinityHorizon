@@ -69,6 +69,7 @@ enum {
     FRAME_OBSERVED = 0x26,        /* hook -> launcher, AC-2: one ended episode of another player's car (watch.c) */
     FRAME_PLAYER_PARTS = 0x27,    /* hook -> launcher, NR-6: another player's model and part rows (watch.c) */
     FRAME_PRIVATE_SESSION = 0x28, /* hook -> launcher, T-L6: {str scid, str templateName, str name} of a held private create */
+    FRAME_INVITE_FRIENDS = 0x29,  /* hook -> launcher, T-L4: {} the game's Invite friends (SystemUI slot 9), completed here */
 };
 /* CR-L41.3 Car: a key goes out once it has stayed the same this long (the game replaces the car
    object on a change), and two Car frames are at least LAUNCH_CAR_MIN_MS apart. */
@@ -1214,6 +1215,26 @@ int fi_launch_private_create(const wchar_t *method, const wchar_t *url, const un
 unsigned fi_launch_private_kind(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size) {
     LaunchSessionRef ref;
     return launch_private_kind(method, url, body, size, &ref);
+}
+
+/* T-L4 (OD-204, WORLDS_OFFICIAL 12.5): the game's Invite friends (ISystemUIStatics slot 9, freeroam.c). Azimuth's slot completes
+   at once and shows nothing (T-R2, 12.8a), so the picker is the launcher's: behind the same capability as the private create (the
+   launcher answered Capture{12, 1}) the call completes here and InviteFriends (0x29, no payload) asks the launcher, which opens
+   the overlay's friend picker or says why not. Without that answer (an older launcher, or no private lobbies on its server) the
+   slot is forwarded to Azimuth as before (0). 1: completed here (sent, or no live session to send it to). */
+int fi_launch_invite_friends(void) {
+    if (!fi_launch_protocol() || !InterlockedCompareExchange(&launch_private_on, 0, 0)) return 0;
+    if (!fi_launch_live() || !launch_connected || fi_launch_suspended()) {
+        launch_log("INVITE FRIENDS: no live launcher session: completed here with nothing to open.", 0, 0, "");
+        return 1;
+    }
+    static const unsigned char none = 0;
+    if (!launch_queue_frame(FRAME_INVITE_FRIENDS, &none, 0)) {
+        launch_log("INVITE FRIENDS: InviteFriends could not be queued; completed here.", 0, 0, "");
+        return 1;
+    }
+    launch_log("INVITE FRIENDS: completed here; the launcher opens its friend picker (InviteFriends).", 0, 0, "");
+    return 1;
 }
 
 /* --------------------------------------------------------------- ticket */

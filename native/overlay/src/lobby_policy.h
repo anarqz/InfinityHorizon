@@ -133,4 +133,60 @@ private:
     int focus_ = kDecline;
 };
 
+// The friend picker (T-L4, 0x25): what it lists and which row has the focus. Only the launcher opens it (flag open: the game's
+// Invite friends or the pane's button answered with a picker); a picker without the flag only refreshes an open one. Only an
+// available friend may be chosen; choosing marks that row invited at once (no double send) until the launcher's refresh.
+class FriendPickerModel {
+public:
+    void Set(const FriendPickerFrame &frame) {
+        if (!frame.open() && !shown_) return; // a refresh for a closed picker
+        shown_ = true;
+        status_ = frame.status;
+        rows_ = frame.friends;
+        if (frame.open()) focus_ = FirstAvailable();
+        Clamp();
+    }
+    void Close() { shown_ = false; }
+    void Clear() {
+        shown_ = false;
+        rows_.clear();
+        focus_ = 0;
+    }
+    bool Shown() const { return shown_; }
+    uint8_t Status() const { return status_; }
+    const std::vector<PickerFriend> &Rows() const { return rows_; }
+    int Focus() const { return focus_; }
+    void Move(int delta) {
+        focus_ += delta;
+        Clamp();
+    }
+    void FocusRow(int row) {
+        focus_ = row;
+        Clamp();
+    }
+    // The focused row's XUID when it may be invited (the row is then marked invited); empty otherwise.
+    std::string Choose() {
+        if (!shown_ || focus_ < 0 || static_cast<size_t>(focus_) >= rows_.size()) return {};
+        PickerFriend &row = rows_[static_cast<size_t>(focus_)];
+        if (row.state != kPickerAvailable) return {};
+        row.state = kPickerInvited;
+        return row.xuid;
+    }
+
+private:
+    int FirstAvailable() const {
+        for (size_t i = 0; i < rows_.size(); ++i)
+            if (rows_[i].state == kPickerAvailable) return static_cast<int>(i);
+        return 0;
+    }
+    void Clamp() {
+        if (focus_ >= static_cast<int>(rows_.size())) focus_ = static_cast<int>(rows_.size()) - 1;
+        if (focus_ < 0) focus_ = 0;
+    }
+    bool shown_ = false;
+    uint8_t status_ = kPickerList;
+    std::vector<PickerFriend> rows_;
+    int focus_ = 0;
+};
+
 } // namespace fi

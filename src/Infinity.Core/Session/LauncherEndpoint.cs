@@ -59,6 +59,9 @@ public abstract record EndpointEvent
 
     /// <summary>Frame 0x28 from the hook (T-L6): the session reference of the private create it holds.</summary>
     public sealed record PrivateSessionWritten(string Scid, string TemplateName, string Name) : EndpointEvent;
+
+    /// <summary>Frame 0x29 from the hook (T-L4): the game's Invite friends, completed in the hook.</summary>
+    public sealed record InviteFriendsAsked : EndpointEvent;
 }
 
 /// <summary>
@@ -173,6 +176,7 @@ public sealed class LauncherEndpoint
             Frame.Progress p => new EndpointEvent.ProgressReported(p.Level, p.Credits),
             Frame.Car c => new EndpointEvent.CarChanged(c.CarKey),
             Frame.PrivateSession p => new EndpointEvent.PrivateSessionWritten(p.Scid, p.TemplateName, p.Name),
+            Frame.InviteFriends => new EndpointEvent.InviteFriendsAsked(),
             _ => throw new ProtocolException($"unexpected frame from hook: type 0x{frame.Type:x2}"),
         };
         return ([], evt);

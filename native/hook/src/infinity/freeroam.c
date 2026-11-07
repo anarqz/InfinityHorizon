@@ -1726,11 +1726,19 @@ static void fr_vtable_observed(void **vtable) {
     memory_copy(vtable + 6, observers, sizeof(observers));
 }
 
-/* ISystemUIStatics slot 9 (user, out action): the system "invite to party" UI. Its entry is
-   logged before Azimuth's slot runs, in case that never returns; both lines share one number. */
+/* ISystemUIStatics slot 9 (user, out action): the system "invite to party" UI, the game's Invite friends. T-L4 (OD-204,
+   WORLDS_OFFICIAL 12.5): when the launcher serves private lobbies (launch.c fi_launch_invite_friends: its Capture{12, 1}) the
+   action completes here, as IPartyStatics 6/7 do, and the launcher opens its own friend picker; nothing reaches Azimuth (its slot
+   completes at once and shows nothing, T-R2). Otherwise it is forwarded as before: its entry is logged before Azimuth's slot
+   runs, in case that never returns; both lines share one number. */
 static HRESULT STDMETHODCALLTYPE fr_system_ui_invite(FrWrap *self, uintptr_t a, uintptr_t b, uintptr_t c,
                                                      uintptr_t d, uintptr_t e, uintptr_t f) {
     LONG number = fr_obs_next(self->observe, 9);
+    if (fi_launch_invite_friends()) {
+        HRESULT result = fr_completed(0, (void **)b);
+        fr_observed(self, 9, number, result, "completed here (Invite friends: the launcher's friend picker)", a, b, c, d, e, f);
+        return result;
+    }
     if (number <= FR_OBS_FIRST) {
         FR_LINE(line);
         fr_obs_head(&line, 0, self->observe, 9, number);

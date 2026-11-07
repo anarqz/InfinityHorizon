@@ -79,6 +79,44 @@ public sealed partial class WorldsBridge
         Volatile.Write(ref _seatOfficial, world); // transport stays official (direct, FIUP)
     }
 
+    // T-L4 (a): 1 while SeatAnswer.privateWorldId may name the world the next lobby ask rejoins first: from this bridge's start (a
+    // crash or a restart is a new launcher session) and after a private seat the server released, until a seat is granted, that
+    // rejoin was refused, or the player left a private lobby on purpose
+    private int _privateRejoinArmed = 1;
+    // the private world the player left itself (the overlay's Leave): privateWorldId never brings it back
+    private string? _privateLeft;
+
+    /// <summary>
+    /// T-L4 (a), MATCHMAKING_API §2.10 <c>SeatAnswer.privateWorldId</c>, WORLDS_OFFICIAL §12.6 "Crash or reconnect": a seat read with no
+    /// seat names the open private world this account may rejoin; while armed, the next lobby ask joins it first by its world id
+    /// (<c>POST /mm/v1/join {worldId}</c>), before any quick join. Absent (an older server): the released seat's world, as T-L6.
+    /// </summary>
+    private void ObservePrivateRejoin(string? privateWorld, SeatEnded? ended, string? generatedAt)
+    {
+        if (string.IsNullOrEmpty(privateWorld) || Volatile.Read(ref _privateRejoinArmed) == 0 || Volatile.Read(ref _privateLeft) == privateWorld) return;
+        // review H1 (owner: the crash hold stays ~30 s, no longer client hold): only a seat of that very world that ended moments ago
+        // (a crash or a lapse: released or expired, at most PrivateRejoinWithin before the read) makes it the first choice; a world the
+        // account merely has access to (left long ago, or by the game's own menu earlier) is never joined from privateWorldId
+        if (ended is null || ended.WorldId != privateWorld || ended.Reason is not (SeatEnds.Released or SeatEnds.Expired)) return;
+        if (Parse(ended.At) is not { } endedAt) return;
+        var reference = Parse(generatedAt) ?? Now;
+        var ago = reference - endedAt;
+        if (ago > PrivateRejoinWithin || ago < -PrivateRejoinWithin) return;
+        Volatile.Write(ref _seatPrivate, privateWorld); // rejoined by id, never placed again by activity
+        if (Volatile.Read(ref _recentlyLeft) is { } recent && recent.WorldId == privateWorld) return; // its first time stands
+        Volatile.Write(ref _recentlyLeft, new RecentWorld(privateWorld, Now - (ago > TimeSpan.Zero ? ago : TimeSpan.Zero)));
+        _log($"worlds: the server names private lobby {privateWorld}, whose seat ended {(int)Math.Max(0, ago.TotalSeconds)} s ago; the next lobby ask joins it first");
+
+        static DateTimeOffset? Parse(string? at) => DateTimeOffset.TryParse(at, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed) ? parsed : null;
+    }
+
+    /// <summary>
+    /// T-L4 (a), review H1: how recently the private world's seat must have ended for <c>privateWorldId</c> to lead the next lobby ask
+    /// (the server's crash hold, owner 2026-11-06: about 30 s; the client adds no longer hold).
+    /// </summary>
+    public static readonly TimeSpan PrivateRejoinWithin = TimeSpan.FromSeconds(30);
+
     /// <summary>The hook's PrivateSession frame: the reference of the session the game is creating (logged without its name).</summary>
     public void PrivateSessionWritten(string scid, string templateName, string name)
     {
@@ -106,15 +144,30 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>
-    /// T-L6: kinds 3/4 (MATCHMAKING_API §2.10). One create call, no retry (the hook's wait is 20 s and the call counts against
-    /// <c>mm.join</c>): granted → the proof is installed (the overlay's join path) and the seat is marked private; refused → none
-    /// and one notice: <c>lobbies_full</c>, <c>pool</c> (the time left), <c>client_update</c>, an older server
-    /// (<c>REQUEST.INVALID {field: "private"}</c>), rate limited, or a failure.
+    /// T-L4 follow-up (b): how long a private create answered <c>lobbies_full</c> keeps asking (its <c>Retry-After</c>, 2 s when absent),
+    /// from the first ask: about 10 s, always inside <see cref="FreeRoamAskBudget"/> and so inside the hook's 20 s FreeRoamNeed wait.
+    /// </summary>
+    public static readonly TimeSpan PrivateCreateFullBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>The wait before asking again after a <c>lobbies_full</c> without <c>Retry-After</c> (MATCHMAKING_API §2.9 sends 2).</summary>
+    public static readonly TimeSpan PrivateCreateFullRetry = TimeSpan.FromSeconds(2);
+
+    /// <summary>T-L4 (b), review M2: the most create calls one ask sends (half the <c>mm.join</c> bucket of 6 a minute).</summary>
+    public const int PrivateCreateMaxAsks = 3;
+
+    /// <summary>
+    /// T-L6: kinds 3/4 (MATCHMAKING_API §2.10): granted → the proof is installed (the overlay's join path) and the seat is marked
+    /// private; refused → none and one notice: <c>lobbies_full</c>, <c>pool</c> (the time left), <c>client_update</c>, an older server
+    /// (<c>REQUEST.INVALID {field: "private"}</c>), rate limited, or a failure. T-L4 (b): only <c>lobbies_full</c> is asked again, after
+    /// its <c>Retry-After</c> (<see cref="PrivateCreateFullRetry"/> when absent), while the next ask still starts within
+    /// <see cref="PrivateCreateFullBudget"/> of the first and the whole ask within <see cref="FreeRoamAskBudget"/>, at most
+    /// <see cref="PrivateCreateMaxAsks"/> calls (each counts against <c>mm.join</c>, 6 a minute: the game's retry and a rejoin keep room); its notice shows only when it still fails.
     /// </summary>
     private async Task<byte> PrivateCreateCoreAsync(byte kind, CancellationToken cancellation)
     {
         var activity = ActivityOf(kind) ?? WorldActivities.FreeRoam;
         if (!PrivateCreateCapable) return Decided(kind, FreeRoamResult.None, "no private lobby (private creates are off in this session)");
+        var started = _clock.GetTimestamp();
         using var budget = new CancellationTokenSource(FreeRoamAskBudget, _clock);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellation, budget.Token);
         var token = bounded.Token;
@@ -124,8 +177,22 @@ public sealed partial class WorldsBridge
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no private lobby (online lobbies are not allowed now)");
             if (OwnWorld) return PrivateRefused(kind, "worlds.close_before_join", "this player hosts a lobby");
             if (WireMods().Refusal is { } mods) return PrivateRefused(kind, mods, $"mods: {mods}");
-            Volatile.Write(ref _lobbiesFullAfter, -1);
-            var joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty, string.Empty), activity, token, kind, privateCreate: true).ConfigureAwait(false);
+            UiFrame.JoinResult joined;
+            var asks = 0;
+            TimeSpan? firstAsk = null;
+            while (true)
+            {
+                firstAsk ??= _clock.GetElapsedTime(started);
+                Volatile.Write(ref _lobbiesFullAfter, -1);
+                asks++;
+                joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty, string.Empty), activity, token, kind, privateCreate: true).ConfigureAwait(false);
+                if (joined.Result == UiJoin.Reserved || Volatile.Read(ref _lobbiesFullAfter) is not (var ticks and >= 0) || !OnlineOpen) break;
+                var after = ticks > 0 ? TimeSpan.FromTicks(Math.Max(ticks, TimeSpan.TicksPerSecond)) : PrivateCreateFullRetry;
+                var now = _clock.GetElapsedTime(started);
+                if (asks >= PrivateCreateMaxAsks || now + after - firstAsk.Value > PrivateCreateFullBudget || now + after >= FreeRoamAskBudget) break;
+                _log($"worlds: {KindName(kind)}: every {activity} lobby is full; asking for its private lobby again in {after.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} s");
+                await Task.Delay(after, _clock, token).ConfigureAwait(false);
+            }
             if (joined.Result == UiJoin.Reserved && Volatile.Read(ref _seatWorld) is { } world)
             {
                 Volatile.Write(ref _seatPrivate, world);

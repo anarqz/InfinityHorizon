@@ -48,6 +48,10 @@
 // invite prompt (invite.cpp); 0x24 InviteAnswer carries the player's Accept or Decline back. The 0x03 toast's additive flags byte
 // marks the notices that show even in an official lobby; 0x0E MyWorld's additive leader names who may invite.
 //
+// Protocol 7 (OD-204 T-L4; layouts in ui_frames.h, the model in lobby_policy.h): 0x25 FriendPicker from the launcher opens or
+// refreshes the friend picker (friend_picker.cpp); 0x26 FriendPickerAsk is the Private Lobby pane's Invite friends; 0x27 InviteSend
+// carries the chosen friend's XUID.
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
@@ -115,6 +119,12 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         InvitePromptFrame prompt;
         if (DecodeInvitePrompt(body, size, prompt)) SetInvitePrompt(prompt);
         else Log("ui pipe: malformed InvitePrompt ignored");
+        break;
+    }
+    case 0x25: { // protocol 7 (T-L4): the friend picker
+        FriendPickerFrame picker;
+        if (DecodeFriendPicker(body, size, picker)) SetFriendPicker(picker);
+        else Log("ui pipe: malformed FriendPicker ignored");
         break;
     }
     case 0x16: {
@@ -315,6 +325,7 @@ void Session(HANDLE pipe) {
         g_out.clear();
     }
     InvitesDisconnected(); // T-L3: no launcher to answer to: its prompts go
+    FriendPickerDisconnected(); // T-L4: and so does the picker
     CloseHandle(read_event);
     CloseHandle(write_event);
 }
@@ -373,6 +384,10 @@ void SendWorldAction(uint8_t action, const std::string &xuid, const std::string 
 }
 
 void SendInviteAnswer(const std::string &invite, bool accept) { Queue(0x24, EncodeInviteAnswer(invite, accept)); }
+
+void SendFriendPickerAsk() { Queue(0x26, {}); }
+
+void SendInviteSend(const std::string &xuid) { Queue(0x27, EncodeInviteSend(xuid)); }
 
 } // namespace fi
 

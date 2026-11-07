@@ -95,7 +95,12 @@ public sealed partial class WorldsBridge
     {
         Volatile.Write(ref _recentlyLeft, null);
         Volatile.Write(ref _hostLeft, null);
-        if (Interlocked.Exchange(ref _seatWorld, null) is { } world) Volatile.Write(ref _leftOnPurpose, new RecentWorld(world, Now));
+        Volatile.Write(ref _privateRejoinArmed, 0); // T-L4 (a): the player's own Leave is never undone by privateWorldId
+        if (Interlocked.Exchange(ref _seatWorld, null) is { } world)
+        {
+            Volatile.Write(ref _leftOnPurpose, new RecentWorld(world, Now));
+            if (SeatPrivate(world)) Volatile.Write(ref _privateLeft, world);
+        }
     }
     private readonly object _freeRoamState = new();
     private Task<byte>? _freeRoamRun;
@@ -476,6 +481,7 @@ public sealed partial class WorldsBridge
         if (SeatPrivate(ended.WorldId) && ended.Reason == SeatEnds.Released)
         {
             Volatile.Write(ref _recentlyLeft, new RecentWorld(ended.WorldId, Now));
+            Volatile.Write(ref _privateRejoinArmed, 1); // T-L4 (a): the server's privateWorldId, when it names one, comes first
             return;
         }
         if (Volatile.Read(ref _seatOfficial) == ended.WorldId) return; // an official world closing is not a host leaving
@@ -497,6 +503,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     private void SeatWorldIs(string world)
     {
+        Volatile.Write(ref _privateRejoinArmed, 0); // T-L4 (a): a seat is held: privateWorldId is no rejoin target now
         if (Interlocked.Exchange(ref _seatWorld, world) == world) return;
         Volatile.Write(ref _keptPastGrace, null);
         Volatile.Write(ref _hostMoved, null);
@@ -597,6 +604,7 @@ public sealed partial class WorldsBridge
                 if (back.Result == UiJoin.Reserved)
                     return Decided(kind, FreeRoamResult.Ready, $"joined {recent.WorldId} (back in the world it left {(int)(Now - recent.LeftAt).TotalSeconds} s ago)");
                 _log($"worlds: {KindName(kind)}: {recent.WorldId}, left {(int)(Now - recent.LeftAt).TotalSeconds} s ago, refused ({back.Result})");
+                if (SeatPrivate(recent.WorldId)) Volatile.Write(ref _privateRejoinArmed, 0); // T-L4 (a): never asked again from privateWorldId
             }
             // OD-149: an isolated player (or one the anti-cheat move is moving) plays in pineapple player worlds only, and an official
             // world never is one (§2.9)

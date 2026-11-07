@@ -928,6 +928,9 @@ void Navigate(Nav nav) {
     if (InviteNavigate(nav)) {
         return; // T-L3: an invite prompt is modal while the guide is open
     }
+    if (PickerNavigate(nav)) {
+        return; // T-L4: the friend picker is modal while the guide is open (under an invite prompt)
+    }
     if (PaneNavigate(nav)) {
         return; // an open player or launcher pane holds the controller
     }
@@ -1029,7 +1032,9 @@ void LoadFonts(float scale) {
 }
 void DrawUi(float width, float height, float dt) {
     PaneTick(dt);
+    FriendPickerTick();          // T-L4: a picker the launcher opened opens the guide; a closed guide closes the picker
     InviteMouse(width, height); // T-L3: a modal invite prompt takes its clicks before the guide sees them
+    PickerMouse(width, height); // T-L4: then the modal friend picker, before the guide
     Model snapshot;
     {
         std::lock_guard<std::mutex> lock(g_lock);
@@ -1059,6 +1064,7 @@ void DrawUi(float width, float height, float dt) {
         }
         ImGui::End();
     }
+    DrawFriendPicker(width, height, dt); // T-L4: under an invite prompt
     DrawInvitePrompt(width, height, dt);
     UpdateToasts(dl, width, height, dt);
 }

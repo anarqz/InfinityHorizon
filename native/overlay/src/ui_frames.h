@@ -67,6 +67,12 @@
 //        (<= 16 B: "freeroam", "roadtrip", or anything else shown as a lobby), u16 expiresInSec (1..3600; 0 withdraws the prompt of
 //        that id: answered elsewhere, expired or cancelled)}
 //   0x24 InviteAnswer, overlay -> launcher {str inviteId, u8 accept (0 decline, 1 accept)}; nothing is sent when a prompt expires
+// Protocol 7 (OD-204, T-L4, WORLDS_OFFICIAL §12.5): the private lobby's friend picker
+//   0x25 FriendPicker, launcher -> overlay {u8 flags (bit 0 open: show the picker now, with the guide; without it only refresh an
+//        open one), u8 status (0 the list, 1 the friend list could not be read: no rows), u8 count <= 100 x {str xuid (decimal),
+//        str gamertag (1..64 B), u8 state (0 available, 1 in this lobby, 2 invited: pending, 3 offline)}}; friends only
+//   0x26 FriendPickerAsk, overlay -> launcher {}: the Private Lobby pane's Invite friends (the launcher answers 0x25 or a notice)
+//   0x27 InviteSend, overlay -> launcher {str xuid}: an available friend chosen; the launcher answers one notice and a fresh 0x25
 // Additive fields of older frames (an older reader ignores them):
 //   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
@@ -82,7 +88,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 6;
+constexpr uint16_t kUiProtocol = 7;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
@@ -610,6 +616,73 @@ inline bool DecodeInviteAnswer(const uint8_t *body, size_t size, InviteAnswerFra
     if (r.ok && !PaneKey(a.id)) r.ok = false;
     if (!r.Done()) return false;
     out = std::move(a);
+    return true;
+}
+
+// ---------------------------------------------------------------- protocol 7: the friend picker (OD-204, T-L4)
+constexpr size_t kMaxPickerFriends = 100;
+constexpr uint8_t kPickerOpen = 1, kPickerFlagsAll = kPickerOpen;
+constexpr uint8_t kPickerList = 0, kPickerUnavailable = 1;
+enum : uint8_t { kPickerAvailable = 0, kPickerInLobby = 1, kPickerInvited = 2, kPickerOffline = 3, kPickerStateMax = kPickerOffline };
+struct PickerFriend {
+    std::string xuid;     // the action key (decimal), never shown
+    std::string gamertag; // shown
+    uint8_t state = kPickerAvailable;
+};
+struct FriendPickerFrame {
+    uint8_t flags = 0, status = kPickerList;
+    std::vector<PickerFriend> friends;
+    bool open() const { return (flags & kPickerOpen) != 0; }
+};
+inline bool PickerXuid(const std::string &xuid) {
+    if (xuid.empty() || xuid.size() > 20) return false;
+    for (char c : xuid)
+        if (c < '0' || c > '9') return false;
+    return true;
+}
+// Strict, as the launcher writes it (UiFrame.FriendPicker.Validate).
+inline bool DecodeFriendPicker(const uint8_t *body, size_t size, FriendPickerFrame &out) {
+    wire::Reader r{body, size};
+    FriendPickerFrame p;
+    p.flags = r.U8();
+    p.status = r.U8();
+    const size_t count = r.Count(kMaxPickerFriends);
+    if (r.ok && (p.flags > kPickerFlagsAll || p.status > kPickerUnavailable || (p.status != kPickerList && count != 0))) r.ok = false;
+    for (size_t i = 0; i < count && r.ok; ++i) {
+        PickerFriend f;
+        f.xuid = r.Text(20);
+        f.gamertag = r.Text(kMaxGamertag);
+        f.state = r.U8();
+        if (r.ok && (!PickerXuid(f.xuid) || f.gamertag.empty() || f.state > kPickerStateMax)) r.ok = false;
+        p.friends.push_back(std::move(f));
+    }
+    if (!r.Done()) return false;
+    out = std::move(p);
+    return true;
+}
+inline std::vector<uint8_t> EncodeFriendPicker(const FriendPickerFrame &p) {
+    std::vector<uint8_t> b;
+    wire::U8(b, p.flags);
+    wire::U8(b, p.status);
+    wire::U8(b, static_cast<uint8_t>(p.friends.size()));
+    for (const auto &f : p.friends) {
+        wire::Str(b, f.xuid);
+        wire::Str(b, f.gamertag);
+        wire::U8(b, f.state);
+    }
+    return b;
+}
+inline std::vector<uint8_t> EncodeInviteSend(const std::string &xuid) {
+    std::vector<uint8_t> b;
+    wire::Str(b, xuid);
+    return b;
+}
+inline bool DecodeInviteSend(const uint8_t *body, size_t size, std::string &xuid) {
+    wire::Reader r{body, size};
+    std::string x = r.Text(20);
+    if (r.ok && !PickerXuid(x)) r.ok = false;
+    if (!r.Done()) return false;
+    xuid = std::move(x);
     return true;
 }
 

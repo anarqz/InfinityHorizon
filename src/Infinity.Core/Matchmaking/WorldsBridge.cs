@@ -902,6 +902,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // longer listed this player), so a cleared relay leg is never silent
                     if (heldGrant is not null) _log(SeatEndedLine(value.Ended, heldGrant));
                     ObserveHostLeft(value.Ended, heldGrant); // OD-190: the next placement says the host left
+                    ObservePrivateRejoin(value.PrivateWorldId, value.Ended, value.GeneratedAt); // T-L4 (a): the server's private world to rejoin comes first
                     SessionSwitchSeatEnded(value.Ended, heldGrant); // W-12 (c): a game moving into that world is released
                     _seat.Observe(value, Now);
                     // OD-149: the seat this launcher held ended because the anti-cheat system isolated the player: it is moved
@@ -989,14 +990,17 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                 Volatile.Write(ref _rosterMods, RosterModsOf(seat.WorldId, named
                     ? boundedRoster!.Items.Select(i => (i.Xuid, i.Role == "host", i.Mods))
                     : world.Host.Xuid is { } host ? [(host, true, (IReadOnlyList<ModEntry>?)null)] : [], world.Mods, ModName));
+                // OD-204 (T-L6): only with the official flag (a private world is an official one; the frame refuses it alone)
+                var privateMine = role != UiWorldRole.Hosting && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)
+                    && (world.Private == true || SeatPrivate(seat.WorldId));
                 return _mineSnapshot = new UiFrame.MyWorld(role, seat.WorldId, world.Name, world.Host.DisplayName, world.Code ?? string.Empty, row.Audience, row.Players, row.Max, named, members,
                     WorldModes.OpenToBoth(world), Official: role != UiWorldRole.Hosting
                         && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId), // OD-192
                     // OD-204 (T-L6): only with the official flag (a private world is an official one; the frame refuses it alone)
-                    Private: role != UiWorldRole.Hosting && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)
-                        && (world.Private == true || SeatPrivate(seat.WorldId)));
-                // OD-204 (T-L3): MyWorld.Leader stays empty (unknown, so the overlay's Invite friends stays disabled) until MACBOOK
-                // exposes the leader to the launcher (WORLDS_OFFICIAL §12.8b: the agent's announce carries it to the server)
+                    Private: privateMine,
+                    // OD-204 (T-L4, CR-S96 c94d4039): the seat read's world.leader (private worlds, seated readers, omitted while nobody
+                    // leads); empty (unknown) lets nobody invite. Only a decimal XUID rides the frame (the frame refuses anything else).
+                    Leader: privateMine && world.Leader is { Length: > 0 and <= 20 } leader && leader.All(char.IsAsciiDigit) ? leader : string.Empty);
             }
         }
         catch (Exception e) when (HostFailure(e) || e is TimeoutException)

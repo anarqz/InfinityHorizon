@@ -71,14 +71,15 @@ public enum UiDirection
 /// 0x14-0x18: modded lobbies and the detail pane, OD-112, protocol 2; 0x19-0x1A: the guide's server
 /// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
 /// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5; 0x23-0x24: the private lobby's invite
-/// prompt and its answer, OD-204 T-L3, protocol 6; native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
+/// prompt and its answer, OD-204 T-L3, protocol 6; 0x25-0x27: the private lobby's friend picker and its invite, OD-204 T-L4,
+/// protocol 7; native/overlay/src/ui_frames.h and pipe.cpp are the other end). The hook
 /// never sees it. T-L3 reserved the player-hosting frames (0x07-0x0C, 0x14, 0x15, WorldAction 1/3, VoiceOp 1/6): a T-L3 overlay
 /// never sends them and ignores them, and this launcher still codes and answers them (its hosting code goes with T-L8).
 /// </summary>
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 6;
+    public const ushort ProtocolVersion = 7;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -112,8 +113,14 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 6 (the private lobby's invite prompt, OD-204 T-L3).</summary>
     public const byte FirstProtocol6Type = 0x23;
 
+    /// <summary>The lowest type that needs protocol 7 (the private lobby's friend picker, OD-204 T-L4).</summary>
+    public const byte FirstProtocol7Type = 0x25;
+
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x24;
+    public const byte LastType = 0x27;
+
+    /// <summary>T-L4: the most friends one <see cref="FriendPicker"/> lists (the launcher keeps the first ones, available ones first).</summary>
+    public const int MaxPickerFriends = 100;
 
     /// <summary>T-L3: an invite id on the pipe (<see cref="InvitePrompt"/>, <see cref="InviteAnswer"/>), in bytes of [A-Za-z0-9:._-].</summary>
     public const int MaxInviteId = 64;
@@ -665,6 +672,55 @@ public abstract record UiFrame
         internal void Validate() => PaneKey(InviteId, "invite id");
     }
 
+    /// <summary>
+    /// 0x25, launcher → overlay (protocol 7, OD-204 T-L4, WORLDS_OFFICIAL §12.5): the private lobby's friend picker. <c>Flags</c>
+    /// <see cref="UiPickerFlags"/> (bit 0: open the picker now, and the guide with it; without it the list only refreshes a picker
+    /// already open); <c>ListStatus</c> <see cref="UiPickerStatus"/> (1: the friend list could not be read, no rows); at most
+    /// <see cref="MaxPickerFriends"/> rows of the player's friends only, each <see cref="PickerFriend"/>.
+    /// </summary>
+    public sealed record FriendPicker(byte Flags, byte ListStatus, IReadOnlyList<PickerFriend> Friends) : UiFrame
+    {
+        public override byte Type => 0x25;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        internal void Validate()
+        {
+            if (Flags > UiPickerFlags.All) throw new ProtocolException("invalid picker flags");
+            if (ListStatus > UiPickerStatus.Max) throw new ProtocolException("invalid picker status");
+            Bound(Friends.Count, MaxPickerFriends, "picker friends");
+            if (ListStatus != UiPickerStatus.List && Friends.Count != 0) throw new ProtocolException("an unavailable list has no rows");
+            foreach (var friend in Friends)
+            {
+                CheckXuid(friend.Xuid, "picker xuid");
+                if (friend.Gamertag.Length == 0) throw new ProtocolException("a picker row names its friend");
+                Limit(friend.Gamertag, 64, "picker gamertag");
+                if (friend.State > UiPickerState.Max) throw new ProtocolException("invalid picker state");
+            }
+        }
+    }
+
+    /// <summary>0x26, overlay → launcher (protocol 7, T-L4): the Private Lobby pane's Invite friends: answer with <see cref="FriendPicker"/>.</summary>
+    public sealed record FriendPickerAsk : UiFrame
+    {
+        public override byte Type => 0x26;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+    }
+
+    /// <summary>
+    /// 0x27, overlay → launcher (protocol 7, T-L4): the player chose a friend in the picker: invite that profile's decimal XUID
+    /// (<c>POST /mm/v1/worlds/{worldId}/invites</c>); the launcher answers with one notice and a refreshed <see cref="FriendPicker"/>.
+    /// </summary>
+    public sealed record InviteSend(string Xuid) : UiFrame
+    {
+        public override byte Type => 0x27;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate() => CheckXuid(Xuid, "invite xuid");
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -1013,6 +1069,24 @@ public abstract record UiFrame
                 w.Str(a.InviteId);
                 w.Flag(a.Accept);
                 break;
+            case FriendPicker p:
+                p.Validate();
+                w.U8(p.Flags);
+                w.U8(p.ListStatus);
+                w.U8((byte)p.Friends.Count);
+                foreach (var friend in p.Friends)
+                {
+                    w.Str(friend.Xuid);
+                    w.Str(friend.Gamertag);
+                    w.U8(friend.State);
+                }
+                break;
+            case FriendPickerAsk:
+                break;
+            case InviteSend s:
+                s.Validate();
+                w.Str(s.Xuid);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -1092,13 +1166,17 @@ public abstract record UiFrame
             0x21 => new PlayerActionRequest(r.U32(), r.Str(), r.U8(), r.U8()),
             0x22 => new PlayerActionDone(r.U32(), r.Str(), r.U8(), r.U8()),
             0x23 => new InvitePrompt(r.Str(), r.Str(), r.Str(), r.U16()),
-            _ => new InviteAnswer(r.Str(), r.Flag("InviteAnswer.accept")),
+            0x24 => new InviteAnswer(r.Str(), r.Flag("InviteAnswer.accept")),
+            0x25 => DecodePicker(ref r),
+            0x26 => new FriendPickerAsk(),
+            _ => new InviteSend(r.Str()),
         };
         r.End();
         switch (frame)
         {
             case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
-                or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast:
+                or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast
+                or FriendPicker or InviteSend:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1106,6 +1184,17 @@ public abstract record UiFrame
         if (frame is UiEvent { Kind: UiEventKind.ConnectionDetails } query && query.Detail.Length != 0) throw new ProtocolException("Connection query detail must be empty");
         used = 4 + length.Value;
         return frame;
+    }
+
+    private static FriendPicker DecodePicker(ref WireReader r)
+    {
+        var flags = r.U8();
+        var status = r.U8();
+        var count = r.U8();
+        Bound(count, MaxPickerFriends, "picker friends");
+        var friends = new List<PickerFriend>(count);
+        for (var i = 0; i < count; ++i) friends.Add(new PickerFriend(r.Str(), r.Str(), r.U8()));
+        return new FriendPicker(flags, status, friends);
     }
 
     private static VoiceState DecodeVoiceState(ref WireReader r)
@@ -1317,7 +1406,57 @@ public abstract record UiIncoming
 
     /// <summary>Protocol 6 (OD-204 T-L3): the player answered an invite prompt (the launcher's accept and decline are T-L4/T-L5's).</summary>
     public sealed record InviteAnswer(UiFrame.InviteAnswer Answer) : UiIncoming;
+
+    /// <summary>Protocol 7 (OD-204 T-L4): the Private Lobby pane's Invite friends; answer with <see cref="UiFrame.FriendPicker"/> or a notice.</summary>
+    public sealed record PickerAsk : UiIncoming;
+
+    /// <summary>Protocol 7 (OD-204 T-L4): a friend chosen in the picker: invite it, then one notice and the refreshed picker.</summary>
+    public sealed record InviteSend(UiFrame.InviteSend Request) : UiIncoming;
 }
+
+/// <summary><see cref="UiFrame.FriendPicker"/>'s flags (T-L4).</summary>
+public static class UiPickerFlags
+{
+    /// <summary>Open the picker now (and the guide with it); without it the list only refreshes a picker already open.</summary>
+    public const byte Open = 1;
+
+    public const byte All = Open;
+}
+
+/// <summary><see cref="UiFrame.FriendPicker"/>'s status (T-L4).</summary>
+public static class UiPickerStatus
+{
+    /// <summary>The rows are the friend list (possibly empty: no friends to invite).</summary>
+    public const byte List = 0;
+
+    /// <summary>The friend list could not be read: the picker says so, with no rows.</summary>
+    public const byte Unavailable = 1;
+
+    public const byte Max = Unavailable;
+}
+
+/// <summary>A <see cref="PickerFriend"/>'s state (T-L4): only <see cref="Available"/> may be chosen.</summary>
+public static class UiPickerState
+{
+    public const byte Available = 0;
+
+    /// <summary>Already in this lobby (its roster, or the friend's presence names this world).</summary>
+    public const byte InLobby = 1;
+
+    /// <summary>This launcher's invite to that friend is pending (it holds a seat for 2 minutes).</summary>
+    public const byte Invited = 2;
+
+    /// <summary>Not online now.</summary>
+    public const byte Offline = 3;
+
+    public const byte Max = Offline;
+}
+
+/// <summary>
+/// One row of <see cref="UiFrame.FriendPicker"/> (T-L4): a friend account's profile as the invite names it (the decimal XUID is the
+/// action key, never shown), its gamertag and <see cref="UiPickerState"/>.
+/// </summary>
+public sealed record PickerFriend(string Xuid, string Gamertag, byte State);
 
 /// <summary><c>Toast.flags</c> (T-L3), an additive byte after the text.</summary>
 public static class UiToastFlags
@@ -1703,7 +1842,7 @@ public sealed class UiSession
         ArgumentNullException.ThrowIfNull(frame);
         return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
             && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5)
-            && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6);
+            && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6) && (frame.Type < UiFrame.FirstProtocol7Type || Protocol >= 7);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1741,13 +1880,15 @@ public sealed class UiSession
         }
         if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
             || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5
-            || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6)
+            || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6 || frame.Type >= UiFrame.FirstProtocol7Type && Protocol < 7)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }
         return frame switch
         {
             UiFrame.UiHello => throw new ProtocolException("second UiHello"),
+            UiFrame.FriendPickerAsk => new UiIncoming.PickerAsk(),
+            UiFrame.InviteSend s => new UiIncoming.InviteSend(s),
             UiFrame.InviteAnswer a => new UiIncoming.InviteAnswer(a),
             UiFrame.PlayerStateQuery q => new UiIncoming.PlayerStateAsk(q),
             UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),

@@ -340,6 +340,17 @@ public abstract record Frame
     }
 
     /// <summary>
+    /// hook → launcher (0x29, T-L4, OD-204, WORLDS_OFFICIAL §12.5): <c>{}</c>, no payload. The game's Invite friends (ISystemUIStatics
+    /// slot 9) completed in the hook; the launcher opens the overlay's friend picker in a private lobby whose leader this player is,
+    /// or says why not. Only to a launcher that answered <see cref="CaptureWhat.PrivateCreate"/>; without it the hook forwards the
+    /// slot to Azimuth as before.
+    /// </summary>
+    public sealed record InviteFriends : Frame
+    {
+        public override byte Type => 0x29;
+    }
+
+    /// <summary>
     /// launcher → hook (0x20, CR-L40): <c>{u32 LE nonce, u8 result}</c>, the result one of
     /// <see cref="Matchmaking.FreeRoamResult"/> (0 a world is ready, 1 none, 2 not online).
     /// </summary>
@@ -685,6 +696,8 @@ public abstract record Frame
             case PrivateSession session:
                 session.Validate();
                 w.Str(session.Scid); w.Str(session.TemplateName); w.Str(session.Name); break;
+            case InviteFriends:
+                break;
             case Progress progress:
                 w.U32(progress.Level); w.U64(progress.Credits); break;
             case Car car:
@@ -816,6 +829,7 @@ public abstract record Frame
             0x26 => DecodeObserved(ref r),
             0x27 => r.U8() == PlayerParts.Layout ? DecodePlayerParts(ref r) : throw new ProtocolException("Unknown player parts layout"),
             0x28 => new PrivateSession(r.Str(), r.Str(), r.Str()),
+            0x29 => new InviteFriends(),
             _ => throw new ProtocolException($"unknown frame type 0x{type:x2}"),
         };
         r.End();
