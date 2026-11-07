@@ -43,7 +43,7 @@ void WriteLogLine(const char *line) {
 }
 
 DWORD WINAPI StartThread(void *) {
-    InitToastSound(g_self);
+    // OD-206 (T3): the render hooks first; a game that creates its swapchain early (FM5) must not wait for the chime
     if (MH_Initialize() != MH_OK) {
         Passthrough("MinHook did not initialise");
         return 0;
@@ -52,6 +52,7 @@ DWORD WINAPI StartThread(void *) {
         Passthrough("the D3D12 hooks could not be installed");
         return 0;
     }
+    InitToastSound(g_self);
     InstallGamepadHook(); // optional: without it the game also sees the pad while the sidebar is open
     StartPipe(g_ui_pipe);
     Log("hooks installed; waiting for the game's first frame");
