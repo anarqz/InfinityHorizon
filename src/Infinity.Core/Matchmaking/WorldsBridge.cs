@@ -508,6 +508,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     {
         ArgumentNullException.ThrowIfNull(request);
         Volatile.Write(ref _lastJoinRefusal, null);
+        Volatile.Write(ref _lastPoolUntilTicks, 0);
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
         if (HostingOrOpening || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting)
@@ -572,6 +573,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     if (PoolRefusal(answer.Error) is { } poolRefusal)
                     {
                         Volatile.Write(ref _lastJoinRefusal, ConflictReasons.Pool); // OD-190: a quick join's pool answer starts the anti-cheat move
+                        Volatile.Write(ref _lastPoolUntilTicks, PrivateLobbyNotices.PoolUntil(answer.Error)?.UtcTicks ?? 0); // A10 (T-L3)
                         return poolRefusal;
                     }
                     if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.LobbiesFull } lobbiesFull)
@@ -582,6 +584,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     }
                     if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.Activity })
                     {
+                        Volatile.Write(ref _lastJoinRefusal, ConflictReasons.Activity); // T-L3: a private create words it (PrivateLobbyNotices)
                         // OD-150: the world runs another activity now; like a closed world, the free-roam step tries the next one
                         _log($"worlds: join refused: {worldId ?? "the code's world"} does not run {activity ?? "the asked activity"} now");
                         return new UiFrame.JoinResult(UiJoin.Closed, _text("worlds.closed"));
@@ -604,6 +607,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     {
                         _log($"worlds: join refused: {answer.Error?.Reason}");
                         return new UiFrame.JoinResult(UiJoin.NotAllowed, _text(relayKey));
+                    }
+                    if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: PrivateLobbyNotices.NotLeader or PrivateLobbyNotices.Region } privateRefusal)
+                    {
+                        // OD-204 (T-L3): CR-S96's private lobby refusals, worded by the one table (T-L4/T-L5 reuse it)
+                        Volatile.Write(ref _lastJoinRefusal, privateRefusal.Reason);
+                        _log($"worlds: join refused: {privateRefusal.Reason}");
+                        return new UiFrame.JoinResult(UiJoin.NotAllowed, PrivateLobbyNotices.Text(_text, privateRefusal.Reason!));
                     }
                     // OD-181 (CR-S84): a modded session's join without its set is 400 {field: "mods"} (WireMods never sends one)
                     if (answer.Error is { Kind: MmErrorKind.Invalid, Field: "mods" })
@@ -816,6 +826,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     /// <summary>The <c>not_allowed</c> reason of the last join (e.g. <c>mode</c>), null when it was not one: a link join offers a profile of that mode (CR-L41.2).</summary>
     public string? LastJoinRefusal => Volatile.Read(ref _lastJoinRefusal);
     private string? _lastJoinRefusal;
+    // A10 (T-L3): the last 409 pool's details.until, as UTC ticks (0: none said)
+    private long _lastPoolUntilTicks;
 
     /// <summary>Periodic reconciliation sleeps after an idle free session has a confirmed empty seat.</summary>
     public async Task<UiFrame.MyWorld> PollMyWorldAsync(CancellationToken cancellation) =>
@@ -983,6 +995,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     // OD-204 (T-L6): only with the official flag (a private world is an official one; the frame refuses it alone)
                     Private: role != UiWorldRole.Hosting && (world.Official == true || Volatile.Read(ref _seatOfficial) == seat.WorldId)
                         && (world.Private == true || SeatPrivate(seat.WorldId)));
+                // OD-204 (T-L3): MyWorld.Leader stays empty (unknown, so the overlay's Invite friends stays disabled) until MACBOOK
+                // exposes the leader to the launcher (WORLDS_OFFICIAL §12.8b: the agent's announce carries it to the server)
             }
         }
         catch (Exception e) when (HostFailure(e) || e is TimeoutException)

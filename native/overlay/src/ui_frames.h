@@ -62,6 +62,16 @@
 //   0x22 PlayerActionDone, launcher -> overlay {u32 id, str xuid, u8 result (0 none, 1 report submitted, 2 report failed, 3 try
 //        later, 4 friend request sent, 5 friends now, 6 friend removed, 7 request cancelled, 8 player not found, 9 friend limit,
 //        10 failed), u8 state (as 0x20)}
+// Protocol 6 (OD-204, T-L3, WORLDS_OFFICIAL §12.5): the private lobby's invite prompt, a modal (never a toast: toasts follow OD-192)
+//   0x23 InvitePrompt, launcher -> overlay {str inviteId (1..64 B of [A-Za-z0-9:._-]), str fromGamertag (1..64 B), str activity
+//        (<= 16 B: "freeroam", "roadtrip", or anything else shown as a lobby), u16 expiresInSec (1..3600; 0 withdraws the prompt of
+//        that id: answered elsewhere, expired or cancelled)}
+//   0x24 InviteAnswer, overlay -> launcher {str inviteId, u8 accept (0 decline, 1 accept)}; nothing is sent when a prompt expires
+// Additive fields of older frames (an older reader ignores them):
+//   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
+//   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
+// Reserved (T-L3, OD-204 item 2): this overlay never sends 0x07, 0x09, 0x0B, 0x14, WorldAction 1/3 or VoiceOp 1/6 any more, and it
+// decodes and ignores 0x08, 0x0A, 0x0C and 0x15 from a launcher that still sends them; their ids and layouts stay reserved.
 // A malformed frame leaves `ok` false and is ignored whole.
 #pragma once
 
@@ -72,7 +82,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 5;
+constexpr uint16_t kUiProtocol = 6;
 // CR-L40: every lobby in one list; the launcher drops the last rows' players and mods to stay in one frame
 constexpr size_t kMaxLobbyRows = 50, kMaxLobbyMembers = 12, kMaxLobbyMods = 32;
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
@@ -190,8 +200,11 @@ struct MyWorld {
     // one. The guide's lobby tab becomes the Official Lobby pane, with no lobby options, and no overlay notice shows.
     bool official = false;
     // OD-204 (T-L6, after official, written only when true and only with official): a private official world, created in the
-    // game's own menu. Read here; the Private Lobby pane is T-L3's.
+    // game's own menu: the guide's Private Lobby pane (T-L3).
     bool is_private = false;
+    // OD-204 (T-L3, after the private flag, written only when private and known): the lobby leader's decimal XUID (WORLDS_OFFICIAL
+    // §12.8b; the server reports it, the launcher passes it on). Empty: unknown, so nobody may invite from this overlay.
+    std::string leader;
 };
 constexpr uint8_t kTransportUnknown = 0, kTransportRelay = 1, kTransportDirect = 2;
 constexpr size_t kMaxMineMembers = 16;
@@ -472,6 +485,10 @@ inline bool DecodeMyWorld(const uint8_t *body, size_t size, MyWorld &out) {
         if (r.ok && r.left > 0) m.official = r.Flag(); // OD-192
         if (r.ok && r.left > 0) m.is_private = r.Flag(); // OD-204 (T-L6)
         if (m.is_private && !m.official) r.ok = false; // a private world is an official one
+        if (r.ok && m.is_private && r.left > 0) { // OD-204 (T-L3): the leader, only when known
+            m.leader = r.Text(kMaxXuid);
+            if (r.ok && !XuidText(m.leader)) r.ok = false;
+        }
         // an unknown transport is written only ahead of the official flag
         if ((m.transport == kTransportUnknown && !m.official) || m.transport > kTransportDirect) r.ok = false;
     }
@@ -505,8 +522,119 @@ inline std::vector<uint8_t> EncodeMyWorld(const MyWorld &m) {
         wire::Str(b, m.notice);
         if (m.official) wire::Flag(b, true); // OD-192
         if (m.official && m.is_private) wire::Flag(b, true); // OD-204 (T-L6)
+        if (m.official && m.is_private && !m.leader.empty()) wire::Str(b, m.leader); // OD-204 (T-L3)
     }
     return b;
+}
+
+// ---------------------------------------------------------------- 0x03 Toast and its T-L3 flags
+// The toast's look is its kind (`icon`, ToastKind's order); `level` is read and not used. Bit 0 of the additive flags: the notice
+// always shows, even in an official lobby (a private create's result, A10's flagged Hardcore message); every other notice follows
+// OD-192's quiet rule. A launcher before T-L3 writes no flags byte (0).
+constexpr uint8_t kToastAlways = 1, kToastFlagsAll = kToastAlways;
+struct ToastFrame {
+    uint8_t level = 0, icon = 0;
+    uint16_t ttl = 0; // tenths of a second; 0 the overlay's own default
+    std::string text; // "Title\nBody"
+    uint8_t flags = 0;
+    bool always() const { return (flags & kToastAlways) != 0; }
+};
+// As leniently as before (trailing bytes past the flags ignored); unknown flag bits are ignored too (a newer launcher's).
+inline bool DecodeToast(const uint8_t *body, size_t size, ToastFrame &out) {
+    wire::Reader r{body, size};
+    ToastFrame t;
+    t.level = r.U8();
+    t.icon = r.U8();
+    t.ttl = r.U16();
+    t.text = r.Str();
+    if (r.ok && r.left > 0) t.flags = static_cast<uint8_t>(r.U8() & kToastFlagsAll);
+    if (!r.ok) return false;
+    out = std::move(t);
+    return true;
+}
+inline std::vector<uint8_t> EncodeToast(const ToastFrame &t) {
+    std::vector<uint8_t> b;
+    wire::U8(b, t.level);
+    wire::U8(b, t.icon);
+    wire::U16(b, t.ttl);
+    wire::Str(b, t.text);
+    if (t.flags != 0) wire::U8(b, t.flags);
+    return b;
+}
+
+// ---------------------------------------------------------------- protocol 6: the invite prompt (OD-204, T-L3)
+constexpr size_t kMaxInviteId = 64, kMaxInviteActivity = 16;
+constexpr uint16_t kMaxInviteSeconds = 3600;
+struct InvitePromptFrame {
+    std::string id;       // the invite's id, echoed by the answer
+    std::string from;     // the inviting player's gamertag (shown; the XUID never is)
+    std::string activity; // "freeroam", "roadtrip", or anything else (shown as a lobby)
+    uint16_t expires = 0; // seconds left; 0 withdraws the prompt of `id`
+};
+// Strict, as the launcher writes it (UiFrame.InvitePrompt.Validate).
+inline bool DecodeInvitePrompt(const uint8_t *body, size_t size, InvitePromptFrame &out) {
+    wire::Reader r{body, size};
+    InvitePromptFrame p;
+    p.id = r.Text(kMaxInviteId);
+    p.from = r.Text(kMaxGamertag);
+    p.activity = r.Text(kMaxInviteActivity);
+    p.expires = r.U16();
+    if (r.ok && (!PaneKey(p.id) || (p.expires != 0 && p.from.empty()) || p.expires > kMaxInviteSeconds)) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(p);
+    return true;
+}
+inline std::vector<uint8_t> EncodeInvitePrompt(const InvitePromptFrame &p) {
+    std::vector<uint8_t> b;
+    wire::Str(b, p.id);
+    wire::Str(b, p.from);
+    wire::Str(b, p.activity);
+    wire::U16(b, p.expires);
+    return b;
+}
+inline std::vector<uint8_t> EncodeInviteAnswer(const std::string &id, bool accept) {
+    std::vector<uint8_t> b;
+    wire::Str(b, id);
+    wire::Flag(b, accept);
+    return b;
+}
+struct InviteAnswerFrame {
+    std::string id;
+    bool accept = false;
+};
+inline bool DecodeInviteAnswer(const uint8_t *body, size_t size, InviteAnswerFrame &out) {
+    wire::Reader r{body, size};
+    InviteAnswerFrame a;
+    a.id = r.Text(kMaxInviteId);
+    a.accept = r.Flag();
+    if (r.ok && !PaneKey(a.id)) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(a);
+    return true;
+}
+
+// ---------------------------------------------------------------- reserved frames (T-L3)
+// 0x08, 0x0A and 0x0C (protocol 1: the list, a join's and a create's answers) from a launcher that still sends them: read to the
+// end of their layout (so a malformed one is told apart in the log) and ignored. 0x15 uses DecodeWorldsListV2.
+inline bool ReservedFrameReads(uint8_t type, const uint8_t *body, size_t size) {
+    wire::Reader r{body, size};
+    switch (type) {
+    case 0x08: {
+        r.U8();
+        r.U8();
+        r.Str();
+        const uint8_t count = r.U8();
+        for (uint8_t i = 0; i < count && r.ok; ++i) {
+            r.Str(); r.Str(); r.Str();
+            for (int k = 0; k < 7; ++k) r.U8();
+        }
+        break;
+    }
+    case 0x0A: r.U8(); r.Str(); break;
+    case 0x0C: r.U8(); r.Str(); r.Str(); r.Str(); break;
+    default: return false;
+    }
+    return r.ok;
 }
 
 // 0x1E (protocol 4): strict, as the launcher writes it (UiFrame.RosterMods.Validate)

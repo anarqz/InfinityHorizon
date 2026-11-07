@@ -35,6 +35,14 @@ public static class PrivateLobbyPolicy
         FreeRoamKind.RoadTrip when activity == WorldActivities.RoadTrip => PrivateSeatAsk.Stay,
         _ => PrivateSeatAsk.Hold,
     };
+
+    /// <summary>
+    /// T-L3 (A3, §12.8b): who may invite into a private lobby, the launcher's copy of the overlay's one rule (lobby_policy.h
+    /// InviteGateOf): the current leader, by decimal XUID; an unknown leader lets nobody invite. The server refuses anyone else
+    /// (409 <c>not_leader</c>, <see cref="PrivateLobbyNotices.NotLeader"/>). T-L4's picker checks it before the invites route.
+    /// </summary>
+    public static bool MayInvite(string? leaderXuid, string? ownXuid) =>
+        !string.IsNullOrEmpty(leaderXuid) && !string.IsNullOrEmpty(ownXuid) && string.Equals(leaderXuid, ownXuid, StringComparison.Ordinal);
 }
 
 // T-L6 (OD-204, WORLDS_OFFICIAL §12.2, MATCHMAKING_API §2.10): the game's own menu creates a private free roam (or Road Trip);
@@ -91,7 +99,8 @@ public sealed partial class WorldsBridge
         string? activity;
         lock (_mineState) activity = _seatActivity is { } seen && seen.WorldId == world ? seen.Activity : null;
         if (PrivateLobbyPolicy.Ask(kind, activity) == PrivateSeatAsk.Stay) return Decided(kind, FreeRoamResult.Ready, Staying("its private lobby"));
-        _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60, _text("worlds.private_hold")));
+        // T-L3: the hold's notice always shows, private lobby or not (PrivateLobbyNotices' rule)
+        _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 1, 60, _text("worlds.private_hold"), UiToastFlags.Always));
         return Decided(kind, FreeRoamResult.None,
             $"no move: {world} is a private lobby running {activity ?? "an activity not read yet"}; the seat stays (no quick join; A7: a private Road Trip is created from the menu, never moved into)");
     }
@@ -128,15 +137,21 @@ public sealed partial class WorldsBridge
             if (!OnlineOpen) return Decided(kind, FreeRoamResult.NotOnline, "no private lobby (online is closed)");
             var full = Interlocked.Exchange(ref _lobbiesFullAfter, -1) >= 0;
             var refusal = Volatile.Read(ref _lastJoinRefusal);
-            var notice = full ? _text("worlds.lobbies_full")
-                : refusal == ConflictReasons.Pool ? PoolNotice() ?? joined.Message
+            // T-L3: the one table words every reason it knows (A10's pool with the time left); any other refusal keeps the join's own
+            // words (mods, access, a game not loaded); either way the notice always shows, in an official lobby too
+            var reason = full ? ConflictReasons.LobbiesFull
+                : PrivateLobbyNotices.Handles(refusal) ? refusal
+                : joined.Result == UiJoin.SlowDown ? PrivateLobbyNotices.RateLimited
+                : null;
+            var notice = reason is not null ? PrivateLobbyNotices.Text(_text, reason, reason == ConflictReasons.Pool ? PoolTimeLeft() : null)
+                : string.IsNullOrWhiteSpace(joined.Message) ? PrivateLobbyNotices.Text(_text, PrivateLobbyNotices.Failed)
                 : joined.Message;
-            _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, notice));
+            _freeRoamToasts.Enqueue(PrivateLobbyNotices.Toast(notice));
             return Decided(kind, FreeRoamResult.None, $"no private lobby (create {activity} refused: {(full ? ConflictReasons.LobbiesFull : refusal ?? joined.Result.ToString(System.Globalization.CultureInfo.InvariantCulture))})");
         }
         catch (OperationCanceledException) when (budget.IsCancellationRequested && !cancellation.IsCancellationRequested && OnlineOpen)
         {
-            _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.private_failed")));
+            _freeRoamToasts.Enqueue(PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.Failed));
             return Decided(kind, FreeRoamResult.None, $"no private lobby (no answer within {(int)FreeRoamAskBudget.TotalSeconds} s)");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested || !OnlineOpen)
@@ -152,7 +167,18 @@ public sealed partial class WorldsBridge
 
     private byte PrivateRefused(byte kind, string key, string why)
     {
-        _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text(key)));
+        _freeRoamToasts.Enqueue(PrivateLobbyNotices.Toast(_text(key))); // T-L3: always shown
         return Decided(kind, FreeRoamResult.None, $"no private lobby ({why})");
+    }
+
+    /// <summary>
+    /// A10 (T-L3): how long the flagged Hardcore profile has no online lobby: the 409 pool's own <c>until</c> (CR-S96), else the last
+    /// seat or list read's <c>pool.until</c>; null when neither is known (the notice then names no time).
+    /// </summary>
+    private TimeSpan? PoolTimeLeft()
+    {
+        var ticks = Volatile.Read(ref _lastPoolUntilTicks);
+        if (ticks > 0) return new DateTimeOffset(ticks, TimeSpan.Zero) - Now;
+        return PoolUntil is { } until ? until - Now : null;
     }
 }

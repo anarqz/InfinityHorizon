@@ -41,8 +41,9 @@ void SetLink(Link link, const std::string &detail);
 // CR-L40 §1.3: the connected server's figures for the guide's bottom block (0x19 ServerStatus)
 void SetServerStatus(const ServerStatus &status);
 void SetConnectionDetails(uint8_t state, const std::string &text);
-// ttl is the fully open hold time in tenths of a second; 0 uses the default, bounded to 1..30 s.
-void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl = 0);
+// ttl is the fully open hold time in tenths of a second; 0 uses the default, bounded to 1..30 s. `always` (T-L3, the launcher's
+// toast flag kToastAlways): shown even in an official lobby; any other notice follows OD-192 (lobby_policy.h ToastShows).
+void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl = 0, bool always = false);
 
 // --- drawing (ui.cpp), called on the render thread inside an ImGui frame
 void LoadFonts(float scale);
@@ -55,44 +56,9 @@ void CloseSidebar();
 enum class Nav : uint8_t { None, Up, Down, Left, Right, Accept, Back, X, Y, Menu, TabLeft, TabRight };
 void Navigate(Nav nav);
 
-// --- text entry (keyboard.cpp): the Xbox on-screen keyboard; a real keyboard types into it too
-struct KeyboardRequest {
-    std::string title;   // what is asked ("World password")
-    std::string hint;    // shown while empty
-    std::string initial; // the text it starts with
-    bool secret = false; // dots instead of the text
-    size_t max = 32;     // in characters
-};
-// Called on the render thread: ok and the text, or false and an empty string (cancelled).
-using KeyboardDone = std::function<void(bool ok, const std::string &text)>;
-void OpenKeyboard(const KeyboardRequest &request, KeyboardDone done); // render thread
-bool KeyboardOpen();
-void KeyboardNavigate(Nav nav);
-bool KeyboardMessage(UINT msg, WPARAM wp); // the window procedure: true when the keyboard took it
-void DrawKeyboard(float width, float height, float dt);
-
-// --- the world code (code_entry.cpp, OD-57): XXXX-XXXX, large in the centre; A joins once complete
-using CodeDone = std::function<void(bool join, const std::string &code)>; // render thread; code without the hyphen
-void OpenCodeEntry(const std::string &title, const std::string &alphabet, CodeDone done); // render thread
-bool CodeEntryOpen();
-void CodeEntryNavigate(Nav nav);
-void CodeEntryRefused(const std::string &why); // render thread
-bool CodeEntryMessage(UINT msg, WPARAM wp);
-void DrawCodeEntry(float width, float height, float dt);
-
-// --- worlds (worlds.cpp, OD-54/56/57/58, CR-L40): the guide's Lobbies tab; the launcher answers through the pipe
-enum class WorldFilter : uint8_t { None, Friends, Near, Global, All };
-// WorldRow is in ui_frames.h (protocol 2 adds modded, modsMatch, members and mods)
-struct HostedWorld {
-    uint8_t status = 0; // 0 open, else refused
-    std::string world, code, message;
-};
-// status 0 ok, 1 loading, 2 error; `modded` echoes the query (protocol 1 answers are vanilla)
-void SetWorlds(WorldFilter filter, bool modded, uint8_t status, const std::string &message, std::vector<WorldRow> rows);
-void SetJoinResult(uint8_t status, const std::string &message); // 0 seat reserved, 3 wrong code, else refused
-void SetHosted(const HostedWorld &hosted);
-
-// "My world" (OD-63): MemberRow and MyWorld are in ui_frames.h (CR-L43 adds any_mode).
+// --- the lobby tab (worlds.cpp, OD-63, OD-192, OD-204 T-L3): one roster pane of the lobby this player is in; the launcher talks
+// to matchmaking and answers through the pipe. No list, code or create (OD-204 item 2: the game's own menus do that).
+// "My world": MemberRow and MyWorld are in ui_frames.h (CR-L43 adds any_mode, T-L6 is_private, T-L3 leader).
 void SetMyWorld(MyWorld mine);
 // OD-181 (protocol 4, 0x1E): the mods each player of my world declared (RosterMods in ui_frames.h).
 void SetRosterMods(RosterMods mods);
@@ -101,7 +67,18 @@ void WorldsReset();
 bool WorldsNavigate(Nav nav); // false: the guide handles it (tabs, close)
 bool WorldsCanRefresh();      // Y refreshes what the tab shows (the footer's hint)
 bool WorldsMuteHint();        // X mutes the focused player (OD-154; the footer's hint)
-bool WorldsOfficial();        // OD-192: the player is in an official lobby (any thread): the Official Lobby pane, no notices
+bool WorldsOfficial();        // OD-192: the player is in an official lobby, a private one included (any thread): no notices
+bool WorldsPrivate();         // OD-204: the player is in a private official lobby (any thread): the tab is the Private Lobby
+
+// --- the invite prompt (invite.cpp, OD-204 T-L3, WORLDS_OFFICIAL §12.5): a modal Accept / Decline, never a toast
+void SetInvitePrompt(const InvitePromptFrame &prompt); // any thread (0x23); expires 0 withdraws that id
+void InvitesDisconnected();                             // any thread: the launcher went away, every prompt goes
+bool InvitePromptOpen();                                // render thread: a prompt is shown
+// Render thread, while the guide is open: the prompt holds the controller (true: used). With the guide closed the prompt only
+// shows, with how to open the guide, so a prompt never takes the pad from the game while driving.
+bool InviteNavigate(Nav nav);
+void InviteMouse(float width, float height);                // render thread, every frame, before the guide: a modal's clicks
+void DrawInvitePrompt(float width, float height, float dt); // render thread, every frame, over the guide
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
 // A player's details in my lobby (their volume, mute, moderation, friend, report) fill the second column beside the
 // guide while open; the tab keeps showing the lobby. Drawn after DrawWorldsTab, x..x + w.
@@ -151,9 +128,6 @@ bool PaneNavigate(Nav nav);   // true: the pane used it
 void ClosePane();
 void DrawPane(ImDrawList *dl, float x, float y, float w, float height, float alpha); // render thread
 
-// Development host only: a request the render thread runs at its next frame (1, 2 the keyboard; 3 the code).
-void DevRequest(int request);
-
 // --- input (input.cpp)
 bool InstallWindowHook(HWND hwnd);
 void PollController(); // on the render thread, once per frame
@@ -170,16 +144,13 @@ uint64_t AvatarTexture();
 void StartPipe(const wchar_t *name);
 void SendEvent(uint8_t kind, const std::string &detail); // UiEventKind: 1 first frame, 5 passthrough, 7 quit
 void SendPanel(bool open);
-void SendWorldsQuery(WorldFilter filter, bool not_full); // 0x14 WorldsQueryV2 (modded 0: every lobby of the filter)
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag);
 void SendPaneAction(const std::string &pane, const std::string &action);
-void SendJoinWorld(const std::string &world, const std::string &code);
-// any_mode (OD-141): open to Hardcore and Noob; false: the host's own mode. voice (OD-154): the lobby's voice chat
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, uint8_t voice);
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value); // 0x1C
 void SendVoiceDevice(VoiceFlow flow, const std::string &id, const std::string &name); // 0x1D (§15)
 void SendMyWorldQuery();
-// action: 1 close, 2 leave, 3 kick, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other)
+// action: 2 leave, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other). 1 close and 3 kick stay reserved (T-L3).
 void SendWorldAction(uint8_t action, const std::string &xuid, const std::string &gamertag, uint8_t reason);
+void SendInviteAnswer(const std::string &invite, bool accept); // 0x24 (protocol 6, T-L3)
 
 } // namespace fi

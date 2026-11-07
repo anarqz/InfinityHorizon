@@ -94,15 +94,24 @@ public sealed class OverlayChannel : IDisposable
     }
 
     /// <summary>
-    /// OD-192: while this says true (the player is in an official lobby) no toast is sent or queued: every launcher notice
-    /// passes here, so official play shows none and user lobbies show them all.
+    /// OD-192: while this says true (the player is in an official lobby, a private one included) no ordinary toast is sent or
+    /// queued: every launcher notice passes here, so official play shows none and user lobbies show them all. T-L3 (fixes T-L6's
+    /// M1): a toast marked <see cref="UiToastFlags.Always"/> (a private create's result and hold, the flagged Hardcore message;
+    /// <see cref="Matchmaking.PrivateLobbyNotices"/>) passes in every lobby; invite prompts are their own frame and never pass here.
     /// </summary>
     public Func<bool>? Quiet { get; set; }
 
-    /// <summary>A toast (queued until the overlay says hello); none while <see cref="Quiet"/>.</summary>
+    /// <summary>The notice rule (T-L3): whether <paramref name="toast"/> shows while <paramref name="quiet"/> (an official lobby).</summary>
+    public static bool Shows(UiFrame.Toast toast, bool quiet)
+    {
+        ArgumentNullException.ThrowIfNull(toast);
+        return !quiet || (toast.Flags & UiToastFlags.Always) != 0;
+    }
+
+    /// <summary>A toast (queued until the overlay says hello); while <see cref="Quiet"/>, only one marked always (<see cref="Shows"/>).</summary>
     public Task ToastAsync(UiFrame.Toast toast, CancellationToken cancellation)
     {
-        if (Quiet?.Invoke() == true) return Task.CompletedTask;
+        if (!Shows(toast, Quiet?.Invoke() == true)) return Task.CompletedTask;
         lock (_lock)
         {
             if (_closed) return Task.CompletedTask;

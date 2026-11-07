@@ -56,9 +56,6 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (SidebarOpen()) {
-            if (CodeEntryMessage(msg, wp) || KeyboardMessage(msg, wp)) {
-                return 0;
-            }
             if (msg == WM_KEYDOWN) {
                 switch (wp) {
                 case VK_UP: Navigate(Nav::Up); break;

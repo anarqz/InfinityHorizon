@@ -12,19 +12,13 @@
 // 0x11 GameReadiness{u8 ready}, lease 1.5 s; 0x12 WorldAccess{u8 allowed, str message},
 // an independent 10 s lease. Missing/malformed/expired installation access stays denied.
 //
-// Worlds (OD-54/57/58; the launcher talks to matchmaking, the overlay only asks):
-// Overlay -> launcher: 0x07 WorldsQuery{u8 filter (1 friends, 2 near, 3 global), u8 notFull};
-// 0x09 JoinWorld{str worldId, str code (8 digits or empty)}; 0x0B CreateWorld{str name,
-// u8 audience (0 everyone, 1 supporters, 2 friends, 3 private), u8 maxPlayers, u8 latency
-// (0 any, 1 < 150 ms, 2 < 100 ms, 3 < 60 ms), u8 anyMode (OD-141: 0 the host's mode, 1 Hardcore and Noob)}.
-// Launcher -> overlay: 0x08 WorldsList{u8 filter, u8 status (0 ok, 2 error), str message,
-// u8 count, count x {str id, str name, str host, u8 players, u8 max, u8 kind, u8 audience,
-// u8 lock (0 none, 1 tier, 2 friends, 3 code, 4 full, 5 latency), u8 ping (0-3), u8 friendHost}};
-// 0x0A JoinResult{u8 status (0 seat reserved, 1 full, 2 not allowed, 3 wrong code, 4 closed,
-// 5 slow down), str message}; 0x0C Hosted{u8 status (0 open), str worldId, str code, str message}.
+// Worlds (OD-54/57/58), RESERVED since T-L3 (OD-204 item 2: the game's own menus create, invite and join): this overlay never
+// sends 0x07 WorldsQuery, 0x09 JoinWorld, 0x0B CreateWorld or 0x14 WorldsQueryV2 any more, and it reads and ignores 0x08
+// WorldsList, 0x0A JoinResult, 0x0C Hosted and 0x15 WorldsListV2 from a launcher that still sends them (ui_frames.h has their
+// layouts; a mixed DEV launcher and overlay never close the pipe over them).
 //
-// My world (OD-63): overlay -> launcher 0x0D MyWorldQuery{} (on explicit open/action/refresh while the Worlds tab is
-// shown); 0x0F WorldAction{u8 action (1 close, 2 leave, 3 kick, 4 add friend, 5 report), str xuid,
+// My world (OD-63): overlay -> launcher 0x0D MyWorldQuery{} (on explicit open/action/refresh while the lobby tab is
+// shown); 0x0F WorldAction{u8 action (2 leave, 4 add friend, 5 report; 1 close and 3 kick reserved since T-L3), str xuid,
 // str gamertag, u8 reason (1 cheating, 2 abuse, 3 other)}. Launcher -> overlay 0x0E MyWorld{u8 role
 // (0 none, 1 hosting, 2 reserved, 3 seated), str worldId, str name, str host, str code, u8 audience,
 // u8 players, u8 max, u8 named, u8 count, count x {str xuid, str gamertag, u8 tier, u8 role (0 host,
@@ -50,6 +44,10 @@
 // player's friend state (0x1F PlayerStateQuery -> 0x20 PlayerState) and sends our items' actions (0x21 PlayerActionRequest ->
 // 0x22 PlayerActionDone) through the fi_overlay_player_* exports the hook calls; nothing of it is drawn here.
 //
+// Protocol 6 (OD-204 T-L3; layouts in ui_frames.h, the queue in lobby_policy.h): 0x23 InvitePrompt from the launcher opens the modal
+// invite prompt (invite.cpp); 0x24 InviteAnswer carries the player's Accept or Decline back. The 0x03 toast's additive flags byte
+// marks the notices that show even in an official lobby; 0x0E MyWorld's additive leader names who may invite.
+//
 // Threads: the game's Present (the draw) never does I/O. Frames to the launcher go into a queue
 // that this file's thread drains; the pipe is overlapped, so a pending read never holds a write
 // (a synchronous handle serialises them, which froze the game inside Present on 2026-10-19).
@@ -59,6 +57,7 @@
 #include "player_actions.h"
 #include "fi_overlay.h"
 
+#include <atomic>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -97,16 +96,25 @@ bool Queue(uint8_t type, const std::vector<uint8_t> &body) {
 
 using Reader = wire::Reader;
 
+// T-L3: a reserved frame (0x08, 0x0A, 0x0C, 0x15) from a launcher that still sends it: logged once per type, never shown.
+void Reserved(uint8_t type, bool well_formed) {
+    static std::atomic<uint32_t> seen{0};
+    const uint32_t bit = 1u << (type & 0x1F);
+    if (!(seen.fetch_or(bit) & bit)) Log("ui pipe: reserved frame 0x%02x %s (T-L3: no lobby list, code or create)", type, well_formed ? "ignored" : "malformed, ignored");
+}
+
 void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
     Reader r{body, size};
     switch (type) {
     case 0x15: {
         WorldsListV2 list;
-        if (DecodeWorldsListV2(body, size, list)) {
-            SetWorlds(static_cast<WorldFilter>(list.filter), list.modded, list.status, list.message, std::move(list.rows));
-        } else {
-            Log("ui pipe: malformed WorldsListV2 ignored");
-        }
+        Reserved(type, DecodeWorldsListV2(body, size, list));
+        break;
+    }
+    case 0x23: { // protocol 6 (T-L3): the invite prompt
+        InvitePromptFrame prompt;
+        if (DecodeInvitePrompt(body, size, prompt)) SetInvitePrompt(prompt);
+        else Log("ui pipe: malformed InvitePrompt ignored");
         break;
     }
     case 0x16: {
@@ -179,57 +187,19 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         break;
     }
     case 0x03: {
-        r.U8(); // level: the kind carries the look
-        const uint8_t icon = r.U8();
-        const uint16_t ttl = r.U16();
-        const std::string text = r.Str();
-        if (!r.ok) return;
-        const size_t nl = text.find('\n');
-        const ToastKind kind = icon <= static_cast<uint8_t>(ToastKind::Friend) ? static_cast<ToastKind>(icon) : ToastKind::Info;
-        PushToast(kind, nl == std::string::npos ? text : text.substr(0, nl), nl == std::string::npos ? "" : text.substr(nl + 1), ttl);
+        ToastFrame t; // the level is read and not used: the kind carries the look
+        if (!DecodeToast(body, size, t)) return;
+        const size_t nl = t.text.find('\n');
+        const ToastKind kind = t.icon <= static_cast<uint8_t>(ToastKind::Friend) ? static_cast<ToastKind>(t.icon) : ToastKind::Info;
+        PushToast(kind, nl == std::string::npos ? t.text : t.text.substr(0, nl), nl == std::string::npos ? "" : t.text.substr(nl + 1), t.ttl, t.always());
         break;
     }
-    case 0x08: {
-        const auto filter = static_cast<WorldFilter>(r.U8());
-        const uint8_t status = r.U8();
-        const std::string message = r.Str();
-        const uint8_t count = r.U8();
-        std::vector<WorldRow> rows;
-        for (uint8_t i = 0; i < count && r.ok && i < 16; ++i) {
-            WorldRow w;
-            w.id = r.Str();
-            w.name = r.Str();
-            w.host = r.Str();
-            w.players = r.U8();
-            w.max = r.U8();
-            w.kind = r.U8();
-            w.audience = r.U8();
-            w.lock = r.U8();
-            w.ping = r.U8();
-            w.friend_host = r.U8() != 0;
-            rows.push_back(std::move(w));
-        }
-        if (r.ok) SetWorlds(filter, false, status, message, std::move(rows)); // a protocol 1 answer: vanilla
-        break;
-    }
-    case 0x0A: {
-        const uint8_t status = r.U8();
-        const std::string message = r.Str();
-        if (r.ok) SetJoinResult(status, message);
-        break;
-    }
-    case 0x0C: {
-        HostedWorld h;
-        h.status = r.U8();
-        h.world = r.Str();
-        h.code = r.Str();
-        h.message = r.Str();
-        if (r.ok) SetHosted(h);
-        break;
-    }
+    case 0x08:
+    case 0x0A:
+    case 0x0C: Reserved(type, ReservedFrameReads(type, body, size)); break; // T-L3: no list, join by code or create
     case 0x0E: {
         MyWorld m;
-        if (DecodeMyWorld(body, size, m)) SetMyWorld(std::move(m)); // ui_frames.h (anyMode, CR-L43)
+        if (DecodeMyWorld(body, size, m)) SetMyWorld(std::move(m)); // ui_frames.h (anyMode CR-L43, private T-L6, leader T-L3)
         break;
     }
     case 0x10: {
@@ -344,6 +314,7 @@ void Session(HANDLE pipe) {
         SetConnectionDetails(2, "");
         g_out.clear();
     }
+    InvitesDisconnected(); // T-L3: no launcher to answer to: its prompts go
     CloseHandle(read_event);
     CloseHandle(write_event);
 }
@@ -382,24 +353,9 @@ void SendEvent(uint8_t kind, const std::string &detail) {
 
 void SendPanel(bool open) { Queue(0x04, {static_cast<uint8_t>(open ? 1 : 0)}); }
 
-void SendWorldsQuery(WorldFilter filter, bool not_full) {
-    Queue(0x14, EncodeWorldsQueryV2(static_cast<uint8_t>(filter), not_full, false));
-}
-
 void SendPlayerDetailsQuery(const std::string &xuid, const std::string &gamertag) { Queue(0x17, EncodePlayerDetailsQuery(xuid, gamertag)); }
 
 void SendPaneAction(const std::string &pane, const std::string &action) { Queue(0x18, EncodePaneActionClick(pane, action)); }
-
-void SendJoinWorld(const std::string &world, const std::string &code) {
-    std::vector<uint8_t> body;
-    PutStr(body, world);
-    PutStr(body, code);
-    Queue(0x09, body);
-}
-
-void SendCreateWorld(const std::string &name, uint8_t audience, uint8_t max_players, uint8_t latency, bool any_mode, uint8_t voice) {
-    Queue(0x0B, EncodeCreateWorld(name, audience, max_players, latency, any_mode, voice));
-}
 
 void SendVoiceCommand(VoiceOp op, const std::string &xuid, uint8_t value) { Queue(0x1C, EncodeVoiceCommand(op, xuid, value)); }
 
@@ -415,6 +371,8 @@ void SendWorldAction(uint8_t action, const std::string &xuid, const std::string 
     body.push_back(reason);
     Queue(0x0F, body);
 }
+
+void SendInviteAnswer(const std::string &invite, bool accept) { Queue(0x24, EncodeInviteAnswer(invite, accept)); }
 
 } // namespace fi
 

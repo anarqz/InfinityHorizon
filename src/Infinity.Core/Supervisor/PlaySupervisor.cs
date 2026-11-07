@@ -208,6 +208,12 @@ public abstract record SupervisorCommand
 
     /// <summary>A toast in the game, already localised (queued until the overlay connects).</summary>
     public sealed record OverlayToast(Overlay.UiFrame.Toast Toast) : SupervisorCommand;
+
+    /// <summary>
+    /// OD-204 (T-L3): an invite prompt for the overlay's modal (or its withdrawal, <c>ExpiresInSec</c> 0), sent only to a protocol 6
+    /// overlay and never through the quiet rule. The launcher's inbox poll that sends it is T-L4/T-L5's; today only tests send it.
+    /// </summary>
+    public sealed record OverlayInvite(Overlay.UiFrame.InvitePrompt Prompt) : SupervisorCommand;
 }
 
 /// <summary>
@@ -1073,6 +1079,9 @@ public sealed class PlaySupervisor
                             case SupervisorCommand.OverlayToast toast when overlay is not null:
                                 await overlay.ToastAsync(toast.Toast, stop.Token).ConfigureAwait(false);
                                 break;
+                            case SupervisorCommand.OverlayInvite invite when overlay is not null:
+                                await overlay.SendIfAcceptedAsync(invite.Prompt, stop.Token).ConfigureAwait(false);
+                                break;
                         }
                     }
                     command = _commands.WaitToReadAsync(stop.Token).AsTask();
@@ -1173,6 +1182,10 @@ public sealed class PlaySupervisor
                                 _ = ReplyAsync(overlay, () => Task.FromResult<Overlay.UiFrame>(new Overlay.UiFrame.PlayerActionDone(unanswerable.Request.Id,
                                     unanswerable.Request.Xuid, unanswerable.Request.Kind == Overlay.UiPlayerAction.Report ? Overlay.UiPlayerResult.ReportFailed
                                         : Overlay.UiPlayerResult.ActionFailed, Overlay.UiPlayerState.Unknown)), stop.Token, always: true);
+                                break;
+                            case Overlay.UiIncoming.InviteAnswer answer:
+                                // OD-204 (T-L3): the overlay's Accept or Decline; acting on it (join, decline route) is T-L4/T-L5's
+                                _emit(new SupervisorEvent.Note($"overlay: invite {(answer.Answer.Accept ? "accepted" : "declined")} (T-L4/T-L5 act on it; nothing is sent yet)"));
                                 break;
                             case Overlay.UiIncoming.Act a when worlds is not null && !suspended:
                                 // the result, then the world as it is now
