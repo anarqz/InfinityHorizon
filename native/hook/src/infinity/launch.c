@@ -98,6 +98,12 @@ enum {
    this hook send kinds 3/4 or PrivateSession (an older launcher refuses both as protocol errors). Without it the private
    session write goes on as before. */
 #define LAUNCH_CAPTURE_PRIVATE_CREATE 12u
+/* T-L5 (OD-204, WORLDS_OFFICIAL 12.5): this hook takes FollowHost's optional third byte, flags with bit 0 (LAUNCH_FOLLOW_MOVE):
+   an accepted invite's move, which starts the game's matchmaking even when it is already in online free roam (follow.c). Sent
+   once with ok=1 at every handshake (hook -> launcher only); a launcher sends the flag only after it, and an older launcher
+   ignores an unknown Capture. */
+#define LAUNCH_CAPTURE_FOLLOW_MOVE 13u
+#define LAUNCH_FOLLOW_MOVE 1u
 /* FreeRoamNeed kinds 3 and 4 (T-L6): a private free roam or a private Road Trip created in the game's own menu. */
 #define LAUNCH_KIND_PRIVATE_FREE_ROAM 3u
 #define LAUNCH_KIND_PRIVATE_ROAD_TRIP 4u
@@ -1893,6 +1899,7 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_launch_capture(LAUNCH_CAPTURE_PARTS, 1);        /* NR-6: PlayerParts after a Watch asking for them */
     fi_launch_capture(LAUNCH_CAPTURE_WATCH_PER_CAR, 1); /* NR-5: the per-car speed floor, Observed layout 2 */
     fi_launch_capture(LAUNCH_CAPTURE_PRIVATE_CREATE, 1); /* T-L6: kinds 3/4 once the launcher answers Capture{12, 1} */
+    fi_launch_capture(LAUNCH_CAPTURE_FOLLOW_MOVE, 1);    /* T-L5: FollowHost's move flag */
     return 1;
 }
 
@@ -2130,15 +2137,23 @@ static int launch_session_frame(void) {
     case FRAME_FREE_ROAM_READY:
         return launch_free_roam_ready(&r);
     case FRAME_FOLLOW_HOST: {
-        /* OD-151: the seated guest's host changed activity; the game asks the player (follow.c) */
-        unsigned lobby = (unsigned)launch_le(&r, 1), is_public = (unsigned)launch_le(&r, 1);
-        if (r.bad || r.left || (lobby != 1 && lobby != 2) || is_public > 1) {
+        /* OD-151: the seated guest's host changed activity; the game asks the player (follow.c). T-L5: an optional third byte,
+           flags, exactly 1 (bit 0): an accepted invite's move (Capture 13); any other value is a protocol error */
+        unsigned lobby = (unsigned)launch_le(&r, 1), is_public = (unsigned)launch_le(&r, 1), flags = 0, has_flags = 0;
+        if (!r.bad && r.left == 1) {
+            flags = (unsigned)launch_le(&r, 1);
+            has_flags = 1;
+        }
+        if (r.bad || r.left || (lobby != 1 && lobby != 2) || is_public > 1 || (has_flags && flags != LAUNCH_FOLLOW_MOVE)) {
             launch_log("REFUSED: a FollowHost frame that does not parse.", 0, 0, "");
             return 0;
         }
         if (fi_launch_suspended()) return 1;
-        launch_log("FollowHost: the host is now in lobby type ", 1, lobby, "; the game is asked to look for it.");
-        fi_follow_host(lobby, is_public);
+        if (flags & LAUNCH_FOLLOW_MOVE)
+            launch_log("FollowHost: an accepted invite moves the game to lobby type ", 1, lobby, "; the game is asked to look for it.");
+        else
+            launch_log("FollowHost: the host is now in lobby type ", 1, lobby, "; the game is asked to look for it.");
+        fi_follow_host(lobby, is_public, (flags & LAUNCH_FOLLOW_MOVE) != 0);
         return 1;
     }
     case FRAME_CANCEL_MATCHMAKING:

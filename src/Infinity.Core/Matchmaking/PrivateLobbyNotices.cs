@@ -58,9 +58,45 @@ public static class PrivateLobbyNotices
     /// <summary>T-L4: the decline route failed (the invite then expires on its own in 2 minutes).</summary>
     public const string DeclineFailed = "decline_failed";
 
+    /// <summary>T-L5: the invite was accepted and its seat is held; the game is asked in (the player confirms with (X)).</summary>
+    public const string InviteJoining = "invite_joining";
+
+    /// <summary>T-L5: the invite lapsed before (or while) it was accepted (its 2 minutes, MATCHMAKING_API §3.4).</summary>
+    public const string InviteExpired = "invite_expired";
+
+    /// <summary>T-L5: the invitee's join answered <c>full</c> (no free seat in the private lobby).</summary>
+    public const string InviteLobbyFull = "invite_lobby_full";
+
+    /// <summary>T-L5: the private lobby closed (the join's <c>closed</c> or 404, or its seat ended before the game connected).</summary>
+    public const string InviteClosed = "invite_closed";
+
+    /// <summary>T-L5: the invitee's join failed with no reason the table knows.</summary>
+    public const string InviteJoinFailed = "invite_join_failed";
+
+    /// <summary>T-L5: the game is in a car meet, a Road Trip, or moving into one: it is never pulled out (the invite shows again).</summary>
+    public const string InviteLeaveEvent = "invite_leave_event";
+
+    /// <summary>T-L5: the game plays in a lobby and this hook cannot move it (no <c>Capture{13}</c>): leave it first.</summary>
+    public const string InviteLeaveLobby = "invite_leave_lobby";
+
+    /// <summary>T-L5: another lobby request (a lobby ask, a join, the game's private create, another accept) is in flight.</summary>
+    public const string InviteBusy = "invite_busy";
+
+    /// <summary>T-L5: the game never asked for its lobby within the bound, or never connected: the private seat was let go.</summary>
+    public const string InviteMoveFailed = "invite_move_failed";
+
     /// <summary>The one table: a server reason (or one of this class's own) and the i18n-win key of its notice.</summary>
     public static IReadOnlyDictionary<string, string> Keys { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        [InviteJoining] = "worlds.invite_joining",
+        [InviteExpired] = "worlds.invite_expired",
+        [InviteLobbyFull] = "worlds.invite_lobby_full",
+        [InviteClosed] = "worlds.invite_closed",
+        [InviteJoinFailed] = "worlds.invite_join_failed",
+        [InviteLeaveEvent] = "worlds.invite_leave_event",
+        [InviteLeaveLobby] = "worlds.invite_leave_lobby",
+        [InviteBusy] = "worlds.invite_busy",
+        [InviteMoveFailed] = "worlds.invite_move_failed",
         [Full] = "worlds.invite_full",
         [PendingLimit] = "worlds.invite_pending_limit",
         [NotFriend] = "worlds.invite_not_friend",
@@ -131,6 +167,24 @@ public static class PrivateLobbyNotices
             _ => InviteFailed,
         };
     }
+
+    /// <summary>
+    /// T-L5: the reason of the invitee's refused join into a private lobby (<c>POST /mm/v1/join {worldId}</c>, MATCHMAKING_API §2.10,
+    /// §3.1), a key of this table: <c>full</c> <see cref="InviteLobbyFull"/>; <c>closed</c> or 404 <see cref="InviteClosed"/>;
+    /// <c>not_allowed {friends}</c> <see cref="Friends"/> (or <see cref="InviteExpired"/> when the invite's own time had passed:
+    /// the server then sees no live invite); 409 <c>client_update</c>, <c>region</c>, <c>pool</c> as they are; rate limited
+    /// <see cref="RateLimited"/>; anything else <see cref="InviteJoinFailed"/>. <paramref name="refusal"/> is the join's
+    /// <c>reason</c> (the bridge's last refusal), <paramref name="result"/> its <see cref="UiJoin"/> answer.
+    /// </summary>
+    public static string InviteJoinRefusal(byte result, string? refusal, bool inviteExpired) => (result, refusal) switch
+    {
+        (_, Friends) => inviteExpired ? InviteExpired : Friends,
+        (_, ConflictReasons.ClientUpdate or ConflictReasons.Region or ConflictReasons.Pool) => refusal,
+        (_, Closed) => InviteClosed, // the join's closed answer or 404 (UiJoin.Closed alone also means a failed join)
+        (UiJoin.Full, _) => InviteLobbyFull,
+        (UiJoin.SlowDown, _) => RateLimited,
+        _ => InviteJoinFailed,
+    };
 
     /// <summary>The notice for <paramref name="reason"/>.</summary>
     public static UiFrame.Toast Toast(Func<string, string> text, string reason, TimeSpan? poolLeft = null) => Toast(Text(text, reason, poolLeft));

@@ -162,6 +162,8 @@ public sealed partial class WorldsBridge
                 (held, heldSince) = (true, _clock.GetTimestamp());
                 _log($"worlds: the host's game left {stays}; it stays open while {others} other player(s) remain");
             }
+            else if (HostedWorldId is null && InviteMoveHolds(world) is not null)
+                _log($"worlds: free roam left; {world} is kept: an accepted invite moves the game there");
             else if (world is not null && SessionSwitchHolds(world) is null)
                 _log(HostedWorldId is null && KeepsPlayerSeat() is not null
                     ? $"worlds: free roam left; {world} is kept for the game's next lobby ({KeptSeat(world)})"
@@ -179,6 +181,13 @@ public sealed partial class WorldsBridge
                     wait = switching < FreeRoamLeftGrace ? switching : FreeRoamLeftGrace;
                     _log($"worlds: {HostedWorldId ?? Volatile.Read(ref _seatWorld)} stays: the game is moving into its car meet session "
                         + $"({(int)Math.Ceiling(switching.TotalSeconds)} s of the hold left)");
+                    continue;
+                }
+                // T-L5: an accepted invite moves the game into this seat's private lobby: the move's own bounds end it (InviteMoveWatchAsync)
+                if (HostedWorldId is null && InviteMoveHolds(Volatile.Read(ref _seatWorld)) is { } moving)
+                {
+                    wait = moving < FreeRoamLeftGrace ? moving : FreeRoamLeftGrace;
+                    _log($"worlds: {Volatile.Read(ref _seatWorld)} stays: an accepted invite moves the game there ({(int)Math.Ceiling(moving.TotalSeconds)} s of its bounds left)");
                     continue;
                 }
                 // a hosted world that still has other players (free roam, Road Trip or car meet) stays for them (live, test.8 and
@@ -330,6 +339,7 @@ public sealed partial class WorldsBridge
         {
             Interlocked.Exchange(ref _lobbyReadyTicks, Now.UtcTicks); // the next leave of free roam is this lobby's
             Volatile.Write(ref _readyKind, kind + 1); // W-12: the lobby the game's next world connection is
+            InviteMoveAsked(kind); // T-L5: an accepted invite's game asked for its lobby
             ArmGiveUp(kind); // a seat that never played gets SeatGiveUp to start playing; hosting never
             // W-16 (c): a host's lobby ask answered from its own world (its car meet or Road Trip there too) is its game in that
             // world: not away. The game's car meet connection to its own world sends no Event 3 (F-9: no "joined" line at

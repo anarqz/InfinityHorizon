@@ -90,15 +90,15 @@ public sealed partial class WorldsBridge
         try { bound = CancellationTokenSource.CreateLinkedTokenSource(_onlineStop.Token); }
         catch (ObjectDisposedException) { return; }
         CancelFreeRoamLeave(Interlocked.Exchange(ref _giveUp, bound));
-        _ = GiveUpAsync(bound, grant, world, kind);
+        _ = GiveUpAsync(bound, grant, world, kind, GiveUpAfter(grant, kind)); // T-L5: an accepted invite's seat has the private window
     }
 
-    private async Task GiveUpAsync(CancellationTokenSource bound, string grant, string world, byte kind)
+    private async Task GiveUpAsync(CancellationTokenSource bound, string grant, string world, byte kind, TimeSpan giveUpAfter)
     {
         var due = false;
         try
         {
-            await Task.Delay(GiveUpAfter(kind), _clock, bound.Token).ConfigureAwait(false);
+            await Task.Delay(giveUpAfter, _clock, bound.Token).ConfigureAwait(false);
             due = Interlocked.CompareExchange(ref _giveUp, null, bound) == bound;
         }
         catch (OperationCanceledException) { }
@@ -112,7 +112,7 @@ public sealed partial class WorldsBridge
         if (Volatile.Read(ref _joinAttempt) != 0) return;
         lock (_freeRoamState) if (_freeRoamRun is { IsCompleted: false }) return;
         var reason = GiveUpReason(grant);
-        var after = (int)GiveUpAfter(kind).TotalSeconds;
+        var after = (int)giveUpAfter.TotalSeconds;
         if (!await ReleaseUnprovenSeatAsync(grant, $"the seat was given up after {after} s: {reason}").ConfigureAwait(false)) return;
         _log($"worlds: {KindName(kind)}: gave up on {world} after {after} s: {reason}");
         if (FreeRoamKind.IsPrivateCreate(kind)) return; // T-L6: the game is writing its own session, not searching
