@@ -49,6 +49,8 @@ pub fn game_options(track: u64, laps: u64) -> Vec<(u32, u64, usize)> {
 }
 
 pub const MIN_PLAYERS: usize = 2;
+/// W16: at most this many parsed vars per `options.owner_update` line (the line also carries the count).
+const OWNER_UPDATE_LOG_VARS: usize = 32;
 /// ConsoleSynced: 4 is the in-race stage (lobby spec §10.5), 7 goes on with launch and off when
 /// the race has ended.
 pub const CONSOLE_READY: usize = 4;
@@ -1032,9 +1034,11 @@ impl Race {
         p.options_seq = o.seq;
         let index = p.index;
         if crate::log::enabled(crate::log::Level::Info) {
+            // parsed indexes and values only, never raw payload bytes; capped per line (MACBOOK, W16)
             let vars: Vec<Value> = parsed
                 .vars
                 .iter()
+                .take(OWNER_UPDATE_LOG_VARS)
                 .map(|(i, v, w)| json!([i, v, w]))
                 .collect();
             let (unknown, unread) = match parsed.unread {
@@ -1043,7 +1047,7 @@ impl Race {
             };
             note(
                 "options.owner_update",
-                json!({"peer": index, "seq": o.seq, "bits": payload.len(), "vars": vars,
+                json!({"peer": index, "seq": o.seq, "bits": payload.len(), "count": parsed.vars.len(), "vars": vars,
                 "unknown": unknown, "unread": unread, "applied": match applied {
                     Applied::Merged => "merged",
                     Applied::Tail => "tail",
