@@ -1749,3 +1749,129 @@ fn no_options_packet_is_longer_than_a_relay_leg_carries() {
     );
     assert_eq!(lab.race.options.vars().len(), super::options::VARS);
 }
+
+/// Every router-6 message of `packets` as (id, fields, payload), checking the packet walks to its
+/// end exactly (no message reads past its data or leaves bits behind but the byte padding).
+fn router6_messages(packets: &[Vec<u8>]) -> Vec<(u8, Object, Writer)> {
+    let mut out = Vec::new();
+    for data in packets {
+        let count = nerd::header(data).unwrap().count;
+        let mut r = Reader::new(nerd::body(data));
+        let mut whole = true;
+        for _ in 0..count {
+            let ident = r.bits(nerd::ID_BITS).unwrap() as u8;
+            let o = match ident {
+                nerd::GRANT_OWNERSHIP | nerd::TRANSFER_OWNERSHIP => {
+                    nerd::read_ownership(&mut r, ident).unwrap()
+                }
+                _ => match nerd::read_one(&mut r, ident).unwrap() {
+                    Some(Fields::Object(o)) => o,
+                    Some(_) => continue,
+                    None => {
+                        whole = false;
+                        break;
+                    }
+                },
+            };
+            if o.router == nerd::ROUTER_LOBBY {
+                out.push((ident, o.clone(), nerd::payload_of(data, &o)));
+            }
+        }
+        if whole {
+            assert!(
+                r.length - r.position < 8,
+                "packet ends where its messages do"
+            );
+        }
+    }
+    out
+}
+
+/// Join, late join, relay, grant and leader change, with a table long enough to be split: every
+/// packet each console got.
+fn every_options_path() -> Vec<Vec<u8>> {
+    let mut lab = Lab::private();
+    let (first, second, late) = (at(1), at(2), at(3));
+    let mut all = lab.connect(first);
+    all.extend(lab.connect(second));
+    lab.options_update(first, 5, 1, &every_var());
+    lab.options_update(first, 6, 2, &owner_payload(&[(3, 3, 32), (228, 5, 32)]));
+    all.extend(lab.connect(late));
+    lab.race.owner = Some(second);
+    lab.race.sync_owner();
+    lab.receive(
+        &packet(
+            vec![Writer::new().push(u64::from(nerd::CLOSE), nerd::ID_BITS)],
+            7,
+        ),
+        first,
+    );
+    for x in [first, second, late] {
+        all.extend(lab.drain(x));
+    }
+    all
+}
+
+#[test]
+fn options_only_ever_go_as_transfer_updates_grants_and_revokes() {
+    let messages = router6_messages(&every_options_path());
+    let mut kinds = std::collections::BTreeSet::new();
+    for (ident, o, _) in &messages {
+        if *ident == nerd::OBJECT_CREATE {
+            // only the SessionHost, never a GameOptions Create (it would overwrite its slot)
+            assert_eq!(
+                (o.kind, o.form),
+                (Some(nerd::TYPE_SESSION_HOST), nerd::HANDLE_OWN)
+            );
+            continue;
+        }
+        assert!(
+            matches!(
+                *ident,
+                nerd::OBJECT_UPDATE | nerd::GRANT_OWNERSHIP | nerd::TRANSFER_OWNERSHIP
+            ),
+            "{ident}"
+        );
+        assert_eq!((o.form, o.id), (nerd::HANDLE_TRANSFER, 0), "{ident}");
+        kinds.insert(*ident);
+    }
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        vec![
+            nerd::OBJECT_UPDATE,
+            nerd::GRANT_OWNERSHIP,
+            nerd::TRANSFER_OWNERSHIP
+        ]
+    );
+    assert!(!race::is_options_message(&nerd::object_create(
+        nerd::ROUTER_LOBBY,
+        nerd::HANDLE_TRANSFER,
+        0,
+        1,
+        0,
+        None,
+        None
+    )));
+}
+
+#[test]
+fn each_split_updates_declared_size_is_its_payload_exactly() {
+    let messages = router6_messages(&every_options_path());
+    let mut split = 0;
+    for (ident, o, payload) in &messages {
+        if !matches!(*ident, nerd::OBJECT_UPDATE | nerd::GRANT_OWNERSHIP) {
+            continue;
+        }
+        assert_eq!(payload.len(), o.bits);
+        let vars = super::options::parse(payload).expect("reads whole");
+        assert_eq!(
+            super::options::encode(&vars).len(),
+            o.bits,
+            "no bit past its vars"
+        );
+        if o.bits > 4096 {
+            split += 1;
+        }
+    }
+    assert!(split >= 4, "the long table went split: {split}");
+}

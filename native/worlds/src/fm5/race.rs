@@ -95,6 +95,31 @@ pub const PACKET_MAX_BYTES: usize = crate::core::legs::MAX_PAYLOAD;
 /// k bits, lobby spec §13.7) goes as several Updates.
 pub const OPTIONS_CHUNK_BITS: usize = 8 * 1024;
 
+/// Whether `m` is an options message the server may send (lobby spec §13.8): an Update (8), a
+/// Grant (11) or a Transfer (12) on router 6 with the Transfer handle, id 0. Never an
+/// ObjectCreate (7) on router 6: a Create of type 1 would overwrite the SessionHost slot
+/// (`CLobby+0x150`, `0x140555ac0`). Every options message goes through [`Race::send_options`],
+/// which asserts this.
+pub(super) fn is_options_message(m: &Writer) -> bool {
+    let bytes = m.bytes();
+    let mut r = nerd::Reader::new(&bytes);
+    let (Ok(ident), Ok(router), Ok(a), Ok(b), Ok(id)) = (
+        r.bits(nerd::ID_BITS),
+        r.bits(nerd::ROUTER_BITS),
+        r.bits(1),
+        r.bits(1),
+        r.bits(nerd::LOBBY_ID_BITS),
+    ) else {
+        return false;
+    };
+    matches!(
+        ident as u8,
+        nerd::OBJECT_UPDATE | nerd::GRANT_OWNERSHIP | nerd::TRANSFER_OWNERSHIP
+    ) && router == u64::from(nerd::ROUTER_LOBBY)
+        && (a as u8, b as u8) == nerd::HANDLE_TRANSFER
+        && id == 0
+}
+
 /// A GameOptions Update from the server (router 6, Transfer handle, id 0).
 fn options_update(seq: u8, payload: &Writer) -> Writer {
     nerd::object_update(
@@ -486,6 +511,7 @@ impl Race {
         let mut packets: Vec<(u8, Vec<Writer>)> = Vec::new();
         let mut bits = 0;
         for (seq, m) in messages {
+            debug_assert!(is_options_message(&m), "options only as 8/11/12, Transfer");
             let fits = packets.last().is_some_and(|_| {
                 nerd::HEADER_LEN + (bits + m.len()).div_ceil(8) <= PACKET_MAX_BYTES
             });
