@@ -21,53 +21,99 @@ public static class AzimuthTitles
     /// folder, and sets <c>[launcher] game</c>; returns what happened, for the log. Without a known game folder a missing
     /// title is left to Azimuth's own launcher.
     /// </summary>
-    public static string EnsureFh2(string azimuthRoot, string? gameFolder)
+    public static string EnsureFh2(string azimuthRoot, string? gameFolder) => EnsureTitle(azimuthRoot, GameDefinition.Fh2, gameFolder);
+
+    /// <summary>
+    /// <see cref="EnsureFh2"/> for any game. A game other than FH2 also follows a folder that moved, and the launcher must check
+    /// <see cref="Names"/> afterwards: without a known folder nothing is written, and <c>--skip-launcher</c> would start another game.
+    /// </summary>
+    public static string EnsureTitle(string azimuthRoot, GameDefinition game, string? gameFolder)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(game);
         var path = Path.Combine(azimuthRoot, "data", IniFile);
         var lines = File.Exists(path) ? Read(path) : [];
         var changed = new List<string>();
-        var title = SectionAt(lines, "title-" + Fh2Id);
-        if (string.IsNullOrWhiteSpace(ValueOf(lines, title, "folder")))
+        var (id, label) = (game.TitleKey, game.Id.ToUpperInvariant());
+        var title = SectionAt(lines, "title-" + id);
+        var known = ValueOf(lines, title, "folder");
+        if (string.IsNullOrWhiteSpace(known))
         {
             if (string.IsNullOrWhiteSpace(gameFolder))
             {
-                return "FH2 not added (no game folder known): Azimuth opens its own launcher";
+                return label + " not added (no game folder known): Azimuth opens its own launcher";
             }
             if (title < 0)
             {
-                lines.Add("[title-" + Fh2Id + "]");
+                lines.Add("[title-" + id + "]");
                 lines.Add("folder=" + gameFolder);
                 lines.Add("content=");
-                lines.Add("name=" + Fh2Name);
+                lines.Add("name=" + game.Name);
             }
             else
             {
                 Set(lines, title, "folder", gameFolder);
-                if (string.IsNullOrWhiteSpace(ValueOf(lines, title, "name"))) Set(lines, title, "name", Fh2Name);
+                if (string.IsNullOrWhiteSpace(ValueOf(lines, title, "name"))) Set(lines, title, "name", game.Name);
             }
             changed.Add("title added");
+        }
+        else if (!game.FullFeatures && !string.IsNullOrWhiteSpace(gameFolder) && !string.Equals(known, gameFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            Set(lines, title, "folder", gameFolder);
+            changed.Add("game folder updated");
         }
         var launcher = SectionAt(lines, "launcher");
         if (launcher < 0)
         {
-            lines.InsertRange(0, ["[launcher]", "game=" + Fh2Id]);
+            lines.InsertRange(0, ["[launcher]", "game=" + id]);
             changed.Add("launcher game set");
         }
-        else if (!string.Equals(ValueOf(lines, launcher, "game"), Fh2Id, StringComparison.OrdinalIgnoreCase))
+        else if (!string.Equals(ValueOf(lines, launcher, "game"), id, StringComparison.OrdinalIgnoreCase))
         {
-            Set(lines, launcher, "game", Fh2Id);
+            Set(lines, launcher, "game", id);
             changed.Add("launcher game set");
+        }
+        // Azimuth's own launcher writes [launcher] shown beside game: never left naming the other game
+        launcher = SectionAt(lines, "launcher");
+        if (ValueOf(lines, launcher, "shown") is { } shown && !string.Equals(shown, id, StringComparison.OrdinalIgnoreCase))
+        {
+            Set(lines, launcher, "shown", id);
+            if (changed.Count == 0) changed.Add("launcher shown set");
         }
         if (changed.Count == 0)
         {
-            return "FH2 already added";
+            return label + " already added";
         }
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporary = path + ".fi-new";
         File.WriteAllText(temporary, string.Join("\r\n", lines) + "\r\n", new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
         File.Move(temporary, path, overwrite: true);
         return string.Join(", ", changed);
+    }
+
+    /// <summary>Whether <c>--skip-launcher</c> starts <paramref name="game"/>: it has a folder and <c>[launcher] game</c> names it.</summary>
+    public static bool Names(string azimuthRoot, GameDefinition game)
+    {
+        var path = Path.Combine(azimuthRoot, "data", IniFile);
+        if (!File.Exists(path)) return false;
+        var lines = Read(path);
+        return !string.IsNullOrWhiteSpace(ValueOf(lines, SectionAt(lines, "title-" + game.TitleKey), "folder"))
+            && string.Equals(ValueOf(lines, SectionAt(lines, "launcher"), "game"), game.TitleKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The game's folder as <c>data\azimuth.ini</c> names it (a relative one is based on the Azimuth folder); null when it does not.</summary>
+    public static string? GameFolder(string? azimuthRoot, GameDefinition game)
+    {
+        if (string.IsNullOrWhiteSpace(azimuthRoot)) return null;
+        try
+        {
+            var path = Path.Combine(azimuthRoot, "data", IniFile);
+            if (!File.Exists(path)) return null;
+            var lines = Read(path);
+            var folder = ValueOf(lines, SectionAt(lines, "title-" + game.TitleKey), "folder");
+            return string.IsNullOrWhiteSpace(folder) ? null : Path.GetFullPath(Path.Combine(azimuthRoot, folder));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
 
     private static List<string> Read(string path)

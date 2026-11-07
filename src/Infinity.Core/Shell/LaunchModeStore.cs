@@ -46,6 +46,30 @@ public static class LaunchModeStore
 
     private const string LastProfileName = "last-local-profile";
 
+    /// <summary>The game last chosen in the picker (its id), chosen again on the next start.</summary>
+    public static string? ReadLastGame(string stateDirectory)
+    {
+        try
+        {
+            var path = Path.Combine(stateDirectory, LastGameName);
+            if (!File.Exists(path) || new FileInfo(path).Length > 32) return null;
+            var id = File.ReadAllText(path).Trim();
+            return id.Length > 0 && id.All(char.IsAsciiLetterOrDigit) ? id : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public static void WriteLastGame(string stateDirectory, string id)
+    {
+        if (id.Length == 0 || !id.All(char.IsAsciiLetterOrDigit)) throw new ArgumentException("not a game id", nameof(id));
+        Directory.CreateDirectory(stateDirectory);
+        var path = Path.Combine(stateDirectory, LastGameName);
+        File.WriteAllText(path + ".tmp", id);
+        File.Move(path + ".tmp", path, overwrite: true);
+    }
+
+    private const string LastGameName = "last-game";
+
     public static void Write(string stateDirectory, string mode)
     {
         if (mode is not (Online or Offline)) throw new ArgumentOutOfRangeException(nameof(mode));
