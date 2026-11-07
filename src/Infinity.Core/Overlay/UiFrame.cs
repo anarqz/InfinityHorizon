@@ -75,12 +75,13 @@ public enum UiDirection
 /// protocol 7; 0x28-0x29: the private lobby's "Who can join", OD-210 CR-S101 W14, protocol 8; native/overlay/src/ui_frames.h and
 /// pipe.cpp are the other end). The hook
 /// never sees it. T-L3 reserved the player-hosting frames (0x07-0x0C, 0x14, 0x15, WorldAction 1/3, VoiceOp 1/6): a T-L3 overlay
-/// never sends them and ignores them, and this launcher still codes and answers them (its hosting code goes with T-L8).
+/// never sends them and ignores them. Protocol 9 (OD-208): players host no world, so this launcher still codes them (the golden
+/// vectors) but answers none: <see cref="UiSession"/> turns 0x07, 0x09, 0x0B, 0x14 and WorldAction 1/3 into <see cref="UiIncoming.Reserved"/>.
 /// </summary>
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 8;
+    public const ushort ProtocolVersion = 9;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -1431,18 +1432,16 @@ public abstract record UiIncoming
 
     public sealed record Bye(byte Reason) : UiIncoming;
 
-    public sealed record Worlds(UiFrame.WorldsQuery Query) : UiIncoming;
-
-    public sealed record Join(UiFrame.JoinWorld Request) : UiIncoming;
-
-    public sealed record Create(UiFrame.CreateWorld Request) : UiIncoming;
-
     public sealed record Mine : UiIncoming;
 
+    /// <summary>Leave (2), friend (4) or report (5); close (1) and kick (3) arrive as <see cref="Reserved"/>.</summary>
     public sealed record Act(UiFrame.WorldAction Request) : UiIncoming;
 
-    /// <summary>Protocol 2 list request (modded filter, OD-112): answer with <see cref="UiFrame.WorldsListV2"/>.</summary>
-    public sealed record WorldsV2(UiFrame.WorldsQueryV2 Query) : UiIncoming;
+    /// <summary>
+    /// OD-208: a reserved player-hosting frame (the lobby list 0x07/0x14, join by code 0x09, create 0x0B, WorldAction close 1 and
+    /// kick 3). Decoded, then refused: nothing answers it.
+    /// </summary>
+    public sealed record Reserved(byte Type, byte Action = 0) : UiIncoming;
 
     /// <summary>The game's player card: answer with a <see cref="UiFrame.DetailPane"/> <c>player:&lt;xuid&gt;</c>.</summary>
     public sealed record PlayerDetails(UiFrame.PlayerDetailsQuery Request) : UiIncoming;
@@ -2000,16 +1999,17 @@ public sealed class UiSession
             UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),
             UiFrame.VoiceCommand v => new UiIncoming.Voice(v),
             UiFrame.VoiceDevice d => new UiIncoming.VoiceDevice(d),
-            UiFrame.WorldsQueryV2 q => new UiIncoming.WorldsV2(q),
+            UiFrame.WorldsQueryV2 q => new UiIncoming.Reserved(q.Type),
             UiFrame.PlayerDetailsQuery p => new UiIncoming.PlayerDetails(p),
             UiFrame.PaneActionClick c => new UiIncoming.PaneClick(c),
             UiFrame.UiEvent e => new UiIncoming.Event(e.Kind, e.Detail),
             UiFrame.Panel p => new UiIncoming.Panel(p.Open),
             UiFrame.Bye b => new UiIncoming.Bye(b.Reason),
-            UiFrame.WorldsQuery q => new UiIncoming.Worlds(q),
-            UiFrame.JoinWorld j => new UiIncoming.Join(j),
-            UiFrame.CreateWorld c => new UiIncoming.Create(c),
+            UiFrame.WorldsQuery q => new UiIncoming.Reserved(q.Type),
+            UiFrame.JoinWorld j => new UiIncoming.Reserved(j.Type),
+            UiFrame.CreateWorld c => new UiIncoming.Reserved(c.Type),
             UiFrame.MyWorldQuery => new UiIncoming.Mine(),
+            UiFrame.WorldAction { Action: UiWorldAction.Close or UiWorldAction.Kick } a => new UiIncoming.Reserved(a.Type, a.Action),
             UiFrame.WorldAction a => new UiIncoming.Act(a),
             _ => throw new ProtocolException("direction checked above"),
         };
