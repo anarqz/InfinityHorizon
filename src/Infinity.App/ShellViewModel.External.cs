@@ -98,7 +98,7 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(card);
         var mod = update ? card.Next : card.Manifest;
         if (mod is not { IsExternal: true } || ModManagerFactory() is not { } factory || !ModsIdle || update && !card.CanAct) return;
-        _externalMod = mod; _showModInfo = false; _showModOptions = false; _showLobbyPane = false; _selectedMod = card;
+        _externalMod = mod; _showModInfo = false; _showModOptions = false; _selectedMod = card;
         if (ShowBrowser) StopBrowsing();
         ExternalRows.Clear();
         foreach (var source in mod.ExternalSources)

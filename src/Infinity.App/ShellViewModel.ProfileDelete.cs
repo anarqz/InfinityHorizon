@@ -46,17 +46,17 @@ public sealed partial class ShellViewModel
 
     public bool HasDeleteProfileStatus => !string.IsNullOrEmpty(_deleteStatus);
 
-    public bool CanConfirmDeleteProfile => _deleting is not null && Idle && !Playing && !DedicatedActive && _session is not null
+    public bool CanConfirmDeleteProfile => _deleting is not null && Idle && !Playing && _session is not null
         && string.Equals(_deleteTyped.Trim(), DeleteProfileName, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The rows' "Delete from the cloud" links are enabled (never while playing, hosting or busy).</summary>
-    public bool CanAskDeleteProfile => Idle && !Playing && !DedicatedActive && _session?.Me is not null && !OfflineMode;
+    public bool CanAskDeleteProfile => Idle && !Playing && _session?.Me is not null && !OfflineMode;
 
     /// <summary>A row's "Delete from the cloud": an account profile only (a local-only row has nothing in the cloud), never while playing.</summary>
     public void AskDeleteProfile(Profile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        if (_session?.Me is not { } me || OfflineMode || Playing || _busy || DedicatedActive
+        if (_session?.Me is not { } me || OfflineMode || Playing || _busy
             || !me.Profiles.Any(p => p.ProfileId == profile.ProfileId && p.Xuid == profile.Xuid))
         {
             return;

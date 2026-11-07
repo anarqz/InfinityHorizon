@@ -58,7 +58,7 @@ public sealed partial class ShellViewModel
     public bool CanBan => CanModerate && ModerationRoles.CanBan(ModerationRole);
 
     /// <summary>One right sidebar at a time: a mod panel or the lobby pane opened later takes the place.</summary>
-    public bool ShowModerationPane => _showModerationPane && CanModerate && _externalMod is null && !_showModInfo && !_showModOptions && !_showLobbyPane;
+    public bool ShowModerationPane => _showModerationPane && CanModerate && _externalMod is null && !_showModInfo && !_showModOptions;
 
     public bool HasModerationPlayers => ModerationPlayers.Count > 0;
 
@@ -155,7 +155,7 @@ public sealed partial class ShellViewModel
         _showModerationPane = !ShowModerationPane;
         if (_showModerationPane)
         {
-            _showLobbyPane = false; _showModInfo = false; _showModOptions = false; _externalMod = null;
+            _showModInfo = false; _showModOptions = false; _externalMod = null;
             ModerationMatches.Clear(); // an earlier account's lookup never carries over
             if (_modTarget?.AccountId is not null) _modTarget = null;
             RefreshModerationPlayers();

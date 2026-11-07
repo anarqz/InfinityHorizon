@@ -106,7 +106,6 @@ public sealed partial class ShellViewModel
         _selectedMod = card; _externalMod = null; // the set-up pane gives way to the chosen card
         _showModInfo = !card.HasOptions;
         _showModOptions = card.HasOptions;
-        _showLobbyPane = false;
         if (card.HasOptions && !(_iniDirty && _iniManifest == card.Manifest.Digest)) await LoadSelectedOptionsAsync();
         Changed(string.Empty);
     }
@@ -117,7 +116,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         if (!ModsIdle) return;
-        _selectedMod = card; _showModInfo = true; _showModOptions = false; _showLobbyPane = false; _externalMod = null;
+        _selectedMod = card; _showModInfo = true; _showModOptions = false; _externalMod = null;
         Changed(string.Empty);
     }
 

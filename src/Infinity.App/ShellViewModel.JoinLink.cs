@@ -45,7 +45,7 @@ public sealed partial class ShellViewModel
 
     public bool JoinLinkInvalid => _joinLinkDraft.Trim().Length > 0 && JoinLink.WorldId(_joinLinkDraft) is null;
 
-    public bool CanJoinFromLink => SignedIn && !_joining && !DedicatedActive && JoinLink.WorldId(_joinLinkDraft) is not null;
+    public bool CanJoinFromLink => SignedIn && !_joining && JoinLink.WorldId(_joinLinkDraft) is not null;
 
     public string? JoinLinkStatus
     {
@@ -60,7 +60,7 @@ public sealed partial class ShellViewModel
     /// <summary>A mode refusal and a profile of that mode on the account: offer switching to it.</summary>
     public bool ShowJoinModeSwitch => _joinModeOffer is not null && JoinModeProfile is not null;
 
-    public bool CanSwitchJoinMode => ShowJoinModeSwitch && !Playing && !_busy && !DedicatedActive;
+    public bool CanSwitchJoinMode => ShowJoinModeSwitch && !Playing && !_busy;
 
     public string JoinModeSwitchLabel => S[_joinModeOffer == "hardcore" ? "join.switch_hardcore" : "join.switch_noob"];
 
