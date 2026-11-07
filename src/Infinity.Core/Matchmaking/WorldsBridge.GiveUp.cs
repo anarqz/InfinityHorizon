@@ -6,7 +6,7 @@ namespace Infinity.Core.Matchmaking;
 // A lobby ask answered Ready with a seat (joined, or kept while it never played) must lead the game into that world quickly:
 // it connects within seconds when there is something to connect to. A seat that has not started playing after SeatGiveUp
 // is given up: released (never "left on purpose") and the game's own matchmaking is cancelled (CancelMatchmaking, 0x24),
-// so FINDING SESSION never waits forever (owner: "Put a 15 s limit and give up"). Hosting is never given up by this.
+// so FINDING SESSION never waits forever (owner: "Put a 15 s limit and give up").
 public sealed partial class WorldsBridge
 {
     /// <summary>How long a seat a lobby ask answered Ready has to start playing before it is given up.</summary>
@@ -51,7 +51,6 @@ public sealed partial class WorldsBridge
 
     private bool Played(string grant) => string.Equals(Volatile.Read(ref _seatPlayedGrant), grant, StringComparison.Ordinal);
 
-    private bool Hosting => HostsOrOpensWorld || Volatile.Read(ref _mineSnapshot).Role == UiWorldRole.Hosting;
 
     /// <summary>The seat started playing: its give-up bound is called off (for good: a seat that played is never given up).</summary>
     private void SeatPlays(string how)
@@ -66,11 +65,11 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// test.11: a seat that never played and was taken for another lobby ask than <paramref name="kind"/> (its grant and
-    /// kind), or null: no seat, hosting, a seat that played, one taken for this kind, or one this launcher did not take.
+    /// kind), or null: no seat, a seat that played, one taken for this kind, or one this launcher did not take.
     /// </summary>
     private SeatTaken? UnprovenOtherSeat(byte kind)
     {
-        if (Hosting || _seat.GrantId is not { } grant || Played(grant)) return null;
+        if (_seat.GrantId is not { } grant || Played(grant)) return null;
         if (SeatPrivate(Volatile.Read(ref _seatWorld))) return null; // T-L6: a private lobby's seat is exempt (WORLDS_OFFICIAL §12.2 item 11)
         // OD-191: a grant this launcher did not take (a seat read's: an OD-191 group seat, an accepted request) was taken for no ask
         // of its own; its world's activity decides
@@ -79,12 +78,12 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>
-    /// A lobby ask was answered Ready: with a seat that never played (not hosting), <see cref="SeatGiveUp"/> starts again
+    /// A lobby ask was answered Ready: with a seat that never played, <see cref="SeatGiveUp"/> starts again
     /// from now. A later ask, the seat playing, its end or online's end call it off.
     /// </summary>
     private void ArmGiveUp(byte kind)
     {
-        if (Hosting || _seat.GrantId is not { } grant || Played(grant) || !OnlineOpen) return;
+        if (_seat.GrantId is not { } grant || Played(grant) || !OnlineOpen) return;
         var world = Volatile.Read(ref _seatWorld) ?? "its seat";
         CancellationTokenSource bound;
         try { bound = CancellationTokenSource.CreateLinkedTokenSource(_onlineStop.Token); }
@@ -107,7 +106,7 @@ public sealed partial class WorldsBridge
             Interlocked.CompareExchange(ref _giveUp, null, bound);
             bound.Dispose();
         }
-        if (!due || !OnlineOpen || _seat.GrantId != grant || Played(grant) || Hosting) return;
+        if (!due || !OnlineOpen || _seat.GrantId != grant || Played(grant)) return;
         // a new lobby ask or the player's own join is the game's flow now: it decides (and re-arms) on its own
         if (Volatile.Read(ref _joinAttempt) != 0) return;
         lock (_freeRoamState) if (_freeRoamRun is { IsCompleted: false }) return;
@@ -138,6 +137,17 @@ public sealed partial class WorldsBridge
         CancelFreeRoamLeave(Interlocked.Exchange(ref _giveUp, null));
         await LeaveForLobbyAsync(why, CancellationToken.None).ConfigureAwait(false);
         return true;
+    }
+
+    /// <summary>
+    /// W-10 Q4: the player leaves a seat from the overlay before its game ever played in it: the game's matchmaking toward that
+    /// world is released first (CancelMatchmaking), as a give-up does.
+    /// </summary>
+    private async Task ReleaseUnplayedSeatAsync()
+    {
+        if (_seat.GrantId is not { } grant || Played(grant) || Volatile.Read(ref _gameInWorld) != 0) return;
+        _log($"worlds: leaving {Volatile.Read(ref _seatWorld) ?? "its seat"} before the game played in it; the game's matchmaking is released first");
+        await CancelMatchmakingAsync().ConfigureAwait(false);
     }
 
     /// <summary>The hook cancels the game's matchmaking (CancelMatchmaking); a closed session or a failed write is only logged.</summary>

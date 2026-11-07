@@ -45,9 +45,6 @@ public sealed record SupervisorConfig(
     /// <summary>After the game exits, how long to wait for the job to empty before the leave.</summary>
     public TimeSpan JobDrain { get; init; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>CR-L49: how often an away host's world is ticked after the game exited; null: the bridge's host cadence.</summary>
-    public TimeSpan? AwayPoll { get; init; }
-
     /// <summary>At most one heartbeat forced by the hook's <c>RefreshRequest</c> per this interval.</summary>
     public TimeSpan ForcedBeatEvery { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -135,11 +132,6 @@ public abstract record SupervisorEvent
 
     public sealed record Relaunching(int Attempt) : SupervisorEvent;
 
-    /// <summary>
-    /// OD-180.2 follow-up (CR-L49): the game exited, but its hosted world stays for the other players (the play session stays live
-    /// until hosting ends; a Quit ends it). <see cref="Ended"/> follows when it ends.
-    /// </summary>
-    public sealed record HostingAway(string WorldId) : SupervisorEvent;
 
     /// <summary>The play session is over; <paramref name="Left"/> tells whether the gate leave was sent.</summary>
     public sealed record Ended(string Reason, bool Left) : SupervisorEvent;
@@ -246,8 +238,6 @@ public sealed class PlaySupervisor
 
     // the session's current game access ticket (matchmaking's X-Fi-Session), renewed by each heartbeat
     private volatile string _ticket = string.Empty;
-    // OD-180.2 follow-up (CR-L49): the bridge whose hosted world outlived the game's exit, for the away phase; null: none
-    private Matchmaking.WorldsBridge? _awayWorlds;
     private bool _admissionPending;
 
     public PlaySupervisor(
@@ -331,7 +321,6 @@ public sealed class PlaySupervisor
     private async Task<ExitDisposition?> OneSessionAsync(string? initialSessionId, CancellationToken cancellation)
     {
         _admissionPending = false;
-        _awayWorlds = null;
         using var preparing =CancellationTokenSource.CreateLinkedTokenSource(cancellation, _online.Cancellation);
         if (_online.IsPaused) { EmitPause(await _online.Paused.ConfigureAwait(false)); return null; }
         var handoff = new Handoff(HandoffChannel.Pipe, Launch.NewNonce());
@@ -491,14 +480,6 @@ public sealed class PlaySupervisor
                 catch (Exception e) { _emit(new SupervisorEvent.Note("save: watch ended (" + e.GetType().Name + ")")); }
 #pragma warning restore CA1031
             }
-            // OD-180.2 follow-up (CR-L49): the hosted world stays for its other players. Its ticking (the world's heartbeat with
-            // hostAway, the gate heartbeat) starts now, alongside the drain, the crash capture and the exit commit, so the world never
-            // lapses in between; the gate's leave waits until hosting ends, and every way out of here closes the world and leaves.
-            var away = Interlocked.Exchange(ref _awayWorlds, null);
-            using var awayStop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            var awayRun = away is null ? null : AwayHostAsync(away, sessionId, fence, active.Ticket.HeartbeatEveryMs, awayStop.Token, cancellation);
-            var handedOver = false;
-            try
             {
                 await DrainJob(child).ConfigureAwait(false);
                 var disposition = ExitDisposition.Classify(code);
@@ -532,9 +513,6 @@ public sealed class PlaySupervisor
                         _emit(new SupervisorEvent.Error("save: " + (e is ApiException api ? api.Code : e.Message)));
                     }
                 }
-                // the exit commit is done: the away host's session lives on until hosting ends (the leave follows it)
-                var stopped = awayRun is not null && await awayRun.ConfigureAwait(false);
-                handedOver = true;
                 var leftGate = await LeaveQuietly(sessionId, "game_exit", _config.Saves?.FenceToken ?? fence, endRevision).ConfigureAwait(false);
                 Write(state with
                 {
@@ -542,124 +520,13 @@ public sealed class PlaySupervisor
                     ExitCode = code,
                     EndedUnix = (ulong)_clock.GetUtcNow().ToUnixTimeSeconds(),
                 });
-                if (stopped) _emit(new SupervisorEvent.Ended("shutdown", leftGate)); // the launcher's close (or Stop) ended the away hosting
-                else if (disposition is not ExitDisposition.Relaunch)
+                if (disposition is not ExitDisposition.Relaunch)
                 {
                     _emit(new SupervisorEvent.Ended(disposition is ExitDisposition.Crashed c ? $"crashed 0x{c.Code:x8}" : "game_exit", leftGate));
                 }
                 return disposition;
             }
-            finally
-            {
-                // an exception before the leave (drain, crash capture, commit): the away hosting ends (one DELETE) and the session leaves
-                if (!handedOver && awayRun is not null)
-                {
-                    await awayStop.CancelAsync().ConfigureAwait(false);
-#pragma warning disable CA1031
-                    try { await awayRun.ConfigureAwait(false); }
-                    catch (Exception e) { _emit(new SupervisorEvent.Note("worlds: away hosting ended (" + e.GetType().Name + ")")); }
-#pragma warning restore CA1031
-                    await LeaveQuietly(sessionId, "game_exit", _config.Saves?.FenceToken ?? fence).ConfigureAwait(false);
-                }
-            }
         }
-    }
-
-    /// <summary>
-    /// OD-180.2 follow-up (CR-L49, MATCHMAKING_API.md §3.3 "An away host"): the game exited or crashed while its hosted world had
-    /// another player. The world goes on (relay, world server, a heartbeat every 15 s with <c>hostAway: true</c>) and so does the play
-    /// session: no gate leave, the gate heartbeat at <c>heartbeatEveryMs</c> (with the line's fence) keeps it live and the ticket the
-    /// world's routes use fresh. Hosting ends (relay stopped, one DELETE) when the server ends the world (404, item 6), the last other
-    /// player is gone, the launcher closes (<paramref name="cancellation"/>), the play session ends (401/409) or the player asks for a
-    /// new Play (<see cref="SupervisorCommand.Quit"/>: the shell's takeover closes the world first); the caller then leaves the gate.
-    /// </summary>
-    private async Task<bool> AwayHostAsync(Matchmaking.WorldsBridge worlds, string sessionId, ulong? fence, uint heartbeatEveryMs,
-        CancellationToken cancellation, CancellationToken shutdown)
-    {
-        _emit(new SupervisorEvent.HostingAway(worlds.HostedWorldId ?? string.Empty));
-        await Task.Yield(); // alongside the caller's drain and exit commit
-        var beatEvery = TimeSpan.FromMilliseconds(Math.Max(heartbeatEveryMs, 5000));
-        var nextBeat = _clock.GetUtcNow(); // at once: the session and the ticket the world's routes use are renewed from now on here
-        var poll = _config.AwayPoll ?? worlds.HostPollInterval;
-        var retry = new OperationBackoff();
-        var why = "the world ended";
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _online.Cancellation);
-        var command = _commands.WaitToReadAsync(stop.Token).AsTask();
-        try
-        {
-            while (true)
-            {
-                var wait = beatEvery < poll ? beatEvery : poll;
-                var untilBeat = nextBeat - _clock.GetUtcNow();
-                if (untilBeat < wait) wait = untilBeat > TimeSpan.Zero ? untilBeat : TimeSpan.Zero;
-                var done = await Task.WhenAny(Task.Delay(wait, _clock, stop.Token), command).ConfigureAwait(false);
-                stop.Token.ThrowIfCancellationRequested();
-                if (done == command)
-                {
-                    if (!await command.ConfigureAwait(false)) command = new TaskCompletionSource<bool>().Task; // the shell closed its writer
-                    else
-                    {
-                        var quit = false;
-                        while (_commands.TryRead(out var next)) quit |= next is SupervisorCommand.Quit;
-                        if (quit) { why = "the player started a new session"; break; }
-                        command = _commands.WaitToReadAsync(stop.Token).AsTask();
-                    }
-                    continue;
-                }
-                if (_clock.GetUtcNow() >= nextBeat)
-                {
-                    try
-                    {
-                        var beat = await _gate.HeartbeatAsync(sessionId, _config.Saves?.FenceToken ?? fence, stop.Token).ConfigureAwait(false);
-                        retry.Success();
-                        fence = beat.Lease?.FenceToken ?? fence;
-                        _config.Saves?.OnLease(beat.Lease);
-                        _ticket = beat.Ticket.Token; // the world's routes authenticate with the hosting session's ticket
-                        beatEvery = TimeSpan.FromMilliseconds(Math.Max(beat.Ticket.HeartbeatEveryMs, 5000));
-                        nextBeat = _clock.GetUtcNow() + beatEvery;
-                        if (!beat.GamePlane.Open) { why = "the game plane closed"; break; }
-                    }
-                    catch (Exception e) when (OperationBackoff.Transient(e) && !stop.IsCancellationRequested)
-                    {
-                        _emit(new SupervisorEvent.Error($"heartbeat: {(e is ApiException api ? api.Code : e.Message)}"));
-                        nextBeat = _clock.GetUtcNow() + retry.Failed(e);
-                    }
-                    catch (ApiException e)
-                    {
-                        if (OnlinePause.From(e) is { } pause) { _online.TryPause(pause); EmitPause(pause); }
-                        why = "the play session ended (" + e.Code + ")";
-                        break;
-                    }
-                }
-                // the world's own heartbeat (peers, hostAway: true); a 404 (item 6), 401 or 409 there stops hosting in the bridge
-                await worlds.HostTickAsync(stop.Token).ConfigureAwait(false);
-                if (worlds.HostedWorldId is null) { why = "the world ended"; break; }
-                if (!await worlds.AwayCheckAsync(stop.Token).ConfigureAwait(false)) { why = "no other player is left"; break; }
-            }
-        }
-        catch (OperationCanceledException) when (stop.IsCancellationRequested)
-        {
-            why = shutdown.IsCancellationRequested ? "the session was stopped (the launcher is closing, or Stop)"
-                : cancellation.IsCancellationRequested ? "the session's exit failed" : "online is paused";
-        }
-#pragma warning disable CA1031 // whatever ends the loop (a JsonException, ...), the world closes and the caller leaves the gate
-        catch (Exception e) when (e is not OutOfMemoryException)
-        {
-            why = "an error (" + e.GetType().Name + ")";
-        }
-#pragma warning restore CA1031
-        finally
-        {
-            if (worlds.HostedWorldId is not null)
-            {
-                // a launcher close leaves room for the gate's leave within the shell's 12 s wait
-                using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(shutdown.IsCancellationRequested ? 4 : 10));
-                try { await worlds.CloseHostAsync(bound.Token).WaitAsync(bound.Token).ConfigureAwait(false); }
-                catch (Exception error) when (error is ApiException or HttpRequestException or IOException or OperationCanceledException or TimeoutException) { }
-            }
-            _emit(new SupervisorEvent.Note($"worlds: hosting while the game is away ended ({why})"));
-        }
-        return shutdown.IsCancellationRequested;
     }
 
     private async Task<bool> CancelBeforeSpawnAsync(string sessionId, ulong? fence, CancellationToken cancellation)
@@ -825,13 +692,6 @@ public sealed class PlaySupervisor
                     // the hook's last frames can arrive together with its exit: the display-only ones still count
                     if (nextFrame is not null && endpoint.Greeted) await DrainPresenceAsync(frames.Reader).ConfigureAwait(false);
                     var exitCode = await exit.ConfigureAwait(false);
-                    // OD-180.2 follow-up (CR-L49): a hosted world with another player outlives the game's exit or crash (never a
-                    // relaunch: its new session would take the world over); the bridge is handed to the away phase, not closed below
-                    if (worlds is not null && !suspended && tokensOpen && !_online.IsPaused && ExitDisposition.Classify(exitCode) is not ExitDisposition.Relaunch)
-                    {
-                        try { if (await worlds.GameExitedAsync(onlineStop.Token).ConfigureAwait(false)) _awayWorlds = worlds; }
-                        catch (OperationCanceledException) { }
-                    }
                     return (exitCode, state);
                 }
                 if (done == accept)
@@ -996,10 +856,11 @@ public sealed class PlaySupervisor
                         }
                         // live (test.9): back from a Road Trip the game opens its free roam connection (Event 3) around
                         // closing the Road Trip one (Event 4); joining again calls off the pending close or leave
-                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } entered && worlds is not null)
+                        if (frame is Frame.Event { Kind: HookEvents.FreeRoamEntered } && worlds is not null)
                         {
-                            // join:<ip:port> is a guest's game in its seat's world: the seat plays (no 15 s give-up)
-                            worlds.GameJoined(join: entered.Detail.StartsWith("join", StringComparison.Ordinal));
+                            // the game in its seat's world: the seat plays (no 15 s give-up). OD-208: any detail (an older hook's
+                            // host:<port> too) is a guest's join, since players host no world
+                            worlds.GameJoined();
                         }
                         if (frame is Frame.RefreshRequest && tokensOpen && !_online.IsPaused)
                         {
@@ -1264,13 +1125,13 @@ public sealed class PlaySupervisor
         finally
         {
             await stop.CancelAsync().ConfigureAwait(false);
-            if (worlds is not null && !ReferenceEquals(worlds, _awayWorlds))
+            if (worlds is not null)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 try
                 {
                     if (suspended) await worlds.SuspendOnlineAsync().WaitAsync(cleanup.Token).ConfigureAwait(false);
-                    else await Task.WhenAll(worlds.LeaveAsync(cleanup.Token), worlds.CloseHostAsync(cleanup.Token)).WaitAsync(cleanup.Token).ConfigureAwait(false);
+                    else await worlds.LeaveAsync(cleanup.Token).WaitAsync(cleanup.Token).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is ApiException or HttpRequestException or IOException or OperationCanceledException or TimeoutException) { }
             }
@@ -1416,23 +1277,20 @@ public sealed class PlaySupervisor
         }
     }
 
-    /// <summary>Polls seats and hosting at the selected relay's cadence; each scheduler decides when work is due.</summary>
+    /// <summary>Polls the seat at <see cref="Matchmaking.WorldsBridge.SeatLoopEvery"/>; each scheduler decides when work is due.</summary>
     private static async Task SeatLoopAsync(Matchmaking.WorldsBridge worlds, OverlayChannel overlay, CancellationToken cancellation)
     {
         while (!cancellation.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(worlds.HostPollInterval, cancellation).ConfigureAwait(false);
+                await Task.Delay(Matchmaking.WorldsBridge.SeatLoopEvery, cancellation).ConfigureAwait(false);
                 await overlay.SendFrameAsync(await worlds.AccessFrameAsync(cancellation).ConfigureAwait(false), cancellation).ConfigureAwait(false);
                 if (await worlds.TickAsync(cancellation).ConfigureAwait(false) is { } ended)
                 {
                     await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, ended), cancellation).ConfigureAwait(false);
                 }
-                if (await worlds.HostTickAsync(cancellation).ConfigureAwait(false) is { } closed)
-                {
-                    await overlay.ToastAsync(new Overlay.UiFrame.Toast(Overlay.UiLevel.Warn, 2, 50, closed), cancellation).ConfigureAwait(false);
-                }
+
                 var mine = await worlds.PollMyWorldAsync(cancellation).ConfigureAwait(false);
                 await overlay.SendFrameAsync(mine, cancellation).ConfigureAwait(false);
                 await overlay.SendIfAcceptedAsync(worlds.RosterModsFrame(), cancellation).ConfigureAwait(false); // OD-181

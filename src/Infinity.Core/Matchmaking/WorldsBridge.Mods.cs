@@ -3,19 +3,17 @@ using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
 
-// OD-112 (docs/launcher/MODDED_LOBBIES.md §2-§3): the session's mod set on hosting, the list and
-// joins, the protocol 2 list rows and the player details pane.
+// OD-112 (docs/launcher/MODDED_LOBBIES.md §2-§3): the session's mod set on joins, the lobby rows (the pool move's list) and the
+// player details pane.
 public sealed partial class WorldsBridge
 {
-    /// <summary>The session's lobby mod set (OD-112); the default is vanilla. Hosting and joining wait for it to be ready.</summary>
+    /// <summary>The session's lobby mod set (OD-112); the default is vanilla. Joining waits for it to be ready.</summary>
     public IModSetSource ModSet { get; init; } = VanillaModSet.Instance;
-
-    private IReadOnlyList<ModEntry> _hostedMods = [];
 
     /// <summary>
     /// The set to send (null: vanilla, left out of the body), or the <c>worlds.*</c> key of why nothing may be sent now. OD-181
     /// (CR-L48): every player declares the set its game loads, so a modded session (the gate's <c>modded</c>, a non-empty plan)
-    /// never sends an empty set: one whose ready set came out empty joins and hosts nothing (the server would answer 400
+    /// never sends an empty set: one whose ready set came out empty joins nothing (the server would answer 400
     /// <c>{field: "mods"}</c>).
     /// </summary>
     private (IReadOnlyList<ModEntry>? Mods, string? Refusal) WireMods()
@@ -29,73 +27,6 @@ public sealed partial class WorldsBridge
             _ => (null, "worlds.mods_failed"),
         };
     }
-
-    /// <summary>The world still carries the set it was opened with (a world's set is fixed, §2.7).</summary>
-    private bool HostedModsCurrent() => ModSet.State is { Ready: true } state && ModSets.Same(state.Mods, Volatile.Read(ref _hostedMods));
-
-    /// <summary>
-    /// The protocol 2 list (0x14 → 0x15), CR-L40 §2.2: every lobby of the filter (4 all, the overlay's default),
-    /// modded and vanilla, ordered matching rows first (<see cref="OrderLobbies"/>), each with its players and the host's
-    /// mods (OD-181: shown, never a reason the row cannot be joined). An OD-112 overlay's <c>modded</c> query still lists
-    /// modded rows only.
-    /// </summary>
-    public async Task<UiFrame.WorldsListV2> ListV2Async(UiFrame.WorldsQueryV2 query, CancellationToken cancellation)
-    {
-        ArgumentNullException.ThrowIfNull(query);
-        UiFrame.WorldsListV2 Failed(string message) => new(query.Filter, query.Modded, 2, message, []);
-        RequestReconcile();
-        using var online = OnlineCancellation(cancellation);
-        cancellation = online.Token;
-        if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } denied)
-            return Failed(DeniedMessage(denied, "list"));
-        var filter = query.Filter switch
-        {
-            UiLobby.FilterFriends => WorldFilters.Friends,
-            UiLobby.FilterNear => WorldFilters.Near,
-            UiLobby.FilterAll => WorldFilters.Every,
-            _ => WorldFilters.Global,
-        };
-        try
-        {
-            List<(WorldView World, LobbyRow Row)> rows;
-            if (query.Modded)
-            {
-                var answer = await OperationAsync(_listRetry, token => _mm.ListAsync(filter == WorldFilters.Every ? WorldFilters.Global : filter, query.NotFull, true, token),
-                    cancellation).ConfigureAwait(false);
-                if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
-                    return Failed(DeniedMessage(changed, "list"));
-                if (answer is not { Ok: true, Value: { } list })
-                    return Failed(_text("worlds.list_failed"));
-                ObservePool(list.Pool);
-                rows = list.Items.Select(w => (w, SessionRow(w, false))).Concat(list.Locked.Select(w => (w, SessionRow(w, true))))
-                    // an older server ignores the filter: never show a world of the other kind
-                    .Where(r => r.Item2.Modded).ToList();
-            }
-            else
-            {
-                var read = await ReadLobbiesAsync(filter, query.NotFull, cancellation).ConfigureAwait(false);
-                if (await AccessAsync(cancellation).ConfigureAwait(false) is { Allowed: false } changed)
-                    return Failed(DeniedMessage(changed, "list"));
-                if (read.FailureKey is { } key) return Failed(_text(key));
-                rows = read.Worlds.Select(w => (w.World, SessionRow(w.World, w.Locked))).ToList();
-            }
-            var ordered = OrderLobbies(rows).Select(r => r.Row with { World = WithActivity(r.Row.World, r.World) }).ToList();
-            // OD-149: a player the anti-cheat system isolated gets the red notice's countdown with the list
-            var (status, message) = PoolListStatus();
-            return new UiFrame.WorldsListV2(query.Filter, query.Modded, status, message, FitLobbyRows(ordered, message));
-        }
-        catch (Exception e) when (HostFailure(e))
-        {
-            return Failed(_text("worlds.list_failed"));
-        }
-    }
-
-    /// <summary>
-    /// OD-150: the overlay's row shows what its world runs now after the host's name ("Host · Online Road Trip"): the row
-    /// frame has no field of its own for it, and the host text is the row's and the lobby pane's subtitle.
-    /// </summary>
-    private WorldRow WithActivity(WorldRow row, WorldView world) =>
-        row with { Host = Clip(row.Host + " · " + ActivityName(world.Activity), 128) };
 
     /// <summary>
     /// OD-181 (CR-L48): the catalog's name of a mod by its multiplayer id (the localized name, or null when the catalog does

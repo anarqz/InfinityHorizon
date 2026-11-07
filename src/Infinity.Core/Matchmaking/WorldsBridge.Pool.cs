@@ -27,9 +27,8 @@ public static class AntiCheatPool
 
 // OD-149 (§3.9): the pineapple pool. Every list marks pineapple worlds (Row: kind bit 1, lock 9 for a clean player); a clean
 // player's join of one is refused with a clear text; an isolated player sees the red notice with the time left and, when its
-// seat in a clean world ends or its clean world closes for the pool, is moved to the first pineapple world it can join, or
-// hosts one (a world an isolated host opens is a pineapple world by the server's rule; OD-190: only this move opens one, never a
-// game's ask). Hardcore only: a Noob session never reads or acts on a pool.
+// seat in a clean world ends or its clean world closes for the pool, is moved to the first pineapple world it can join (OD-208:
+// it never opens one; the server places flagged players). Hardcore only: a Noob session never reads or acts on a pool.
 public sealed partial class WorldsBridge
 {
     /// <summary>How long the automatic move to a pineapple world looks for one (the free roam ask's own budget).</summary>
@@ -39,8 +38,6 @@ public sealed partial class WorldsBridge
     private long _poolUntilTicks;
     // the seat whose pool end was already handled (a seat read repeats `ended` until the next seat)
     private string? _poolHandledGrant;
-    // the hosted world is a pineapple world (its PUT's answer): its end is never a pool move
-    private bool _hostedPool;
     private int _poolMoving;
     private Task _poolMove = Task.CompletedTask;
 
@@ -81,11 +78,6 @@ public sealed partial class WorldsBridge
         ? _text("worlds.pool_notice").Replace("{time}", AntiCheatPool.TimeLeft(until - Now), StringComparison.Ordinal)
         : null;
 
-    /// <summary>The overlay list's status and message: <see cref="UiLobby.ListIsolated"/> with "&lt;seconds&gt;\n&lt;link&gt;" while isolated.</summary>
-    private (byte Status, string Message) PoolListStatus() => PoolUntil is { } until
-        ? (UiLobby.ListIsolated, ((long)Math.Ceiling((until - Now).TotalSeconds)).ToString(CultureInfo.InvariantCulture) + "\n" + AntiCheatPool.DisputeLink)
-        : ((byte)0, string.Empty);
-
     /// <summary>
     /// A join answered 409 <c>PORTAL.CONFLICT {reason: "pool"}</c>: a clean player's join of a pineapple world, or an isolated
     /// player's join of a clean one. Answered as <see cref="UiJoin.Closed"/> (the overlay refreshes its list and shows the text;
@@ -114,16 +106,9 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>
-    /// The server ended the hosted world for the pool: its answer names <c>pool</c>, or the host is isolated now and its world
-    /// was a clean one (§3.9: a clean world an isolated host hosts closes). A pineapple world's end never is.
-    /// </summary>
-    private bool HostedWorldClosedForPool(MmError error) =>
-        PoolApplies && !_hostedPool && (string.Equals(error.Reason, ConflictReasons.Pool, StringComparison.Ordinal) || Isolated);
-
-    /// <summary>
     /// The move (§3.9 "on the flag"): the free roam ask's own path joins the first pineapple world this player may join (the
-    /// candidates of an isolated player are pineapple worlds only) or opens one (<see cref="OpenPoolWorldAsync"/>), then asks the game to
-    /// look for free roam (<see cref="Session.Frame.FollowHost"/>, which lands it in the new seat or world). One move at a time.
+    /// candidates of an isolated player are pineapple worlds only), then asks the game to look for free roam
+    /// (<see cref="Session.Frame.FollowHost"/>, which lands it in the new seat). One move at a time.
     /// </summary>
     private void StartPoolMove(string why)
     {
@@ -138,10 +123,7 @@ public sealed partial class WorldsBridge
         {
             // the caller's own change (a seat read or renew under _mineState) is published before the ask weighs it
             lock (_mineState) Interlocked.MemoryBarrier();
-            // and a host operation that started it (the announce that read the close) has ended: the world is no longer this one's
-            Task hostQueue;
-            lock (_hostState) hostQueue = _hostOperation;
-            await hostQueue.ConfigureAwait(false);
+
             // and a lobby ask that started it (a quick join answered pool) has ended, so the move runs its own ask, not that one's answer
             Task<byte>? asking;
             lock (_freeRoamState) asking = _freeRoamRun;
@@ -151,28 +133,14 @@ public sealed partial class WorldsBridge
             using var deadline = new CancellationTokenSource(PoolMoveBudget, _clock);
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_onlineStop.Token, deadline.Token);
             var result = await EnsureFreeRoamWorldAsync(FreeRoamKind.FreeRoam, budget.Token).ConfigureAwait(false);
-            // with no pineapple world to join the move opens one (an isolated host's world is one by the server's rule); OD-190 keeps
-            // this the move's own step, never a game's ask
-            if (result != FreeRoamResult.Ready && OnlineOpen && !HasFreeRoamWorld && Volatile.Read(ref _joinAttempt) == 0)
-                result = await OpenPoolWorldAsync(budget.Token).ConfigureAwait(false);
             if (result == FreeRoamResult.Ready)
                 Volatile.Write(ref _followHost, new Session.Frame.FollowHost(Session.FollowHostLobby.FreeRoam, Public: true));
-            else _log($"worlds: no pineapple lobby joined or opened ({result})");
+            else _log($"worlds: no pineapple lobby joined ({result})");
         }
         catch (Exception error) when (HostFailure(error) || error is ObjectDisposedException)
         {
             _log($"worlds: the move to a pineapple lobby failed ({error.GetType().Name})");
         }
         finally { Volatile.Write(ref _poolMoving, 0); }
-    }
-
-    /// <summary>OD-149: the move's own pineapple lobby, open to everyone with the default name (the CR-L40 lobby of before OD-190).</summary>
-    private async Task<byte> OpenPoolWorldAsync(CancellationToken cancellation)
-    {
-        var name = DefaultLobbyName(_text("worlds.default_name"), Gamertag);
-        var hosted = await CreateAsync(new UiFrame.CreateWorld(name, 0, FreeRoamPlayers, 0), WorldActivities.FreeRoam, cancellation).ConfigureAwait(false);
-        if (hosted.Result != 0) return Decided(FreeRoamKind.FreeRoam, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, $"no pineapple lobby opened: {hosted.Result}");
-        FreeRoamToast("worlds.free_roam_opened", name);
-        return Decided(FreeRoamKind.FreeRoam, FreeRoamResult.Ready, $"opened {HostedWorldId ?? name} (a pineapple lobby for the anti-cheat move)");
     }
 }
