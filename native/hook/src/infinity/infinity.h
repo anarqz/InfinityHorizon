@@ -446,9 +446,6 @@ void azimuth_update_offer(const char *latest, const char *release);
 
 /* net.c: an HSTRING made by Azimuth's WindowsCreateString. */
 HRESULT azimuth_net_make_hstring(const wchar_t *text, void **out);
-/* net.c: a WinRT activation factory from Azimuth's providers, as the game's own activation gets it (W7b: the
-   MultiplayerSessionReference factory). Not filtered, not traced. */
-HRESULT azimuth_net_activate(const wchar_t *name, const void *iid, void **out);
 /* freeroam.c: free roam online ([FreeRoam] Enabled=1). The filter may wrap a WinRT
    class's statics that Azimuth answered; it returns 1 if it did. */
 void azimuth_apply_freeroam(unsigned char *game_image, const wchar_t *directory, const wchar_t *executable);
