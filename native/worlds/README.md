@@ -81,8 +81,9 @@ authentication failed, 5 no common protocol version, 6 public socket or budget n
 The "host's launcher" of official worlds on a Worlds host: it signs every call to the server's
 `/mm/v1/official` routes with the VM's node key (`FI-World-Agent`), spawns and supervises
 `worlds serve --profile public --bind <FI_WORLDS_BIND>` from its own executable (restarted with
-backoff; the worlds of an ended engine are `DELETE`d), keeps one spare open world per (mode,
-activity), announces each every 15 s with `world.state`'s peers, feeds each answer to
+backoff; the worlds of an ended engine are `DELETE`d), keeps one spare open world per (game,
+activity), mixed (`mode: "any"`) when it serves both modes (OD-210, CR-S101; the car meet lobby
+keeps the first mode), announces each every 15 s with `world.state`'s peers, feeds each answer to
 `world.context` and `world.admission`, and answers `catalog.need` from the server-side catalog.
 SIGTERM: every world `DELETE`d, the engine shut down, exit 0.
 

@@ -18,20 +18,57 @@ use crate::core::keys::{decode_base64, encode_base64};
 pub type Invalid = &'static str;
 
 /// The activities an official world may run (MATCHMAKING_API §2.9 `OfficialWorldSettings`;
-/// WORLDS_OFFICIAL.md §11.1): `freeroam` and `roadtrip` per mode, `carmeet` for both modes.
+/// WORLDS_OFFICIAL.md §11.1): `freeroam` and `roadtrip` mixed (OD-210, CR-S101), `carmeet` for
+/// both modes.
 pub const ACTIVITIES: [&str; 3] = ["freeroam", "carmeet", "roadtrip"];
-/// The one activity whose world admits both modes (OD-180, WORLDS_OFFICIAL.md §11.1).
+/// The car meet lobby, which admits both modes by its activity (OD-180, WORLDS_OFFICIAL.md
+/// §11.1): its spare keeps the agent's first mode as `mode`, as before OD-210.
 pub const MIXED: &str = "carmeet";
-/// The default `--max-worlds`: one spare per (freeroam, mode) and (roadtrip, mode) and one car
-/// meet spare (2 + 2 + 1) with room for three more (two of them FM5's race spares, one per mode,
-/// when `race` is placed); the engine's public cap (§8: 8 × 40 MiB reserved fits the 400 MB
-/// limit) and `--max-seats` 8 × 12 = 96 (8 × 16 = 128 when `race` is placed).
+/// The default `--max-worlds`: one mixed spare per (game, activity) (OD-210, CR-S101, W14):
+/// free roam, the car meet lobby and Road Trip (3), FM5's race (1) when `race` is placed, with
+/// room for four more; the engine's public cap (§8: 8 × 40 MiB reserved fits the 400 MB limit)
+/// and `--max-seats` 8 × 12 = 96 (8 × 16 = 128 when `race` is placed).
 pub const DEFAULT_MAX_WORLDS: u64 = 8;
 /// The pools an official world may serve (`OfficialWorldSettings.mode`).
 pub const MODES: [&str; 2] = ["hardcore", "noob"];
+/// `OfficialWorldSettings.mode` of a mixed world: both modes (MATCHMAKING_API §2.11, CR-S101).
+pub const ANY_MODE: &str = "any";
+
+/// The `mode` an activity's spare is opened with (OD-210, CR-S101 §2.11, W14): `"any"` (a mixed
+/// world) when the agent serves every mode, else its one mode; the car meet lobby keeps the first
+/// mode, as before (it admits both modes by its activity, OD-180).
+pub fn spare_mode(modes: &[&'static str], activity: &str) -> &'static str {
+    let first = modes.first().copied().unwrap_or("noob");
+    if activity == MIXED {
+        first
+    } else if MODES.iter().all(|m| modes.contains(m)) {
+        ANY_MODE
+    } else {
+        first
+    }
+}
+
+/// The placement groups, each kept with one spare (OD-210, CR-S101, W14): one per (game,
+/// activity) placed, with [`spare_mode`]'s mode. Free roam first, the car meet lobby, then Road
+/// Trip: the order spares are restored in; FM5's `race` after FH2's (CR-S99 §5), within the same
+/// `maxWorlds`.
+pub fn spare_groups(
+    modes: &[&'static str],
+    activities: &[&'static str],
+) -> Vec<(&'static str, &'static str)> {
+    if modes.is_empty() {
+        return Vec::new();
+    }
+    ALL_ACTIVITIES
+        .into_iter()
+        .filter(|a| activities.contains(a))
+        .map(|a| (spare_mode(modes, a), a))
+        .collect()
+}
 /// FH2, the game of the activities above.
 pub const GAME: &str = "fh2";
-/// FM5's official activity (CR-S99 §1, §5; OD-206): a private race lobby, one spare per mode.
+/// FM5's official activity (CR-S99 §1, §5; OD-206): a private race lobby, one mixed spare
+/// (OD-210; FM5 is Noob only until M11, so its lobbies are Noob in practice).
 pub const FM5_ACTIVITIES: [&str; 1] = ["race"];
 pub const FM5: &str = "fm5";
 /// Every activity this agent may place, FH2's then FM5's: the order spares are restored in.
@@ -594,6 +631,54 @@ mod tests {
             ),
             Err("FI_WORLDS_ACTIVITIES")
         );
+    }
+
+    /// OD-210, CR-S101 (W14): one mixed (`"any"`) spare per (game, activity) instead of one per
+    /// mode; the car meet lobby keeps the agent's first mode as before.
+    #[test]
+    fn one_mixed_spare_per_game_and_activity_and_the_car_meet_as_before() {
+        let fh2 = spare_groups(&MODES, &ACTIVITIES);
+        assert_eq!(
+            fh2,
+            vec![
+                ("any", "freeroam"),
+                ("hardcore", "carmeet"),
+                ("any", "roadtrip"),
+            ]
+        );
+        let all = spare_groups(&MODES, &ALL_ACTIVITIES);
+        assert_eq!(
+            all,
+            vec![
+                ("any", "freeroam"),
+                ("hardcore", "carmeet"),
+                ("any", "roadtrip"),
+                ("any", "race"),
+            ]
+        );
+        // every placed spare fits the default cap, with room for promoted private worlds
+        assert!(all.len() < DEFAULT_MAX_WORLDS as usize);
+        // the order of the list does not matter to "any"; the car meet takes the first mode
+        assert_eq!(
+            spare_groups(&["noob", "hardcore"], &["carmeet", "freeroam"]),
+            vec![("any", "freeroam"), ("noob", "carmeet")]
+        );
+        // an agent serving one mode keeps single-mode spares of it (the server accepts both)
+        assert_eq!(
+            spare_groups(&["noob"], &["roadtrip", "freeroam", "carmeet", "race"]),
+            vec![
+                ("noob", "freeroam"),
+                ("noob", "carmeet"),
+                ("noob", "roadtrip"),
+                ("noob", "race"),
+            ]
+        );
+        assert!(spare_groups(&MODES, &[]).is_empty());
+        assert!(spare_groups(&[], &ACTIVITIES).is_empty());
+        assert_eq!(spare_mode(&MODES, "freeroam"), ANY_MODE);
+        assert_eq!(spare_mode(&["hardcore"], "race"), "hardcore");
+        // "any" is a world's mode, never a pool the agent is configured to serve
+        assert!(!MODES.contains(&ANY_MODE));
     }
 
     #[test]
