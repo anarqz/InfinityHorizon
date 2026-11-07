@@ -32,8 +32,9 @@ foreach ($file in @("$out/mod/infinity_mod.dll.sig", "$out/mod/infinity-mod-prep
 & dotnet publish "$root/src/Infinity.App/Infinity.App.csproj" -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
 if ($LASTEXITCODE -ne 0) { throw 'Launcher publish failed' }
+# U1: the updater's single-file bundle is compressed (about half the size on disk; same name, path and .sig).
 & dotnet publish "$root/src/Infinity.Updater/Infinity.Updater.csproj" -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
 if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
 # OD-125: the hook ships as ExtraOptions.Infinity (ExtraOptions 0.4.4 + patches + the hook, one winmm.dll for Azimuth 1.0.4, OD-127);
 # the package keeps its name, the launcher installs it as <Azimuth>\winmm.dll
