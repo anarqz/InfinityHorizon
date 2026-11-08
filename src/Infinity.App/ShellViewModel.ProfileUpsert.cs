@@ -243,6 +243,27 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
     }
 
+    /// <summary>
+    /// Owner 2026-11-08 (Profiles ⋯ Rename): the server renames a profile only while it carries a rename notice (OD-120, ACCOUNTS.md §5;
+    /// <c>POST /launcher/v1/profiles/{xuid}/name</c>). This PC's copy of such a profile, or null (the menu says why it is off).
+    /// </summary>
+    private LocalProfile? RenamableCopy(Player? player)
+    {
+        if (player?.RenameNotice is null || OfflineMode) return null;
+        try { return LocalProfiles.Read().FirstOrDefault(p => p.Cloud is { RenameNotice: not null } cloud && cloud.Xuid == player.Xuid); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>Opens the rename panel for <paramref name="player"/> (its notice's free rename).</summary>
+    private void OpenRename(Player? player)
+    {
+        if (RenamableCopy(player) is not { } copy || _renameBusy) return;
+        _renameLater.Remove(copy.Cloud!.ProfileId);
+        _renaming = copy;
+        _renameName = string.Empty;
+        Changed(string.Empty);
+    }
+
     /// <summary>"Later": the notice comes back at the next start; the free rename stays unused.</summary>
     public void RenameLater()
     {

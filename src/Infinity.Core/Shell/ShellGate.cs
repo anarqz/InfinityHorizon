@@ -7,10 +7,10 @@ public enum ShellStep
     /// <summary>Sign in to the Infinity account first.</summary>
     SignIn,
 
-    /// <summary>Choose a game.</summary>
+    /// <summary>No game yet. Owner 2026-11-08: no page asks for it; the launcher chooses one at sign-in (the last one), PLAY's tiles change it.</summary>
     PickGame,
 
-    /// <summary>Choose a profile (profiles come from the server only).</summary>
+    /// <summary>A game, no profile chosen yet: PLAY is open (its PLAY HARDCORE / PLAY NOOB buttons choose the profile as they launch).</summary>
     PickProfile,
 
     /// <summary>Every page is open.</summary>
@@ -21,6 +21,9 @@ public enum ShellStep
 public enum ShellPage
 {
     Home,
+
+    /// <summary>Owner 2026-11-08: profile management only (no Play, no Start); the save tools act on PLAY's game.</summary>
+    Profiles,
     News,
     Servers,
     Help,
@@ -51,15 +54,29 @@ public sealed record ShellGate(string? AccountEmail, string? Game, string? Profi
     public bool CanOpen(ShellPage page) => Enum.IsDefined(page) && Step == ShellStep.Ready;
 
     /// <summary>Signing in replaces the offline path; the local profile chosen offline is chosen again from the account's list.</summary>
-    public ShellGate SignIn(string email) => this with { AccountEmail = email, Game = null, ProfileTag = null, ProfileKey = null, Offline = false };
+    /// <remarks>Owner 2026-11-08: with <paramref name="game"/> (the last one played, else the first offered) no page asks for a game.</remarks>
+    public ShellGate SignIn(string email, string? game = null) => this with { AccountEmail = email, Game = game, ProfileTag = null, ProfileKey = null, Offline = false };
 
     public ShellGate SignOut() => this with { AccountEmail = null, Game = null, ProfileTag = null, ProfileKey = null, Offline = false };
 
     /// <summary>OD-118 "Play offline" on the welcome screen: the launcher without an account.</summary>
-    public ShellGate PlayOffline() => this with { AccountEmail = null, Game = null, ProfileTag = null, ProfileKey = null, Offline = true };
+    public ShellGate PlayOffline(string? game = null) => this with { AccountEmail = null, Game = game, ProfileTag = null, ProfileKey = null, Offline = true };
 
     /// <summary>A different game drops the profile, which belongs to the game.</summary>
     public ShellGate ChooseGame(string game) => AccountEmail is null && !Offline ? this : this with { Game = game, ProfileTag = game == Game ? ProfileTag : null, ProfileKey = game == Game ? ProfileKey : null };
 
     public ShellGate ChooseProfile(string tag, string? key = null) => Game is null ? this : this with { ProfileTag = tag, ProfileKey = key };
+}
+
+/// <summary>Owner 2026-11-08: the shell's frame around the pages (header, sidebar, the right column).</summary>
+public static class ShellLayout
+{
+    /// <summary>
+    /// The FRIENDS sidebar on the right, at shell level (any page): open when the header's friends button opened it, and only signed in
+    /// (offline has no friends to read). Owner 2026-11-08 (second pass): no longer tied to PLAY.
+    /// </summary>
+    public static bool FriendsSidebar(bool open, bool signedIn) => open && signedIn;
+
+    /// <summary>The header's friends button shows signed in only.</summary>
+    public static bool FriendsButton(bool signedIn) => signedIn;
 }

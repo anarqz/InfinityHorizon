@@ -213,7 +213,7 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
     </DataTemplate>
-    <!-- OD-119: a news card (cover, title, date, summary, pinned, unread) and the PLAY column of the newest few. -->
+    <!-- OD-119: a news card (cover, title, date, summary, pinned, unread) of the NEWS page (owner 2026-11-08: news is never on PLAY). -->
     <DataTemplate x:Key="NewsCardTemplate">
       <Button Click="OnNewsCard" Margin="0,0,0,10" Background="{DynamicResource NewsCardSurface}" AutomationProperties.Name="{Binding Title}">
         <Button.Style><Style TargetType="Button" BasedOn="{StaticResource ModCardButton}" /></Button.Style>
@@ -235,17 +235,6 @@
                      MaxHeight="60" TextTrimming="CharacterEllipsis" />
         </StackPanel>
       </Button>
-    </DataTemplate>
-    <DataTemplate x:Key="NewsColumn">
-      <StackPanel>
-        <DockPanel Margin="0,0,0,10">
-          <Button DockPanel.Dock="Right" Content="{Binding S[news.all]}" Click="OnNavNews" Style="{StaticResource LinkButton}" Margin="0" />
-          <TextBlock Text="{Binding S[news.title]}" Style="{StaticResource SectionTag}" VerticalAlignment="Center" />
-        </DockPanel>
-        <TextBlock Text="{Binding NewsStatus}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,10"
-                   Visibility="{Binding HasNewsStatus, Converter={StaticResource Visible}}" AutomationProperties.LiveSetting="Polite" />
-        <ItemsControl ItemsSource="{Binding NewsPreview}" ItemTemplate="{StaticResource NewsCardTemplate}" Focusable="False" />
-      </StackPanel>
     </DataTemplate>
   </Window.Resources>
   <Grid>
@@ -275,12 +264,12 @@
         <Image DockPanel.Dock="Top" Source="{StaticResource BrandLogo}" Width="172" Margin="22,22,22,12"
                RenderOptions.BitmapScalingMode="HighQuality" />
         <StackPanel DockPanel.Dock="Bottom" Margin="0,0,12,14">
-          <Button Content="{Binding S[nav.help]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+          <Button Content="{Binding S[nav.help]}" Style="{StaticResource NavButton}" IsEnabled="{Binding InShell}" />
           <Button Content="{Binding S[nav.bug]}" Style="{StaticResource NavButton}" Click="OnNavBugReport" Tag="{Binding ShowBugReport}" />
           <Button Style="{StaticResource NavButton}" Click="OnDiscord" AutomationProperties.Name="{Binding S[nav.discord]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[nav.discord]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
           <Border Height="1" Background="{StaticResource InfinityBorder}" Margin="20,8,8,8" />
           <Button Content="{Binding S[nav.account]}" Style="{StaticResource NavButton}" IsEnabled="{Binding CanChangeIdentity}" Click="OnNavAccount" Tag="{Binding ShowAccount}" />
-          <Button Content="{Binding S[nav.donate]}" Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" />
+          <Button Content="{Binding S[nav.donate]}" Style="{StaticResource NavButton}" IsEnabled="{Binding InShell}" />
           <TextBlock Text="{Binding ServerLabel}" Margin="20,14,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
           <!-- CR-L40: the connected server's figures (online now, registered profiles in parentheses), read every 30 s -->
           <StackPanel Margin="20,4,0,0" Background="Transparent" ToolTip="{Binding ServerStatusTip}" ToolTipService.ShowOnDisabled="True"
@@ -303,6 +292,8 @@
         </StackPanel>
         <StackPanel Margin="0,0,12,0">
           <Button Content="{Binding S[nav.play]}" Style="{StaticResource NavButton}" Click="OnNavHome" Tag="{Binding ShowHome}" />
+          <!-- Owner 2026-11-08: profile management (create, rename, delete, the save tools of PLAY's game). -->
+          <Button Content="{Binding S[nav.profiles]}" Style="{StaticResource NavButton}" Click="OnNavProfiles" Tag="{Binding ShowProfiles}" />
           <!-- All game configuration and validation live here. -->
           <Button Style="{StaticResource NavButton}" Click="OnNavSetup" Tag="{Binding ShowSetup}">
             <StackPanel Orientation="Horizontal">
@@ -323,7 +314,7 @@
             </StackPanel>
           </Button>
           <!-- OD-119: News, with a dot while an item is unread. -->
-          <Button Style="{StaticResource NavButton}" IsEnabled="{Binding Ready}" Click="OnNavNews" Tag="{Binding ShowNews}">
+          <Button Style="{StaticResource NavButton}" IsEnabled="{Binding InShell}" Click="OnNavNews" Tag="{Binding ShowNews}">
             <StackPanel Orientation="Horizontal">
               <TextBlock Text="{Binding S[nav.news]}" VerticalAlignment="Center" />
               <Ellipse Width="8" Height="8" Margin="10,0,0,0" Fill="{StaticResource InfinityPink}" VerticalAlignment="Center"
@@ -391,15 +382,22 @@
                            Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" />
               </StackPanel>
             </Border>
-            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center"
-                        IsEnabled="{Binding CanChangeIdentity}"
-                        Visibility="{Binding InShell, Converter={StaticResource Visible}}">
-              <TextBlock Text="{Binding GameLabel}" FontWeight="Bold" VerticalAlignment="Center" />
-              <Button Content="{Binding S[shell.change]}" Style="{StaticResource LinkButton}" Click="OnChangeGame" />
-              <TextBlock Text="/" Margin="10,0" Foreground="{StaticResource InfinityFaint}" VerticalAlignment="Center" />
-              <TextBlock Text="{Binding ProfileLabel}" FontWeight="Bold" VerticalAlignment="Center" />
-              <Button Content="{Binding S[shell.change]}" Style="{StaticResource LinkButton}" Click="OnChangeProfile" />
-            </StackPanel>
+            <!-- Owner 2026-11-08: no game or profile picker in the header (the game is PLAY's tiles, the profile PLAY's two buttons). -->
+            <!-- Owner 2026-11-08: the FRIENDS sidebar's toggle, right of (exit): "{icon} online/total", a green dot for a pending request or invite. -->
+            <Button x:Name="FriendsToggle" DockPanel.Dock="Right" Style="{StaticResource SmButton}" Padding="10,5" Margin="12,0,0,0" VerticalAlignment="Center"
+                    Click="OnToggleFriends" AutomationProperties.Name="{Binding FriendsButtonName}" ToolTip="{Binding FriendsButtonName}"
+                    Visibility="{Binding ShowFriendsButton, Converter={StaticResource Visible}}">
+              <Grid>
+                <StackPanel Orientation="Horizontal">
+                  <Path Data="M9,11 A3.2,3.2 0 1 0 9,4.6 A3.2,3.2 0 1 0 9,11 M2.5,19 C2.5,15 5.5,13 9,13 C12.5,13 15.5,15 15.5,19 M16,11 A2.6,2.6 0 1 0 16,5.8 M17.5,13.3 C19.8,13.9 21.5,15.6 21.5,18.5"
+                        Stroke="{StaticResource InfinityText}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="22" Height="20"
+                        Stretch="Uniform" VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding FriendsCounts}" Margin="7,0,0,0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" />
+                </StackPanel>
+                <Ellipse Width="9" Height="9" Fill="{x:Static local:SlotBrushes.Noob}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-5,-7,0"
+                         Visibility="{Binding FriendsPending, Converter={StaticResource Visible}}" />
+              </Grid>
+            </Button>
             <!-- CR-S62: quick moderation actions, top right, for moderator and admin accounts only. -->
             <Button x:Name="ModerationButton" DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Margin="14,0,0,0"
                     Content="{Binding S[moderation.open]}" Click="OnToggleModerationPane" VerticalAlignment="Center"
@@ -421,6 +419,108 @@
             <!-- OD-118: on the offline path the top right keeps Sign in. -->
             <Button DockPanel.Dock="Right" Content="{Binding S[offline.sign_in]}" Style="{StaticResource AccentButtonStyle}" Click="OnOpenSignIn" Padding="14,6"
                     VerticalAlignment="Center" IsEnabled="{Binding Idle}" Visibility="{Binding OfflineMode, Converter={StaticResource Visible}}" />
+          </DockPanel>
+        </Border>
+
+        <!-- Owner 2026-11-08: the FRIENDS sidebar, shell level (any page), toggled by the header's friends button; as the in-game overlay's
+             (W15): add by gamertag on top, friends online first then by name, then incoming requests and invites with accept / decline. -->
+        <Border x:Name="FriendsPane" DockPanel.Dock="Right" Width="320" Padding="18,18,10,14" Background="{StaticResource InfinitySurface}"
+                BorderBrush="#3365184D" BorderThickness="1,0,0,0" Visibility="{Binding ShowFriendsSidebar, Converter={StaticResource Visible}}">
+          <DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,8,12">
+              <Button DockPanel.Dock="Right" Content="✕" Style="{StaticResource SmButton}" Width="32" Height="30" Padding="0" Click="OnToggleFriends"
+                      AutomationProperties.Name="{Binding S[play.friends_close]}" ToolTip="{Binding S[play.friends_close]}" />
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="{Binding S[play.friends_title]}" FontSize="13" FontWeight="Black" />
+                <TextBlock Text="{Binding FriendsCounts}" Margin="10,0,0,0" FontSize="12" Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" />
+              </StackPanel>
+            </DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,8,6">
+              <Button DockPanel.Dock="Right" Content="{Binding S[play.friends_add]}" Style="{StaticResource SmButton}" Padding="12,6" Margin="8,0,0,0"
+                      Click="OnAddFriend" IsEnabled="{Binding CanAddFriend}" />
+              <TextBox Text="{Binding FriendAddName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" Padding="8,5" KeyDown="OnFriendAddKey"
+                       AutomationProperties.Name="{Binding S[play.friends_add_hint]}" ToolTip="{Binding S[play.friends_add_hint]}" />
+            </DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{Binding FriendsStatus}" Margin="0,4,8,6" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                       AutomationProperties.LiveSetting="Polite" Visibility="{Binding HasFriendsStatus, Converter={StaticResource Visible}}" />
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Margin="0,6,0,0">
+              <StackPanel Margin="0,0,8,0">
+                <TextBlock Text="{Binding S[play.friends_not_read]}" Style="{StaticResource SmHint}" Margin="0,4,0,0"
+                           Visibility="{Binding FriendsNotRead, Converter={StaticResource Visible}}" />
+                <TextBlock Text="{Binding S[play.friends_empty]}" Style="{StaticResource SmHint}" Margin="0,4,0,0"
+                           Visibility="{Binding FriendsEmpty, Converter={StaticResource Visible}}" />
+                <ItemsControl ItemsSource="{Binding FriendCards}" Focusable="False">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Padding="8,8" Margin="0,0,0,4" CornerRadius="10" Background="#08FFFFFF">
+                        <StackPanel>
+                          <DockPanel>
+                            <Grid DockPanel.Dock="Left" Width="32" Height="32" VerticalAlignment="Center">
+                              <Ellipse Fill="{StaticResource SmCardRaised}" />
+                              <TextBlock Text="{Binding Initial}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                              <Ellipse Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Bottom" Stroke="{StaticResource InfinitySurface}" StrokeThickness="2">
+                                <Ellipse.Style>
+                                  <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="{StaticResource InfinityFaint}" />
+                                    <Style.Triggers><DataTrigger Binding="{Binding Online}" Value="True"><Setter Property="Fill" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger></Style.Triggers>
+                                  </Style>
+                                </Ellipse.Style>
+                              </Ellipse>
+                            </Grid>
+                            <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                              <TextBlock Text="{Binding Status}" FontSize="11" TextWrapping="Wrap">
+                                <TextBlock.Style>
+                                  <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+                                    <Style.Triggers><DataTrigger Binding="{Binding Online}" Value="True"><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger></Style.Triggers>
+                                  </Style>
+                                </TextBlock.Style>
+                              </TextBlock>
+                              <TextBlock Text="{Binding Profiles}" FontSize="10" Foreground="{StaticResource InfinityFaint}" TextWrapping="Wrap"
+                                         Visibility="{Binding HasProfiles, Converter={StaticResource Visible}}" />
+                            </StackPanel>
+                          </DockPanel>
+                          <!-- a friend's live invite to this account: accept joins in the game's overlay; decline here -->
+                          <StackPanel Margin="42,6,0,0" Visibility="{Binding Invited, Converter={StaticResource Visible}}">
+                            <TextBlock Text="{Binding DataContext.S[play.friend_invited], RelativeSource={RelativeSource AncestorType=Window}}" FontSize="11"
+                                       Foreground="{x:Static local:SlotBrushes.Noob}" FontWeight="SemiBold" />
+                            <WrapPanel Margin="0,4,0,0">
+                              <Button Content="{Binding DataContext.S[play.friends_accept], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
+                                      Padding="10,4" Margin="0,0,6,0" FontSize="12" Click="OnAcceptFriendInvite" />
+                              <Button Content="{Binding DataContext.S[play.friends_decline], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
+                                      Padding="10,4" FontSize="12" Click="OnDeclineFriendInvite" />
+                            </WrapPanel>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <StackPanel Margin="0,12,0,0" Visibility="{Binding HasFriendRequests, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[play.friends_requests]}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,6" />
+                  <ItemsControl ItemsSource="{Binding FriendRequestCards}" Focusable="False">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Padding="8,8" Margin="0,0,0,4" CornerRadius="10" Background="#08FFFFFF">
+                          <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                              <Button Content="✓" Style="{StaticResource SmButton}" Width="30" Height="28" Padding="0" Margin="4,0,0,0" Click="OnAcceptFriendRequest"
+                                      AutomationProperties.Name="{Binding DataContext.S[play.friends_accept], RelativeSource={RelativeSource AncestorType=Window}}"
+                                      ToolTip="{Binding DataContext.S[play.friends_accept], RelativeSource={RelativeSource AncestorType=Window}}" />
+                              <Button Content="✕" Style="{StaticResource SmButton}" Width="30" Height="28" Padding="0" Margin="4,0,0,0" Click="OnDeclineFriendRequest"
+                                      AutomationProperties.Name="{Binding DataContext.S[play.friends_decline], RelativeSource={RelativeSource AncestorType=Window}}"
+                                      ToolTip="{Binding DataContext.S[play.friends_decline], RelativeSource={RelativeSource AncestorType=Window}}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                          </DockPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
           </DockPanel>
         </Border>
 
@@ -956,36 +1056,6 @@
             </StackPanel>
           </ScrollViewer>
 
-          <!-- Choose a game. -->
-          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="900"
-                      Visibility="{Binding ShowPickGame, Converter={StaticResource Visible}}">
-            <TextBlock Text="{Binding S[shell.pick_game]}" Style="{StaticResource PageTitle}" Margin="10,0,10,18" />
-            <ItemsControl ItemsSource="{Binding GameCards}" Focusable="False">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                  <WrapPanel HorizontalAlignment="Center" />
-                </ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <!-- OD-206: the game's own tile, from the folder data\azimuth.ini names. -->
-                  <Button Margin="10" Padding="0" Width="280" IsEnabled="{Binding Info.Accepting}" Click="OnChooseGame"
-                          AutomationProperties.Name="{Binding Title}" HorizontalContentAlignment="Stretch" ToolTip="{Binding Title}">
-                    <StackPanel>
-                      <Grid Height="280" Background="{StaticResource InfinitySurface}" ClipToBounds="True">
-                        <TextBlock Text="{Binding Title}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" TextAlignment="Center"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" Foreground="{StaticResource InfinityBorder}" />
-                        <Image Source="{Binding Cover}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               RenderOptions.BitmapScalingMode="HighQuality" />
-                      </Grid>
-                      <TextBlock Text="{Binding Title}" Margin="14,12" FontSize="16" FontWeight="Bold" TextTrimming="CharacterEllipsis" TextAlignment="Center" />
-                    </StackPanel>
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </StackPanel>
-
           <!-- OD-118: after sign-in, this PC's profiles that could go online (Update online profiles). Panel over the content. -->
           <Border x:Name="UpsertPanel" Panel.ZIndex="20" Style="{StaticResource Card}" Background="{StaticResource InfinitySurface}" MaxWidth="600"
                   HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26,22" KeyDown="OnUpsertPanelKey" Margin="0,16"
@@ -1073,13 +1143,13 @@
               <DockPanel LastChildFill="True">
                 <Button DockPanel.Dock="Left" Content="{Binding S[sm.back]}" Style="{StaticResource SmButton}" Padding="12,6" Margin="0,0,14,0" FontSize="13"
                         Click="OnSavesBack" Visibility="{Binding SavesCanGoBack, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding S[sm.back]}" />
-                <Button DockPanel.Dock="Right" Style="{StaticResource SmButton}" Padding="12,6" Click="OnChangeGame" IsEnabled="{Binding Idle}"
-                        AutomationProperties.Name="{Binding GameLabel}">
+                <!-- owner 2026-11-08: the save tools act on PLAY's selected game (chosen there, shown here) -->
+                <Border DockPanel.Dock="Right" Style="{StaticResource SmPill}" Padding="12,6" ToolTip="{Binding S[sm.game_from_play]}">
                   <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="{Binding GameLabel}" FontWeight="SemiBold" />
-                    <TextBlock Text="  ▾" Foreground="{StaticResource InfinityMuted}" />
+                    <TextBlock Text="{Binding S[sm.game_label]}" Foreground="{StaticResource InfinityMuted}" FontSize="12" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding GameLabel}" FontWeight="SemiBold" Margin="6,0,0,0" />
                   </StackPanel>
-                </Button>
+                </Border>
                 <TextBlock VerticalAlignment="Center" FontSize="15" TextTrimming="CharacterEllipsis">
                   <Run Text="{Binding SavesTrail, Mode=OneWay}" Foreground="{StaticResource InfinityMuted}" /><Run Text="{Binding SavesTrailLast, Mode=OneWay}" FontWeight="SemiBold" />
                 </TextBlock>
@@ -1090,7 +1160,7 @@
 
                 <!-- ============ HOME: both profile cards, the Azimuth strip ============ -->
                 <StackPanel Visibility="{Binding ShowSavesHome, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding S[shell.pick_profile]}" Style="{StaticResource PageTitle}" FontSize="26" Margin="9,0,9,4" />
+                  <TextBlock Text="{Binding S[nav.profiles]}" Style="{StaticResource PageTitle}" FontSize="26" Margin="9,0,9,4" />
                   <TextBlock Text="{Binding SavesSubtitle}" Style="{StaticResource SmSub}" Margin="9,0,9,18" />
                   <StackPanel Margin="9,0,9,16" Visibility="{Binding SavesEmpty, Converter={StaticResource Visible}}">
                     <TextBlock Text="{Binding S[sm.empty_title]}" FontSize="18" FontWeight="Bold" />
@@ -1263,41 +1333,7 @@
                   </StackPanel>
                 </StackPanel>
 
-                <!-- ============ START: where a career of the chosen game starts (OD-214, §2.6) ============ -->
-                <StackPanel MaxWidth="660" Visibility="{Binding ShowSavesStart, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding StartSub}" Style="{StaticResource SmSub}" />
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerFresh" IsEnabled="{Binding Idle}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[sm.start.fresh]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFreshHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerFromProfile" IsEnabled="{Binding StartFromProfileEnabled}"
-                          Visibility="{Binding ShowStartFromProfile, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding StartFromProfileLabel}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFromProfileHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerExisting" IsEnabled="{Binding StartFromPcEnabled}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[sm.start.from_pc]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[sm.start.hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                      <TextBlock Text="{Binding S[seed.warning]}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
-                                 Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
-                    </StackPanel>
-                  </Border>
-                  <WrapPanel Margin="0,12,0,0">
-                    <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
-                            Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
-                  </WrapPanel>
-                </StackPanel>
+                <!-- owner 2026-11-08: a career starts on PLAY (its inline choice), never on the Profiles page -->
 
                 <!-- ============ RESOLVE: cloud vs this PC, the newer one recommended ============ -->
                 <StackPanel MaxWidth="860" Visibility="{Binding ShowSavesResolve, Converter={StaticResource Visible}}">
@@ -1577,10 +1613,10 @@
             </Border>
           </Grid>
 
-          <!-- Choose a profile (from the server) or create one: offline, and against a server before CR-S98. -->
+          <!-- Owner 2026-11-08: the Profiles page of the offline path and of a server before CR-S98: list, create, delete (no Play here). -->
           <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowPlainProfiles, Converter={StaticResource Visible}}">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500" Margin="0,8">
-              <TextBlock Text="{Binding S[shell.pick_profile]}" Style="{StaticResource PageTitle}" />
+              <TextBlock Text="{Binding S[nav.profiles]}" Style="{StaticResource PageTitle}" />
               <TextBlock Text="{Binding ProfilesText}" Margin="0,8,0,14" Style="{StaticResource PageSubtitle}" />
               <ItemsControl ItemsSource="{Binding ProfileRows}" Focusable="False">
                 <ItemsControl.ItemTemplate>
@@ -1591,14 +1627,10 @@
                         <ColumnDefinition Width="Auto" />
                       </Grid.ColumnDefinitions>
                       <!-- The card button spans both columns; its text sits in column 0 (wraps) and the links get column 1, so they never overlap. -->
-                      <Button Grid.ColumnSpan="2" Padding="20,14" HorizontalContentAlignment="Left" Click="OnChooseProfile"
-                              AutomationProperties.Name="{Binding Gamertag}" MinHeight="64" />
+                      <Border Grid.ColumnSpan="2" Style="{StaticResource SmCard}" Padding="20,14" MinHeight="64" />
                       <StackPanel Grid.Column="0" Margin="20,14,10,14" IsHitTestVisible="False" VerticalAlignment="Center">
                           <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="16" />
                           <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                          <!-- OD-214: no career of the chosen game (or an empty one): the card opens the Start panel. -->
-                          <TextBlock Text="{Binding DataContext.S[careers.start_card], RelativeSource={RelativeSource AncestorType=Window}}" FontSize="12" FontWeight="Bold"
-                                     Margin="0,4,0,0" Foreground="{StaticResource InfinityGold}" Visibility="{Binding ShowStart, Converter={StaticResource Visible}}" />
                           <!-- CR-S63: the account's Discord link shows on every profile of the account. -->
                           <StackPanel Orientation="Horizontal" Margin="0,4,0,0" Visibility="{Binding OnAccount, Converter={StaticResource Visible}}">
                             <StackPanel Orientation="Horizontal"
@@ -1643,34 +1675,6 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-              <!-- OD-214 (CAREERS.md §4, §6.7): start the chosen game's career of a profile: Fresh, or from an existing profile / a save on this PC. -->
-              <Border Style="{StaticResource Card}" Margin="0,16,0,0" Visibility="{Binding ShowCareerStart, Converter={StaticResource Visible}}">
-                <StackPanel>
-                  <TextBlock Text="{Binding CareerStartTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding CareerStartBody}" Margin="0,6,0,10" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" />
-                  <Button Margin="0,0,0,10" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnStartCareerFresh" IsEnabled="{Binding Idle}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[careers.fresh]}" FontWeight="Bold" />
-                      <TextBlock Text="{Binding S[careers.fresh_hint]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                    </StackPanel>
-                  </Button>
-                  <Button Margin="0,0,0,6" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnStartCareerExisting" IsEnabled="{Binding Idle}"
-                          Visibility="{Binding CareerStartFromExisting, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding CareerStartExistingLabel}" FontWeight="Bold" />
-                      <TextBlock Text="{Binding CareerStartExistingHint}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                    </StackPanel>
-                  </Button>
-                  <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
-                             Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
-                  <TextBlock Text="{Binding Message}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
-                  <WrapPanel Margin="0,12,0,0">
-                    <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource LinkButton}" Margin="0,0,14,0"
-                            Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
-                    <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnCancelCareerStart" Style="{StaticResource LinkButton}" />
-                  </WrapPanel>
-                </StackPanel>
-              </Border>
               <Border Style="{StaticResource Card}" Margin="0,16,0,0" Visibility="{Binding ShowNewProfile, Converter={StaticResource Visible}}">
                 <StackPanel>
                   <TextBlock Text="{Binding S[profiles.new]}" Style="{StaticResource SectionTag}" FontSize="12" />
@@ -1764,23 +1768,60 @@
           </ScrollViewer>
 
           <!-- PLAY: admission happens here; the game starts only with a verified active ticket. -->
-          <!-- OD-119: the news column beside PLAY on a wide window, below it at 1280x800 and smaller (PLAY keeps its width).
-               T3d (Alex): beside PLAY the news scrolls on its own and PLAY stays put; stacked, the page scrolls as one. -->
-          <Grid x:Name="HomeArea" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}" SizeChanged="OnHomeSized">
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+          <!-- Owner 2026-11-08: no news on PLAY; news lives only on the NEWS page (sidebar). -->
+          <Grid x:Name="HomeArea" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}">
           <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
             <Grid>
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-            <StackPanel MaxWidth="600" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,8,0,8">
-              <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                <Border Padding="8,2" CornerRadius="4" Background="{StaticResource InfinityWarnSurface}">
+            <StackPanel MaxWidth="900" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,8">
+              <!-- Owner 2026-11-08 (the PLAY revamp): title, the game tiles, one button per profile, "manage profiles". -->
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock Text="{Binding PlayTitle}" FontSize="40" FontWeight="Black" VerticalAlignment="Center" />
+                <Border Padding="8,2" CornerRadius="4" Margin="14,0,0,0" VerticalAlignment="Center" Background="{StaticResource InfinityWarnSurface}">
                   <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />
                 </Border>
               </StackPanel>
-              <Image Source="{StaticResource BrandLogo}" Width="340" Margin="0,0,0,20" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality"
-                     Visibility="{Binding ShowPlayBrand, Converter={StaticResource Visible}}" />
+              <!-- the catalog's games: our own tiles (short code, name, accent; never game art), a horizontal scrollbar when they overflow -->
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,16,0,0" PanningMode="HorizontalOnly"
+                            Focusable="False" IsEnabled="{Binding Idle}">
+                <ItemsControl ItemsSource="{Binding GameCards}" Focusable="False">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Button Click="OnSelectGameTile" IsEnabled="{Binding Enabled}" Width="208" Height="120" Margin="0,0,12,12" Cursor="Hand"
+                              FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" ToolTip="{Binding Title}">
+                        <Button.Template>
+                          <ControlTemplate TargetType="Button">
+                            <Grid>
+                              <Border x:Name="Box" CornerRadius="14" Background="{StaticResource SmCardSurface}" BorderBrush="{StaticResource SmLine}" BorderThickness="1" />
+                              <Border x:Name="Glow" CornerRadius="14" Background="{Binding Soft}" Opacity="0" Margin="1" />
+                              <Border CornerRadius="0,0,14,14" Height="4" VerticalAlignment="Bottom" Margin="1" Background="{Binding Accent}" Opacity="0.85" />
+                              <StackPanel Margin="18,14,18,14" VerticalAlignment="Top">
+                                <TextBlock Text="{Binding ShortCode}" FontSize="32" FontWeight="Black" Foreground="{Binding Accent}" />
+                                <TextBlock Text="{Binding Tagline}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource InfinityMuted}" />
+                              </StackPanel>
+                              <TextBlock Text="{Binding Title}" Margin="18,0,18,14" VerticalAlignment="Bottom" FontSize="12" TextTrimming="CharacterEllipsis"
+                                         Foreground="{StaticResource InfinityText}" />
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityMuted}" /></Trigger>
+                              <DataTrigger Binding="{Binding Selected}" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{Binding Accent}" />
+                                <Setter TargetName="Box" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="Glow" Property="Opacity" Value="1" />
+                              </DataTrigger>
+                              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+                              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+                            </ControlTemplate.Triggers>
+                          </ControlTemplate>
+                        </Button.Template>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
-                <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,0,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,6,0,14" Foreground="{StaticResource InfinityMuted}" />
                 <!-- §1.1: mods never block Play silently; the reason and the way to Mods are shown here. -->
                 <!-- OD-118 T1c: the notice above its buttons, which wrap, so neither is clipped at 1172x746 in pt-BR. -->
                 <StackPanel Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
@@ -1794,10 +1835,87 @@
                 </StackPanel>
                 <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
-                <WrapPanel>
-                  <Button x:Name="PlayButton" Content="{Binding PlayButtonLabel}" HorizontalAlignment="Left" Click="OnPlay" IsEnabled="{Binding CanPlayAny}"
-                          Style="{StaticResource PlayButton}" Margin="0,0,12,8" />
-                </WrapPanel>
+                <!-- one button per profile: its career in the selected game, then PLAY {MODE} (or start / create / resolve / not offered) -->
+                <ItemsControl x:Name="PlayButtonsRow" ItemsSource="{Binding PlayButtons}" Focusable="False" IsEnabled="{Binding CanUsePlayButtons}" Visibility="{Binding ShowPlayStart, Converter={StaticResource Hidden}}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Button Click="OnPlayButton" IsEnabled="{Binding Enabled}" Margin="0,0,14,0" MinHeight="168" Cursor="Hand"
+                              FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" HorizontalContentAlignment="Stretch">
+                        <Button.Template>
+                          <ControlTemplate TargetType="Button">
+                            <Border x:Name="Box" CornerRadius="16" Background="{StaticResource SmCardSurface}" BorderBrush="{Binding Accent}" BorderThickness="1.5" Padding="20,18">
+                              <DockPanel LastChildFill="False">
+                                <DockPanel DockPanel.Dock="Top">
+                                  <Grid DockPanel.Dock="Left" Width="40" Height="40" VerticalAlignment="Center">
+                                    <Ellipse Fill="{Binding Soft}" Stroke="{Binding Accent}" StrokeThickness="1.5" />
+                                    <TextBlock Text="{Binding Initial}" Foreground="{Binding Accent}" FontSize="16" FontWeight="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                  </Grid>
+                                  <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding ModeLabel}" Foreground="{Binding Accent}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" />
+                                    <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="15" TextTrimming="CharacterEllipsis" Foreground="{StaticResource InfinityText}"
+                                               Visibility="{Binding HasGamertag, Converter={StaticResource Visible}}" />
+                                  </StackPanel>
+                                </DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding Stats}" Margin="0,14,0,0" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource InfinityText}"
+                                           TextWrapping="Wrap" Visibility="{Binding HasStats, Converter={StaticResource Visible}}" />
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding Note}" Margin="0,10,0,0" Style="{StaticResource SmHint}"
+                                           Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
+                                <Border x:Name="Action" DockPanel.Dock="Bottom" Margin="0,16,0,0" CornerRadius="10" Background="{Binding Accent}" Padding="14,11">
+                                  <TextBlock Text="{Binding Title}" Foreground="#FF071018" FontWeight="Black" FontSize="17" HorizontalAlignment="Center" TextWrapping="Wrap"
+                                             TextAlignment="Center" />
+                                </Border>
+                              </DockPanel>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="Background" Value="{StaticResource SmCardRaised}" /></Trigger>
+                              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+                              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Action" Property="Opacity" Value="0.8" /></Trigger>
+                              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
+                            </ControlTemplate.Triggers>
+                          </ControlTemplate>
+                        </Button.Template>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <!-- (1) START {MODE} CAREER: the inline choice (fresh / from my other profile / from this PC's save); Play follows -->
+                <StackPanel Visibility="{Binding ShowPlayStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Left">
+                  <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding StartSub}" Style="{StaticResource SmSub}" />
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFresh" IsEnabled="{Binding Idle}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[sm.start.fresh]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFreshHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromProfile" IsEnabled="{Binding StartFromProfileEnabled}"
+                          Visibility="{Binding ShowStartFromProfile, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding StartFromProfileLabel}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFromProfileHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromPc" IsEnabled="{Binding StartFromPcEnabled}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[sm.start.from_pc]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[sm.start.hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding S[seed.warning]}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                                 Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Border>
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnClosePlayStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
+                    <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
+                            Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
+                  </WrapPanel>
+                </StackPanel>
+                <Button Content="{Binding S[play.manage_profiles]}" Style="{StaticResource SmLink}" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OnNavProfiles" />
                 <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" FontWeight="Bold"
                            AutomationProperties.LiveSetting="Polite" />
               </StackPanel>
@@ -1863,14 +1981,7 @@
                 </WrapPanel>
               </StackPanel>
             </StackPanel>
-            <ContentControl x:Name="NewsColumnBelow" Grid.Row="1" MaxWidth="600" HorizontalAlignment="Left" Margin="0,24,0,8" Focusable="False"
-                            Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" Visibility="{Binding NewsBelow, Converter={StaticResource Visible}}" />
             </Grid>
-          </ScrollViewer>
-          <ScrollViewer x:Name="NewsScroll" Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="32,0,0,0" FocusVisualStyle="{x:Null}"
-                        Visibility="{Binding NewsBeside, Converter={StaticResource Visible}}">
-            <ContentControl x:Name="NewsColumnBeside" Width="340" Margin="0,8,8,8" VerticalAlignment="Top" Focusable="False"
-                            Content="{Binding}" ContentTemplate="{StaticResource NewsColumn}" />
           </ScrollViewer>
           </Grid>
 

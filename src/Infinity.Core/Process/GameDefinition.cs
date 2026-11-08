@@ -14,7 +14,10 @@ namespace Infinity.Core.Process;
 public sealed record GameDefinition(string Id, string Name, string TitleId, string StashDir, IReadOnlyList<string> Caches, string CarDatabase, bool FullFeatures)
 {
     public static readonly GameDefinition Fh2 = new("fh2", AzimuthTitles.Fh2Name, "1A96545B", ModeCaches.Fh2StashDir, ModeCaches.Fh2Caches,
-        Path.Combine("media", "stripped", "gamedbRC.slt"), FullFeatures: true);
+        Path.Combine("media", "stripped", "gamedbRC.slt"), FullFeatures: true)
+    {
+        TileAccent = "#FFFF4F8B", TileTagline = "Horizon",
+    };
 
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
@@ -22,8 +25,17 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     {
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
-        ExtraOptionsSeedResource = null,
+        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport",
     };
+
+    /// <summary>
+    /// Owner 2026-11-08 (PLAY's game tiles): the tile's accent colour (<c>#AARRGGBB</c>), drawn by the launcher. A tile is our own art (the
+    /// short code, the name, this accent): never a game file or game art (rule 3).
+    /// </summary>
+    public string TileAccent { get; init; } = "#FFB06BFF";
+
+    /// <summary>The tile's small line under the short code (the series), our own words.</summary>
+    public string TileTagline { get; init; } = string.Empty;
 
     /// <summary>
     /// CR-S98 §6.2: a Hardcore profile may have a career of this game. FM5 has none until it keeps cloud saves (M11): no Start card for a

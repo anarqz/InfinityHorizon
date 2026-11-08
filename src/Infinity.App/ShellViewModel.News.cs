@@ -25,7 +25,7 @@ public sealed partial class ShellViewModel
     private NewsClient? _newsClient;
     private NewsReadState? _newsRead;
     private NewsSnapshot? _newsSnapshot;
-    private bool _newsLoading, _newsLoaded, _onNews, _newsFromHome, _wideLayout = true;
+    private bool _newsLoading, _newsLoaded, _onNews, _newsFromHome;
     private NewsCard? _newsOpen;
     private FlowDocument? _newsDocument;
     /// <summary>The harness's transport (a synthetic feed); production builds the real one.</summary>
@@ -58,21 +58,7 @@ public sealed partial class ShellViewModel
     public bool ShowNewsList => ShowNews && _newsOpen is null;
     public bool ShowNewsDetail => ShowNews && _newsOpen is not null;
 
-    /// <summary>The PLAY column: beside PLAY on a wide window; below it at 1280x800 and smaller, so PLAY is never squeezed.</summary>
-    public bool ShowNewsColumn => NewsCards.Count > 0 || NewsStatus.Length > 0;
-    public bool NewsBeside => _wideLayout && ShowNewsColumn;
-    public bool NewsBelow => !_wideLayout && ShowNewsColumn;
-    /// <summary>The PLAY column shows the newest few; the News page shows them all.</summary>
-    public IEnumerable<NewsCard> NewsPreview => NewsCards.Take(4);
-    public bool NewsHasMore => NewsCards.Count > 4;
-
-    /// <summary>The window's width decides where the column goes (MainWindow, on resize).</summary>
-    public void SetWideLayout(bool wide)
-    {
-        if (_wideLayout == wide) return;
-        _wideLayout = wide;
-        Changed(nameof(NewsBeside)); Changed(nameof(NewsBelow));
-    }
+    // Owner 2026-11-08: news lives only on the NEWS page (sidebar); PLAY has no news column or teaser.
 
     public void OpenNews()
     {
@@ -190,8 +176,7 @@ public sealed partial class ShellViewModel
 
     private void NewsChanged()
     {
-        foreach (var name in new[] { nameof(NewsStatus), nameof(HasNewsStatus), nameof(ShowNewsColumn), nameof(NewsBeside), nameof(NewsBelow),
-            nameof(NewsPreview), nameof(NewsHasMore), nameof(NewsUnread) }) Changed(name);
+        foreach (var name in new[] { nameof(NewsStatus), nameof(HasNewsStatus), nameof(NewsUnread) }) Changed(name);
     }
 }
 

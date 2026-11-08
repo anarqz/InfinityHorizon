@@ -3,15 +3,20 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Security.Cryptography;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using Infinity.Core.Api;
 using Infinity.Core.Process;
 using Infinity.Core.Shell;
 
 namespace Infinity.App;
 
-/// <summary>A game of the picker: its cover is null when <c>data\azimuth.ini</c> names no folder with one.</summary>
-public sealed record GameCard(GameInfo Info, string Title, ImageSource? Cover);
+/// <summary>
+/// Owner 2026-11-08: a game tile of PLAY's row. Our own art only (rule 3: no game file or game art): the catalog's short code, name, tagline
+/// and accent (<see cref="GameDefinition.TileAccent"/>).
+/// </summary>
+public sealed record GameCard(GameInfo Info, string Title, string ShortCode, string Tagline, Brush Accent, Brush Soft, bool Selected)
+{
+    public bool Enabled => Info.Accepting;
+}
 
 /// <summary>
 /// OD-206: which games this PC offers. The allowed titles (<see cref="GameDefinition.All"/>) found in Azimuth's <c>data\titles</c>;
@@ -45,42 +50,50 @@ public sealed partial class ShellViewModel
         }
     }
 
-    /// <summary>The cards follow <see cref="Games"/>; called from the constructor's subscription.</summary>
+    /// <summary>PLAY's tiles follow <see cref="Games"/> and the selected game (no file or request: the catalog's data only).</summary>
     private void FillGameCards()
     {
         GameCards.Clear();
         foreach (var game in Games)
         {
             var definition = GameDefinition.ById(game.Id);
-            var folder = definition is null ? null : AzimuthTitles.GameFolder(_install?.Root, definition);
-            GameCards.Add(new GameCard(game, game.Title, GameCoverImage(GameCover.Read(folder))));
+            var accent = TileBrush(definition?.TileAccent, 0xFF);
+            GameCards.Add(new GameCard(game, game.Title, definition?.ShortName ?? game.Id.ToUpperInvariant(), definition?.TileTagline ?? string.Empty,
+                accent, TileBrush(definition?.TileAccent, 0x2E), game.Id == _gate.Game));
         }
     }
 
-    private static BitmapImage? GameCoverImage(byte[]? bytes)
+    private static SolidColorBrush TileBrush(string? argb, byte alpha)
     {
-        if (bytes is null) return null;
-        try
+        Color color;
+        try { color = argb is null ? Color.FromRgb(0xB0, 0x6B, 0xFF) : (Color)ColorConverter.ConvertFromString(argb); }
+        catch (FormatException) { color = Color.FromRgb(0xB0, 0x6B, 0xFF); }
+        var brush = new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
+        brush.Freeze();
+        return brush;
+    }
+
+    private PlaySelection? _playSelection;
+
+    /// <summary>
+    /// Owner 2026-11-08: the game PLAY opens on after sign-in or Play offline: the last one selected (local settings) while it is still
+    /// offered, else the first. Null when no game is offered.
+    /// </summary>
+    private string? OpenPlayGame()
+    {
+        _playSelection ??= new PlaySelection(_stateDirectory);
+        try { return _playSelection.Open(Games.Select(g => g.Id)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            var bitmap = new BitmapImage();
-            using (var stream = new MemoryStream(bytes)) { bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.DecodePixelWidth = 480; bitmap.StreamSource = stream; bitmap.EndInit(); }
-            bitmap.Freeze();
-            return bitmap;
+            Log("games: last game not read (" + error.GetType().Name + ")");
+            return Games.FirstOrDefault()?.Id;
         }
-        catch (Exception error) when (error is IOException or NotSupportedException or InvalidOperationException or ArgumentException or FileFormatException) { return null; }
-    }
-
-    /// <summary>The game to choose without asking: the only one, else the one last chosen while it is still offered.</summary>
-    private string? GameToChooseAlone()
-    {
-        if (Games.Count == 1) return Games[0].Id;
-        var last = LaunchModeStore.ReadLastGame(_stateDirectory);
-        return Games.Any(game => game.Id == last) ? last : null;
     }
 
     private void RememberGame(string id)
     {
-        try { LaunchModeStore.WriteLastGame(_stateDirectory, id); }
+        _playSelection ??= new PlaySelection(_stateDirectory);
+        try { _playSelection.Select(id, Games.Select(g => g.Id)); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { Log("games: last game not saved (" + error.GetType().Name + ")"); }
     }
 

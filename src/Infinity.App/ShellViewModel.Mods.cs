@@ -54,7 +54,7 @@ public sealed partial class ShellViewModel
         Changed(string.Empty);
         _ = _catalogLoaded ? RefreshModsAsync() : LoadModCatalogQuietlyAsync();
     }
-    public void OpenHome() { LeaveAccount(); _onMods = false; _onSetup = false; _onBugReport = false; _onNews = false; Changed(string.Empty); }
+    public void OpenHome() { LeaveAccount(); _onMods = false; _onSetup = false; _onBugReport = false; _onNews = false; _onProfiles = false; FillPlayBoard(); Changed(string.Empty); }
 
     /// <summary>When an Azimuth folder is found: state in the background, and once per run the catalog (news tag) and retention.</summary>
     private void StartMods()

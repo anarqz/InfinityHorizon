@@ -196,7 +196,40 @@ public partial class MainWindow : Window
 
     private async void OnCreateAccount(object sender, RoutedEventArgs e) => await _vm.CreateAccountAsync();
 
-    private void OnChooseGame(object sender, RoutedEventArgs e) => _vm.ChooseGame(((GameCard)((FrameworkElement)sender).DataContext).Info);
+    // Owner 2026-11-08 (the PLAY revamp): the game tiles, the two profile buttons, the inline career start, the Profiles page
+    private void OnSelectGameTile(object sender, RoutedEventArgs e) => _vm.SelectPlayGame((GameCard)((FrameworkElement)sender).DataContext);
+
+    private async void OnPlayButton(object sender, RoutedEventArgs e) => await _vm.PlayButtonAsync((PlayButtonCard)((FrameworkElement)sender).DataContext);
+
+    private async void OnPlayStartFresh(object sender, RoutedEventArgs e) => await _vm.PlayStartFreshAsync();
+
+    private async void OnPlayStartFromProfile(object sender, RoutedEventArgs e) => await _vm.PlayStartFromProfileAsync();
+
+    private async void OnPlayStartFromPc(object sender, RoutedEventArgs e) => await _vm.PlayStartFromPcAsync();
+
+    private void OnClosePlayStart(object sender, RoutedEventArgs e) => _vm.ClosePlayStart();
+
+    private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
+
+    // Owner 2026-11-08: the FRIENDS sidebar (header toggle)
+    private void OnToggleFriends(object sender, RoutedEventArgs e) => _vm.ToggleFriends();
+
+    private async void OnAddFriend(object sender, RoutedEventArgs e) => await _vm.AddFriendAsync();
+
+    private async void OnFriendAddKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+        e.Handled = true;
+        await _vm.AddFriendAsync();
+    }
+
+    private async void OnAcceptFriendRequest(object sender, RoutedEventArgs e) => await _vm.AcceptFriendRequestAsync((FriendRequestCard)((FrameworkElement)sender).DataContext);
+
+    private async void OnDeclineFriendRequest(object sender, RoutedEventArgs e) => await _vm.DeclineFriendRequestAsync((FriendRequestCard)((FrameworkElement)sender).DataContext);
+
+    private void OnAcceptFriendInvite(object sender, RoutedEventArgs e) => _vm.AcceptFriendInvite((FriendCard)((FrameworkElement)sender).DataContext);
+
+    private async void OnDeclineFriendInvite(object sender, RoutedEventArgs e) => await _vm.DeclineFriendInviteAsync((FriendCard)((FrameworkElement)sender).DataContext);
 
     private async void OnConvertProfile(object sender, RoutedEventArgs e) => await _vm.AskConvertAsync(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
 
@@ -257,8 +290,6 @@ public partial class MainWindow : Window
     private void OnSeedCloseChoice(object sender, RoutedEventArgs e) => _vm.CloseSeedChoice();
 
     private async void OnAbandonSeed(object sender, RoutedEventArgs e) => await _vm.AbandonSeedAsync();
-
-    private void OnChooseProfile(object sender, RoutedEventArgs e) => _vm.PickProfileRow((ProfileRow)((FrameworkElement)sender).DataContext);
 
     // OD-214: the Start panel of a profile without a career of the chosen game
     private async void OnStartCareerFresh(object sender, RoutedEventArgs e) => await _vm.StartCareerFreshAsync();
@@ -351,10 +382,6 @@ public partial class MainWindow : Window
         if (vm.ShowSeedPanel) { vm.CloseSeedChoice(); e.Handled = true; }
         else if (vm.ShowSaveManager && vm.SavesCanGoBack) { vm.SavesBack(); e.Handled = true; }
     }
-
-    private void OnChangeGame(object sender, RoutedEventArgs e) => _vm.ChangeGame();
-
-    private void OnChangeProfile(object sender, RoutedEventArgs e) => _vm.ChangeProfile();
 
     private void OnSignOut(object sender, RoutedEventArgs e) => _vm.SignOut();
 
@@ -499,12 +526,10 @@ public partial class MainWindow : Window
     /// OD-119: the news column sits beside PLAY only when PLAY's own area is this wide (PLAY 600 + column 340 + gaps), measured on the
     /// content, so the lobby pane or a 1280x800 window moves it below PLAY instead of squeezing the button.
     /// </summary>
-    internal const double WideLayoutWidth = 1000;
-    private void OnHomeSized(object sender, SizeChangedEventArgs e) { if (e.NewSize.Width > 0) _vm.SetWideLayout(e.NewSize.Width >= WideLayoutWidth); }
     private void OnNavNews(object sender, RoutedEventArgs e) => _vm.OpenNews();
     private async void OnNewsCard(object sender, RoutedEventArgs e)
     {
-        await _vm.OpenNewsItemAsync((NewsCard)((FrameworkElement)sender).DataContext, fromHome: _vm.ShowHome);
+        await _vm.OpenNewsItemAsync((NewsCard)((FrameworkElement)sender).DataContext, fromHome: false); // owner 2026-11-08: news cards live only on the NEWS page
         // The pressed card collapsed with the list: the controller lands on Back (B / Escape also goes back).
         await Dispatcher.InvokeAsync(() => NewsBackButton.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
     }
