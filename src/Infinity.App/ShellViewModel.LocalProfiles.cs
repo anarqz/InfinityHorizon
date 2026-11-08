@@ -81,7 +81,7 @@ public sealed partial class ShellViewModel
         {
             await Run(async () =>
             {
-                var api = new ApiProfileAccount(session.Api);
+                var api = new ApiProfileAccount(session.Api, session.CareerGame(CurrentGame.Id));
                 var access = await session.Tokens.AccessAsync(CancellationToken.None);
                 var plan = await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
                 var result = (await ProfileUpsert.UploadAsync(api, access, LocalProfiles, plan, [created.Id], CancellationToken.None)).SingleOrDefault();

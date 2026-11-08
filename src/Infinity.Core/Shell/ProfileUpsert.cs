@@ -12,14 +12,15 @@ public interface IProfileAccountApi
     Task<Profile> RenameProfileAsync(string access, string xuid, NameChange change, string idempotencyKey, CancellationToken cancellation);
 }
 
-/// <summary><see cref="IProfileAccountApi"/> over <see cref="ApiClient"/>.</summary>
-public sealed class ApiProfileAccount(ApiClient api) : IProfileAccountApi
+/// <summary><see cref="IProfileAccountApi"/> over <see cref="ApiClient"/>; <paramref name="game"/>: the <c>?game=</c> of the rename route on a
+/// CR-S98 server (null on an older one, CAREERS.md §6.1).</summary>
+public sealed class ApiProfileAccount(ApiClient api, string? game = null) : IProfileAccountApi
 {
     public Task<Me> MeAsync(string access, CancellationToken cancellation) => api.MeAsync(access, cancellation);
     public Task<Profile> CreateProfileAsync(string access, NewProfile profile, string idempotencyKey, CancellationToken cancellation) =>
         api.CreateProfileAsync(access, profile, idempotencyKey, cancellation);
     public Task<Profile> RenameProfileAsync(string access, string xuid, NameChange change, string idempotencyKey, CancellationToken cancellation) =>
-        api.RenameProfileAsync(access, xuid, change, idempotencyKey, cancellation);
+        api.RenameProfileAsync(access, xuid, change, idempotencyKey, game, cancellation);
 }
 
 /// <summary>
@@ -102,7 +103,7 @@ public static class ProfileUpsert
             var source = AzimuthSaves.List(savesRoot).FirstOrDefault(s => s.Xuid == profile.OfflineXuid);
             if (source is null) return SaveContinuation.None;
             var result = AzimuthSaves.Clone(savesRoot, source, xuid, nowUtc);
-            new SaveLinks(stateDirectory).Set(cloud.Xuid, new SaveLink(source.Folder, source.Revision.Number, result.Number, nowUtc));
+            new SaveLinks(stateDirectory, profile.Game).Set(cloud.Xuid, new SaveLink(source.Folder, source.Revision.Number, result.Number, nowUtc));
             return SaveContinuation.Continued;
         }
         catch (Exception error) when (error is SaveException or IOException or UnauthorizedAccessException) { return SaveContinuation.Kept; }

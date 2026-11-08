@@ -8,11 +8,14 @@ public sealed record SaveLink(string Source, ulong SourceRevision, ulong Revisio
 
 /// <summary>
 /// <c>save-links.json</c> in the launcher's state folder: XUID (decimal string) → <see cref="SaveLink"/>.
-/// Written whole through a temporary file; a damaged file reads as empty (it only labels the UI).
+/// Written whole through a temporary file; a damaged file reads as empty (it only labels the UI). CR-S98: a XUID names a career per game,
+/// so another game's link is keyed <c>&lt;game&gt;:&lt;xuid&gt;</c>; FH2's keep the bare XUID every earlier launcher wrote.
 /// </summary>
-public sealed class SaveLinks(string stateDirectory)
+public sealed class SaveLinks(string stateDirectory, string game = SaveSyncStore.DefaultGame)
 {
     public const string FileName = "save-links.json";
+
+    private string Key(string xuid) => game == SaveSyncStore.DefaultGame ? xuid : game + ":" + xuid;
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
@@ -30,11 +33,11 @@ public sealed class SaveLinks(string stateDirectory)
         }
     }
 
-    public SaveLink? For(string xuid) => Read().TryGetValue(xuid, out var link) ? link : null;
+    public SaveLink? For(string xuid) => Read().TryGetValue(Key(xuid), out var link) ? link : null;
 
     public void Set(string xuid, SaveLink link)
     {
-        var all = new Dictionary<string, SaveLink>(Read()) { [xuid] = link };
+        var all = new Dictionary<string, SaveLink>(Read()) { [Key(xuid)] = link };
         Directory.CreateDirectory(stateDirectory);
         var temp = FilePath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(all, Indented));

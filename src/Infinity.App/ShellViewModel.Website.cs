@@ -44,7 +44,7 @@ public sealed partial class ShellViewModel
         if (!SignedIn || OfflineMode || _session is not { } session) return;
         try
         {
-            await row.SetAsync(wanted, (value, ct) => session.SetWebsiteListedAsync(row.Xuid, value, ct));
+            await row.SetAsync(wanted, (value, ct) => session.SetWebsiteListedAsync(row.Xuid, value, row.Profile.Game, ct));
             if (_session == session) SetWebsiteStatus(null);
         }
         catch (ApiException e)

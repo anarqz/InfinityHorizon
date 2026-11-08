@@ -20,10 +20,16 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
         Path.Combine("media", "db", "gamedb.slt"), FullFeatures: false)
     {
-        PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false,
+        PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
         ExtraOptionsSeedResource = null,
     };
+
+    /// <summary>
+    /// CR-S98 §6.2: a Hardcore profile may have a career of this game. FM5 has none until it keeps cloud saves (M11): no Start card for a
+    /// Hardcore profile, and no Hardcore in the new-profile form.
+    /// </summary>
+    public bool HardcoreCareers { get; init; } = true;
 
     /// <summary>W11: the game has a Mods page (its ExtraOptions card, and the catalog mods that declare the game).</summary>
     public bool HasModsPage { get; init; } = true;

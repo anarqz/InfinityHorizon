@@ -47,6 +47,8 @@ public static class ErrorCodes
     public const string SharingTooManyDevices = "SHARING.TOO_MANY_DEVICES";
     public const string AccountsNameUnavailable = "ACCOUNTS.NAME_UNAVAILABLE";
     public const string AccountsProfileLimit = "ACCOUNTS.PROFILE_LIMIT";
+    /// <summary>409 of <c>POST /launcher/v1/players/{xuid}/careers</c>: the profile already has a career of that game (CR-S98).</summary>
+    public const string AccountsCareerExists = "ACCOUNTS.CAREER_EXISTS";
     public const string AccountsInvalidName = "ACCOUNTS.INVALID_NAME";
     /// <summary>The profile has no free rename (<c>renameNotice</c> absent, OD-120).</summary>
     public const string AccountsRenameNotAllowed = "ACCOUNTS.RENAME_NOT_ALLOWED";
