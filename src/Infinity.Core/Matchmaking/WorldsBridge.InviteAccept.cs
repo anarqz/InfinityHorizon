@@ -47,8 +47,9 @@ public sealed record InviteAcceptAnswer(InviteAcceptOutcome Outcome, UiFrame.Toa
 // Bounded, never stranded: the game must ask for its lobby within InviteMoveBudget (60 s: the player confirms FINDING SESSION with
 // (X)); then its seat has PrivateSeatGiveUp (60 s, T-L6's private connect window) to play, else the give-up releases it and cancels
 // the search (CancelMatchmaking: the game is searching then). The private lobby closing before the game connects ends the move the
-// same way: the search is cancelled if the game had asked, and one notice says the lobby closed. A move that never asked releases the
-// seat with one notice and no cancel (no search of ours runs; a late start of the game's own lands it in a public lobby by its ask).
+// same way: the search is cancelled, and one notice says the lobby closed. A FollowHost move that never asked releases the seat with
+// one notice and CancelMatchmaking too (T-1108-J: its start can sit parked behind the game's own search, module+0x150, and fire later;
+// the hook frees it, and disconnects only while a matchmaking entity exists).
 public sealed partial class WorldsBridge
 {
     /// <summary>T-L5: how long the game has to ask for its lobby (FreeRoamNeed) after an accepted invite's FollowHost.</summary>
@@ -382,8 +383,10 @@ public sealed partial class WorldsBridge
                 if (move.AskedAt == 0 && _clock.GetElapsedTime(move.Since) >= InviteMoveBudget)
                 {
                     if (!End(move, $"the game did not ask for its lobby within {(int)InviteMoveBudget.TotalSeconds} s of {move.Via}; the seat in {move.WorldId} is let go")) return;
-                    // no CancelMatchmaking: no search of ours runs (a start the player never confirmed lands in a public lobby by its own ask)
                     await ReleaseUnprovenSeatAsync(move.Grant, "an accepted invite's game never asked for its lobby").ConfigureAwait(false);
+                    // T-1108-J: FollowHost's start may still be parked behind the game's own search (module+0x150, live games-6: FINDING
+                    // forever); the cancel frees it and ends that search, so it never fires later into a lobby whose seat is gone
+                    if (move.Via == "FollowHost") await CancelMatchmakingAsync().ConfigureAwait(false);
                     _freeRoamToasts.Enqueue(PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.InviteMoveFailed));
                     return;
                 }
@@ -416,8 +419,9 @@ public sealed partial class WorldsBridge
             return;
         }
         if (!End(move, $"the seat in {move.WorldId} ended before the game reached it (the lobby closed or released it)")) return;
-        // a game searching toward a lobby that is gone gets the terminal release, never JOINING SESSION on a world that is gone
-        if (move.AskedAt != 0) await CancelMatchmakingAsync().ConfigureAwait(false);
+        // a game searching toward a lobby that is gone gets the terminal release, never JOINING SESSION on a world that is gone;
+        // T-1108-J: before its ask too, FollowHost's start may be parked (module+0x150) and fire later
+        if (move.AskedAt != 0 || move.Via == "FollowHost") await CancelMatchmakingAsync().ConfigureAwait(false);
         _freeRoamToasts.Enqueue(PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.InviteClosed));
     }
 
