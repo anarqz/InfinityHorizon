@@ -183,6 +183,30 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
         SetFriendPicker(p);
         break;
     }
+    case 24: { // W15: a synthetic friends state, as the launcher's 0x2A would send it
+        FriendsStateFrame st;
+        st.flags = kFriendsLoaded | kFriendsHaveLobby;
+        FriendRowFrame ana;
+        ana.id = "10"; ana.name = "Synthetic#00117"; ana.flags = kFriendOnline | kFriendSupporter | kFriendCanAsk | kFriendCanInvite | kFriendFavorite;
+        ana.game = "FH2"; ana.activity = kActFreeRoam; ana.discord_user = "synthetic_d"; ana.discord_name = "Synthetic D"; ana.account_days = 402;
+        ana.profile_url = "https://play.infinity-horizon.com/fh2/hardcore/profiles/Synthetic%2300117";
+        ana.profiles = {{"Synthetic#00117", 0, "FH2"}, {"Synthetic#00118", 1, "FH2"}};
+        FriendRowFrame bia;
+        bia.id = "11"; bia.name = "Synthetic#00230"; bia.flags = kFriendOnline | kFriendCanAsk | kFriendExcluded | kFriendRacing; bia.game = "FH2"; bia.activity = kActRace;
+        bia.excluded = kExcludedMode; bia.profiles = {{"Synthetic#00230", 1, "FH2"}};
+        FriendRowFrame cal;
+        cal.id = "12"; cal.name = "Synthetic#00311"; cal.flags = kFriendOnline | kFriendCanAsk | kFriendCanInvite | kFriendPrivate; cal.game = "FM5"; cal.activity = kActFreeRoam;
+        cal.profiles = {{"Synthetic#00311", 1, "FM5"}};
+        FriendRowFrame zed;
+        zed.id = "20"; zed.name = "Synthetic#00412"; zed.profiles = {{"Synthetic#00412", 1, "FH2"}};
+        st.friends = {ana, bia, cal, zed};
+        st.requests = {{"30", "Synthetic#00519"}};
+        st.joins = {{"r1", "Synthetic#00601"}};
+        SetFriendsState(st);
+        break;
+    }
+    case 25: Navigate(Nav::Y); break;
+    case 26: { FriendsResultFrame r; r.kind = kFriendsAdd; r.result = kResultRequested; r.message = "Friend request sent to Synthetic#00519"; SetFriendsResult(r); break; }
     default: break;
     }
 }

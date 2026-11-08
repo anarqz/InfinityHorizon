@@ -56,7 +56,10 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (SidebarOpen()) {
-            if (msg == WM_KEYDOWN) {
+            if (msg == WM_CHAR && FriendsTyping()) FriendsChar(static_cast<char16_t>(wp)); // W15: the Add friend keyboard types too
+            if (msg == WM_KEYDOWN && FriendsKeyDown(static_cast<unsigned>(wp))) {
+                // consumed by the Add friend keyboard (backspace, enter, escape, space)
+            } else if (msg == WM_KEYDOWN) {
                 switch (wp) {
                 case VK_UP: Navigate(Nav::Up); break;
                 case VK_DOWN: Navigate(Nav::Down); break;

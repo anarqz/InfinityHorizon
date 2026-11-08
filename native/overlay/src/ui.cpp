@@ -6,9 +6,9 @@
 //   then slides down. One at a time; the rest wait in order. Generic: connection status, news,
 //   updates, achievements, friends.
 // - Sidebar: the Xbox guide. Slides in from the left over a dimmed game: the profile header
-//   (avatar, gamertag, tier chip, connection), tabs Home, Lobbies, Friends and Settings,
-//   rounded tiles with the white focus ring, and controller hints. Friends is coming soon;
-//   Settings lists its categories (Connection, Voice Chat; ui_layout.h) and the focused one's
+//   (avatar, gamertag, tier chip, connection), tabs Home, Lobby and Settings,
+//   rounded tiles with the white focus ring, and controller hints. Friends is the pinned right sidebar
+//   (friends.cpp, OD-211); Settings lists its categories (Connection, Voice Chat; ui_layout.h) and the focused one's
 //   settings fill the second column beside the guide. Transient toasts remain available.
 // - The guide's bottom block (CR-L40 §1.3), just above the controller hints: the avatar (the
 //   launcher's 0x1A image in a circle, the initials without one) and the gamertag, then the server's
@@ -81,8 +81,8 @@ Model g_model;
 ToastSchedule<Toast> g_toasts;
 bool g_open = false;
 float g_open_anim = 0; // 0 closed .. 1 open
-int g_tab = 0; // 0 Home, 1 Lobbies, 2 Friends, 3 Settings
-constexpr int kTabs = 4, kTabWorlds = 1, kTabFriends = 2, kTabSettings = 3;
+int g_tab = 0; // 0 Home, 1 Lobby, 2 Settings (Friends is the right sidebar, friends.cpp: W15)
+constexpr int kTabs = 3, kTabWorlds = 1, kTabSettings = 2;
 int g_focus = 0;
 bool g_confirm_quit = false; // "Quit the game" asks for a second A
 bool g_connection_open = false;
@@ -759,11 +759,11 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     y += av + 34 * s;
 
     // tabs
-    const char *icons[] = {kIconHome, kIconWorld, kIconPeople, kIconSettings};
+    const char *icons[] = {kIconHome, kIconWorld, kIconSettings};
     // OD-204 item 4 (T-L3): one roster tab, the lobby this player is in: "Private Lobby" in a private official lobby, else
     // "Current Lobby" (an official one or any other; its pane's tag says which)
     const char *names[] = {T("Home", "Início"), WorldsPrivate() ? T("Private Lobby", "Lobby privado") : T("Current Lobby", "Lobby atual"),
-                           T("Friends", "Amigos"), T("Settings", "Ajustes")};
+                           T("Settings", "Ajustes")};
     const float tw = (pw - 2 * pad) / kTabs;
     for (int i = 0; i < kTabs; ++i) {
         const float tx = x0 + pad + i * tw;
@@ -790,23 +790,13 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
 
     SetHoverPane(nullptr); // the worlds tab sets it again for its focused row
     if (g_tab != kTabSettings) g_settings_in = false;
-    const float column_x = b.x, column_w = std::min(420 * s, width - b.x); // the second column (the right pane's place)
-    if (OfflineSession() && (g_tab == kTabWorlds || g_tab == kTabFriends)) {
-        g_pending.action = -1; // OD-118: lobbies and friends need the online session
+    const float column_x = b.x, column_w = std::min(420 * s, width - b.x - FriendsSidebarWidth()); // the second column (the right pane's place), short of FRIENDS
+    if (OfflineSession() && g_tab == kTabWorlds) {
+        g_pending.action = -1; // OD-118: lobbies need the online session
         DrawOfflineMode(dl, x0 + pw / 2, (y + content_bottom) / 2, s);
     } else if (g_tab == kTabWorlds) {
         DrawWorldsTab(dl, x0 + pad, y, pw - 2 * pad, content_bottom, dt);
         if (!PaneModal() && WorldsColumnOpen()) DrawWorldsColumn(dl, column_x, column_w, height, ease); // a player's details
-    } else if (g_tab == kTabFriends) {
-        g_pending.action = -1;
-        const float center_x = x0 + pw / 2;
-        const float center_y = (y + content_bottom) / 2;
-        const float icon_size = 84 * s;
-        const ImVec2 icon = f.icon_big->CalcTextSizeA(icon_size, FLT_MAX, 0, kIconContact);
-        dl->AddText(f.icon_big, icon_size, ImVec2(center_x - icon.x / 2, center_y - 66 * s), Rgba(255, 255, 255, 0.22f), kIconContact);
-        const char *soon = T("Coming soon", "Em breve");
-        const ImVec2 text = Measure(f.title, soon);
-        TextAt(dl, f.title, ImVec2(center_x - text.x / 2, center_y + 34 * s), kTextDim, soon);
     } else if (g_tab == kTabSettings) {
         RequestVoiceDevices(); // §15: the device names stay current while it shows
         DrawSettings(dl, x0, y, pw, pad, content_bottom, column_x, column_w, height, ease, m);
@@ -840,7 +830,8 @@ void DrawSidebar(ImDrawList *dl, float width, float height, float dt, const Mode
     if (!mute_hint) TextAt(dl, f.tag, ImVec2(x0 + pw - pad - bsz.x, hy + 4 * s), kPinkU, brand);
 
     // the right pane (OD-112), beside the guide and sliding with it
-    DrawPane(dl, b.x, 0, std::min(420 * s, width - b.x), height, ease);
+    DrawPane(dl, b.x, 0, std::min(420 * s, width - b.x - FriendsSidebarWidth()), height, ease);
+    DrawFriendsSidebar(dl, width, height, ease); // OD-211 (W15): the pinned right FRIENDS sidebar
 }
 
 } // namespace
@@ -934,6 +925,9 @@ void Navigate(Nav nav) {
     if (PaneNavigate(nav)) {
         return; // an open player or launcher pane holds the controller
     }
+    if (FriendsNavigate(nav)) {
+        return; // W15: the controller is in the right FRIENDS sidebar
+    }
     if (g_tab == kTabWorlds && nav != Nav::TabLeft && nav != Nav::TabRight && WorldsNavigate(nav)) {
         return;
     }
@@ -974,10 +968,10 @@ void Navigate(Nav nav) {
     switch (nav) {
     case Nav::Up: --g_focus; break;
     case Nav::Down: ++g_focus; break; // clamped when drawn
-    case Nav::Left:
     case Nav::TabLeft: g_tab = (g_tab + kTabs - 1) % kTabs; g_focus = 0; break;
-    case Nav::Right:
     case Nav::TabRight: g_tab = (g_tab + 1) % kTabs; g_focus = 0; break;
+    case Nav::Right: // W15: Right (Start from anywhere) enters the FRIENDS sidebar; LB / RB change the tab
+    case Nav::Menu: FriendsEnter(); break;
     case Nav::Accept: g_pending.action = 1; break;
     case Nav::Back: CloseSidebar(); break;
     default: break;
@@ -1032,6 +1026,7 @@ void LoadFonts(float scale) {
 }
 void DrawUi(float width, float height, float dt) {
     PaneTick(dt);
+    FriendsTick();               // W15: what the launcher sent for the FRIENDS sidebar; asks for the list while the guide is open
     FriendPickerTick();          // T-L4: a picker the launcher opened opens the guide; a closed guide closes the picker
     InviteMouse(width, height); // T-L3: a modal invite prompt takes its clicks before the guide sees them
     PickerMouse(width, height); // T-L4: then the modal friend picker, before the guide
