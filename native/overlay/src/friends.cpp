@@ -6,7 +6,7 @@
 //   (the launcher sends the profile it plays, else its first), its other profiles are in the gamercard.
 // - The top row "Add friend" opens an on-screen keyboard for a PROFILE name (the controller moves over the keys; a PC keyboard types
 //   too). Incoming friend requests and requests to join this player's lobby (the leader's) are rows with Accept / Decline.
-// - A friend row: A opens the gamercard, X asks to join its world, Y invites it to my lobby. The gamercard replaces the whole
+// - A friend row: A opens the gamercard, X joins its world (asks to join a private lobby), Y invites it to my lobby. The gamercard replaces the whole
 //   sidebar: avatar, name, Discord (when linked), what it does, account age, its profiles, Ask to join, Invite to my game, the link
 //   to its profile on the website (hidden when it is not listed), Unfriend (a second A confirms).
 // - A friend the lobby's "Who can join" excludes shows greyed with the reason. Everything is the launcher's last FriendsState (0x2A);
@@ -512,7 +512,8 @@ struct CardButton {
 std::vector<CardButton> ButtonsOf(const FriendsStateFrame &st, const FriendRowFrame &fr) {
     std::vector<CardButton> b;
     const bool online = fr.Has(kFriendOnline);
-    b.push_back({T("Ask to join", "Pedir para entrar"),
+    // T-1108-R: a public official world is joined straight away; only a private lobby takes a request (the launcher routes it)
+    b.push_back({fr.Has(kFriendPrivate) ? T("Ask to join", "Pedir para entrar") : T("Join", "Entrar"),
                  fr.Has(kFriendCanAsk) ? "" : online ? T("Not in a world you can join", "Não está em um mundo em que você possa entrar") : T("Offline", "Offline"),
                  fr.Has(kFriendCanAsk), CardButton::Ask});
     if (st.have_lobby())
@@ -975,7 +976,7 @@ void DrawFriendsSidebar(ImDrawList *dl, float width, float height, float alpha) 
     switch (g_view) {
     case View::List:
         if (g_invite) HintLine(dl, l, alpha, {{"A", T("Invite", "Convidar")}, {"B", T("Done", "Pronto")}});
-        else HintLine(dl, l, alpha, {{"A", T("Open", "Abrir")}, {"X", T("Ask to join", "Pedir")}, {"Y", T("Invite", "Convidar")}, {"B", T("Back", "Voltar")}});
+        else HintLine(dl, l, alpha, {{"A", T("Open", "Abrir")}, {"X", T("Join", "Entrar")}, {"Y", T("Invite", "Convidar")}, {"B", T("Back", "Voltar")}});
         break;
     case View::Card: HintLine(dl, l, alpha, {{"A", T("Select", "Selecionar")}, {"B", T("Back", "Voltar")}}); break;
     case View::Keyboard: HintLine(dl, l, alpha, {{"A", T("Type", "Digitar")}, {"X", T("Delete", "Apagar")}, {"Y", T("Space", "Espaço")}, {"B", T("Cancel", "Cancelar")}}); break;
