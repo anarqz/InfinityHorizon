@@ -1200,5 +1200,15 @@
   "careers.cars": "{cars} carros",
   "careers.hours": "{hours} h",
   "careers.game_closed": "{game} está fechado neste servidor agora.",
-  "careers.not_listed": "A carreira foi criada, mas o servidor ainda não a listou. Tente de novo em instantes."
+  "careers.not_listed": "A carreira foi criada, mas o servidor ainda não a listou. Tente de novo em instantes.",
+  "careers.delete": "Apagar carreira de {game}",
+  "careers.delete_profile": "Apagar perfil (todos os jogos)",
+  "careers.duplicate": "Há outro perfil deste modo nesta conta",
+  "profiles.delete_career_title": "Apagar a carreira de {game} de {name}?",
+  "profiles.delete_career_body": "Isto apaga o que os servidores guardam da carreira de {game} de {name}, na hora e para sempre: os saves na nuvem e o histórico, pontuações, pinturas e o resto. Não há como desfazer.",
+  "profiles.delete_career_keeps": "O perfil {name}, o nome e as carreiras em outros jogos continuam.",
+  "profiles.delete_career_last": "Esta é a última carreira de {name}: o perfil vai junto, e o nome {name} fica livre para qualquer pessoa.",
+  "profiles.delete_all_title": "Apagar o perfil {name}, em todos os jogos?",
+  "profiles.delete_all_body": "Isto apaga {name} e todas as suas carreiras da nuvem, na hora e para sempre, em todos os jogos: saves na nuvem e o histórico, pinturas e criações, pontuações, mensagens e o resto. Não há como desfazer, e o nome {name} fica livre para qualquer pessoa.",
+  "profiles.delete_in_use_game": "Este perfil está jogando {game} agora. Feche o jogo lá e tente de novo."
 }

@@ -1200,5 +1200,15 @@
   "careers.cars": "{cars} cars",
   "careers.hours": "{hours} h",
   "careers.game_closed": "{game} is closed on this server right now.",
-  "careers.not_listed": "The career was created, but the server did not list it yet. Try again in a moment."
+  "careers.not_listed": "The career was created, but the server did not list it yet. Try again in a moment.",
+  "careers.delete": "Delete {game} career",
+  "careers.delete_profile": "Delete profile (all games)",
+  "careers.duplicate": "Another profile of this mode exists on this account",
+  "profiles.delete_career_title": "Delete the {game} career of {name}?",
+  "profiles.delete_career_body": "This erases what the servers keep for the {game} career of {name}, at once and for good: its cloud saves and their history, scores, liveries and the rest. There is no undo.",
+  "profiles.delete_career_keeps": "The profile {name}, its name and its careers in other games stay.",
+  "profiles.delete_career_last": "This is the last career of {name}: the profile goes with it, and the name {name} becomes free for anyone to take.",
+  "profiles.delete_all_title": "Delete the profile {name}, in every game?",
+  "profiles.delete_all_body": "This erases {name} and every one of its careers from the cloud, at once and for good, in every game: cloud saves and their history, liveries and creations, scores, messages and the rest. There is no undo, and the name {name} becomes free for anyone to take.",
+  "profiles.delete_in_use_game": "This profile is playing {game} right now. Close the game there, then try again."
 }

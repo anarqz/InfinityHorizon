@@ -415,8 +415,17 @@ public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = f
     /// <summary>OD-207 #8 / CAREERS.md §6.8: a launcher that knows careers never changes a mode; an older server's rows keep the link.</summary>
     public bool CanConvert => Hardcore && Card is null;
 
-    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only, and on a career that exists.</summary>
-    public bool CanDeleteFromCloud => OnAccount && (Card is null || Card.CareerRow is not null);
+    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only (an older server's: the profile is its one career).</summary>
+    public bool CanDeleteFromCloud => OnAccount && Card is null;
+
+    /// <summary>CR-S98: "Delete &lt;game&gt; career" on a profile with a career of the chosen game.</summary>
+    public bool CanDeleteCareer => OnAccount && Card?.CareerRow is not null;
+
+    /// <summary>CR-S98: "Delete profile" (every game) on every account profile of a server that lists them.</summary>
+    public bool CanDeleteWholeProfile => OnAccount && Card is not null;
+
+    /// <summary>The career link's words, with the game's title.</summary>
+    public string DeleteCareerLabel { get; init; } = string.Empty;
 
     /// <summary>OD-214: the card opens the Start panel (no career of the game, or an empty one).</summary>
     public bool ShowStart => Card is { Startable: true };
