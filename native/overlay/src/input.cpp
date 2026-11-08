@@ -21,6 +21,9 @@
 //   until the WGI hook is in.
 // - Voice chat (OD-154, voice_gestures.h), with the guide closed: R3 held is push-to-talk, RB then R3 the next mic
 //   mode with a notice on screen. Both still reach the game: they only read the pad.
+// - Invite toasts (INVITE_UX, invite.cpp), with the guide closed: Y held (or F6, kHoldKey) fills the hold ring. While a toast is on
+//   screen the game's reading has Y taken out and F6 never reaches the game; a Y or F6 held back stays held back until it is released
+//   (so the Y that accepted never becomes a press, FH2's rewind, when the toast goes).
 #include "overlay.h"
 #include "style.h"
 #include "voice_gestures.h"
@@ -47,9 +50,21 @@ namespace {
 
 WNDPROC g_game_proc = nullptr;
 HWND g_hwnd = nullptr;
+std::atomic<bool> g_key_hold{false}; // F6 is down (the invite toasts' hold, the keyboard's way)
+bool g_key_held_back = false;        // the window thread's: this F6 press went to the toasts, so its release does too
 
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (!InPassthrough()) {
+        if ((msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == kHoldKey) {
+            const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+            g_key_hold = down;
+            if (down && !SidebarOpen() && InviteToastsOnScreen()) g_key_held_back = true;
+            if (g_key_held_back) {
+                if (!down) g_key_held_back = false;
+                return 0;
+            }
+        }
+        if (msg == WM_KILLFOCUS) g_key_hold = false;
         if (msg == WM_KEYDOWN && wp == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000)) {
             ToggleSidebar();
             Log("guide: %s by Shift+Tab", SidebarOpen() ? "opened" : "closed");
@@ -136,6 +151,8 @@ using ReadingFn = HRESULT(STDMETHODCALLTYPE *)(void *, GamepadReading *);
 ReadingFn g_reading = nullptr;
 std::atomic<bool> g_pad_hooked{false};
 std::atomic<bool> g_open_seen{false}; // the render thread's SidebarOpen(), for the game's input thread
+std::atomic<bool> g_toasts_seen{false}; // the render thread's InviteToastsOnScreen(), for the game's input thread
+std::atomic<bool> g_pad_seen{false};    // a controller was read (XInput or WGI): the toasts show Y, else F6
 
 // GamepadButtons
 constexpr UINT32 kWMenu = 0x1, kWView = 0x2, kWA = 0x4, kWB = 0x8, kWX = 0x10, kWY = 0x20, kWLB = 0x400, kWRB = 0x800, kWUp = 0x40, kWDown = 0x80, kWLeft = 0x100, kWRight = 0x200,
@@ -166,6 +183,7 @@ Chord g_xinput_shoulders; // the render thread's, from XInput, until the WGI hoo
 struct Trigger {
     void *pad = nullptr;
     Chord shoulders{};
+    bool y_held_back = false; // INVITE_UX: this Y went to an invite toast; the game sees no Y until it is released
 };
 Trigger g_triggers[4];
 
@@ -192,6 +210,9 @@ HRESULT STDMETHODCALLTYPE HookReading(void *self, GamepadReading *value) {
     g_w_ly[slot] = static_cast<int>(value->LeftThumbstickY * 32767);
     const auto now = std::chrono::steady_clock::now();
     if (trigger.shoulders.Update((raw & (kWLB | kWRB)) == (kWLB | kWRB), now)) g_trigger_toggle = true;
+    if (!(raw & kWY)) trigger.y_held_back = false;
+    else if (g_toasts_seen.load()) trigger.y_held_back = true;
+    if (trigger.y_held_back) value->Buttons = static_cast<ABI::Windows::Gaming::Input::GamepadButtons>(raw & ~kWY);
     if (g_open_seen.load() || g_hold_until_release.load()) {
         const UINT64 stamp = value->Timestamp;
         *value = GamepadReading{};
@@ -263,8 +284,12 @@ bool InstallGamepadHook() {
     return thread != nullptr;
 }
 
+bool PadPresent() { return g_pad_seen.load(); }
+
 void PollController() {
     g_open_seen = SidebarOpen();
+    g_toasts_seen = InviteToastsOnScreen() && !SidebarOpen();
+    SetInviteHold(g_key_hold.load());
     if (g_trigger_toggle.exchange(false)) {
         ToggleSidebar();
         Log("guide: %s by holding View or LB + RB", SidebarOpen() ? "opened" : "closed");
@@ -312,6 +337,8 @@ void PollController() {
         SetPushToTalk(false);
         return;
     }
+    g_pad_seen = true;
+    SetInviteHold(g_key_hold.load() || (state.buttons & kY) != 0); // INVITE_UX: the toasts' hold (the guide closed)
     const WORD pressed = state.buttons & static_cast<WORD>(~g_previous);
     g_previous = state.buttons;
     const bool idle = state.buttons == 0 && std::abs(state.lx) < 8000 && std::abs(state.ly) < 8000 && state.lt < 30 && state.rt < 30;

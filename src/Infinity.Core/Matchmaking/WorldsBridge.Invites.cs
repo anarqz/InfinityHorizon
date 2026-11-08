@@ -6,8 +6,12 @@ using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
 
-/// <summary>What Invite friends answers (T-L4): the friend picker to send the overlay, or one notice; neither while another press is answered.</summary>
-public sealed record InviteFriendsAnswer(UiFrame.FriendPicker? Picker, UiFrame.Toast? Notice);
+/// <summary>
+/// What Invite friends answers (T-L4): the friend picker to send the overlay, or one notice; neither while another press is answered.
+/// INVITE_UX (protocol 12): <c>Sidebar</c> instead of a picker: send <see cref="WorldsBridge.FriendsStateFrame"/> (read again just now) and
+/// <see cref="UiFrame.FriendsOpen"/> with <see cref="UiFriendsOpen.Invite"/>.
+/// </summary>
+public sealed record InviteFriendsAnswer(UiFrame.FriendPicker? Picker, UiFrame.Toast? Notice, bool Sidebar = false);
 
 /// <summary>What one chosen friend answers (T-L4): one notice, and the refreshed picker (null when there is none to refresh).</summary>
 public sealed record InviteSendAnswer(UiFrame.Toast Notice, UiFrame.FriendPicker? Picker);
@@ -34,19 +38,20 @@ public sealed partial class WorldsBridge
 
     /// <summary>
     /// The game's Invite friends (<paramref name="fromGame"/>) or the Private Lobby pane's: the picker to open, or the notice saying
-    /// why not. The lobby is read again first (bounded); a failed read uses the last one.
+    /// why not. The lobby is read again first (bounded); a failed read uses the last one. <paramref name="sidebar"/> (an overlay of
+    /// protocol 12, INVITE_UX): the friend list is read again and the answer says to open the FRIENDS sidebar's invite mode instead.
     /// </summary>
-    public async Task<InviteFriendsAnswer> InviteFriendsAsync(bool fromGame, CancellationToken cancellation)
+    public async Task<InviteFriendsAnswer> InviteFriendsAsync(bool fromGame, CancellationToken cancellation, bool sidebar = false)
     {
         // review L6: a press while one is answered is the same press (no second picker, no stacked notice)
         if (Interlocked.Exchange(ref _inviteFriendsBusy, 1) != 0) return new(null, null);
-        try { return await InviteFriendsCoreAsync(fromGame, cancellation).ConfigureAwait(false); }
+        try { return await InviteFriendsCoreAsync(fromGame, sidebar, cancellation).ConfigureAwait(false); }
         finally { Volatile.Write(ref _inviteFriendsBusy, 0); }
     }
 
     private int _inviteFriendsBusy;
 
-    private async Task<InviteFriendsAnswer> InviteFriendsCoreAsync(bool fromGame, CancellationToken cancellation)
+    private async Task<InviteFriendsAnswer> InviteFriendsCoreAsync(bool fromGame, bool sidebar, CancellationToken cancellation)
     {
         var mine = await CurrentLobbyAsync(cancellation).ConfigureAwait(false);
         var where = fromGame ? "the game's Invite friends" : "the Private Lobby pane's Invite friends";
@@ -59,6 +64,12 @@ public sealed partial class WorldsBridge
         {
             _log($"worlds: invite: {where} in {mine.WorldId}: this player is not its leader ({(mine.Leader.Length == 0 ? "the leader is not known" : "another player leads")})");
             return new(null, PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.NotLeader));
+        }
+        if (sidebar)
+        {
+            var read = await ReadFriendsAsync(force: true, cancellation).ConfigureAwait(false);
+            _log($"worlds: invite: {where}: the FRIENDS sidebar opens to invite ({(read ? "the list read again" : "the friend list could not be read")})");
+            return new(null, null, Sidebar: true);
         }
         var picker = await PickerAsync(mine, UiPickerFlags.Open, cancellation).ConfigureAwait(false);
         _log($"worlds: invite: {where}: the friend picker opens ({(picker.ListStatus == UiPickerStatus.List ? picker.Friends.Count.ToString(CultureInfo.InvariantCulture) + " friends" : "the friend list could not be read")})");

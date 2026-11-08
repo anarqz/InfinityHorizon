@@ -869,7 +869,7 @@ void SetConnectionDetails(uint8_t state, const std::string &text) {
 
 // OD-192: the one gate and the one hold of every notice. None shows in an official lobby (official play stays vanilla), a
 // private one included, except what the launcher marks always (T-L3, lobby_policy.h ToastShows: a private create's result and
-// hold, the flagged Hardcore message with its time left); invite prompts are their own modal (invite.cpp), never a notice. The
+// hold, the flagged Hardcore message with its time left); invite prompts are their own toasts (invite.cpp), never a notice. The
 // launcher already sends its holds halved (OverlayNotices.Shortened), and this overlay's own default and bounds are half of what
 // they were (4.6 s, 1..30 s).
 void PushToast(ToastKind kind, const std::string &title, const std::string &body, uint16_t ttl, bool always) {
@@ -915,12 +915,6 @@ void Navigate(Nav nav) {
     }
     if (!g_open) {
         return;
-    }
-    if (InviteNavigate(nav)) {
-        return; // T-L3: an invite prompt is modal while the guide is open
-    }
-    if (PickerNavigate(nav)) {
-        return; // T-L4: the friend picker is modal while the guide is open (under an invite prompt)
     }
     if (PaneNavigate(nav)) {
         return; // an open player or launcher pane holds the controller
@@ -1026,10 +1020,7 @@ void LoadFonts(float scale) {
 }
 void DrawUi(float width, float height, float dt) {
     PaneTick(dt);
-    FriendsTick();               // W15: what the launcher sent for the FRIENDS sidebar; asks for the list while the guide is open
-    FriendPickerTick();          // T-L4: a picker the launcher opened opens the guide; a closed guide closes the picker
-    InviteMouse(width, height); // T-L3: a modal invite prompt takes its clicks before the guide sees them
-    PickerMouse(width, height); // T-L4: then the modal friend picker, before the guide
+    FriendsTick(); // W15: what the launcher sent for the FRIENDS sidebar (INVITE_UX: may open the guide to invite)
     Model snapshot;
     {
         std::lock_guard<std::mutex> lock(g_lock);
@@ -1059,8 +1050,7 @@ void DrawUi(float width, float height, float dt) {
         }
         ImGui::End();
     }
-    DrawFriendPicker(width, height, dt); // T-L4: under an invite prompt
-    DrawInvitePrompt(width, height, dt);
+    DrawInviteToasts(width, height, dt); // INVITE_UX: top right, hold Y to accept (hidden while the guide is open)
     UpdateToasts(dl, width, height, dt);
 }
 

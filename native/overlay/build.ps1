@@ -95,7 +95,7 @@ foreach ($set in @(@('opus', $opus, $opusPlain, "$odefs"), @('opus_avx2', $opus,
 Set-Content -Path "$vobj\codecs.rsp" -Value ($codecObjs -join "`r`n") -Encoding ascii
 $codecLines += "lib /nologo /OUT:`"$out\obj\voice_codecs.lib`" @`"$vobj\codecs.rsp`" || exit /b 1"
 $sources = @(
-    "$here\src\main.cpp", "$here\src\dx12.cpp", "$here\src\input.cpp", "$here\src\ui.cpp", "$here\src\pipe.cpp", "$here\src\worlds.cpp", "$here\src\invite.cpp", "$here\src\friend_picker.cpp", "$here\src\friends.cpp", "$here\src\pane.cpp", "$here\src\voice.cpp", "$here\src\voice_audio.cpp", "$here\src\toast_audio.cpp", "$here\src\png_fit.cpp", "$here\src\png_write.cpp",
+    "$here\src\main.cpp", "$here\src\dx12.cpp", "$here\src\input.cpp", "$here\src\ui.cpp", "$here\src\pipe.cpp", "$here\src\worlds.cpp", "$here\src\invite.cpp", "$here\src\friends.cpp", "$here\src\pane.cpp", "$here\src\voice.cpp", "$here\src\voice_audio.cpp", "$here\src\toast_audio.cpp", "$here\src\png_fit.cpp", "$here\src\png_write.cpp",
     "$imgui\imgui.cpp", "$imgui\imgui_draw.cpp", "$imgui\imgui_tables.cpp", "$imgui\imgui_widgets.cpp",
     "$imgui\backends\imgui_impl_dx12.cpp", "$imgui\backends\imgui_impl_win32.cpp"
 ) | ForEach-Object { "`"$_`"" }

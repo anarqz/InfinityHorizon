@@ -1015,6 +1015,7 @@ public sealed class PlaySupervisor
                                     var inboxOverlay = overlay;
                                     var inboxStop = onlineStop.Token;
                                     inbox.Observer ??= worlds.OnInvitesPolledAsync; // W15: the friends sidebar's join requests and online toasts
+                                    inbox.Holding ??= worlds.IsRacingNow; // INVITE_UX: no invite toast while racing; it comes after the race
                                     inboxRun ??= Task.Run(() => inbox.RunAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop), inboxStop);
                                     _ = inbox.ResendAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop);
                                 }
@@ -1202,15 +1203,22 @@ public sealed class PlaySupervisor
     }
 
     /// <summary>
-    /// T-L4 (OD-204, WORLDS_OFFICIAL §12.5): Invite friends (the hook's InviteFriends, or the Private Lobby pane's 0x26): the friend
-    /// picker (0x25, protocol 7) in a private lobby this player leads, else one notice marked always.
+    /// T-L4 (OD-204, WORLDS_OFFICIAL §12.5): Invite friends (the hook's InviteFriends, or the Private Lobby pane's 0x26): in a private
+    /// lobby this player leads, the FRIENDS sidebar's invite mode (INVITE_UX, protocol 12: a fresh 0x2A, its avatars, then 0x2E), or the
+    /// friend picker for an overlay of protocol 7-11; else one notice marked always.
     /// </summary>
     private async Task InviteFriendsAsync(Matchmaking.WorldsBridge worlds, OverlayChannel overlay, bool fromGame, CancellationToken cancellation)
     {
         try
         {
-            var answer = await worlds.InviteFriendsAsync(fromGame, cancellation).ConfigureAwait(false);
+            var answer = await worlds.InviteFriendsAsync(fromGame, cancellation, sidebar: overlay.Protocol >= 12).ConfigureAwait(false);
             if (_online.IsPaused || cancellation.IsCancellationRequested) return;
+            if (answer.Sidebar)
+            {
+                await overlay.SendIfAcceptedAsync(worlds.FriendsStateFrame(), cancellation).ConfigureAwait(false);
+                await worlds.SendFriendAvatarsAsync(overlay.SendIfAcceptedAsync, cancellation).ConfigureAwait(false);
+                await overlay.SendIfAcceptedAsync(new Overlay.UiFrame.FriendsOpen(Overlay.UiFriendsOpen.Invite), cancellation).ConfigureAwait(false);
+            }
             if (answer.Picker is { } picker)
             {
                 if (overlay.Accepts(picker)) await overlay.SendIfAcceptedAsync(picker, cancellation).ConfigureAwait(false);

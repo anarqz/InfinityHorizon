@@ -49,8 +49,10 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
     // lobby request in flight) is shown again from then while the server still lists it; 0 none
     // CR-S102: FromRequest, a prompt made by this launcher for this player's own request that the leader accepted (the server lists it in
     // no inbox): it ends at its deadline only, and its decline sends nothing (the seat the accept held lapses on its own)
+    // INVITE_UX: Held, a prompt not sent yet because this player raced when it came (Holding); it is sent, with the time it has left, at the
+    // first poll after the race
     private sealed record Shown(UiFrame.InvitePrompt Prompt, long Deadline, bool Answered, string WorldId = "", string? Activity = null,
-        GameSessionReference? Session = null, long ReofferAt = 0, bool FromRequest = false);
+        GameSessionReference? Session = null, long ReofferAt = 0, bool FromRequest = false, bool Held = false);
 
     /// <summary>CR-S102: how long the prompt of an accepted request to join stays (the seat it holds is the server's to keep or lapse).</summary>
     public static readonly TimeSpan AcceptedRequestPrompt = TimeSpan.FromSeconds(60);
@@ -72,6 +74,12 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
     /// never stop the inbox.
     /// </summary>
     public Func<InviteList, Func<UiFrame, CancellationToken, Task>, CancellationToken, Task>? Observer { get; set; }
+
+    /// <summary>
+    /// INVITE_UX (owner 2026-11-08): true while this player races (the bridge's <see cref="WorldsBridge.IsRacingNow"/>). A new invite then
+    /// shows no toast: it waits, and the first poll after the race sends it with the time it has left (one that lapsed meanwhile is gone).
+    /// </summary>
+    public Func<bool>? Holding { get; set; }
 
     /// <summary>
     /// Polls until <paramref name="cancellation"/> ends or the server refuses the caller; <paramref name="send"/> takes each prompt and
@@ -150,6 +158,8 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
         var serverNow = Parse(list.GeneratedAt);
         var listed = new HashSet<string>(StringComparer.Ordinal);
         var outgoing = new List<UiFrame>();
+        var holding = Holding?.Invoke() == true;
+        var held = 0;
         lock (_lock)
         {
             foreach (var invite in list.Items)
@@ -158,8 +168,18 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                 listed.Add(invite.Id);
                 if (_shown.TryGetValue(invite.Id, out var known))
                 {
+                    // INVITE_UX: one held back during a race comes once the race is over, with what is left of its time
+                    if (known.Held)
+                    {
+                        if (!holding && known.Deadline > now)
+                        {
+                            _shown[invite.Id] = known with { Held = false };
+                            outgoing.Add(Left(known, now));
+                        }
+                        continue;
+                    }
                     // T-L5: an accept that could not be served then is shown again once its wait is over (with the time it has left)
-                    if (!known.Answered && known.ReofferAt > 0 && known.ReofferAt <= now && known.Deadline > now)
+                    if (!holding && !known.Answered && known.ReofferAt > 0 && known.ReofferAt <= now && known.Deadline > now)
                     {
                         _shown[invite.Id] = known with { ReofferAt = 0 };
                         outgoing.Add(Left(known, now));
@@ -167,16 +187,18 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                     continue;
                 }
                 _shown[invite.Id] = new Shown(prompt, now + (long)(prompt.ExpiresInSec * (double)_clock.TimestampFrequency), false,
-                    invite.World.Id, invite.World.Activity, invite.Session);
-                outgoing.Add(prompt);
+                    invite.World.Id, invite.World.Activity, invite.Session, Held: holding);
+                if (holding) held++;
+                else outgoing.Add(prompt);
             }
             foreach (var (id, shown) in _shown.ToList())
             {
                 if ((listed.Contains(id) || shown.FromRequest) && shown.Deadline > now) continue;
                 _shown.Remove(id);
-                if (!shown.Answered) outgoing.Add(UiFrame.InvitePrompt.Withdraw(id));
+                if (!shown.Answered && !shown.Held) outgoing.Add(UiFrame.InvitePrompt.Withdraw(id));
             }
         }
+        if (held > 0) _log($"invites: {held} new private lobby invite(s) held back while racing");
         var added = outgoing.Count(f => f is UiFrame.InvitePrompt { ExpiresInSec: > 0 });
         if (added > 0) _log($"invites: {added} new private lobby invite(s) prompted");
         if (outgoing.Count > added) _log($"invites: {outgoing.Count - added} prompt(s) withdrawn (answered elsewhere, gone or expired)");
@@ -191,7 +213,7 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
         List<UiFrame.InvitePrompt> again;
         lock (_lock)
         {
-            again = _shown.Values.Where(s => !s.Answered && s.Deadline > now && s.ReofferAt <= now).Select(s => Left(s, now)).ToList();
+            again = _shown.Values.Where(s => !s.Answered && !s.Held && s.Deadline > now && s.ReofferAt <= now).Select(s => Left(s, now)).ToList();
         }
         if (again.Count > 0) _log($"invites: {again.Count} pending prompt(s) sent again (the overlay said hello)");
         foreach (var prompt in again) await send(prompt, cancellation).ConfigureAwait(false);
@@ -255,7 +277,9 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                 _log($"invites: accepted, but not now; the prompt shows again in {(int)ReofferAfter.TotalSeconds} s while the invite is pending");
             }
             else _log($"invites: accepted ({result.Outcome.ToString().ToLowerInvariant()})");
-            return result.Notice;
+            // INVITE_UX (owner 2026-11-08): after a hold accepted, nothing more is shown while the game moves in (it shows its own join);
+            // a refusal or a "not now" still says why
+            return result.Outcome == InviteAcceptOutcome.Moving ? null : result.Notice;
         }
         if (answered.FromRequest)
         {
@@ -309,7 +333,7 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
         List<string> ids;
         lock (_lock)
         {
-            ids = _shown.Where(s => !s.Value.Answered).Select(s => s.Key).ToList();
+            ids = _shown.Where(s => !s.Value.Answered && !s.Value.Held).Select(s => s.Key).ToList();
             _shown.Clear();
         }
         foreach (var id in ids) await send(UiFrame.InvitePrompt.Withdraw(id), cancellation).ConfigureAwait(false);

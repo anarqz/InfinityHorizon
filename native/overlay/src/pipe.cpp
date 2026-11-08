@@ -39,13 +39,13 @@
 // player's friend state (0x1F PlayerStateQuery -> 0x20 PlayerState) and sends our items' actions (0x21 PlayerActionRequest ->
 // 0x22 PlayerActionDone) through the fi_overlay_player_* exports the hook calls; nothing of it is drawn here.
 //
-// Protocol 6 (OD-204 T-L3; layouts in ui_frames.h, the queue in lobby_policy.h): 0x23 InvitePrompt from the launcher opens the modal
-// invite prompt (invite.cpp); 0x24 InviteAnswer carries the player's Accept or Decline back. The 0x03 toast's additive flags byte
+// Protocol 6 (OD-204 T-L3; layouts in ui_frames.h, the queue in lobby_policy.h): 0x23 InvitePrompt from the launcher is an invite
+// toast (invite.cpp, INVITE_UX: hold Y to accept); 0x24 InviteAnswer carries the accept back. The 0x03 toast's additive flags byte
 // marks the notices that show even in an official lobby; 0x0E MyWorld's additive leader names who may invite.
 //
-// Protocol 7 (OD-204 T-L4; layouts in ui_frames.h, the model in lobby_policy.h): 0x25 FriendPicker from the launcher opens or
-// refreshes the friend picker (friend_picker.cpp); 0x26 FriendPickerAsk is the Private Lobby pane's Invite friends; 0x27 InviteSend
-// carries the chosen friend's XUID.
+// Protocol 7 (OD-204 T-L4): 0x26 FriendPickerAsk is the Private Lobby pane's Invite friends. The centred picker is gone (INVITE_UX): an
+// older launcher's 0x25 with the open flag opens the FRIENDS sidebar's invite mode, as protocol 12's 0x2E FriendsOpen does; its rows
+// and a refresh without the flag are ignored (the sidebar shows 0x2A), and 0x27 InviteSend is never sent.
 //
 // Protocol 8 (OD-210, CR-S101, W14; layouts in ui_frames.h, the rule in lobby_policy.h): 0x28 LobbyJoinModes from the launcher is the
 // private lobby's "Who can join" (after every 0x0E); 0x29 JoinModesSet carries the leader's choice.
@@ -130,10 +130,16 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         else Log("ui pipe: malformed LobbyJoinModes ignored");
         break;
     }
-    case 0x25: { // protocol 7 (T-L4): the friend picker
+    case 0x25: { // protocol 7 (T-L4): an older launcher's friend picker: its open flag opens the sidebar's invite mode
         FriendPickerFrame picker;
-        if (DecodeFriendPicker(body, size, picker)) SetFriendPicker(picker);
-        else Log("ui pipe: malformed FriendPicker ignored");
+        if (!DecodeFriendPicker(body, size, picker)) Log("ui pipe: malformed FriendPicker ignored");
+        else if (picker.open()) FriendsOpen(true);
+        break;
+    }
+    case 0x2E: { // protocol 12 (INVITE_UX): open the guide on the FRIENDS sidebar, focused
+        uint8_t mode = 0;
+        if (DecodeFriendsOpen(body, size, mode)) FriendsOpen(mode == kFriendsOpenInvite);
+        else Log("ui pipe: malformed FriendsOpen ignored");
         break;
     }
     case 0x16: {
@@ -331,7 +337,6 @@ void Session(HANDLE pipe) {
         g_out.clear();
     }
     InvitesDisconnected(); // T-L3: no launcher to answer to: its prompts go
-    FriendPickerDisconnected(); // T-L4: and so does the picker
     FriendsDisconnected(); // W15: and the friends sidebar
     CloseHandle(read_event);
     CloseHandle(write_event);
@@ -394,7 +399,6 @@ void SendInviteAnswer(const std::string &invite, bool accept) { Queue(0x24, Enco
 
 void SendFriendPickerAsk() { Queue(0x26, {}); }
 
-void SendInviteSend(const std::string &xuid) { Queue(0x27, EncodeInviteSend(xuid)); }
 
 void SendJoinModesSet(uint8_t modes) { Queue(0x29, EncodeJoinModesSet(modes)); }
 void SendFriendsAction(uint8_t kind, const std::string &id, const std::string &text) {

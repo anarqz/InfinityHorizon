@@ -12,11 +12,16 @@
 // - A friend the lobby's "Who can join" excludes shows greyed with the reason. Everything is the launcher's last FriendsState (0x2A);
 //   actions are FriendsAction (0x2B); the launcher answers FriendsResult (0x2C), shown as a notice.
 // - The controller enters with Right (Start from anywhere) and leaves with B at the list or Left; the mouse always works.
+// - Invite mode (owner 2026-11-08, INVITE_UX; 0x2E FriendsOpen, protocol 12): the game's Invite friends and the Private Lobby pane's
+//   button open the guide with this sidebar focused and titled INVITE PLAYERS: friends only, online first, each row with its Invite
+//   (A, Y or a click on it), greyed with the reason when it cannot (offline, in this lobby, invited, Who can join, no lobby). B leaves
+//   invite mode, and closes the guide when invite mode opened it. It replaces the centred friend picker.
 #include "overlay.h"
 
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -25,6 +30,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "lobby_policy.h"
 #include "style.h"
 
 namespace fi {
@@ -57,10 +63,14 @@ bool g_was_open = false;
 ULONGLONG g_refresh_at = 0;
 FriendsStateFrame g_view_state;
 bool g_view_have = false;
+std::atomic<int> g_open_request{-1}; // any thread -> render thread: -1 none, else kFriendsOpenList / kFriendsOpenInvite
+bool g_invite = false;               // invite mode
+bool g_invite_closes_guide = false;  // invite mode opened the guide: B closes it again
+InviteSends g_sends;                 // invites asked for, not answered yet
 
 constexpr float kWidth = 400.0f;
 
-bool Blocked() { return PaneModal() || FriendPickerOpen() || InvitePromptOpen(); }
+bool Blocked() { return PaneModal(); }
 
 // ---------------------------------------------------------------- words
 std::string Fmt(const char *format, const std::string &game) {
@@ -112,14 +122,15 @@ struct Row {
     std::string header;
 };
 
+// The list's rows; in invite mode only the friends (online first): no Add friend, no requests.
 std::vector<Row> RowsOf(const FriendsStateFrame &st) {
     std::vector<Row> rows;
-    rows.push_back({Row::Add, 0, {}});
-    if (!st.joins.empty()) {
+    if (!g_invite) rows.push_back({Row::Add, 0, {}});
+    if (!g_invite && !st.joins.empty()) {
         rows.push_back({Row::Header, 0, T("WANT TO JOIN YOUR LOBBY", "QUEREM ENTRAR NO SEU LOBBY")});
         for (size_t i = 0; i < st.joins.size(); ++i) rows.push_back({Row::Join, static_cast<int>(i), {}});
     }
-    if (!st.requests.empty()) {
+    if (!g_invite && !st.requests.empty()) {
         rows.push_back({Row::Header, 0, T("FRIEND REQUESTS", "PEDIDOS DE AMIZADE")});
         for (size_t i = 0; i < st.requests.size(); ++i) rows.push_back({Row::Request, static_cast<int>(i), {}});
     }
@@ -360,16 +371,55 @@ void ListX(const FriendsStateFrame &st, const Row &row) { // X: ask to join, or 
     }
 }
 
+// What a friend row's Invite says in invite mode (its pill), and the row's reason when it cannot.
+InviteRowState InviteState(const FriendsStateFrame &st, const FriendRowFrame &fr) {
+    return InviteStateOf(fr, st.have_lobby(), g_sends.Sending(fr.id, GetTickCount64()));
+}
+
+const char *InvitePill(InviteRowState state) {
+    switch (state) {
+    case InviteRowState::Available: return T("Invite", "Convidar");
+    case InviteRowState::Sending: return T("Inviting...", "Convidando...");
+    case InviteRowState::Invited: return T("Invited", "Convidado");
+    case InviteRowState::InLobby: return T("In lobby", "No lobby");
+    case InviteRowState::Offline: return T("Offline", "Offline");
+    case InviteRowState::Excluded: return T("Can't join", "Não pode entrar");
+    default: return T("No lobby", "Sem lobby");
+    }
+}
+
+// Invite one friend to my private lobby (Y anywhere in the list, A / a click in invite mode): sent once until the launcher answers.
+void InviteFriend(const FriendsStateFrame &st, const FriendRowFrame &fr) {
+    switch (InviteState(st, fr)) {
+    case InviteRowState::Available:
+        if (g_sends.Begin(fr.id, GetTickCount64())) Act(kFriendsInviteMine, fr.id);
+        break;
+    case InviteRowState::NoLobby:
+        PushToast(ToastKind::Info, T("Friends", "Amigos"), T("Open a private lobby to invite friends", "Abra um lobby privado para convidar amigos"), 30, true);
+        break;
+    case InviteRowState::Excluded:
+        PushToast(ToastKind::Info, T("Friends", "Amigos"), fr.Has(kFriendExcluded) ? ExcludedText(fr.excluded) : T("Cannot join this lobby", "Não pode entrar neste lobby"), 30, true);
+        break;
+    default: break; // the reason is on the row already
+    }
+}
+
 void ListY(const FriendsStateFrame &st, const Row &row) { // Y: invite to my game
-    if (row.kind != Row::Friend) return;
-    const auto &fr = st.friends[static_cast<size_t>(row.index)];
-    if (!st.have_lobby()) PushToast(ToastKind::Info, T("Friends", "Amigos"), T("Open a private lobby to invite friends", "Abra um lobby privado para convidar amigos"), 30, true);
-    else if (fr.Has(kFriendExcluded)) PushToast(ToastKind::Info, T("Friends", "Amigos"), ExcludedText(fr.excluded), 30, true);
-    else if (fr.Has(kFriendCanInvite)) Act(kFriendsInviteMine, fr.id);
+    if (row.kind == Row::Friend) InviteFriend(st, st.friends[static_cast<size_t>(row.index)]);
+}
+
+// B in invite mode: back to the plain list, or the guide closes when invite mode opened it.
+void LeaveInvite() {
+    g_invite = false;
+    if (g_invite_closes_guide) {
+        g_invite_closes_guide = false;
+        CloseSidebar();
+    }
 }
 
 void DrawList(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, bool have, float alpha) {
     const std::vector<Row> rows = RowsOf(st);
+    if (rows.empty()) return; // invite mode with no friends
     g_focus = std::clamp(g_focus, 0, static_cast<int>(rows.size()) - 1);
     if (rows[static_cast<size_t>(g_focus)].kind == Row::Header) MoveFocus(rows, 1);
     const float th = 62 * s, hh = 34 * s, gap = 8 * s;
@@ -396,9 +446,16 @@ void DrawList(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, bool
         y += th + gap;
         if (b.y < l.top - 4 * s || a.y > l.bottom) continue;
         const bool inside = a.y >= l.top - 1 && b.y <= l.bottom + 1;
+        // invite mode: the Invite pill at the row's right end
+        const float pill_w = 112 * s;
+        const ImVec2 pa(b.x - 10 * s - pill_w, a.y + 14 * s), pb(b.x - 10 * s, b.y - 14 * s);
         if (inside && !Blocked() && Inside(mouse, a, b) && ImGui::IsMouseHoveringRect(a, b)) {
             g_focus = i;
-            if (ImGui::IsMouseClicked(0)) { g_in = true; ActivateRow(st, row); }
+            if (ImGui::IsMouseClicked(0)) {
+                g_in = true;
+                if (!g_invite) ActivateRow(st, row);
+                else if (row.kind == Row::Friend && Inside(mouse, pa, pb)) InviteFriend(st, st.friends[static_cast<size_t>(row.index)]);
+            }
         }
         const bool focus = i == g_focus;
         Tile(dl, a, b, focus, g_in);
@@ -419,6 +476,20 @@ void DrawList(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, bool
         const FriendRowFrame &fr = st.friends[static_cast<size_t>(row.index)];
         const bool excluded = fr.Has(kFriendExcluded);
         Disc(dl, ImVec2(a.x + 32 * s, a.y + th / 2), 20 * s, fr.name, fr.Has(kFriendOnline), fr.Has(kFriendSupporter), &fr.id);
+        if (g_invite) { // the name, what it does or why it cannot come, and the Invite pill
+            const InviteRowState state = InviteState(st, fr);
+            const bool can = state == InviteRowState::Available;
+            const float iw = pa.x - tx - 8 * s;
+            Clipped(dl, f.body, ImVec2(tx, a.y + 8 * s), iw, can || state == InviteRowState::Sending ? kText : kTextDim, fr.name.c_str());
+            const std::string sub = excluded ? std::string(ExcludedText(fr.excluded)) : DoingText(fr);
+            Clipped(dl, f.small, ImVec2(tx, a.y + 35 * s), iw, excluded ? kAmber : kTextDim, sub.c_str(), 22);
+            const bool hot = Inside(mouse, pa, pb) && !Blocked();
+            dl->AddRectFilled(pa, pb, can ? (hot || (focus && g_in) ? kPinkU : kPinkDark) : Rgba(52, 52, 58), (pb.y - pa.y) / 2);
+            const char *pill = InvitePill(state);
+            const ImVec2 ps = Measure(f.small, pill);
+            TextAt(dl, f.small, ImVec2((pa.x + pb.x - ps.x) / 2, (pa.y + pb.y - ps.y) / 2), can || state == InviteRowState::Sending ? kText : kTextDim, pill, alpha);
+            continue;
+        }
         Clipped(dl, f.body, ImVec2(tx, a.y + 8 * s), tw, excluded || !fr.Has(kFriendOnline) ? kTextDim : kText, fr.name.c_str());
         if (!fr.discord_user.empty()) { // linked Discord, also in the list
             const float nw = Measure(f.body, fr.name.c_str()).x;
@@ -628,6 +699,7 @@ void DrainInput() {
     for (const auto &r : results) {
         const bool ok = r.result <= kResultNowFriends;
         PushToast(ok ? ToastKind::Friend : ToastKind::Warning, T("Friends", "Amigos"), r.message, 40, true);
+        if (r.kind == kFriendsInviteMine) g_sends.Answered();
         if (r.kind == kFriendsAdd) {
             g_sending = false;
             if (ok && g_view == View::Keyboard) { g_view = View::List; g_text.clear(); }
@@ -655,6 +727,22 @@ void FriendsDisconnected() {
     g_state = FriendsStateFrame{};
     g_have = false;
     g_results.clear();
+}
+
+void FriendsOpen(bool invite) {
+    g_open_request = invite ? kFriendsOpenInvite : kFriendsOpenList;
+    Log("friends: the launcher opens the sidebar%s", invite ? " to invite" : "");
+}
+
+std::string FriendIdByName(const std::string &name) {
+    if (name.empty()) return {};
+    std::lock_guard<std::mutex> lock(g_lock);
+    for (const auto &fr : g_state.friends) {
+        if (fr.name == name) return fr.id;
+        for (const auto &p : fr.profiles)
+            if (p.name == name) return fr.id;
+    }
+    return {};
 }
 
 float FriendsSidebarWidth() { return kWidth * s; }
@@ -685,7 +773,30 @@ bool FriendsNavigate(Nav nav) {
     }
     if (nav == Nav::Menu) { // Start: submit a name being typed, else back to the guide
         if (g_view == View::Keyboard) Submit();
+        else if (g_invite) LeaveInvite();
         else g_in = false;
+        return true;
+    }
+    if (g_invite && g_view == View::List) { // invite mode: Up/Down move, A or Y invites, B (or Left) is done
+        const std::vector<Row> rows = RowsOf(st);
+        if (rows.empty()) {
+            if (nav == Nav::Back || nav == Nav::Left) LeaveInvite();
+            return true;
+        }
+        g_focus = std::clamp(g_focus, 0, static_cast<int>(rows.size()) - 1);
+        if (rows[static_cast<size_t>(g_focus)].kind == Row::Header) MoveFocus(rows, 1);
+        const Row &row = rows[static_cast<size_t>(g_focus)];
+        switch (nav) {
+        case Nav::Up: MoveFocus(rows, -1); break;
+        case Nav::Down: MoveFocus(rows, 1); break;
+        case Nav::Accept:
+        case Nav::Y:
+            if (row.kind == Row::Friend) InviteFriend(st, st.friends[static_cast<size_t>(row.index)]);
+            break;
+        case Nav::Back:
+        case Nav::Left: LeaveInvite(); break;
+        default: break;
+        }
         return true;
     }
     switch (g_view) {
@@ -759,6 +870,12 @@ bool FriendsKeyDown(unsigned vk) {
 
 // Every frame, drawn or not (ui.cpp DrawUi): what the launcher sent is applied, and the list is asked for while the guide is open.
 void FriendsTick() {
+    const int request = g_open_request.exchange(-1);
+    bool opened = false;
+    if (request >= 0 && !SidebarOpen()) {
+        ToggleSidebar();
+        opened = true;
+    }
     const bool open = SidebarOpen();
     if (open && !g_was_open) {
         g_refresh_at = 0;
@@ -767,9 +884,25 @@ void FriendsTick() {
         g_focus = 0;
         g_scroll = 0;
         g_sending = false;
+        g_invite = false;
+        g_invite_closes_guide = false;
     }
-    if (!open && g_was_open) g_in = false;
+    if (!open && g_was_open) {
+        g_in = false;
+        g_invite = false;
+        g_invite_closes_guide = false;
+    }
     g_was_open = open;
+    if (request >= 0 && open) { // INVITE_UX: the sidebar shown and focused, at its top (online friends first)
+        ClosePane();
+        g_in = true;
+        g_view = View::List;
+        g_invite = request == kFriendsOpenInvite;
+        g_invite_closes_guide = g_invite && opened;
+        g_focus = 0;
+        g_scroll = 0;
+        g_refresh_at = 0;
+    }
     DrainInput();
     const ULONGLONG now = GetTickCount64();
     if (open && !OfflineSession() && now - g_refresh_at > 30000) { // the list stays current while the guide is open
@@ -795,7 +928,12 @@ void DrawFriendsSidebar(ImDrawList *dl, float width, float height, float alpha) 
     }
     dl->AddRectFilledMultiColor(ImVec2(l.x, 0), ImVec2(l.x + l.w, 150 * s), Rgba(230, 0, 126, 0.16f * alpha), Rgba(230, 0, 126, 0.06f * alpha),
                                 Rgba(20, 20, 22, 0), Rgba(20, 20, 22, 0));
-    if (g_view == View::List || !g_view_have) {
+    if (g_invite && g_view == View::List) {
+        TextAt(dl, f.heading, ImVec2(l.x + l.pad, 30 * s), kText, T("INVITE PLAYERS", "CONVIDAR JOGADORES"), alpha);
+        const bool lobby = g_view_have && g_view_state.have_lobby();
+        TextAt(dl, f.small, ImVec2(l.x + l.pad, 70 * s), lobby ? kTextDim : kAmber,
+               lobby ? T("To your private lobby", "Para o seu lobby privado") : T("Open a private lobby to invite friends", "Abra um lobby privado para convidar amigos"), alpha);
+    } else if (g_view == View::List || !g_view_have) {
         TextAt(dl, f.heading, ImVec2(l.x + l.pad, 30 * s), kText, T("FRIENDS", "AMIGOS"), alpha);
         size_t online = 0;
         for (const auto &fr : g_view_state.friends) online += fr.Has(kFriendOnline) ? 1 : 0;
@@ -820,7 +958,9 @@ void DrawFriendsSidebar(ImDrawList *dl, float width, float height, float alpha) 
         TextAt(dl, f.small, ImVec2(l.x + l.pad, l.top + 90 * s), kAmber, T("Your friends list is unavailable right now", "Sua lista de amigos está indisponível agora"), alpha);
     } else if (g_view == View::List) {
         DrawList(dl, l, g_view_state, true, alpha);
-        if (g_view_state.friends.empty() && g_view_state.requests.empty() && g_view_state.joins.empty())
+        if (g_invite && g_view_state.friends.empty())
+            TextAt(dl, f.small, ImVec2(l.x + l.pad, l.top + 20 * s), kTextDim, T("No friends to invite yet", "Nenhum amigo para convidar ainda"), alpha);
+        else if (!g_invite && g_view_state.friends.empty() && g_view_state.requests.empty() && g_view_state.joins.empty())
             TextAt(dl, f.small, ImVec2(l.x + l.pad, l.top + 90 * s), kTextDim, T("No friends yet. Add one by their profile name.", "Nenhum amigo ainda. Adicione pelo nome do perfil."), alpha);
     } else if (g_view == View::Card) {
         DrawCard(dl, l, g_view_state, alpha);
@@ -833,7 +973,10 @@ void DrawFriendsSidebar(ImDrawList *dl, float width, float height, float alpha) 
         return;
     }
     switch (g_view) {
-    case View::List: HintLine(dl, l, alpha, {{"A", T("Open", "Abrir")}, {"X", T("Ask to join", "Pedir")}, {"Y", T("Invite", "Convidar")}, {"B", T("Back", "Voltar")}}); break;
+    case View::List:
+        if (g_invite) HintLine(dl, l, alpha, {{"A", T("Invite", "Convidar")}, {"B", T("Done", "Pronto")}});
+        else HintLine(dl, l, alpha, {{"A", T("Open", "Abrir")}, {"X", T("Ask to join", "Pedir")}, {"Y", T("Invite", "Convidar")}, {"B", T("Back", "Voltar")}});
+        break;
     case View::Card: HintLine(dl, l, alpha, {{"A", T("Select", "Selecionar")}, {"B", T("Back", "Voltar")}}); break;
     case View::Keyboard: HintLine(dl, l, alpha, {{"A", T("Type", "Digitar")}, {"X", T("Delete", "Apagar")}, {"Y", T("Space", "Espaço")}, {"B", T("Cancel", "Cancelar")}}); break;
     }

@@ -1,18 +1,24 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-// Infinity overlay: the invite prompt (OD-204 T-L3, WORLDS_OFFICIAL §12.5). A friend invited this player to a private lobby: the
-// launcher sends 0x23 InvitePrompt and this modal asks Accept or Decline; the answer goes back as 0x24 InviteAnswer. It is never a
-// toast: toasts follow OD-192 and are dropped in official lobbies, and an invitee may well be in one.
+// Infinity overlay: the invite toasts (owner 2026-11-08, docs/launcher/batch-1107/INVITE_UX.md; WORLDS_OFFICIAL §12.5). A friend
+// invited this player to a private lobby: the launcher sends 0x23 InvitePrompt and a toast slides in at the TOP RIGHT with the inviter's
+// avatar (the 0x2D cache of the FRIENDS sidebar; the initials until it arrives), "{name} invites you to play" and "Hold (Y) to accept".
 //
-// - With the guide closed the prompt shows as a card at the top of the screen with how to open the guide; it never takes the pad
-//   from the game (an invite can arrive mid-race). With the guide open it is modal: it holds the controller (Left/Right or Up/Down
-//   choose, A answers, B closes the guide and leaves the prompt waiting) and the mouse (a click outside it does nothing). Decline
-//   is focused first, so an A meant for the guide never accepts an invite by accident.
-// - One prompt at a time; others wait (lobby_policy.h InviteQueue). The time left counts down; at 0 the prompt goes without an
-//   answer (the server's invite expires on its own, MATCHMAKING_API §3.4: 2 minutes).
-// - What happens after Accept (the join, the proof, moving the game) is the launcher's (T-L5); this file only asks.
+// - Holding Y (a keyboard: F6, kHoldKeyName) fills a ring around the glyph in HoldRing::kHoldSeconds (1.2 s); released early, it drains.
+//   When it completes the top toast's invite is accepted (0x24 InviteAnswer, accept) and the toast slides out; nothing else is shown
+//   (the game shows its own join). There is no decline: a toast left alone slides out at the end of its answer window (the invite's own
+//   time, the countdown) and nothing is sent (the server's invite lapses on its own).
+// - Up to three toasts stack under each other, the oldest on top (the one a hold accepts); more wait their turn (lobby_policy.h
+//   InviteQueue). A Y already held when a toast comes never accepts it: it must be released first (HoldRing).
+// - While a toast is on screen the game's pad reading has Y taken out (input.cpp), and F6 never reaches the game, so the hold is no press
+//   in the game (FH2's Y is the rewind); the Y that completed a hold stays held back until it is released.
+// - With the guide open the toasts are hidden (Y is the guide's there) and keep counting down; they come back when it closes.
+// - The launcher holds new invites back while this player races (InviteInbox.Holding); they come after the race with their time left.
 #include "overlay.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <map>
 #include <mutex>
 #include <string>
 
@@ -28,55 +34,67 @@ namespace {
 std::mutex g_lock;
 InviteQueue g_queue; // under g_lock: the pipe thread offers, the render thread shows and answers
 
+// render thread
+HoldRing g_ring;
+bool g_held = false;                 // the pad's Y or the keyboard's F6, this frame (input.cpp)
+bool g_dev_hold = false;             // the dev host's command 28
+std::map<std::string, float> g_ys;   // each drawn toast's animated top
+std::atomic<bool> g_on_screen{false}; // a live toast shows (the game's input thread reads it)
+
 const char *ActivityName(const std::string &activity) {
     if (activity == "freeroam") return T("Free Roam", "Free Roam");
     if (activity == "roadtrip") return T("Road Trip", "Road Trip");
-    return T("Lobby", "Lobby");
+    if (activity == "race") return T("Race", "Corrida");
+    return T("Private lobby", "Lobby privado");
 }
 
-struct Layout {
-    ImVec2 a, b;           // the card
-    ImVec2 accept_a, accept_b, decline_a, decline_b;
-    bool modal = false;    // the guide is open: centred, with buttons
-};
-
-Layout LayoutOf(float width, float height, bool modal) {
-    Layout l;
-    l.modal = modal;
-    const float w = std::min(560 * s, width - 48 * s), h = modal ? 250 * s : 118 * s;
-    const float x = (width - w) / 2, y = modal ? (height - h) / 2 : 40 * s;
-    l.a = ImVec2(x, y);
-    l.b = ImVec2(x + w, y + h);
-    const float bw = (w - 3 * 24 * s) / 2, bh = 52 * s, by = y + h - 24 * s - bh;
-    l.accept_a = ImVec2(x + 24 * s, by);
-    l.accept_b = ImVec2(x + 24 * s + bw, by + bh);
-    l.decline_a = ImVec2(l.accept_b.x + 24 * s, by);
-    l.decline_b = ImVec2(l.decline_a.x + bw, by + bh);
-    return l;
+// The inviter's disc: its avatar once the launcher sent it (0x2D, keyed by the FRIENDS row of that name), else its initials.
+void Avatar(ImDrawList *dl, ImVec2 c, float r, const std::string &name, float alpha) {
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+    const std::string id = FriendIdByName(name);
+    const ImU32 white = Rgba(255, 255, 255, alpha);
+    if (const uint64_t texture = id.empty() ? 0 : FriendAvatarTexture(id, u0, v0, u1, v1)) {
+        dl->AddImageRounded(static_cast<ImTextureID>(texture), ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), ImVec2(u0, v0), ImVec2(u1, v1), white, r);
+        return;
+    }
+    dl->AddCircleFilled(c, r, Rgba(230, 0, 126, alpha), 40);
+    std::string initials = name.substr(0, std::min<size_t>(name.size() >= 2 && static_cast<unsigned char>(name[0]) < 0x80 ? 2 : 1, name.size()));
+    for (auto &ch : initials) ch = static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
+    const ImVec2 size = Measure(f.title, initials.c_str());
+    TextAt(dl, f.title, ImVec2(c.x - size.x / 2, c.y - size.y / 2), kText, initials.c_str(), alpha);
 }
 
-bool Inside(ImVec2 p, ImVec2 a, ImVec2 b) { return p.x >= a.x && p.x < b.x && p.y >= a.y && p.y < b.y; }
+// The glyph (the pad's yellow Y, or the F6 keycap) with the hold ring around it, `progress` 0..1 filled clockwise from the top.
+void HoldGlyph(ImDrawList *dl, ImVec2 c, float r, float progress, bool pad, float alpha) {
+    dl->AddCircle(c, r + 4 * s, Rgba(255, 255, 255, 0.22f * alpha), 40, 3 * s);
+    if (progress > 0) {
+        constexpr float kTop = -1.5707963f, kTurn = 6.2831853f;
+        dl->PathArcTo(c, r + 4 * s, kTop, kTop + kTurn * std::min(1.0f, progress), 48);
+        dl->PathStroke(Rgba(255, 185, 0, alpha), ImDrawFlags_None, 3.5f * s);
+    }
+    if (pad) {
+        FaceButton(dl, c, r, kYellow, "Y");
+        return;
+    }
+    const ImVec2 a(c.x - r, c.y - r * 0.8f), b(c.x + r, c.y + r * 0.8f);
+    dl->AddRectFilled(a, b, Rgba(58, 58, 64, alpha), 4 * s);
+    dl->AddRect(a, b, Rgba(255, 255, 255, 0.5f * alpha), 4 * s, 0, 1.2f * s);
+    const ImVec2 ts = Measure(f.tag, kHoldKeyName);
+    TextAt(dl, f.tag, ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), kText, kHoldKeyName, alpha);
+}
 
-// The player answered the shown prompt (render thread).
-void Answer(bool accept) {
+void Accept() {
     std::string id;
     {
         std::lock_guard<std::mutex> lock(g_lock);
-        if (!g_queue.Answer(&id)) return;
+        if (!g_queue.Answer(&id, GetTickCount64())) return;
     }
     if (DevHost()) {
-        Log("invite: dev host: %s (no launcher)", accept ? "accepted" : "declined");
+        Log("invite: dev host: accepted by a hold (no launcher)");
         return;
     }
-    SendInviteAnswer(id, accept);
-    Log("invite: %s; the launcher acts on it", accept ? "accepted" : "declined");
-}
-
-void Button(ImDrawList *dl, ImVec2 a, ImVec2 b, bool focus, bool primary, const char *text) {
-    dl->AddRectFilled(a, b, primary ? kPinkU : kTile, 6 * s);
-    if (focus) FocusRing(dl, a, b, 6 * s);
-    const ImVec2 ts = Measure(f.body, text);
-    TextAt(dl, f.body, ImVec2((a.x + b.x - ts.x) / 2, (a.y + b.y - ts.y) / 2), kText, text);
+    SendInviteAnswer(id, true);
+    Log("invite: accepted by a hold; the launcher joins and moves the game");
 }
 
 } // namespace
@@ -102,88 +120,85 @@ bool InvitePromptOpen() {
     return g_queue.Current() != nullptr;
 }
 
-bool InviteNavigate(Nav nav) {
-    if (!SidebarOpen()) return false;
-    int focus = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_lock);
-        if (!g_queue.Current()) return false;
-        switch (nav) {
-        case Nav::Left:
-        case Nav::Up: g_queue.Move(0); return true;
-        case Nav::Right:
-        case Nav::Down: g_queue.Move(1); return true;
-        case Nav::Back: break; // the guide closes; the prompt keeps waiting (below, outside the lock)
-        case Nav::Accept: focus = g_queue.Focus(); break;
-        default: return true; // modal: tabs, X, Y and Menu do nothing under it
-        }
-    }
-    if (nav == Nav::Back) { // B closes the guide, whatever screen is under the prompt; nothing is answered
-        CloseSidebar();
-        return true;
-    }
-    Answer(focus == 0);
-    return true;
+bool InviteToastsOnScreen() { return g_on_screen.load(); }
+
+void SetInviteHold(bool held) { g_held = held; }
+
+void DevHoldInvite() {
+    if (DevHost()) g_dev_hold = true;
 }
 
-void InviteMouse(float width, float height) {
-    if (!SidebarOpen() || !ImGui::IsMouseClicked(0) || !InvitePromptOpen()) return;
-    // the guide is open and a prompt shows: a click on a button answers; any other click is eaten (modal), before anything
-    // under the prompt sees it
-    const Layout l = LayoutOf(width, height, true);
-    const ImVec2 at = ImGui::GetIO().MousePos;
-    ImGui::GetIO().MouseDown[0] = false;
-    if (Inside(at, l.accept_a, l.accept_b)) Answer(true);
-    else if (Inside(at, l.decline_a, l.decline_b)) Answer(false);
-}
-
-void DrawInvitePrompt(float width, float height, float dt) {
-    (void)dt;
+void DrawInviteToasts(float width, float height, float dt) {
+    (void)height;
     const uint64_t now = GetTickCount64();
-    InvitePromptFrame prompt;
-    uint32_t left = 0;
-    size_t waiting = 0;
-    int focus = 0;
+    std::vector<InviteQueue::Entry> drawn;
+
+    std::string top_id;
     {
         std::lock_guard<std::mutex> lock(g_lock);
-        if (g_queue.Expire(now)) Log("invite: a prompt expired without an answer");
-        const auto *current = g_queue.Current();
-        if (!current) return;
-        prompt = current->prompt;
-        left = g_queue.SecondsLeft(now);
-        waiting = g_queue.Waiting();
-        focus = g_queue.Focus();
+        if (g_queue.Expire(now)) Log("invite: a prompt's time ran out without an answer");
+        if (const auto *current = g_queue.Current()) top_id = current->prompt.id;
+        if (!SidebarOpen()) drawn = g_queue.Drawn(now);
     }
-    const bool modal = SidebarOpen();
-    const Layout l = LayoutOf(width, height, modal);
-    ImDrawList *dl = ImGui::GetForegroundDrawList();
-    if (modal) dl->AddRectFilled(ImVec2(0, 0), ImVec2(width, height), Rgba(0, 0, 0, 0.45f));
-    Shadow(dl, l.a, l.b, 10 * s, 1.0f);
-    dl->AddRectFilled(l.a, l.b, kPanel, 10 * s);
-    dl->AddRect(l.a, l.b, kPinkU, 10 * s, 0, 2 * s);
-    const float pad = 24 * s, x = l.a.x + pad, w = l.b.x - l.a.x - 2 * pad;
-    float y = l.a.y + 18 * s;
-    TextAt(dl, f.tag, ImVec2(x, y), kPinkU, T("PRIVATE LOBBY INVITE", "CONVITE PARA LOBBY PRIVADO"));
-    const std::string time = std::to_string(left) + " s";
-    const ImVec2 ts = Measure(f.small, time.c_str());
-    TextAt(dl, f.small, ImVec2(l.b.x - pad - ts.x, y - 2 * s), left <= 15 ? kAmber : kTextDim, time.c_str());
-    y += 22 * s;
-    const std::string line = prompt.from + T(" invites you to a private lobby", " convida você para um lobby privado");
-    dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + 34 * s), true);
-    TextAt(dl, f.title, ImVec2(x, y), kText, line.c_str());
-    dl->PopClipRect();
-    y += 32 * s;
-    std::string sub = ActivityName(prompt.activity);
-    if (waiting > 1) sub += std::string(" · +") + std::to_string(waiting - 1) + T(" more waiting", " na fila");
-    TextAt(dl, f.small, ImVec2(x, y), kTextDim, sub.c_str());
-    if (!modal) {
-        y += 24 * s;
-        TextAt(dl, f.small, ImVec2(x, y), kText,
-               T("Open the guide to answer: hold LB + RB, or press Shift+Tab", "Abra o guia para responder: segure LB + RB, ou pressione Shift+Tab"));
+    const bool live = !top_id.empty() && !SidebarOpen() && !InPassthrough();
+    g_on_screen = live;
+    if (!live) g_ring.Reset();
+    else if (g_ring.Update(g_held || g_dev_hold, dt)) Accept();
+    if (drawn.empty()) {
+        g_ys.clear();
         return;
     }
-    Button(dl, l.accept_a, l.accept_b, focus == 0, true, T("Accept", "Aceitar"));
-    Button(dl, l.decline_a, l.decline_b, focus == 1, false, T("Decline", "Recusar"));
+    const float w = std::min(440 * s, width - 32 * s), h = 104 * s, margin = 24 * s, gap = 12 * s;
+    const bool pad = PadPresent();
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    std::map<std::string, float> ys;
+    float slot = margin;
+    for (const auto &e : drawn) {
+        const bool leaving = !e.live();
+        float &y = g_ys.try_emplace(e.prompt.id, slot).first->second;
+        if (!leaving) y += (slot - y) * std::min(1.0f, dt * 14.0f); // a leaving toast keeps its place while it slides out
+        ys[e.prompt.id] = y;
+        const float in = e.shown_ms ? EaseOutCubic(static_cast<float>(now - e.shown_ms) / InviteQueue::kSlideMs) : 0.0f;
+        const float out = leaving ? EaseInCubic(static_cast<float>(now - e.leaving_ms) / InviteQueue::kSlideMs) : 0.0f;
+        const float shift = (1.0f - in + out) * (w + margin);
+        const float alpha = std::clamp(in - out, 0.0f, 1.0f);
+        const ImVec2 a(width - margin - w + shift, y), b(width - margin + shift, y + h);
+        if (!leaving) slot += h + gap;
+        if (alpha <= 0.01f) continue;
+        const bool first = e.prompt.id == top_id;
+        Shadow(dl, a, b, 12 * s, alpha);
+        dl->AddRectFilled(a, b, Rgba(20, 20, 22, 0.96f * alpha), 12 * s);
+        dl->AddRect(a, b, first ? Rgba(230, 0, 126, alpha) : Rgba(255, 255, 255, 0.14f * alpha), 12 * s, 0, (first ? 2.0f : 1.2f) * s);
+        const float pad_x = 16 * s, disc = 30 * s;
+        Avatar(dl, ImVec2(a.x + pad_x + disc, a.y + h / 2 - 6 * s), disc, e.prompt.from, alpha);
+        const float tx = a.x + pad_x + 2 * disc + 14 * s;
+        // the time left, top right; the line under it empties with the answer window
+        const uint32_t left = InviteQueue::SecondsLeft(e, now);
+        const std::string time = std::to_string(left) + " s";
+        const ImVec2 tsz = Measure(f.small, time.c_str());
+        TextAt(dl, f.small, ImVec2(b.x - pad_x - tsz.x, a.y + 12 * s), left <= 15 ? kAmber : kTextDim, time.c_str(), alpha);
+        const std::string line = e.prompt.from + T(" invites you to play", " convida você para jogar");
+        dl->PushClipRect(ImVec2(tx, a.y), ImVec2(b.x - pad_x - tsz.x - 8 * s, b.y), true);
+        TextAt(dl, f.body, ImVec2(tx, a.y + 12 * s), kText, line.c_str(), alpha);
+        dl->PopClipRect();
+        TextAt(dl, f.small, ImVec2(tx, a.y + 36 * s), kTextDim, ActivityName(e.prompt.activity), alpha);
+        const float hy = a.y + 74 * s;
+        if (first && !leaving) { // "Hold (Y) to accept", the ring on the glyph
+            const char *hold = T("Hold", "Segure"), *accept = T("to accept", "para aceitar");
+            const ImVec2 hs = Measure(f.small, hold);
+            TextAt(dl, f.small, ImVec2(tx, hy - hs.y / 2), kText, hold, alpha);
+            const float r = 11 * s;
+            const ImVec2 gc(tx + hs.x + 8 * s + r + 4 * s, hy);
+            HoldGlyph(dl, gc, r, g_ring.Progress(), pad, alpha);
+            TextAt(dl, f.small, ImVec2(gc.x + r + 12 * s, hy - hs.y / 2), kText, accept, alpha);
+        } else if (!leaving) {
+            TextAt(dl, f.small, ImVec2(tx, hy - Measure(f.small, "N").y / 2), kTextDim, T("Next in line", "Próximo da fila"), alpha);
+        }
+        const float total = e.prompt.expires ? static_cast<float>(e.prompt.expires) : 1.0f;
+        const float frac = std::clamp((static_cast<float>(e.deadline_ms) - static_cast<float>(now)) / (total * 1000.0f), 0.0f, 1.0f);
+        dl->AddRectFilled(ImVec2(a.x + 12 * s, b.y - 5 * s), ImVec2(a.x + 12 * s + (w - 24 * s) * frac, b.y - 3 * s), Rgba(230, 0, 126, 0.8f * alpha), 1 * s);
+    }
+    g_ys.swap(ys);
 }
 
 } // namespace fi

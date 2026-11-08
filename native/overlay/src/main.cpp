@@ -175,14 +175,22 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
         SetInvitePrompt(p);
         break;
     }
-    case 23: { // T-L4: a synthetic friend picker, as the launcher's 0x25 with the open flag would
-        FriendPickerFrame p;
-        p.flags = kPickerOpen;
-        p.friends = {{"4", "Synthetic#00311", kPickerAvailable}, {"5", "Synthetic#00412", kPickerInvited},
-                     {"2", "Synthetic#00230", kPickerInLobby}, {"6", "Synthetic#00519", kPickerOffline}};
-        SetFriendPicker(p);
+    case 23: FriendsOpen(true); break; // INVITE_UX: the FRIENDS sidebar's invite mode, as the launcher's 0x2E would open it
+    case 27: { // INVITE_UX: two more synthetic invites, so the toasts stack
+        InvitePromptFrame p;
+        p.id = "dev-invite-2";
+        p.from = "Synthetic#00311";
+        p.activity = "roadtrip";
+        p.expires = 90;
+        SetInvitePrompt(p);
+        p.id = "dev-invite-3";
+        p.from = "Synthetic#00412";
+        p.activity = "";
+        p.expires = 61;
+        SetInvitePrompt(p);
         break;
     }
+    case 28: DevHoldInvite(); break; // INVITE_UX: as if Y were held from now on (the ring fills, then accepts the top toast)
     case 24: { // W15: a synthetic friends state, as the launcher's 0x2A would send it
         FriendsStateFrame st;
         st.flags = kFriendsLoaded | kFriendsHaveLobby;
@@ -195,7 +203,7 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
         bia.id = "11"; bia.name = "Synthetic#00230"; bia.flags = kFriendOnline | kFriendCanAsk | kFriendExcluded | kFriendRacing; bia.game = "FH2"; bia.activity = kActRace;
         bia.excluded = kExcludedMode; bia.profiles = {{"Synthetic#00230", 1, "FH2"}};
         FriendRowFrame cal;
-        cal.id = "12"; cal.name = "Synthetic#00311"; cal.flags = kFriendOnline | kFriendCanAsk | kFriendCanInvite | kFriendPrivate; cal.game = "FM5"; cal.activity = kActFreeRoam;
+        cal.id = "12"; cal.name = "Synthetic#00311"; cal.flags = kFriendOnline | kFriendCanAsk | kFriendInvited | kFriendPrivate; cal.game = "FM5"; cal.activity = kActFreeRoam;
         cal.profiles = {{"Synthetic#00311", 1, "FM5"}};
         FriendRowFrame zed;
         zed.id = "20"; zed.name = "Synthetic#00412"; zed.profiles = {{"Synthetic#00412", 1, "FH2"}};

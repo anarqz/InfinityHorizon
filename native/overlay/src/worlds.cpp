@@ -7,7 +7,7 @@
 //   and where lobbies come from.
 // - A private official lobby (MyWorld.is_private) is the Private Lobby: its players with Report, Friends, Mute and the voice
 //   volume, Leave lobby (A12, OD-196) and Invite friends, enabled for the current lobby leader only (lobby_policy.h InviteGateOf;
-//   it asks the launcher for the friend picker, friend_picker.cpp, T-L4). Any other official lobby is the Official Lobby (OD-192): the same pane without Invite.
+//   it asks the launcher to open the FRIENDS sidebar to invite, friends.cpp, INVITE_UX). Any other official lobby is the Official Lobby (OD-192): the same pane without Invite.
 // - OD-210 (CR-S101, W14): the Private Lobby also shows "Who can join" (Everyone, Hardcore only, Noob only; FM5: no Hardcore) from
 //   the launcher's 0x28; the current leader's A moves it to the next choice (0x29, PUT …/modes), everyone else reads it. It applies to
 //   new joins only: nobody already here is removed (kicking stays the leader's).
@@ -124,19 +124,16 @@ void Act(uint8_t action, const MemberRow &member, uint8_t reason) {
     }
 }
 
-// Invite friends (T-L4): the launcher answers 0x26 with the friend picker (0x25, open) or a notice; the dev host opens a synthetic one.
+// Invite friends (T-L4, INVITE_UX): the launcher answers 0x26 with a fresh 0x2A and 0x2E FriendsOpen (the FRIENDS sidebar's invite
+// mode) or a notice; the dev host opens the invite mode at once.
 void InviteFriends(const MyWorld &m) {
     if (InviteGateOf(m) != InviteGate::Allowed) return;
     if (DevHost()) {
-        FriendPickerFrame p;
-        p.flags = kPickerOpen;
-        p.friends = {{"2", "Synthetic#00230", kPickerInLobby}, {"4", "Synthetic#00311", kPickerAvailable},
-                     {"5", "Synthetic#00412", kPickerInvited}, {"6", "Synthetic#00519", kPickerOffline}};
-        SetFriendPicker(p);
+        FriendsOpen(true);
         return;
     }
     SendFriendPickerAsk();
-    Log("invite: Invite friends chosen in the Private Lobby pane; the launcher answers with its friend picker");
+    Log("invite: Invite friends chosen in the Private Lobby pane; the launcher opens the FRIENDS sidebar to invite");
 }
 
 // OD-210 (W14): the words of a "Who can join" choice
@@ -219,9 +216,9 @@ float WrappedHeight(ImFont *font, float width, const char *text) {
     return font->CalcTextSizeA(font->FontSize, FLT_MAX, width, text).y;
 }
 
-// a modal right pane, invite prompt or friend picker holds the input: the tab underneath takes no clicks
+// a modal right pane holds the input: the tab underneath takes no clicks
 bool Clicked(ImVec2 a, ImVec2 b) {
-    return !PaneModal() && !InvitePromptOpen() && !FriendPickerOpen() && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0);
+    return !PaneModal() && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0);
 }
 
 bool g_accept = false; // A, applied at draw time on the focused item
