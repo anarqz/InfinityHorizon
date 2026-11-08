@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using Infinity.Core.Api;
 using Infinity.Core.Process;
 
 namespace Infinity.Core.Shell;
@@ -136,8 +137,9 @@ public sealed class PlaySelection(string stateDirectory)
 }
 
 /// <summary>
-/// Owner 2026-11-08: the Profiles page manages profiles only. The ⋯ menu's tools (the save tools act on PLAY's selected game); none of
-/// them plays or starts a career, which PLAY alone does.
+/// Owner 2026-11-08 (PROFILES_ROWS): the Profiles page's two kinds of ⋯ menu. A profile card's ⋯ holds only the profile's own actions
+/// (<see cref="ProfileLevel"/>); each game row under it has its own ⋯ with that game's CAREER actions (<see cref="CareerLevel"/>), which open
+/// the existing screens with the row's game set. No tool plays a game; the one start is "Start the other profile from this" career.
 /// </summary>
 public static class ProfileTools
 {
@@ -145,32 +147,69 @@ public static class ProfileTools
     public const string History = "history";
     public const string Resolve = "resolve";
     public const string CopyTo = "copy-azimuth";
+    public const string StartOther = "start-other";
     public const string Download = "download";
     public const string HelpSensei = "help";
-    public const string RestoreOriginal = "restore-original";
     public const string Rename = "rename";
     public const string DeleteCareer = "delete-career";
     public const string DeleteProfile = "delete-profile";
 
-    /// <summary>Every tool the page may offer, in the menu's order.</summary>
-    public static IReadOnlyList<string> All { get; } =
-        [ManageSaves, History, Resolve, CopyTo, Download, HelpSensei, RestoreOriginal, Rename, DeleteCareer, DeleteProfile];
+    /// <summary>The profile card's tools, in the menu's order.</summary>
+    public static IReadOnlyList<string> ProfileLevel { get; } = [DeleteProfile, Rename, HelpSensei];
 
-    /// <summary>The menu of one profile card: the tools that apply to it, in order (whether each is enabled is the page's).</summary>
-    /// <param name="started">The profile has a started career of the selected game (its saves can be copied, resolved, downloaded).</param>
+    /// <summary>A game row's career tools, in the menu's order (owner 2026-11-08).</summary>
+    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, StartOther, History, Resolve, ManageSaves, Download, DeleteCareer];
+
+    /// <summary>The profile card's menu (whether each is enabled is the page's).</summary>
+    /// <param name="canRename">The server allows this profile a rename now (a name change notice): otherwise Rename is not listed.</param>
+    /// <param name="canDeleteProfile">The whole profile can be deleted.</param>
+    public static IReadOnlyList<string> ProfileMenu(bool canRename, bool canDeleteProfile)
+    {
+        var list = new List<string>();
+        if (canDeleteProfile) list.Add(DeleteProfile);
+        if (canRename) list.Add(Rename);
+        list.Add(HelpSensei);
+        return list;
+    }
+
+    /// <summary>One game row's menu: the career tools that apply to it, in order (whether each is enabled is the page's).</summary>
+    /// <param name="started">The profile has a started career of the row's game (its saves can be copied, resolved, downloaded, start the other profile).</param>
     /// <param name="canDownload">Its sync chip allows a download onto this PC (a game with cloud saves).</param>
     /// <param name="canDeleteCareer">A career of the game exists to delete.</param>
-    /// <param name="canDeleteProfile">The whole profile can be deleted.</param>
-    public static IReadOnlyList<string> Menu(bool started, bool canDownload, bool canDeleteCareer, bool canDeleteProfile)
+    public static IReadOnlyList<string> CareerMenu(bool started, bool canDownload, bool canDeleteCareer)
     {
-        var list = new List<string> { ManageSaves, History };
-        if (started) { list.Add(Resolve); list.Add(CopyTo); }
+        var list = new List<string>();
+        if (started) { list.Add(CopyTo); list.Add(StartOther); }
+        list.Add(History);
+        if (started) list.Add(Resolve);
+        list.Add(ManageSaves);
         if (started && canDownload) list.Add(Download);
-        list.Add(HelpSensei);
-        list.Add(RestoreOriginal);
-        list.Add(Rename);
         if (canDeleteCareer) list.Add(DeleteCareer);
-        if (canDeleteProfile) list.Add(DeleteProfile);
         return list;
+    }
+}
+
+/// <summary>One game row of a profile card (owner 2026-11-08): the catalog game and the profile's career of it (null card: the profile is not on the board of that game).</summary>
+public sealed record ProfileGameFacts(GameDefinition Game, BoardCard? Card)
+{
+    /// <summary>The career has progress from <c>/me</c> ("LV 15 · CR 15,858 · 22h"); otherwise the row says "No career data yet".</summary>
+    public bool HasCareerData => Card is { State: CareerState.Started, Career.Progress: not null };
+
+    public bool Started => Card?.State == CareerState.Started;
+}
+
+/// <summary>
+/// Owner 2026-11-08 (PROFILES_ROWS): under each profile card, one row per catalog game, in catalog order, from the single <c>/me</c> (no
+/// request per row). <paramref name="flags"/> gives each game's board flags (this PC's files of that game).
+/// </summary>
+public static class ProfileGameRows
+{
+    public static IReadOnlyList<ProfileGameFacts> Build(Me me, string profileId, IEnumerable<GameDefinition> catalog, Func<GameDefinition, BoardFlags> flags)
+    {
+        ArgumentNullException.ThrowIfNull(me);
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(flags);
+        return [.. catalog.Select(game => new ProfileGameFacts(game,
+            ProfileBoard.Build(me, game, flags(game)).FirstOrDefault(c => c.Player.ProfileId == profileId)))];
     }
 }

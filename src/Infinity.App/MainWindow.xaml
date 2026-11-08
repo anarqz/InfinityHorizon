@@ -1166,17 +1166,11 @@
               <DockPanel LastChildFill="True">
                 <Button DockPanel.Dock="Left" Content="{Binding S[sm.back]}" Style="{StaticResource SmButton}" Padding="12,6" Margin="0,0,14,0" FontSize="13"
                         Click="OnSavesBack" Visibility="{Binding SavesCanGoBack, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding S[sm.back]}" />
-                <!-- owner 2026-11-08: the save tools act on PLAY's selected game (chosen there, shown here) -->
+                <!-- owner 2026-11-08 (PROFILES_ROWS): no game pill here; a game row's action sets its game and the breadcrumb names it -->
                 <!-- games-5: History's Refresh, small, at the right of the head row (out of the slot filters) -->
                 <Button x:Name="HistoryRefresh" DockPanel.Dock="Right" Content="{Binding S[sm.history_refresh]}" Style="{StaticResource SmButton}" Padding="10,4" FontSize="12"
                         Margin="10,0,0,0" VerticalAlignment="Center" Click="OnHistoryRefresh" IsEnabled="{Binding Idle}"
                         Visibility="{Binding ShowSavesHistory, Converter={StaticResource Visible}}" />
-                <Border DockPanel.Dock="Right" Style="{StaticResource SmPill}" Padding="12,6" ToolTip="{Binding S[sm.game_from_play]}">
-                  <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="{Binding S[sm.game_label]}" Foreground="{StaticResource InfinityMuted}" FontSize="12" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding GameLabel}" FontWeight="SemiBold" Margin="6,0,0,0" />
-                  </StackPanel>
-                </Border>
                 <TextBlock VerticalAlignment="Center" FontSize="15" TextTrimming="CharacterEllipsis">
                   <Run Text="{Binding SavesTrail, Mode=OneWay}" Foreground="{StaticResource InfinityMuted}" /><Run Text="{Binding SavesTrailLast, Mode=OneWay}" FontWeight="SemiBold" />
                 </TextBlock>
@@ -1235,38 +1229,83 @@
                                   </Grid>
                                   <StackPanel Margin="16,2,0,0" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding Gamertag}" FontSize="22" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding Stats}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                               Visibility="{Binding HasStats, Converter={StaticResource Visible}}" />
-                                    <TextBlock Text="{Binding NoCareerTitle}" Foreground="{Binding Accent}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"
-                                               Visibility="{Binding HasNoCareer, Converter={StaticResource Visible}}" />
                                   </StackPanel>
                                 </DockPanel>
-                                <TextBlock DockPanel.Dock="Top" Text="{Binding NoCareerBody}" Style="{StaticResource SmHint}" Margin="0,14,0,0"
-                                           Visibility="{Binding HasNoCareer, Converter={StaticResource Visible}}" />
-                                <!-- the chip: plain words, a green or amber dot -->
-                                <Border DockPanel.Dock="Top" HorizontalAlignment="Left" CornerRadius="12" Padding="10,4" Margin="0,14,0,0" Background="#0DFFFFFF"
-                                        Visibility="{Binding HasChip, Converter={StaticResource Visible}}">
-                                  <StackPanel Orientation="Horizontal">
-                                    <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Noob}"
-                                             Visibility="{Binding ChipGood, Converter={StaticResource Visible}}" />
-                                    <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource SmWarn}"
-                                             Visibility="{Binding ChipWarn, Converter={StaticResource Visible}}" />
-                                    <TextBlock Text="{Binding ChipText}" FontSize="12" TextWrapping="Wrap">
-                                      <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                          <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
-                                          <Style.Triggers><DataTrigger Binding="{Binding ChipWarn}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmWarn}" /></DataTrigger></Style.Triggers>
-                                        </Style>
-                                      </TextBlock.Style>
-                                    </TextBlock>
-                                  </StackPanel>
-                                </Border>
+                                <!-- owner 2026-11-08 (PROFILES_ROWS): one row per catalog game, each with its career line, sync chip and career ⋯ -->
+                                <ItemsControl x:Name="ProfileGameRows" DockPanel.Dock="Top" ItemsSource="{Binding Games}" Margin="0,16,0,0" Focusable="False">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <StackPanel Margin="0,0,0,10">
+                                        <DockPanel>
+                                          <Grid DockPanel.Dock="Left" Width="44" Height="44" VerticalAlignment="Center">
+                                            <!-- the styled fallback (the catalog's short code on its accent) when the cover is missing -->
+                                            <Border CornerRadius="6" Background="{Binding Soft}" BorderBrush="{Binding Accent}" BorderThickness="1"
+                                                    Visibility="{Binding HasCover, Converter={StaticResource Hidden}}">
+                                              <TextBlock Text="{Binding ShortCode}" Foreground="{Binding Accent}" FontSize="12" FontWeight="Black"
+                                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <Border CornerRadius="6" Visibility="{Binding HasCover, Converter={StaticResource Visible}}">
+                                              <Border.Background><ImageBrush ImageSource="{Binding Cover}" Stretch="UniformToFill" /></Border.Background>
+                                            </Border>
+                                          </Grid>
+                                          <Button DockPanel.Dock="Right" Content="⋯" Style="{StaticResource SmButton}" Width="32" Height="30" Padding="0" FontSize="15"
+                                                  VerticalAlignment="Center" Margin="8,0,0,0" Click="OnGameRowMenu" Visibility="{Binding HasMenu, Converter={StaticResource Visible}}"
+                                                  AutomationProperties.Name="{Binding Name}" />
+                                          <!-- the game's sync chip: plain words, a green or amber dot -->
+                                          <Border DockPanel.Dock="Right" CornerRadius="12" Padding="8,3" Margin="8,0,0,0" Background="#0DFFFFFF" VerticalAlignment="Center"
+                                                  MaxWidth="170" Visibility="{Binding HasChip, Converter={StaticResource Visible}}">
+                                            <StackPanel Orientation="Horizontal">
+                                              <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Noob}"
+                                                       Visibility="{Binding ChipGood, Converter={StaticResource Visible}}" />
+                                              <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{StaticResource SmWarn}"
+                                                       Visibility="{Binding ChipWarn, Converter={StaticResource Visible}}" />
+                                              <TextBlock Text="{Binding ChipText}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChipText}">
+                                                <TextBlock.Style>
+                                                  <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+                                                    <Style.Triggers><DataTrigger Binding="{Binding ChipWarn}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmWarn}" /></DataTrigger></Style.Triggers>
+                                                  </Style>
+                                                </TextBlock.Style>
+                                              </TextBlock>
+                                            </StackPanel>
+                                          </Border>
+                                          <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                          </StackPanel>
+                                        </DockPanel>
+                                        <!-- the row's ⋯ menu, in the flow under the row (no popup, which froze under Proton) -->
+                                        <Border Visibility="{Binding MenuOpen, Converter={StaticResource Visible}}" HorizontalAlignment="Right" Margin="0,6,0,0"
+                                                MinWidth="250" MaxWidth="330" Padding="6" CornerRadius="10" Background="{StaticResource SmMenuSurface}"
+                                                BorderBrush="{StaticResource SmLine}" BorderThickness="1">
+                                          <ItemsControl ItemsSource="{Binding Menu}" Focusable="False">
+                                            <ItemsControl.ItemTemplate>
+                                              <DataTemplate>
+                                                <Button Style="{StaticResource SmMenuItem}" IsEnabled="{Binding Enabled}" Click="OnGameRowMenuItem"
+                                                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}" ToolTip="{Binding Reason}">
+                                                  <StackPanel>
+                                                    <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
+                                                      <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                          <Style.Triggers><DataTrigger Binding="{Binding Danger}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmBad}" /></DataTrigger></Style.Triggers>
+                                                        </Style>
+                                                      </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <TextBlock Text="{Binding Reason}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap"
+                                                               Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
+                                                  </StackPanel>
+                                                </Button>
+                                              </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                          </ItemsControl>
+                                        </Border>
+                                      </StackPanel>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                                 <TextBlock DockPanel.Dock="Bottom" Text="{Binding Note}" FontSize="12" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" Margin="0,8,0,0"
                                            Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
                                 <TextBlock DockPanel.Dock="Bottom" Text="{Binding Hint}" Style="{StaticResource SmHint}" Margin="0,12,0,0" />
-                                <Button DockPanel.Dock="Bottom" Content="{Binding PrimaryLabel}" Background="{Binding Accent}" Style="{StaticResource SmPrimary}"
-                                        HorizontalAlignment="Left" Margin="0,18,0,0" IsEnabled="{Binding PrimaryEnabled}" Click="OnSavesPrimary"
-                                        Visibility="{Binding HasPrimary, Converter={StaticResource Visible}}" />
                               </DockPanel>
                               <!-- the ⋯ menu (drawn in the card: no popup, which froze under Proton) -->
                               <Border Visibility="{Binding MenuOpen, Converter={StaticResource Visible}}" HorizontalAlignment="Right" VerticalAlignment="Top"
@@ -2009,28 +2048,6 @@
                 <Button Content="{Binding S[restore.entry]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Center" Margin="0"
                         Click="OnOpenCareerRestore" IsEnabled="{Binding CanRestoreCareer}" />
                 <TextBlock Text="{Binding CareerRestoreNote}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center" Foreground="{StaticResource InfinityFaint}" Margin="0,2,0,0" />
-              </StackPanel>
-              <!-- CR-L41.2: Join from link (the Join lobby button of a Discord card; the path on Steam Deck). It only fills the field.
-                   games-5: a small link at the bottom of the column; its field opens on a click, or by itself when a link arrives. -->
-              <Button x:Name="JoinLinkToggle" Content="{Binding S[join.title]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Margin="0,22,0,0"
-                      Click="OnToggleJoinLink" Visibility="{Binding ShowJoinFromLink, Converter={StaticResource Visible}}" />
-              <StackPanel Margin="0,6,0,0" MaxWidth="460" HorizontalAlignment="Center" Visibility="{Binding ShowJoinLinkForm, Converter={StaticResource Visible}}">
-                <TextBlock Text="{Binding S[join.hint]}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,6" Foreground="{StaticResource InfinityMuted}" />
-                <DockPanel>
-                  <Button DockPanel.Dock="Right" Content="{Binding S[join.button]}" Click="OnJoinFromLink" IsEnabled="{Binding CanJoinFromLink}" Margin="8,0,0,0" Padding="12,6" />
-                  <TextBox Text="{Binding JoinLinkDraft, UpdateSourceTrigger=PropertyChanged}" Padding="10,6" KeyDown="OnJoinLinkKey"
-                           AutomationProperties.Name="{Binding S[join.title]}" />
-                </DockPanel>
-                <TextBlock Text="{Binding S[join.invalid]}" FontSize="12" Margin="0,4,0,0" Foreground="{StaticResource InfinityGold}"
-                           Visibility="{Binding JoinLinkInvalid, Converter={StaticResource Visible}}" />
-                <TextBlock Text="{Binding JoinLinkStatus}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" AutomationProperties.LiveSetting="Polite"
-                           Visibility="{Binding HasJoinLinkStatus, Converter={StaticResource Visible}}" />
-                <WrapPanel Margin="0,6,0,0">
-                  <Button Content="{Binding JoinModeSwitchLabel}" Click="OnSwitchJoinMode" IsEnabled="{Binding CanSwitchJoinMode}" Padding="10,4" Margin="0,0,8,6"
-                          Visibility="{Binding ShowJoinModeSwitch, Converter={StaticResource Visible}}" />
-                  <Button Content="{Binding S[join.cancel]}" Style="{StaticResource LinkButton}" Click="OnCancelPendingJoin" Margin="-6,0,0,6"
-                          Visibility="{Binding HasPendingJoin, Converter={StaticResource Visible}}" />
-                </WrapPanel>
               </StackPanel>
             </StackPanel>
             </Grid>

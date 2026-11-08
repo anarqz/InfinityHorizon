@@ -25,7 +25,7 @@ public sealed partial class ShellViewModel
     private bool NoobCloudReachable => SignedIn && !OfflineMode && CurrentGame.FullFeatures && CloudSaveClient() is not null;
 
     /// <summary>The account's (or, offline, this PC's) Hardcore careers of the chosen game.</summary>
-    private IReadOnlyList<Profile> NoobCandidates => NoobStart.Candidates(Profiles, _gate.Game ?? "");
+    private IReadOnlyList<Profile> NoobCandidates => NoobStart.Candidates(Profiles, CurrentGameId ?? "");
 
     /// <summary>What this PC knows of <paramref name="hardcore"/>: its local save (and which), its cloud revision from <c>/me</c>.</summary>
     private (HardcoreSourceFacts Facts, SaveProfile? Save) HardcoreFacts(Profile hardcore)
@@ -56,7 +56,7 @@ public sealed partial class ShellViewModel
     private static HardcoreSourceFacts? FirstFact(IReadOnlyList<HardcoreSourceFacts> facts) => facts.Count > 0 ? facts[0] : null;
 
     private IReadOnlyList<HardcoreSourceFacts> NoobFacts(IEnumerable<Profile>? pool = null) =>
-        [.. (pool is null ? NoobCandidates : NoobStart.Candidates(pool, _gate.Game ?? "")).Select(p => HardcoreFacts(p).Facts)];
+        [.. (pool is null ? NoobCandidates : NoobStart.Candidates(pool, CurrentGameId ?? "")).Select(p => HardcoreFacts(p).Facts)];
 
     /// <summary>The usable plans among <paramref name="pool"/>'s Hardcore careers of the chosen game (the picker's rows when null).</summary>
     private IReadOnlyList<NoobStartPlan> UsableNoobSources(IEnumerable<Profile>? pool = null) =>
