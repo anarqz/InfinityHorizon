@@ -34,7 +34,33 @@ public sealed partial class WorldsBridge
     public InviteInbox? Inbox { get; init; }
 
     // this launcher's pending invites: the friend account (its handle) → the world and when the invite lapses (MATCHMAKING_API §3.4: 2 min)
-    private readonly Dictionary<string, (string World, DateTimeOffset Until)> _invitesSent = new(StringComparer.Ordinal);
+    // R-1108-I2: and when it was sent (a seat read answered just after cannot clear it)
+    private readonly Dictionary<string, (string World, DateTimeOffset Until, DateTimeOffset Sent)> _invitesSent = new(StringComparer.Ordinal);
+
+    /// <summary>R-1108-I2: a seat read within this long of an invite never clears its "Invited" mark (it may predate the invite).</summary>
+    public static readonly TimeSpan InviteHoldSettle = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// R-1108-I2 (SAURON 2026-11-08): the picker's and the FRIENDS sidebar's "Invited" is this launcher's own mark, which only lapsed
+    /// with the invite's 2 minutes, so a declined invite left the friend greyed and not invitable. No route lists a leader's sent
+    /// invites (MATCHMAKING_API §3.4), but every pending invite holds a seat: <c>openSeats</c> = <c>maxPlayers</c> − <c>players</c> −
+    /// reserved and held seats (§2.1). A seat read of <paramref name="worldId"/> with none reserved or held means no invite into it
+    /// is pending any more (declined, lapsed or used): every mark into it older than <see cref="InviteHoldSettle"/> goes, and those
+    /// friends may be invited again. Called with each seat read and renewal.
+    /// </summary>
+    internal void ObserveInviteHolds(string worldId, WorldView world)
+    {
+        if (world.Players + (ulong)world.OpenSeats < world.MaxPlayers) return; // some seat is still held or reserved
+        var settled = Now - InviteHoldSettle;
+        int cleared;
+        lock (_invitesSent)
+        {
+            var gone = _invitesSent.Where(e => e.Value.World == worldId && e.Value.Sent <= settled).Select(e => e.Key).ToList();
+            foreach (var key in gone) _invitesSent.Remove(key);
+            cleared = gone.Count;
+        }
+        if (cleared > 0) _log($"worlds: invite: {cleared} invite mark(s) cleared (the world holds no seat for an invite any more: declined, lapsed or used)");
+    }
 
     /// <summary>
     /// The game's Invite friends (<paramref name="fromGame"/>) or the Private Lobby pane's: the picker to open, or the notice saying
@@ -122,7 +148,7 @@ public sealed partial class WorldsBridge
         {
             var until = answer?.Value is { } made && DateTimeOffset.TryParse(made.ExpiresAt, CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var expires) ? expires : Now + TimeSpan.FromSeconds(MatchmakingLimits.InviteTtlSecs);
-            lock (_invitesSent) _invitesSent[friend.Id] = (mine.WorldId, until);
+            lock (_invitesSent) _invitesSent[friend.Id] = (mine.WorldId, until, Now);
             _log($"worlds: invite: sent in {mine.WorldId} ({(answer!.Created ? "new" : "already pending")})");
             notice = PrivateLobbyNotices.Done(PrivateLobbyNotices.Text(_text, PrivateLobbyNotices.InviteSent).Replace("{name}", name, StringComparison.Ordinal));
         }

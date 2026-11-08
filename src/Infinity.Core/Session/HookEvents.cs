@@ -49,6 +49,13 @@ public static class HookEvents
     public const byte Screen = 9;
 
     /// <summary>
+    /// OD-224 (T-1108-L): the game's lobby kind changed (hook game_profile.h FI_WATCH_EVENT_LOBBY_KIND rows, FM5 only; detail the decimal
+    /// kind, 0..255, 0 none). Leaving <see cref="Process.GameDefinition.PrivateLobbyKind"/> ends the private match's seat
+    /// (<see cref="Matchmaking.WorldsBridge.ObserveLobbyKindAsync"/>).
+    /// </summary>
+    public const byte LobbyKind = 10;
+
+    /// <summary>
     /// An <see cref="Activity"/> detail as the overlay's idle warning: only when it carries <c>evict_in</c> (the seat
     /// goes to a waiting player in N seconds); null otherwise, or when the detail is malformed.
     /// </summary>

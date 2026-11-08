@@ -26,7 +26,7 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
         ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,
-        CloudSaves = true, InviteAcceptScreens = [Fm5HoppersScreen], };
+        CloudSaves = true, InviteAcceptScreens = [Fm5HoppersScreen], PrivateLobbyKind = Fm5PrivateLobbyKind, };
 
     /// <summary>
     /// OD-223 (T-1108-M): FM5's MULTIPLAYER hoppers screen, as the hook's top screen id reads it (game_profile.h "FM5 WATCH top screen
@@ -105,11 +105,21 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
 
     /// <summary>
     /// OD-223 (owner 2026-11-08: "Players can ONLY accept an invitation for a MP game when they're both in the MULTIPLAYER HOPPERS
-    /// screen"; option B): the screen ids (the hook's Event 9) on which the game may show and take an invite. Off them, or with no screen
-    /// reported yet, every invite is declined at once with no prompt and no toast, and one showing is withdrawn and declined. Empty: no
-    /// restriction (FH2, unchanged).
+    /// screen"): the screen ids (the hook's Event 9) on which the game may take an invite. OD-223 revised: off them, or with no screen
+    /// reported yet, an invite is held as a notice ("Go into Multiplayer to accept it"), never declined automatically; it becomes the
+    /// hold-Y accept toast once the game is on one. Empty: no restriction (FH2, unchanged).
     /// </summary>
     public IReadOnlyList<int> InviteAcceptScreens { get; init; } = [];
+
+    /// <summary>
+    /// OD-224 (owner 2026-11-08, T-1108-L): the game's lobby kind (the hook's Event 10, game_profile.h FI_WATCH_EVENT_LOBBY_KIND) that
+    /// is a private match (FM5: 5, SAURON; it stays 5 through that match's race and results). When the reported kind leaves it the
+    /// player left the private match: its seat ends at once and nothing of it is reused. Null: the hook reports no lobby kind (FH2).
+    /// </summary>
+    public int? PrivateLobbyKind { get; init; }
+
+    /// <summary>OD-224: FM5's private match lobby kind (CLobby+0x38, lobby spec §13.4; 7 is Waiting-to-Start, 0 none).</summary>
+    public const int Fm5PrivateLobbyKind = 5;
 
     /// <summary>The allowed titles.</summary>
     public static readonly IReadOnlyList<GameDefinition> All = [Fh2, Fm5];

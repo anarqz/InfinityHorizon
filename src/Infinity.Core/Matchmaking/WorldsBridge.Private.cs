@@ -130,6 +130,68 @@ public sealed partial class WorldsBridge
         _log($"worlds: private create: the game writes its session (template {templateName})");
     }
 
+    // OD-224 (T-1108-L): the hook's last lobby kind (Event 10), -1 before the first report
+    private int _lobbyKind = -1;
+    // OD-224: the private world whose seat was held while the game's lobby kind was its private match's (that match's seat)
+    private string? _privateMatchWorld;
+
+    private int? PrivateLobbyKindOfGame => Process.GameDefinition.ById(SessionGame)?.PrivateLobbyKind;
+
+    // OD-224: the seat held now is a private match's the game was in and has left since (its lobby kind is known and not private): a
+    // seat granted for a create the game has not entered yet (a retry of that create) is never one
+    private bool HoldsLeftPrivateMatch => PrivateLobbyKindOfGame is { } privateKind && Volatile.Read(ref _lobbyKind) is var kind
+        && kind >= 0 && kind != privateKind && InPrivateLobby && Volatile.Read(ref _privateMatchWorld) is { } match
+        && match == Volatile.Read(ref _seatWorld);
+
+    // OD-224: the game is in its private match now: the private seat held is that match's
+    private void NotePrivateMatch()
+    {
+        if (PrivateLobbyKindOfGame is { } privateKind && Volatile.Read(ref _lobbyKind) == privateKind && InPrivateLobby)
+            Volatile.Write(ref _privateMatchWorld, Volatile.Read(ref _seatWorld));
+    }
+
+    /// <summary>
+    /// OD-224 (owner 2026-11-08: "after leaving the Create Private Match screen, the private lobby must be closed automatically"):
+    /// the hook's Event 10, the game's lobby kind (decimal 0..255). When it leaves the game's
+    /// <see cref="Process.GameDefinition.PrivateLobbyKind"/> (FM5: 5 to anything else; it stays 5 through that match's race and
+    /// results) the private match's seat ends at once (<c>DELETE /mm/v1/seat</c>, as <see cref="GameLeftOnlineAsync"/>: never
+    /// rejoined, its world never named again by <c>privateWorldId</c>) and every cached reference of it goes (the private class, its
+    /// game session), so the next Create Private Match starts clean. Once per transition. A game with no private kind (FH2): ignored.
+    /// </summary>
+    public async Task ObserveLobbyKindAsync(string detail, CancellationToken cancellation)
+    {
+        var kind = detail is { Length: > 0 and <= 3 } && detail.All(char.IsAsciiDigit) ? int.Parse(detail, System.Globalization.CultureInfo.InvariantCulture) : -1;
+        if (kind is < 0 or > 255)
+        {
+            _log("worlds: a malformed lobby kind report was ignored");
+            return;
+        }
+        var previous = Interlocked.Exchange(ref _lobbyKind, kind);
+        if (PrivateLobbyKindOfGame is not { } privateKind) return;
+        if (kind == privateKind)
+        {
+            NotePrivateMatch();
+            return;
+        }
+        if (previous != privateKind) return;
+        await LeavePrivateMatchAsync($"private match left, lobby kind {kind}", cancellation).ConfigureAwait(false);
+    }
+
+    // OD-224: the private match's seat ends now and nothing of it is kept; a seat in a world that is not private is never touched
+    private async Task LeavePrivateMatchAsync(string why, CancellationToken cancellation)
+    {
+        if (_seat.GrantId is not null && Volatile.Read(ref _seatWorld) is { } world && !SeatPrivate(world))
+        {
+            _log($"worlds: {why}; the seat is not a private lobby's, kept");
+            return;
+        }
+        Volatile.Write(ref _privateSession, null);
+        Volatile.Write(ref _seatSession, null);
+        Volatile.Write(ref _privateMatchWorld, null);
+        await GameLeftOnlineAsync(why, cancellation).ConfigureAwait(false);
+        Volatile.Write(ref _seatPrivate, null);
+    }
+
     // W-14 wording for a kept seat (OD-208: only a private lobby's is kept past the grace)
     private const string KeptSeat = "a private lobby's seat";
 
@@ -182,6 +244,10 @@ public sealed partial class WorldsBridge
             if (await AccessAsync(token).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no private lobby (online lobbies are not allowed now)");
             if (WireMods().Refusal is { } mods) return PrivateRefused(kind, mods, $"mods: {mods}");
+            // OD-224: a new create never reuses an old private match: a private seat still held while the game is out of that match (its
+            // lobby kind said so; Event 10 missed or its DELETE failed) ends first, so the server opens a fresh one
+            if (HoldsLeftPrivateMatch)
+                await LeavePrivateMatchAsync("a new private create while the old private match's seat is still held", token).ConfigureAwait(false);
             UiFrame.JoinResult joined;
             var asks = 0;
             TimeSpan? firstAsk = null;
@@ -200,6 +266,7 @@ public sealed partial class WorldsBridge
                 Volatile.Write(ref _seatOfficial, world);
                 lock (_mineState) _seatActivity = (world, activity);
                 Volatile.Write(ref _recentlyLeft, null); // the private world is this ask's answer
+                NotePrivateMatch(); // OD-224: the game already reads as in its private match
                 return Decided(kind, FreeRoamResult.Ready, $"joined its private lobby {world} ({activity})");
             }
             if (!OnlineOpen) return Decided(kind, FreeRoamResult.NotOnline, "no private lobby (online is closed)");

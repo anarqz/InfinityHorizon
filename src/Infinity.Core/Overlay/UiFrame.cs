@@ -583,8 +583,12 @@ public abstract record UiFrame
     /// [A-Za-z0-9:._-], echoed by <see cref="InviteAnswer"/>; <c>FromGamertag</c> 1-64 bytes (shown; never a XUID); <c>Activity</c>
     /// at most 16 bytes (<c>freeroam</c>, <c>roadtrip</c>, anything else shown as a lobby); <c>ExpiresInSec</c> 1-3600, or 0 to
     /// withdraw the prompt of that id (then the gamertag and activity may be empty). A prompt that runs out goes without an answer.
+    /// <c>Notice</c> (OD-223 revised, an additive byte 1 after the expiry, written only when true and never on a withdrawal; an older
+    /// overlay refuses the frame and shows nothing): the game is not where it may take the invite (FM5: off its MULTIPLAYER hoppers
+    /// screen), so the overlay shows the same toast with "Go into Multiplayer to accept it" and no hold; the launcher sends the same id
+    /// again without it (the accept toast) once the game is there, and with it again when the game leaves.
     /// </summary>
-    public sealed record InvitePrompt(string InviteId, string FromGamertag, string Activity, ushort ExpiresInSec) : UiFrame
+    public sealed record InvitePrompt(string InviteId, string FromGamertag, string Activity, ushort ExpiresInSec, bool Notice = false) : UiFrame
     {
         public override byte Type => 0x23;
 
@@ -600,6 +604,7 @@ public abstract record UiFrame
             Limit(Activity, MaxInviteActivity, "invite activity");
             if (ExpiresInSec > MaxInviteSeconds) throw new ProtocolException("invite expiry past an hour");
             if (ExpiresInSec != 0 && FromGamertag.Length == 0) throw new ProtocolException("an invite names its inviter");
+            if (Notice && ExpiresInSec == 0) throw new ProtocolException("a withdrawal is no notice");
         }
     }
 
@@ -1068,6 +1073,7 @@ public abstract record UiFrame
                 w.Str(p.FromGamertag);
                 w.Str(p.Activity);
                 w.U16(p.ExpiresInSec);
+                if (p.Notice) w.U8(1); // OD-223 revised: only when set (the bytes of every accept prompt stand)
                 break;
             case InviteAnswer a:
                 a.Validate();
@@ -1233,7 +1239,7 @@ public abstract record UiFrame
             0x20 => new PlayerState(r.Str(), r.U8()),
             0x21 => new PlayerActionRequest(r.U32(), r.Str(), r.U8(), r.U8()),
             0x22 => new PlayerActionDone(r.U32(), r.Str(), r.U8(), r.U8()),
-            0x23 => new InvitePrompt(r.Str(), r.Str(), r.Str(), r.U16()),
+            0x23 => new InvitePrompt(r.Str(), r.Str(), r.Str(), r.U16(), !r.IsEmpty && r.Flag("InvitePrompt.notice")),
             0x24 => new InviteAnswer(r.Str(), r.Flag("InviteAnswer.accept")),
             0x25 => DecodePicker(ref r),
             0x26 => new FriendPickerAsk(),

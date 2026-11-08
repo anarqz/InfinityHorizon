@@ -49,7 +49,21 @@ static DWORD WINAPI game_watch_thread(void *parameter) {
             const FiGameWatch *watch = &game->watches[i];
             unsigned char *object = 0;
             unsigned value = 0;
-            int object_ok = memory_read(image + watch->global, &object, sizeof(object)) && object;
+            int global_ok = memory_read(image + watch->global, &object, sizeof(object));
+            int object_ok = global_ok && object;
+            if (watch->event == FI_WATCH_EVENT_LOBBY_KIND) {
+                /* OD-224 (T-1108-L): the game's lobby kind to the launcher (Event 10) at each change; 0 when no lobby object; a read
+                   that faults reports nothing */
+                unsigned kind = 0;
+                int read_ok = object_ok && watch->kind == FI_WATCH_CHAIN && fi_watch_value(memory_read, object, watch, &value);
+                if (fi_watch_lobby_kind_of(global_ok, object != 0, read_ok, value, &kind) && kind != reported[i]) {
+                    char detail[4];
+                    reported[i] = kind;
+                    fi_activity_screen_detail(kind, detail); /* the same decimal 0..255 as Event 9 */
+                    fi_launch_event(FI_EVENT_LOBBY_KIND, detail);
+                }
+                value = 0;
+            }
             if (watch->event == FI_WATCH_EVENT_SCREEN) {
                 /* OD-223 (T-1108-M): the game's screen to the launcher (Event 9) at each change; unknown when the walk fails or one
                    of the profile's screen_terms does not hold (FM5: the hoppers' cloud config not loaded) */

@@ -53,7 +53,7 @@
 // Protocol 6 (OD-204, T-L3, WORLDS_OFFICIAL §12.5): the private lobby's invite prompt, a modal (never a toast: toasts follow OD-192)
 //   0x23 InvitePrompt, launcher -> overlay {str inviteId (1..64 B of [A-Za-z0-9:._-]), str fromGamertag (1..64 B), str activity
 //        (<= 16 B: "freeroam", "roadtrip", or anything else shown as a lobby), u16 expiresInSec (1..3600; 0 withdraws the prompt of
-//        that id: answered elsewhere, expired or cancelled)}
+//        that id: answered elsewhere, expired or cancelled), [u8 notice = 1, OD-223 revised: only when set, never on a withdrawal]}
 //   0x24 InviteAnswer, overlay -> launcher {str inviteId, u8 accept (0 decline, 1 accept)}; nothing is sent when a prompt expires
 // Protocol 7 (OD-204, T-L4, WORLDS_OFFICIAL §12.5): the private lobby's friend picker
 //   0x25 FriendPicker, launcher -> overlay {u8 flags (bit 0 open: show the picker now, with the guide; without it only refresh an
@@ -553,8 +553,10 @@ struct InvitePromptFrame {
     std::string from;     // the inviting player's gamertag (shown; the XUID never is)
     std::string activity; // "freeroam", "roadtrip", or anything else (shown as a lobby)
     uint16_t expires = 0; // seconds left; 0 withdraws the prompt of `id`
+    bool notice = false;  // OD-223 revised: the game is not where it may take it: "Go into Multiplayer to accept it", no hold
 };
-// Strict, as the launcher writes it (UiFrame.InvitePrompt.Validate).
+// Strict, as the launcher writes it (UiFrame.InvitePrompt.Validate). The notice byte (1) follows the expiry only when set, never on a
+// withdrawal.
 inline bool DecodeInvitePrompt(const uint8_t *body, size_t size, InvitePromptFrame &out) {
     wire::Reader r{body, size};
     InvitePromptFrame p;
@@ -562,6 +564,10 @@ inline bool DecodeInvitePrompt(const uint8_t *body, size_t size, InvitePromptFra
     p.from = r.Text(kMaxGamertag);
     p.activity = r.Text(kMaxInviteActivity);
     p.expires = r.U16();
+    if (r.ok && r.left > 0) {
+        p.notice = r.Flag();
+        if (!p.notice || p.expires == 0) r.ok = false;
+    }
     if (r.ok && (!PaneKey(p.id) || (p.expires != 0 && p.from.empty()) || p.expires > kMaxInviteSeconds)) r.ok = false;
     if (!r.Done()) return false;
     out = std::move(p);
@@ -573,6 +579,7 @@ inline std::vector<uint8_t> EncodeInvitePrompt(const InvitePromptFrame &p) {
     wire::Str(b, p.from);
     wire::Str(b, p.activity);
     wire::U16(b, p.expires);
+    if (p.notice) wire::U8(b, 1);
     return b;
 }
 inline std::vector<uint8_t> EncodeInviteAnswer(const std::string &id, bool accept) {

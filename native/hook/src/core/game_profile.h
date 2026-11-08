@@ -48,6 +48,25 @@ enum { FI_WATCH_CHAIN_MAX = 6 };
    screen it accepts invites on). For a game whose screen activity.c does not report (FM5). 0: logged only. */
 #define FI_WATCH_EVENT_SCREEN 9u
 #define FI_WATCH_SCREEN_UNKNOWN 255u
+/* OD-224 (T-1108-L): a row whose value also goes to the launcher as the game's lobby kind, Event 10 (infinity.h FI_EVENT_LOBBY_KIND,
+   detail the decimal kind 0..255), at each change: the value of the walk, 0 when the row's global is null (no lobby object), 255 past
+   254; a read that faults reports nothing (a transient fault must never read as "left the lobby"). The launcher ends a private
+   lobby's seat when the kind leaves its GameDefinition.PrivateLobbyKind (FM5: 5). 0: logged only. */
+#define FI_WATCH_EVENT_LOBBY_KIND 10u
+
+/* OD-224: the kind an FI_WATCH_EVENT_LOBBY_KIND row reports: `global_ok` the read of its global succeeded, `object_set` it is not
+   null, `read_ok` the walk succeeded with `value`. 1 and `*kind` when there is something to report, 0 when nothing is. Pure, for
+   tests. */
+static inline int fi_watch_lobby_kind_of(int global_ok, int object_set, int read_ok, unsigned value, unsigned *kind) {
+    if (!global_ok) return 0;
+    if (!object_set) {
+        *kind = 0;
+        return 1;
+    }
+    if (!read_ok) return 0;
+    *kind = value < FI_WATCH_SCREEN_UNKNOWN ? value : FI_WATCH_SCREEN_UNKNOWN;
+    return 1;
+}
 typedef struct {
     const char *label;
     unsigned global, offset, bytes, kind;
@@ -197,7 +216,9 @@ static const FiGameWatch fi_fm5_watches[] = {
     {"FM5 WATCH go+38 (-2 = local options owner)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x38u}, 0},
     {"FM5 WATCH go+40 (-2 too after the grant)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x40u}, 0},
     {"FM5 WATCH lobby session +148 (non-zero)", 0x25e6e40u, 0, 8, FI_WATCH_CHAIN, 1, {0x148u}, 0},
-    {"FM5 WATCH lobby kind +38 (5/6/7)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x38u}, 0},
+    /* OD-224 (T-1108-L, SAURON): also Event 10: 5 a private match (lobby spec 13.4), 7 Waiting-to-Start, 0 none; it stays 5 through
+       that match's race and results and drops to 0 when the player leaves it (16:06:56, screen 110 -> 67) */
+    {"FM5 WATCH lobby kind +38 (5/6/7)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x38u}, FI_WATCH_EVENT_LOBBY_KIND},
     {"FM5 WATCH lobby race +40 (1 from race load to end)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x40u}, 0},
     /* OD-223 (T-1108-M): also Event 9, so the launcher takes FM5 invites on its MULTIPLAYER hoppers screen only (GameDefinition
        InviteAcceptScreens; SAURON's live map: 101 main menu, 67 hoppers, 34 joining, 110 lobby, 98/68 race load/race, 155/154/211
