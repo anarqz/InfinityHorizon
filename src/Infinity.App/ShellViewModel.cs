@@ -564,7 +564,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (!OfflineMode && _session?.Me is { Players: not null } board)
         {
             // OD-214: the account's profiles (both modes) with the chosen game's career on each; local-only rows as before
-            var flags = new BoardFlags(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves());
+            var flags = new BoardFlags(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves(), SeedPendingXuids(board));
             foreach (var card in ProfileBoard.Build(board, CurrentGame, flags))
             {
                 var row = card.CareerRow ?? new Profile(card.Player.ProfileId, game, card.Player.Xuid, card.Player.Gamertag, card.Player.Gamertag,
