@@ -138,6 +138,13 @@ public sealed partial class WorldsBridge
     {
         var accepted = _clock.GetTimestamp();
         if (string.IsNullOrEmpty(invite.WorldId)) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no world");
+        // OD-223 (T-1108-M): FM5 handed an invite off its MULTIPLAYER hoppers screen never starts its hopper matchmaking again in that run
+        // (SAURON games-10: GameSessionReady at the main menu, then no /variants and no /qosservers): no join, no seat, nothing shown
+        if (!InviteScreenAllows())
+        {
+            _log("worlds: invite: accepted off the screens that take invites (OD-223); not joined");
+            return new(InviteAcceptOutcome.Refused, null);
+        }
         // W7b (CR-S99 §4): a game that takes the invite by Party GameSessionReady (FM5) runs private races; FH2's path is unchanged
         var bySession = SessionReadyCapable;
         // a private lobby runs free roam or a Road Trip, never a car meet (MATCHMAKING_API §2.10); FM5's runs a race (CR-S99 §1)

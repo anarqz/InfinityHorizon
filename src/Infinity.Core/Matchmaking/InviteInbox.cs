@@ -82,6 +82,62 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
     public Func<bool>? Holding { get; set; }
 
     /// <summary>
+    /// OD-223 (owner 2026-11-08, T-1108-M): false while the game is not on a screen where it may take an invite (the bridge's
+    /// <see cref="WorldsBridge.InviteScreenAllows"/>, from the game's <see cref="Process.GameDefinition.InviteAcceptScreens"/>; FM5: its
+    /// MULTIPLAYER hoppers screen). Then every pending invite is declined at once (<c>POST /launcher/v1/invites/{id}/decline</c>) with no
+    /// prompt and no toast, one already shown is withdrawn and declined, and an accept is never served. Null: always (FH2).
+    /// </summary>
+    public Func<bool>? Acceptable { get; set; }
+
+    private bool AcceptableNow() => Acceptable?.Invoke() != false;
+
+    /// <summary>
+    /// OD-223: when the game is not where it may take an invite (<see cref="Acceptable"/>), every unanswered prompt is withdrawn (one that
+    /// showed) and declined (one the server lists; an accepted request to join is only dropped). Called when the game's screen changes.
+    /// </summary>
+    public async Task EnforceAcceptableAsync(Func<UiFrame, CancellationToken, Task> send, CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        if (AcceptableNow()) return;
+        var outgoing = new List<UiFrame>();
+        var declines = new List<string>();
+        lock (_lock) DropOffScreen(outgoing, declines);
+        foreach (var frame in outgoing) await send(frame, cancellation).ConfigureAwait(false);
+        await DeclineOffScreenAsync(declines, cancellation).ConfigureAwait(false);
+    }
+
+    // OD-223, under _lock: every unanswered prompt is answered here; a shown one is withdrawn, a server-listed one is to be declined
+    private void DropOffScreen(List<UiFrame> outgoing, List<string> declines)
+    {
+        foreach (var (id, shown) in _shown.ToList())
+        {
+            if (shown.Answered) continue;
+            _shown[id] = shown with { Answered = true, ReofferAt = 0 };
+            if (!shown.Held) outgoing.Add(UiFrame.InvitePrompt.Withdraw(id));
+            if (!shown.FromRequest) declines.Add(id);
+        }
+    }
+
+    // OD-223: the automatic declines (one retry of a transport failure); never a toast, a failure only lapses on its own
+    private async Task DeclineOffScreenAsync(List<string> ids, CancellationToken cancellation)
+    {
+        foreach (var id in ids)
+        {
+            try
+            {
+                try { await _decline(id, cancellation).ConfigureAwait(false); }
+                catch (HttpRequestException) when (!cancellation.IsCancellationRequested) { await _decline(id, cancellation).ConfigureAwait(false); }
+                _log("invites: an invite was declined automatically (the game is not on a screen that takes invites, OD-223)");
+            }
+            catch (Exception error) when (!cancellation.IsCancellationRequested && error is ApiException or HttpRequestException
+                or OperationCanceledException or IOException or InvalidOperationException or TimeoutException)
+            {
+                _log($"invites: an automatic decline failed ({(error is ApiException api ? $"HTTP {(int)api.Status} {api.Code}" : error.GetType().Name)}); it lapses on its own");
+            }
+        }
+    }
+
+    /// <summary>
     /// Polls until <paramref name="cancellation"/> ends or the server refuses the caller; <paramref name="send"/> takes each prompt and
     /// withdrawal (the overlay channel, which drops what its overlay's protocol does not have).
     /// </summary>
@@ -159,6 +215,8 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
         var listed = new HashSet<string>(StringComparer.Ordinal);
         var outgoing = new List<UiFrame>();
         var holding = Holding?.Invoke() == true;
+        var acceptable = AcceptableNow();
+        var declines = new List<string>();
         var held = 0;
         lock (_lock)
         {
@@ -168,10 +226,11 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                 listed.Add(invite.Id);
                 if (_shown.TryGetValue(invite.Id, out var known))
                 {
+                    if (!acceptable) continue; // OD-223: nothing shows again off those screens (DropOffScreen answers it below)
                     // INVITE_UX: one held back during a race comes once the race is over, with what is left of its time
                     if (known.Held)
                     {
-                        if (!holding && known.Deadline > now)
+                        if (!holding && !known.Answered && known.Deadline > now) // OD-223: one declined off the screen never comes
                         {
                             _shown[invite.Id] = known with { Held = false };
                             outgoing.Add(Left(known, now));
@@ -186,8 +245,10 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                     }
                     continue;
                 }
+                // OD-223: off the screens that take invites, a new one never shows (DropOffScreen declines it below)
                 _shown[invite.Id] = new Shown(prompt, now + (long)(prompt.ExpiresInSec * (double)_clock.TimestampFrequency), false,
-                    invite.World.Id, invite.World.Activity, invite.Session, Held: holding);
+                    invite.World.Id, invite.World.Activity, invite.Session, Held: holding || !acceptable);
+                if (!acceptable) continue;
                 if (holding) held++;
                 else outgoing.Add(prompt);
             }
@@ -197,18 +258,21 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                 _shown.Remove(id);
                 if (!shown.Answered && !shown.Held) outgoing.Add(UiFrame.InvitePrompt.Withdraw(id));
             }
+            if (!acceptable) DropOffScreen(outgoing, declines);
         }
         if (held > 0) _log($"invites: {held} new private lobby invite(s) held back while racing");
         var added = outgoing.Count(f => f is UiFrame.InvitePrompt { ExpiresInSec: > 0 });
         if (added > 0) _log($"invites: {added} new private lobby invite(s) prompted");
         if (outgoing.Count > added) _log($"invites: {outgoing.Count - added} prompt(s) withdrawn (answered elsewhere, gone or expired)");
         foreach (var frame in outgoing) await send(frame, cancellation).ConfigureAwait(false);
+        await DeclineOffScreenAsync(declines, cancellation).ConfigureAwait(false);
     }
 
     /// <summary>T-L3's open item: every pending, unanswered prompt again, with the seconds it has left (an overlay's hello).</summary>
     public async Task ResendAsync(Func<UiFrame, CancellationToken, Task> send, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(send);
+        if (!AcceptableNow()) return; // OD-223: off the screens that take invites nothing shows (EnforceAcceptableAsync declines them)
         var now = _clock.GetTimestamp();
         List<UiFrame.InvitePrompt> again;
         lock (_lock)
@@ -253,6 +317,13 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
             if (join is null)
             {
                 _log("invites: accepted with no lobby bridge in this session; nothing is sent");
+                return null;
+            }
+            // OD-223: the game left the screens that take invites before the accept came: it is declined, never served, and nothing shows
+            if (!AcceptableNow())
+            {
+                _log("invites: accepted off the screens that take invites; declined instead (OD-223)");
+                if (!answered.FromRequest) await DeclineOffScreenAsync([inviteId], cancellation).ConfigureAwait(false);
                 return null;
             }
             var left = TimeSpan.FromSeconds((answered.Deadline - now) / (double)_clock.TimestampFrequency);
@@ -318,11 +389,18 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
         }
         var shownActivity = activity is { } a && Encoding.UTF8.GetByteCount(a) <= UiFrame.MaxInviteActivity ? a : string.Empty;
         var prompt = new UiFrame.InvitePrompt(requestId, from, shownActivity, (ushort)AcceptedRequestPrompt.TotalSeconds);
+        var acceptable = AcceptableNow();
         lock (_lock)
         {
             if (_shown.ContainsKey(requestId)) return;
-            _shown[requestId] = new Shown(prompt, _clock.GetTimestamp() + (long)(AcceptedRequestPrompt.TotalSeconds * _clock.TimestampFrequency), false,
+            // OD-223: off the screens that take invites it is never shown (answered at once; its seat lapses on its own, as a decline's)
+            _shown[requestId] = new Shown(prompt, _clock.GetTimestamp() + (long)(AcceptedRequestPrompt.TotalSeconds * _clock.TimestampFrequency), !acceptable,
                 worldId, activity, null, FromRequest: true);
+        }
+        if (!acceptable)
+        {
+            _log("invites: an accepted request to join came off the screens that take invites; not shown (OD-223)");
+            return;
         }
         _log("invites: an accepted request to join is prompted as an invite");
         await send(prompt, cancellation).ConfigureAwait(false);

@@ -845,6 +845,9 @@ public sealed class PlaySupervisor
                         if (frame is Frame.Event { Kind: HookEvents.Screen } screen && worlds is not null)
                         {
                             worlds.ObserveScreen(screen.Detail);
+                            // OD-223: off the screens that take invites (FM5: its hoppers screen) a showing invite is withdrawn and declined
+                            if (worlds.Inbox is { } screenInbox && overlay is not null && inboxRun is not null)
+                                _ = screenInbox.EnforceAcceptableAsync(overlay.SendIfAcceptedAsync, onlineStop.Token);
                         }
                         // OD-208: the game left the online world on its own (its car database changed): the seat goes now
                         if (frame is Frame.Event { Kind: HookEvents.WorldLeft } left && worlds is not null)
@@ -1016,6 +1019,7 @@ public sealed class PlaySupervisor
                                     var inboxStop = onlineStop.Token;
                                     inbox.Observer ??= worlds.OnInvitesPolledAsync; // W15: the friends sidebar's join requests and online toasts
                                     inbox.Holding ??= worlds.IsRacingNow; // INVITE_UX: no invite toast while racing; it comes after the race
+                                    inbox.Acceptable ??= worlds.InviteScreenAllows; // OD-223: off the game's invite screens, declined at once
                                     inboxRun ??= Task.Run(() => inbox.RunAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop), inboxStop);
                                     _ = inbox.ResendAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop);
                                 }

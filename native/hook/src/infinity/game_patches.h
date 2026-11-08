@@ -35,23 +35,36 @@ static void game_watch_log_pointer(const char *label, const void *pointer) {
 
 static DWORD WINAPI game_watch_thread(void *parameter) {
     enum { GAME_WATCH_MAX = 24, GAME_HEARTBEAT_MS = 1000 };
-    static unsigned last[GAME_WATCH_MAX], raw[GAME_WATCH_MAX];
+    static unsigned last[GAME_WATCH_MAX], raw[GAME_WATCH_MAX], reported[GAME_WATCH_MAX];
     static ULONGLONG changed_at[GAME_WATCH_MAX];
     const FiGameProfile *game = fi_game_profile();
     unsigned char *image = parameter;
     unsigned count = game->watch_count < GAME_WATCH_MAX ? game->watch_count : GAME_WATCH_MAX;
     for (unsigned i = 0; i < count; ++i) {
-        last[i] = raw[i] = 0xdeadbeefu;
+        last[i] = raw[i] = reported[i] = 0xdeadbeefu;
     }
     for (;;) {
         ULONGLONG now = GetTickCount64();
         for (unsigned i = 0; i < count; ++i) {
             const FiGameWatch *watch = &game->watches[i];
             unsigned char *object = 0;
-            if (!memory_read(image + watch->global, &object, sizeof(object)) || !object) {
+            unsigned value = 0;
+            int object_ok = memory_read(image + watch->global, &object, sizeof(object)) && object;
+            if (watch->event == FI_WATCH_EVENT_SCREEN) {
+                /* OD-223 (T-1108-M): the game's screen to the launcher (Event 9) at each change; unknown when the walk fails or one
+                   of the profile's screen_terms does not hold (FM5: the hoppers' cloud config not loaded) */
+                int read_ok = object_ok && watch->kind == FI_WATCH_CHAIN && fi_watch_value(memory_read, object, watch, &value);
+                unsigned screen = fi_watch_screen_gated(memory_read, image, game, read_ok, value);
+                if (screen != reported[i]) {
+                    char detail[4];
+                    reported[i] = screen;
+                    fi_activity_screen_detail(screen, detail);
+                    fi_launch_event(FI_EVENT_SCREEN, detail);
+                }
+            }
+            if (!object_ok) {
                 continue;
             }
-            unsigned value = 0;
             if (watch->kind == FI_WATCH_POINTER_ONCE) {
                 if (last[i] != 1) {
                     last[i] = 1;

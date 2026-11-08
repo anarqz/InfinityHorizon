@@ -206,6 +206,18 @@ public sealed partial class WorldsBridge
         return activity == WorldActivities.Race && Volatile.Read(ref _gameInWorld) != 0;
     }
 
+    /// <summary>
+    /// OD-223 (T-1108-M): the game may show and take an invite now: its <see cref="Process.GameDefinition.InviteAcceptScreens"/> is empty
+    /// (FH2), or the hook's last screen (Event 9) is one of them. No screen reported yet is none of them.
+    /// </summary>
+    public bool InviteScreenAllows()
+    {
+        var screens = Process.GameDefinition.ById(SessionGame)?.InviteAcceptScreens;
+        if (screens is not { Count: > 0 }) return true;
+        var screen = Volatile.Read(ref _screen);
+        return screen >= 0 && screens.Contains(screen);
+    }
+
     /// <summary>The hook's Event 9: the game's rich-presence screen id (decimal 0..255), sent when it changes. Anything else is ignored.</summary>
     public void ObserveScreen(string detail)
     {
