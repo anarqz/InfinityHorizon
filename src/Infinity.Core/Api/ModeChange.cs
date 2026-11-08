@@ -54,36 +54,78 @@ public sealed partial class ApiClient
     /// answer is 409 <see cref="ModeChangeConfirm.Code"/>; with <c>confirm: true</c> the profile becomes
     /// Noob. <paramref name="idempotencyKey"/> is reused on every retry of the same step.
     /// </summary>
-    public Task<Profile> ChangeModeAsync(string access, string xuid, ModeChange change, string idempotencyKey, CancellationToken cancellation = default) =>
-        SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/mode", change, access, idempotencyKey, cancellation);
+    public Task<Profile> ChangeModeAsync(string access, string xuid, ModeChange change, string idempotencyKey, string? game = null,
+        CancellationToken cancellation = default) =>
+        SendAsync<Profile>(HttpMethod.Post, Core, ProfilePath(xuid, "/mode", game), change, access, idempotencyKey, cancellation);
 
     /// <summary>
     /// <c>POST /launcher/v1/profiles/{xuid}/name</c> (OD-120, ACCOUNTS.md §5 "Plain names and renames"): only while the profile has a
-    /// <c>renameNotice</c>; the current name keeps it, another free name takes it, and either clears the notice.
+    /// <c>renameNotice</c>; the current name keeps it, another free name takes it, and either clears the notice. CR-S98: it renames the
+    /// profile and all its careers; <paramref name="game"/> picks the career the route names.
     /// </summary>
-    public Task<Profile> RenameProfileAsync(string access, string xuid, NameChange change, string idempotencyKey, CancellationToken cancellation = default) =>
-        SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/name", change, access, idempotencyKey, cancellation);
+    public Task<Profile> RenameProfileAsync(string access, string xuid, NameChange change, string idempotencyKey, string? game = null,
+        CancellationToken cancellation = default) =>
+        SendAsync<Profile>(HttpMethod.Post, Core, ProfilePath(xuid, "/name", game), change, access, idempotencyKey, cancellation);
 
     /// <summary>
     /// <c>POST /launcher/v1/profiles/{xuid}/website</c> (CR-S83, CR-L47; ACCOUNTS.md §5) → 200 <see cref="Profile"/>: the caller's own
     /// profile on the play dashboard or off it. Idempotent (the current value answers 200 again), so no <c>Idempotency-Key</c>.
     /// </summary>
-    public Task<Profile> SetWebsiteListedAsync(string access, string xuid, bool listed, CancellationToken cancellation = default)
+    public Task<Profile> SetWebsiteListedAsync(string access, string xuid, bool listed, string? game = null, CancellationToken cancellation = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(xuid);
-        return SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/website",
+        return SendAsync<Profile>(HttpMethod.Post, Core, ProfilePath(xuid, "/website", game),
             new WebsiteVisibility(listed), access, idempotencyKey: null, cancellation);
     }
 
     /// <summary>
     /// <c>DELETE /launcher/v1/profiles/{xuid}</c> (CR-S61, ACCOUNTS.md §5 "Profile deletion"): no body → 204, the profile's cloud data
     /// erased at once and for good. <paramref name="idempotencyKey"/> is required and reused on every retry of the same deletion (a
-    /// replay answers the 204 again).
+    /// replay answers the 204 again). CR-S98: with <paramref name="game"/> it deletes that game's career (CAREERS.md §3 "delete
+    /// career"); the profile goes with its last live career.
     /// </summary>
-    public async Task DeleteProfileAsync(string access, string xuid, string idempotencyKey, CancellationToken cancellation = default)
+    public async Task DeleteProfileAsync(string access, string xuid, string idempotencyKey, string? game = null, CancellationToken cancellation = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(idempotencyKey);
-        await SendAsync<System.Text.Json.JsonElement?>(HttpMethod.Delete, Core, $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}", null, access, idempotencyKey, cancellation)
+        await SendAsync<System.Text.Json.JsonElement?>(HttpMethod.Delete, Core, ProfilePath(xuid, "", game), null, access, idempotencyKey, cancellation)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// CR-S98 <c>POST /launcher/v1/players/{xuid}/careers</c> <c>{game}</c> → 201 <see cref="Profile"/> (the new, empty career).
+    /// <paramref name="idempotencyKey"/> is one per start of that (profile, game), reused by its retries. 409
+    /// <c>ACCOUNTS.CAREER_EXISTS</c> when it exists; 400 <c>profile.mode</c> / <c>profile.game</c>; 403 <c>ACCOUNTS.BANNED</c>; 409
+    /// <c>ACCOUNTS.DELETION_PENDING</c> (CAREERS.md §3, §6.12).
+    /// </summary>
+    public Task<Profile> CreateCareerAsync(string access, string xuid, CareerCreate career, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(xuid);
+        ArgumentNullException.ThrowIfNull(career);
+        ArgumentException.ThrowIfNullOrEmpty(idempotencyKey);
+        return SendAsync<Profile>(HttpMethod.Post, Core, $"/launcher/v1/players/{Uri.EscapeDataString(xuid)}/careers", career, access, idempotencyKey,
+            cancellation);
+    }
+
+    /// <summary>
+    /// CR-S98 <c>DELETE /launcher/v1/players/{xuid}</c> → 204, "delete profile": every career, then the profile (CAREERS.md §3, §6.5).
+    /// Same key, refusals and shared 3-an-hour limit as <see cref="DeleteProfileAsync"/>; refused whole while any career is in use.
+    /// </summary>
+    public async Task DeletePlayerAsync(string access, string xuid, string idempotencyKey, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(xuid);
+        ArgumentException.ThrowIfNullOrEmpty(idempotencyKey);
+        await SendAsync<System.Text.Json.JsonElement?>(HttpMethod.Delete, Core, $"/launcher/v1/players/{Uri.EscapeDataString(xuid)}", null, access,
+            idempotencyKey, cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>/launcher/v1/profiles/{xuid}{suffix}</c>, with <c>?game=</c> when <paramref name="game"/> is set (CAREERS.md §3, §6.1). Null
+    /// leaves it off: the bare route means the XUID's only career, what a server before CR-S98 understands.
+    /// </summary>
+    public static string ProfilePath(string xuid, string suffix, string? game) =>
+        $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}{suffix}" + GameQuery(game, first: true);
+
+    /// <summary><c>?game=&lt;id&gt;</c> (or <c>&amp;game=</c> after another parameter); empty when <paramref name="game"/> is null.</summary>
+    public static string GameQuery(string? game, bool first) =>
+        string.IsNullOrEmpty(game) ? "" : (first ? "?" : "&") + "game=" + Uri.EscapeDataString(game);
 }

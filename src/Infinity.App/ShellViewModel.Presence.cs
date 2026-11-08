@@ -243,7 +243,7 @@ public sealed partial class ShellViewModel
                 {
                     try
                     {
-                        var presence = await session.Tokens.WithAccessAsync(access => session.Api.ProfilePresenceAsync(access, xuid, car, stop.Token), stop.Token)
+                        var presence = await session.Tokens.WithAccessAsync(access => session.Api.ProfilePresenceAsync(access, xuid, car, session.CareerGame(CurrentGame.Id), stop.Token), stop.Token)
                             .ConfigureAwait(false);
                         reads.Answered(car, presence?.LiveryImage);
                         _ui.Post(_ =>

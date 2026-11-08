@@ -25,8 +25,19 @@ public sealed partial class ShellViewModel
     {
         // OD-206 (plan A1): a game without FH2's features has no Hardcore; the server refuses one (400 profile.mode), and the refused
         // profile would stay on this PC only, playable offline alone (T1, 2026-11-07)
-        get { var can = _session?.Me is not null && CurrentGame.FullFeatures; InspectCanChooseHardcore(ref can); return can; }
+        // OD-214: a game whose careers allow no Hardcore (FM5 until M11) offers none; an account with a live Hardcore profile makes no second
+        get { var can = _session?.Me is not null && CurrentGame.FullFeatures && CurrentGame.HardcoreCareers && !HasLiveProfile("hardcore"); InspectCanChooseHardcore(ref can); return can; }
     }
+
+    /// <summary>OD-214 / CAREERS.md §2: a new Noob profile only while the account has no live one (it gets a career of this game instead).</summary>
+    public bool CanChooseNoob => !HasLiveProfile("noob");
+
+    /// <summary>The new-profile form: offline always; signed in only while a mode has no live profile the game allows.</summary>
+    public bool ShowNewProfile => OfflineMode || _session?.Me?.Players is null || CanChooseNoob || CanChooseHardcore;
+
+    /// <summary>A CR-S98 server lists a live profile of <paramref name="mode"/> on this account (<c>players</c>).</summary>
+    private bool HasLiveProfile(string mode) =>
+        !OfflineMode && _session?.Me?.Players is { } players && players.Any(p => p.Mode == mode && p.Status == "active");
 
     partial void InspectCanChooseHardcore(ref bool can);
 
@@ -49,7 +60,7 @@ public sealed partial class ShellViewModel
 
     public bool NewHardcore
     {
-        get => _newHardcore && CanChooseHardcore;
+        get => (_newHardcore || !CanChooseNoob) && CanChooseHardcore;
         set
         {
             _newHardcore = value;
@@ -114,7 +125,7 @@ public sealed partial class ShellViewModel
         }
         await Run(async () =>
         {
-            var details = await _session.AskNoobAsync(profile.Xuid);
+            var details = await _session.AskNoobAsync(profile.Xuid, game: profile.Game);
             if (details is null)
             {
                 await _session.RefreshMeAsync();
@@ -144,7 +155,7 @@ public sealed partial class ShellViewModel
                 Message = S["modes.convert_needs_download"];
                 return;
             }
-            await _session.ConfirmNoobAsync(profile.Xuid, key);
+            await _session.ConfirmNoobAsync(profile.Xuid, key, game: profile.Game);
             CancelConvert();
             await _session.RefreshMeAsync();
             FillProfiles();
@@ -167,19 +178,27 @@ public sealed partial class ShellViewModel
         Changed(nameof(ConvertDeletes));
     }
 
-    private CloudSaves? _cloudSaves;
-    private SavesApiClient? _savesApi;
+    private readonly Dictionary<(string Game, string? Query), (CloudSaves Saves, SavesApiClient Api)> _saveClients = [];
 
-    /// <summary>The save client of this server (one per launcher: its state file is per realm and profile).</summary>
+    /// <summary>
+    /// The save client of this server for the chosen game (CR-S98: its state is per realm, game and XUID, and every route carries
+    /// <c>?game=</c> on a server that knows careers; none on an older one).
+    /// </summary>
     private (CloudSaves Saves, SavesApiClient Api)? CloudSaveClient()
     {
         if (_session?.Info.Services?.Saves is not { } origin || !Uri.TryCreate(origin, UriKind.Absolute, out var saves))
         {
             return null;
         }
-        _savesApi ??= new SavesApiClient(Http, saves, ClientHeader);
-        _cloudSaves ??= new CloudSaves(_savesApi, new SaveSyncStore(_stateDirectory), saves.GetLeftPart(UriPartial.Authority));
-        return (_cloudSaves, _savesApi);
+        var game = CurrentGame.Id;
+        var query = _session.CareerGame(game);
+        if (!_saveClients.TryGetValue((game, query), out var client))
+        {
+            var api = new SavesApiClient(Http, saves, ClientHeader, query);
+            client = (new CloudSaves(api, new SaveSyncStore(_stateDirectory, game), saves.GetLeftPart(UriPartial.Authority)), api);
+            _saveClients[(game, query)] = client;
+        }
+        return client;
     }
 
     /// <summary>OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says).</summary>
@@ -383,13 +402,34 @@ public sealed partial class ShellViewModel
     }
 }
 
-/// <summary>One row of the profile picker. <see cref="OnAccount"/>: a profile of the signed-in account (not a local-only row).</summary>
-public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = false)
+/// <summary>
+/// One row of the profile picker. <see cref="OnAccount"/>: a profile of the signed-in account (not a local-only row). <see cref="Card"/>
+/// (OD-214, a CR-S98 server): the profile and its career of the chosen game; null for a local row or an older server.
+/// </summary>
+public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = false, BoardCard? Card = null)
 {
     public string Gamertag => ProfileName.Plain(Profile.Gamertag);
 
     public bool Hardcore => Profile.Mode == "hardcore";
 
-    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only.</summary>
-    public bool CanDeleteFromCloud => OnAccount;
+    /// <summary>OD-207 #8 / CAREERS.md §6.8: a launcher that knows careers never changes a mode; an older server's rows keep the link.</summary>
+    public bool CanConvert => Hardcore && Card is null;
+
+    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only (an older server's: the profile is its one career).</summary>
+    public bool CanDeleteFromCloud => OnAccount && Card is null;
+
+    /// <summary>CR-S98: "Delete &lt;game&gt; career" on a profile with a career of the chosen game.</summary>
+    public bool CanDeleteCareer => OnAccount && Card?.CareerRow is not null;
+
+    /// <summary>CR-S98: "Delete profile" (every game) on every account profile of a server that lists them.</summary>
+    public bool CanDeleteWholeProfile => OnAccount && Card is not null;
+
+    /// <summary>W12: "Download to this PC" on a started career the cloud holds a revision of (a game with cloud saves).</summary>
+    public bool CanDownload => OnAccount && Card is { State: CareerState.Started, Career.Cloud.Revision: > 0 };
+
+    /// <summary>The career link's words, with the game's title.</summary>
+    public string DeleteCareerLabel { get; init; } = string.Empty;
+
+    /// <summary>OD-214: the card opens the Start panel (no career of the game, or an empty one).</summary>
+    public bool ShowStart => Card is { Startable: true };
 }
