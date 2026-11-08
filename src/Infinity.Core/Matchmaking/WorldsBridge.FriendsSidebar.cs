@@ -539,6 +539,9 @@ public sealed partial class WorldsBridge
         var name = Clip(friend?.Playing?.Gamertag ?? (friend is null ? null : FirstName(friend.Profiles)), UiFrame.MaxFriendName);
         if (friend is not { Online: true, Playing: { State: "in_world", WorldId.Length: > 0 } playing })
             return Result(action, UiFriendsResult.Refused, "friends.ask_not_in_world", name);
+        // T-1108-R: a PUBLIC official world is joined straight away (OD-190 "Join friend", POST /mm/v1/join {worldId}); only a
+        // private one takes requests (CR-S102: POST …/requests to a public official world is 409 {reason: "official"})
+        if (JoinsDirectly(playing)) return await JoinFriendFromSidebarAsync(action, playing, name, cancellation).ConfigureAwait(false);
         var (mods, refusal) = WireMods();
         if (refusal is not null) return new UiFrame.FriendsResult(action.Kind, UiFriendsResult.Refused, Clip(_text(refusal), UiFrame.MaxFriendMessage));
         var answer = await _mm.RequestAsync(playing.WorldId!, mods, cancellation).ConfigureAwait(false);
@@ -553,6 +556,31 @@ public sealed partial class WorldsBridge
         var error = answer.Error!;
         _log($"friends: ask to join refused ({(int)error.Status} {error.Kind} {error.Reason})");
         return Result(action, UiFriendsResult.Refused, AskRefusalKey(error), name);
+    }
+
+    /// <summary>
+    /// T-1108-R: whether the sidebar's join of <paramref name="playing"/> is the direct "Join friend" (<c>POST /mm/v1/join {worldId}</c>):
+    /// an official world (<see cref="JoinFriendOffered"/>) that is not private (<c>doing.private</c>, CORE_API §4.2a). A private official
+    /// world, or a world with no official activity, goes through "Ask to join" (<c>…/requests</c>, CR-S102), and the server decides.
+    /// </summary>
+    public static bool JoinsDirectly(FriendPlaying? playing) => JoinFriendOffered(playing) && playing!.Doing?.Private != true;
+
+    /// <summary>The words of a granted "Join friend" by the activity of the friend's official world (the game's own menu entry to pick).</summary>
+    public static string JoinedFriendKey(string? activity) => activity switch
+    {
+        WorldActivities.RoadTrip => "friends.joined_roadtrip",
+        WorldActivities.CarMeet => "friends.joined_carmeet",
+        _ => "friends.joined_freeroam",
+    };
+
+    private async Task<UiFrame.FriendsResult> JoinFriendFromSidebarAsync(UiFrame.FriendsAction action, FriendPlaying playing, string name,
+        CancellationToken cancellation)
+    {
+        var joined = await JoinFriendAsync(playing, cancellation).ConfigureAwait(false);
+        _log($"friends: joined a friend's public official world: {joined.Result}");
+        if (joined.Result == UiJoin.Reserved) return Result(action, UiFriendsResult.Done, JoinedFriendKey(playing.OfficialActivity), name);
+        // the join's own refusal words (full, closed, not allowed, slow down, the anti-cheat pool, mods)
+        return new UiFrame.FriendsResult(action.Kind, UiFriendsResult.Refused, Clip(joined.Message.Replace('\n', ' '), UiFrame.MaxFriendMessage));
     }
 
     /// <summary>
