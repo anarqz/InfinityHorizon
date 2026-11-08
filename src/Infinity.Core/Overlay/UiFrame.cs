@@ -80,7 +80,7 @@ public enum UiDirection
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 9;
+    public const ushort ProtocolVersion = 10;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -119,8 +119,17 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 8 (the private lobby's "Who can join", OD-210, CR-S101, W14).</summary>
     public const byte FirstProtocol8Type = 0x28;
 
+    /// <summary>The lowest type that needs protocol 10 (the friends sidebar, OD-211, CR-S102, W15).</summary>
+    public const byte FirstProtocol10Type = 0x2A;
+
+    /// <summary>W15: the most friend rows, incoming friend requests, join requests, profiles per friend one <see cref="FriendsState"/> carries.</summary>
+    public const int MaxFriendRows = 64, MaxFriendRequests = 16, MaxJoinRequests = 8, MaxFriendProfiles = 4;
+
+    /// <summary>W15 text limits in UTF-8 bytes: a name, a game's short label, a profile link, a result message, a typed profile name.</summary>
+    public const int MaxFriendName = 64, MaxFriendGame = 8, MaxFriendUrl = 160, MaxFriendMessage = 160;
+
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x29;
+    public const byte LastType = 0x2C;
 
     /// <summary>T-L4: the most friends one <see cref="FriendPicker"/> lists (the launcher keeps the first ones, available ones first).</summary>
     public const int MaxPickerFriends = 100;
@@ -686,6 +695,79 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x2A, launcher → overlay (protocol 10, OD-211, CR-S102 CORE_API §4.2a, W15): the right FRIENDS sidebar. <c>Flags</c>
+    /// <see cref="UiFriendsFlags"/>; up to <see cref="MaxFriendRows"/> friend accounts (online first), up to
+    /// <see cref="MaxFriendRequests"/> incoming friend requests and up to <see cref="MaxJoinRequests"/> requests to join this player's
+    /// lobby (the leader's). Sent whole after every change; the overlay shows what it last got.
+    /// </summary>
+    public sealed record FriendsState(byte Flags, IReadOnlyList<FriendRow> Friends, IReadOnlyList<FriendRequestRow> Requests,
+        IReadOnlyList<FriendRequestRow> JoinRequests) : UiFrame
+    {
+        public override byte Type => 0x2A;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        /// <summary>No list yet (not loaded): the sidebar says so.</summary>
+        public static FriendsState Unloaded { get; } = new(0, [], [], []);
+
+        internal void Validate()
+        {
+            if (Flags > UiFriendsFlags.All) throw new ProtocolException("invalid friends flags");
+            Bound(Friends.Count, MaxFriendRows, "friend rows");
+            Bound(Requests.Count, MaxFriendRequests, "friend requests");
+            Bound(JoinRequests.Count, MaxJoinRequests, "join requests");
+            if ((Flags & UiFriendsFlags.Loaded) == 0 && (Friends.Count != 0 || Requests.Count != 0)) throw new ProtocolException("an unloaded list has no rows");
+            foreach (var row in Friends) row.Validate();
+            foreach (var request in Requests.Concat(JoinRequests)) request.Validate();
+        }
+    }
+
+    /// <summary>0x2B, overlay → launcher (protocol 10, W15): a friends action; <see cref="UiFriendsAction"/> names the kinds and what each carries.</summary>
+    public sealed record FriendsAction(byte Kind, string Id, string Text) : UiFrame
+    {
+        public override byte Type => 0x2B;
+
+        public override UiDirection Direction => UiDirection.ToLauncher;
+
+        internal void Validate()
+        {
+            if (Kind is < UiFriendsAction.Refresh or > UiFriendsAction.Max) throw new ProtocolException("invalid friends action");
+            Limit(Text, MaxFriendName, "friends action text");
+            if (Kind == UiFriendsAction.Add)
+            {
+                if (Id.Length != 0 || Text.Length == 0) throw new ProtocolException("Add names a profile, not an id");
+            }
+            else if (Kind == UiFriendsAction.Refresh)
+            {
+                if (Id.Length != 0 || Text.Length != 0) throw new ProtocolException("Refresh carries nothing");
+            }
+            else
+            {
+                PaneKey(Id, "friends action id");
+                if (Text.Length != 0) throw new ProtocolException("this friends action carries no text");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 0x2C, launcher → overlay (protocol 10, W15): the answer to a <see cref="FriendsAction"/> (<c>Kind</c> echoed, <c>Result</c>
+    /// <see cref="UiFriendsResult"/>) with the words to show, in the player's language (a notice that always shows: the player asked).
+    /// </summary>
+    public sealed record FriendsResult(byte Kind, byte Result, string Message) : UiFrame
+    {
+        public override byte Type => 0x2C;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        internal void Validate()
+        {
+            if (Kind is < UiFriendsAction.Refresh or > UiFriendsAction.Max) throw new ProtocolException("invalid friends result kind");
+            if (Result > UiFriendsResult.Max) throw new ProtocolException("invalid friends result");
+            Limit(Message, MaxFriendMessage, "friends result message");
+        }
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -972,6 +1054,55 @@ public abstract record UiFrame
                 s.Validate();
                 w.U8(s.Modes);
                 break;
+            case FriendsState f: // W15 (protocol 10)
+                f.Validate();
+                w.U8(f.Flags);
+                w.U8((byte)f.Friends.Count);
+                foreach (var row in f.Friends)
+                {
+                    w.Str(row.Id);
+                    w.Str(row.Name);
+                    w.U16(row.Flags);
+                    w.Str(row.Game);
+                    w.U8(row.Activity);
+                    w.U8(row.Excluded);
+                    w.Str(row.DiscordUser);
+                    w.Str(row.DiscordName);
+                    w.U32(row.AccountDays);
+                    w.Str(row.ProfileUrl);
+                    w.U8((byte)row.Profiles.Count);
+                    foreach (var profile in row.Profiles)
+                    {
+                        w.Str(profile.Name);
+                        w.U8(profile.Mode);
+                        w.Str(profile.Game);
+                    }
+                }
+                w.U8((byte)f.Requests.Count);
+                foreach (var request in f.Requests)
+                {
+                    w.Str(request.Id);
+                    w.Str(request.Name);
+                }
+                w.U8((byte)f.JoinRequests.Count);
+                foreach (var request in f.JoinRequests)
+                {
+                    w.Str(request.Id);
+                    w.Str(request.Name);
+                }
+                break;
+            case FriendsAction a:
+                a.Validate();
+                w.U8(a.Kind);
+                w.Str(a.Id);
+                w.Str(a.Text);
+                break;
+            case FriendsResult r:
+                r.Validate();
+                w.U8(r.Kind);
+                w.U8(r.Result);
+                w.Str(r.Message);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -1050,14 +1181,17 @@ public abstract record UiFrame
             0x26 => new FriendPickerAsk(),
             0x27 => new InviteSend(r.Str()),
             0x28 => new LobbyJoinModes(r.Str(), r.U8(), r.U8()),
-            _ => new JoinModesSet(r.U8()),
+            0x29 => new JoinModesSet(r.U8()),
+            0x2A => DecodeFriendsState(ref r),
+            0x2B => new FriendsAction(r.U8(), r.Str(), r.Str()),
+            _ => new FriendsResult(r.U8(), r.U8(), r.Str()),
         };
         r.End();
         switch (frame)
         {
             case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
                 or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast
-                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet:
+                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet or FriendsState or FriendsAction or FriendsResult:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1065,6 +1199,44 @@ public abstract record UiFrame
         if (frame is UiEvent { Kind: UiEventKind.ConnectionDetails } query && query.Detail.Length != 0) throw new ProtocolException("Connection query detail must be empty");
         used = 4 + length.Value;
         return frame;
+    }
+
+    private static FriendsState DecodeFriendsState(ref WireReader r)
+    {
+        var flags = r.U8();
+        var count = r.U8();
+        Bound(count, MaxFriendRows, "friend rows");
+        var friends = new List<FriendRow>(count);
+        for (var i = 0; i < count; ++i)
+        {
+            var id = r.Str();
+            var name = r.Str();
+            var rowFlags = r.U16();
+            var game = r.Str();
+            var activity = r.U8();
+            var excluded = r.U8();
+            var discordUser = r.Str();
+            var discordName = r.Str();
+            var days = r.U32();
+            var url = r.Str();
+            var profileCount = r.U8();
+            Bound(profileCount, MaxFriendProfiles, "friend profiles");
+            var profiles = new List<FriendProfileRow>(profileCount);
+            for (var p = 0; p < profileCount; ++p) profiles.Add(new FriendProfileRow(r.Str(), r.U8(), r.Str()));
+            friends.Add(new FriendRow(id, name, rowFlags, game, activity, excluded, discordUser, discordName, days, url, profiles));
+        }
+        var requests = DecodeFriendRequests(ref r, MaxFriendRequests, "friend requests");
+        var joins = DecodeFriendRequests(ref r, MaxJoinRequests, "join requests");
+        return new FriendsState(flags, friends, requests, joins);
+    }
+
+    private static List<FriendRequestRow> DecodeFriendRequests(ref WireReader r, int max, string what)
+    {
+        var count = r.U8();
+        Bound(count, max, what);
+        var rows = new List<FriendRequestRow>(count);
+        for (var i = 0; i < count; ++i) rows.Add(new FriendRequestRow(r.Str(), r.Str()));
+        return rows;
     }
 
     private static FriendPicker DecodePicker(ref WireReader r)
@@ -1228,6 +1400,143 @@ public abstract record UiIncoming
 
     /// <summary>Protocol 8 (OD-210, CR-S101, W14): the private lobby's leader chose who can join; one notice, then the lobby again.</summary>
     public sealed record JoinModesSet(UiFrame.JoinModesSet Request) : UiIncoming;
+
+    /// <summary>Protocol 10 (OD-211, CR-S102, W15): an action of the friends sidebar; answer with <see cref="UiFrame.FriendsResult"/> and a fresh <see cref="UiFrame.FriendsState"/>.</summary>
+    public sealed record FriendsAct(UiFrame.FriendsAction Request) : UiIncoming;
+}
+
+/// <summary><see cref="UiFrame.FriendsState"/>'s flags (W15).</summary>
+public static class UiFriendsFlags
+{
+    /// <summary>The friend list was read; without it the sidebar says it could not.</summary>
+    public const byte Loaded = 1;
+
+    /// <summary>This player leads a private lobby: "Invite to my game" is offered.</summary>
+    public const byte HaveLobby = 2;
+
+    public const byte All = Loaded | HaveLobby;
+}
+
+/// <summary><see cref="FriendRow.Flags"/> (W15).</summary>
+public static class UiFriendFlag
+{
+    public const ushort Online = 1, Favorite = 2, Supporter = 4, CanAsk = 8, CanInvite = 0x10, Excluded = 0x20, Racing = 0x40, Private = 0x80;
+
+    public const ushort All = 0xFF;
+}
+
+/// <summary><see cref="FriendRow.Activity"/> (W15): what an online friend does; the overlay words it with the game ("Racing on FH2").</summary>
+public static class UiFriendActivity
+{
+    public const byte Offline = 0, Menus = 1, FreeRoam = 2, CarMeet = 3, RoadTrip = 4, Race = 5, Max = Race;
+
+    /// <summary>The wire value of a presence: a <c>doing.activity</c> when the server sends one, else what <c>officialActivity</c> / <c>state</c> say.</summary>
+    public static byte Of(Api.FriendPlaying? playing, bool online)
+    {
+        if (!online || playing is null || playing.State == "offline") return Offline;
+        if (playing.Doing is { } doing)
+            return doing.Racing == true || doing.Activity == "race" ? Race
+                : doing.Activity == "freeroam" ? FreeRoam : doing.Activity == "carmeet" ? CarMeet : doing.Activity == "roadtrip" ? RoadTrip : Menus;
+        return playing.OfficialActivity switch { "freeroam" => FreeRoam, "carmeet" => CarMeet, "roadtrip" => RoadTrip, _ => Menus };
+    }
+}
+
+/// <summary><see cref="FriendRow.Excluded"/> (W15): why "Ask to join" / "Invite to my game" is off for a friend.</summary>
+public static class UiFriendExcluded
+{
+    public const byte None = 0, Mode = 1, Other = 2, Max = Other;
+}
+
+/// <summary><see cref="UiFrame.FriendsAction.Kind"/> (W15) and what each carries (<c>Id</c> the friend account, request or join request).</summary>
+public static class UiFriendsAction
+{
+    /// <summary>Read the lists again (the sidebar opened). Carries nothing.</summary>
+    public const byte Refresh = 1;
+
+    /// <summary>"Add friend": <c>Text</c> a profile name (any profile of the account), no id.</summary>
+    public const byte Add = 2;
+
+    /// <summary>Accept an incoming friend request (<c>Id</c> its id).</summary>
+    public const byte Accept = 3;
+
+    /// <summary>Decline an incoming friend request (<c>DELETE /launcher/v1/friends/{id}</c>).</summary>
+    public const byte Decline = 4;
+
+    /// <summary>Unfriend (<c>Id</c> the friend account).</summary>
+    public const byte Unfriend = 5;
+
+    /// <summary>"Ask to join" the friend's world (<c>POST /mm/v1/worlds/{worldId}/requests</c>).</summary>
+    public const byte AskToJoin = 6;
+
+    /// <summary>"Invite to my game" (the private lobby's invite).</summary>
+    public const byte InviteToMine = 7;
+
+    /// <summary>The leader accepts a request to join its lobby (<c>Id</c> the request).</summary>
+    public const byte AcceptJoin = 8;
+
+    /// <summary>The leader declines a request to join its lobby.</summary>
+    public const byte DeclineJoin = 9;
+
+    public const byte Max = DeclineJoin;
+}
+
+/// <summary><see cref="UiFrame.FriendsResult.Result"/> (W15).</summary>
+public static class UiFriendsResult
+{
+    public const byte Done = 0, Requested = 1, NowFriends = 2, NotFound = 3, Refused = 4, Failed = 5, Max = Failed;
+}
+
+/// <summary>A profile of a friend as the gamercard lists it: its name, mode (0 hardcore, 1 noob) and the game's short label.</summary>
+public sealed record FriendProfileRow(string Name, byte Mode, string Game)
+{
+    internal void Validate()
+    {
+        if (Name.Length == 0) throw new ProtocolException("a friend profile has a name");
+        UiFrame.Limit(Name, UiFrame.MaxFriendName, "friend profile name");
+        UiFrame.Limit(Game, UiFrame.MaxFriendGame, "friend profile game");
+        if (Mode > 1) throw new ProtocolException("invalid friend profile mode");
+    }
+}
+
+/// <summary>An incoming friend request or a request to join this player's lobby: its id (the action key) and the asker's profile name.</summary>
+public sealed record FriendRequestRow(string Id, string Name)
+{
+    internal void Validate()
+    {
+        UiFrame.PaneKey(Id, "friend request id");
+        if (Name.Length == 0) throw new ProtocolException("a request names its asker");
+        UiFrame.Limit(Name, UiFrame.MaxFriendName, "friend request name");
+    }
+}
+
+/// <summary>
+/// One friend account of <see cref="UiFrame.FriendsState"/> (W15): <c>Id</c> the account handle (the action key), <c>Name</c> the profile
+/// shown (the one online, else the first), <c>Flags</c> <see cref="UiFriendFlag"/>, <c>Game</c> the short label of the game it plays,
+/// <c>Activity</c> <see cref="UiFriendActivity"/>, <c>Excluded</c> <see cref="UiFriendExcluded"/>, the linked Discord (empty: none),
+/// <c>AccountDays</c> the account's age in days (<see cref="Unknown"/> when the server did not say), <c>ProfileUrl</c> an https link
+/// (empty: not listed on the website) and every <c>Profiles</c> name with its mode.
+/// </summary>
+public sealed record FriendRow(string Id, string Name, ushort Flags, string Game, byte Activity, byte Excluded, string DiscordUser,
+    string DiscordName, uint AccountDays, string ProfileUrl, IReadOnlyList<FriendProfileRow> Profiles)
+{
+    /// <summary>No age: the server sent no <c>accountSince</c>.</summary>
+    public const uint Unknown = uint.MaxValue;
+
+    internal void Validate()
+    {
+        UiFrame.PaneKey(Id, "friend id");
+        if (Name.Length == 0) throw new ProtocolException("a friend row has a name");
+        UiFrame.Limit(Name, UiFrame.MaxFriendName, "friend name");
+        UiFrame.Limit(Game, UiFrame.MaxFriendGame, "friend game");
+        UiFrame.Limit(DiscordUser, UiFrame.MaxFriendName, "friend discord user");
+        UiFrame.Limit(DiscordName, UiFrame.MaxFriendName, "friend discord name");
+        UiFrame.Limit(ProfileUrl, UiFrame.MaxFriendUrl, "friend profile url");
+        if (ProfileUrl.Length != 0 && !ProfileUrl.StartsWith("https://", StringComparison.Ordinal)) throw new ProtocolException("a profile link is https");
+        if (Flags > UiFriendFlag.All || Activity > UiFriendActivity.Max || Excluded > UiFriendExcluded.Max) throw new ProtocolException("invalid friend row");
+        if (((Flags & UiFriendFlag.Excluded) != 0) != (Excluded != UiFriendExcluded.None)) throw new ProtocolException("excluded flag and reason agree");
+        UiFrame.Bound(Profiles.Count, UiFrame.MaxFriendProfiles, "friend profiles");
+        foreach (var profile in Profiles) profile.Validate();
+    }
 }
 
 /// <summary>
@@ -1629,7 +1938,7 @@ public sealed class UiSession
         return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
             && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5)
             && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6) && (frame.Type < UiFrame.FirstProtocol7Type || Protocol >= 7)
-            && (frame.Type < UiFrame.FirstProtocol8Type || Protocol >= 8);
+            && (frame.Type < UiFrame.FirstProtocol8Type || Protocol >= 8) && (frame.Type < UiFrame.FirstProtocol10Type || Protocol >= 10);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1668,7 +1977,7 @@ public sealed class UiSession
         if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
             || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5
             || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6 || frame.Type >= UiFrame.FirstProtocol7Type && Protocol < 7
-            || frame.Type >= UiFrame.FirstProtocol8Type && Protocol < 8)
+            || frame.Type >= UiFrame.FirstProtocol8Type && Protocol < 8 || frame.Type >= UiFrame.FirstProtocol10Type && Protocol < 10)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }
@@ -1678,6 +1987,7 @@ public sealed class UiSession
             UiFrame.FriendPickerAsk => new UiIncoming.PickerAsk(),
             UiFrame.InviteSend s => new UiIncoming.InviteSend(s),
             UiFrame.JoinModesSet m => new UiIncoming.JoinModesSet(m),
+            UiFrame.FriendsAction f => new UiIncoming.FriendsAct(f),
             UiFrame.InviteAnswer a => new UiIncoming.InviteAnswer(a),
             UiFrame.PlayerStateQuery q => new UiIncoming.PlayerStateAsk(q),
             UiFrame.PlayerActionRequest a => new UiIncoming.PlayerAct(a),

@@ -18,6 +18,44 @@ public sealed record FriendProfile
     public required string Game { get; init; }
 
     public required string Mode { get; init; }
+
+    /// <summary>OD-211 (CORE_API §4.2a, CR-S102): the profile's page on the website; absent when it is not listed (CR-S83): no link then.</summary>
+    public string? ProfileUrl { get; init; }
+}
+
+/// <summary>OD-211 (CORE_API §4.2a): a friend account's linked Discord; absent when it has none.</summary>
+public sealed record FriendDiscord
+{
+    public required string Username { get; init; }
+
+    public string? GlobalName { get; init; }
+
+    public required string AvatarUrl { get; init; }
+}
+
+/// <summary>OD-211 (CORE_API §4.2a): what a friend does in its world (<c>activity</c>: freeroam | carmeet | roadtrip | race).</summary>
+public sealed record FriendDoing
+{
+    public required string Activity { get; init; }
+
+    public required bool Private { get; init; }
+
+    /// <summary>Only where the hook reports a race in progress.</summary>
+    public bool? Racing { get; init; }
+}
+
+/// <summary>OD-211 (CORE_API §4.2a): a friend whose account started a play session since the caller's previous invites poll.</summary>
+public sealed record FriendOnline
+{
+    public required string FriendId { get; init; }
+
+    public required string Gamertag { get; init; }
+
+    public required string Game { get; init; }
+
+    public required string Mode { get; init; }
+
+    public required string Since { get; init; }
 }
 
 /// <summary>The profile a friend plays now, or played last (<c>state</c>: offline | in_game | in_world).</summary>
@@ -42,6 +80,9 @@ public sealed record FriendPlaying
     /// activity (<c>freeroam</c>, <c>carmeet</c>, <c>roadtrip</c>); "Join friend" is then <c>POST /mm/v1/join {worldId}</c>.
     /// </summary>
     public string? OfficialActivity { get; init; }
+
+    /// <summary>OD-211 (CORE_API §4.2a): the world's activity, whether it is private, and whether a race is in progress; absent on older servers.</summary>
+    public FriendDoing? Doing { get; init; }
 }
 
 /// <summary>The friend's newest live invite to the caller.</summary>
@@ -72,6 +113,12 @@ public sealed record Friend
     public FriendPlaying? Playing { get; init; }
 
     public FriendInvite? Invite { get; init; }
+
+    /// <summary>OD-211 (CORE_API §4.2a): the friend account's creation (an instant); absent on older servers.</summary>
+    public string? AccountSince { get; init; }
+
+    /// <summary>OD-211 (CORE_API §4.2a): only when the account linked Discord.</summary>
+    public FriendDiscord? Discord { get; init; }
 }
 
 /// <summary>A live friend request: the other account.</summary>
@@ -153,6 +200,9 @@ public sealed record InviteList
     public required IReadOnlyList<InviteReceived> Items { get; init; }
 
     public required string GeneratedAt { get; init; }
+
+    /// <summary>OD-211 (CORE_API §4.2a, CR-S102): friends who came online since the previous poll; absent on older servers and on the first poll.</summary>
+    public IReadOnlyList<FriendOnline>? Online { get; init; }
 }
 
 /// <summary>

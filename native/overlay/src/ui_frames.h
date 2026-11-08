@@ -67,6 +67,21 @@
 //        Hardcore)}, sent after every 0x0E MyWorld
 //   0x29 JoinModesSet, overlay -> launcher {u8 modes}: the current leader's choice (PUT /mm/v1/worlds/{id}/modes); the launcher answers
 //        one notice and a fresh 0x28. New joins only: players already in the lobby stay
+// Protocol 10 (OD-211, CR-S102 CORE_API §4.2a, W15): the right FRIENDS sidebar
+//   0x2A FriendsState, launcher -> overlay {u8 flags (bit 0 loaded: the list was read, else "could not load"; bit 1 have lobby: this
+//        player leads a private lobby, so Invite to my game is offered), u8 count <= 64 x {str id (PaneKey, the account), str name (1..64 B),
+//        u16 flags (bit 0 online, 1 favourite, 2 supporter, 3 can ask, 4 can invite, 5 excluded, 6 racing, 7 private), str game (<= 8 B,
+//        "FH2"), u8 activity (0 offline, 1 menus, 2 free roam, 3 car meet, 4 road trip, 5 race), u8 excluded (0 none, 1 mode, 2 other; set
+//        exactly when flag 5), str discordUser, str discordName (each <= 64 B; empty: none linked), u32 accountDays (0xFFFFFFFF unknown),
+//        str profileUrl (<= 160 B, https or empty), u8 profiles <= 4 x {str name, u8 mode (0 hardcore, 1 noob), str game}},
+//        u8 requests <= 16 x {str id, str name} (incoming friend requests), u8 joins <= 8 x {str id, str name} (requests to join this
+//        player's lobby)}
+//   0x2B FriendsAction, overlay -> launcher {u8 kind (1 refresh, 2 add, 3 accept, 4 decline, 5 unfriend, 6 ask to join, 7 invite to my
+//        game, 8 accept join request, 9 decline join request), str id (PaneKey; empty for 1 and 2), str text (<= 64 B; the profile name
+//        for 2, else empty)}
+//   0x2C FriendsResult, launcher -> overlay {u8 kind (echoed), u8 result (0 done, 1 requested, 2 now friends, 3 not found, 4 refused,
+//        5 failed), str message (<= 160 B, in the player's language)}
+// Online toasts ("{gamertag} is online · {game}") are ordinary 0x03 Toasts with the friend icon (6).
 // Additive fields of older frames (an older reader ignores them):
 //   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
@@ -83,7 +98,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 9;
+constexpr uint16_t kUiProtocol = 10;
 constexpr size_t kMaxLobbyMods = 32; // OD-181: a roster player's declared mods
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
 constexpr size_t kMaxPaneSections = 8, kMaxPaneEntries = 32, kMaxPaneActions = 4;
@@ -679,6 +694,176 @@ inline bool DecodeJoinModesSet(const uint8_t *body, size_t size, uint8_t &modes)
     if (r.ok && m > kJoinModesMax) r.ok = false;
     if (!r.Done()) return false;
     modes = m;
+    return true;
+}
+
+// ---------------------------------------------------------------- protocol 10: the friends sidebar (OD-211, CR-S102, W15)
+constexpr size_t kMaxFriendRows = 64, kMaxFriendRequests = 16, kMaxJoinRequests = 8, kMaxFriendProfiles = 4;
+constexpr size_t kMaxFriendName = 64, kMaxFriendGame = 8, kMaxFriendUrl = 160, kMaxFriendMessage = 160;
+constexpr uint32_t kFriendAgeUnknown = 0xFFFFFFFFu;
+enum : uint8_t { kFriendsLoaded = 1, kFriendsHaveLobby = 2, kFriendsFlagsAll = 3 };
+enum : uint16_t { kFriendOnline = 1, kFriendFavorite = 2, kFriendSupporter = 4, kFriendCanAsk = 8, kFriendCanInvite = 0x10, kFriendExcluded = 0x20,
+                  kFriendRacing = 0x40, kFriendPrivate = 0x80, kFriendFlagsAll = 0xFF };
+enum : uint8_t { kActOffline = 0, kActMenus = 1, kActFreeRoam = 2, kActCarMeet = 3, kActRoadTrip = 4, kActRace = 5, kActMax = kActRace };
+enum : uint8_t { kExcludedNone = 0, kExcludedMode = 1, kExcludedOther = 2, kExcludedMax = kExcludedOther };
+enum : uint8_t { kFriendsRefresh = 1, kFriendsAdd = 2, kFriendsAccept = 3, kFriendsDecline = 4, kFriendsUnfriend = 5, kFriendsAsk = 6,
+                 kFriendsInviteMine = 7, kFriendsAcceptJoin = 8, kFriendsDeclineJoin = 9, kFriendsActionMax = kFriendsDeclineJoin };
+enum : uint8_t { kResultDone = 0, kResultRequested = 1, kResultNowFriends = 2, kResultNotFound = 3, kResultRefused = 4, kResultFailed = 5,
+                 kResultMax = kResultFailed };
+struct FriendProfileRow {
+    std::string name;
+    uint8_t mode = 1; // 0 hardcore, 1 noob
+    std::string game;
+};
+struct FriendRowFrame {
+    std::string id, name;
+    uint16_t flags = 0;
+    std::string game;
+    uint8_t activity = kActOffline, excluded = kExcludedNone;
+    std::string discord_user, discord_name;
+    uint32_t account_days = kFriendAgeUnknown;
+    std::string profile_url;
+    std::vector<FriendProfileRow> profiles;
+    bool Has(uint16_t flag) const { return (flags & flag) != 0; }
+};
+struct FriendRequestRow {
+    std::string id, name;
+};
+struct FriendsStateFrame {
+    uint8_t flags = 0;
+    std::vector<FriendRowFrame> friends;
+    std::vector<FriendRequestRow> requests, joins;
+    bool loaded() const { return (flags & kFriendsLoaded) != 0; }
+    bool have_lobby() const { return (flags & kFriendsHaveLobby) != 0; }
+};
+struct FriendsResultFrame {
+    uint8_t kind = 0, result = kResultDone;
+    std::string message;
+};
+inline bool DecodeFriendRequests(wire::Reader &r, size_t max, std::vector<FriendRequestRow> &out) {
+    const size_t count = r.Count(max);
+    for (size_t i = 0; i < count && r.ok; ++i) {
+        FriendRequestRow q;
+        q.id = r.Text(kMaxPaneId);
+        q.name = r.Text(kMaxFriendName);
+        if (r.ok && (!PaneKey(q.id) || q.name.empty())) r.ok = false;
+        out.push_back(std::move(q));
+    }
+    return r.ok;
+}
+// Strict, as the launcher writes it (UiFrame.FriendsState.Validate)
+inline bool DecodeFriendsState(const uint8_t *body, size_t size, FriendsStateFrame &out) {
+    wire::Reader r{body, size};
+    FriendsStateFrame f;
+    f.flags = r.U8();
+    const size_t count = r.Count(kMaxFriendRows);
+    if (r.ok && f.flags > kFriendsFlagsAll) r.ok = false;
+    for (size_t i = 0; i < count && r.ok; ++i) {
+        FriendRowFrame row;
+        row.id = r.Text(kMaxPaneId);
+        row.name = r.Text(kMaxFriendName);
+        row.flags = r.U16();
+        row.game = r.Text(kMaxFriendGame);
+        row.activity = r.U8();
+        row.excluded = r.U8();
+        row.discord_user = r.Text(kMaxFriendName);
+        row.discord_name = r.Text(kMaxFriendName);
+        row.account_days = r.U32();
+        row.profile_url = r.Text(kMaxFriendUrl);
+        if (r.ok && (!PaneKey(row.id) || row.name.empty() || row.flags > kFriendFlagsAll || row.activity > kActMax || row.excluded > kExcludedMax ||
+                     (row.Has(kFriendExcluded) != (row.excluded != kExcludedNone)) ||
+                     (!row.profile_url.empty() && row.profile_url.rfind("https://", 0) != 0)))
+            r.ok = false;
+        const size_t profiles = r.Count(kMaxFriendProfiles);
+        for (size_t p = 0; p < profiles && r.ok; ++p) {
+            FriendProfileRow pr;
+            pr.name = r.Text(kMaxFriendName);
+            pr.mode = r.U8();
+            pr.game = r.Text(kMaxFriendGame);
+            if (r.ok && (pr.name.empty() || pr.mode > 1)) r.ok = false;
+            row.profiles.push_back(std::move(pr));
+        }
+        f.friends.push_back(std::move(row));
+    }
+    DecodeFriendRequests(r, kMaxFriendRequests, f.requests);
+    DecodeFriendRequests(r, kMaxJoinRequests, f.joins);
+    if (r.ok && !f.loaded() && (!f.friends.empty() || !f.requests.empty())) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(f);
+    return true;
+}
+inline std::vector<uint8_t> EncodeFriendsState(const FriendsStateFrame &f) {
+    std::vector<uint8_t> b;
+    wire::U8(b, f.flags);
+    wire::U8(b, static_cast<uint8_t>(f.friends.size()));
+    for (const auto &row : f.friends) {
+        wire::Str(b, row.id);
+        wire::Str(b, row.name);
+        wire::U16(b, row.flags);
+        wire::Str(b, row.game);
+        wire::U8(b, row.activity);
+        wire::U8(b, row.excluded);
+        wire::Str(b, row.discord_user);
+        wire::Str(b, row.discord_name);
+        wire::U32(b, row.account_days);
+        wire::Str(b, row.profile_url);
+        wire::U8(b, static_cast<uint8_t>(row.profiles.size()));
+        for (const auto &p : row.profiles) {
+            wire::Str(b, p.name);
+            wire::U8(b, p.mode);
+            wire::Str(b, p.game);
+        }
+    }
+    for (const auto *list : {&f.requests, &f.joins}) {
+        wire::U8(b, static_cast<uint8_t>(list->size()));
+        for (const auto &q : *list) {
+            wire::Str(b, q.id);
+            wire::Str(b, q.name);
+        }
+    }
+    return b;
+}
+inline bool DecodeFriendsResult(const uint8_t *body, size_t size, FriendsResultFrame &out) {
+    wire::Reader r{body, size};
+    FriendsResultFrame f;
+    f.kind = r.U8();
+    f.result = r.U8();
+    f.message = r.Text(kMaxFriendMessage);
+    if (r.ok && (f.kind < kFriendsRefresh || f.kind > kFriendsActionMax || f.result > kResultMax)) r.ok = false;
+    if (!r.Done()) return false;
+    out = std::move(f);
+    return true;
+}
+inline std::vector<uint8_t> EncodeFriendsResult(const FriendsResultFrame &f) {
+    std::vector<uint8_t> b;
+    wire::U8(b, f.kind);
+    wire::U8(b, f.result);
+    wire::Str(b, f.message);
+    return b;
+}
+// Overlay -> launcher; the same rule the launcher checks (UiFrame.FriendsAction.Validate): Refresh carries nothing, Add a name, the rest an id.
+inline bool FriendsActionValid(uint8_t kind, const std::string &id, const std::string &text) {
+    if (kind < kFriendsRefresh || kind > kFriendsActionMax || text.size() > kMaxFriendName || !Utf8(text)) return false;
+    if (kind == kFriendsAdd) return id.empty() && !text.empty();
+    if (kind == kFriendsRefresh) return id.empty() && text.empty();
+    return PaneKey(id) && text.empty();
+}
+inline std::vector<uint8_t> EncodeFriendsAction(uint8_t kind, const std::string &id, const std::string &text) {
+    std::vector<uint8_t> b;
+    wire::U8(b, kind);
+    wire::Str(b, id);
+    wire::Str(b, text);
+    return b;
+}
+inline bool DecodeFriendsAction(const uint8_t *body, size_t size, uint8_t &kind, std::string &id, std::string &text) {
+    wire::Reader r{body, size};
+    const uint8_t k = r.U8();
+    std::string i = r.Text(kMaxPaneId), t = r.Text(kMaxFriendName);
+    if (r.ok && !FriendsActionValid(k, i, t)) r.ok = false;
+    if (!r.Done()) return false;
+    kind = k;
+    id = std::move(i);
+    text = std::move(t);
     return true;
 }
 
