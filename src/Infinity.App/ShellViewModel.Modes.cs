@@ -114,7 +114,7 @@ public sealed partial class ShellViewModel
         }
         await Run(async () =>
         {
-            var details = await _session.AskNoobAsync(profile.Xuid);
+            var details = await _session.AskNoobAsync(profile.Xuid, game: profile.Game);
             if (details is null)
             {
                 await _session.RefreshMeAsync();
@@ -144,7 +144,7 @@ public sealed partial class ShellViewModel
                 Message = S["modes.convert_needs_download"];
                 return;
             }
-            await _session.ConfirmNoobAsync(profile.Xuid, key);
+            await _session.ConfirmNoobAsync(profile.Xuid, key, game: profile.Game);
             CancelConvert();
             await _session.RefreshMeAsync();
             FillProfiles();
@@ -167,19 +167,27 @@ public sealed partial class ShellViewModel
         Changed(nameof(ConvertDeletes));
     }
 
-    private CloudSaves? _cloudSaves;
-    private SavesApiClient? _savesApi;
+    private readonly Dictionary<(string Game, string? Query), (CloudSaves Saves, SavesApiClient Api)> _saveClients = [];
 
-    /// <summary>The save client of this server (one per launcher: its state file is per realm and profile).</summary>
+    /// <summary>
+    /// The save client of this server for the chosen game (CR-S98: its state is per realm, game and XUID, and every route carries
+    /// <c>?game=</c> on a server that knows careers; none on an older one).
+    /// </summary>
     private (CloudSaves Saves, SavesApiClient Api)? CloudSaveClient()
     {
         if (_session?.Info.Services?.Saves is not { } origin || !Uri.TryCreate(origin, UriKind.Absolute, out var saves))
         {
             return null;
         }
-        _savesApi ??= new SavesApiClient(Http, saves, ClientHeader);
-        _cloudSaves ??= new CloudSaves(_savesApi, new SaveSyncStore(_stateDirectory), saves.GetLeftPart(UriPartial.Authority));
-        return (_cloudSaves, _savesApi);
+        var game = CurrentGame.Id;
+        var query = _session.CareerGame(game);
+        if (!_saveClients.TryGetValue((game, query), out var client))
+        {
+            var api = new SavesApiClient(Http, saves, ClientHeader, query);
+            client = (new CloudSaves(api, new SaveSyncStore(_stateDirectory, game), saves.GetLeftPart(UriPartial.Authority)), api);
+            _saveClients[(game, query)] = client;
+        }
+        return client;
     }
 
     /// <summary>OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says).</summary>

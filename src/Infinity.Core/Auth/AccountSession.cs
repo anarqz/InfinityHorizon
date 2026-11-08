@@ -177,11 +177,12 @@ public sealed class AccountSession : IDisposable
     /// Hardcore → Noob, step 1 (OD-52): what the change would delete. Nothing is written; null when
     /// the profile is already Noob (the server answers 200).
     /// </summary>
-    public async Task<ModeChangeConfirm?> AskNoobAsync(string xuid, CancellationToken cancellation = default)
+    public async Task<ModeChangeConfirm?> AskNoobAsync(string xuid, string? game = null, CancellationToken cancellation = default)
     {
         try
         {
-            await Tokens.WithAccessAsync(access => Api.ChangeModeAsync(access, xuid, new ModeChange("noob", null), Guid.CreateVersion7().ToString(), cancellation), cancellation).ConfigureAwait(false);
+            await Tokens.WithAccessAsync(access => Api.ChangeModeAsync(access, xuid, new ModeChange("noob", null), Guid.CreateVersion7().ToString(),
+                CareerGame(game), cancellation), cancellation).ConfigureAwait(false);
             return null;
         }
         catch (ApiException e) when (e.Code == ModeChangeConfirm.Code)
@@ -191,19 +192,44 @@ public sealed class AccountSession : IDisposable
     }
 
     /// <summary>Hardcore → Noob, step 2: confirmed. The profile's cloud data is deleted for good; friends stay.</summary>
-    public Task<Profile> ConfirmNoobAsync(string xuid, string idempotencyKey, CancellationToken cancellation = default) =>
-        Tokens.WithAccessAsync(access => Api.ChangeModeAsync(access, xuid, new ModeChange("noob", true), idempotencyKey, cancellation), cancellation);
+    public Task<Profile> ConfirmNoobAsync(string xuid, string idempotencyKey, string? game = null, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.ChangeModeAsync(access, xuid, new ModeChange("noob", true), idempotencyKey, CareerGame(game), cancellation), cancellation);
 
     /// <summary>
     /// CR-S61: deletes the profile from the cloud at once, for good. <paramref name="idempotencyKey"/> is the caller's, kept for every
     /// retry of this deletion; 204 and 404 are <see cref="Shell.ProfileDeletionResult.Deleted"/>, the contract's refusals outcomes.
     /// </summary>
-    public Task<Shell.ProfileDeletionOutcome> DeleteProfileAsync(string xuid, string idempotencyKey, CancellationToken cancellation = default) =>
+    public Task<Shell.ProfileDeletionOutcome> DeleteProfileAsync(string xuid, string idempotencyKey, string? game = null,
+        CancellationToken cancellation = default) =>
         Shell.ProfileDeletion.SendAsync(ct => Tokens.WithAccessAsync(async access =>
         {
-            await Api.DeleteProfileAsync(access, xuid, idempotencyKey, ct).ConfigureAwait(false);
+            await Api.DeleteProfileAsync(access, xuid, idempotencyKey, CareerGame(game), ct).ConfigureAwait(false);
             return true;
         }, ct), () => Api.ServerNow(TimeProvider.System), cancellation); // a ticket's expiry is on the server's clock
+
+    /// <summary>
+    /// CR-S98 "delete profile" (<c>DELETE /players/{xuid}</c>): every career, then the profile; outcomes as
+    /// <see cref="DeleteProfileAsync"/> (same key rules, shared limit, refused whole while a career is in use).
+    /// </summary>
+    public Task<Shell.ProfileDeletionOutcome> DeletePlayerAsync(string xuid, string idempotencyKey, CancellationToken cancellation = default) =>
+        Shell.ProfileDeletion.SendAsync(ct => Tokens.WithAccessAsync(async access =>
+        {
+            await Api.DeletePlayerAsync(access, xuid, idempotencyKey, ct).ConfigureAwait(false);
+            return true;
+        }, ct), () => Api.ServerNow(TimeProvider.System), cancellation);
+
+    /// <summary>
+    /// CR-S98 <c>POST /players/{xuid}/careers {game}</c>: the profile's empty career of <paramref name="game"/>. Refusals are thrown as
+    /// <see cref="ApiException"/> (<see cref="Shell.CareerStart.Classify"/> reads them).
+    /// </summary>
+    public Task<Profile> CreateCareerAsync(string xuid, string game, string idempotencyKey, CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.CreateCareerAsync(access, xuid, new CareerCreate(game), idempotencyKey, cancellation), cancellation);
+
+    /// <summary>
+    /// CR-S98: <paramref name="game"/> for a <c>/profiles/{xuid}*</c> route's <c>?game=</c> on a server that knows careers
+    /// (<c>players</c> in <c>/me</c>, CAREERS.md §6.11); null on an older one, where the bare route means FH2.
+    /// </summary>
+    public string? CareerGame(string? game) => Me?.Players is not null && !string.IsNullOrEmpty(game) ? game : null;
 
     /// <summary>CR-S62: a moderator's kick (the caller's key, kept for the retries of this one action).</summary>
     public Task<KickApplied> KickAsync(NewKick kick, string idempotencyKey, CancellationToken cancellation = default) =>
@@ -242,10 +268,11 @@ public sealed class AccountSession : IDisposable
         Tokens.WithAccessAsync(access => Api.SetAnnounceAsync(access, xuid, announce, cancellation), cancellation);
 
     /// <summary>CR-L47: a profile's website switch; the server's answer replaces that profile in <see cref="Me"/>.</summary>
-    public async Task<Profile> SetWebsiteListedAsync(string xuid, bool listed, CancellationToken cancellation = default)
+    public async Task<Profile> SetWebsiteListedAsync(string xuid, bool listed, string? game = null, CancellationToken cancellation = default)
     {
-        var answer = await Tokens.WithAccessAsync(access => Api.SetWebsiteListedAsync(access, xuid, listed, cancellation), cancellation).ConfigureAwait(false);
-        if (Me is { } me) Me = me with { Profiles = [.. me.Profiles.Select(p => p.Xuid == answer.Xuid ? answer : p)] };
+        var answer = await Tokens.WithAccessAsync(access => Api.SetWebsiteListedAsync(access, xuid, listed, CareerGame(game), cancellation), cancellation).ConfigureAwait(false);
+        // CR-S98: a XUID names a career per game; the answer replaces only its own career's row
+        if (Me is { } me) Me = me with { Profiles = [.. me.Profiles.Select(p => p.ProfileId == answer.ProfileId ? answer : p)] };
         return answer;
     }
 

@@ -33,11 +33,14 @@ public sealed partial class ApiClient
     /// <c>?car=</c> only when known. Null on 404 (<c>ACCOUNTS.NOT_FOUND</c>: not this account's profile, or a server without the route)
     /// and 405: no club, no level, and credits only from the hook.
     /// </summary>
-    public async Task<ProfilePresence?> ProfilePresenceAsync(string access, string xuid, int? carId = null, CancellationToken cancellation = default)
+    public async Task<ProfilePresence?> ProfilePresenceAsync(string access, string xuid, int? carId = null, string? game = null,
+        CancellationToken cancellation = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(xuid);
         var path = $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/presence";
-        if (carId is { } car and > 0) path += "?car=" + car.ToString(CultureInfo.InvariantCulture);
+        var first = true;
+        if (carId is { } car and > 0) { path += "?car=" + car.ToString(CultureInfo.InvariantCulture); first = false; }
+        path += GameQuery(game, first); // CR-S98: the career of the game being played
         try
         {
             var presence = await SendAsync<ProfilePresence>(HttpMethod.Get, Core, path, null, access,

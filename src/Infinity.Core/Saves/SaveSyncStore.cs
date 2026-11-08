@@ -33,10 +33,12 @@ public sealed record FreshStartRecord(string AtUtc, string? Archive, string? Ref
 
 /// <summary>
 /// One profile's sync state, keyed by the server realm (<c>/info</c> <c>realm</c>) and the XUID. A line belongs to one XUID for good (a
-/// deleted profile's XUID is retired, CR-S61), so realm + XUID is also the line's key: <see cref="FreshStart"/> is per line.
+/// deleted profile's XUID is retired, CR-S61), so realm + XUID is also the line's key: <see cref="FreshStart"/> is per line. CR-S98: a profile's
+/// XUID is shared by its careers in every game, so the key is realm + <see cref="Game"/> + XUID; <see cref="Game"/> null is FH2 (every entry an
+/// earlier launcher wrote, and every FH2 entry this one writes, so a downgrade still reads them).
 /// </summary>
 public sealed record ProfileSyncState(string Realm, ulong Xuid, SyncMark? Mark, PendingUpload? PendingUpload, FreshStartRecord? FreshStart = null,
-    RestoreRecord? Restore = null);
+    RestoreRecord? Restore = null, string? Game = null);
 
 /// <summary>
 /// OD-133: a career restore recorded for the cloud and not settled yet: the <c>before-restore-*</c> folder (""/none), the head it goes on
@@ -67,13 +69,29 @@ public sealed class SaveSyncStore
 
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    private readonly string _dir;
-    private readonly Lock _lock = new();
+    /// <summary>The game an entry without <see cref="ProfileSyncState.Game"/> belongs to.</summary>
+    public const string DefaultGame = "fh2";
 
-    public SaveSyncStore(string stateDirectory)
+    private readonly string _dir;
+    private readonly string _game;
+    // One lock per state file, shared by the stores of every game (CR-S98): each writes the whole file.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lock> Locks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock _lock;
+
+    /// <param name="game">CR-S98: the game whose careers this store reads and writes; the other games' entries in the same file are kept
+    /// untouched.</param>
+    public SaveSyncStore(string stateDirectory, string game = DefaultGame)
     {
         _dir = stateDirectory ?? throw new ArgumentNullException(nameof(stateDirectory));
+        ArgumentException.ThrowIfNullOrWhiteSpace(game);
+        _game = game;
+        _lock = Locks.GetOrAdd(Path.GetFullPath(Path.Combine(_dir, FileName)), _ => new Lock());
     }
+
+    /// <summary>The game of this store.</summary>
+    public string Game => _game;
+
+    private bool Mine(ProfileSyncState p, string realm, ulong xuid) => p.Realm == realm && p.Xuid == xuid && (p.Game ?? DefaultGame) == _game;
 
     private string FilePath => Path.Combine(_dir, FileName);
 
@@ -86,7 +104,7 @@ public sealed class SaveSyncStore
     }
 
     public ProfileSyncState? Get(string realm, ulong xuid) =>
-        Snapshot().Profiles.FirstOrDefault(p => p.Realm == realm && p.Xuid == xuid);
+        Snapshot().Profiles.FirstOrDefault(p => Mine(p, realm, xuid));
 
     /// <summary>Changes one profile's entry under the store's lock and writes the file; returns the new entry.</summary>
     public ProfileSyncState Update(string realm, ulong xuid, Func<ProfileSyncState, ProfileSyncState> change)
@@ -97,9 +115,10 @@ public sealed class SaveSyncStore
         {
             var file = Load();
             var profiles = file.Profiles.ToList();
-            var index = profiles.FindIndex(p => p.Realm == realm && p.Xuid == xuid);
-            var current = index >= 0 ? profiles[index] : new ProfileSyncState(realm, xuid, null, null);
-            var next = change(current) with { Realm = realm, Xuid = xuid };
+            var index = profiles.FindIndex(p => Mine(p, realm, xuid));
+            var game = _game == DefaultGame ? null : _game;
+            var current = index >= 0 ? profiles[index] : new ProfileSyncState(realm, xuid, null, null, Game: game);
+            var next = change(current) with { Realm = realm, Xuid = xuid, Game = current.Game };
             if (index >= 0)
             {
                 profiles[index] = next;
@@ -228,7 +247,8 @@ public sealed class SaveSyncStore
 
     /// <summary>
     /// CR-S61: the profile was deleted from the cloud (its XUID is retired, never reused): its entry goes, mark included. A pending
-    /// upload's bytes are moved to <c>pending\set-aside</c>, never deleted. True when there was an entry.
+    /// upload's bytes are moved to <c>pending\set-aside</c>, never deleted. True when there was an entry. CR-S98: only this store's game's
+    /// entry (a deleted career); the profile's other careers keep theirs.
     /// </summary>
     public bool Forget(string realm, ulong xuid)
     {
@@ -237,7 +257,7 @@ public sealed class SaveSyncStore
         lock (_lock)
         {
             var file = Load();
-            var profiles = file.Profiles.Where(p => !(p.Realm == realm && p.Xuid == xuid)).ToList();
+            var profiles = file.Profiles.Where(p => !Mine(p, realm, xuid)).ToList();
             if (profiles.Count == file.Profiles.Count)
             {
                 return false;

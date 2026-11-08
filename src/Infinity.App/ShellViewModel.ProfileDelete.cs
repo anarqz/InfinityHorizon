@@ -90,7 +90,7 @@ public sealed partial class ShellViewModel
             ProfileDeletionOutcome outcome;
             try
             {
-                outcome = await session.DeleteProfileAsync(profile.Xuid, key);
+                outcome = await session.DeleteProfileAsync(profile.Xuid, key, game: profile.Game);
             }
             catch (ApiException e) when ((int)e.Status is >= 400 and < 500)
             {

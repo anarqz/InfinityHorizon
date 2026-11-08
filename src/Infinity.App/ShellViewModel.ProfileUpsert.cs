@@ -68,7 +68,7 @@ public sealed partial class ShellViewModel
         if (_session is not { } session || _gate.Game is not { } game) return;
         try
         {
-            var api = new ApiProfileAccount(session.Api);
+            var api = new ApiProfileAccount(session.Api, session.CareerGame(CurrentGame.Id));
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
             var plan = await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
             // An earlier registration the server stored but whose answer was lost: linked by this refresh, continued like any other.
@@ -150,7 +150,7 @@ public sealed partial class ShellViewModel
             var chosen = UpsertRows.Where(r => r.Selected && !r.Done).Select(r => r.Profile.Id).ToArray();
             if (chosen.Length == 0) return;
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
-            var results = await ProfileUpsert.UploadAsync(new ApiProfileAccount(session.Api), access, LocalProfiles, plan, chosen, CancellationToken.None);
+            var results = await ProfileUpsert.UploadAsync(new ApiProfileAccount(session.Api, session.CareerGame(CurrentGame.Id)), access, LocalProfiles, plan, chosen, CancellationToken.None);
             foreach (var result in results)
             {
                 if (UpsertRows.FirstOrDefault(r => r.Profile.Id == result.Profile.Id) is not { } row) continue;
@@ -262,7 +262,7 @@ public sealed partial class ShellViewModel
             var keyOf = (cloud.ProfileId, name); // the exact body sent: another spelling is another request
             if (!_renameKeys.TryGetValue(keyOf, out var key)) _renameKeys[keyOf] = key = Guid.CreateVersion7().ToString();
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
-            var result = await ProfileUpsert.RenameAsync(new ApiProfileAccount(session.Api), access, LocalProfiles, profile, name, key, CancellationToken.None);
+            var result = await ProfileUpsert.RenameAsync(new ApiProfileAccount(session.Api, session.CareerGame(CurrentGame.Id)), access, LocalProfiles, profile, name, key, CancellationToken.None);
             if (result.ErrorCode is { } code)
             {
                 _renameKeys.Remove(keyOf); // a refusal is final for that key: the next attempt is a new request

@@ -145,7 +145,7 @@ public sealed partial class ShellViewModel
             Message = S.Format("saves.cloned", ("title", choice.Title), ("name", ProfileName.Plain(target.Gamertag)));
             try
             {
-                new SaveLinks(_stateDirectory).Set(target.Xuid, new SaveLink(choice.Save.Folder, choice.Save.Revision.Number, result.Number, DateTime.UtcNow));
+                new SaveLinks(_stateDirectory, CurrentGame.Id).Set(target.Xuid, new SaveLink(choice.Save.Folder, choice.Save.Revision.Number, result.Number, DateTime.UtcNow));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
