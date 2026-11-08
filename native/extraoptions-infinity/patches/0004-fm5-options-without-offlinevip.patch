@@ -116,7 +116,7 @@
          Site thunk = {0x5cf963, 12, {0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc},
                         {0x48,0xb8,0,0,0,0,0,0,0,0,0xff,0xe0}, 0};
          uintptr_t callback = (uintptr_t)initialize_files;
-@@ -271,14 +241,14 @@ int fm5_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
+@@ -271,16 +241,16 @@ int fm5_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
          sites[count++] = call;
          write_log("FILES: override mounts scheduled after native file-system initialization.\r\n");
      }
@@ -127,9 +127,14 @@
      }
      if (!apply(sites, count))
          return rejected("REFUSED: FM5 patch bytes or page protections changed; no FM5 patches applied.");
- #ifdef FH2_AZIMUTH
+-#ifdef FH2_AZIMUTH
 -    if (option(L"Compatibility", L"GenerateMissingSaveCommits"))
-+    if (option(L"Compatibility", L"GenerateMissingSaveCommits", 1))
-         azimuth_repair_title_markers((unsigned char *)GetModuleHandleW(NULL), FM5_TITLE_ID, write_log);
- #endif
+-        azimuth_repair_title_markers((unsigned char *)GetModuleHandleW(NULL), FM5_TITLE_ID, write_log);
+-#endif
++    /* ExtraOptions.Infinity: Compatibility/GenerateMissingSaveCommits is the Infinity server's, always off, as
++       patch 0002 does for DisableAzimuthSaveChecksums: azimuth_repair_title_markers would promote torn revisions to
++       valid ones, against the cloud saves (M11). The key is not read and azimuth_repair_title_markers is never called. */
++    write_log("INFINITY: GenerateMissingSaveCommits is the Infinity server's: off, whatever FM5_ExtraOptions.ini says.\r\n");
      status_set("OK: FM5 Extra Options initialized (7B35D917); FH2 features not loaded.");
+     write_log(status_get());
+     write_log("\r\n");
