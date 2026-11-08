@@ -352,14 +352,25 @@ public static class AzimuthSaves
         {
             throw new SaveException("a profile cannot be cloned onto itself");
         }
-        var revision = ReadRevision(source.Revision.Number, source.Revision.Path)
-            ?? throw new SaveException(source.Folder + ": the picked revision has no commit file any more");
+        return CloneRevision(savesRoot, source.Revision, source.Folder, source.Folder, "picked", target, nowUtc);
+    }
+
+    /// <summary>
+    /// <see cref="Clone"/>'s steps for one sealed revision anywhere (<paramref name="picked"/>, read again and verified), archived as
+    /// <c>&lt;label&gt;-&lt;stamp&gt;</c> under <paramref name="archiveFolder"/>; <paramref name="sourceName"/> names it in errors. The staged copy
+    /// must equal the picked commit line for line (sha256 and size of every file) before it is renamed into the target.
+    /// </summary>
+    internal static CloneResult CloneRevision(string savesRoot, LocalRevision picked, string sourceName, string archiveFolder, string label, string target, DateTime nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(picked);
+        var revision = ReadRevision(picked.Number, picked.Path)
+            ?? throw new SaveException(sourceName + ": the picked revision has no commit file any more");
         if (Verify(revision) is { Count: > 0 } changed)
         {
-            throw new SaveException(source.Folder + ": " + string.Join("; ", changed));
+            throw new SaveException(sourceName + ": " + string.Join("; ", changed));
         }
         var stamp = nowUtc.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-        var backups = new List<string> { CopyDir(revision.Path, ArchiveSlot(savesRoot, source.Folder, $"picked-{stamp}", revision.Number)) };
+        var backups = new List<string> { CopyDir(revision.Path, ArchiveSlot(savesRoot, archiveFolder, $"{label}-{stamp}", revision.Number)) };
         var targetDir = Path.Combine(savesRoot, "player-1", target);
         foreach (var (number, path) in RevisionFolders(targetDir))
         {
@@ -385,6 +396,10 @@ public static class AzimuthSaves
             if (Verify(staged) is { Count: > 0 } torn)
             {
                 throw new SaveException("the staged copy does not verify: " + string.Join("; ", torn));
+            }
+            if (!staged.Entries.SequenceEqual(revision.Entries))
+            {
+                throw new SaveException("the staged commit is not the picked one");
             }
             next = NextRevisionNumber(targetDir);
             var revisions = Path.Combine(targetDir, "revisions");

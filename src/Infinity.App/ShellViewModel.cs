@@ -275,7 +275,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _crashOpen = false;
         _onProfiles = true;
         _nav.Root();
-        _copy = null; _subject = null; _menuFor = null;
+        _copy = null; _subject = null; _menu.Close();
         FillProfiles();
         Changed(string.Empty);
     }
