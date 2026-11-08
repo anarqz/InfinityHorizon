@@ -122,8 +122,9 @@ public sealed partial class ShellViewModel
         // the careers this deletion removes, read before /me changes (a profile's every game, or the one career)
         var rows = allGames ? session.Me!.Profiles.Where(p => p.Xuid == profile.Xuid).ToList() : [profile];
         var playerId = session.Me?.Players?.FirstOrDefault(p => p.Xuid == profile.Xuid)?.ProfileId ?? profile.ProfileId;
-        await Run(async () =>
+        await Run(S[allGames ? "busy.deleting_profile" : "busy.deleting_career"], async () =>
         {
+            if (allGames) _remote.InvalidatePrefix(RemoteCache.Key("revisions")); else SavesChanged(profile.Game); // owner 2026-11-08: read again when next shown
             ProfileDeletionOutcome outcome;
             try
             {
@@ -132,7 +133,7 @@ public sealed partial class ShellViewModel
             catch (ApiException e) when ((int)e.Status is >= 400 and < 500)
             {
                 _deleteKey = NewDeleteKey(); // answered: the next press is a new request (a lost answer keeps the key)
-                SetDeleteStatus(e.Code == ErrorCodes.AccountsBanned ? BannedText(e.Details) : ErrorText(e.Code));
+                SetDeleteStatus(Describe(e)); // banned, OD-215 rate limits and the rest in the player's words
                 throw;
             }
             Log(allGames ? $"profiles: delete profile {playerId} → {outcome.Result}"
@@ -173,6 +174,9 @@ public sealed partial class ShellViewModel
         var minutes = outcome.RetryMinutes?.ToString(CultureInfo.CurrentCulture);
         return outcome.Result switch
         {
+            // OD-215: the per-account request/write limits say so (seconds); the deletions' own 3 an hour keeps its text
+            ProfileDeletionResult.RateLimited when RateLimits.IsAccountLimit(outcome.Details) =>
+                RateText(RateLimits.Describe(RateLimits.Limit(outcome.Details), outcome.RetryAfter)),
             ProfileDeletionResult.RateLimited => minutes is null ? S["profiles.delete_rate_limited_later"] : S.Format("profiles.delete_rate_limited", ("minutes", minutes)),
             // CR-S98 §6.5: a career in use in another game says which
             ProfileDeletionResult.InUse when ProfileDeletion.InUseGame(outcome) is { } game && game != CurrentGame.Id =>

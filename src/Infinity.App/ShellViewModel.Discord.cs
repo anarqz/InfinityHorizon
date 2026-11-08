@@ -84,13 +84,17 @@ public sealed partial class ShellViewModel
     public bool HasDiscordStatus => !string.IsNullOrEmpty(_discordStatus);
 
     /// <summary><c>GET /core/v1/me/discord</c>; quiet: a refusal only hides the card (sign-in and page opening).</summary>
-    public async Task RefreshDiscordAsync(bool quiet = true)
+    /// <remarks>Owner 2026-11-08: <paramref name="read"/> <see cref="CacheRead.Cached"/> (the Account page opening) shows the cached link with no
+    /// request; null (after an action of ours) always asks; <see cref="CacheRead.Refresh"/> (the explicit check) at most every 10 s.</remarks>
+    public async Task RefreshDiscordAsync(bool quiet = true, CacheRead? read = null)
     {
         if (!DiscordSignedIn || _session is not { } session) return;
         var epoch = _discordEpoch;
         try
         {
-            var settings = await session.DiscordSettingsAsync();
+            if (read is null) _remote.Invalidate(DiscordCacheKey);
+            var settings = await _remote.GetAsync(DiscordCacheKey, () => session.DiscordSettingsAsync(), read ?? CacheRead.Cached,
+                refreshed: fresh => { if (epoch == _discordEpoch && _session == session) ApplyDiscord(fresh); });
             if (epoch == _discordEpoch && _session == session) ApplyDiscord(settings);
         }
         catch (ApiException e)
@@ -171,7 +175,7 @@ public sealed partial class ShellViewModel
     public void CancelDiscordLink() => _discordPoll?.Cancel();
 
     /// <summary>"Check now" while waiting: one read at once (the wait goes on until the link shows).</summary>
-    public Task CheckDiscordNowAsync() => RefreshDiscordAsync(quiet: false);
+    public Task CheckDiscordNowAsync() => RefreshDiscordAsync(quiet: false, read: CacheRead.Refresh);
 
     /// <summary>"Unlink": <c>DELETE /core/v1/me/discord/link</c>, then the settings again.</summary>
     public async Task UnlinkDiscordAsync()
@@ -231,6 +235,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(settings);
         _discord = settings;
+        _remote.Set(DiscordCacheKey, settings); // an action's answer is the cached link (owner 2026-11-08: no read again to know it)
         AnnounceSwitches.Clear();
         foreach (var profile in settings.Profiles) AnnounceSwitches.Add(new AnnounceSwitch(profile));
         var avatar = settings.Link?.AvatarUrl;

@@ -15,7 +15,10 @@ public sealed record CareerOffers(bool Fresh, bool FromExisting, IReadOnlyList<P
 {
     public static CareerOffers Nothing { get; } = new(false, false, []);
 
-    public bool Any => Fresh || FromExisting;
+    /// <summary>A Noob card: "From my HARDCORE profile" (the account's Hardcore career of the game has a save, <see cref="NoobStart"/>).</summary>
+    public bool FromHardcore { get; init; }
+
+    public bool Any => Fresh || FromExisting || FromHardcore;
 }
 
 /// <summary>How <c>POST /players/{xuid}/careers</c> ended for the launcher (CAREERS.md §3, §6.12; plan §5).</summary>
@@ -72,7 +75,8 @@ public static class CareerStart
         }
         // review L1: the flow runs the OD-41 local picker only, so it is offered only with a readable Azimuth save of the game on this PC
         var copy = game.FullFeatures && flags.AzimuthSaves;
-        return new CareerOffers(true, copy, game.FullFeatures ? sameGame : []);
+        // owner 2026-10-28 / fix 2026-11-08: a Noob starts from the account's Hardcore career of the same game (no check), when it has a save
+        return new CareerOffers(true, copy, game.FullFeatures ? sameGame : []) { FromHardcore = flags.NoobFromHardcore };
     }
 
     /// <summary>Reads a refusal of <c>POST /players/{xuid}/careers</c>; null error = 201.</summary>

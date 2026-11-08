@@ -123,7 +123,7 @@ public sealed partial class ShellViewModel
         {
             return;
         }
-        await Run(async () =>
+        await Run(S["busy.reading"], async () =>
         {
             var details = await _session.AskNoobAsync(profile.Xuid, game: profile.Game);
             if (details is null)
@@ -147,8 +147,9 @@ public sealed partial class ShellViewModel
         {
             return;
         }
-        await Run(async () =>
+        await Run(S["busy.converting"], async () =>
         {
+            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
             if (details.SaveRevision > 0 && !await DownloadNewestAsync(profile))
             {
                 // the cloud save would be gone for good: it comes to this PC first (SAVES_API.md §4)

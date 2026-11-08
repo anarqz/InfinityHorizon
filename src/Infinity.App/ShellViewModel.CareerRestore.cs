@@ -124,8 +124,9 @@ public sealed partial class ShellViewModel
             || ParseXuid(profile) is not { } xuid) return;
         if (Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
         var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
-        await Run(async () =>
+        await Run(S["busy.restoring"], async () =>
         {
+            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
             var result = RestoreUndo.SetAsideResult.NotUndone;
             try
             {
@@ -246,8 +247,9 @@ public sealed partial class ShellViewModel
             || _install is null || ParseXuid(profile) is not { } xuid) return;
         if (Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
         var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
-        await Run(async () =>
+        await Run(S["busy.restoring"], async () =>
         {
+            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
             Message = S["restore.checking"];
             RestoreOutcome outcome;
             try

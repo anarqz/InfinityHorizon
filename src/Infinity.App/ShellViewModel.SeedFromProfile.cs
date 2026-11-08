@@ -292,7 +292,10 @@ public sealed partial class ShellViewModel
     /// Step 3: the dry run for <paramref name="target"/> (a Hardcore profile on the server) from <paramref name="source"/>'s newest sealed
     /// revision on this PC. Whatever the answer, nothing is copied yet.
     /// </summary>
-    private async Task CheckSeedAsync(Profile target, Profile source, bool fromPlay)
+    private Task CheckSeedAsync(Profile target, Profile source, bool fromPlay) =>
+        RunOrStep(S["busy.checking"], () => CheckSeedCoreAsync(target, source, fromPlay));
+
+    private async Task CheckSeedCoreAsync(Profile target, Profile source, bool fromPlay)
     {
         var sourceName = ProfileName.Plain(source.Gamertag);
         if (_install is null || _session is not { } session || CloudSaveClient() is not { } client
@@ -355,8 +358,9 @@ public sealed partial class ShellViewModel
         if (_install is null || CloudSaveClient() is not { } client || ParseXuid(offer.Target) is not { } targetXuid || ParseXuid(offer.Source) is not { } sourceXuid) return;
         var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         var adopted = false;
-        await Run(async () =>
+        await Run(S["busy.applying_seed"], async () =>
         {
+            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
             var failure = await Task.Run(() => ProfileSeed.Adopt(client.Saves, savesRoot, targetXuid, sourceXuid, offer.Packed));
             _seedOffer = null;
             _seedChoice = null;

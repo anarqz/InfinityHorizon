@@ -74,7 +74,7 @@ public sealed partial class ShellViewModel
         SetWebsiteStatus(null);
         FillWebsiteSwitches(); // CR-L47: the switches as the session's /me has them
         Changed(string.Empty);
-        _ = RefreshDiscordAsync(); // CR-S63: the link and the switches as the server has them now
+        _ = RefreshDiscordAsync(read: CacheRead.Cached); // CR-S63; owner 2026-11-08: the cached link, read once per sign-in (refreshed after our changes)
     }
 
     private void LeaveAccount()

@@ -181,6 +181,7 @@ public sealed partial class ShellViewModel
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var epoch = _onlinePauseEpoch;
         _signIn = cancellation;
+        EnterBusy(S["busy.signing_in"]);
         try
         {
             Task<(ServerInfo Info, ApiClient Api)>? connection = null;
@@ -253,6 +254,7 @@ public sealed partial class ShellViewModel
         {
             if (_onlinePause is not null) Message = OnlineServiceMessage;
             _signIn = null;
+            ExitBusy();
             Busy = false;
             Changed(string.Empty);
         }

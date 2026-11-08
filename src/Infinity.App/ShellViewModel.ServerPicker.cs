@@ -77,12 +77,19 @@ public sealed partial class ShellViewModel
     {
         _beholder ??= BeholderClient.Load(StateRoot);
         FillServerItems();
+        // owner 2026-11-08: the lists and the rows' status read in the last 5 minutes are shown again without a request
+        if (_pickersReadAt is { } read && DateTimeOffset.UtcNow - read < TimeSpan.FromMinutes(5)) return;
         _ = RefreshPickersAsync();
     }
+
+    /// <summary>When the picker last asked the beholder and the rows (the page's refresh asks again at most every 10 s).</summary>
+    private DateTimeOffset? _pickersReadAt;
 
     public async Task RefreshPickersAsync()
     {
         if (_beholderLoading) return;
+        if (_pickersReadAt is { } last && DateTimeOffset.UtcNow - last < TimeSpan.FromSeconds(10)) return;
+        _pickersReadAt = DateTimeOffset.UtcNow;
         var generation = ++_pickerGeneration;
         _beholderLoading = true;
         Changed(string.Empty);

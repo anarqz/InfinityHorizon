@@ -319,7 +319,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         // profile screen: named as Azimuth's player it adopts that career, otherwise the picker offers this PC's Azimuth saves.
         var adoptsAzimuth = ShowAzimuthNameWarning;
         Profile? created = null;
-        await Run(async () =>
+        await Run(S["busy.creating_account"], async () =>
         {
             var session = await _pending.CreateAccountAsync("fh2", NewName);
             _pending = null;
@@ -343,7 +343,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// key, then linked like any registration, and its offline save continues online (P1b). A name taken meanwhile renames the local
     /// profile first (the player typed another name), so the profile and its save are never left behind.
     /// </summary>
-    private Task CreateAccountFromLocalAsync(PendingAccount pending, LocalProfile first) => Run(async () =>
+    private Task CreateAccountFromLocalAsync(PendingAccount pending, LocalProfile first) => Run(S["busy.creating_account"], async () =>
     {
         // The stored copy decides: another window may have changed or removed it since the screen opened.
         if (LocalProfiles.Read().FirstOrDefault(p => p.Id == first.Id && p.LocalOnly) is not { } local) { _firstLocal = null; Message = S["offline.error.other"]; return; }
@@ -449,6 +449,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ClearShellStatus(); // CR-L40
         _session?.Dispose();
         _session = null;
+        ForgetRemote(); // owner 2026-11-08: nothing read for this account stays cached
         SessionStore.Delete(_stateDirectory);
         DisengageOnline(); // OD-118: signed out is offline again until the next SIGN IN
         ClearIntegrity();
@@ -470,6 +471,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (!OnlineServiceAllowsPlay) throw new OperationCanceledException("Online services paused.", cancellation);
         // Stay signed in: every rotated refresh token is saved before the next request can use it.
         session.Tokens.Changed += refresh => KeepSession(session, refresh);
+        ForgetRemote(); // owner 2026-11-08: a sign-in (or another account) reads everything once again
         var me = await session.RefreshMeAsync(cancellation);
         KeepSession(session, session.Tokens.RefreshToken);
         RememberLaunchMode(LaunchModeStore.Online); // OD-118 (G2): the next start resumes this session
@@ -527,6 +529,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
         Busy = true;
+        EnterBusy(S["busy.resuming"]);
         AccountSession? session = null;
         try
         {
@@ -555,6 +558,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             session?.Dispose();
             _resuming = false;
+            ExitBusy();
             Busy = false;
             Changed(nameof(Resuming));
         }
@@ -570,7 +574,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (!OfflineMode && _session?.Me is { Players: not null } board)
         {
             // OD-214: the account's profiles (both modes) with the chosen game's career on each; local-only rows as before
-            var flags = new BoardFlags(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves(), SeedPendingXuids(board));
+            // fix 2026-11-08: a Noob career whose folder holds a save (a Hardcore copy waiting for its first upload) is started, not "fresh"
+            var flags = new BoardFlags(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves(), SeedPendingXuids(board),
+                LocalSaveXuids(), UsableNoobSources(board.Profiles).Count > 0);
             foreach (var card in ProfileBoard.Build(board, CurrentGame, flags))
             {
                 var row = card.CareerRow ?? new Profile(card.Player.ProfileId, game, card.Player.Xuid, card.Player.Gamertag, card.Player.Gamertag,
@@ -625,13 +631,17 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         return false;
     }
 
-    private async Task Run(Func<Task> work)
+    private Task Run(Func<Task> work) => Run(S["busy.working"], work);
+
+    /// <summary>A network or save action: the busy overlay with <paramref name="label"/> until it ends (owner 2026-11-08), errors in <see cref="Message"/>.</summary>
+    private async Task Run(string label, Func<Task> work)
     {
         if (_busy)
         {
             return;
         }
         Busy = true;
+        EnterBusy(label);
         try
         {
             await work();
@@ -660,6 +670,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         finally
         {
             if (_onlinePause is not null) Message = OnlineServiceMessage;
+            ExitBusy();
             Busy = false;
         }
     }
@@ -667,6 +678,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     private string Describe(Exception e) => e switch
     {
         ApiException { Code: ErrorCodes.AccountsBanned } banned => BannedText(banned.Details), // CR-S52: the review of a seeded line
+        ApiException limited when RateLimits.Describe(limited) is { } rate => RateText(rate), // OD-215: which limit, and when to try again
         ApiException api => ErrorText(api.Code),
         HttpRequestException => S["native.unreachable"],
         _ => S["native.failed"],
@@ -676,6 +688,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// OD122-L7: a server error code in the player's language (<c>error.&lt;CODE&gt;</c>, every code of fi-protocol's catalog); a code this
     /// build does not know reads "Unexpected error (CODE)".
     /// </summary>
+    /// <summary>A 429 <c>REQUEST.RATE_LIMITED</c> (OD-215) in the player's words, with the seconds the server gave.</summary>
+    internal string RateText((string Key, int? Seconds) rate) =>
+        S.Format(rate.Key, ("seconds", (rate.Seconds ?? 0).ToString(System.Globalization.CultureInfo.CurrentCulture)));
+
     internal string ErrorText(string code) => KnownErrorText(code) ?? S.Format("error.unexpected", ("code", code));
 
     /// <summary>The translated text of a server error code, or null for a code this build has no text for.</summary>

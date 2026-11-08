@@ -659,16 +659,31 @@ public sealed partial class ShellViewModel
 
     public string StartFreshHint => S.Format("sm.start.fresh_hint", ("game", GameLabel));
 
-    /// <summary>"From my NOOB/HARDCORE profile": HARDCORE only (CR-S52); NOOB starts from this PC's saves (the OD-41 picker).</summary>
-    public bool ShowStartFromProfile => CareerStartHardcore;
+    /// <summary>
+    /// "From my NOOB/HARDCORE profile" (§2.6): a HARDCORE card starts from the NOOB career through the CR-S52 check; a NOOB card (fix
+    /// 2026-11-08, owner 2026-10-28) from the HARDCORE career's save, no check. Always shown; disabled with the reason when not possible.
+    /// </summary>
+    public bool ShowStartFromProfile => StartCard is not null;
 
-    public string StartFromProfileLabel => S.Format("sm.start.from_profile", ("mode", ModeWord(SaveSlot.Noob)));
+    public string StartFromProfileLabel => S.Format("sm.start.from_profile", ("mode", ModeWord(CareerStartHardcore ? SaveSlot.Noob : SaveSlot.Hardcore)));
 
-    public string StartFromProfileHint => CareerStartHardcore && CareerStartFromExisting ? CareerStartExistingHint
-        : !CurrentGame.FullFeatures ? S.Format("sm.start.cloudless", ("game", GameLabel))
-        : S.Format("sm.start.from_profile_off", ("mode", ModeWord(SaveSlot.Noob)), ("game", GameLabel));
+    public string StartFromProfileHint => CareerStartHardcore
+        ? CareerStartFromExisting ? CareerStartExistingHint
+            : !CurrentGame.FullFeatures ? S.Format("sm.start.cloudless", ("game", GameLabel))
+            : S.Format("sm.start.from_profile_off", ("mode", ModeWord(SaveSlot.Noob)), ("game", GameLabel))
+        : NoobStartHint();
 
-    public bool StartFromProfileEnabled => CareerStartHardcore && CareerStartFromExisting && Idle;
+    public bool StartFromProfileEnabled => (CareerStartHardcore ? CareerStartFromExisting : CareerStartFromHardcore) && Idle;
+
+    /// <summary>What the Noob's "From my HARDCORE profile" will do (copy this PC's save, or download the cloud's), or why it cannot.</summary>
+    private string NoobStartHint()
+    {
+        if (_startRow is not { } row) return string.Empty;
+        var facts = NoobFacts();
+        var plans = NoobStart.Usable(CurrentGame, facts, NoobCloudReachable);
+        var plan = plans is [var first, ..] ? first : NoobStart.Plan(CurrentGame, FirstFact(facts), NoobCloudReachable);
+        return NoobPlanText(plan, facts.FirstOrDefault(f => f.Hardcore.ProfileId == plan.Hardcore?.ProfileId) ?? FirstFact(facts), row.Gamertag);
+    }
 
     public bool StartFromPcEnabled => !CareerStartHardcore && CareerStartFromExisting && Idle;
 
@@ -727,8 +742,9 @@ public sealed partial class ShellViewModel
         if (_subject is not { } row || _session is not { } session || _install is null || CloudSaveClient() is not { } client || ParseXuid(row.Profile) is not { } xuid) return;
         RefreshGameRunning();
         if (_gameRunning) { Message = S["saves.game_running"]; return; }
-        await Run(async () =>
+        await Run(S.Format("busy.downloading", ("mode", BusyMode(row.Profile.Mode))), async () =>
         {
+            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
             var (head, failure) = await client.Saves.HeadAsync(access, xuid);
             if (head is null || failure is not null || head.Revision == 0) { Message = S["careers.download_failed"]; return; }
@@ -920,7 +936,7 @@ public sealed partial class ShellViewModel
         RefreshGameRunning();
         if (_gameRunning) { Message = S["saves.game_running"]; ChangedSaves(); return; }
         var fromWord = plan.From == SaveSlot.Azimuth ? "azimuth" : plan.From.ToString().ToLowerInvariant();
-        await Run(async () =>
+        await Run(S["busy.copying"], async () =>
         {
             try
             {
@@ -994,7 +1010,11 @@ public sealed partial class ShellViewModel
         RefreshGameRunning();
         _historySlot = slot;
         SavesGo(SavesScreen.History);
-        await FillHistoryAsync();
+        // cached revisions render at once (no request, no overlay); a first read shows the overlay
+        var row = slot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (slot == SaveSlot.Hardcore ? "hardcore" : "noob"));
+        if (row is null || row.Card?.CareerRow is null || _remote.TryGet<IReadOnlyList<SaveRevision>>(RevisionsKey(CurrentGame.Id, row.Profile.Xuid), out _))
+            await FillHistoryAsync();
+        else await RunOrStep(S["busy.history"], FillHistoryAsync);
     }
 
     public Task ShowHistorySlotAsync(SaveSlot slot)
@@ -1034,27 +1054,30 @@ public sealed partial class ShellViewModel
                 rows.Add((at, new HistoryRow(S["sm.origin.pc"], title, item.Entry.Reason.For(S.Locale), false) { Item = item, When = When(item.Entry.At) }));
             }
         }
-        rows.AddRange(_cloudHistory.Where(_ => row is not null && _cloudHistoryXuid == row.Profile.Xuid).Select(CloudRow));
-        if (row?.Card?.CareerRow is not null && _session is { } session && CloudSaveClient() is { } client && ParseXuid(row.Profile) is { } xuid && _cloudHistoryXuid != row.Profile.Xuid)
+        var read = _historyRead;
+        _historyRead = CacheRead.Cached;
+        if (_cloudHistoryXuid is { } seeded && row is not null && seeded == row.Profile.Xuid)
+            rows.AddRange(_cloudHistory.Select(CloudRow)); // the harness's synthetic revisions
+        else if (row?.Card?.CareerRow is not null && _session is { } session && CloudSaveClient() is { } client && ParseXuid(row.Profile) is not null)
         {
+            // owner 2026-11-08: the revisions are read once and kept (by game and profile); our own save writes and the Refresh read them again
+            var profile = row.Profile;
             try
             {
-                var access = await session.Tokens.AccessAsync(CancellationToken.None);
-                var page = await client.Api.RevisionsAsync(access, row.Profile.Xuid, null, 50);
-                if (page.Ok && page.Value is { } revisions)
+                var revisions = await _remote.GetAsync<IReadOnlyList<SaveRevision>>(RevisionsKey(CurrentGame.Id, profile.Xuid), async () =>
                 {
-                    _cloudHistory.Clear();
-                    _cloudHistory.AddRange(revisions.Items);
-                    _cloudHistoryXuid = row.Profile.Xuid;
-                    rows.AddRange(revisions.Items.Select(CloudRow));
-                }
-                else Log($"saves: cloud history of {row.Profile.ProfileId} → {page.Error?.Code ?? ((int)page.Status).ToString(CultureInfo.InvariantCulture)}");
+                    var access = await session.Tokens.AccessAsync(CancellationToken.None);
+                    var page = await client.Api.RevisionsAsync(access, profile.Xuid, null, 50);
+                    return page.Ok && page.Value is { } value ? value.Items
+                        : throw new RevisionsUnavailableException(page.Error?.Code ?? ((int)page.Status).ToString(CultureInfo.InvariantCulture));
+                }, read, refreshed: fresh => { if (ShowSaveManager && _nav.Current == SavesScreen.History) _ = FillHistoryAsync(); });
+                rows.AddRange(revisions.Select(CloudRow));
             }
+            catch (RevisionsUnavailableException e) { Log($"saves: cloud history of {profile.ProfileId} → {e.Code}"); }
             catch (Exception e) when (e is HttpRequestException or ApiException or IOException or TaskCanceledException)
             {
                 Log("saves: cloud history not read: " + e.GetType().Name);
             }
-            _ = xuid;
         }
         foreach (var (_, r) in rows.OrderByDescending(r => r.At)) HistoryRows.Add(r);
         if (HistoryRows.Count > 0) SelectHistory(HistoryRows[0]);
@@ -1062,6 +1085,16 @@ public sealed partial class ShellViewModel
     }
 
     private string? _cloudHistoryXuid;
+
+    /// <summary>How the next history fill reads the cloud revisions (the Refresh button asks the server, throttled).</summary>
+    private CacheRead _historyRead = CacheRead.Cached;
+
+    /// <summary>History's "Refresh": the cloud revisions again (at most every 10 s), under the busy overlay.</summary>
+    public Task RefreshHistoryAsync()
+    {
+        _historyRead = CacheRead.Refresh;
+        return RunOrStep(S["busy.history"], FillHistoryAsync);
+    }
 
     /// <summary>Harness seam: the cloud revisions of <paramref name="xuid"/> as SAVES_API §4.2 lists them.</summary>
     internal void SeedCloudHistory(string xuid, IEnumerable<SaveRevision> revisions)

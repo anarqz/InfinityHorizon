@@ -1254,6 +1254,7 @@
                       <CheckBox Content="{Binding S[seed.noob_option]}" IsChecked="{Binding NewNoobFromHardcore}" FontWeight="Bold" />
                       <ListBox Margin="0,8,0,0" ItemsSource="{Binding NoobSources}" SelectedItem="{Binding NewNoobSource}" MaxHeight="160"
                                ScrollViewer.HorizontalScrollBarVisibility="Disabled" Visibility="{Binding NewNoobFromHardcore, Converter={StaticResource Visible}}" />
+                      <TextBlock Text="{Binding NoobSeedPlanText}" Style="{StaticResource SmHint}" Margin="0,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                   </Border>
                   <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
@@ -1272,7 +1273,7 @@
                       <TextBlock Text="{Binding StartFreshHint}" Style="{StaticResource SmHint}" FontSize="14" />
                     </StackPanel>
                   </Button>
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerExisting" IsEnabled="{Binding StartFromProfileEnabled}"
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerFromProfile" IsEnabled="{Binding StartFromProfileEnabled}"
                           Visibility="{Binding ShowStartFromProfile, Converter={StaticResource Visible}}">
                     <StackPanel>
                       <TextBlock Text="{Binding StartFromProfileLabel}" FontWeight="Bold" FontSize="15" />
@@ -1459,6 +1460,7 @@
                           <DataTrigger Binding="{Binding HistoryNoobOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Noob}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger>
                         </Style.Triggers></Style></Button.Style>
                       </Button>
+                      <Button Content="{Binding S[sm.history_refresh]}" Style="{StaticResource SmButton}" Margin="12,0,0,0" Click="OnHistoryRefresh" IsEnabled="{Binding Idle}" />
                     </StackPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding S[sm.history_empty]}" Style="{StaticResource SmHint}" Visibility="{Binding HistoryEmpty, Converter={StaticResource Visible}}" />
                     <ItemsControl ItemsSource="{Binding HistoryRows}" Focusable="False">
@@ -1710,7 +1712,7 @@
                       <ListBox Margin="0,8,0,0" ItemsSource="{Binding NoobSources}" SelectedItem="{Binding NewNoobSource}" MaxHeight="160"
                                ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}"
                                Visibility="{Binding NewNoobFromHardcore, Converter={StaticResource Visible}}" />
-                      <TextBlock Text="{Binding S[seed.noob_option_hint]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                      <TextBlock Text="{Binding NoobSeedPlanText}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                     </StackPanel>
                   </Border>
                   <TextBlock Text="{Binding FreeNoobHint}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
@@ -2677,5 +2679,35 @@
         </DockPanel>
       </Border>
     </Grid>
+    <!-- owner 2026-11-08: every network or save action shows this modal overlay (spinner + what is happening); clicks and keys stop here -->
+    <Border x:Name="BusyOverlay" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="None"
+            Visibility="{Binding ShowBusyOverlay, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding BusyLabel}">
+      <Border HorizontalAlignment="Center" VerticalAlignment="Center" Padding="30,24" CornerRadius="10" MinWidth="320"
+              Background="{StaticResource SmCardRaised}" BorderBrush="{StaticResource SmLine}" BorderThickness="1">
+        <StackPanel HorizontalAlignment="Center">
+          <Grid Width="44" Height="44" HorizontalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform><RotateTransform x:Name="BusySpin" Angle="0" /></Grid.RenderTransform>
+            <Grid.Triggers>
+              <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                <BeginStoryboard>
+                  <Storyboard RepeatBehavior="Forever">
+                    <DoubleAnimation Storyboard.TargetName="BusySpin" Storyboard.TargetProperty="Angle" From="0" To="360" Duration="0:0:0.9" />
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+            </Grid.Triggers>
+            <Ellipse Stroke="{StaticResource SmLine}" StrokeThickness="4" />
+            <Path Stroke="{StaticResource InfinityAccent}" StrokeThickness="4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Data="M 22,2 A 20,20 0 0 1 42,22" />
+          </Grid>
+          <TextBlock Text="{Binding BusyLabel}" Margin="0,16,0,0" FontSize="15" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"
+                     MaxWidth="420" AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{Binding BusyElapsed}" Margin="0,6,0,0" TextAlignment="Center" Foreground="{StaticResource InfinityMuted}"
+                     Visibility="{Binding HasBusyElapsed, Converter={StaticResource Visible}}" />
+          <Button Content="{Binding S[signin.cancel]}" Margin="0,14,0,0" HorizontalAlignment="Center" Click="OnBusyCancel"
+                  Visibility="{Binding CanCancelBusy, Converter={StaticResource Visible}}" />
+        </StackPanel>
+      </Border>
+    </Border>
   </Grid>
 </Window>
