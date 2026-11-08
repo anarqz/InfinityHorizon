@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Text.Json.Serialization;
+using Infinity.Core.Api;
 
 namespace Infinity.Core.Matchmaking;
 
@@ -420,6 +421,13 @@ public sealed record Seat
 
     /// <summary>CR-S57, reserved and seated: the joiner's expected transport now.</summary>
     public string? Transport { get; init; }
+
+    /// <summary>
+    /// CR-S100 follow-up (additive, optional): a seat in a private official world carries the world's game session (the shape of an
+    /// invite's <c>session</c>), so a requester whose request was accepted can join without an invite. Absent on older servers.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GameSessionReference? Session { get; init; }
 }
 
 /// <summary>How the caller's last seat ended (<c>reason</c>: one of <see cref="SeatEnds"/>).</summary>
