@@ -359,22 +359,38 @@ public partial class MainWindow : Window
     private void PlaceFloatingMenu(FrameworkElement anchor)
     {
         _menuAnchor = anchor;
-        if (!_menuResizeHooked) { SizeChanged += (_, _) => _vm.CloseMenu(); _menuResizeHooked = true; }
+        if (!_menuResizeHooked)
+        {
+            SizeChanged += (_, _) => _vm.CloseMenu();
+            // the measured menu changes size once its items are drawn: place it again by the same button
+            FloatingMenuPanel.SizeChanged += (_, _) => { if (_vm.ShowFloatingMenu) PositionFloatingMenu(); };
+            _menuResizeHooked = true;
+        }
         Dispatcher.BeginInvoke(() =>
         {
             // the cards are rebuilt when a menu opens: the anchor is the open menu's ⋯ button as drawn now
             if (!_vm.ShowFloatingMenu) return;
             UpdateLayout();
-            if (OpenMenuButton(this) is { } drawn) _menuAnchor = drawn;
-            if (_menuAnchor is not { IsVisible: true } button || !button.IsDescendantOf(this)) { _vm.CloseMenu(); return; }
-            FloatingMenuPanel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            var menu = FloatingMenuPanel.DesiredSize;
-            var at = button.TransformToAncestor(MenuLayer).TransformBounds(new Rect(button.RenderSize));
-            var spot = Infinity.Core.Shell.MenuPlacement.Place(at.Left, at.Top, at.Width, at.Height, menu.Width, menu.Height, MenuLayer.ActualWidth, MenuLayer.ActualHeight);
-            System.Windows.Controls.Canvas.SetLeft(FloatingMenuPanel, spot.Left);
-            System.Windows.Controls.Canvas.SetTop(FloatingMenuPanel, spot.Top);
+            if (!PositionFloatingMenu()) { _vm.CloseMenu(); return; }
             FloatingMenuPanel.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.First));
         }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// Puts the open menu by its ⋯ button, in the menu layer's coordinates. The button is a sibling of the layer, not a child, so the
+    /// transform goes through their common ancestor (TransformToVisual; TransformToAncestor threw here and left the menu at 0,0).
+    /// </summary>
+    private bool PositionFloatingMenu()
+    {
+        if (OpenMenuButton(this) is { } drawn) _menuAnchor = drawn;
+        if (_menuAnchor is not { IsVisible: true } button || !button.IsDescendantOf(this) || !MenuLayer.IsVisible) return false;
+        FloatingMenuPanel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var menu = FloatingMenuPanel.DesiredSize;
+        var at = button.TransformToVisual(MenuLayer).TransformBounds(new Rect(button.RenderSize));
+        var spot = Infinity.Core.Shell.MenuPlacement.Place(at.Left, at.Top, at.Width, at.Height, menu.Width, menu.Height, MenuLayer.ActualWidth, MenuLayer.ActualHeight);
+        System.Windows.Controls.Canvas.SetLeft(FloatingMenuPanel, spot.Left);
+        System.Windows.Controls.Canvas.SetTop(FloatingMenuPanel, spot.Top);
+        return true;
     }
 
     /// <summary>The ⋯ button of the open menu's card or game row.</summary>
