@@ -37,6 +37,24 @@ public sealed partial class WorldsBridge
     // R-1108-I2: and when it was sent (a seat read answered just after cannot clear it)
     private readonly Dictionary<string, (string World, DateTimeOffset Until, DateTimeOffset Sent)> _invitesSent = new(StringComparer.Ordinal);
 
+    // CR-S106 (CORE_API §4.2): the last `sent` the inbox poll carried (null: never, or the server does not send it) and when it was read
+    private IReadOnlyList<InviteSent>? _sentTruth;
+    private DateTimeOffset _sentRead;
+
+    /// <summary>
+    /// CR-S106: the inbox poll's <c>sent</c> (null: an older server). When present it is the source of truth for "Invited": it shows only
+    /// for the friend's newest row into the current world while that row is pending (and not past its <c>expiresAt</c>); every other
+    /// state drops it. A mark of this launcher newer than the poll (sent after it was read) still shows until a poll lists it.
+    /// </summary>
+    internal void ObserveSentInvites(IReadOnlyList<InviteSent>? sent)
+    {
+        lock (_invitesSent)
+        {
+            _sentTruth = sent;
+            _sentRead = Now;
+        }
+    }
+
     /// <summary>R-1108-I2: a seat read within this long of an invite never clears its "Invited" mark (it may predate the invite).</summary>
     public static readonly TimeSpan InviteHoldSettle = TimeSpan.FromSeconds(5);
 
@@ -50,6 +68,7 @@ public sealed partial class WorldsBridge
     /// </summary>
     internal void ObserveInviteHolds(string worldId, WorldView world)
     {
+        if (Volatile.Read(ref _sentTruth) is not null) return; // CR-S106: the server lists the sent invites; no guessing from seats
         if (world.Players + (ulong)world.OpenSeats < world.MaxPlayers) return; // some seat is still held or reserved
         var settled = Now - InviteHoldSettle;
         int cleared;
@@ -237,9 +256,26 @@ public sealed partial class WorldsBridge
         var now = Now;
         lock (_invitesSent)
         {
+            if (_sentTruth is { } sent) return InvitedBySent(sent, world, now);
             foreach (var gone in _invitesSent.Where(e => e.Value.Until <= now).Select(e => e.Key).ToList()) _invitesSent.Remove(gone);
             return _invitesSent.Where(e => e.Value.World == world).Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
         }
+    }
+
+    private HashSet<string> InvitedBySent(IReadOnlyList<InviteSent> sent, string world, DateTimeOffset now)
+    {
+        var decided = new HashSet<string>(StringComparer.Ordinal); // a friend's newest row decides (the list is newest first)
+        var invited = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in sent)
+        {
+            if (row is null || row.Kind != OfferKinds.Invite || row.WorldId != world || row.To is not { FriendId.Length: > 0 } to || !decided.Add(to.FriendId)) continue;
+            if (row.State == OfferStates.Pending && (!DateTimeOffset.TryParse(row.ExpiresAt, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var until) || until > now)) invited.Add(to.FriendId);
+        }
+        // sent after the poll was read: the poll cannot know it yet
+        foreach (var (friend, mark) in _invitesSent)
+            if (mark.World == world && mark.Until > now && mark.Sent > _sentRead) invited.Add(friend);
+        return invited;
     }
 
     private static string Cut(string text, int maxBytes)

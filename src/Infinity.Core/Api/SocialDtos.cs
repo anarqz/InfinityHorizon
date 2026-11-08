@@ -209,6 +209,38 @@ public sealed record InviteList
 
     /// <summary>OD-211 (CORE_API §4.2a, CR-S102): friends who came online since the previous poll; absent on older servers and on the first poll.</summary>
     public IReadOnlyList<FriendOnline>? Online { get; init; }
+
+    /// <summary>
+    /// CR-S106 (CORE_API §4.2): the caller's own invites and requests of the last 2 minutes or still pending, newest first, at most 20,
+    /// each with its state; absent on older servers (the launcher then falls back to reading the seat's holds, R-1108-I2).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public IReadOnlyList<InviteSent>? Sent { get; init; }
+}
+
+/// <summary>CR-S106: the account an invite or request the caller sent is addressed to now.</summary>
+public sealed record InviteTo
+{
+    /// <summary>Its address (<c>Friend.id</c>).</summary>
+    public string FriendId { get; init; } = "";
+
+    public string Gamertag { get; init; } = "";
+}
+
+/// <summary>CR-S106: an invite or request to join the caller sent, with its state (one of <see cref="OfferStates"/>).</summary>
+public sealed record InviteSent
+{
+    public string Id { get; init; } = "";
+
+    /// <summary>One of <see cref="OfferKinds"/>.</summary>
+    public string Kind { get; init; } = "";
+
+    public string WorldId { get; init; } = "";
+
+    public InviteTo? To { get; init; }
+
+    public string State { get; init; } = "";
+
+    public string ExpiresAt { get; init; } = "";
 }
 
 /// <summary>
