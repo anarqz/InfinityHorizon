@@ -164,12 +164,14 @@ public sealed partial class ShellViewModel
         _seedDeclined.Add(target.ProfileId);
         _seedChoice = null;
         ChangedSeedCheck();
+        if (_seedStarting?.ProfileId == target.ProfileId) { Log($"profiles: start {target.Game} {target.ProfileId} fresh"); FinishSeedStart(target); return; } // OD-214: chosen, no Play
         await PlayAsync();
     }
 
     /// <summary>"Not now": the seed screens close without playing and nothing is recorded (asked again at the next Play).</summary>
     public void CloseSeedChoice()
     {
+        _seedStarting = null; // OD-214: the empty career stays; its card offers the start again
         _seedChoice = null;
         _seedOffer = null;
         _seedBlocked = null;
@@ -221,7 +223,7 @@ public sealed partial class ShellViewModel
             return Task.CompletedTask;
         }
         if (_busy) Log("seed: check clicked while the launcher is busy");
-        return Run(() => CheckSeedAsync(target, source.Profile, fromPlay: true));
+        return Run(() => CheckSeedAsync(target, source.Profile, fromPlay: _seedStarting?.ProfileId != target.ProfileId));
     }
 
     // ------------------------------------------------------------------ the dry run's answer, shown before the player confirms
@@ -370,6 +372,7 @@ public sealed partial class ShellViewModel
             Log($"seed: {offer.Packed.ContentSha256[..12]} copied for the next Play (seed_from_profile)");
             Message = S.Format("seed.adopted", ("name", name), ("source", source));
         });
+        if (adopted && !offer.FromPlay) FinishSeedStart(offer.Target); // OD-214: the started career is chosen; its first Play commits the seed
         if (adopted && offer.FromPlay) await PlayAsync(); // the commit goes under this Play's lease, before the game starts
     }
 
@@ -388,6 +391,7 @@ public sealed partial class ShellViewModel
         ChangedSeedCheck();
         Message = S.Format("seed.fresh", ("name", ProfileName.Plain(offer.Target.Gamertag)));
         if (offer.FromPlay) await PlayAsync();
+        else FinishSeedStart(offer.Target);
     }
 
     private void ChangedSeedCheck()
@@ -402,6 +406,7 @@ public sealed partial class ShellViewModel
         Changed(nameof(SeedCheckAccepted));
         Changed(nameof(SeedCheckRefused));
         Changed(nameof(ShowSeedNotNow));
+        Changed(nameof(ShowSeedDeleteCareer));
         Changed(nameof(SeedCommitMayBeLimited));
         Changed(nameof(ShowSeedBlocked));
         Changed(nameof(SeedBlockedText));

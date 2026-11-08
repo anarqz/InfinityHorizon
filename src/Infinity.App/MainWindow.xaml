@@ -551,6 +551,9 @@
                   <Button Content="{Binding S[seed.start_fresh]}" Click="OnDismissSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
                   <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8"
                           Visibility="{Binding ShowSeedNotNow, Converter={StaticResource Visible}}" />
+                  <!-- OD-214 (§6.7): a refused check leaves an empty career: start fresh (above) or delete it. -->
+                  <Button Content="{Binding S[careers.delete_empty]}" Click="OnSeedDeleteCareer" Style="{StaticResource LinkButton}" Margin="0,0,0,8"
+                          Visibility="{Binding ShowSeedDeleteCareer, Converter={StaticResource Visible}}" />
                 </WrapPanel>
               </StackPanel>
               <!-- A seed whose first upload waits on the day's checks (429): wait, or a new career instead (the seed set aside, kept). -->
@@ -862,6 +865,9 @@
                         <StackPanel Margin="0,0,170,0">
                           <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="16" />
                           <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                          <!-- OD-214: no career of the chosen game (or an empty one): the card opens the Start panel. -->
+                          <TextBlock Text="{Binding DataContext.S[careers.start_card], RelativeSource={RelativeSource AncestorType=Window}}" FontSize="12" FontWeight="Bold"
+                                     Margin="0,4,0,0" Foreground="{StaticResource InfinityGold}" Visibility="{Binding ShowStart, Converter={StaticResource Visible}}" />
                           <!-- CR-S63: the account's Discord link shows on every profile of the account. -->
                           <StackPanel Orientation="Horizontal" Margin="0,4,0,0" Visibility="{Binding OnAccount, Converter={StaticResource Visible}}">
                             <StackPanel Orientation="Horizontal"
@@ -883,7 +889,7 @@
                       <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
                         <Button Content="{Binding DataContext.S[detail.convert], RelativeSource={RelativeSource AncestorType=Window}}"
                                 Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
-                                Click="OnConvertProfile" Visibility="{Binding Hardcore, Converter={StaticResource Visible}}" />
+                                Click="OnConvertProfile" Visibility="{Binding CanConvert, Converter={StaticResource Visible}}" />
                         <!-- CR-S61: an account profile can be deleted from the cloud (a typed confirmation below). -->
                         <Button Content="{Binding DataContext.S[profiles.delete], RelativeSource={RelativeSource AncestorType=Window}}"
                                 Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
@@ -894,7 +900,35 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-              <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+              <!-- OD-214 (CAREERS.md §4, §6.7): start the chosen game's career of a profile: Fresh, or from an existing profile / a save on this PC. -->
+              <Border Style="{StaticResource Card}" Margin="0,16,0,0" Visibility="{Binding ShowCareerStart, Converter={StaticResource Visible}}">
+                <StackPanel>
+                  <TextBlock Text="{Binding CareerStartTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding CareerStartBody}" Margin="0,6,0,10" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" />
+                  <Button Margin="0,0,0,10" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnStartCareerFresh" IsEnabled="{Binding Idle}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[careers.fresh]}" FontWeight="Bold" />
+                      <TextBlock Text="{Binding S[careers.fresh_hint]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Button>
+                  <Button Margin="0,0,0,6" Padding="20,12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnStartCareerExisting" IsEnabled="{Binding Idle}"
+                          Visibility="{Binding CareerStartFromExisting, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding CareerStartExistingLabel}" FontWeight="Bold" />
+                      <TextBlock Text="{Binding CareerStartExistingHint}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Button>
+                  <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
+                  <TextBlock Text="{Binding Message}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource LinkButton}" Margin="0,0,14,0"
+                            Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
+                    <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnCancelCareerStart" Style="{StaticResource LinkButton}" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+              <Border Style="{StaticResource Card}" Margin="0,16,0,0" Visibility="{Binding ShowNewProfile, Converter={StaticResource Visible}}">
                 <StackPanel>
                   <TextBlock Text="{Binding S[profiles.new]}" Style="{StaticResource SectionTag}" FontSize="12" />
                   <DockPanel Margin="0,10,0,0">
@@ -924,7 +958,7 @@
                                    Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
                       </StackPanel>
                     </Border>
-                    <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" />
+                    <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" IsEnabled="{Binding CanChooseNoob}" />
                     <TextBlock Text="{Binding NoobHint}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
                   <!-- Owner 2026-10-28: a Noob profile may start from one of the player's Hardcore careers on this PC (a copy; no check). -->

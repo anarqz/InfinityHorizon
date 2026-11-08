@@ -25,8 +25,19 @@ public sealed partial class ShellViewModel
     {
         // OD-206 (plan A1): a game without FH2's features has no Hardcore; the server refuses one (400 profile.mode), and the refused
         // profile would stay on this PC only, playable offline alone (T1, 2026-11-07)
-        get { var can = _session?.Me is not null && CurrentGame.FullFeatures; InspectCanChooseHardcore(ref can); return can; }
+        // OD-214: a game whose careers allow no Hardcore (FM5 until M11) offers none; an account with a live Hardcore profile makes no second
+        get { var can = _session?.Me is not null && CurrentGame.FullFeatures && CurrentGame.HardcoreCareers && !HasLiveProfile("hardcore"); InspectCanChooseHardcore(ref can); return can; }
     }
+
+    /// <summary>OD-214 / CAREERS.md §2: a new Noob profile only while the account has no live one (it gets a career of this game instead).</summary>
+    public bool CanChooseNoob => !HasLiveProfile("noob");
+
+    /// <summary>The new-profile form: offline always; signed in only while a mode has no live profile the game allows.</summary>
+    public bool ShowNewProfile => OfflineMode || _session?.Me?.Players is null || CanChooseNoob || CanChooseHardcore;
+
+    /// <summary>A CR-S98 server lists a live profile of <paramref name="mode"/> on this account (<c>players</c>).</summary>
+    private bool HasLiveProfile(string mode) =>
+        !OfflineMode && _session?.Me?.Players is { } players && players.Any(p => p.Mode == mode && p.Status == "active");
 
     partial void InspectCanChooseHardcore(ref bool can);
 
@@ -49,7 +60,7 @@ public sealed partial class ShellViewModel
 
     public bool NewHardcore
     {
-        get => _newHardcore && CanChooseHardcore;
+        get => (_newHardcore || !CanChooseNoob) && CanChooseHardcore;
         set
         {
             _newHardcore = value;
@@ -391,13 +402,22 @@ public sealed partial class ShellViewModel
     }
 }
 
-/// <summary>One row of the profile picker. <see cref="OnAccount"/>: a profile of the signed-in account (not a local-only row).</summary>
-public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = false)
+/// <summary>
+/// One row of the profile picker. <see cref="OnAccount"/>: a profile of the signed-in account (not a local-only row). <see cref="Card"/>
+/// (OD-214, a CR-S98 server): the profile and its career of the chosen game; null for a local row or an older server.
+/// </summary>
+public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = false, BoardCard? Card = null)
 {
     public string Gamertag => ProfileName.Plain(Profile.Gamertag);
 
     public bool Hardcore => Profile.Mode == "hardcore";
 
-    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only.</summary>
-    public bool CanDeleteFromCloud => OnAccount;
+    /// <summary>OD-207 #8 / CAREERS.md §6.8: a launcher that knows careers never changes a mode; an older server's rows keep the link.</summary>
+    public bool CanConvert => Hardcore && Card is null;
+
+    /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only, and on a career that exists.</summary>
+    public bool CanDeleteFromCloud => OnAccount && (Card is null || Card.CareerRow is not null);
+
+    /// <summary>OD-214: the card opens the Start panel (no career of the game, or an empty one).</summary>
+    public bool ShowStart => Card is { Startable: true };
 }
