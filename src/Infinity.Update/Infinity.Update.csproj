@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- U2: what infinity-updater.exe needs to verify and install a release, and nothing else: the signed descriptor (v1,
+       fi-launcher-release-v1), the release signatures, the journalled installer and the restart-argument rules. No UI,
+       no Sqlite, no HTTP. Infinity.Core references it, so the launcher keeps the same types and namespaces. AOT-clean
+       (IsAotCompatible: trim and AOT analysis warnings are errors), because the updater is published with Native AOT. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Infinity.Core</RootNamespace>
+    <AssemblyName>Infinity.Update</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Ed25519 (RFC 8032) only: .NET has no Ed25519. -->
+    <PackageReference Include="BouncyCastle.Cryptography" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Infinity.Core" />
+    <InternalsVisibleTo Include="Infinity.Core.Tests" />
+  </ItemGroup>
+
+</Project>

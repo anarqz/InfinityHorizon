@@ -18,6 +18,7 @@ internal static class UpdateReleaseStateStore
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectRequiredConstructorParameters = true,
         MaxDepth = 12,
+        TypeInfoResolver = UpdateJsonContext.Default,
     };
 
     internal static void ValidateKnown(string stateDirectory, LauncherReleaseDescriptor manifest, byte[] raw)
@@ -45,7 +46,7 @@ internal static class UpdateReleaseStateStore
                 else if (reader.TokenType == JsonTokenType.PropertyName && !names.Peek().Add(reader.GetString()!))
                     throw new InvalidDataException("Duplicate release history property.");
             }
-            previous = JsonSerializer.Deserialize<LauncherReleaseDescriptor>(previousBytes, Json)
+            previous = JsonSerializer.Deserialize(previousBytes, UpdateJsonContext.TypeInfo<LauncherReleaseDescriptor>(Json))
                 ?? throw new InvalidDataException("Invalid release history.");
         }
         catch (JsonException error) { throw new InvalidDataException("Invalid release history.", error); }
@@ -95,7 +96,7 @@ internal static class UpdateReleaseStateStore
 
     private static LauncherVersion ValidateShape(LauncherReleaseDescriptor value)
     {
-        if (value.SchemaVersion != 1 || value.Product != "infinity-horizon" || value.Repository != GitHubReleases.Repository
+        if (value.SchemaVersion != 1 || value.Product != "infinity-horizon" || value.Repository != UpdatePackageVerifier.ReleaseRepository
             || value.Channel != "stable" || value.Platform != "windows-x64" || !LauncherVersion.TryParse(value.Version, out var version)
             || version.Prerelease is not null || value.Tag != "v" + value.Version || value.ReleaseSequence is < 1 or > 9_007_199_254_740_991
             || !Hex(value.SourceCommit, 40) || !Instant(value.IssuedAt, out var issued) || !Instant(value.ExpiresAt, out var expires)

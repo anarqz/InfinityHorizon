@@ -5,29 +5,25 @@ using Infinity.Core.Session;
 
 namespace Infinity.Core.Auth;
 
-/// <summary>Explicit production configuration. Never populated by discovery or development environment variables.</summary>
+/// <summary>
+/// Explicit production configuration. Never populated by discovery or development environment variables. The origins and
+/// their rules live in <see cref="ProductionOrigins"/> (Infinity.Update), which the updater carries alone.
+/// </summary>
 public static class ProductionDeployment
 {
-    public static Uri Core { get; } = new("https://api.infinity-horizon.com");
-    public static Uri Gate { get; } = new("https://gate.infinity-horizon.com");
-    public static Uri Saves { get; } = new("https://saves.infinity-horizon.com");
-    public static Uri Matchmaking { get; } = new("https://mm.infinity-horizon.com");
-    public static Uri Crashes { get; } = new("https://crashes.infinity-horizon.com");
+    public static Uri Core => ProductionOrigins.Core;
+    public static Uri Gate => ProductionOrigins.Gate;
+    public static Uri Saves => ProductionOrigins.Saves;
+    public static Uri Matchmaking => ProductionOrigins.Matchmaking;
+    public static Uri Crashes => ProductionOrigins.Crashes;
     public const string LaunchKid = "lt-20261021-1";
     public const string LaunchPublicKey = "XQjN8vrGqvQCcrMzQU+vlHhbzF2ppID8CWET8P3lubg=";
     public const string RelayKid = "rg-20261021-1";
     public const string RelayPublicKey = "oee+y665E9oUviXkaLadB1gXfYBEreMRSmHhdRaYVkE=";
 
-    public static bool IsOfficial(Uri uri) => new[] { Core, Gate, Saves, Matchmaking, Crashes }
-        .Any(origin => string.Equals(origin.IdnHost, uri.IdnHost.TrimEnd('.'), StringComparison.OrdinalIgnoreCase));
+    public static bool IsOfficial(Uri uri) => ProductionOrigins.IsOfficial(uri);
 
-    public static void RequireOrigin(Uri actual, Uri expected)
-    {
-        if (!actual.IsAbsoluteUri || actual.Scheme != Uri.UriSchemeHttps || !actual.IsDefaultPort ||
-            actual.UserInfo.Length != 0 || actual.AbsolutePath != "/" || actual.Query.Length != 0 ||
-            actual.Fragment.Length != 0 || !string.Equals(actual.Host, expected.Host, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Production service origin is not approved");
-    }
+    public static void RequireOrigin(Uri actual, Uri expected) => ProductionOrigins.RequireOrigin(actual, expected);
 
     public static void ValidateInfo(ServerInfo info)
     {

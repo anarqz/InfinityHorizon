@@ -17,11 +17,27 @@ public static class ReleaseSignature
     /// </summary>
     public const string ModRuntimePrefix = "fi-mod-runtime-v1 ";
 
+    /// <summary>
+    /// The line a release binary's <c>.sig</c> signs: <c>"fh2online-update-v1 " + SHA-256 lowercase hex</c>, the hook's own
+    /// update line (<c>HookInstaller.SignPrefix</c> is this constant).
+    /// </summary>
+    public const string SignPrefix = "fh2online-update-v1 ";
+
+    /// <summary>
+    /// The project's release public key, the same 32 bytes as <c>azimuth_sign_release_key</c> in sign.c
+    /// (<c>HookInstaller.ReleaseKey</c> is this key). U2: here, so infinity-updater.exe carries it without the rest of Core.
+    /// </summary>
+    public static ReadOnlySpan<byte> ReleaseKey =>
+    [
+        0xbf, 0xe5, 0x72, 0xbc, 0x40, 0x36, 0x71, 0x2e, 0x5a, 0x2f, 0x96, 0x83, 0xc6, 0xb9, 0xfe, 0x29,
+        0x3d, 0xce, 0x19, 0x62, 0x74, 0xe0, 0x8b, 0x10, 0x83, 0x0e, 0xf0, 0x23, 0x28, 0x60, 0xae, 0xfb,
+    ];
+
     public static bool IsOfficialFile(string? path, string? signaturePath = null) =>
-        path is not null && VerifyFile(path, signaturePath ?? path + ".sig", HookInstaller.ReleaseKey);
+        path is not null && VerifyFile(path, signaturePath ?? path + ".sig", ReleaseKey);
 
     public static bool VerifyFile(string path, string signaturePath, ReadOnlySpan<byte> publicKey) =>
-        VerifyFile(path, signaturePath, publicKey, HookInstaller.SignPrefix);
+        VerifyFile(path, signaturePath, publicKey, SignPrefix);
 
     public static bool VerifyFile(string path, string signaturePath, ReadOnlySpan<byte> publicKey, string prefix)
     {

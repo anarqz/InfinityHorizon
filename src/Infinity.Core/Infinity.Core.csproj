@@ -15,6 +15,11 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
 
+  <!-- U2: the update path (verify + install) lives in Infinity.Update, which the updater references alone. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Infinity.Update\Infinity.Update.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="Infinity.Core.Tests" />
   </ItemGroup>
