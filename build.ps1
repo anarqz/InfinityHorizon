@@ -30,12 +30,20 @@ foreach ($file in @("$out/mod/infinity_mod.dll.sig", "$out/mod/infinity-mod-prep
 }
 
 & dotnet publish "$root/src/Infinity.App/Infinity.App.csproj" -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
-if ($LASTEXITCODE -ne 0) { throw 'Launcher publish failed' }
-# U1: the updater's single-file bundle is compressed (about half the size on disk; same name, path and .sig).
-& dotnet publish "$root/src/Infinity.Updater/Infinity.Updater.csproj" -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
-if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Launcher publish failed' }
+# U2: the updater is Native AOT (PublishAot in its project): one native infinity-updater.exe of about 4 MB that carries only
+# Infinity.Update; same name, path, .sig, arguments and hand-shake. The native link needs the MSVC x64 tools (Visual Studio C++
+# workload); their vcvarsall.bat looks up vswhere.exe on PATH, so the Installer folder goes first.
+$vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+if (!(Test-Path -LiteralPath (Join-Path $vsInstaller 'vswhere.exe'))) { throw 'The updater (Native AOT) needs Visual Studio with the C++ x64 tools' }
+$pathBefore = $env:PATH
+$env:PATH = "$vsInstaller;$env:PATH"
+try {
+    & dotnet publish "$root/src/Infinity.Updater/Infinity.Updater.csproj" -c Release -r win-x64 `
+        -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:InfinityProduction=$profile" -o $out
+    if ($LASTEXITCODE -ne 0) { throw 'Updater publish failed' }
+} finally { $env:PATH = $pathBefore }
 # OD-125: the hook ships as ExtraOptions.Infinity (ExtraOptions 0.4.4 + patches + the hook, one winmm.dll for Azimuth 1.0.4, OD-127);
 # the package keeps its name, the launcher installs it as <Azimuth>\winmm.dll
 $hookArgs = @("$root/native/extraoptions-infinity/build.py", $zigPath, '--output', "$out/hook/infinity.dll")

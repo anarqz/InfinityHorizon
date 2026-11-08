@@ -18,7 +18,9 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
     public const int MaxDescriptorBytes = 65536;
     public const long MaxZipBytes = 536870912;
     public const long MaxExpandedBytes = 1073741824;
-    public static string DefaultStateDirectory => Auth.ServerConfig.Default.StateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher"));
+    /// <summary>The fixed release repository (<c>GitHubReleases.Repository</c> is this constant).</summary>
+    public const string ReleaseRepository = "anarqz/InfinityHorizon";
+    public static string DefaultStateDirectory => Auth.ServerSelection.DefaultStateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher"));
     private readonly byte[] _key;
     private readonly TimeProvider _clock;
     private readonly string? _stateDirectory;
@@ -34,9 +36,10 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
     {
         PropertyNameCaseInsensitive = false, NumberHandling = JsonNumberHandling.Strict,
         RespectRequiredConstructorParameters = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, MaxDepth = 12,
+        TypeInfoResolver = UpdateJsonContext.Default, // U2: source-generated metadata, same options (Native AOT updater)
     };
 
-    public UpdatePackageVerifier() : this(HookInstaller.ReleaseKey.ToArray(), TimeProvider.System, DefaultStateDirectory) { }
+    public UpdatePackageVerifier() : this(ReleaseSignature.ReleaseKey.ToArray(), TimeProvider.System, DefaultStateDirectory) { }
     internal UpdatePackageVerifier(byte[] key, TimeProvider clock, string? stateDirectory = null)
     {
         _key = key.ToArray(); _clock = clock; _stateDirectory = stateDirectory;
@@ -67,8 +70,8 @@ public sealed class UpdatePackageVerifier : IUpdatePlanVerifier
             else if (reader.TokenType == JsonTokenType.EndObject) names.Pop();
             else if (reader.TokenType == JsonTokenType.PropertyName && !names.Peek().Add(reader.GetString()!)) Invalid();
         }
-        var value = JsonSerializer.Deserialize<LauncherReleaseDescriptor>(raw, Json) ?? throw new InvalidDataException("Missing release descriptor");
-        if (value.SchemaVersion != 1 || value.Product != "infinity-horizon" || value.Repository != GitHubReleases.Repository
+        var value = JsonSerializer.Deserialize(raw, UpdateJsonContext.TypeInfo<LauncherReleaseDescriptor>(Json)) ?? throw new InvalidDataException("Missing release descriptor");
+        if (value.SchemaVersion != 1 || value.Product != "infinity-horizon" || value.Repository != ReleaseRepository
             || value.Channel != "stable" || value.Platform != "windows-x64" || !LauncherVersion.TryParse(value.Version, out var version)
             || version.Prerelease is not null || value.Tag != "v" + value.Version || !Hex(value.SourceCommit, 40)
             || value.ReleaseSequence is 0 or > 9007199254740991 || !Instant(value.IssuedAt, out var issued) || !Instant(value.ExpiresAt, out var expires)

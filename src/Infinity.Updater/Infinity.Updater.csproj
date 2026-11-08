@@ -4,8 +4,19 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>infinity-updater</AssemblyName>
     <RootNamespace>Infinity.Updater</RootNamespace>
+    <!-- U2: one native infinity-updater.exe (no .NET bundle): Infinity.Update only, compiled ahead of time. Trim and AOT
+         analysis warnings are errors (TreatWarningsAsErrors). Same name, path, .sig, arguments and hand-shake as before. -->
+    <!-- RID builds only (build.ps1 publishes -r win-x64): PublishAot pulls Microsoft.DotNet.ILCompiler into every restore, and
+         without a RID it would be the SDK's 10.0.12 (NU1903 as error in Infinity.sln). The analyzers still run everywhere. -->
+    <PublishAot Condition="'$(RuntimeIdentifier)' != ''">true</PublishAot>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <!-- CVE-2026-111497 (Brotli, GHSA-p3jp-9v83-76w9): an AOT exe links its runtime, so it carries the patched one even
+         while the SDK band still bundles 10.0.12 (this also selects ILCompiler 10.0.14). RID builds only: a plain
+         `dotnet build` keeps running on the installed shared runtime. -->
+    <RuntimeFrameworkVersion Condition="'$(RuntimeIdentifier)' != ''">10.0.14</RuntimeFrameworkVersion>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Infinity.Core/Infinity.Core.csproj" />
+    <ProjectReference Include="../Infinity.Update/Infinity.Update.csproj" />
   </ItemGroup>
 </Project>

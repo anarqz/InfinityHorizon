@@ -20,44 +20,14 @@ public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = fals
     /// <summary>A custom server's key pins (<c>custom-trust.json</c> in its own state folder); required for <see cref="Custom"/>.</summary>
     public TrustPins? Pins { get; init; }
 
-    /// <summary>Official builds use production only; development builds keep their explicit local selection.</summary>
-#if INFINITY_PRODUCTION_BUILD
-    public static ServerConfig Default { get; } = new(ProductionDeployment.Core, ProductionDeployment.Core, true);
-#else
-    public static ServerConfig Default { get; } = new(new Uri("http://127.0.0.1:8480"), new Uri("http://127.0.0.1:3120"));
-#endif
+    /// <summary>Official builds use production only; development builds keep their explicit local selection (<see cref="ServerSelection"/>).</summary>
+    public static ServerConfig Default { get; } = new(ServerSelection.DefaultServer, ServerSelection.DefaultPortal, ServerSelection.DefaultProduction);
 
     /// <summary><c>--server &lt;url&gt;</c> / <c>--portal &lt;url&gt;</c>, then <c>FI_SERVER</c> / <c>FI_PORTAL</c>, then <see cref="Default"/>.</summary>
     public static ServerConfig From(IReadOnlyList<string> args, Func<string, string?> env)
     {
-        ArgumentNullException.ThrowIfNull(args);
-        ArgumentNullException.ThrowIfNull(env);
-        string? Arg(string name)
-        {
-            var at = args.ToList().IndexOf(name);
-            if (at < 0) return null;
-            if (at + 1 >= args.Count || args[at + 1].StartsWith("--", StringComparison.Ordinal) || args.Count(value => value == name) != 1)
-                throw new ArgumentException("Invalid configuration argument");
-            return args[at + 1];
-        }
-#if INFINITY_PRODUCTION_BUILD
-        // Environment inherited from a development shortcut/prefix must never select LAN.
-        var server = Arg("--server");
-        var portal = Arg("--portal");
-        var environment = Arg("--environment");
-        if (environment is not (null or "production")) throw new ArgumentException("This build uses production only");
-        const bool production = true;
-#else
-        var server = Arg("--server") ?? env("FI_SERVER");
-        var portal = Arg("--portal") ?? env("FI_PORTAL");
-        var environment = Arg("--environment") ?? env("FI_ENVIRONMENT");
-        if (environment is not (null or "development" or "production"))
-            throw new ArgumentException("Environment must be development or production");
-        var production = environment == "production";
-#endif
-        var config = new ServerConfig(
-            ApiClient.CheckOrigin(server is null ? production ? ProductionDeployment.Core : Default.Server : new Uri(server)),
-            ApiClient.CheckOrigin(portal is null ? production ? ProductionDeployment.Core : Default.Portal : new Uri(portal)), production);
+        var (server, portal, production) = ServerSelection.Resolve(args, env);
+        var config = new ServerConfig(server, portal, production);
         config.Validate();
         return config;
     }
@@ -71,15 +41,7 @@ public sealed record ServerConfig(Uri Server, Uri Portal, bool Production = fals
             CustomOrigins.Allow(Server);
             return;
         }
-        if (BuildProfile.ProductionOnly && !Production) throw new ArgumentException("This build uses production or a custom server only");
-        if (Production)
-        {
-            ProductionDeployment.RequireOrigin(Server, ProductionDeployment.Core);
-            // No hosted production portal is available. Native account operations use core.
-            ProductionDeployment.RequireOrigin(Portal, ProductionDeployment.Core);
-        }
-        else if (ProductionDeployment.IsOfficial(Server) || ProductionDeployment.IsOfficial(Portal))
-            throw new ArgumentException("Official endpoints require explicit production selection");
+        ServerSelection.Validate(Server, Portal, Production);
     }
 
     /// <summary>The official server in <c>production</c>, a custom one in <c>custom\&lt;scheme&gt;-&lt;host&gt;-&lt;port&gt;</c>, development in the root.</summary>

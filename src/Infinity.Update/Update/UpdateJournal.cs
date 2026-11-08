@@ -55,6 +55,7 @@ internal static class UpdateJournalStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         MaxDepth = 12,
+        TypeInfoResolver = UpdateJsonContext.Default, // U2: source-generated, same options (Native AOT updater)
     };
 
     internal static T Read<T>(string path)
@@ -62,12 +63,12 @@ internal static class UpdateJournalStore
         UpdateInstaller.RequireNoReparse(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (stream.Length is <= 0 or > MaxDocumentBytes) throw new InvalidDataException("Invalid update document size.");
-        return JsonSerializer.Deserialize<T>(stream, Json) ?? throw new InvalidDataException("Invalid update document.");
+        return JsonSerializer.Deserialize(stream, UpdateJsonContext.TypeInfo<T>(Json)) ?? throw new InvalidDataException("Invalid update document.");
     }
 
     internal static void Write<T>(string path, T value)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(value, Json);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(value, UpdateJsonContext.TypeInfo<T>(Json));
         if (bytes.Length > MaxDocumentBytes) throw new InvalidDataException("Update document is too large.");
         UpdateInstaller.RequireNoReparse(path);
         var temporary = path + ".tmp";

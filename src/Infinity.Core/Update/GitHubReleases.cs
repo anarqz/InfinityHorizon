@@ -15,7 +15,7 @@ public sealed record GitHubReleaseAsset(long Id, string Name, long Size, Uri Dow
 /// <summary>Unauthenticated fixed-repository discovery and bounded downloads. Absence/failure is never a current-version result.</summary>
 public sealed class GitHubReleases : IDisposable
 {
-    public const string Repository = "anarqz/InfinityHorizon";
+    public const string Repository = UpdatePackageVerifier.ReleaseRepository;
     public const string ApiVersion = "2022-11-28";
     public const int MaxMetadataBytes = 1024 * 1024;
     public const int MaxAssets = 64;

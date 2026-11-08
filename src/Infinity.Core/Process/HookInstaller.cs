@@ -82,7 +82,7 @@ public static class HookInstaller
     /// <summary>OD-125: ExtraOptions.Infinity, the <c>winmm.dll</c> beside <c>azimuth.exe</c> (Azimuth 1.0.x loads no TLS helper for FH2).</summary>
     public const string HookDll = "winmm.dll";
     public const string PackageFile = "infinity.dll";
-    public const string SignPrefix = "fh2online-update-v1 ";
+    public const string SignPrefix = ReleaseSignature.SignPrefix;
     public const string DevKeyEnv = "FI_DEV_HOOK_KEY";
     public const int MaxHookBytes = 8 << 20;
     public const int StockMaxBytes = 64 * 1024;
@@ -90,12 +90,9 @@ public static class HookInstaller
     /// <summary>Azimuth 0.9.10's own helper (thirdparty.rs pins the same): the only file kept as <c>.stock</c>.</summary>
     public const string Stock0910Sha256 = "d92ff5c173ec42c2f371d8d28a30c5535489f7f0dffa43363860cf1fe70ee695";
 
-    /// <summary>The project's release public key, the same 32 bytes as <c>azimuth_sign_release_key</c> in sign.c.</summary>
-    public static ReadOnlySpan<byte> ReleaseKey =>
-    [
-        0xbf, 0xe5, 0x72, 0xbc, 0x40, 0x36, 0x71, 0x2e, 0x5a, 0x2f, 0x96, 0x83, 0xc6, 0xb9, 0xfe, 0x29,
-        0x3d, 0xce, 0x19, 0x62, 0x74, 0xe0, 0x8b, 0x10, 0x83, 0x0e, 0xf0, 0x23, 0x28, 0x60, 0xae, 0xfb,
-    ];
+    /// <summary>The project's release public key, the same 32 bytes as <c>azimuth_sign_release_key</c> in sign.c (kept in
+    /// <see cref="ReleaseSignature.ReleaseKey"/>, Infinity.Update, which the updater carries alone).</summary>
+    public static ReadOnlySpan<byte> ReleaseKey => ReleaseSignature.ReleaseKey;
 
     /// <summary>A development key from <c>FI_DEV_HOOK_KEY</c> (64 hex digits), or null.</summary>
     public static byte[]? DevKey(string? hex) =>

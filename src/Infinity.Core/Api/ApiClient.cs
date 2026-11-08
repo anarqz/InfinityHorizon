@@ -210,22 +210,10 @@ public sealed partial class ApiClient
 
     /// <summary>
     /// https anywhere; plain http only on loopback or a private LAN address with a port, or on an origin a custom server the
-    /// player chose made acceptable (<see cref="Auth.CustomOrigins"/>, CR-L39).
+    /// player chose made acceptable (<see cref="Auth.CustomOrigins"/>, CR-L39). The rule is <see cref="OriginPolicy.Check"/>
+    /// (Infinity.Update), which the updater applies to its restart arguments.
     /// </summary>
-    public static Uri CheckOrigin(Uri origin)
-    {
-        ArgumentNullException.ThrowIfNull(origin);
-        if (origin.Scheme == Uri.UriSchemeHttps)
-        {
-            return origin;
-        }
-        var text = origin.GetLeftPart(UriPartial.Authority);
-        if (origin.Scheme == Uri.UriSchemeHttp && (DevNet.PlainHttpUrl(text) || Auth.CustomOrigins.IsAllowed(origin)))
-        {
-            return origin;
-        }
-        throw new ArgumentException($"{text} is not https, loopback or a private LAN address", nameof(origin));
-    }
+    public static Uri CheckOrigin(Uri origin) => OriginPolicy.Check(origin);
 
     /// <summary><c>GET /launcher/v1/info</c> from a server's base URL, before the service map is known.</summary>
     public static async Task<ServerInfo> InfoAsync(HttpClient http, Uri server, string clientHeader, CancellationToken cancellation = default)

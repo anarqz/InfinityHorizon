@@ -1,5 +1,4 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-using System.Collections.Concurrent;
 using System.Text.Json;
 using Infinity.Core.Api;
 using Org.BouncyCastle.Math.EC.Rfc8032;
@@ -148,29 +147,6 @@ public static class CustomServer
         if (keys.Count > 8) throw new InvalidDataException("A custom server publishes at most eight keys of a kind");
         return [.. keys];
     }
-}
-
-/// <summary>
-/// Plain-http origins a custom server made acceptable (CR-L39): the server the player chose and the origins its validated
-/// discovery names. <see cref="ApiClient.CheckOrigin"/> accepts http for exactly these; everything else keeps https or the
-/// development LAN rule.
-/// </summary>
-public static class CustomOrigins
-{
-    private static readonly ConcurrentDictionary<string, byte> Allowed = new(StringComparer.OrdinalIgnoreCase);
-
-    public static void Allow(Uri origin)
-    {
-        ArgumentNullException.ThrowIfNull(origin);
-        Allowed[Key(origin)] = 0;
-    }
-
-    public static bool IsAllowed(Uri origin) => origin.IsAbsoluteUri && Allowed.ContainsKey(Key(origin));
-
-    /// <summary>Tests only: a fresh process state.</summary>
-    public static void Clear() => Allowed.Clear();
-
-    private static string Key(Uri origin) => origin.Scheme + "://" + origin.Authority;
 }
 
 /// <summary>What a custom server's published keys and realm are against the ones pinned for its origin.</summary>

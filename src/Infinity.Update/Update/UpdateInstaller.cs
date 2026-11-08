@@ -779,12 +779,12 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
                 if (!Uri.TryCreate(value, UriKind.Absolute, out var origin) || origin.UserInfo.Length != 0 ||
                     origin.Query.Length != 0 || origin.Fragment.Length != 0)
                     throw new InvalidDataException("Invalid update restart origin.");
-                ApiClient.CheckOrigin(origin);
+                OriginPolicy.Check(origin);
             }
             else throw new InvalidDataException("Only environment, server, portal and locale may be preserved across update.");
         }
         if (names.Contains("--environment") || BuildProfile.ProductionOnly)
-            Auth.ServerConfig.From(arguments, _ => null);
+            Auth.ServerSelection.Resolve(arguments, _ => null);
     }
 
     private static void ValidateJournal(UpdateJournal journal, string expectedId)
