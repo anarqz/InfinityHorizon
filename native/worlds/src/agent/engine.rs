@@ -227,7 +227,13 @@ fn read_lines(stream: UnixStream, pending: Pending, generation: u64, events: Sen
 /// Spawns `worlds serve --profile public` from this executable, its stdout and stderr shared with
 /// the agent's (both are JSON lines to the VM's log; nothing here reads them).
 /// `worlds serve`'s arguments for the agent's engine (the tests parse exactly these).
-pub fn serve_args(bind: &str, control: &Path, max_worlds: usize, max_seats: usize) -> Vec<String> {
+pub fn serve_args(
+    bind: &str,
+    control: &Path,
+    max_worlds: usize,
+    max_seats: usize,
+    memory_limit_mb: u64,
+) -> Vec<String> {
     vec![
         "serve".into(),
         "--profile".into(),
@@ -240,6 +246,8 @@ pub fn serve_args(bind: &str, control: &Path, max_worlds: usize, max_seats: usiz
         max_worlds.to_string(),
         "--max-seats".into(),
         max_seats.to_string(),
+        "--memory-limit-mb".into(),
+        memory_limit_mb.to_string(),
     ]
 }
 
@@ -248,10 +256,17 @@ pub fn spawn(
     control: &Path,
     max_worlds: usize,
     max_seats: usize,
+    memory_limit_mb: u64,
 ) -> std::io::Result<Child> {
     let exe = std::env::current_exe()?;
     Command::new(exe)
-        .args(serve_args(bind, control, max_worlds, max_seats))
+        .args(serve_args(
+            bind,
+            control,
+            max_worlds,
+            max_seats,
+            memory_limit_mb,
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

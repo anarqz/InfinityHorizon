@@ -56,6 +56,8 @@ type Log = Arc<Mutex<Vec<(String, String)>>>;
 /// How the fake answers `POST …/game-sessions`: a status (201 with a `GameModeSession`, anything
 /// else a refusal), or `HANG` (no answer for 16 s, past the agent's 14 s budget).
 const HANG: u16 = 0;
+/// A server without pool worlds (before CR-S103): a `PUT` carrying `pool` is refused with 400.
+const NO_POOL: u16 = 1;
 /// The group world the fake server opens for a car meet session (WORLDS_OFFICIAL.md §11.4).
 const GROUP_WORLD: &str = "01900000-0000-7000-8000-0000000000a1";
 
@@ -142,6 +144,30 @@ fn serve(stream: TcpStream, log: Log, sessions: u16) {
                 ),
                 ("PUT", Some(w)) => {
                     let settings: Value = serde_json::from_slice(&body).unwrap();
+                    // WORLDS_OFFICIAL.md §14 (W17): `pool` is `true` on an FH2 pool world and
+                    // absent on a clean one, never `false`
+                    if let Some(pool) = settings.get("pool") {
+                        assert_eq!(pool, &Value::Bool(true), "{settings}");
+                        assert_eq!(settings["game"], "fh2", "{settings}");
+                    }
+                    if settings.get("pool").is_some() && sessions == NO_POOL {
+                        // a server before CR-S103: `deny_unknown_fields` refuses the body
+                        log.lock()
+                            .unwrap()
+                            .push(("PUT-pool".into(), target.clone()));
+                        let refusal = json!({"code": "REQUEST.INVALID", "message": "no"});
+                        let text = refusal.to_string();
+                        let head = format!(
+                            "HTTP/1.1 400 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                            text.len()
+                        );
+                        if out.write_all(head.as_bytes()).is_err()
+                            || out.write_all(text.as_bytes()).is_err()
+                        {
+                            return;
+                        }
+                        continue;
+                    }
                     // OD-210, CR-S101 (W14): a mixed spare (`"any"`) per (game, activity) from an
                     // agent serving both modes; the car meet lobby keeps the first mode as before
                     // (its test serves Noob only)
@@ -252,6 +278,8 @@ fn hello_open_announce_admission_and_delete_end_to_end() {
         .env("FI_WORLDS_BIND", "127.0.0.1:0")
         .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
         .env("FI_WORLDS_ACTIVITIES", "freeroam")
+        // one world exactly (the pool spare has its own test)
+        .env("FI_WORLDS_POOL_SPARES", "0")
         .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -338,6 +366,90 @@ fn hello_open_announce_admission_and_delete_end_to_end() {
     std::thread::sleep(Duration::from_millis(300));
     assert!(std::os::unix::net::UnixStream::connect(&control).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// W17 (WORLDS_OFFICIAL.md §14): beside FH2's clean free roam spare the agent opens a pool spare
+/// (`PUT … {pool: true}`, the fake asserts the body); against a server without pool worlds (400)
+/// it logs `agent.pool.refused` and keeps its clean spare.
+#[test]
+fn a_pool_spare_opens_beside_the_clean_one_and_waits_when_refused() {
+    for answer in [201, NO_POOL] {
+        let dir =
+            std::env::temp_dir().join(format!("fi-agent-pool-{}-{answer}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("agent.key");
+        std::fs::write(&key, format!("{}\n", encode_base64(&AGENT_SEED))).unwrap();
+        let control = dir.join("ctl").join("control.sock");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let log: Log = Arc::default();
+        let server_log = log.clone();
+        std::thread::spawn(move || fake(listener, server_log, answer));
+        let mut child = Command::new(env!("CARGO_BIN_EXE_worlds"))
+            .arg("agent")
+            .env_clear()
+            .env("FI_WORLDS_SERVER_URL", format!("http://127.0.0.1:{port}"))
+            .env("FI_WORLDS_VM_ID", VM)
+            .env("FI_WORLDS_KEY_FILE", &key)
+            .env("FI_WORLDS_BIND", "127.0.0.1:0")
+            .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
+            .env("FI_WORLDS_ACTIVITIES", "freeroam")
+            .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                let v: Value = serde_json::from_str(&line).expect("stdout carries JSON lines only");
+                if tx.send(v).is_err() {
+                    return;
+                }
+            }
+        });
+        let clean = wait_line(&rx, "the clean spare", |v| {
+            v["ev"] == "agent.world.opened" && v["pool"] == false
+        });
+        assert_eq!(clean["activity"], "freeroam");
+        if answer == NO_POOL {
+            let refused = wait_line(&rx, "agent.pool.refused", |v| {
+                v["ev"] == "agent.pool.refused"
+            });
+            assert!(refused["world"].is_string(), "{refused}");
+        } else {
+            let pool = wait_line(&rx, "the pool spare", |v| {
+                v["ev"] == "agent.world.opened" && v["pool"] == true
+            });
+            assert_eq!(
+                (&pool["activity"], &pool["mode"]),
+                (&json!("freeroam"), &json!("any"))
+            );
+            assert_ne!(pool["world"], clean["world"]);
+        }
+        Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            assert!(Instant::now() < until, "the agent did not stop");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(status.code(), Some(0));
+        let calls = log.lock().unwrap().clone();
+        let refused = calls.iter().filter(|(m, _)| m == "PUT-pool").count();
+        // one refusal holds pool spares off (5 min), the clean spare is unaffected
+        assert_eq!(refused, usize::from(answer == NO_POOL), "{calls:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// CR-S99 §5 (OD-206, W6): an FM5 race spare. The agent opens `game: "fm5"`, `activity: "race"`
@@ -480,6 +592,7 @@ fn a_car_meet_lobby_opens_and_answers_its_game_session_end_to_end() {
             .env("FI_WORLDS_CONTROL", format!("unix:{}", control.display()))
             .env("FI_WORLDS_ACTIVITIES", "carmeet")
             .env("FI_WORLDS_MODES", "noob")
+            .env("FI_WORLDS_POOL_SPARES", "0")
             .env("FI_WORLDS_ANNOUNCE_SECONDS", "1")
             .env("FI_DS_TEST_GAME_SESSION_XUIDS", XUID)
             .env("FI_DS_TEST_GAME_SESSION_KIND", kind)

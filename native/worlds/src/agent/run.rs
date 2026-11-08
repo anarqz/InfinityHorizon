@@ -12,7 +12,9 @@
 //!    its retries; FM5's `race` one mixed spare too (CR-S99 §5: `game: "fm5"`,
 //!    `maxPlayers` ≤ 16), within the same `maxWorlds`; an announce per world every 15 s with
 //!    `world.state`'s peers, each answer feeding `world.context` then `world.admission`; an idle
-//!    extra world closed (`DELETE`);
+//!    extra world closed (`DELETE`). The spare is warm (W13, WORLDS_OFFICIAL.md §13): one EMPTY
+//!    world per group, opened on demand as players fill the others, up to `--max-worlds`; FH2's
+//!    groups also keep a pool spare (`pool: true`, §14, W17);
 //! 4. `catalog.need` answered with `catalog.parts`;
 //! 5. a car meet's `world.gameSession.request` answered from `POST …/game-sessions` (a call off
 //!    the loop, at most 14 s; DEDICATED_SERVER.md §4.4), `session: null` when refused or late;
@@ -69,6 +71,9 @@ struct World {
     id: String,
     mode: &'static str,
     activity: &'static str,
+    /// A pool world (WORLDS_OFFICIAL.md §14, W17): flagged FH2 sessions only, opened with
+    /// `OfficialWorldSettings.pool: true`.
+    pool: bool,
     peers: Vec<String>,
     /// Admission holds grants or a handshaking peer: someone is on the way in.
     busy: bool,
@@ -132,9 +137,12 @@ struct Agent {
     road_trip: Option<Map<String, Value>>,
     worlds: Vec<World>,
     deletions: Vec<Deletion>,
-    /// The minted id of the next world of a (mode, activity), reused by its retries (`mode` is
+    /// The minted id of the next world of a placement group, reused by its retries (`mode` is
     /// `"any"` for a mixed spare, OD-210).
-    minted: HashMap<(&'static str, &'static str), String>,
+    minted: HashMap<config::Spare, String>,
+    /// A server without pool worlds refused a pool spare (400, CR-S103 not deployed yet): no
+    /// pool spare until then (the next hello refresh tries again).
+    pool_off_until: Option<Instant>,
     open_after: Instant,
     open_failures: u32,
     server_full_until: Option<Instant>,
@@ -211,6 +219,7 @@ pub fn run(cfg: AgentConfig) -> i32 {
         worlds: Vec::new(),
         deletions: Vec::new(),
         minted: HashMap::new(),
+        pool_off_until: None,
         open_after: now,
         open_failures: 0,
         server_full_until: None,
@@ -422,21 +431,27 @@ impl Agent {
             // CR-S99 §5: FM5's seats when `race` is placed. The engine is spawned with the activities
             // of the hello before it; a later hello adding `race` gets its seats at the next start.
             let seats = self.cfg.engine_seats(&self.activities);
-            let mut child =
-                match engine::spawn(&self.cfg.bind.to_string(), &self.cfg.control, cap, seats) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        log::error(log_ids::AGENT_ENGINE_EXITED)
-                            .field("kind", "spawn")
-                            .field("restartInMs", delay.as_millis() as u64)
-                            .emit();
-                        if wait_signal(rx, delay) {
-                            return self.stopped();
-                        }
-                        delay = (delay * 2).min(BACKOFF_MAX);
-                        continue;
+            let memory = self.cfg.memory_limit_mb;
+            let mut child = match engine::spawn(
+                &self.cfg.bind.to_string(),
+                &self.cfg.control,
+                cap,
+                seats,
+                memory,
+            ) {
+                Ok(c) => c,
+                Err(_) => {
+                    log::error(log_ids::AGENT_ENGINE_EXITED)
+                        .field("kind", "spawn")
+                        .field("restartInMs", delay.as_millis() as u64)
+                        .emit();
+                    if wait_signal(rx, delay) {
+                        return self.stopped();
                     }
-                };
+                    delay = (delay * 2).min(BACKOFF_MAX);
+                    continue;
+                }
+            };
             log::info(log_ids::AGENT_ENGINE_STARTED)
                 .field("pid", child.id())
                 .emit();
@@ -864,6 +879,8 @@ impl Agent {
             id: made.world.clone(),
             mode: self.cfg.modes.first().copied().unwrap_or("noob"),
             activity: made.activity,
+            // the server's session world: never a spare, so its pool side is the server's
+            pool: false,
             peers: Vec::new(),
             busy: false,
             idle_since: Some(now),
@@ -1104,8 +1121,13 @@ impl Agent {
         }
     }
 
-    /// One spare open world per (game, activity), mixed (OD-210, CR-S101, W14), at most the cap;
-    /// an idle extra closed.
+    /// Pool spares are kept (W17): the setting is on and no server refusal holds them off.
+    fn pool_on(&self, now: Instant) -> bool {
+        self.cfg.pool_spares && self.pool_off_until.is_none_or(|t| now >= t)
+    }
+
+    /// One warm (empty) spare per placement group, mixed (OD-210, CR-S101, W14), clean then
+    /// pool (W17), opened on demand up to the cap; an idle extra closed (W13, §13).
     fn place(&mut self, control: &Control, now: Instant) {
         if now < self.open_after || self.ring.is_empty() {
             return;
@@ -1123,75 +1145,87 @@ impl Agent {
         }
         // worlds of an activity or mode no longer placed close once idle (OD-210, CR-S101: a
         // spare's mode is its activity's `spare_mode`, `"any"` when every mode is served)
+        let pool_on = self.pool_on(now);
         let stray = self.worlds.iter().find(|w| {
             !w.group
                 && !w.private
                 && (!self.activities.contains(&w.activity)
-                    || w.mode != config::spare_mode(&self.cfg.modes, w.activity))
+                    || w.mode != config::spare_mode(&self.cfg.modes, w.activity)
+                    || (w.pool && !pool_on))
                 && idle_for(w, now) >= IDLE_CLOSE
         });
         if let Some(id) = stray.map(|w| w.id.clone()) {
             self.close(control, &id, "idle");
             return;
         }
-        for (mode, activity) in config::spare_groups(&self.cfg.modes, &self.activities) {
-            let max = usize::from(self.cfg.max_players_of(activity));
+        for spare in config::spares(&self.cfg.modes, &self.activities, pool_on) {
             let group: Vec<&World> = self
                 .worlds
                 .iter()
                 // a private world is nobody's spare (§12.2 item 5): its group refills
-                .filter(|w| !w.group && !w.private && w.mode == mode && w.activity == activity)
+                .filter(|w| {
+                    !w.group
+                        && !w.private
+                        && w.mode == spare.mode
+                        && w.activity == spare.activity
+                        && w.pool == spare.pool
+                })
                 .collect();
-            // OD-194: a Road Trip past its vote takes no newcomers: it is no spare
-            let free = group
+            // warm: empty and nobody on the way in; OD-194: a Road Trip past its vote takes no
+            // newcomers, so it is never the spare
+            let seen: Vec<(bool, bool)> = group
                 .iter()
-                .filter(|w| w.peers.len() < max && !w.in_progress)
-                .count();
-            if free == 0 {
-                let server_full = self.server_full_until.is_some_and(|t| now < t);
-                let reason = if self.worlds.len() >= self.engine_cap.max(1) {
-                    Some("worlds")
-                } else if self.engine_full {
-                    Some("engine")
-                } else if server_full {
-                    Some("server")
-                } else {
-                    None
-                };
-                match reason {
-                    Some(reason) => {
-                        if !self.capacity_logged {
-                            self.capacity_logged = true;
-                            log::warn(log_ids::AGENT_CAPACITY)
-                                .field("reason", reason)
-                                .emit();
-                        }
-                    }
-                    None => {
-                        self.open(control, mode, activity);
-                        return;
-                    }
-                }
-            } else if free > 1 {
-                let extra = group
-                    .iter()
-                    .rev()
-                    .find(|w| w.peers.is_empty() && idle_for(w, now) >= IDLE_CLOSE)
-                    .map(|w| w.id.clone());
-                if let Some(id) = extra {
+                .map(|w| {
+                    (
+                        w.peers.is_empty() && !w.busy && !w.in_progress,
+                        idle_for(w, now) >= IDLE_CLOSE,
+                    )
+                })
+                .collect();
+            match config::spare_step(&seen) {
+                config::SpareStep::Keep => {}
+                config::SpareStep::Close(i) => {
+                    let id = group[i].id.clone();
                     self.close(control, &id, "idle");
                     return;
+                }
+                config::SpareStep::Open => {
+                    let server_full = self.server_full_until.is_some_and(|t| now < t);
+                    let reason = if self.worlds.len() >= self.engine_cap.max(1) {
+                        Some("worlds")
+                    } else if self.engine_full {
+                        Some("engine")
+                    } else if server_full {
+                        Some("server")
+                    } else {
+                        None
+                    };
+                    match reason {
+                        Some(reason) => {
+                            if !self.capacity_logged {
+                                self.capacity_logged = true;
+                                log::warn(log_ids::AGENT_CAPACITY)
+                                    .field("reason", reason)
+                                    .emit();
+                            }
+                        }
+                        None => {
+                            self.open(control, spare);
+                            return;
+                        }
+                    }
                 }
             }
         }
     }
 
-    fn open(&mut self, control: &Control, mode: &'static str, activity: &'static str) {
-        let id = self
-            .minted
-            .entry((mode, activity))
-            .or_insert_with(uuid_v4)
-            .clone();
+    fn open(&mut self, control: &Control, spare: config::Spare) {
+        let config::Spare {
+            mode,
+            activity,
+            pool,
+        } = spare;
+        let id = self.minted.entry(spare).or_insert_with(uuid_v4).clone();
         // `carmeet` without `carMeetLobby`: the official car meet lobby (both locations and their
         // free roam, DEDICATED_SERVER.md §16 decision 10); `race` an FM5 world (CR-S99 §5), which
         // has no FH2 field
@@ -1209,16 +1243,21 @@ impl Agent {
             match e.code.as_str() {
                 "capacity" => self.engine_full = true,
                 "exists" => {
-                    self.minted.remove(&(mode, activity));
+                    self.minted.remove(&spare);
                 }
                 _ => {}
             }
             self.open_failed();
             return;
         }
-        let body = json!({"game": game, "mode": mode, "activity": activity,
-            "maxPlayers": max_players})
-        .to_string();
+        let mut body = json!({"game": game, "mode": mode, "activity": activity,
+            "maxPlayers": max_players});
+        // WORLDS_OFFICIAL.md §14: `pool: true` only on a pool world (absent: clean), so a clean
+        // spare's body is unchanged for a server without pool worlds
+        if pool {
+            body["pool"] = Value::Bool(true);
+        }
+        let body = body.to_string();
         let reply = self.client.call(
             "PUT",
             &Self::world_target(&id),
@@ -1229,12 +1268,13 @@ impl Agent {
         let now = Instant::now();
         match reply {
             Ok(r) if r.status == 200 || r.status == 201 => {
-                self.minted.remove(&(mode, activity));
+                self.minted.remove(&spare);
                 self.open_failures = 0;
                 self.worlds.push(World {
                     id: id.clone(),
                     mode,
                     activity,
+                    pool,
                     peers: Vec::new(),
                     busy: false,
                     idle_since: Some(now),
@@ -1252,6 +1292,7 @@ impl Agent {
                     .world(&id)
                     .field("mode", mode)
                     .field("activity", activity)
+                    .field("pool", pool)
                     .emit();
                 self.apply(control, &id, &r.body);
                 return;
@@ -1266,13 +1307,28 @@ impl Agent {
                     409 if reason.as_deref() == Some("max_worlds") => {
                         self.server_full_until = Some(now + BACKOFF_MAX);
                     }
+                    // a server without pool worlds (CR-S103 not deployed) refuses the unknown
+                    // field: pool spares wait for the next hello refresh, clean ones go on
+                    400 if pool => {
+                        log::warn(log_ids::AGENT_POOL_REFUSED)
+                            .world(&id)
+                            .field("reason", reason)
+                            .emit();
+                        self.minted.remove(&spare);
+                        self.pool_off_until = Some(now + HELLO_REFRESH);
+                        let _ = control.request_retry(
+                            "world.close",
+                            json!({"worldId": id, "reason": "controller"}),
+                        );
+                        return;
+                    }
                     400 | 403 | 409 => {
                         log::warn(log_ids::AGENT_WORLD_REFUSED)
                             .world(&id)
                             .field("status", r.status)
                             .field("reason", reason)
                             .emit();
-                        self.minted.remove(&(mode, activity));
+                        self.minted.remove(&spare);
                     }
                     _ => self.refused("open", &r),
                 }

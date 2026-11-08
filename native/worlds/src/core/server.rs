@@ -36,12 +36,16 @@ pub const PROFILE: &str = "public";
 
 const HOUSEKEEPING_MS: u64 = 1000;
 pub(crate) const MIB: u64 = 1024 * 1024;
-/// Public budget: per world `4 MB + 3 MB × maxPlayers` against `limit − 20 MB` (§8).
+/// Public budget: per world `4 MB + seat MB × maxPlayers` against `limit − 20 MB` (§8); the
+/// seat share is the game's ([`crate::core::game::Game::seat_reserve_mb`]: 3 MB unless its
+/// measured worst case is smaller, FH2 2 MB).
 pub(crate) const WORLD_BASE_MB: u64 = 4;
 pub(crate) const SEAT_MB: u64 = 3;
-const BUDGET_HEADROOM_MB: u64 = 20;
-/// Public CPU guard: refuse opens while the rolling 60 s CPU is above 15 % of one core.
-const CPU_GUARD_PERMILLE: u64 = 150;
+pub(crate) const BUDGET_HEADROOM_MB: u64 = 20;
+/// Public CPU guard: refuse opens while the rolling 60 s CPU is above 60 % of one core (OD-218,
+/// W13: a 1 vCPU host's 100 players are estimated at 20-40 %, so the guard only stops opens near
+/// saturation and leaves the rest of the core to the relay, the agent and the OS).
+const CPU_GUARD_PERMILLE: u64 = 600;
 const CPU_WINDOW_MS: u64 = 60_000;
 /// Health: unhealthy when the loop lagged more than 5 s in the last 30 s.
 const LAG_UNHEALTHY_MS: u64 = 5000;
@@ -681,7 +685,7 @@ impl Server {
             return Err(self.refuse("seats"));
         }
         let reserve = if self.budgeted() {
-            WORLD_BASE_MB + SEAT_MB * spec.max_players as u64
+            WORLD_BASE_MB + game.seat_reserve_mb() * spec.max_players as u64
         } else {
             0
         };

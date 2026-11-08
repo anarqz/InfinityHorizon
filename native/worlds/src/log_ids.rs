@@ -63,4 +63,7 @@ pub const AGENT_WORLD_DELETED: &str = "agent.world.deleted";
 pub const AGENT_WORLD_ADMISSION: &str = "agent.world.admission";
 /// The server made one of this agent's worlds a private official world (WORLDS_OFFICIAL.md §12).
 pub const AGENT_WORLD_PRIVATE: &str = "agent.world.private";
+/// The server refused a pool spare (`OfficialWorldSettings.pool`, WORLDS_OFFICIAL.md §14) with
+/// 400: pool spares wait for the next hello refresh (5 min).
+pub const AGENT_POOL_REFUSED: &str = "agent.pool.refused";
 pub const AGENT_GAME_SESSION: &str = "agent.game_session";

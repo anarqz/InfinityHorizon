@@ -84,9 +84,11 @@ pub fn parse_role(args: &[String]) -> Result<Role, Invalid> {
     }
 }
 
-/// The `--max-seats` ceiling: `--max-worlds`' 8 at FM5's 16 seats (CR-S99 §1; OD-206 W6).
-/// FH2's own agent default stays 8 × 12 = 96.
-pub const PUBLIC_MAX_SEATS: u64 = 128;
+/// The `--max-worlds` ceiling (OD-218, W13): a technical bound above what a VM's player limit
+/// fills; the memory budget and the CPU guard bound a smaller VM below it (sao-1: 20).
+pub const PUBLIC_MAX_WORLDS: u64 = 32;
+/// The `--max-seats` ceiling: every world at FM5's 16 seats (CR-S99 §1; OD-206 W6), 32 × 16.
+pub const PUBLIC_MAX_SEATS: u64 = PUBLIC_MAX_WORLDS * 16;
 
 pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Command, Invalid> {
     let mut given: Vec<(&'static str, String)> = Vec::new();
@@ -158,7 +160,7 @@ pub fn parse(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<Co
             Some(v) => v.parse::<u64>().ok().filter(|n| ok(*n)).ok_or(opt),
         }
     };
-    let max_worlds = int("--max-worlds", 4, &|n| (1..=8).contains(&n))? as usize;
+    let max_worlds = int("--max-worlds", 4, &|n| (1..=PUBLIC_MAX_WORLDS).contains(&n))? as usize;
     let max_seats = int("--max-seats", 48, &|n| (1..=PUBLIC_MAX_SEATS).contains(&n))? as usize;
     let memory_limit_mb = int("--memory-limit-mb", 400, &|n| (128..=65_536).contains(&n))?;
     let drain_seconds = int("--drain-seconds", 25, &|n| n <= 300)?;
