@@ -106,6 +106,18 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         else Log("ui pipe: malformed InvitePrompt ignored");
         break;
     }
+    case 0x2A: { // protocol 10 (OD-211, W15): the friends sidebar
+        FriendsStateFrame state;
+        if (DecodeFriendsState(body, size, state)) SetFriendsState(std::move(state));
+        else Log("ui pipe: malformed FriendsState ignored");
+        break;
+    }
+    case 0x2C: {
+        FriendsResultFrame result;
+        if (DecodeFriendsResult(body, size, result)) SetFriendsResult(std::move(result));
+        else Log("ui pipe: malformed FriendsResult ignored");
+        break;
+    }
     case 0x28: { // protocol 8 (OD-210, W14): the private lobby's "Who can join"
         LobbyJoinModesFrame modes;
         if (DecodeLobbyJoinModes(body, size, modes)) SetLobbyJoinModes(std::move(modes));
@@ -314,6 +326,7 @@ void Session(HANDLE pipe) {
     }
     InvitesDisconnected(); // T-L3: no launcher to answer to: its prompts go
     FriendPickerDisconnected(); // T-L4: and so does the picker
+    FriendsDisconnected(); // W15: and the friends sidebar
     CloseHandle(read_event);
     CloseHandle(write_event);
 }
@@ -378,6 +391,9 @@ void SendFriendPickerAsk() { Queue(0x26, {}); }
 void SendInviteSend(const std::string &xuid) { Queue(0x27, EncodeInviteSend(xuid)); }
 
 void SendJoinModesSet(uint8_t modes) { Queue(0x29, EncodeJoinModesSet(modes)); }
+void SendFriendsAction(uint8_t kind, const std::string &id, const std::string &text) {
+    if (FriendsActionValid(kind, id, text)) Queue(0x2B, EncodeFriendsAction(kind, id, text));
+}
 
 } // namespace fi
 

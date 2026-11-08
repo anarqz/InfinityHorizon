@@ -95,6 +95,21 @@ void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, floa
 bool WorldsColumnOpen();
 void DrawWorldsColumn(ImDrawList *dl, float x, float w, float height, float alpha);
 
+// --- the friends sidebar (friends.cpp, OD-211, CR-S102, W15): pinned to the right of the guide, for every game
+void SetFriendsState(FriendsStateFrame state);       // any thread (0x2A)
+void SetFriendsResult(FriendsResultFrame result);    // any thread (0x2C): shown as a notice
+void FriendsDisconnected();                          // any thread: the launcher went away
+float FriendsSidebarWidth();                         // render thread: the sidebar's width, so the guide's columns stop short of it
+bool FriendsFocused();                               // render thread: the controller is in the sidebar
+bool FriendsTyping();                                // render thread: the on-screen keyboard is up (the game window's keys type there)
+void FriendsEnter();
+void FriendsLeave();
+void FriendsChar(char16_t c);                        // any thread: WM_CHAR from the game window while the guide is open
+bool FriendsKeyDown(unsigned vk);                    // the game window's key while the guide is open (true: consumed)
+bool FriendsNavigate(Nav nav);                       // render thread, while the guide is open (true: used)
+void FriendsTick();                                  // render thread, every frame: applies what arrived, asks for the list while the guide is open
+void DrawFriendsSidebar(ImDrawList *dl, float width, float height, float alpha); // render thread, inside the guide
+
 // --- voice chat (voice.cpp, OD-154, VOICE_CHAT.md §11): the launcher holds the state, the overlay shows it and asks
 // VoiceState and VoiceMember are in ui_frames.h (0x1B).
 void SetVoiceState(VoiceState state); // any thread
@@ -164,6 +179,7 @@ void SendWorldAction(uint8_t action, const std::string &xuid, const std::string 
 void SendInviteAnswer(const std::string &invite, bool accept); // 0x24 (protocol 6, T-L3)
 void SendFriendPickerAsk();                                   // 0x26 (protocol 7, T-L4): the pane's Invite friends
 void SendInviteSend(const std::string &xuid);                 // 0x27 (protocol 7, T-L4): a friend chosen in the picker
+void SendFriendsAction(uint8_t kind, const std::string &id, const std::string &text); // 0x2B (protocol 10, W15)
 void SendJoinModesSet(uint8_t modes);                         // 0x29 (protocol 8, OD-210 W14): the leader's "Who can join"
 
 } // namespace fi
