@@ -24,11 +24,72 @@ pub const ACTIVITIES: [&str; 3] = ["freeroam", "carmeet", "roadtrip"];
 /// The car meet lobby, which admits both modes by its activity (OD-180, WORLDS_OFFICIAL.md
 /// §11.1): its spare keeps the agent's first mode as `mode`, as before OD-210.
 pub const MIXED: &str = "carmeet";
-/// The default `--max-worlds`: one mixed spare per (game, activity) (OD-210, CR-S101, W14):
-/// free roam, the car meet lobby and Road Trip (3), FM5's race (1) when `race` is placed, with
-/// room for four more; the engine's public cap (§8: 8 × 40 MiB reserved fits the 400 MB limit)
-/// and `--max-seats` 8 × 12 = 96 (8 × 16 = 128 when `race` is placed).
-pub const DEFAULT_MAX_WORLDS: u64 = 8;
+/// The default `--max-worlds` (OD-218, W13; WORLDS_OFFICIAL.md §13): the safety ceiling of a
+/// 1 vCPU / 949 MB host (sao-1), above what its 100 FH2 players fill: at least 9 full worlds,
+/// one per activity partly filled, and the warm spares (three clean, three pool), with room
+/// for private lobbies. `--max-seats` 20 × 12 = 240 (20 × 16 = 320 when `race` is placed) and
+/// `--memory-limit-mb` 20 × 28 + 20 = 580 (§8).
+pub const DEFAULT_MAX_WORLDS: u64 = 20;
+/// The games with official pool worlds (WORLDS_OFFICIAL.md §14, CR-S103): FH2's flagged
+/// sessions play in pool worlds; FM5 has none (a flagged FM5 seat is ended instead).
+pub const POOL_GAMES: [&str; 1] = [GAME];
+
+/// A placement group the agent keeps one warm spare of (W13, W17): its mode and activity, and
+/// whether its worlds are pool worlds (`OfficialWorldSettings.pool`, WORLDS_OFFICIAL.md §14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Spare {
+    pub mode: &'static str,
+    pub activity: &'static str,
+    pub pool: bool,
+}
+
+/// Every group placed: the clean ones ([`spare_groups`]), then, with `pool`, the same groups of
+/// the [`POOL_GAMES`] as pool worlds (clean spares come first under the cap).
+pub fn spares(modes: &[&'static str], activities: &[&'static str], pool: bool) -> Vec<Spare> {
+    let groups = spare_groups(modes, activities);
+    let clean = groups.iter().map(|&(mode, activity)| Spare {
+        mode,
+        activity,
+        pool: false,
+    });
+    let pools = groups
+        .iter()
+        .filter(|(_, a)| pool && POOL_GAMES.contains(&game_of(a)))
+        .map(|&(mode, activity)| Spare {
+            mode,
+            activity,
+            pool: true,
+        });
+    clean.chain(pools).collect()
+}
+
+/// What one group's public worlds need (W13, WORLDS_OFFICIAL.md §13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpareStep {
+    /// No warm spare: open one.
+    Open,
+    /// More than one warm spare: close this extra one (an index into the group's list).
+    Close(usize),
+    Keep,
+}
+
+/// A group's step from its worlds, oldest first, each `(warm, idle_long)`: a warm spare is an
+/// empty world (no peer, nobody on the way in, not a Road Trip past its vote), the one the server
+/// promotes for a private create or a car meet session and fills last (its quick join seats the
+/// oldest world with a free seat). So a group always keeps exactly one empty world besides its
+/// partly filled ones; an extra empty one closes once idle long enough, newest first.
+pub fn spare_step(worlds: &[(bool, bool)]) -> SpareStep {
+    let warm = worlds.iter().filter(|(w, _)| *w).count();
+    if warm == 0 {
+        return SpareStep::Open;
+    }
+    if warm > 1
+        && let Some(i) = worlds.iter().rposition(|&(w, idle)| w && idle)
+    {
+        return SpareStep::Close(i);
+    }
+    SpareStep::Keep
+}
 /// The pools an official world may serve (`OfficialWorldSettings.mode`).
 pub const MODES: [&str; 2] = ["hardcore", "noob"];
 /// `OfficialWorldSettings.mode` of a mixed world: both modes (MATCHMAKING_API §2.11, CR-S101).
@@ -106,8 +167,13 @@ pub struct AgentConfig {
     /// `None`: the hello's `activities`.
     pub activities: Option<Vec<&'static str>>,
     pub modes: Vec<&'static str>,
-    /// The most worlds this VM keeps open (the engine's `--max-worlds`, 1-8, default 8).
+    /// The most worlds this VM keeps open (the engine's `--max-worlds`, 1-32, default 20).
     pub max_worlds: usize,
+    /// The engine's `--memory-limit-mb` (128-65536; default `max_worlds` FH2 worlds' §8
+    /// reservations plus the 20 MB headroom): at most what the engine's container may use.
+    pub memory_limit_mb: u64,
+    /// Keep pool spares beside the clean ones (WORLDS_OFFICIAL.md §14; `1` default, `0` off).
+    pub pool_spares: bool,
     /// Each FH2 world's `maxPlayers` (guests, 2-12).
     pub max_players: u8,
     /// Each FM5 world's `maxPlayers` (2-16, default 16; CR-S99 §5).
@@ -129,7 +195,20 @@ const OPTIONS: &[(&str, &str)] = &[
     ("--max-players", "FI_WORLDS_MAX_PLAYERS"),
     ("--fm5-max-players", "FI_WORLDS_FM5_MAX_PLAYERS"),
     ("--announce-seconds", "FI_WORLDS_ANNOUNCE_SECONDS"),
+    ("--memory-limit-mb", "FI_WORLDS_MEMORY_LIMIT_MB"),
+    ("--pool-spares", "FI_WORLDS_POOL_SPARES"),
 ];
+
+/// A world's §8 reservation: its base plus its game's seat share × `maxPlayers` (the engine's
+/// own rule, `core::server`).
+pub fn world_reserve_mb(game: &str, max_players: u8) -> u64 {
+    let seat = if game == GAME {
+        crate::fh2::SEAT_RESERVE_MB
+    } else {
+        crate::core::server::SEAT_MB
+    };
+    crate::core::server::WORLD_BASE_MB + seat * u64::from(max_players)
+}
 
 /// The default control socket (DEDICATED_SERVER.md §3.1).
 pub const DEFAULT_CONTROL: &str = "/run/fi-ds/control.sock";
@@ -219,13 +298,20 @@ pub fn parse(
         Some(t) => list(&t, &MODES).ok_or("FI_WORLDS_MODES")?,
     };
     let max_worlds = int("FI_WORLDS_MAX_WORLDS", DEFAULT_MAX_WORLDS, &|n| {
-        (1..=8).contains(&n)
+        (1..=crate::cli::PUBLIC_MAX_WORLDS).contains(&n)
     })? as usize;
     let max_players = int("FI_WORLDS_MAX_PLAYERS", 12, &|n| (2..=12).contains(&n))? as u8;
     let fm5_max_players = int("FI_WORLDS_FM5_MAX_PLAYERS", FM5_MAX_PLAYERS, &|n| {
         (2..=FM5_MAX_PLAYERS).contains(&n)
     })? as u8;
     let announce_seconds = int("FI_WORLDS_ANNOUNCE_SECONDS", 15, &|n| (1..=15).contains(&n))?;
+    let memory_default = max_worlds as u64 * world_reserve_mb(GAME, max_players)
+        + crate::core::server::BUDGET_HEADROOM_MB;
+    // the engine's own range (`--memory-limit-mb`, DEDICATED_SERVER.md §2)
+    let memory_limit_mb = int("FI_WORLDS_MEMORY_LIMIT_MB", memory_default.max(128), &|n| {
+        (128..=65_536).contains(&n)
+    })?;
+    let pool_spares = int("FI_WORLDS_POOL_SPARES", 1, &|n| n <= 1)? == 1;
     Ok(AgentConfig {
         server,
         vm_id,
@@ -236,6 +322,8 @@ pub fn parse(
         activities,
         modes,
         max_worlds,
+        memory_limit_mb,
+        pool_spares,
         max_players,
         fm5_max_players,
         announce_seconds,
@@ -446,8 +534,9 @@ mod tests {
         assert_eq!(c.modes, vec!["hardcore", "noob"]);
         assert_eq!(
             (c.max_worlds, c.max_players, c.announce_seconds),
-            (8, 12, 15)
+            (20, 12, 15)
         );
+        assert_eq!((c.memory_limit_mb, c.pool_spares), (580, true));
         let c = with(
             &[("FI_WORLDS_VM_ID", "env-vm"), ("FI_WORLDS_MODES", "noob")],
             &["--vm-id", "cli-vm", "--activities=roadtrip,freeroam"],
@@ -491,8 +580,14 @@ mod tests {
             ("FI_WORLDS_ACTIVITIES", ","),
             ("FI_WORLDS_MODES", "any"),
             ("FI_WORLDS_MAX_WORLDS", "0"),
-            ("FI_WORLDS_MAX_WORLDS", "9"),
+            ("FI_WORLDS_MAX_WORLDS", "33"),
             ("FI_WORLDS_MAX_WORLDS", "04"),
+            ("FI_WORLDS_MEMORY_LIMIT_MB", "127"),
+            ("FI_WORLDS_MEMORY_LIMIT_MB", "65537"),
+            ("FI_WORLDS_MEMORY_LIMIT_MB", "0580"),
+            ("FI_WORLDS_POOL_SPARES", "2"),
+            ("FI_WORLDS_POOL_SPARES", "true"),
+            ("FI_WORLDS_POOL_SPARES", "01"),
             ("FI_WORLDS_MAX_PLAYERS", "1"),
             ("FI_WORLDS_MAX_PLAYERS", "13"),
             ("FI_WORLDS_ANNOUNCE_SECONDS", "16"),
@@ -518,7 +613,7 @@ mod tests {
 
     /// T2 (SAURON, 2026-11-07): the engine refused `--max-seats` 128 and restarted forever. Every
     /// placement and setting the agent allows gives seats the engine's public profile accepts;
-    /// FH2's default stays 96.
+    /// FH2's default is 20 × 12 = 240 (W13).
     #[test]
     fn the_engines_seats_fit_its_public_bound_for_every_placement() {
         let key = if cfg!(windows) {
@@ -527,11 +622,11 @@ mod tests {
             "/var/lib/fi-worlds/agent.key"
         };
         let base = with(&[("FI_WORLDS_KEY_FILE", key)], &[]).unwrap();
-        assert_eq!(base.engine_seats(&ACTIVITIES), 96);
-        assert_eq!(base.engine_seats(&ALL_ACTIVITIES), 128);
-        assert_eq!(base.engine_seats(&FM5_ACTIVITIES), 128);
+        assert_eq!(base.engine_seats(&ACTIVITIES), 240);
+        assert_eq!(base.engine_seats(&ALL_ACTIVITIES), 320);
+        assert_eq!(base.engine_seats(&FM5_ACTIVITIES), 320);
         let placements: [&[&str]; 4] = [&ACTIVITIES, &FM5_ACTIVITIES, &ALL_ACTIVITIES, &[]];
-        for worlds in 1..=8 {
+        for worlds in 1..=crate::cli::PUBLIC_MAX_WORLDS as usize {
             for fh2 in 2..=12u8 {
                 for fm5 in 2..=16u8 {
                     let c = AgentConfig {
@@ -568,12 +663,130 @@ mod tests {
                 std::path::Path::new("/run/fi-ds/control.sock"),
                 base.max_worlds,
                 base.engine_seats(placed),
+                base.memory_limit_mb,
             );
-            assert!(
-                crate::cli::parse(&args[1..], &|_| None).is_ok(),
-                "{placed:?}: {args:?}"
+            let Ok(crate::cli::Command::Run(rc)) = crate::cli::parse(&args[1..], &|_| None) else {
+                panic!("{placed:?}: {args:?}");
+            };
+            assert_eq!(
+                (rc.max_worlds, rc.max_seats, rc.memory_limit_mb),
+                (base.max_worlds, base.engine_seats(placed), 580)
             );
         }
+        // the largest setting the agent accepts still parses
+        let max = with(
+            &[
+                ("FI_WORLDS_KEY_FILE", "/var/lib/fi-worlds/agent.key"),
+                ("FI_WORLDS_MAX_WORLDS", "32"),
+            ],
+            &[],
+        )
+        .unwrap();
+        let args = super::super::engine::serve_args(
+            "0.0.0.0:5101",
+            std::path::Path::new("/run/fi-ds/control.sock"),
+            max.max_worlds,
+            max.engine_seats(&ALL_ACTIVITIES),
+            max.memory_limit_mb,
+        );
+        assert!(crate::cli::parse(&args[1..], &|_| None).is_ok(), "{args:?}");
+    }
+
+    /// W13 (OD-218): the default ceiling's §8 budget. 20 FH2 worlds at 12 seats reserve 28 MB
+    /// each (4 + 2 × 12), 560 MB plus the 20 MB headroom; FM5's 16-seat worlds 52 MB each.
+    #[test]
+    fn the_memory_limit_follows_the_ceiling_unless_set() {
+        let key = if cfg!(windows) {
+            "C:\\fi-worlds\\agent.key"
+        } else {
+            "/var/lib/fi-worlds/agent.key"
+        };
+        assert_eq!(world_reserve_mb(GAME, 12), 28);
+        assert_eq!(world_reserve_mb(FM5, 16), 52);
+        let c = with(&[("FI_WORLDS_KEY_FILE", key)], &[]).unwrap();
+        assert_eq!((c.max_worlds, c.memory_limit_mb), (20, 580));
+        let c = with(
+            &[
+                ("FI_WORLDS_KEY_FILE", key),
+                ("FI_WORLDS_MAX_WORLDS", "16"),
+                ("FI_WORLDS_MAX_PLAYERS", "8"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(c.memory_limit_mb, 16 * 20 + 20);
+        // a small ceiling still gives the engine its smallest limit
+        let c = with(
+            &[("FI_WORLDS_KEY_FILE", key), ("FI_WORLDS_MAX_WORLDS", "1")],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(c.memory_limit_mb, 128);
+        let c = with(
+            &[("FI_WORLDS_KEY_FILE", key)],
+            &["--memory-limit-mb", "600", "--pool-spares=0"],
+        )
+        .unwrap();
+        assert_eq!((c.memory_limit_mb, c.pool_spares), (600, false));
+    }
+
+    /// W17 (WORLDS_OFFICIAL.md §14): a pool spare per FH2 group beside each clean one, clean
+    /// first; FM5's race has none; `pool` off keeps the clean ones only.
+    #[test]
+    fn pool_spares_are_fh2s_and_come_after_the_clean_ones() {
+        let s = spares(&MODES, &ALL_ACTIVITIES, true);
+        let names: Vec<(&str, &str, bool)> =
+            s.iter().map(|g| (g.mode, g.activity, g.pool)).collect();
+        assert_eq!(
+            names,
+            vec![
+                ("any", "freeroam", false),
+                ("hardcore", "carmeet", false),
+                ("any", "roadtrip", false),
+                ("any", "race", false),
+                ("any", "freeroam", true),
+                ("hardcore", "carmeet", true),
+                ("any", "roadtrip", true),
+            ]
+        );
+        assert!(s.iter().all(|g| !g.pool || game_of(g.activity) == GAME));
+        assert_eq!(
+            spares(&MODES, &ALL_ACTIVITIES, false),
+            spare_groups(&MODES, &ALL_ACTIVITIES)
+                .into_iter()
+                .map(|(mode, activity)| Spare {
+                    mode,
+                    activity,
+                    pool: false
+                })
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            spares(&MODES, &FM5_ACTIVITIES, true)
+                .iter()
+                .all(|g| !g.pool)
+        );
+        // every spare of the default placement fits the default ceiling with room for the
+        // players' worlds (at least 9 full FH2 worlds for 100 players, OD-218)
+        assert!(s.len() + 9 < DEFAULT_MAX_WORLDS as usize);
+    }
+
+    /// W13 (WORLDS_OFFICIAL.md §13): one empty world per group, whatever its partly filled ones;
+    /// an extra empty one closes once idle, newest first; a busy or young one stays.
+    #[test]
+    fn a_group_keeps_exactly_one_warm_spare() {
+        use SpareStep::*;
+        assert_eq!(spare_step(&[]), Open);
+        // partly filled worlds are no spare: a private create needs an empty one
+        assert_eq!(spare_step(&[(false, false), (false, false)]), Open);
+        assert_eq!(spare_step(&[(false, false), (true, false)]), Keep);
+        assert_eq!(spare_step(&[(true, true)]), Keep);
+        assert_eq!(
+            spare_step(&[(true, true), (false, false), (true, true)]),
+            Close(2)
+        );
+        assert_eq!(spare_step(&[(true, true), (true, false)]), Close(0));
+        assert_eq!(spare_step(&[(true, false), (true, false)]), Keep);
     }
 
     /// CR-S99 §5: `race` is FM5's activity, its worlds seat up to 16; FH2's are unchanged.

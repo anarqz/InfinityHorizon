@@ -187,7 +187,8 @@ impl RelaySettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::server::{MIB, SEAT_MB, WORLD_BASE_MB};
+    use crate::core::server::{MIB, WORLD_BASE_MB};
+    use crate::fh2::SEAT_RESERVE_MB;
 
     #[test]
     fn a_full_world_of_histories_fits_one_joiners_queue() {
@@ -221,11 +222,12 @@ mod tests {
             );
             let world = crate::fh2::engine::world_worst_case_bytes(&s, seats) as u64
                 + crate::core::world_tables_worst_case_bytes() as u64;
-            let reserved = (WORLD_BASE_MB + SEAT_MB * seats as u64) * MIB;
+            // FH2's own seat share (W13: 2 MB, was the generic 3 MB)
+            let reserved = (WORLD_BASE_MB + SEAT_RESERVE_MB * seats as u64) * MIB;
             assert!(world <= reserved, "{seats}: {world} of {reserved}");
             if seats == 12 {
-                // the full world: comfortably inside 3 MB per seat (at most two thirds of it)
-                assert!(world * 3 <= 2 * SEAT_MB * MIB * 12, "{world}");
+                // the full world: at most 80 % of its reservation (21.3 of 28 MiB)
+                assert!(world * 5 <= 4 * reserved, "{world} of {reserved}");
             }
         }
     }

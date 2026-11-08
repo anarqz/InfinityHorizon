@@ -101,6 +101,12 @@ pub trait Game: std::marker::Send + Sync {
         super::world::MAX_PLAYERS_DEFAULT
     }
 
+    /// The memory a seat reserves at `world.open` on top of the world's base (contract §8): 3 MB
+    /// unless the game bounds its per-seat worst case lower by a test (FH2 2 MB).
+    fn seat_reserve_mb(&self) -> u64 {
+        super::server::SEAT_MB
+    }
+
     /// Validates `world.open`'s game-scoped fields and makes the world's game side. Errors are
     /// `bad_request` naming the field. Also returns the notices of the open (catalog missing...).
     fn open(&self, info: OpenInfo) -> Result<(Box<dyn GameWorld>, Vec<Notice>), CmdError>;

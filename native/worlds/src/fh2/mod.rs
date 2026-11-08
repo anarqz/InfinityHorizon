@@ -46,6 +46,11 @@ pub use settings::RelaySettings;
 pub use voice::VoiceMode;
 
 pub const GAME_ID: &str = "fh2";
+/// An FH2 seat's share of the public memory budget (contract §8, W13): the measured worst case
+/// is 1.52 MB per peer in a full world and 1.89 MB in a one-seat one (with the world's tables,
+/// test `the_public_worst_case_fits_the_section_8_reservation`), so 2 MB per seat holds every
+/// world size from 1 to 12.
+pub const SEAT_RESERVE_MB: u64 = 2;
 
 /// `world.voice.lobbyMuted`, `world.voiceBlocks.blocks`.
 pub const VOICE_LIST_MAX: usize = 64;
@@ -293,6 +298,10 @@ fn number(v: f64) -> Value {
 impl Game for Fh2 {
     fn id(&self) -> &'static str {
         GAME_ID
+    }
+
+    fn seat_reserve_mb(&self) -> u64 {
+        SEAT_RESERVE_MB
     }
 
     fn command(&self, op: &str, o: Obj) -> Option<CmdResult> {

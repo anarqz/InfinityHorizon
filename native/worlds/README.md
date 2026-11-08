@@ -63,8 +63,8 @@ worlds relay                    # not implemented yet: exit 7
 | `--game-db` | `FI_DS_GAME_DB` | none; deprecated and ignored (the catalogs come by `catalog.set` / `catalog.parts`) |
 | `--grant-keys` | `FI_DS_GRANT_VERIFY_KEYS` | none (`keys.set` replaces it) |
 | `--bind` | `FI_DS_BIND` | required: the one public UDP socket `addr:port` (`[::]:port` dual-stack) |
-| `--max-worlds` | `FI_DS_MAX_WORLDS` | 4 (1-8) |
-| `--max-seats` | `FI_DS_MAX_SEATS` | 48 (1-128) |
+| `--max-worlds` | `FI_DS_MAX_WORLDS` | 4 (1-32) |
+| `--max-seats` | `FI_DS_MAX_SEATS` | 48 (1-512) |
 | `--memory-limit-mb` | `FI_DS_MEMORY_LIMIT_MB` | 400 (128-65536) |
 | `--drain-seconds` | `FI_DS_DRAIN_SECONDS` | 25 (0-300) |
 | `--stats-seconds` | `FI_DS_STATS_SECONDS` | 60 (0 or 10-3600) |
@@ -79,9 +79,10 @@ authentication failed, 5 no common protocol version, 6 public socket or budget n
 The "host's launcher" of official worlds on a Worlds host: it signs every call to the server's
 `/mm/v1/official` routes with the VM's node key (`FI-World-Agent`), spawns and supervises
 `worlds serve --profile public --bind <FI_WORLDS_BIND>` from its own executable (restarted with
-backoff; the worlds of an ended engine are `DELETE`d), keeps one spare open world per (game,
+backoff; the worlds of an ended engine are `DELETE`d), keeps one warm (empty) spare world per (game,
 activity), mixed (`mode: "any"`) when it serves both modes (OD-210, CR-S101; the car meet lobby
-keeps the first mode), announces each every 15 s with `world.state`'s peers, feeds each answer to
+keeps the first mode), opened on demand as players fill the others up to `--max-worlds` and closed
+when idle extras (W13), plus a pool spare (`pool: true`) per FH2 group for flagged sessions (W17), announces each every 15 s with `world.state`'s peers, feeds each answer to
 `world.context` and `world.admission`, and answers `catalog.need` from the server-side catalog.
 SIGTERM: every world `DELETE`d, the engine shut down, exit 0.
 
@@ -95,7 +96,9 @@ SIGTERM: every world `DELETE`d, the engine shut down, exit 0.
 | `--catalog` | `FI_WORLDS_CATALOG` | none: the server-side catalog SQLite, opened read-only and immutable |
 | `--activities` | `FI_WORLDS_ACTIVITIES` | the hello's `activities` (`freeroam`, `roadtrip`); Road Trip only with catalog events |
 | `--modes` | `FI_WORLDS_MODES` | `hardcore,noob` |
-| `--max-worlds` | `FI_WORLDS_MAX_WORLDS` | 4 (1-8; the engine's `--max-worlds`) |
+| `--max-worlds` | `FI_WORLDS_MAX_WORLDS` | 20 (1-32; the engine's `--max-worlds`; `--max-seats` = it × the largest `maxPlayers` placed) |
+| `--memory-limit-mb` | `FI_WORLDS_MEMORY_LIMIT_MB` | `max-worlds` × (4 + 2 × `max-players`) + 20 (580 at the defaults; 128-65536; the engine's `--memory-limit-mb`, at most the container's limit) |
+| `--pool-spares` | `FI_WORLDS_POOL_SPARES` | 1 (`0` keeps clean spares only) |
 | `--max-players` | `FI_WORLDS_MAX_PLAYERS` | 12 (2-12 guests per world) |
 | `--announce-seconds` | `FI_WORLDS_ANNOUNCE_SECONDS` | 15 (1-15; less only in tests) |
 
