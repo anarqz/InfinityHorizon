@@ -245,7 +245,28 @@ public partial class MainWindow : Window
 
     private async void OnAbandonSeed(object sender, RoutedEventArgs e) => await _vm.AbandonSeedAsync();
 
-    private void OnChooseProfile(object sender, RoutedEventArgs e) => _vm.ChooseProfile(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
+    private void OnChooseProfile(object sender, RoutedEventArgs e) => _vm.PickProfileRow((ProfileRow)((FrameworkElement)sender).DataContext);
+
+    // OD-214: the Start panel of a profile without a career of the chosen game
+    private async void OnStartCareerFresh(object sender, RoutedEventArgs e) => await _vm.StartCareerFreshAsync();
+
+    private async void OnStartCareerExisting(object sender, RoutedEventArgs e) => await _vm.StartCareerFromExistingAsync();
+
+    private void OnCancelCareerStart(object sender, RoutedEventArgs e) => _vm.CancelCareerStart();
+
+    private void OnDeleteStartCareer(object sender, RoutedEventArgs e)
+    {
+        _vm.DeleteStartCareer();
+        if (_vm.ShowDeleteProfile)
+            Dispatcher.BeginInvoke(() => DeleteProfilePanel.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnSeedDeleteCareer(object sender, RoutedEventArgs e)
+    {
+        _vm.DeleteCareerFromSeed();
+        if (_vm.ShowDeleteProfile)
+            Dispatcher.BeginInvoke(() => DeleteProfilePanel.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
 
     private async void OnCreateProfile(object sender, RoutedEventArgs e) => await _vm.CreateProfileAsync();
 
