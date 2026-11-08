@@ -9,114 +9,45 @@ using Infinity.Core.Process;
 namespace Infinity.App;
 
 /// <summary>
-/// CR-L41.2, DISCORD_PRESENCE.md §4: "Join from link". A link (or world id) comes from the field, from a protocol launch
-/// (<c>infinity-horizon://join/&lt;worldId&gt;</c>) or from a second launch handed over through <c>launcher.lock</c>; it only fills
-/// the field, the player presses Join. The join is the overlay's own (<c>POST /mm/v1/join {worldId}</c> through the session's
-/// worlds bridge, with the game ticket): it needs the game loaded (the server's checks and the bridge's readiness rule), so
-/// outside a loaded game the world waits here, joins as soon as the game is ready, and the player is told to choose
-/// FREE ROAM ONLINE. A mode refusal offers a profile of the other mode.
+/// CR-L41.2, DISCORD_PRESENCE.md §4: a lobby link (<c>infinity-horizon://join/&lt;worldId&gt;</c>) arrives from a protocol launch or from a
+/// second launch handed over through <c>launcher.lock</c>: the Join button of a Discord card or of the play dashboard (PLAY_DASHBOARD.md
+/// §5.1). Owner 2026-11-08: the "Join from link" field (paste a link on PLAY) is gone; the deep link stays because those two buttons open it.
+/// The player already chose to join there (and the browser asked before opening the launcher), so the world waits here and joins as soon as
+/// the game is loaded (the overlay's own <c>POST /mm/v1/join {worldId}</c> through the session's worlds bridge, with the game ticket); every
+/// step is said in the status line. A link waits at most <see cref="PendingJoinLifetime"/>.
 /// </summary>
 public sealed partial class ShellViewModel
 {
-    private string _joinLinkDraft = string.Empty;
-    private string? _joinLinkStatus;
     private string? _pendingJoin;
-    private string? _joinModeOffer;
-    private string? _joinModeWorld;
+    private DateTimeOffset _pendingJoinAt;
     private bool _joining;
     private LauncherHandoff? _handoff;
+
+    /// <summary>How long a received link waits for the game to load before it is dropped (said in the status line).</summary>
+    internal static readonly TimeSpan PendingJoinLifetime = TimeSpan.FromMinutes(15);
 
     /// <summary>The window comes to the front (a link arrived from a second launch).</summary>
     public event Action? ActivateRequested;
 
-    public string JoinLinkDraft
-    {
-        get => _joinLinkDraft;
-        set
-        {
-            _joinLinkDraft = value ?? string.Empty;
-            Changed();
-            Changed(nameof(CanJoinFromLink));
-            Changed(nameof(JoinLinkInvalid));
-            Changed(nameof(ShowJoinLinkForm));
-        }
-    }
-
-    public bool ShowJoinFromLink => SignedIn && !OfflineMode;
-
-    private bool _joinLinkOpen;
-
-    /// <summary>
-    /// Owner 2026-11-08 (games-5): on PLAY, Join from link is a small link under the centered column; its field opens on a click, and stays
-    /// open while it holds a link (a protocol launch fills it) or a join is pending or has something to say.
-    /// </summary>
-    public bool ShowJoinLinkForm => ShowJoinFromLink && (_joinLinkOpen || _joinLinkDraft.Length > 0 || HasPendingJoin || HasJoinLinkStatus);
-
-    public void ToggleJoinLink()
-    {
-        _joinLinkOpen = !_joinLinkOpen;
-        Changed(nameof(ShowJoinLinkForm));
-    }
-
-    public bool JoinLinkInvalid => _joinLinkDraft.Trim().Length > 0 && JoinLink.WorldId(_joinLinkDraft) is null;
-
-    public bool CanJoinFromLink => SignedIn && !_joining && JoinLink.WorldId(_joinLinkDraft) is not null;
-
-    public string? JoinLinkStatus
-    {
-        get => _joinLinkStatus;
-        private set { _joinLinkStatus = value; Changed(); Changed(nameof(HasJoinLinkStatus)); Changed(nameof(ShowJoinLinkForm)); }
-    }
-
-    public bool HasJoinLinkStatus => !string.IsNullOrEmpty(_joinLinkStatus);
-
-    public bool HasPendingJoin => _pendingJoin is not null;
-
-    /// <summary>A mode refusal and a profile of that mode on the account: offer switching to it.</summary>
-    public bool ShowJoinModeSwitch => _joinModeOffer is not null && JoinModeProfile is not null;
-
-    public bool CanSwitchJoinMode => ShowJoinModeSwitch && !Playing && !_busy;
-
-    public string JoinModeSwitchLabel => S[_joinModeOffer == "hardcore" ? "join.switch_hardcore" : "join.switch_noob"];
-
-    private Infinity.Core.Api.Profile? JoinModeProfile => _joinModeOffer is { } mode
-        ? _session?.Me?.Profiles.FirstOrDefault(p => p.Game == _gate.Game && p.Mode == mode && p.Status == "active") : null;
-
-    public async Task JoinFromLinkAsync()
-    {
-        if (JoinLink.WorldId(_joinLinkDraft) is not { } worldId) { JoinLinkStatus = S["join.invalid"]; return; }
-        if (!CanJoinFromLink) return;
-        _joinModeOffer = _joinModeWorld = null;
-        Log("link: join asked");
-        if (_playWorlds is { } worlds && GameStarted && worlds.GameReadiness.CurrentGeneration is not null)
-        {
-            await JoinNowAsync(worlds, worldId);
-            return;
-        }
-        _pendingJoin = worldId;
-        JoinLinkStatus = S[Playing ? "join.waiting_game" : "join.press_play"];
-        ChangedJoin();
-    }
-
-    public void CancelPendingJoin()
-    {
-        _pendingJoin = null;
-        JoinLinkStatus = null;
-        ChangedJoin();
-    }
-
     /// <summary>The presence tick: a waiting link joins once the session's game reports ready.</summary>
     private void TryPendingJoin()
     {
-        if (_pendingJoin is not { } worldId || _joining || !GameStarted || _playWorlds is not { } worlds || worlds.GameReadiness.CurrentGeneration is null) return;
-        _ = JoinNowAsync(worlds, worldId);
+        if (_pendingJoin is null || _joining) return;
+        if (DateTimeOffset.UtcNow - _pendingJoinAt > PendingJoinLifetime)
+        {
+            _pendingJoin = null;
+            Message = S["join.expired"];
+            Log("link: expired before the game loaded");
+            return;
+        }
+        if (!GameStarted || _playWorlds is not { } worlds || worlds.GameReadiness.CurrentGeneration is null) return;
+        _ = JoinNowAsync(worlds, _pendingJoin);
     }
 
     private async Task JoinNowAsync(Infinity.Core.Matchmaking.WorldsBridge worlds, string worldId)
     {
         if (_joining) return;
         _joining = true;
-        ChangedJoin();
         try
         {
             using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(45));
@@ -124,64 +55,41 @@ public sealed partial class ShellViewModel
             if (result.Result == UiJoin.Reserved)
             {
                 _pendingJoin = null;
-                JoinLinkStatus = S["join.reserved"];
+                Message = S["join.reserved"];
                 OverlayToast(1, S["join.reserved_title"], S["worlds.reserved"]);
                 Log("link: seat reserved");
             }
-            else if (result.Result == UiJoin.NotAllowed && worlds.LastJoinRefusal == "mode")
-            {
-                _pendingJoin = null;
-                _joinModeWorld = worldId;
-                _joinModeOffer = ProfileHardcore ? "noob" : "hardcore";
-                JoinLinkStatus = result.Message;
-                Log("link: refused for the profile's mode");
-            }
             else if (worlds.GameReadiness.CurrentGeneration is null)
             {
-                JoinLinkStatus = S["join.waiting_game"]; // the game left free roam meanwhile: kept for the next ready sample
+                Message = S["join.waiting_game"]; // the game left free roam meanwhile: kept for the next ready sample
             }
             else
             {
                 _pendingJoin = null;
-                JoinLinkStatus = result.Message;
-                Log("link: join refused (" + result.Result + ")");
+                Message = result.Message; // a mode refusal says so: the player picks the other profile on PLAY
+                Log("link: join refused (" + result.Result + (worlds.LastJoinRefusal is { } why ? ", " + why : string.Empty) + ")");
             }
         }
         catch (Exception error) when (error is OperationCanceledException or HttpRequestException or IOException or TimeoutException)
         {
             _pendingJoin = null;
-            JoinLinkStatus = S["worlds.join_failed"];
+            Message = S["worlds.join_failed"];
             Log("link: join failed (" + error.GetType().Name + ")");
         }
         finally
         {
             _joining = false;
-            ChangedJoin();
         }
     }
 
-    /// <summary>Chooses the account's profile of the lobby's mode; the link waits for that profile's Play.</summary>
-    public void SwitchJoinMode()
-    {
-        if (!CanSwitchJoinMode || JoinModeProfile is not { } profile) return;
-        var world = _joinModeWorld;
-        _joinModeOffer = _joinModeWorld = null;
-        ChooseProfile(profile);
-        if (world is not null)
-        {
-            _pendingJoin = world;
-            JoinLinkStatus = S["join.press_play"];
-        }
-        ChangedJoin();
-    }
-
-    /// <summary>A link from the command line or from a second launch: fills the field and shows it, nothing joins by itself.</summary>
+    /// <summary>A link from the command line or from a second launch: it waits for the game to load, and the status line says what happens.</summary>
     internal void ReceiveJoinLink(string worldId)
     {
         if (!JoinLink.IsWorldId(worldId)) return;
-        JoinLinkDraft = worldId;
+        _pendingJoin = worldId.ToLowerInvariant();
+        _pendingJoinAt = DateTimeOffset.UtcNow;
         if (InShell) OpenHome();
-        JoinLinkStatus = S[SignedIn ? "join.received" : "join.sign_in_first"];
+        Message = S[!SignedIn ? "join.sign_in_first" : Playing ? "join.waiting_game" : "join.press_play"];
         Log("link: received");
         ActivateRequested?.Invoke();
     }
@@ -209,14 +117,5 @@ public sealed partial class ShellViewModel
         {
             Log("link: registration not written (" + error.GetType().Name + ")");
         }
-    }
-
-    private void ChangedJoin()
-    {
-        Changed(nameof(CanJoinFromLink));
-        Changed(nameof(HasPendingJoin));
-        Changed(nameof(ShowJoinModeSwitch));
-        Changed(nameof(CanSwitchJoinMode));
-        Changed(nameof(JoinModeSwitchLabel));
     }
 }

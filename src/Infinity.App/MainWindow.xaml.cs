@@ -339,12 +339,18 @@ public partial class MainWindow : Window
     // SAVE_MANAGER_UX (OD-207, OD-214): the save manager's screens
     private void OnSavesBack(object sender, RoutedEventArgs e) => _vm.SavesBack();
     private void OnSavesHome(object sender, RoutedEventArgs e) => _vm.SavesHome();
-    private async void OnSavesPrimary(object sender, RoutedEventArgs e) => await _vm.SavesPrimaryAsync((SaveCard)((FrameworkElement)sender).DataContext);
     private void OnSavesMenu(object sender, RoutedEventArgs e) => _vm.ToggleSavesMenu((SaveCard)((FrameworkElement)sender).DataContext);
-    private async void OnSavesMenuItem(object sender, RoutedEventArgs e)
+    private void OnSavesMenuItem(object sender, RoutedEventArgs e)
     {
         var element = (FrameworkElement)sender;
-        if (element.Tag is SaveCard card && element.DataContext is MenuAction action) await _vm.SavesMenuAsync(card, action);
+        if (element.Tag is SaveCard card && element.DataContext is MenuAction action) _vm.SavesMenu(card, action);
+    }
+    // owner 2026-11-08: each game row's own ⋯ (its career actions)
+    private void OnGameRowMenu(object sender, RoutedEventArgs e) => _vm.ToggleGameRowMenu((ProfileGameRow)((FrameworkElement)sender).DataContext);
+    private async void OnGameRowMenuItem(object sender, RoutedEventArgs e)
+    {
+        var element = (FrameworkElement)sender;
+        if (element.Tag is ProfileGameRow row && element.DataContext is MenuAction action) await _vm.GameRowMenuAsync(row, action);
     }
     private void OnSavesCreate(object sender, RoutedEventArgs e) => _vm.OpenCreateProfile((SaveCard)((FrameworkElement)sender).DataContext);
     private void OnOpenManageSaves(object sender, RoutedEventArgs e) => _vm.OpenManageSaves();
@@ -651,18 +657,6 @@ public partial class MainWindow : Window
     private async void OnModerationApply(object sender, RoutedEventArgs e) => await _vm.ApplyModerationAsync();
 
     private void OnNavSetup(object sender, RoutedEventArgs e) => _vm.OpenSetup();
-
-    // CR-L41.2: Join from link
-    private async void OnJoinFromLink(object sender, RoutedEventArgs e) => await _vm.JoinFromLinkAsync();
-    private void OnToggleJoinLink(object sender, RoutedEventArgs e) => _vm.ToggleJoinLink();
-    private async void OnJoinLinkKey(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key != System.Windows.Input.Key.Enter) return;
-        e.Handled = true;
-        await _vm.JoinFromLinkAsync();
-    }
-    private void OnCancelPendingJoin(object sender, RoutedEventArgs e) => _vm.CancelPendingJoin();
-    private void OnSwitchJoinMode(object sender, RoutedEventArgs e) => _vm.SwitchJoinMode();
 
     /// <summary>Mods' "Use a different catalog…": Configure, scrolled to its catalog card.</summary>
     private void OnOpenCatalogSetting(object sender, RoutedEventArgs e)

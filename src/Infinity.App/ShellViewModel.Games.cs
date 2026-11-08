@@ -32,8 +32,23 @@ public sealed partial class ShellViewModel
 {
     public ObservableCollection<GameCard> GameCards { get; } = [];
 
-    /// <summary>The chosen game; FH2 until one is.</summary>
-    private GameDefinition CurrentGame => GameDefinition.ById(_gate.Game) ?? GameDefinition.Fh2;
+    /// <summary>The chosen game; FH2 until one is. While the Profiles page reads another game's row, that game (<see cref="InGame"/>).</summary>
+    private GameDefinition CurrentGame => GameDefinition.ById(CurrentGameId) ?? GameDefinition.Fh2;
+
+    /// <summary>The chosen game's id, or the game a Profiles row is being read for (<see cref="InGame"/>).</summary>
+    private string? CurrentGameId => _gameScope ?? _gate.Game;
+
+    /// <summary>Owner 2026-11-08 (PROFILES_ROWS): a game the page reads synchronously for one row (its files, chips, board flags); never across an await.</summary>
+    private string? _gameScope;
+
+    /// <summary>Runs <paramref name="read"/> with <paramref name="game"/> as the current game (pure reads of this PC's files and /me, on the UI thread).</summary>
+    private T InGame<T>(GameDefinition game, Func<T> read)
+    {
+        var outer = _gameScope;
+        _gameScope = game.Id;
+        try { return read(); }
+        finally { _gameScope = outer; }
+    }
 
     /// <summary>The offline list: every available game, as the server's list would describe it.</summary>
     private void FillOfflineGames()
@@ -116,7 +131,10 @@ public sealed partial class ShellViewModel
         _tileArt[key] = art;
         _tileArtLoading.Remove(key);
         Log(art.Image is null ? $"play: {game.Id} cover {problem}; the styled tile is shown" : $"play: {game.Id} cover read from the game folder");
-        if (_install?.Root == root) FillGameCards();
+        if (_install?.Root != root) return;
+        FillGameCards();
+        if (ShowSaveManager && _nav.Current == SavesScreen.Home) FillSaveCards(); // the Profiles rows' small covers come from the same cache
+
     }
 
     private static (ImageSource? Image, string? Problem) DecodeCover(CoverRead read)

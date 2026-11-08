@@ -313,7 +313,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>CR-S69: a Supporter's account carries the small "Supporter" badge next to its e-mail; nothing else depends on it.</summary>
     public bool ShowSupporterBadge => SignedIn && IsSupporter;
 
-    public string GameLabel => _gate.Game is { } id ? Games.FirstOrDefault(g => g.Id == id)?.Title ?? Infinity.Core.Process.GameDefinition.ById(id)?.Name ?? id.ToUpperInvariant() : S["shell.pick_game"];
+    public string GameLabel => CurrentGameId is { } id ? Games.FirstOrDefault(g => g.Id == id)?.Title ?? Infinity.Core.Process.GameDefinition.ById(id)?.Name ?? id.ToUpperInvariant() : S["shell.pick_game"];
 
     public string ProfileLabel => _gate.ProfileTag ?? S["shell.no_profile"];
 
@@ -581,9 +581,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             // OD-214: the account's profiles (both modes) with the chosen game's career on each; local-only rows as before
             // fix 2026-11-08: a Noob career whose folder holds a save (a Hardcore copy waiting for its first upload) is started, not "fresh"
-            var flags = new BoardFlags(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves(), SeedPendingXuids(board),
-                LocalSaveXuids(), UsableNoobSources(board.Profiles).Count > 0);
-            foreach (var card in ProfileBoard.Build(board, CurrentGame, flags))
+            foreach (var card in ProfileBoard.Build(board, CurrentGame, BoardFlagsNow(board)))
             {
                 var row = card.CareerRow ?? new Profile(card.Player.ProfileId, game, card.Player.Xuid, card.Player.Gamertag, card.Player.Gamertag,
                     card.Player.Mode, card.Player.Status, card.Career?.CreatedAt ?? string.Empty, null, card.Player.RenameNotice);
@@ -611,6 +609,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
         ChangedProfileList();
     }
+
+    /// <summary>The board's flags of the current game (or of the Profiles row's game being read, <see cref="InGame"/>): this PC's files and the server's switches.</summary>
+    private BoardFlags BoardFlagsNow(Me board) => new(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves(), SeedPendingXuids(board),
+        LocalSaveXuids(), UsableNoobSources(board.Profiles).Count > 0);
 
     private void ChangedProfileList()
     {
