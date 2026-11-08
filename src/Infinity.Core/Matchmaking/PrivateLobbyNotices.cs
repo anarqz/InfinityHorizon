@@ -139,7 +139,8 @@ public static class PrivateLobbyNotices
         [InviteFailed] = "worlds.invite_failed",
         [InviteSent] = "worlds.invite_sent", // with {name}
         [DeclineFailed] = "worlds.invite_decline_failed",
-        [ConflictReasons.LobbiesFull] = "worlds.lobbies_full", // also a create that would take the last public spare
+        [ConflictReasons.LobbiesFull] = "worlds.private_full", // CR-S100: only a create into the player's own full private world
+        [Unavailable] = "worlds.no_free_world", // CR-S100: 503 after the server's own wait
         [ConflictReasons.Pool] = "worlds.private_pool", // A10, with {time}; without a time: PoolNoTimeKey
         [ConflictReasons.ClientUpdate] = "worlds.client_update",
         [NotLeader] = "worlds.private_not_leader",
@@ -150,6 +151,9 @@ public static class PrivateLobbyNotices
         [RateLimited] = "worlds.slow_down",
         [Failed] = "worlds.private_failed",
     };
+
+    /// <summary>CR-S100: 503 <c>SERVICE.UNAVAILABLE</c> (no spare world after the server's own wait).</summary>
+    public const string Unavailable = "unavailable";
 
     /// <summary>A10 when the flag's end is not known: no time to show.</summary>
     public const string PoolNoTimeKey = "worlds.private_pool_flagged";

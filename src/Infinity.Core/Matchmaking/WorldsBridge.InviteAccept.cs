@@ -57,6 +57,29 @@ public sealed partial class WorldsBridge
     /// <summary>T-L5: how long the accept's join may take (the overlay's prompt is already answered meanwhile).</summary>
     public static readonly TimeSpan InviteJoinBudget = TimeSpan.FromSeconds(15);
 
+    /// <summary>CR-S100 follow-up: how long an accepted request waits for the server to link its private world's game session (<c>Seat.session</c>).</summary>
+    public static readonly TimeSpan SeatSessionWait = TimeSpan.FromSeconds(60);
+
+    // polls the seat (the supervisor's cadence, Retry-After of a failed read respected) until Seat.session of <world> shows, bounded by SeatSessionWait
+    private async Task<GameSessionReference?> WaitSeatSessionAsync(string world, CancellationToken cancellation)
+    {
+        var started = _clock.GetTimestamp();
+        _log($"worlds: invite: waiting for the game session of {world} (Seat.session), at most {(int)SeatSessionWait.TotalSeconds} s");
+        while (true)
+        {
+            if (SeatSessionOf(world) is { } found) return found;
+            if (_clock.GetElapsedTime(started) >= SeatSessionWait || !OnlineOpen) return null;
+            try
+            {
+                RequestReconcile();
+                await MyWorldAsync(cancellation).ConfigureAwait(false);
+            }
+            catch (Exception error) when (HostFailure(error) && !cancellation.IsCancellationRequested) { }
+            if (SeatSessionOf(world) is { } read) return read;
+            await Task.Delay(SeatLoopEvery, _clock, cancellation).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>T-L5: how often a move is checked (the seat played, ended, or the game's ask is late).</summary>
     public static readonly TimeSpan InviteMoveTick = TimeSpan.FromSeconds(1);
 
@@ -123,7 +146,10 @@ public sealed partial class WorldsBridge
         if (!OnlineOpen) return Refused(PrivateLobbyNotices.InviteJoinFailed, "online is closed");
         if (invite.Left <= TimeSpan.Zero) return Refused(PrivateLobbyNotices.InviteExpired, "the invite expired before it was accepted");
         if (bySession ? SendSessionReady is null : SendFollowHost is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "no game pipe to move the game with");
-        if (bySession && invite.Session is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no game session (route 1 needs it)");
+        // CR-S100 follow-up: an accepted request has no invite session; the seat read's Seat.session serves instead (optional field)
+        var gameSession = invite.Session ?? SeatSessionOf(invite.WorldId);
+        if (bySession && gameSession is null && !invite.FromRequest) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no game session (route 1 needs it)");
+        if (bySession && gameSession is null) _log("worlds: invite: the accepted request has no game session yet (no invite session, no Seat.session); it is read after the join");
         if (GameReadiness.CurrentGeneration is not { } generation) return NotNowText(_text("worlds.load_game"), "the game is not loaded");
         if (_seat.GrantId is { } heldGrant && Volatile.Read(ref _seatWorld) == invite.WorldId && !(invite.FromRequest && !Played(heldGrant)))
         {
@@ -146,9 +172,11 @@ public sealed partial class WorldsBridge
         // CR-S102: the leader's accept of this player's request already seated it there (the seat read took the grant): move the game in
         if (invite.FromRequest && _seat.GrantId is { } given && Volatile.Read(ref _seatWorld) == invite.WorldId)
         {
+            if (bySession && gameSession is null && (gameSession = await WaitSeatSessionAsync(invite.WorldId, cancellation).ConfigureAwait(false)) is null)
+                return Refused(PrivateLobbyNotices.InviteJoinFailed, $"the accepted request's seat has no game session after {(int)SeatSessionWait.TotalSeconds} s (the server sent no Seat.session)");
             _log($"worlds: invite: the accepted request's seat in {invite.WorldId} is held; moving the game in");
             return bySession
-                ? await SessionReadyIntoAsync(invite.WorldId, given, kind, invite.Activity ?? WorldActivities.Race, invite.Session!, generation, cancellation).ConfigureAwait(false)
+                ? await SessionReadyIntoAsync(invite.WorldId, given, kind, invite.Activity ?? WorldActivities.Race, gameSession!, generation, cancellation).ConfigureAwait(false)
                 : await MoveIntoAsync(invite.WorldId, given, kind, invite.Activity ?? ActivityOf(kind)!, inLobby, cancellation).ConfigureAwait(false);
         }
         _log($"worlds: invite: accepted; joining private lobby {invite.WorldId} ({invite.Activity ?? "activity not said"}; the game {(inLobby ? "plays in a lobby" : "is in no lobby")})");
@@ -166,9 +194,18 @@ public sealed partial class WorldsBridge
             }
         }
         if (joined.Result == UiJoin.Reserved && Volatile.Read(ref _seatWorld) is { } world && world == invite.WorldId && _seat.GrantId is { } grant)
+        {
+            var session = gameSession ?? SeatSessionOf(world);
+            if (bySession && session is null) session = await WaitSeatSessionAsync(world, cancellation).ConfigureAwait(false);
+            if (bySession && session is null)
+            {
+                await ReleaseUnprovenSeatAsync(grant, "an accepted request's seat has no game session").ConfigureAwait(false);
+                return Refused(PrivateLobbyNotices.InviteJoinFailed, "the seat in " + world + " has no game session (no invite session, the server sent no Seat.session); it is let go");
+            }
             return bySession
-                ? await SessionReadyIntoAsync(world, grant, kind, invite.Activity ?? WorldActivities.Race, invite.Session!, generation, cancellation).ConfigureAwait(false)
+                ? await SessionReadyIntoAsync(world, grant, kind, invite.Activity ?? WorldActivities.Race, session!, generation, cancellation).ConfigureAwait(false)
                 : await MoveIntoAsync(world, grant, kind, invite.Activity ?? ActivityOf(kind)!, inLobby, cancellation).ConfigureAwait(false);
+        }
         if (joined.Result == UiJoin.Reserved)
         {
             // never expected (JoinCoreAsync releases a grant of another world): the seat is not this invite's, so it is let go

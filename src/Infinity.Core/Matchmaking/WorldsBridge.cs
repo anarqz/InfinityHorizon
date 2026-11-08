@@ -322,9 +322,24 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     /// <summary>A join by world id (OD-208: no lobby code). One live seat per profile: a seat elsewhere is left first (the player chose this world).</summary>
     private int _joinAttempt;
-    public Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request,CancellationToken cancellation)
+
+    /// <summary>CR-S100: the Retry-After of a 503 <c>SERVICE.UNAVAILABLE</c> join (MATCHMAKING_API §2.9), used when the header is missing.</summary>
+    public static readonly TimeSpan UnavailableRetryDefault = TimeSpan.FromSeconds(15);
+
+    // CR-S100: the Retry-After of the last join answered 503 as ticks; -1: the last join was not one
+    private long _unavailableAfter = -1;
+
+    public async Task<UiFrame.JoinResult> JoinAsync(UiFrame.JoinWorld request, CancellationToken cancellation)
     {
-        return JoinAsync(request, null, cancellation);
+        var joined = await JoinAsync(request, null, cancellation).ConfigureAwait(false);
+        // CR-S100: a quick join (no world id) that found no free world after the server's own wait asks ONCE more after Retry-After
+        // (the overlay's own wait: "Waiting for a free world…"); the second 503 is the player's message
+        if (!string.IsNullOrEmpty(request.WorldId) || Interlocked.Exchange(ref _unavailableAfter, -1) is not (var ticks and >= 0)) return joined;
+        var after = TimeSpan.FromTicks(Math.Clamp(ticks, TimeSpan.TicksPerSecond, 30 * TimeSpan.TicksPerSecond));
+        _log($"worlds: quick join: no free world; waiting for a free world, asking once more in {(int)after.TotalSeconds} s");
+        await Task.Delay(after, _clock, cancellation).ConfigureAwait(false);
+        if (!OnlineOpen) return joined;
+        return await JoinAsync(request, null, cancellation).ConfigureAwait(false);
     }
 
     /// <summary>As <see cref="JoinAsync(UiFrame.JoinWorld, CancellationToken)"/>, asking for <paramref name="activity"/> (OD-150; null: any).</summary>
@@ -342,6 +357,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
     {
         ArgumentNullException.ThrowIfNull(request);
         Volatile.Write(ref _lastJoinRefusal, null);
+        Volatile.Write(ref _unavailableAfter, -1);
         Volatile.Write(ref _lastPoolUntilTicks, 0);
         using var online = OnlineCancellation(cancellation);
         cancellation = online.Token;
@@ -394,6 +410,13 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                         // OD-190 (WORLDS_OFFICIAL §11.2): no official world of the activity has a free seat; the quick join waits Retry-After
                         Volatile.Write(ref _lobbiesFullAfter, (answer.RetryAfter ?? lobbiesFull.RetryAfter ?? TimeSpan.Zero).Ticks);
                         return new UiFrame.JoinResult(UiJoin.Full, _text("worlds.lobbies_full"));
+                    }
+                    if (answer.Status == HttpStatusCode.ServiceUnavailable)
+                    {
+                        // CR-S100: no spare world after the server's own wait (503 SERVICE.UNAVAILABLE, Retry-After 15); the caller decides about one more ask
+                        Volatile.Write(ref _unavailableAfter, (answer.RetryAfter ?? answer.Error?.RetryAfter ?? UnavailableRetryDefault).Ticks);
+                        Volatile.Write(ref _lastJoinRefusal, PrivateLobbyNotices.Unavailable);
+                        return new UiFrame.JoinResult(UiJoin.Full, _text("worlds.no_free_world"));
                     }
                     if (answer.Error is { Kind: MmErrorKind.Conflict, Reason: ConflictReasons.Activity })
                     {

@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Collections.Concurrent;
+using Infinity.Core.Api;
 using Infinity.Core.Overlay;
 
 namespace Infinity.Core.Matchmaking;
@@ -485,6 +486,7 @@ public sealed partial class WorldsBridge
         var placement = PlacementOf(kind);
         TimeSpan? firstAsk = null;
         var full = false;
+        var unavailableRetried = false;
         while (true)
         {
             if (Volatile.Read(ref _joinAttempt) != 0) return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
@@ -492,6 +494,7 @@ public sealed partial class WorldsBridge
             cancellation.ThrowIfCancellationRequested(); // the hook's wait is bounded: no join past it
             firstAsk ??= _clock.GetElapsedTime(started);
             Volatile.Write(ref _lobbiesFullAfter, -1);
+            Volatile.Write(ref _unavailableAfter, -1);
             joins++;
             var joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty), placement, cancellation, kind).ConfigureAwait(false);
             if (joined.Result == UiJoin.Reserved)
@@ -517,6 +520,21 @@ public sealed partial class WorldsBridge
                 _log($"worlds: {KindName(kind)}: every official {placement} world is full; asking again in {(int)after.TotalSeconds} s");
                 await Task.Delay(after, _clock, cancellation).ConfigureAwait(false);
                 continue;
+            }
+            if (Interlocked.Exchange(ref _unavailableAfter, -1) is var unavailable and >= 0)
+            {
+                // CR-S100: no spare after the server's own wait (503, Retry-After 15). One more ask after Retry-After, only when it still
+                // fits the hook's wait (the hook gives up at 18 s, so it never does for a 15 s Retry-After); else the message
+                var wait = TimeSpan.FromTicks(Math.Clamp(unavailable, TimeSpan.TicksPerSecond, 30 * TimeSpan.TicksPerSecond));
+                if (!unavailableRetried && _clock.GetElapsedTime(started) + wait + TimeSpan.FromSeconds(10) <= FreeRoamAskBudget)
+                {
+                    unavailableRetried = true;
+                    _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Info, 2, 60, _text("worlds.waiting_free_world")));
+                    await Task.Delay(wait, _clock, cancellation).ConfigureAwait(false);
+                    continue;
+                }
+                _freeRoamToasts.Enqueue(new UiFrame.Toast(UiLevel.Warn, 2, 60, _text("worlds.no_free_world")));
+                return Decided(kind, FreeRoamResult.None, $"no world (no free official {placement} world after the server's wait)");
             }
             if (joined.Result == UiJoin.SlowDown && Volatile.Read(ref _joinAttempt) != 0)
                 return Decided(kind, FreeRoamResult.None, "no world (the player's own join is in flight)");
@@ -552,6 +570,14 @@ public sealed partial class WorldsBridge
     // the activity of the seat's official world as last read (_mineState only); null: none read for this seat yet
     private (string WorldId, string Activity)? _seatActivity;
 
+    // CR-S100 follow-up: the game session the last seat read carried (Seat.session) and the world it belongs to
+    private sealed record SeatSessionRef(string WorldId, GameSessionReference Session);
+    private SeatSessionRef? _seatSession;
+
+    /// <summary>The game session of the seat in <paramref name="worldId"/> as the server last said it (<c>Seat.session</c>); null: none.</summary>
+    internal GameSessionReference? SeatSessionOf(string worldId) =>
+        Volatile.Read(ref _seatSession) is { } held && held.WorldId == worldId ? held.Session : null;
+
     /// <summary>
     /// OD-190: records the activity of the seat's official world (its one activity for life: a later ask for another moves the
     /// seat) and its private class. Called under <c>_mineState</c> with each seat read and renewal.
@@ -559,6 +585,7 @@ public sealed partial class WorldsBridge
     private void ObserveActivity(Seat seat)
     {
         if (seat.World.Id != seat.WorldId) { _seatActivity = null; return; }
+        if (seat.Session is { } session) Volatile.Write(ref _seatSession, new SeatSessionRef(seat.WorldId, session));
         ObservePrivate(seat.WorldId, seat.World); // T-L6: the private official seat class
         if (seat.World.Official == true) Volatile.Write(ref _seatOfficial, seat.WorldId);
         var activity = seat.World.Activity;

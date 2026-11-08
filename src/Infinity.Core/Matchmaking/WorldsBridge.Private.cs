@@ -191,12 +191,8 @@ public sealed partial class WorldsBridge
                 Volatile.Write(ref _lobbiesFullAfter, -1);
                 asks++;
                 joined = await JoinAsync(new UiFrame.JoinWorld(string.Empty), activity, token, kind, privateCreate: true).ConfigureAwait(false);
-                if (joined.Result == UiJoin.Reserved || Volatile.Read(ref _lobbiesFullAfter) is not (var ticks and >= 0) || !OnlineOpen) break;
-                var after = ticks > 0 ? TimeSpan.FromTicks(Math.Max(ticks, TimeSpan.TicksPerSecond)) : PrivateCreateFullRetry;
-                var now = _clock.GetElapsedTime(started);
-                if (asks >= PrivateCreateMaxAsks || now + after - firstAsk.Value > PrivateCreateFullBudget || now + after >= FreeRoamAskBudget) break;
-                _log($"worlds: {KindName(kind)}: every {activity} lobby is full; asking for its private lobby again in {after.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} s");
-                await Task.Delay(after, _clock, token).ConfigureAwait(false);
+                // CR-S100: no retry. lobbies_full is now the player's own full private world; a 503 (no spare) is answered with its message
+                break;
             }
             if (joined.Result == UiJoin.Reserved && Volatile.Read(ref _seatWorld) is { } world)
             {
@@ -212,6 +208,7 @@ public sealed partial class WorldsBridge
             // T-L3: the one table words every reason it knows (A10's pool with the time left); any other refusal keeps the join's own
             // words (mods, access, a game not loaded); either way the notice always shows, in an official lobby too
             var reason = full ? ConflictReasons.LobbiesFull
+                : Interlocked.Exchange(ref _unavailableAfter, -1) >= 0 ? PrivateLobbyNotices.Unavailable
                 : PrivateLobbyNotices.Handles(refusal) ? refusal
                 : joined.Result == UiJoin.SlowDown ? PrivateLobbyNotices.RateLimited
                 : null;
