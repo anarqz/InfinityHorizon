@@ -105,6 +105,10 @@ typedef struct {
        hook's own session reference makes its HSTRINGs with the function stored there, so the game frees them with its own
        WindowsDeleteString. 0: none (FH2). */
     unsigned hstring_create_rva;
+    /* fm5-12 (W7b): the same for combase!WindowsDeleteString (FM5: 0x101bcf8, SAURON-verified; it holds Azimuth's delete, 0x14017f460
+       in azimuth.exe 1.0.4, which throws on a non-FSH2 string, so only strings the game's create made are passed). 0: none (FH2);
+       the hook then falls back to finding the delete next to the create. */
+    unsigned hstring_delete_iat_rva;
 } FiGameProfile;
 
 /* FM5 1.0.0.20 (docs/launcher/FM5_INFINITY_HANDOFF.md 3).
@@ -178,12 +182,12 @@ static const FiReadyTerm fi_fm5_ready[] = {
 
 static const FiGameProfile fi_game_profiles[] = {
     {FI_GAME_FH2, "FH2", GAME_TIMESTAMP, GAME_IMAGE_SIZE, FI_FEATURES_ALL, L"title-1a96545b", L"media\\stripped\\gamedbRC.slt", 2,
-     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0},
+     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0},
     {FI_GAME_FM5, "FM5", 0x53d8d1f2u, 0x279d000u, 0, L"title-7b35d917", L"media\\db\\gamedb.slt", -1,
      fi_fm5_patches, sizeof(fi_fm5_patches) / sizeof(fi_fm5_patches[0]),
      fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0]),
      fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u},
-     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u},
+     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u, 0x101bcf8u},
 };
 
 /* The polled heartbeat's term (game_patches.h game_ready_thread): it changed at `beat_at` (0: never seen change) and is
