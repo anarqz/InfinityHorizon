@@ -2011,9 +2011,45 @@ static FrDeleteStringFn fr_ready_deleter(FrCreateStringFn create) {
     return 0;
 }
 
-/* Frees one HSTRING this file made with `create` (fm5-12): a no-op for null or when the delete is not found. */
+/* The game's own WindowsDeleteString: the pointer in its IAT slot at image + rva (fm5-12, SAURON: FM5 0x101bcf8), under the same
+   rule as the create (code of the image or of a loaded module); the signature scan above only when the row has none or the read
+   fails. Logs the pointer and where it came from once. */
+static volatile LONG fr_ready_delete_logged;
+static FrDeleteStringFn fr_ready_delete_for(FrCreateStringFn create) {
+    const FiGameProfile *game = fi_game_profile();
+    void *slot = 0;
+    int where = 0;
+    FrDeleteStringFn found = 0;
+    const char *how = "the row's IAT slot";
+    if (game->hstring_delete_iat_rva) {
+        found = (FrDeleteStringFn)(uintptr_t)fr_ready_creator(fi_game_selected_image, game->image_size, game->hstring_delete_iat_rva,
+                                                              &slot, &where);
+    }
+    if (!found) {
+        found = fr_ready_deleter(create);
+        how = "the signature scan after the create (no usable row slot)";
+    }
+    if (!InterlockedExchange(&fr_ready_delete_logged, 1)) {
+        FR_LINE(line);
+        fr_text(&line, "FREEROAM: GameSessionReady (W7b): HSTRINGs are freed by ");
+        if (found) {
+            fr_text(&line, "0x");
+            fr_hex(&line, (unsigned long long)(uintptr_t)found, 16);
+            fr_text(&line, ", found by ");
+            fr_text(&line, how);
+            fr_text(&line, ".");
+        } else {
+            fr_text(&line, "nothing (no delete found); they are left.");
+        }
+        fr_end(&line);
+    }
+    return found;
+}
+
+/* Frees one HSTRING made by the game's `create` (fm5-12): a no-op for null, for a null create (Azimuth's maker, stack or reference
+   strings are never passed) or when no delete is found. */
 static void fr_ready_free_string(FrCreateStringFn create, void *text) {
-    FrDeleteStringFn drop = text ? fr_ready_deleter(create) : 0;
+    FrDeleteStringFn drop = text && create ? fr_ready_delete_for(create) : 0;
     if (drop) (void)drop(text);
 }
 
