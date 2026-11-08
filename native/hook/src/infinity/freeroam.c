@@ -1985,6 +1985,38 @@ static FrCreateStringFn fr_ready_creator(const unsigned char *image, size_t imag
     return *where_out ? (FrCreateStringFn)(uintptr_t)pointer : 0;
 }
 
+/* fm5-12 (W7b): freeing the hook's own HSTRINGs. The game's import table holds Azimuth's WindowsCreateString (T3: 0x14017f370 in
+   azimuth.exe) and the game's WindowsDeleteString import is not in the row, so the delete is found from the create: Azimuth
+   builds the two next to each other, and its delete starts (after int3 padding) with `test rcx,rcx; je; cmp dword [rcx],"FSH2"`
+   (azimuth.exe 0.9.10 FM5: 0x14017f460, 0xf0 after the create; it drops the reference and HeapFrees a heap string). The signature
+   is searched in the 0x300 bytes after the create, read without faulting; nothing found (a build that differs, a fake create)
+   means the string is left as before, never a guess. */
+typedef HRESULT(WINAPI *FrDeleteStringFn)(void *hstring);
+#define FR_DELETE_SCAN 0x300u
+static const unsigned char fr_delete_signature[] = {0x48, 0x85, 0xc9, 0x74, 0x00, 0x81, 0x39, 0x46, 0x53, 0x48, 0x32};
+static FrDeleteStringFn fr_ready_deleter(FrCreateStringFn create) {
+    unsigned char code[FR_DELETE_SCAN + sizeof(fr_delete_signature)];
+    if (!create || !memory_read((const void *)(uintptr_t)create, code, sizeof(code))) return 0;
+    for (unsigned i = 0; i < FR_DELETE_SCAN; ++i) {
+        int same = 1;
+        for (unsigned j = 0; same && j < sizeof(fr_delete_signature); ++j) {
+            same = j == 4 || code[i + j] == fr_delete_signature[j]; /* byte 4 is the jump distance */
+        }
+        if (!same) continue;
+        unsigned start = i;
+        while (start > 0 && i - start < 0x40 && code[start - 1] != 0xcc) --start; /* the function starts after int3 padding */
+        if (start == 0 || code[start - 1] != 0xcc || start == i) return 0;
+        return (FrDeleteStringFn)(uintptr_t)((const unsigned char *)(uintptr_t)create + start);
+    }
+    return 0;
+}
+
+/* Frees one HSTRING this file made with `create` (fm5-12): a no-op for null or when the delete is not found. */
+static void fr_ready_free_string(FrCreateStringFn create, void *text) {
+    FrDeleteStringFn drop = text ? fr_ready_deleter(create) : 0;
+    if (drop) (void)drop(text);
+}
+
 /* One HSTRING: the game's WindowsCreateString when there is one, else Azimuth's maker (fm5-10). */
 static HRESULT fr_ready_string(FrCreateStringFn create, const wchar_t *text, void **out) {
     if (!out) return E_POINTER;
@@ -2069,17 +2101,18 @@ static FrCom *fr_ready_own_reference(FrCreateStringFn create, const wchar_t part
 /* The hook's own reference's three HSTRING getters (slots 6 to 8, lobby spec 11.9) against what was passed, for the log: one
    line per getter (its HRESULT and text; session name, scid and template are not personal), then which slot answers which
    part. 1 when slots 6, 7 and 8 read back name, scid and template. */
-static int fr_ready_reference_log(FrCom *reference, const wchar_t parts[3][FI_SESSION_READY_PART + 1]) {
+static int fr_ready_reference_log(FrCom *reference, FrCreateStringFn create, const wchar_t parts[3][FI_SESSION_READY_PART + 1]) {
     int matched = 1;
     FR_LINE(line);
     fr_text(&line, "FREEROAM: GameSessionReady (W7b): the hook's own reference reads back");
     for (unsigned slot = 6; slot <= 8; ++slot) {
         typedef HRESULT(STDMETHODCALLTYPE * GetFn)(FrCom *, void **);
-        void *text = 0; /* not freed: the hook has no WindowsDeleteString */
+        void *text = 0; /* freed below with the delete found from the create (fm5-12) */
         wchar_t got[FI_SESSION_READY_PART + 1];
         HRESULT result = ((GetFn)((void *const *)(const void *)reference->lpVtbl)[slot])(reference, &text);
         size_t n = SUCCEEDED(result) ? fr_hstring(text, got, ARRAY_COUNT(got)) : 0;
         if (!n) got[0] = 0;
+        fr_ready_free_string(create, text);
         {
             FR_LINE(one);
             fr_text(&one, "FREEROAM: GameSessionReady (W7b): the hook's own reference slot ");
@@ -2117,10 +2150,11 @@ static int fr_ready_reference_log(FrCom *reference, const wchar_t parts[3][FI_SE
    else Azimuth's (null). Logs which, and why when it is Azimuth's. */
 static FrCreateStringFn fr_ready_maker(const wchar_t *probe) {
     const FiGameProfile *game = fi_game_profile();
-    void *slot = 0, *made = 0; /* the probe string is not freed: the hook has no WindowsDeleteString */
+    void *slot = 0, *made = 0;
     int where = 0;
     FrCreateStringFn create = fr_ready_creator(fi_game_selected_image, game->image_size, game->hstring_create_rva, &slot, &where);
     HRESULT game_result = create ? fr_ready_string(create, probe, &made) : S_OK;
+    if (SUCCEEDED(game_result)) fr_ready_free_string(create, made); /* the probe (fm5-12) */
     if (FAILED(game_result)) create = 0;
     FR_LINE(line);
     fr_text(&line, "FREEROAM: GameSessionReady (W7b): strings by ");
@@ -2199,7 +2233,8 @@ static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *tem
     fr_ascii_wide(name, parts[0], ARRAY_COUNT(parts[0]));
     fr_ascii_wide(scid, parts[1], ARRAY_COUNT(parts[1]));
     fr_ascii_wide(template_name, parts[2], ARRAY_COUNT(parts[2]));
-    FrCom *reference = fr_ready_own_reference(fr_ready_maker(parts[0]), (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
+    FrCreateStringFn create = fr_ready_maker(parts[0]);
+    FrCom *reference = fr_ready_own_reference(create, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
     FrReadyArgs *args = reference ? fr_alloc(sizeof(*args)) : 0;
     if (!args) {
         if (reference) reference->lpVtbl->Release(reference);
@@ -2207,7 +2242,7 @@ static unsigned fr_ready_fire(FrCom *delegate, const char *scid, const char *tem
         if (hresult) *hresult = (unsigned)E_OUTOFMEMORY;
         return FI_SESSION_READY_NO_REFERENCE;
     }
-    fr_ready_reference_log(reference, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
+    fr_ready_reference_log(reference, create, (const wchar_t(*)[FI_SESSION_READY_PART + 1])parts);
     args->lpVtbl = fr_ready_args_vtable;
     args->references = 1;
     args->reference = reference; /* takes the caller's reference */

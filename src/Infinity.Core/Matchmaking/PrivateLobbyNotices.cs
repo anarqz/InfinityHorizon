@@ -94,6 +94,9 @@ public static class PrivateLobbyNotices
     /// <summary>OD-210 (W14): who can join changed (200): "Who can join: {who}", with the players already in the lobby staying.</summary>
     public const string JoinModesSet = "join_modes_set";
 
+    /// <summary>OD-210 (W14): the leader changed who can join and another member reads it: "Lobby: {who}".</summary>
+    public const string JoinModesChanged = "join_modes_changed";
+
     /// <summary>OD-210 (W14): a non-leader's change (the overlay's rule, or the server's 409 <c>not_leader</c> / 403 <c>MM.NOT_HOST</c>).</summary>
     public const string JoinModesNotLeader = "join_modes_not_leader";
 
@@ -123,6 +126,7 @@ public static class PrivateLobbyNotices
         [InviteMoveFailed] = "worlds.invite_move_failed",
         [InviteMode] = "worlds.invite_mode", // OD-210 (CR-S101)
         [JoinModesSet] = "worlds.join_modes_set", // with {who}
+        [JoinModesChanged] = "worlds.join_modes_changed", // with {who}
         [JoinModesNotLeader] = "worlds.join_modes_not_leader",
         [JoinModesPrivateOnly] = "worlds.join_modes_private_only",
         [JoinModesUnavailable] = "worlds.join_modes_unavailable",

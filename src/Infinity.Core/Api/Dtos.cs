@@ -186,7 +186,23 @@ public sealed record Me(
     Access Access,
     Deletion? Deletion,
     IReadOnlyList<BoundDevice> Devices,
-    IReadOnlyList<Notice> Notices);
+    IReadOnlyList<Notice> Notices,
+    // CR-S98: profiles above their careers; null from servers before CR-S98.
+    IReadOnlyList<Player>? Players = null);
+
+/// <summary>CR-S98 (OD-214): a profile above its per-game careers (CAREERS.md §3).</summary>
+public sealed record Player(string ProfileId, string Gamertag, string Mode, string Xuid, string Status, RenameNotice? RenameNotice,
+    IReadOnlyList<Career> Careers);
+
+/// <summary>One game's career of a <see cref="Player"/>; <see cref="CareerId"/> is the <c>ProfileId</c> of its <see cref="Profile"/>.</summary>
+public sealed record Career(string Game, string CareerId, string CreatedAt, string? LastPlayedAt, CareerCloud? Cloud, CareerProgress? Progress);
+
+public sealed record CareerCloud(long Revision, string SavedAt);
+
+public sealed record CareerProgress(long? Level, long? Credits, long? Cars, long? PlaySeconds, string? SyncedAt);
+
+/// <summary><c>POST /launcher/v1/players/{xuid}/careers</c> (CR-S98) → 201 <see cref="Profile"/>.</summary>
+public sealed record CareerCreate(string Game);
 
 /// <summary>A profile to create; a Hardcore one starts from the server's seed at its first launch (OD-60).</summary>
 public sealed record NewProfile(string Game, string Name, string Mode);
