@@ -23,39 +23,45 @@ public sealed record FriendProfile
     public string? ProfileUrl { get; init; }
 }
 
-/// <summary>OD-211 (CORE_API §4.2a): a friend account's linked Discord; absent when it has none.</summary>
+// CR-S102's records below are additive: every field reads tolerantly (a missing or new field never fails the whole list); the
+// code that uses them skips what is empty.
+
+/// <summary>OD-211 (CORE_API §4.2a): a friend account's verified Discord link; absent when it has none.</summary>
 public sealed record FriendDiscord
 {
-    public required string Username { get; init; }
+    public string? Username { get; init; }
 
     public string? GlobalName { get; init; }
 
-    public required string AvatarUrl { get; init; }
+    /// <summary>Discord's CDN (CORE_API §5a.2's rule); fetched only from <c>cdn.discordapp.com</c> (<c>DiscordLinks.Avatar</c>).</summary>
+    public string? AvatarUrl { get; init; }
 }
 
-/// <summary>OD-211 (CORE_API §4.2a): what a friend does in its world (<c>activity</c>: freeroam | carmeet | roadtrip | race).</summary>
+/// <summary>OD-211 (CORE_API §4.2a): what an <c>in_world</c> friend does there (<c>activity</c>: freeroam | carmeet | roadtrip | race).</summary>
 public sealed record FriendDoing
 {
-    public required string Activity { get; init; }
+    /// <summary><c>race</c>: FM5's official race lobby.</summary>
+    public string? Activity { get; init; }
 
-    public required bool Private { get; init; }
+    /// <summary>A private official world (MATCHMAKING_API §2.10).</summary>
+    public bool Private { get; init; }
 
-    /// <summary>Only where the hook reports a race in progress.</summary>
+    /// <summary>FH2 only: the hook's report (at most 90 s old) shows a race screen (true) or another screen (false); absent without one.</summary>
     public bool? Racing { get; init; }
 }
 
 /// <summary>OD-211 (CORE_API §4.2a): a friend whose account started a play session since the caller's previous invites poll.</summary>
 public sealed record FriendOnline
 {
-    public required string FriendId { get; init; }
+    public string? FriendId { get; init; }
 
-    public required string Gamertag { get; init; }
+    public string? Gamertag { get; init; }
 
-    public required string Game { get; init; }
+    public string? Game { get; init; }
 
-    public required string Mode { get; init; }
+    public string? Mode { get; init; }
 
-    public required string Since { get; init; }
+    public string? Since { get; init; }
 }
 
 /// <summary>The profile a friend plays now, or played last (<c>state</c>: offline | in_game | in_world).</summary>

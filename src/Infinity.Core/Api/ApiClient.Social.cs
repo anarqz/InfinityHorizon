@@ -20,7 +20,18 @@ public sealed partial class ApiClient
     /// Open to every account (OD-129); a 403 means stop polling.
     /// </summary>
     public Task<InviteList> InvitesAsync(string access, string? asXuid = null, CancellationToken cancellation = default) =>
-        SendAsync<InviteList>(HttpMethod.Get, Core, "/launcher/v1/invites" + AsXuid(asXuid), null, access, idempotent: false, cancellation);
+        InvitesAsync(access, asXuid, first: false, cancellation);
+
+    /// <summary>
+    /// <c>GET /launcher/v1/invites[?asXuid=][&amp;first=true]</c> (CORE_API §4.2a, OD-218): <paramref name="first"/> marks this launcher's
+    /// first poll since it started, which names nobody in <c>online</c> (use <see cref="InvitesFirstPoll"/>).
+    /// </summary>
+    public Task<InviteList> InvitesAsync(string access, string? asXuid, bool first, CancellationToken cancellation = default)
+    {
+        var query = AsXuid(asXuid);
+        if (first) query += (query.Length == 0 ? "?" : "&") + "first=true";
+        return SendAsync<InviteList>(HttpMethod.Get, Core, "/launcher/v1/invites" + query, null, access, idempotent: false, cancellation);
+    }
 
     /// <summary><c>POST /launcher/v1/invites/{inviteId}/decline</c> → 204, either kind; idempotent by state (no <c>Idempotency-Key</c>).</summary>
     public async Task DeclineInviteAsync(string access, string inviteId, CancellationToken cancellation = default)

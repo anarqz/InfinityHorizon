@@ -10,7 +10,9 @@ namespace Infinity.Core.Matchmaking;
 /// (<c>session</c>, CORE_API §4.2). <see cref="Session"/> is carried for <c>gameSessionReady</c> only: T-R2 proved no consumer of it
 /// (WORLDS_OFFICIAL §12.5, §12.8a, §12.9), so nothing sends it yet.
 /// </summary>
-public sealed record InviteAccept(string InviteId, string WorldId, string? Activity, TimeSpan Left, GameSessionReference? Session = null);
+/// <para><c>FromRequest</c> (CR-S102): this player's own request to join, accepted by the private lobby's leader; that accept already holds
+/// the seat, so the game is moved straight in when the seat read holds it (otherwise the join returns that seat).</para>
+public sealed record InviteAccept(string InviteId, string WorldId, string? Activity, TimeSpan Left, GameSessionReference? Session = null, bool FromRequest = false);
 
 /// <summary>T-L5: what an accept did.</summary>
 public enum InviteAcceptOutcome
@@ -123,7 +125,7 @@ public sealed partial class WorldsBridge
         if (bySession ? SendSessionReady is null : SendFollowHost is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "no game pipe to move the game with");
         if (bySession && invite.Session is null) return Refused(PrivateLobbyNotices.InviteJoinFailed, "the invite names no game session (route 1 needs it)");
         if (GameReadiness.CurrentGeneration is not { } generation) return NotNowText(_text("worlds.load_game"), "the game is not loaded");
-        if (_seat.GrantId is not null && Volatile.Read(ref _seatWorld) == invite.WorldId)
+        if (_seat.GrantId is { } heldGrant && Volatile.Read(ref _seatWorld) == invite.WorldId && !(invite.FromRequest && !Played(heldGrant)))
         {
             _log($"worlds: invite: accepted; the seat is already in {invite.WorldId}");
             return new(InviteAcceptOutcome.Already, null);
@@ -141,6 +143,14 @@ public sealed partial class WorldsBridge
         // lobby spec §11.4 "State needed": the game's Join popup shows on its main menu or hopper screen; in a lobby it waits (INFERRED)
         if (inLobby && bySession) return NotNow(PrivateLobbyNotices.InviteLeaveLobby, "the game plays in a lobby (its Join popup shows on the main menu or the hopper screen)");
 
+        // CR-S102: the leader's accept of this player's request already seated it there (the seat read took the grant): move the game in
+        if (invite.FromRequest && _seat.GrantId is { } given && Volatile.Read(ref _seatWorld) == invite.WorldId)
+        {
+            _log($"worlds: invite: the accepted request's seat in {invite.WorldId} is held; moving the game in");
+            return bySession
+                ? await SessionReadyIntoAsync(invite.WorldId, given, kind, invite.Activity ?? WorldActivities.Race, invite.Session!, generation, cancellation).ConfigureAwait(false)
+                : await MoveIntoAsync(invite.WorldId, given, kind, invite.Activity ?? ActivityOf(kind)!, inLobby, cancellation).ConfigureAwait(false);
+        }
         _log($"worlds: invite: accepted; joining private lobby {invite.WorldId} ({invite.Activity ?? "activity not said"}; the game {(inLobby ? "plays in a lobby" : "is in no lobby")})");
         UiFrame.JoinResult joined;
         using (var budget = new CancellationTokenSource(InviteJoinBudget, _clock))

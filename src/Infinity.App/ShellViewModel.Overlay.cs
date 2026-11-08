@@ -100,9 +100,12 @@ public sealed partial class ShellViewModel
                 PlayerActions = playerActions,
                 // OD-211 (W15): the overlay's FRIENDS sidebar
                 FriendsApi = new Infinity.Core.Matchmaking.ApiFriendsSidebar(session.Api, ct => session.Tokens.AccessAsync(ct)),
-                // T-L4 (OD-204): the invite inbox (GET /launcher/v1/invites every 10 s while online) and its decline route
+                Avatars = _friendAvatars, // CR-S102: the friends' Discord avatars (0x2D), the launcher sidebar's cache
+                // T-L4 (OD-204): the invite inbox (GET /launcher/v1/invites every 10 s while online) and its decline route; OD-218: the
+                // launcher's first poll carries first=true (Infinity.Core.Api.InvitesFirstPoll)
                 Inbox = new Infinity.Core.Matchmaking.InviteInbox(
-                    async ct => await session.Api.InvitesAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), null, ct).ConfigureAwait(false),
+                    ct => Infinity.Core.Api.InvitesFirstPoll.Process.ReadAsync(async (first, c) =>
+                        await session.Api.InvitesAsync(await session.Tokens.AccessAsync(c).ConfigureAwait(false), null, first, c).ConfigureAwait(false), Log, ct),
                     async (id, ct) => await session.Api.DeclineInviteAsync(await session.Tokens.AccessAsync(ct).ConfigureAwait(false), id, ct).ConfigureAwait(false),
                     key => S[key], log: Log),
                 ModSet = mods,

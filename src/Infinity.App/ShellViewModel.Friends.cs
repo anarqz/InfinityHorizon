@@ -10,11 +10,18 @@ using Infinity.Core.Shell;
 namespace Infinity.App;
 
 /// <summary>A friend of the FRIENDS sidebar: the profile shown, what it does now, and a live invite from it to this account.</summary>
-public sealed record FriendCard(string Id, string Name, string Status, bool Online, bool Supporter, string? InviteId, string Profiles)
+public sealed record FriendCard(string Id, string Name, string Status, bool Online, bool Supporter, string? InviteId, string Profiles,
+    System.Windows.Media.ImageSource? Avatar = null, string Discord = "")
 {
     public string Initial => Name.Length > 0 ? Name[..1].ToUpperInvariant() : "?";
     public bool Invited => InviteId is not null;
     public bool HasProfiles => Profiles.Length > 0;
+
+    /// <summary>CR-S102: the friend's Discord avatar (cdn.discordapp.com only, loaded once); null: the initial.</summary>
+    public bool HasAvatar => Avatar is not null;
+
+    /// <summary>CR-S102: "@username" of the friend's verified Discord link; empty: none.</summary>
+    public bool HasDiscord => Discord.Length > 0;
 }
 
 /// <summary>An incoming friend request: its id (accept / decline) and the asker's profile name.</summary>
@@ -118,7 +125,11 @@ public sealed partial class ShellViewModel
             if (name.Length == 0) continue;
             var profiles = string.Join("  ·  ", friend.Profiles.Select(p => S.Format(p.Mode == "hardcore" ? "friends.profile_hardcore" : "friends.profile_noob",
                 ("name", p.Gamertag), ("game", WorldsBridge.GameLabel(p.Game)))));
-            FriendCards.Add(new FriendCard(friend.Id, name, FriendStatus(friend), friend.Online, friend.Tier == "vip", friend.Invite?.Id, profiles));
+            var url = friend.Discord?.AvatarUrl;
+            var avatar = FriendAvatars.Allowed(url) ? FriendAvatarImage(url!) : null;
+            if (avatar is null && FriendAvatars.Allowed(url)) _ = _friendAvatars.Want(url); // loaded once; the list is drawn again when it arrives
+            var discord = friend.Discord?.Username is { Length: > 0 } user ? "@" + user : string.Empty;
+            FriendCards.Add(new FriendCard(friend.Id, name, FriendStatus(friend), friend.Online, friend.Tier == "vip", friend.Invite?.Id, profiles, avatar, discord));
         }
         FriendRequestCards.Clear();
         foreach (var request in list.Incoming)
@@ -127,6 +138,48 @@ public sealed partial class ShellViewModel
             if (!string.IsNullOrEmpty(asker)) FriendRequestCards.Add(new FriendRequestCard(request.Id, asker));
         }
         ChangedFriends();
+    }
+
+    // ------------------------------------------------------------------ CR-S102: the friends' Discord avatars
+
+    private FriendAvatars? _friendAvatarsCache;
+    private readonly Dictionary<string, System.Windows.Media.ImageSource> _friendAvatarImages = new(StringComparer.Ordinal);
+
+    /// <summary>One cache for this sidebar and the overlay's (0x2D): cdn.discordapp.com only, 96 x 96 RGBA, fetched once per URL.</summary>
+    private FriendAvatars _friendAvatars
+    {
+        get
+        {
+            if (_friendAvatarsCache is { } cache) return cache;
+            cache = _friendAvatarsCache = new FriendAvatars(FetchAvatarAsync, DecodeFriendAvatar, log: Log);
+            cache.Loaded += _ => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                if (_friendList is { } list) ShowFriends(list);
+            });
+            return cache;
+        }
+    }
+
+    /// <summary>A downloaded image as the overlay draws it (96 x 96 straight RGBA), or null when it does not decode.</summary>
+    private static byte[]? DecodeFriendAvatar(byte[] bytes)
+    {
+        var avatar = OverlayAvatar(Avatar(bytes));
+        return avatar.Width == UiFrame.AvatarSide ? avatar.Rgba : null;
+    }
+
+    /// <summary>The launcher's image of a cached avatar (made once per URL), or null while it is not loaded.</summary>
+    private System.Windows.Media.ImageSource? FriendAvatarImage(string url)
+    {
+        if (_friendAvatarImages.TryGetValue(url, out var made)) return made;
+        if (_friendAvatars.Get(url) is not { } rgba) return null;
+        var bgra = (byte[])rgba.Clone();
+        for (var i = 0; i < bgra.Length; i += 4) (bgra[i], bgra[i + 2]) = (bgra[i + 2], bgra[i]);
+        var image = System.Windows.Media.Imaging.BitmapSource.Create(UiFrame.AvatarSide, UiFrame.AvatarSide, 96, 96,
+            System.Windows.Media.PixelFormats.Bgra32, null, bgra, UiFrame.AvatarSide * 4);
+        image.Freeze();
+        if (_friendAvatarImages.Count >= FriendAvatars.MaxEntries) _friendAvatarImages.Clear();
+        _friendAvatarImages[url] = image;
+        return image;
     }
 
     /// <summary>"Offline", "Online", "In FH2", "Free roam on FH2", "Racing on FH2"... (en + pt-BR), as the overlay words it.</summary>

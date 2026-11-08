@@ -841,6 +841,11 @@ public sealed class PlaySupervisor
                         {
                             _ = worlds.FreeRoamLeftAsync(stop.Token);
                         }
+                        // OD-211 (CR-S102): the game's rich-presence screen (Event 9): the online toasts' "none while racing"
+                        if (frame is Frame.Event { Kind: HookEvents.Screen } screen && worlds is not null)
+                        {
+                            worlds.ObserveScreen(screen.Detail);
+                        }
                         // OD-208: the game left the online world on its own (its car database changed): the seat goes now
                         if (frame is Frame.Event { Kind: HookEvents.WorldLeft } left && worlds is not null)
                         {
@@ -994,6 +999,7 @@ public sealed class PlaySupervisor
                         {
                             case Overlay.UiIncoming.Hello hello:
                                 _emit(new SupervisorEvent.OverlayConnected(hello.OverlayVersion));
+                                worlds?.FriendsOverlayHello(); // CR-S102: a new overlay has no friend avatar yet
                                 await overlay.SendFrameAsync(new Overlay.UiFrame.GameReadiness(worlds?.GameReadiness.CurrentGeneration is not null), stop.Token).ConfigureAwait(false);
                                 await overlay.SendFrameAsync(worlds is null
                                     ? new Overlay.UiFrame.WorldAccess(false, _config.Text?["worlds.integrity_inconclusive"] ?? "Online installation verification is unavailable. Return to the launcher for help.")
@@ -1246,6 +1252,7 @@ public sealed class PlaySupervisor
             if (_online.IsPaused || cancellation.IsCancellationRequested) return;
             if (result is not null) await overlay.SendIfAcceptedAsync(result, cancellation).ConfigureAwait(false);
             await overlay.SendIfAcceptedAsync(worlds.FriendsStateFrame(), cancellation).ConfigureAwait(false);
+            await worlds.SendFriendAvatarsAsync(overlay.SendIfAcceptedAsync, cancellation).ConfigureAwait(false); // CR-S102 (0x2D)
         }
         catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException or InvalidOperationException or HttpRequestException)
         {
@@ -1442,7 +1449,7 @@ public sealed class PlaySupervisor
                     }
                 }
                 break;
-            case EndpointEvent.HookEvent e when e.Kind != HookEvents.GameReadiness:
+            case EndpointEvent.HookEvent e when e.Kind != HookEvents.GameReadiness && e.Kind != HookEvents.Screen: // both repeat; never a log line each
                 _emit(new SupervisorEvent.HookEvent(e.Kind, e.Detail));
                 break;
             case EndpointEvent.Capture c:

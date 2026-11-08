@@ -82,6 +82,10 @@
 //   0x2C FriendsResult, launcher -> overlay {u8 kind (echoed), u8 result (0 done, 1 requested, 2 now friends, 3 not found, 4 refused,
 //        5 failed), str message (<= 160 B, in the player's language)}
 // Online toasts ("{gamertag} is online · {game}") are ordinary 0x03 Toasts with the friend icon (6).
+// Protocol 11 (OD-211, CR-S102): a friend's Discord avatar
+//   0x2D FriendAvatar, launcher -> overlay {str id (PaneKey: a 0x2A friend row's id), u16 side (96, or 0: none), side * side * 4
+//        bytes of straight-alpha RGBA}: the launcher fetched it from cdn.discordapp.com only and decoded it; the overlay draws it in
+//        the friend's disc (the initials until one arrives) and never fetches anything
 // Additive fields of older frames (an older reader ignores them):
 //   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
@@ -98,7 +102,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 10;
+constexpr uint16_t kUiProtocol = 11;
 constexpr size_t kMaxLobbyMods = 32; // OD-181: a roster player's declared mods
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
 constexpr size_t kMaxPaneSections = 8, kMaxPaneEntries = 32, kMaxPaneActions = 4;
@@ -865,6 +869,37 @@ inline bool DecodeFriendsAction(const uint8_t *body, size_t size, uint8_t &kind,
     id = std::move(i);
     text = std::move(t);
     return true;
+}
+
+// ---------------------------------------------------------------- protocol 11: a friend's Discord avatar (OD-211, CR-S102)
+constexpr uint16_t kFriendAvatarSide = 96;
+
+struct FriendAvatarFrame {
+    std::string id;            // the friend row's id (PaneKey)
+    uint16_t side = 0;         // 96, or 0: none (the initials)
+    std::vector<uint8_t> rgba; // side * side * 4, straight alpha
+};
+
+// Strict, as the launcher writes it (UiFrame.FriendAvatar.Validate)
+inline bool DecodeFriendAvatar(const uint8_t *body, size_t size, FriendAvatarFrame &out) {
+    wire::Reader r{body, size};
+    FriendAvatarFrame a;
+    a.id = r.Text(kMaxPaneId);
+    a.side = r.U16();
+    if (!r.ok || !PaneKey(a.id) || (a.side != 0 && a.side != kFriendAvatarSide)) return false;
+    const size_t bytes = static_cast<size_t>(a.side) * a.side * 4;
+    if (r.left != bytes) return false;
+    a.rgba.assign(r.p, r.p + bytes);
+    out = std::move(a);
+    return true;
+}
+
+inline std::vector<uint8_t> EncodeFriendAvatar(const FriendAvatarFrame &a) {
+    std::vector<uint8_t> b;
+    wire::Str(b, a.id);
+    wire::U16(b, a.side);
+    b.insert(b.end(), a.rgba.begin(), a.rgba.end());
+    return b;
 }
 
 // 0x1E (protocol 4): strict, as the launcher writes it (UiFrame.RosterMods.Validate)

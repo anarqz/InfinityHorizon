@@ -72,7 +72,8 @@ public enum UiDirection
 /// status and avatar, CR-L40; 0x1B-0x1D: voice chat, protocol 3; 0x1E: each lobby player's mods, OD-181, protocol 4;
 /// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5; 0x23-0x24: the private lobby's invite
 /// prompt and its answer, OD-204 T-L3, protocol 6; 0x25-0x27: the private lobby's friend picker and its invite, OD-204 T-L4,
-/// protocol 7; 0x28-0x29: the private lobby's "Who can join", OD-210 CR-S101 W14, protocol 8; native/overlay/src/ui_frames.h and
+/// protocol 7; 0x28-0x29: the private lobby's "Who can join", OD-210 CR-S101 W14, protocol 8; 0x2A-0x2C: the friends sidebar, OD-211
+/// CR-S102 W15, protocol 10; 0x2D: a friend's Discord avatar, protocol 11; native/overlay/src/ui_frames.h and
 /// pipe.cpp are the other end). The hook
 /// never sees it. Protocol 9 (OD-208): players host no world, so the lobby list, join by code, create and hosted frames
 /// (0x07-0x0C, 0x14, 0x15) and WorldAction close (1) and kick (3) are gone from the pipe; either end refuses them as unknown.
@@ -80,7 +81,7 @@ public enum UiDirection
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 10;
+    public const ushort ProtocolVersion = 11;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -122,6 +123,9 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 10 (the friends sidebar, OD-211, CR-S102, W15).</summary>
     public const byte FirstProtocol10Type = 0x2A;
 
+    /// <summary>The lowest type that needs protocol 11 (a friend's Discord avatar, OD-211, CR-S102).</summary>
+    public const byte FirstProtocol11Type = 0x2D;
+
     /// <summary>W15: the most friend rows, incoming friend requests, join requests, profiles per friend one <see cref="FriendsState"/> carries.</summary>
     public const int MaxFriendRows = 64, MaxFriendRequests = 16, MaxJoinRequests = 8, MaxFriendProfiles = 4;
 
@@ -129,7 +133,7 @@ public abstract record UiFrame
     public const int MaxFriendName = 64, MaxFriendGame = 8, MaxFriendUrl = 160, MaxFriendMessage = 160;
 
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x2C;
+    public const byte LastType = 0x2D;
 
     /// <summary>T-L4: the most friends one <see cref="FriendPicker"/> lists (the launcher keeps the first ones, available ones first).</summary>
     public const int MaxPickerFriends = 100;
@@ -768,6 +772,28 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x2D, launcher → overlay (protocol 11, OD-211, CR-S102): one friend's Discord avatar, <c>Id</c> the friend row's id (a
+    /// <see cref="FriendRow.Id"/>), <c>Side</c> 96 with exactly 96 x 96 x 4 bytes of straight-alpha RGBA, or 0 with none (back to the
+    /// initials). The launcher fetched it from <c>cdn.discordapp.com</c> only and decoded it; the overlay never fetches anything.
+    /// <c>Rgba</c> compares by reference: compare encodings.
+    /// </summary>
+    public sealed record FriendAvatar(string Id, ushort Side, byte[] Rgba) : UiFrame
+    {
+        public override byte Type => 0x2D;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        /// <summary>No avatar for <paramref name="id"/> (the initials).</summary>
+        public static FriendAvatar Clear(string id) => new(id, 0, []);
+
+        internal void Validate()
+        {
+            PaneKey(Id, "friend avatar id");
+            if (Side is not (0 or AvatarSide) || Rgba is null || Rgba.Length != Side * Side * 4) throw new ProtocolException("invalid friend avatar");
+        }
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -1103,6 +1129,12 @@ public abstract record UiFrame
                 w.U8(r.Result);
                 w.Str(r.Message);
                 break;
+            case FriendAvatar fa:
+                fa.Validate();
+                w.Str(fa.Id);
+                w.U16(fa.Side);
+                if (fa.Rgba.Length > 0) w.Fixed(fa.Rgba, fa.Rgba.Length, "friend avatar");
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -1184,14 +1216,15 @@ public abstract record UiFrame
             0x29 => new JoinModesSet(r.U8()),
             0x2A => DecodeFriendsState(ref r),
             0x2B => new FriendsAction(r.U8(), r.Str(), r.Str()),
-            _ => new FriendsResult(r.U8(), r.U8(), r.Str()),
+            0x2C => new FriendsResult(r.U8(), r.U8(), r.Str()),
+            _ => DecodeFriendAvatar(ref r),
         };
         r.End();
         switch (frame)
         {
             case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
                 or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast
-                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet or FriendsState or FriendsAction or FriendsResult:
+                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet or FriendsState or FriendsAction or FriendsResult or FriendAvatar:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1277,6 +1310,14 @@ public abstract record UiFrame
             members.Add(new RosterModsMember(xuid, mods));
         }
         return new RosterMods(world, members);
+    }
+
+    private static FriendAvatar DecodeFriendAvatar(ref WireReader r)
+    {
+        var id = r.Str();
+        var side = r.U16();
+        if (side is not (0 or AvatarSide)) throw new ProtocolException("invalid friend avatar");
+        return new FriendAvatar(id, side, side == 0 ? [] : r.Take(side * side * 4).ToArray());
     }
 
     private static Avatar DecodeAvatar(ref WireReader r)
@@ -1938,7 +1979,8 @@ public sealed class UiSession
         return Ready && (frame.Type < UiFrame.FirstProtocol2Type || Protocol >= 2) && (frame.Type < UiFrame.FirstProtocol3Type || Protocol >= 3)
             && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5)
             && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6) && (frame.Type < UiFrame.FirstProtocol7Type || Protocol >= 7)
-            && (frame.Type < UiFrame.FirstProtocol8Type || Protocol >= 8) && (frame.Type < UiFrame.FirstProtocol10Type || Protocol >= 10);
+            && (frame.Type < UiFrame.FirstProtocol8Type || Protocol >= 8) && (frame.Type < UiFrame.FirstProtocol10Type || Protocol >= 10)
+            && (frame.Type < UiFrame.FirstProtocol11Type || Protocol >= 11);
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -1977,7 +2019,8 @@ public sealed class UiSession
         if (frame.Type >= UiFrame.FirstProtocol2Type && Protocol < 2 || frame.Type >= UiFrame.FirstProtocol3Type && Protocol < 3
             || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5
             || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6 || frame.Type >= UiFrame.FirstProtocol7Type && Protocol < 7
-            || frame.Type >= UiFrame.FirstProtocol8Type && Protocol < 8 || frame.Type >= UiFrame.FirstProtocol10Type && Protocol < 10)
+            || frame.Type >= UiFrame.FirstProtocol8Type && Protocol < 8 || frame.Type >= UiFrame.FirstProtocol10Type && Protocol < 10
+            || frame.Type >= UiFrame.FirstProtocol11Type && Protocol < 11)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }

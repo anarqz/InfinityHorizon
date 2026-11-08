@@ -268,14 +268,21 @@ void PressKey(const KeyDef &key) {
 // ---------------------------------------------------------------- drawing helpers
 bool Inside(ImVec2 p, ImVec2 a, ImVec2 b) { return p.x >= a.x && p.x < b.x && p.y >= a.y && p.y < b.y; }
 
-// A friend's initials on a disc (the Discord avatar is not carried on the pipe yet); a green dot when online.
-void Disc(ImDrawList *dl, ImVec2 c, float r, const std::string &name, bool online, bool supporter) {
-    dl->AddCircleFilled(c, r, online ? (supporter ? kPinkU : IM_COL32(86, 86, 96, 255)) : IM_COL32(52, 52, 58, 255), 40);
-    std::string initials = name.substr(0, std::min<size_t>(name.size() >= 2 && static_cast<unsigned char>(name[0]) < 0x80 ? 2 : 1, name.size()));
-    for (auto &ch : initials) ch = static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
-    ImFont *font = r > 30 * s ? f.heading : f.tag;
-    const ImVec2 size = Measure(font, initials.c_str());
-    TextAt(dl, font, ImVec2(c.x - size.x / 2, c.y - size.y / 2), online ? kText : kTextDim, initials.c_str());
+// A friend's disc: its Discord avatar (0x2D, protocol 11) once the launcher sent it, else its initials; a green dot when online.
+// `id` names the friend row (null: a request row, initials only).
+void Disc(ImDrawList *dl, ImVec2 c, float r, const std::string &name, bool online, bool supporter, const std::string *id = nullptr) {
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+    if (const uint64_t texture = id ? FriendAvatarTexture(*id, u0, v0, u1, v1) : 0) {
+        dl->AddImageRounded(static_cast<ImTextureID>(texture), ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), ImVec2(u0, v0), ImVec2(u1, v1),
+                            online ? IM_COL32_WHITE : IM_COL32(160, 160, 160, 255), r);
+    } else {
+        dl->AddCircleFilled(c, r, online ? (supporter ? kPinkU : IM_COL32(86, 86, 96, 255)) : IM_COL32(52, 52, 58, 255), 40);
+        std::string initials = name.substr(0, std::min<size_t>(name.size() >= 2 && static_cast<unsigned char>(name[0]) < 0x80 ? 2 : 1, name.size()));
+        for (auto &ch : initials) ch = static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
+        ImFont *font = r > 30 * s ? f.heading : f.tag;
+        const ImVec2 size = Measure(font, initials.c_str());
+        TextAt(dl, font, ImVec2(c.x - size.x / 2, c.y - size.y / 2), online ? kText : kTextDim, initials.c_str());
+    }
     if (online) {
         dl->AddCircleFilled(ImVec2(c.x + r * 0.72f, c.y + r * 0.72f), r * 0.28f + 2 * s, kPanel, 20);
         dl->AddCircleFilled(ImVec2(c.x + r * 0.72f, c.y + r * 0.72f), r * 0.28f, kTalkGreen, 20);
@@ -411,7 +418,7 @@ void DrawList(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, bool
         }
         const FriendRowFrame &fr = st.friends[static_cast<size_t>(row.index)];
         const bool excluded = fr.Has(kFriendExcluded);
-        Disc(dl, ImVec2(a.x + 32 * s, a.y + th / 2), 20 * s, fr.name, fr.Has(kFriendOnline), fr.Has(kFriendSupporter));
+        Disc(dl, ImVec2(a.x + 32 * s, a.y + th / 2), 20 * s, fr.name, fr.Has(kFriendOnline), fr.Has(kFriendSupporter), &fr.id);
         Clipped(dl, f.body, ImVec2(tx, a.y + 8 * s), tw, excluded || !fr.Has(kFriendOnline) ? kTextDim : kText, fr.name.c_str());
         if (!fr.discord_user.empty()) { // linked Discord, also in the list
             const float nw = Measure(f.body, fr.name.c_str()).x;
@@ -484,7 +491,7 @@ void DrawCard(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, floa
     if (!fr) { g_view = View::List; return; }
     float y = l.top;
     const float cx = l.x + l.w / 2;
-    Disc(dl, ImVec2(cx, y + 44 * s), 40 * s, fr->name, fr->Has(kFriendOnline), fr->Has(kFriendSupporter));
+    Disc(dl, ImVec2(cx, y + 44 * s), 40 * s, fr->name, fr->Has(kFriendOnline), fr->Has(kFriendSupporter), &fr->id);
     y += 100 * s;
     const ImVec2 ns = Measure(f.heading, fr->name.c_str());
     dl->PushClipRect(ImVec2(l.x + l.pad, y), ImVec2(l.x + l.w - l.pad, y + 40 * s), true);
@@ -503,7 +510,7 @@ void DrawCard(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, floa
         Clipped(dl, font, ImVec2(cx - std::min(ts.x, l.w - 2 * l.pad) / 2, y), l.w - 2 * l.pad, color, text.c_str(), 26);
         y += ts.y + 6 * s;
     };
-    if (!fr->discord_user.empty()) { // the Discord avatar needs an image on the pipe; its name shows today
+    if (!fr->discord_user.empty()) { // the linked Discord's names (its avatar is the disc above, 0x2D)
         line(f.body, Rgba(120, 140, 255), fr->discord_name.empty() ? "@" + fr->discord_user : fr->discord_name + "  @" + fr->discord_user);
     }
     const bool excluded = fr->Has(kFriendExcluded);
