@@ -26,7 +26,14 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
         ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,
-        CloudSaves = true, };
+        CloudSaves = true, InviteAcceptScreens = [Fm5HoppersScreen], };
+
+    /// <summary>
+    /// OD-223 (T-1108-M): FM5's MULTIPLAYER hoppers screen, as the hook's top screen id reads it (game_profile.h "FM5 WATCH top screen
+    /// id", reported as Event 9), SAURON-verified (main menu 101, hoppers 67, joining 34, lobby 110, race 98/68, results 155/154/211). The
+    /// hook reports it only once the hoppers' cloud config is loaded (its <c>fi_fm5_screen_terms</c>, value 3); before that it reports 255.
+    /// </summary>
+    public const int Fm5HoppersScreen = 67;
 
     /// <summary>
     /// NOOB_FROM_FILE (owner 2026-11-08): where the game keeps a profile's saves and what a career revision holds, so a save copied off a
@@ -92,9 +99,17 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     /// <summary>
     /// OD-211 (CR-S102): the game's rich-presence screen ids that are a race (the hook's Event 9 reports the screen; FH2: 4-8, the solo
     /// events, and 18 <c>ONLINE_RACE</c>, as the server's <c>fi_domain::activity::FH2_RACE_SCREENS</c>). No online toast shows on one.
-    /// Empty: the hook reports no screen for the game (FM5: its race is the official race lobby, activity <c>race</c>).
+    /// Empty: no screen is a race (FM5: its race is the official race lobby, activity <c>race</c>; its screen ids are its own).
     /// </summary>
     public IReadOnlyList<int> RaceScreens { get; init; } = [];
+
+    /// <summary>
+    /// OD-223 (owner 2026-11-08: "Players can ONLY accept an invitation for a MP game when they're both in the MULTIPLAYER HOPPERS
+    /// screen"; option B): the screen ids (the hook's Event 9) on which the game may show and take an invite. Off them, or with no screen
+    /// reported yet, every invite is declined at once with no prompt and no toast, and one showing is withdrawn and declined. Empty: no
+    /// restriction (FH2, unchanged).
+    /// </summary>
+    public IReadOnlyList<int> InviteAcceptScreens { get; init; } = [];
 
     /// <summary>The allowed titles.</summary>
     public static readonly IReadOnlyList<GameDefinition> All = [Fh2, Fm5];

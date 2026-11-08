@@ -43,11 +43,23 @@ enum {
    each offset but the last is added and the pointer there read (null stops the walk, nothing is logged); the last offset
    addresses the `bytes` that are logged at each change. Other kinds leave chain_count 0. */
 enum { FI_WATCH_CHAIN_MAX = 6 };
+/* OD-223 (T-1108-M): a row whose value also goes to the launcher as the game's screen, Event 9 (infinity.h FI_EVENT_SCREEN, detail the
+   decimal id 0..255), at each change; a value past 255 or a walk that fails reads FI_WATCH_SCREEN_UNKNOWN (the launcher then knows no
+   screen it accepts invites on). For a game whose screen activity.c does not report (FM5). 0: logged only. */
+#define FI_WATCH_EVENT_SCREEN 9u
+#define FI_WATCH_SCREEN_UNKNOWN 255u
 typedef struct {
     const char *label;
     unsigned global, offset, bytes, kind;
     unsigned chain_count, chain[FI_WATCH_CHAIN_MAX];
+    unsigned event;
 } FiGameWatch;
+
+/* OD-223: the screen an FI_WATCH_EVENT_SCREEN row reports from a read: its value when the read succeeded and fits 0..254, else
+   FI_WATCH_SCREEN_UNKNOWN. Pure, for tests. */
+static inline unsigned fi_watch_screen_of(int read_ok, unsigned value) {
+    return read_ok && value < FI_WATCH_SCREEN_UNKNOWN ? value : FI_WATCH_SCREEN_UNKNOWN;
+}
 
 /* The chain walk of a FI_WATCH_CHAIN row, with the reader passed in so a test can run it on a fake heap
    (game_patches.h passes memory_read). 1 and the value (little endian, `bytes` wide) when every pointer was readable and set. */
@@ -131,6 +143,10 @@ typedef struct {
        in azimuth.exe 1.0.4, which throws on a non-FSH2 string, so only strings the game's create made are passed). 0: none (FH2);
        the hook then falls back to finding the delete next to the create. */
     unsigned hstring_delete_iat_rva;
+    /* OD-223 (T-1108-M): the terms (as ready_terms) the game's screen row (FI_WATCH_EVENT_SCREEN) needs besides its walk: while one fails
+       Event 9 reports FI_WATCH_SCREEN_UNKNOWN, so the launcher takes no invite there. FM5: its hopper cloud config loaded (SAURON). */
+    const FiReadyTerm *screen_terms;
+    unsigned screen_term_count;
 } FiGameProfile;
 
 /* FM5 1.0.0.20 (docs/launcher/FM5_INFINITY_HANDOFF.md 3).
@@ -154,22 +170,22 @@ static const FiGamePatch fi_fm5_patches[] = {
 
 /* The states the hopper screen decides on (response spec 9). */
 static const FiGameWatch fi_fm5_watches[] = {
-    {"FM5 WATCH party state +48", 0x261d198u, 0x48u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH party requested +4c", 0x261d198u, 0x4cu, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH party flag +290", 0x261d198u, 0x290u, 1, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH cloud config +11510", 0x261d1a0u, 0x11510u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH party state +48", 0x261d198u, 0x48u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH party requested +4c", 0x261d198u, 0x4cu, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH party flag +290", 0x261d198u, 0x290u, 1, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH cloud config +11510", 0x261d1a0u, 0x11510u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4, FI_WATCH_VALUE, 0, {0}, 0},
     /* R8 (lobby spec 12): the game-ready predicate's terms, to verify it on the first boot. F+0x5c, the frame
        timestamp, changes every frame and is not logged here. */
-    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4, FI_WATCH_VALUE, 0, {0}},
-    {"FM5 WATCH ready F+48 (set in a race)", 0x25d0398u, 0x48u, 8, FI_WATCH_NONNULL, 0, {0}},
+    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4, FI_WATCH_VALUE, 0, {0}, 0},
+    {"FM5 WATCH ready F+48 (set in a race)", 0x25d0398u, 0x48u, 8, FI_WATCH_NONNULL, 0, {0}, 0},
     /* the predicate's main risk: the frame timestamp stopping on some screen */
-    {"FM5 WATCH ready heartbeat F+5c", 0x25d0398u, 0x5cu, 4, FI_WATCH_HEARTBEAT, 0, {0}},
-    {"FM5 WATCH ready F", 0x25d0398u, 0, 0, FI_WATCH_POINTER_ONCE, 0, {0}},
+    {"FM5 WATCH ready heartbeat F+5c", 0x25d0398u, 0x5cu, 4, FI_WATCH_HEARTBEAT, 0, {0}, 0},
+    {"FM5 WATCH ready F", 0x25d0398u, 0, 0, FI_WATCH_POINTER_ONCE, 0, {0}, 0},
     /* W16 (lobby spec 12 "Screen id, for diagnosis"): the UserInterface U=*(0x25f88a0); the top screen id is
        **(*(*(*(U+0x58)+0x20)+8)+0x10) (0x1408e6580; 0 when *(s+0x28)==0, not checked here). VERIFIED statically (SAURON), id 0x6e is a
        race start. Read it to tell when the lobby screen is on top. The GameOptions chain itself (screen+0x360 -> CLobby, CLobby+0x130 ->
@@ -178,12 +194,15 @@ static const FiGameWatch fi_fm5_watches[] = {
     /* W16 (SAURON): the CLobby singleton, TBasicSingleton<CLobby>: its ctor writes the global at 0x25e6e40 and its dtors zero it. Chain only,
        any null link stops the walk. GameOptions go = *(CLobby+0x130) resets when the lobby is left. Expected: before a grant go+38 is not
        -2; after engine msg 11 go+38 and go+40 read -2; after msg 12 go+38 is no longer -2. */
-    {"FM5 WATCH go+38 (-2 = local options owner)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x38u}},
-    {"FM5 WATCH go+40 (-2 too after the grant)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x40u}},
-    {"FM5 WATCH lobby session +148 (non-zero)", 0x25e6e40u, 0, 8, FI_WATCH_CHAIN, 1, {0x148u}},
-    {"FM5 WATCH lobby kind +38 (5/6/7)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x38u}},
-    {"FM5 WATCH lobby race +40 (1 from race load to end)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x40u}},
-    {"FM5 WATCH top screen id", 0x25f88a0u, 0, 4, FI_WATCH_CHAIN, 5, {0x58u, 0x20u, 0x8u, 0x10u, 0}},
+    {"FM5 WATCH go+38 (-2 = local options owner)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x38u}, 0},
+    {"FM5 WATCH go+40 (-2 too after the grant)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x40u}, 0},
+    {"FM5 WATCH lobby session +148 (non-zero)", 0x25e6e40u, 0, 8, FI_WATCH_CHAIN, 1, {0x148u}, 0},
+    {"FM5 WATCH lobby kind +38 (5/6/7)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x38u}, 0},
+    {"FM5 WATCH lobby race +40 (1 from race load to end)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x40u}, 0},
+    /* OD-223 (T-1108-M): also Event 9, so the launcher takes FM5 invites on its MULTIPLAYER hoppers screen only (GameDefinition
+       InviteAcceptScreens; SAURON's live map: 101 main menu, 67 hoppers, 34 joining, 110 lobby, 98/68 race load/race, 155/154/211
+       results), and only once fi_fm5_screen_terms hold */
+    {"FM5 WATCH top screen id", 0x25f88a0u, 0, 4, FI_WATCH_CHAIN, 5, {0x58u, 0x20u, 0x8u, 0x10u, 0}, FI_WATCH_EVENT_SCREEN},
 };
 
 /* SAURON's R8 (lobby spec 12, static, verified by T1's first values): S=*0x14261d1a0, L=*0x1425e6e40,
@@ -197,6 +216,15 @@ static const FiReadyTerm fi_fm5_ready[] = {
     {0x25d0398u, 0x48u, 8, FI_READY_EQ, 0},     /* F+0x48 null in menus */
 };
 
+/* OD-223 (T-1108-M, SAURON): an invite may be taken only once the hoppers screen's cloud config is loaded: the u32 at
+   *(0x14261d1a0)+0x11510 (watch row "cloud config": 1 pending, 3 ok, 4 failed; 1 for about 0.6 s on entry, 30 s on the stuck path).
+   Until then the screen row reports FI_WATCH_SCREEN_UNKNOWN. The failing accept (games-10, 15:55:26) came on screen 101 with it 0;
+   the good one (16:01:40) on 67 with it 3. */
+#define FI_FM5_CLOUD_CONFIG_OK 3u
+static const FiReadyTerm fi_fm5_screen_terms[] = {
+    {0x261d1a0u, 0x11510u, 4, FI_READY_EQ, FI_FM5_CLOUD_CONFIG_OK},
+};
+
 /* FM5's heartbeat window: the game clamps a frame's delta at 4000 ms (0x14013f841, cmp 0FA0h), so a gap of a few seconds is a
    normal hitch, and T2's stall of just over 1 s dropped GAME READY for one poll (SAURON). A race start is still seen at once:
    L+0x40 is 1 for the whole load and race. */
@@ -204,13 +232,29 @@ static const FiReadyTerm fi_fm5_ready[] = {
 
 static const FiGameProfile fi_game_profiles[] = {
     {FI_GAME_FH2, "FH2", GAME_TIMESTAMP, GAME_IMAGE_SIZE, FI_FEATURES_ALL, L"title-1a96545b", L"media\\stripped\\gamedbRC.slt", 2,
-     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0},
+     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0, 0, 0},
     {FI_GAME_FM5, "FM5", 0x53d8d1f2u, 0x279d000u, 0, L"title-7b35d917", L"media\\db\\gamedb.slt", -1,
      fi_fm5_patches, sizeof(fi_fm5_patches) / sizeof(fi_fm5_patches[0]),
      fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0]),
      fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u},
-     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u, 0x101bcf8u},
+     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u, 0x101bcf8u, fi_fm5_screen_terms, sizeof(fi_fm5_screen_terms) / sizeof(fi_fm5_screen_terms[0])},
 };
+
+/* OD-223: what the game's screen row reports, the walk's value `value` (`read_ok` when it succeeded) gated by the profile's
+   screen_terms read from `image` with `read`: FI_WATCH_SCREEN_UNKNOWN unless the walk succeeded, fits 0..254 and every term holds. Pure,
+   for tests (game_patches.h passes memory_read). */
+static inline unsigned fi_watch_screen_gated(FiWatchReader read, const unsigned char *image, const FiGameProfile *game, int read_ok,
+                                             unsigned value) {
+    for (unsigned i = 0; read_ok && i < game->screen_term_count; ++i) {
+        const FiReadyTerm *term = &game->screen_terms[i];
+        const unsigned char *object = 0;
+        unsigned long long seen = 0;
+        read_ok = term->bytes <= sizeof(seen) && read(image + term->global, &object, sizeof(object)) && object &&
+                  read(object + term->offset, &seen, term->bytes) &&
+                  (term->op == FI_READY_EQ ? seen == term->value : term->op == FI_READY_NE ? seen != term->value : seen >= term->value);
+    }
+    return fi_watch_screen_of(read_ok, value);
+}
 
 /* The polled heartbeat's term (game_patches.h game_ready_thread): it changed at `beat_at` (0: never seen change) and is
    fresh while no more than `window_ms` have passed since. Pure, for tests. */
