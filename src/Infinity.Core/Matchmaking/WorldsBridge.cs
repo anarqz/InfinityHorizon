@@ -589,7 +589,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
                     ObserveSeatEnded(seat.Ended, grantId);
                 }
                 // OD-149: isolated by the anti-cheat system: the seat in a clean world ended, the launcher moves the player
-                if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text("worlds.pool_moved");
+                if (after.Step == SeatStep.Stop && SeatEndedForPool(seat.Ended, grantId)) return _text(PoolEndKey);
                 return after.Step == SeatStep.Stop && after.Why != SeatDecision.LeftSeat ? _text("worlds.seat_ended") : null;
             }
         }

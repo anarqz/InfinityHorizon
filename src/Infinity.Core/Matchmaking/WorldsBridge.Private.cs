@@ -69,6 +69,9 @@ public sealed partial class WorldsBridge
     /// <summary>CR-S99: the activity of the game's private creates when its game says one (FM5: race); null keeps the kind's own.</summary>
     public string? PrivateCreateActivity { get; set; }
 
+    /// <summary>CR-S103: the game has pool worlds to move a flagged player to (<see cref="Process.GameDefinition.HasPoolWorlds"/>); false: a <c>pool</c> seat end is told, never followed by a move.</summary>
+    public bool HasPoolWorlds { get; set; } = true;
+
     /// <summary>The seat's world is a private official world (as last known).</summary>
     public bool InPrivateLobby => _seat.GrantId is not null && SeatPrivate(Volatile.Read(ref _seatWorld));
 

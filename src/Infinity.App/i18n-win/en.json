@@ -394,6 +394,7 @@
   "worlds.not_allowed_pool": "This is a pineapple lobby: only players isolated by the anti-cheat system can join it.",
   "worlds.pool_only": "You are isolated by the anti-cheat system: until it ends you can join only pineapple lobbies.",
   "worlds.pool_moved": "Isolated by the anti-cheat system\nYou were moved to a pineapple lobby, where you play until the isolation ends.",
+  "worlds.pool_seat_ended": "Removed by the anti-cheat system\nYour online session was ended. You can rejoin after the cooldown; there is no separate lobby for this game.",
   "worlds.pool_notice": "Isolated by the anti-cheat system for {time}. Until then you play only in pineapple lobbies.",
   "worlds.pool_dispute": "Think this is a mistake? Dispute it on Discord",
   "worlds.mods_needed": "Needs: {mods}.",

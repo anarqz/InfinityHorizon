@@ -19,7 +19,13 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
         Path.Combine("media", "db", "gamedb.slt"), FullFeatures: false)
-    { PrivateCreateActivity = Matchmaking.WorldActivities.Race };
+    { PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false };
+
+    /// <summary>
+    /// CR-S103: the game has official pool worlds a flagged player is moved to (FH2). Without them (FM5) the server ends a flagged
+    /// player's seat with reason <c>pool</c> and starts the kick cooldown: the launcher says so and does not move the player.
+    /// </summary>
+    public bool HasPoolWorlds { get; init; } = true;
 
     /// <summary>
     /// The activity of every private lobby the game creates (CR-S99: FM5's are races). Null: the activity follows the game's own
