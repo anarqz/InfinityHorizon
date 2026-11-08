@@ -27,7 +27,8 @@
    starts anyway when the game is connected in online free roam, or in nothing; it never starts when the game is connected with any
    other lobby type (a Road Trip, 1, or a car meet, 3 or 6: an event the player is in), which is logged and left to the launcher's
    bound (its seat is let go there). Nothing else changes: the player still confirms with (X), and a stale or closed
-   request is dropped as any other.
+   request is dropped as any other. T-1108-J: a move's start that the game queued behind its own running search (module+0x150
+   while +0xc0 lives) gets the game's disconnect for that search, so the queued start runs (fh_move_unpark).
 
    Giving up (CancelMatchmaking, 0x24). When the launcher gave up on a lobby ask's seat (it did not
    start playing within 15 s), the same detour, on the module's next Update, sends the game's own
@@ -262,6 +263,31 @@ static int fh_move_blocked(unsigned char *module, unsigned lobby) {
     return 0;
 }
 
+/* T-1108-J (live, games-6): a move's start parked behind the game's own matchmaking. OnStartMatchmaking queues the start
+   (module+0x150) while a live matchmaking entity exists (+0xc0), and Update runs the queued start only once the entity is gone
+   (game+0x808b60: the +0x15c branch needs +0xc0 null); a game sitting in its own FINDING SESSION search never drops it, so the
+   move waited forever (queued=1 entity=1 +15c=1). As Update itself does when its entity's session is not the one asked
+   (game+0x80905e), the game's own disconnect is sent so that search ends; the queued start is kept and the game runs it on a
+   following Update. Only for a move (the player chose the private lobby), only with a queued start of `lobby` and an entity, and
+   only on the send's verified bytes; a game connected in a session has no entity (live, test.11), so it is never disconnected. */
+static void fh_move_unpark(unsigned char *module, unsigned lobby) {
+    unsigned char *queued = 0, queued_lobby = 0;
+    void *entity = 0;
+    unsigned connected = (unsigned)fh_connected;
+    if ((connected && connected != FH_LOBBY_FREE_ROAM) || !memory_read_pointer(module + FH_QUEUED_OFFSET, (void **)&queued) || !memory_read(queued, &queued_lobby, 1) ||
+        queued_lobby != lobby || !memory_read_pointer(module + FH_ENTITY_OFFSET, &entity)) {
+        return;
+    }
+    if (!fh_cancel_ready) {
+        log_append("FOLLOW: an invite's move waits behind the game's own matchmaking, and its disconnect is not as expected "
+                   "here; it stays queued.\r\n");
+        return;
+    }
+    ((FhSendFn)(uintptr_t)(fh_game + FH_SEND_RVA))(module, fh_game + FH_DISCONNECT_RVA);
+    fh_log_lobby("FOLLOW: an invite's move waits behind the game's own matchmaking: that search is disconnected; the queued "
+                 "start (lobby type ", lobby, ") runs once it ends.\r\n");
+}
+
 static void fh_update(void *module, float dt) {
     if (fh_cancel && InterlockedExchange(&fh_cancel, 0)) {
         if (GetTickCount64() - (ULONGLONG)fh_cancel_at > FH_PENDING_MS || !fi_launch_live() || fi_launch_suspended()) {
@@ -297,6 +323,7 @@ static void fh_update(void *module, float dt) {
                 fh_log_lobby("FOLLOW: an invite's move: matchmaking started for lobby type ", lobby,
                              " (the player confirms; the game leaves its current session itself).\r\n");
             }
+            fh_move_unpark(module, lobby);
         } else if (fh_already(module, lobby)) {
             log_append(lobby == FH_LOBBY_ROAD_TRIP ? "FOLLOW: the host is in Online Road Trip; the game is already there.\r\n"
                                                    : "FOLLOW: the host is in Online Free Roam; the game is already there.\r\n");
