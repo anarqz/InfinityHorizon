@@ -23,6 +23,15 @@ public enum BundleFault
     CommitMismatch,
     NotGameDatabase,
     NotXml,
+
+    /// <summary>FM5SAVE1 (CR-S105): the profile not first, a sibling name that is not a livery's or a thumbnail's, out of order or twice, or too many.</summary>
+    InvalidContainer,
+
+    /// <summary>FM5SAVE1: ProfileData is not the game's property tree (<c>Main/Level</c>, <c>Main/XP</c>, <c>Main/Credits</c> do not read).</summary>
+    NotProfileData,
+
+    /// <summary>FM5SAVE1: a thumbnail that is not a PNG.</summary>
+    NotThumbnail,
 }
 
 /// <summary>A bundle that does not pass <see cref="Fh2Bundle"/>'s checks; <see cref="File"/> names the file when one is at fault.</summary>
@@ -45,6 +54,12 @@ public sealed record BundleLayout(ulong Label, IReadOnlyList<BundleEntry> Entrie
 /// <summary>A bundle that passed every check: files unpacked in <see cref="Fh2Bundle.SaveFiles"/> order, content digest (lower hex), summary.</summary>
 public sealed record ValidBundle(ulong Label, IReadOnlyList<SaveFile> Files, string ContentSha256, SaveSummary Summary)
 {
+    /// <summary>
+    /// FM5SAVE1 (CR-S105): every container of the career, the profile (<see cref="Fm5Bundle.User"/>, whose files are <see cref="Files"/>)
+    /// first, then its siblings ascending by name. Null for an FH2SAVE1 bundle (one revision, <see cref="Files"/>).
+    /// </summary>
+    public IReadOnlyList<Fm5Container>? Containers { get; init; }
+
     /// <summary>The label as Azimuth names the folder (16 lowercase hex; folder names compare case-insensitively, CR-L9).</summary>
     public string LabelHex => Label.ToString("x16", CultureInfo.InvariantCulture);
 }

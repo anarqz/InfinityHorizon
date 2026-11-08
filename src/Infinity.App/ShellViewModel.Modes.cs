@@ -195,8 +195,10 @@ public sealed partial class ShellViewModel
         var query = _session.CareerGame(game);
         if (!_saveClients.TryGetValue((game, query), out var client))
         {
-            var api = new SavesApiClient(Http, saves, ClientHeader, query);
-            client = (new CloudSaves(api, new SaveSyncStore(_stateDirectory, game), saves.GetLeftPart(UriPartial.Authority)), api);
+            // CR-S105: the line's bundle is the game's (FH2SAVE1, or FM5SAVE1 with its garage's containers)
+            var bundle = CurrentGame.Saves.Bundle;
+            var api = new SavesApiClient(Http, saves, ClientHeader, query, bundle);
+            client = (new CloudSaves(api, new SaveSyncStore(_stateDirectory, game, bundle.MaxBundle), saves.GetLeftPart(UriPartial.Authority), bundle), api);
             _saveClients[(game, query)] = client;
         }
         return client;
@@ -205,7 +207,7 @@ public sealed partial class ShellViewModel
     /// <summary>OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says).</summary>
     private SessionSaves? SessionSavesFor(Profile profile)
     {
-        if (!CurrentGame.FullFeatures || _install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
+        if (!CurrentGame.CloudSaves || _install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
         {
             return null;
         }

@@ -308,7 +308,8 @@ public static class AzimuthSaves
         {
             return null; // listed without its credits
         }
-        return ProfileInt(profile, "Credits");
+        // CR-S105: FM5's ProfileData may name Credits more than once; its Main/Credits reads by path (fi-saves profile_path_int)
+        return ProfileInt(profile, "Credits") ?? (Fm5Bundle.ProfilePathInt(profile, "Main/Credits") is { } credits and >= int.MinValue and <= int.MaxValue ? (int)credits : null);
     }
 
     /// <summary>

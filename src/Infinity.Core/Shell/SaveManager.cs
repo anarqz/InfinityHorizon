@@ -128,7 +128,7 @@ public enum ChipTone
 
 /// <summary>What the chip of one card is computed from, all read on this PC (no request).</summary>
 /// <param name="State">Where the career of the chosen game stands.</param>
-/// <param name="CloudSaves">The game keeps cloud saves (<c>GameDefinition.FullFeatures</c>).</param>
+/// <param name="CloudSaves">The game keeps cloud saves (<c>GameDefinition.CloudSaves</c>; FM5 too since CR-S105).</param>
 /// <param name="CloudRevision">The career's newest cloud revision from <c>/me</c> (<c>career.cloud.revision</c>), null or 0 for none.</param>
 /// <param name="LocalContent">The content digest of this PC's newest sealed save of the profile, null when this PC has none.</param>
 /// <param name="Mark">What this PC last agreed with the cloud (sync-state), null when never.</param>

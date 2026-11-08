@@ -146,7 +146,7 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
     /// The headers and body of a commit (<c>PUT .../save</c>, §4.3) and of its dry run (§4.11), set in one place. <paramref name="withLease"/>
     /// false (the dry run) leaves out <c>Idempotency-Key</c>, <c>X-Fi-Session-Id</c>, <c>X-Fi-Fence</c> and <c>X-Fi-Seed-Source</c>.
     /// </summary>
-    private static void CommitHeaders(HttpRequestMessage request, SaveCommitRequest commit, bool withLease)
+    private void CommitHeaders(HttpRequestMessage request, SaveCommitRequest commit, bool withLease)
     {
         request.Headers.TryAddWithoutValidation("If-Match", string.Create(CultureInfo.InvariantCulture, $"\"{commit.Expected}\""));
         if (withLease)
@@ -163,15 +163,17 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
             request.Headers.TryAddWithoutValidation(SeedSourceHeader, source);
         }
         request.Content = new ByteArrayContent(commit.Bundle);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue(Infinity.Core.Saves.Fh2Bundle.MediaType);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(Bundle.MediaType);
     }
     private readonly HttpClient _http;
     private readonly string _client;
 
     /// <param name="game">CR-S98: the game whose career every route names (<c>?game=</c>, CAREERS.md §3); null against a server before
     /// CR-S98 (no <c>players</c> in <c>/me</c>), where the bare route means FH2.</param>
-    public SavesApiClient(HttpClient http, Uri saves, string clientHeader, string? game = null)
+    /// <param name="bundle">CR-S105: the line's bundle (its <c>Content-Type</c> and size limit); null is FH2SAVE1.</param>
+    public SavesApiClient(HttpClient http, Uri saves, string clientHeader, string? game = null, Infinity.Core.Saves.ICareerBundle? bundle = null)
     {
+        Bundle = bundle ?? Infinity.Core.Saves.Fh2CareerBundle.Instance;
         _http = http ?? throw new ArgumentNullException(nameof(http));
         Saves = ApiClient.CheckOrigin(saves);
         _client = clientHeader;
@@ -179,6 +181,9 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
     }
 
     public Uri Saves { get; }
+
+    /// <summary>CR-S105: the bundle format every upload and download of this line uses.</summary>
+    public Infinity.Core.Saves.ICareerBundle Bundle { get; }
 
     /// <summary>The <c>?game=</c> every route sends; null sends none.</summary>
     public string? Game { get; }
@@ -228,7 +233,7 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
             using var buffer = new MemoryStream();
             var chunk = new byte[16 << 10];
             int read;
-            while (buffer.Length <= Infinity.Core.Saves.Fh2Bundle.MaxBundle && (read = await stream.ReadAsync(chunk, cancellation).ConfigureAwait(false)) > 0)
+            while (buffer.Length <= Bundle.MaxBundle && (read = await stream.ReadAsync(chunk, cancellation).ConfigureAwait(false)) > 0)
             {
                 buffer.Write(chunk, 0, read);
             }
