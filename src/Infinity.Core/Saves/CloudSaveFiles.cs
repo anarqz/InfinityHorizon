@@ -4,10 +4,24 @@ using System.Globalization;
 namespace Infinity.Core.Saves;
 
 /// <summary>A local revision read for the cloud: its files (verified against its commit), bundle and content digest.</summary>
-public sealed record PackedRevision(ulong Number, IReadOnlyList<SaveFile> Files, byte[] Bundle, string ContentSha256);
+public sealed record PackedRevision(ulong Number, IReadOnlyList<SaveFile> Files, byte[] Bundle, string ContentSha256)
+{
+    /// <summary>CR-S105 (FM5SAVE1): every container packed, the profile first. Null for FH2SAVE1.</summary>
+    public IReadOnlyList<Fm5Container>? Containers { get; init; }
+
+    /// <summary>CR-S105: containers the career names that are not sealed on this PC (not packed; the server does not check them).</summary>
+    public IReadOnlyList<string> MissingSiblings { get; init; } = [];
+}
 
 /// <summary>The result of <see cref="CloudSaveFiles.Install"/>: the folder number the revision got, and the copies of what it shadows.</summary>
-public sealed record InstalledRevision(ulong Number, string Path, IReadOnlyList<string> Archived);
+public sealed record InstalledRevision(ulong Number, string Path, IReadOnlyList<string> Archived)
+{
+    /// <summary>CR-S105 (FM5): sibling containers installed as their own <c>highest + 1</c>.</summary>
+    public IReadOnlyList<string> Siblings { get; init; } = [];
+
+    /// <summary>CR-S105 (FM5): sibling containers left as they were (their newest revision already holds the same files).</summary>
+    public IReadOnlyList<string> SkippedSiblings { get; init; } = [];
+}
 
 /// <summary>The result of <see cref="CloudSaveFiles.QuarantineUnsealed"/>: folders moved to the archive, and busy folders left in place.</summary>
 public sealed record PreparedFolders(IReadOnlyList<string> Moved, IReadOnlyList<string> Busy);
@@ -150,6 +164,19 @@ public static class CloudSaveFiles
         {
             throw new SaveException("the downloaded save does not match the cloud head's digest");
         }
+        return InstallContainer(savesRoot, ProfileDir(savesRoot, xuid), AzimuthSaves.FolderFor(xuid), files, expectedContent,
+            Fh2Bundle.ContentDigest, ReadFiles, stagingId, label, afterMove);
+    }
+
+    /// <summary>
+    /// <see cref="Install"/>'s steps for one container folder (<paramref name="containerDir"/>, named <paramref name="folder"/> in the
+    /// archive and the staging folder): staged and verified, every revision it shadows copied to the archive, renamed to
+    /// <c>revisions\&lt;highest + 1&gt;</c>, then read back with <paramref name="readBack"/> and checked by <paramref name="digest"/> against
+    /// <paramref name="expectedContent"/>. CR-S105: FM5's profile and sibling containers each go through it.
+    /// </summary>
+    internal static InstalledRevision InstallContainer(string savesRoot, string containerDir, string folder, IReadOnlyList<SaveFile> files, string expectedContent,
+        Func<IReadOnlyList<SaveFile>, string> digest, Func<LocalRevision, IReadOnlyList<SaveFile>> readBack, string stagingId, string label, Action<string>? afterMove)
+    {
         if (files.Count == 0 || files[0].Name != "commit")
         {
             throw new SaveException("the downloaded save has no commit file");
@@ -158,8 +185,7 @@ public static class CloudSaveFiles
         {
             throw new ArgumentException("a staging id is letters, digits and '-'", nameof(stagingId));
         }
-        var folder = AzimuthSaves.FolderFor(xuid);
-        var profileDir = ProfileDir(savesRoot, xuid);
+        var profileDir = containerDir;
         var staging = Path.Combine(savesRoot, AzimuthSaves.IncomingDir, $"{folder}-{stagingId}");
         if (Directory.Exists(staging))
         {
@@ -213,7 +239,7 @@ public static class CloudSaveFiles
         try
         {
             verified = AzimuthSaves.NewestSealed(profileDir) is { } newest && newest.Number == number
-                && string.Equals(Fh2Bundle.ContentDigest(ReadFiles(newest)), expectedContent, StringComparison.OrdinalIgnoreCase);
+                && string.Equals(digest(readBack(newest)), expectedContent, StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
         {

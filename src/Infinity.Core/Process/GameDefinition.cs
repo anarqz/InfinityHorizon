@@ -10,7 +10,8 @@ namespace Infinity.Core.Process;
 /// <param name="StashDir">The mode cache stash, relative to the Azimuth folder.</param>
 /// <param name="Caches">The caches of one mode (<see cref="ModeCaches"/>), relative to the Azimuth folder.</param>
 /// <param name="CarDatabase">The file the hook sends the SHA-256 of, relative to <c>Mount</c>.</param>
-/// <param name="FullFeatures">Cloud saves, mods, ExtraOptions' settings and the integrity check. FM5's first version has none.</param>
+/// <param name="FullFeatures">Mods, ExtraOptions' settings, the integrity check and FH2's career starts. FM5's first version has none (its
+/// cloud saves are <see cref="CloudSaves"/>).</param>
 public sealed record GameDefinition(string Id, string Name, string TitleId, string StashDir, IReadOnlyList<string> Caches, string CarDatabase, bool FullFeatures)
 {
     public static readonly GameDefinition Fh2 = new("fh2", AzimuthTitles.Fh2Name, "1A96545B", ModeCaches.Fh2StashDir, ModeCaches.Fh2Caches,
@@ -24,13 +25,21 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     {
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
-        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,    };
+        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,
+        CloudSaves = true, };
 
     /// <summary>
     /// NOOB_FROM_FILE (owner 2026-11-08): where the game keeps a profile's saves and what a career revision holds, so a save copied off a
-    /// PC is checked and placed by data. Its cloud sync follows <see cref="FullFeatures"/> (FM5: local only until FM5SAVE1).
+    /// PC is checked and placed by data. Its bundle (<see cref="Infinity.Core.Saves.SaveLayout.Bundle"/>) is what the cloud line takes.
     /// </summary>
     public Infinity.Core.Saves.SaveLayout Saves { get; init; } = Infinity.Core.Saves.SaveLayout.Fh2;
+
+    /// <summary>
+    /// W-M11 (CR-S105, owner Alex 2026-11-08 "make sure you're pushing FM5 saves to the cloud"): the game's careers keep a cloud save line
+    /// (watch, upload at the session points, download, History, resolve) in <see cref="Saves"/>' bundle. Which profile has a line is the
+    /// server's (the gate's <c>lease</c> and <c>save</c>; FM5: Noob only, <see cref="HardcoreCareers"/> false).
+    /// </summary>
+    public bool CloudSaves { get; init; } = true;
 
     /// <summary>
     /// Owner 2026-11-08 (PLAY's game tiles): the tile's accent colour (<c>#AARRGGBB</c>), drawn by the launcher: the selected tile's border,

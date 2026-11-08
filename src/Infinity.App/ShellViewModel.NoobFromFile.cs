@@ -158,7 +158,8 @@ public sealed partial class ShellViewModel
             }
             Log($"saves: save file → {result.Career.Target}/{result.Career.Number:x16} ({CurrentGame.Id}); containers copied [{string.Join(", ", result.CopiedSiblings)}], "
                 + $"kept [{string.Join(", ", result.SkippedSiblings)}], missing [{string.Join(", ", missing)}]");
-            if (!CurrentGame.FullFeatures) Log($"saves: {CurrentGame.Id} keeps no cloud saves yet: the copy stays on this PC");
+            Log(CurrentGame.CloudSaves ? $"saves: {CurrentGame.Id}: the copy goes to the cloud at the next Play (a Noob line's first revision may be any valid save, OD-219)"
+                : $"saves: {CurrentGame.Id} keeps no cloud saves yet: the copy stays on this PC");
             SavesChanged();
             _fileCard = null;
             _fileSource = null;

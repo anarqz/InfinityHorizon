@@ -308,12 +308,17 @@ public sealed class CloudSaves
     private readonly SaveSyncStore _store;
     private readonly string _realm;
 
-    public CloudSaves(ISaveApi api, SaveSyncStore store, string realm)
+    /// <param name="bundle">CR-S105: the line's bundle (the game's <see cref="SaveLayout.Bundle"/>); null is FH2SAVE1.</param>
+    public CloudSaves(ISaveApi api, SaveSyncStore store, string realm, ICareerBundle? bundle = null)
     {
         _api = api ?? throw new ArgumentNullException(nameof(api));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _realm = realm ?? throw new ArgumentNullException(nameof(realm));
+        Bundle = bundle ?? Fh2CareerBundle.Instance;
     }
+
+    /// <summary>CR-S105: how this line's careers are packed, checked and installed.</summary>
+    public ICareerBundle Bundle { get; }
 
     private static string Wire(ulong xuid) => xuid.ToString(CultureInfo.InvariantCulture);
 
@@ -378,14 +383,14 @@ public sealed class CloudSaves
     public LocalDecision Decide(string savesRoot, ulong xuid, SaveHead head)
     {
         ArgumentNullException.ThrowIfNull(head);
-        var (local, failure) = LocalNewest(savesRoot, xuid);
+        var (local, failure) = LocalNewest(Bundle, savesRoot, xuid);
         return failure is not null
             ? new LocalDecision(null, null, failure)
             : new LocalDecision(SaveReconcile.Decide(local, State(xuid)?.Mark, CloudHead.From(head)), local, null);
     }
 
     /// <summary>The content digest of this PC's newest sealed revision (null when none), or why it cannot be read.</summary>
-    private static (string? Content, SaveFailure? Failure) LocalNewest(string savesRoot, ulong xuid)
+    private static (string? Content, SaveFailure? Failure) LocalNewest(ICareerBundle bundle, string savesRoot, ulong xuid)
     {
         var profileDir = CloudSaveFiles.ProfileDir(savesRoot, xuid);
         try
@@ -395,7 +400,7 @@ public sealed class CloudSaves
             {
                 return (null, SaveFailure.Local(SaveFailureKind.Busy, busy[0] + " is being written"));
             }
-            return (newest is null ? null : Fh2Bundle.ContentDigest(CloudSaveFiles.ReadFiles(newest)), null);
+            return (newest is null ? null : bundle.ContentDigest(newest), null);
         }
         catch (IOException e) when (AzimuthSaves.IsBusy(e))
         {
@@ -479,9 +484,9 @@ public sealed class CloudSaves
         {
             return new DownloadOutcome(null, null, SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture, $"asked for revision {revision}, the server sent {served}")));
         }
-        if (download.Bytes.Length > Fh2Bundle.MaxBundle)
+        if (download.Bytes.Length > Bundle.MaxBundle)
         {
-            return new DownloadOutcome(null, null, SaveFailure.Integrity("the bundle is over 384 KiB"));
+            return new DownloadOutcome(null, null, SaveFailure.Integrity("the bundle is over the format's limit"));
         }
         if (download.BundleSha256 is null || download.BundleSha256 != Convert.ToHexStringLower(SHA256.HashData(download.Bytes)))
         {
@@ -494,7 +499,7 @@ public sealed class CloudSaves
         ValidBundle bundle;
         try
         {
-            bundle = Fh2Bundle.Validate(download.Bytes);
+            bundle = Bundle.Validate(download.Bytes);
         }
         catch (BundleException e)
         {
@@ -504,7 +509,7 @@ public sealed class CloudSaves
         {
             return new DownloadOutcome(null, bundle, SaveFailure.Integrity("the downloaded save does not match the head's content digest"));
         }
-        var (local, localFailure) = LocalNewest(savesRoot, xuid);
+        var (local, localFailure) = LocalNewest(Bundle, savesRoot, xuid);
         if (localFailure is not null)
         {
             return new DownloadOutcome(null, bundle, localFailure);
@@ -517,7 +522,7 @@ public sealed class CloudSaves
         InstalledRevision installed;
         try
         {
-            installed = CloudSaveFiles.Install(savesRoot, xuid, bundle.Files, expected, Guid.CreateVersion7().ToString("N"), label, AfterInstallMove);
+            installed = Bundle.Install(savesRoot, xuid, bundle, expected, Guid.CreateVersion7().ToString("N"), label, AfterInstallMove);
         }
         catch (SaveException e) when (e.Landed)
         {
@@ -557,11 +562,11 @@ public sealed class CloudSaves
             return new DownloadOutcome(null, null, SaveFailure.Network(e));
         }
         if (!result.Ok) return new DownloadOutcome(null, null, SaveFailure.From(result.Status, result.Error!, result.RetryAfter));
-        var (bundle, invalid) = VerifyDownload(result.Value!, revision, expected);
+        var (bundle, invalid) = VerifyDownload(result.Value!, revision, expected, Bundle);
         if (bundle is null || invalid is not null) return new DownloadOutcome(null, bundle, invalid ?? SaveFailure.Integrity("the bundle was not read"));
         try
         {
-            var installed = CloudSaveFiles.Install(savesRoot, targetXuid, bundle.Files, expected, Guid.CreateVersion7().ToString("N"), label);
+            var installed = Bundle.Install(savesRoot, targetXuid, bundle, expected, Guid.CreateVersion7().ToString("N"), label, null);
             return new DownloadOutcome(installed, bundle, null);
         }
         catch (SaveException e) when (e.Landed)
@@ -579,19 +584,20 @@ public sealed class CloudSaves
     /// <c>Repr-Digest</c>, every bundle check, and the content digest the revision was listed with. The valid bundle, else why not (a
     /// bundle that reads but holds other content is returned with its failure).
     /// </summary>
-    public static (ValidBundle? Bundle, SaveFailure? Failure) VerifyDownload(SaveBundleDownload download, ulong revision, string expectedContent)
+    public static (ValidBundle? Bundle, SaveFailure? Failure) VerifyDownload(SaveBundleDownload download, ulong revision, string expectedContent, ICareerBundle? format = null)
     {
         ArgumentNullException.ThrowIfNull(download);
+        format ??= Fh2CareerBundle.Instance;
         if (SaveReconcile.NormalizeDigest(expectedContent) is not { } expected) return (null, SaveFailure.Integrity("the revision has no content digest"));
         if (download.Revision is { } served && served != revision)
             return (null, SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture, $"asked for revision {revision}, the server sent {served}")));
-        if (download.Bytes.Length > Fh2Bundle.MaxBundle) return (null, SaveFailure.Integrity("the bundle is over 384 KiB"));
+        if (download.Bytes.Length > format.MaxBundle) return (null, SaveFailure.Integrity("the bundle is over the format's limit"));
         if (download.BundleSha256 is null || download.BundleSha256 != Convert.ToHexStringLower(SHA256.HashData(download.Bytes)))
             return (null, SaveFailure.Integrity("the bundle does not match its Repr-Digest"));
         ValidBundle bundle;
         try
         {
-            bundle = Fh2Bundle.Validate(download.Bytes);
+            bundle = format.Validate(download.Bytes);
         }
         catch (BundleException e)
         {
@@ -624,7 +630,7 @@ public sealed class CloudSaves
         PackedRevision packed;
         try
         {
-            packed = CloudSaveFiles.Pack(revision);
+            packed = Bundle.Pack(revision);
         }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
         {
@@ -662,7 +668,7 @@ public sealed class CloudSaves
         if (!CommitKinds.IsPlayerKind(kind)) throw new ArgumentException("a player commit kind", nameof(kind));
         if (State(xuid)?.PendingUpload is { } waiting) return PendingFirst(waiting);
         PackedRevision packed;
-        try { packed = CloudSaveFiles.Pack(revision); }
+        try { packed = Bundle.Pack(revision); }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
         { return SaveFailure.Integrity(e.Message); }
         try { _store.BeginUpload(_realm, xuid, Guid.CreateVersion7().ToString(), expected, kind, packed.Number, packed.ContentSha256, packed.Bundle, restore: restore); }

@@ -613,8 +613,9 @@ public sealed class SessionSaves
         _scheduler ??= new CheckpointScheduler(policy, _sessionStart, mark?.Content);
         if (_scheduler.StoppedBecause is not null) { _checkpointing = false; return; }
         if (AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, _xuid)) is not { } newest) return;
-        // a revision's folder never changes once sealed: its digest is read once
-        if (_seen?.Number != newest.Number) _seen = (newest.Number, Fh2Bundle.ContentDigest(CloudSaveFiles.ReadFiles(newest)));
+        // a revision's folder never changes once sealed: its digest is read once (CR-S105: an FM5 career's, its garage's containers included,
+        // follows the profile's revision; the exit's upload always packs afresh)
+        if (_seen?.Number != newest.Number) _seen = (newest.Number, _saves.Bundle.ContentDigest(newest));
         var content = _seen.Value.Content;
         var now = Clock();
         if (!_scheduler.ShouldCommit(now, content)) return;

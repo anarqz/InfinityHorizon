@@ -35,6 +35,9 @@ public sealed record SaveLayout(string PlayerDir, string UserPrefix, string Revi
     /// <summary>The folder, beside <c>revisions</c> in a save copied off a PC, that holds the sibling containers (<c>containers</c>).</summary>
     public string StagedSiblingsDir { get; init; } = "containers";
 
+    /// <summary>CR-S105: the game's cloud save bundle (FH2SAVE1, or FM5SAVE1 with the sibling containers).</summary>
+    public ICareerBundle Bundle { get; init; } = Fh2CareerBundle.Instance;
+
     /// <summary>FH2 (the FH2SAVE1 bundle's names, <see cref="Fh2Bundle.SaveFiles"/>).</summary>
     public static SaveLayout Fh2 { get; } = new("player-1", "User_", "revisions",
         ["PlayerDatabase", "ProfileData", "SaveState"],
@@ -44,14 +47,17 @@ public sealed record SaveLayout(string PlayerDir, string UserPrefix, string Revi
     /// FM5 (SAURON RE 2026-11-08): no SaveState; <c>Career_Garage.LiveryFileName/.Thumbnail</c> name sibling <c>BaseLivery_&lt;car&gt;_&lt;ts&gt;</c>
     /// and <c>GarageThumbnail_&lt;car&gt;_&lt;ts&gt;</c> containers, and replays are <c>Replay_*</c> containers, all in <c>player-1</c>.
     /// </summary>
-    public static SaveLayout Fm5 { get; } = new("player-1", "User_", "revisions",
+    public static SaveLayout Fm5 { get; } = WithBundle(new("player-1", "User_", "revisions",
         ["PlayerDatabase", "ProfileData"],
         ["PlayerDatabase", "ProfileData", "TransactionLogFile", "VersionFlags"])
     {
         SiblingPrefixes = ["BaseLivery_", "GarageThumbnail_", "Replay_"],
         References = new SiblingReferences("PlayerDatabase", 8, "Career_Garage", ["LiveryFileName", "Thumbnail"], ["CS:"]),
         OptionalSiblingPrefixes = ["Replay_"],
-    };
+    });
+
+    /// <summary>CR-S105: FM5SAVE1 reads the career's references through the layout itself.</summary>
+    private static SaveLayout WithBundle(SaveLayout layout) => layout with { Bundle = new Fm5CareerBundle(layout) };
 
     /// <summary><c>User_&lt;XUID upper hex&gt;</c>.</summary>
     public string UserFolder(ulong xuid) => UserPrefix + xuid.ToString("X", CultureInfo.InvariantCulture);

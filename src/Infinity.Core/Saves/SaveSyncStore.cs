@@ -74,15 +74,18 @@ public sealed class SaveSyncStore
 
     private readonly string _dir;
     private readonly string _game;
+    private readonly int _maxBundle;
     // One lock per state file, shared by the stores of every game (CR-S98): each writes the whole file.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lock> Locks = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock;
 
     /// <param name="game">CR-S98: the game whose careers this store reads and writes; the other games' entries in the same file are kept
     /// untouched.</param>
-    public SaveSyncStore(string stateDirectory, string game = DefaultGame)
+    /// <param name="maxBundle">CR-S105: the largest pending bundle the game's format allows (FM5SAVE1: 48 MiB); 0 is FH2SAVE1's.</param>
+    public SaveSyncStore(string stateDirectory, string game = DefaultGame, int maxBundle = 0)
     {
         _dir = stateDirectory ?? throw new ArgumentNullException(nameof(stateDirectory));
+        _maxBundle = maxBundle > 0 ? maxBundle : Fh2Bundle.MaxBundle;
         ArgumentException.ThrowIfNullOrWhiteSpace(game);
         _game = game;
         _lock = Locks.GetOrAdd(Path.GetFullPath(Path.Combine(_dir, FileName)), _ => new Lock());
@@ -173,7 +176,7 @@ public sealed class SaveSyncStore
         ArgumentNullException.ThrowIfNull(pending);
         var path = Path.Combine(_dir, pending.BundleFile.Replace('/', Path.DirectorySeparatorChar));
         var info = new FileInfo(path);
-        if (!info.Exists || info.Length > Fh2Bundle.MaxBundle)
+        if (!info.Exists || info.Length > _maxBundle)
         {
             throw new SaveException(pending.BundleFile + " is missing or too large");
         }

@@ -129,14 +129,26 @@ public static class SaveImport
     {
         ArgumentNullException.ThrowIfNull(revision);
         ArgumentNullException.ThrowIfNull(layout);
+        if (layout.References is not { } refs) return new HashSet<string>(StringComparer.Ordinal);
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(Path.Combine(revision.Path, "data", refs.File)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new SaveException(refs.File + ": " + e.Message); }
+        return ReferencedSiblings(bytes, layout);
+    }
+
+    /// <summary>
+    /// <see cref="ReferencedSiblings(LocalRevision, SaveLayout)"/> on the bytes of the layout's reference file already read (CR-S105: the
+    /// pack reads the names from the very bytes it verified against the commit and sends).
+    /// </summary>
+    public static IReadOnlySet<string> ReferencedSiblings(byte[] bytes, SaveLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        ArgumentNullException.ThrowIfNull(layout);
         var names = new HashSet<string>(StringComparer.Ordinal);
         if (layout.References is not { } refs) return names;
         var temp = Path.Combine(Path.GetTempPath(), "fi-save-refs-" + Guid.NewGuid().ToString("N") + ".db");
         try
         {
-            byte[] bytes;
-            try { bytes = File.ReadAllBytes(Path.Combine(revision.Path, "data", refs.File)); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new SaveException(refs.File + ": " + e.Message); }
             if (bytes.Length <= refs.HeaderBytes) throw new SaveException(refs.File + " is too short");
             File.WriteAllBytes(temp, bytes[refs.HeaderBytes..]);
             using var db = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
@@ -185,13 +197,14 @@ public static class SaveImport
         gameRunning ? "saves.game_running" : !installKnown ? "play.setup_needed" : mode != "noob" ? "save_file.noob_only" : null;
 
     /// <summary>
-    /// What happens with the cloud: a game with cloud saves uploads the copy at the next Play (a normal upload, SAVES_API §4.3); a game
-    /// without them (FM5 until FM5SAVE1) keeps it on this PC and says cloud sync comes later. Never a failure.
+    /// What happens with the cloud: a game with cloud saves (<see cref="GameDefinition.CloudSaves"/>; FM5 too since CR-S105) uploads the copy
+    /// at the next Play (a normal upload, SAVES_API §4.3; a Noob line's first revision is any valid save, OD-219); a game without them keeps it
+    /// on this PC and says cloud sync comes later. Never a failure.
     /// </summary>
     public static string CloudNoteKey(GameDefinition game)
     {
         ArgumentNullException.ThrowIfNull(game);
-        return game.FullFeatures ? "save_file.cloud_next_play" : "save_file.cloud_later";
+        return game.CloudSaves ? "save_file.cloud_next_play" : "save_file.cloud_later";
     }
 
     /// <summary>

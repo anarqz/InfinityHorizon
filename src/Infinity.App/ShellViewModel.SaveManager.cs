@@ -440,7 +440,7 @@ public sealed partial class ShellViewModel
     /// <summary>"Save on this PC · CR 15,858 · not uploaded yet" (a game without cloud saves: no upload part); no level, which only the server derives (CR-S81).</summary>
     private string LocalRowLine(GameDefinition game, SaveProfile local)
     {
-        var key = game.FullFeatures ? "sm.row.local" : "sm.row.local_cloudless";
+        var key = game.CloudSaves ? "sm.row.local" : "sm.row.local_cloudless";
         return local.Credits is { } credits
             ? S.Format(key + "_credits", ("credits", credits.ToString("N0", SavesCulture)))
             : S[key];
@@ -471,7 +471,7 @@ public sealed partial class ShellViewModel
         var canDeleteCareer = card?.CareerRow is not null;
         // NOOB_FROM_FILE: a Noob profile of a game with Noob careers (catalog data) may start its career from a save folder on this PC
         var fromFile = slot == SaveSlot.Noob && card is not null && card.State != CareerState.NotOffered;
-        foreach (var id in ProfileTools.CareerMenu(facts.Started, SaveChips.CanDownload(chip) && game.FullFeatures, canDeleteCareer, fromFile))
+        foreach (var id in ProfileTools.CareerMenu(facts.Started, SaveChips.CanDownload(chip) && game.CloudSaves, canDeleteCareer, fromFile))
         {
             var action = id switch
             {
@@ -536,16 +536,16 @@ public sealed partial class ShellViewModel
             try
             {
                 if (AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
-                    content = CurrentGame.FullFeatures ? Fh2Bundle.ContentDigest(CloudSaveFiles.ReadFiles(newest)) : "local";
+                    content = CurrentGame.CloudSaves ? CurrentGame.Saves.Bundle.ContentDigest(newest) : "local";
             }
             catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { content = "unreadable"; }
-            if (CurrentGame.FullFeatures && CloudSaveClient() is { } client && client.Saves.State(xuid) is { } state)
+            if (CurrentGame.CloudSaves && CloudSaveClient() is { } client && client.Saves.State(xuid) is { } state)
             {
                 mark = state.Mark;
                 pending = state.PendingUpload is not null && state.PendingUpload.Kind != CommitKinds.SeedFromProfile;
             }
         }
-        return SaveChips.Of(new SaveChipInput(card.State, CurrentGame.FullFeatures, card.Career?.Cloud?.Revision, content, mark, pending, card.SeedPending));
+        return SaveChips.Of(new SaveChipInput(card.State, CurrentGame.CloudSaves, card.Career?.Cloud?.Revision, content, mark, pending, card.SeedPending));
     }
 
     private string ChipText(SaveChipKind kind, Career? career) => kind switch
