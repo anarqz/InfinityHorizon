@@ -149,6 +149,14 @@ static const FiGameWatch fi_fm5_watches[] = {
        race start. Read it to tell when the lobby screen is on top. The GameOptions chain itself (screen+0x360 -> CLobby, CLobby+0x130 ->
        go, go+0x38 owned at -2, go+0x40 granted alongside) has no stable root yet: add its two rows below as
        {label, 0x25f88a0u, 0, 4, FI_WATCH_CHAIN, n, {...}} once the lobby screen has a known global or chain from U (docs/launcher/batch-1107/ITEM5.md). */
+    /* W16 (SAURON): the CLobby singleton, TBasicSingleton<CLobby>: its ctor writes the global at 0x25e6e40 and its dtors zero it. Chain only,
+       any null link stops the walk. GameOptions go = *(CLobby+0x130) resets when the lobby is left. Expected: before a grant go+38 is not
+       -2; after engine msg 11 go+38 and go+40 read -2; after msg 12 go+38 is no longer -2. */
+    {"FM5 WATCH go+38 (-2 = local options owner)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x38u}},
+    {"FM5 WATCH go+40 (-2 too after the grant)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 2, {0x130u, 0x40u}},
+    {"FM5 WATCH lobby session +148 (non-zero)", 0x25e6e40u, 0, 8, FI_WATCH_CHAIN, 1, {0x148u}},
+    {"FM5 WATCH lobby kind +38 (5/6/7)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x38u}},
+    {"FM5 WATCH lobby race +40 (1 from race load to end)", 0x25e6e40u, 0, 4, FI_WATCH_CHAIN, 1, {0x40u}},
     {"FM5 WATCH top screen id", 0x25f88a0u, 0, 4, FI_WATCH_CHAIN, 5, {0x58u, 0x20u, 0x8u, 0x10u, 0}},
 };
 
