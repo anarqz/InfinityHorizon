@@ -3,7 +3,7 @@ namespace Infinity.Core.Process;
 
 /// <summary>
 /// The games this launcher may play (OD-206): <see cref="All"/> is the allowed titles. Which of them a PC offers comes from its
-/// Azimuth folder (<see cref="Available"/>), each game's folder and cover from <c>data\azimuth.ini</c> (<see cref="AzimuthTitles"/>).
+/// Azimuth folder (<see cref="Available"/>), each game's folder from <c>data\azimuth.ini</c> (<see cref="AzimuthTitles"/>).
 /// </summary>
 /// <param name="Id">The server's game id.</param>
 /// <param name="TitleId">The Xbox title id, as <c>AppxManifest.xml</c> and <c>data\titles</c> write it.</param>
@@ -16,8 +16,7 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     public static readonly GameDefinition Fh2 = new("fh2", AzimuthTitles.Fh2Name, "1A96545B", ModeCaches.Fh2StashDir, ModeCaches.Fh2Caches,
         Path.Combine("media", "stripped", "gamedbRC.slt"), FullFeatures: true)
     {
-        TileAccent = "#FFFF4F8B", TileTagline = "Horizon",
-    };
+        TileAccent = "#FFFF4F8B", TileTagline = "Horizon",    };
 
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
@@ -25,17 +24,22 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     {
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
-        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport",
-    };
+        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport",    };
 
     /// <summary>
-    /// Owner 2026-11-08 (PLAY's game tiles): the tile's accent colour (<c>#AARRGGBB</c>), drawn by the launcher. A tile is our own art (the
-    /// short code, the name, this accent): never a game file or game art (rule 3).
+    /// Owner 2026-11-08 (PLAY's game tiles): the tile's accent colour (<c>#AARRGGBB</c>), drawn by the launcher: the selected tile's border,
+    /// and the styled tile (short code, tagline, accent) shown when the game's cover (<see cref="GameCover"/>) is missing or unreadable.
     /// </summary>
     public string TileAccent { get; init; } = "#FFB06BFF";
 
-    /// <summary>The tile's small line under the short code (the series), our own words.</summary>
+    /// <summary>The styled tile's small line under the short code (the series), our own words.</summary>
     public string TileTagline { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Owner 2026-11-08 (games-5), covers from the user's own game files (<see cref="GameCover"/>): the tile's image, relative to the game
+    /// folder <c>data\azimuth.ini</c> names for the title. Read only, at runtime; never shipped.
+    /// </summary>
+    public string CoverPath { get; init; } = Path.Combine("Mount", "Logo.png");
 
     /// <summary>
     /// CR-S98 §6.2: a Hardcore profile may have a career of this game. FM5 has none until it keeps cloud saves (M11): no Start card for a

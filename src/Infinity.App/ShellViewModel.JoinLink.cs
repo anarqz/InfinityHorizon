@@ -38,10 +38,25 @@ public sealed partial class ShellViewModel
             Changed();
             Changed(nameof(CanJoinFromLink));
             Changed(nameof(JoinLinkInvalid));
+            Changed(nameof(ShowJoinLinkForm));
         }
     }
 
     public bool ShowJoinFromLink => SignedIn && !OfflineMode;
+
+    private bool _joinLinkOpen;
+
+    /// <summary>
+    /// Owner 2026-11-08 (games-5): on PLAY, Join from link is a small link under the centered column; its field opens on a click, and stays
+    /// open while it holds a link (a protocol launch fills it) or a join is pending or has something to say.
+    /// </summary>
+    public bool ShowJoinLinkForm => ShowJoinFromLink && (_joinLinkOpen || _joinLinkDraft.Length > 0 || HasPendingJoin || HasJoinLinkStatus);
+
+    public void ToggleJoinLink()
+    {
+        _joinLinkOpen = !_joinLinkOpen;
+        Changed(nameof(ShowJoinLinkForm));
+    }
 
     public bool JoinLinkInvalid => _joinLinkDraft.Trim().Length > 0 && JoinLink.WorldId(_joinLinkDraft) is null;
 
@@ -50,7 +65,7 @@ public sealed partial class ShellViewModel
     public string? JoinLinkStatus
     {
         get => _joinLinkStatus;
-        private set { _joinLinkStatus = value; Changed(); Changed(nameof(HasJoinLinkStatus)); }
+        private set { _joinLinkStatus = value; Changed(); Changed(nameof(HasJoinLinkStatus)); Changed(nameof(ShowJoinLinkForm)); }
     }
 
     public bool HasJoinLinkStatus => !string.IsNullOrEmpty(_joinLinkStatus);

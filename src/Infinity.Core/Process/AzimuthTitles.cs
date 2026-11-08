@@ -116,6 +116,24 @@ public static class AzimuthTitles
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
 
+    /// <summary>
+    /// The game's display name as <c>data\azimuth.ini</c> writes it (<c>name=</c>); null when it names none. Owner 2026-11-08: the tiles'
+    /// name comes from here (FM5's manifest DisplayName is <c>ms-resource:Title</c>), else from the catalog.
+    /// </summary>
+    public static string? DisplayName(string? azimuthRoot, GameDefinition game)
+    {
+        if (string.IsNullOrWhiteSpace(azimuthRoot)) return null;
+        try
+        {
+            var path = Path.Combine(azimuthRoot, "data", IniFile);
+            if (!File.Exists(path)) return null;
+            var lines = Read(path);
+            var name = ValueOf(lines, SectionAt(lines, "title-" + game.TitleKey), "name");
+            return string.IsNullOrWhiteSpace(name) || name.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase) ? null : name;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
+
     private static List<string> Read(string path)
     {
         var text = File.ReadAllText(path, Encoding.Unicode);
