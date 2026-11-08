@@ -85,12 +85,58 @@ public sealed partial class ShellViewModel
     /// <summary>"Start from an existing profile" (Hardcore, the §4.10 check) or "from a save on this PC" (Noob, the OD-41 picker).</summary>
     public Task StartCareerFromExistingAsync() => StartCareerAsync(fromExisting: true);
 
+    /// <summary>A Noob card offers "From my HARDCORE profile" (the account's Hardcore career of the game has a save).</summary>
+    public bool CareerStartFromHardcore => StartCard?.Offers.FromHardcore == true;
+
+    /// <summary>The Start screen's "From my NOOB/HARDCORE profile": the §4.10 check for a Hardcore card, the Hardcore copy for a Noob one.</summary>
+    public Task StartCareerFromProfileAsync() => CareerStartHardcore ? StartCareerAsync(fromExisting: true) : StartNoobCareerFromHardcoreAsync();
+
+    /// <summary>
+    /// Fix 2026-11-08 (SAVE_MANAGER_UX §2.6): a Noob career of the chosen game starts from the account's Hardcore career of the same game.
+    /// The source is checked first (nothing is created without one); then the career exists (POST .../careers), the Hardcore save is copied
+    /// (this PC's, else its newest cloud revision) and the career is chosen; its first Play uploads the copy. A failed copy says why and
+    /// leaves the empty career with its Start choices.
+    /// </summary>
+    private async Task StartNoobCareerFromHardcoreAsync()
+    {
+        if (StartCard is not { } card || _session is null || card.Player.Mode == "hardcore") return;
+        var usable = UsableNoobSources();
+        if (usable is not [var plan, ..])
+        {
+            var reason = NoobStart.RefusalKey(CurrentGame, NoobFacts(), NoobCloudReachable);
+            Log($"profiles: start {CurrentGame.Id} {card.Player.ProfileId} from Hardcore refused ({reason})");
+            var facts = NoobFacts();
+            Message = S.Format("noob_hc.not_created", ("reason", NoobPlanText(NoobStart.Plan(CurrentGame, FirstFact(facts), NoobCloudReachable), FirstFact(facts), card.Player.Gamertag)));
+            return;
+        }
+        await Run(S.Format("busy.starting_career", ("mode", BusyMode(card.Player.Mode)), ("game", GameLabel)), async () =>
+        {
+            var (row, alreadyStarted) = await EnsureCareerAsync(card);
+            if (row is null) return;
+            if (alreadyStarted)
+            {
+                Log($"profiles: start {row.Game} {row.ProfileId} → exists and started, chosen");
+                _startRow = null;
+                ChangedCareerStart();
+                ChooseProfile(row);
+                Message = S.Format("careers.exists_chosen", ("game", GameLabel), ("name", ProfileName.Plain(row.Gamertag)));
+                return;
+            }
+            Log($"profiles: start {row.Game} {row.ProfileId} from Hardcore {plan.Hardcore!.ProfileId} ({plan.Source})");
+            if (!await StartNoobFromHardcoreAsync(row, plan.Hardcore)) return; // the reason is shown; the empty career keeps its Start choices
+            _startRow = null;
+            ChangedCareerStart();
+            SavesPop(SavesScreen.Start);
+            ChooseProfile(row);
+        });
+    }
+
     private async Task StartCareerAsync(bool fromExisting)
     {
         if (StartCard is not { } card || _session is null) return;
         if (fromExisting && !card.Offers.FromExisting) return;
         if (fromExisting && card.Player.Mode != "hardcore" && !HasAzimuthSaves()) { Message = S["saves.none_found"]; return; } // review L1: nothing to start from, nothing created
-        await Run(async () =>
+        await Run(S.Format("busy.starting_career", ("mode", BusyMode(card.Player.Mode)), ("game", GameLabel)), async () =>
         {
             var (row, alreadyStarted) = await EnsureCareerAsync(card);
             if (row is null) return;
@@ -190,7 +236,7 @@ public sealed partial class ShellViewModel
                 Message = S["native.unreachable"];
                 return (null, false);
             default:
-                Message = ErrorText(code ?? "HTTP.EMPTY");
+                Message = error is ApiException refused ? Describe(refused) : ErrorText(code ?? "HTTP.EMPTY"); // OD-215 429s with their wait
                 return (null, false);
         }
     }
@@ -288,8 +334,9 @@ public sealed partial class ShellViewModel
             || ParseXuid(row.Profile) is not { } xuid) return;
         if (System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
         var name = row.Gamertag;
-        await Run(async () =>
+        await Run(S.Format("busy.downloading", ("mode", BusyMode(row.Profile.Mode))), async () =>
         {
+            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
             var (head, failure) = await client.Saves.HeadAsync(access, xuid);
             if (head is null || failure is not null) { Log($"profiles: download {row.Profile.Game} {row.Profile.ProfileId} → {failure?.Code ?? "no head"}"); Message = S["careers.download_failed"]; return; }

@@ -306,6 +306,7 @@ public sealed partial class ShellViewModel
             Changed(nameof(ProfileRows));
             _play.Dispose();
             _play = null;
+            SavesChanged(); // a session uploads: the cached cloud revisions of this game are read again when next shown
             _waitingForAdmission = _queued = _leavingQueue = false;
             RefreshHook();
             _commands = null;

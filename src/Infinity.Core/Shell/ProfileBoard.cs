@@ -42,7 +42,11 @@ public enum CareerProgressKind
 /// <param name="HardcoreKeepsCloud">A Hardcore profile of this account keeps a cloud line on this server (OD-52).</param>
 /// <param name="AzimuthSaves">This PC has an Azimuth save of the game a Noob career may start from (OD-41).</param>
 /// <param name="SeedPendingXuids">Profiles whose career of the game holds an accepted seed waiting for its first Play on this PC (a pending <c>seed_from_profile</c>): they count as started, never as empty (review M1).</param>
-public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, bool AzimuthSaves = false, IReadOnlySet<string>? SeedPendingXuids = null);
+/// <param name="LocalSaveXuids">Noob profiles whose own folder on this PC holds a sealed save of the game (copied from a Hardcore career, a
+/// picked save, or played offline) while the cloud has none yet: started, and their first Play uploads it (fix 2026-11-08).</param>
+/// <param name="NoobFromHardcore">The account's Hardcore career of the game has a save a Noob career can start from (<see cref="NoobStart"/>).</param>
+public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, bool AzimuthSaves = false, IReadOnlySet<string>? SeedPendingXuids = null,
+    IReadOnlySet<string>? LocalSaveXuids = null, bool NoobFromHardcore = false);
 
 /// <summary>
 /// One profile on the Profiles page of the chosen game: the <see cref="Player"/>, its career of the game (<see cref="Career"/> and, joined by
@@ -91,7 +95,8 @@ public static class ProfileBoard
             var career = player.Careers.FirstOrDefault(c => c.Game == game.Id);
             var row = career is null ? null : me.Profiles.FirstOrDefault(p => p.ProfileId == career.CareerId);
             var seedPending = flags.SeedPendingXuids?.Contains(player.Xuid) == true && career is not null && row is not null;
-            var state = StateOf(player, career, game, seedPending);
+            var localSave = flags.LocalSaveXuids?.Contains(player.Xuid) == true && row is not null;
+            var state = StateOf(player, career, game, seedPending, localSave);
             var offers = state is CareerState.None or CareerState.Empty
                 ? CareerStart.Offers(player.Mode, game, flags, ProfileSeed.Sources(me.Profiles, game.Id, player.Xuid))
                 : CareerOffers.Nothing;
@@ -101,7 +106,12 @@ public static class ProfileBoard
     }
 
     /// <summary>Where <paramref name="player"/>'s career of <paramref name="game"/> stands.</summary>
-    public static CareerState StateOf(Player player, Career? career, GameDefinition game, bool seedPending = false)
+    /// <remarks>
+    /// <paramref name="localSave"/>: the profile's own folder on this PC holds a save. For a Noob career that is a start (a Noob line takes
+    /// any save, B2; its first Play uploads it), so it is never shown as empty "starts fresh" (fix 2026-11-08). A Hardcore career is not
+    /// started by a local save (OD-60: it starts from the beginning or through the §4.10 check).
+    /// </remarks>
+    public static CareerState StateOf(Player player, Career? career, GameDefinition game, bool seedPending = false, bool localSave = false)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(game);
@@ -109,8 +119,9 @@ public static class ProfileBoard
         {
             return player.Mode == "hardcore" && !game.HardcoreCareers ? CareerState.NotOffered : CareerState.None;
         }
+        var startedHere = localSave && player.Mode != "hardcore";
         // §6.7: on a game with cloud saves, a career nothing started (no revision, no sync, never played) is not started in the UI
-        return game.FullFeatures && !seedPending && career is { Cloud: null, Progress: null, LastPlayedAt: null } ? CareerState.Empty : CareerState.Started;
+        return game.FullFeatures && !seedPending && !startedHere && career is { Cloud: null, Progress: null, LastPlayedAt: null } ? CareerState.Empty : CareerState.Started;
     }
 
     /// <summary>What the progress line of <paramref name="career"/> says.</summary>

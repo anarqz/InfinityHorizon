@@ -58,6 +58,8 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => Shown();
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
+        PreviewKeyDown += OnBusyKey; // owner 2026-11-08: while the busy overlay is up no key reaches the page (Esc never cancels a write)
+        PreviewMouseUp += OnBusyMouse;
         KeyDown += OnSavesBackKey; // SAVE_MANAGER_UX §3: Esc goes back (a focused control that uses Esc handles it first)
         MouseUp += OnSavesMouseBack;
         var handled = false;
@@ -263,6 +265,28 @@ public partial class MainWindow : Window
 
     private async void OnStartCareerExisting(object sender, RoutedEventArgs e) => await _vm.StartCareerFromExistingAsync();
 
+    private async void OnStartCareerFromProfile(object sender, RoutedEventArgs e) => await _vm.StartCareerFromProfileAsync();
+
+    /// <summary>The busy overlay's Cancel: only a sign-in waiting on the network (it writes nothing).</summary>
+    private void OnBusyCancel(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ShellViewModel { CanCancelBusy: true } vm) vm.CancelSignIn();
+    }
+
+    private void OnBusyKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        // Alt+F4 and the system keys stay the window's; every other key stops at the overlay (the Cancel button takes Enter/Space)
+        if (DataContext is not ShellViewModel { ShowBusyOverlay: true } vm || e.Key == System.Windows.Input.Key.System) return;
+        if (vm.CanCancelBusy && BusyOverlay.IsKeyboardFocusWithin && (e.Key == System.Windows.Input.Key.Enter || e.Key == System.Windows.Input.Key.Space)) return;
+        e.Handled = true;
+    }
+
+    private void OnBusyMouse(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is ShellViewModel { ShowBusyOverlay: true } && e.ChangedButton is System.Windows.Input.MouseButton.XButton1 or System.Windows.Input.MouseButton.XButton2)
+            e.Handled = true;
+    }
+
     private void OnCancelCareerStart(object sender, RoutedEventArgs e) => _vm.CancelCareerStart();
 
     private void OnDeleteStartCareer(object sender, RoutedEventArgs e)
@@ -305,6 +329,7 @@ public partial class MainWindow : Window
     {
         if (Enum.TryParse<Infinity.Core.Shell.SaveSlot>(((FrameworkElement)sender).Tag as string, out var slot)) await _vm.ShowHistorySlotAsync(slot);
     }
+    private async void OnHistoryRefresh(object sender, RoutedEventArgs e) => await _vm.RefreshHistoryAsync();
     private void OnSelectHistory(object sender, RoutedEventArgs e) => _vm.SelectHistory((HistoryRow)((FrameworkElement)sender).DataContext);
     private void OnHistoryOpenFolder(object sender, RoutedEventArgs e) => _vm.HistoryOpenFolder();
     private void OnHistoryCopy(object sender, RoutedEventArgs e) => _vm.HistoryCopyToAzimuth();

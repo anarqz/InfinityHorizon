@@ -120,7 +120,7 @@ public sealed partial class ShellViewModel
         {
             return;
         }
-        await Run(async () =>
+        await Run(S["busy.copying"], async () =>
         {
             Message = S["saves.cloning"];
             CloneResult result;
