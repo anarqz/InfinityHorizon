@@ -861,8 +861,14 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
                     <Grid Margin="0,5">
-                      <Button Padding="20,14" HorizontalContentAlignment="Left" Click="OnChooseProfile">
-                        <StackPanel Margin="0,0,170,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <!-- The card button spans both columns; its text sits in column 0 (wraps) and the links get column 1, so they never overlap. -->
+                      <Button Grid.ColumnSpan="2" Padding="20,14" HorizontalContentAlignment="Left" Click="OnChooseProfile"
+                              AutomationProperties.Name="{Binding Gamertag}" MinHeight="64" />
+                      <StackPanel Grid.Column="0" Margin="20,14,10,14" IsHitTestVisible="False" VerticalAlignment="Center">
                           <TextBlock Text="{Binding Gamertag}" FontWeight="Bold" FontSize="16" />
                           <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
                           <!-- OD-214: no career of the chosen game (or an empty one): the card opens the Start panel. -->
@@ -884,9 +890,8 @@
                                          VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
                             </StackPanel>
                           </StackPanel>
-                        </StackPanel>
-                      </Button>
-                      <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" MaxWidth="280" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
                         <Button Content="{Binding DataContext.S[detail.convert], RelativeSource={RelativeSource AncestorType=Window}}"
                                 Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
                                 Click="OnConvertProfile" Visibility="{Binding CanConvert, Converter={StaticResource Visible}}" />
