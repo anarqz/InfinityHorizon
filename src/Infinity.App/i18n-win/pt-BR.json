@@ -341,7 +341,7 @@
   "worlds.private_unavailable": "Lobbies privados ainda não estão disponíveis neste servidor",
   "worlds.client_update": "Atualize o Infinity para usar lobbies privados",
   "worlds.private_failed": "Não foi possível criar seu lobby privado, tente novamente em instantes",
-  "worlds.private_hold": "Indisponível em um lobby privado. Saia do lobby primeiro",
+  "worlds.private_left": "Você saiu do seu lobby privado para entrar nesta atividade",
   "worlds.private_pool": "Sem lobbies online por {time}: este perfil Hardcore foi sinalizado pelo sistema anti-trapaça",
   "worlds.private_pool_flagged": "Sem lobbies online enquanto este perfil Hardcore estiver sinalizado pelo sistema anti-trapaça",
   "worlds.private_not_leader": "Só o líder do lobby pode convidar",

@@ -399,9 +399,9 @@ public sealed partial class WorldsBridge
             if (await AccessAsync(token).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no world (online lobbies are not allowed now)");
             if (WireMods().Refusal is { } refusal) return Decided(kind, FreeRoamResult.None, $"no world (mods: {refusal})");
-            // T-L6 (WORLDS_OFFICIAL §12.2 item 11): a private lobby's seat (known from the seat just read) is never dropped by test.11
-            // nor moved by a quick join: PrivateLobbyPolicy says whether this ask stays there or holds
-            if (PrivateSeatDecision(kind) is { } inPrivate) return inPrivate;
+            // T-L6 (WORLDS_OFFICIAL §12.2 item 11): a private lobby's seat (known from the seat just read) is never dropped by test.11:
+            // PrivateLobbyPolicy says whether this ask stays there; T-1108-R: otherwise the private seat is left and the ask placed below
+            if (await PrivateSeatDecisionAsync(kind, token).ConfigureAwait(false) is { } inPrivate) return inPrivate;
             // test.11: a seat taken for another kind that never played is not this ask's world ("stay" left the game on FINDING
             // SESSION): it is let go (not on purpose) and this kind is placed as usual. No CancelMatchmaking: this ask is
             // the game's live matchmaking now.
