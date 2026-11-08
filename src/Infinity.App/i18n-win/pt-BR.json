@@ -394,6 +394,7 @@
   "worlds.not_allowed_pool": "Este é um lobby abacaxi: só jogadores isolados pelo sistema anti-trapaça podem entrar.",
   "worlds.pool_only": "Você está isolado pelo sistema anti-trapaça: até o isolamento acabar, você só pode entrar em lobbies abacaxi.",
   "worlds.pool_moved": "Isolado pelo sistema anti-trapaça\nVocê foi levado para um lobby abacaxi, onde joga até o isolamento acabar.",
+  "worlds.pool_seat_ended": "Removido pelo sistema anti-trapaça\nSua sessão online foi encerrada. Você pode entrar de novo depois da espera; este jogo não tem um lobby separado.",
   "worlds.pool_notice": "Isolado pelo sistema anti-trapaça por {time}. Até lá, você só joga em lobbies abacaxi.",
   "worlds.pool_dispute": "Acha que é um engano? Conteste no Discord",
   "worlds.mods_needed": "Precisa de: {mods}.",

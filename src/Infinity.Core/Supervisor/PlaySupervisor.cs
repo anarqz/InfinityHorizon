@@ -556,6 +556,7 @@ public sealed class PlaySupervisor
         }
         // the overlay's Worlds tab: answers off the loop, the seat renewed in the background
         var worlds = overlay is null ? null : _config.Worlds?.Invoke(() => _ticket);
+        if (worlds is not null && Process.GameDefinition.ById(_config.Game) is { } worldsGame) worlds.HasPoolWorlds = worldsGame.HasPoolWorlds; // CR-S103
         // W7b: SessionReady frames waiting for the hook's SessionReadyResult, by nonce
         var sessionReadyWaits = new System.Collections.Concurrent.ConcurrentDictionary<uint, TaskCompletionSource<byte>>();
         var sessionReadyNonce = 0;

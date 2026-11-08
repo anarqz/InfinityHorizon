@@ -91,7 +91,11 @@ public sealed partial class WorldsBridge
     }
 
     /// <summary>The toast of a move to a pineapple world.</summary>
-    private UiFrame.Toast PoolToast() => new(UiLevel.Warn, 2, 80, _text("worlds.pool_moved"));
+    private UiFrame.Toast PoolToast() => new(UiLevel.Warn, 2, 80, _text(PoolEndKey));
+
+    // CR-S103: a game without pool worlds (FM5) tells the player the seat ended for the anti-cheat system and moves nobody; the
+    // account's kick cooldown (CR-S62) answers the next join exactly as after a kick
+    private string PoolEndKey => HasPoolWorlds ? "worlds.pool_moved" : "worlds.pool_seat_ended";
 
     /// <summary>
     /// The seat this launcher held (<paramref name="heldGrant"/>) ended with <c>reason: "pool"</c>: the move starts (once per
@@ -99,8 +103,13 @@ public sealed partial class WorldsBridge
     /// </summary>
     private bool SeatEndedForPool(SeatEnded? ended, string? heldGrant)
     {
-        if (!PoolApplies || ended is not { Reason: SeatEnds.Pool } || heldGrant is null || ended.GrantId != heldGrant) return false;
+        if ((HasPoolWorlds && !PoolApplies) || ended is not { Reason: SeatEnds.Pool } || heldGrant is null || ended.GrantId != heldGrant) return false;
         if (Interlocked.Exchange(ref _poolHandledGrant, heldGrant) == heldGrant) return false;
+        if (!HasPoolWorlds)
+        {
+            _log($"worlds: seat {heldGrant} in {ended.WorldId} ended for the anti-cheat system; this game has no pool worlds, no move");
+            return true;
+        }
         StartPoolMove($"seat {heldGrant} in {ended.WorldId} ended");
         return true;
     }
