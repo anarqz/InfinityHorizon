@@ -364,6 +364,7 @@ public sealed partial class WorldsBridge
     {
         ArgumentNullException.ThrowIfNull(list);
         ArgumentNullException.ThrowIfNull(send);
+        ObserveSentInvites(list.Sent); // CR-S106: the server's own list of what this account sent
         var requests = list.Items.Where(i => i.Kind == OfferKinds.Request && ValidId(i.Id) && i.World.Id.Length > 0)
             .Select(i => (i.Id, WorldId: i.World.Id, Name: Clip(i.From.Gamertag, UiFrame.MaxFriendName))).Where(r => r.Name.Length > 0)
             .Take(UiFrame.MaxJoinRequests).ToList();
