@@ -4,6 +4,8 @@
 (patches/*.patch, applied to a copy) and the ForzaInfinity hook (native/hook, built with
 FI_EO_BUILD and src/core/fi_rename.h).
 
+The FM5 title profile (upstream features/fm5.c, --fm5) is in the same DLL; see patches/0004.
+
 Usage: python build.py /path/to/zig [--dev] [--build-dir DIR] [--output PATH]
 
 The output goes beside azimuth.exe (Proton needs WINEDLLOVERRIDES=winmm=n,b). The submodule is
@@ -105,6 +107,9 @@ def build(zig, directory, output, options):
         tree / "build.py",
         zig,
         "--azimuth",
+        # one winmm.dll for both titles: on_map_game dispatches by the mapped game's title id (patch 0004
+        # removes upstream's OfflineVIP and its default-on keys); FH2 never reaches the FM5 code.
+        "--fm5",
         "--rebuild",
         "--output",
         output,
