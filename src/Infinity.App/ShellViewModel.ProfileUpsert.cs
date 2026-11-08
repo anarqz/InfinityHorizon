@@ -74,7 +74,10 @@ public sealed partial class ShellViewModel
             // An earlier registration the server stored but whose answer was lost: linked by this refresh, continued like any other.
             var registered = plan.Recovered.ToList();
             IReadOnlyList<ProfileUpsertResult> automatic = [];
-            if (plan.Automatic.Count > 0)
+            // W12 (handoff §10): a server that knows careers lists the cloud's profiles only: no automatic upload, no upload panel
+            var cloudOnly = session.Me?.Players is not null;
+            if (cloudOnly && plan.Automatic.Count > 0) Log($"profiles: {plan.Uploadable.Count} local profile(s) kept on this PC (no automatic upload)");
+            if (!cloudOnly && plan.Automatic.Count > 0)
             {
                 // A lost answer is retried once at once: the stored upload keys make it a replay, never a second profile.
                 try { automatic = await ProfileUpsert.UploadAsync(api, access, LocalProfiles, plan, plan.Automatic, CancellationToken.None); }
@@ -86,12 +89,12 @@ public sealed partial class ShellViewModel
                 Message = S.Format("upsert.registered", ("names", string.Join(", ", registered.Select(p => p.DisplayName)))) + string.Concat(registered.Select(SaveNote));
                 await session.RefreshMeAsync();
             }
-            if (plan.Automatic.Count > 0) plan = await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
+            if (!cloudOnly && plan.Automatic.Count > 0) plan = await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
             FillProfiles();
             RefreshChosenLocal();
             RefreshChosenTag();
             QueueRenameNotices(plan);
-            if (plan.Uploadable.Count == 0) { Changed(string.Empty); return; }
+            if (cloudOnly || plan.Uploadable.Count == 0) { Changed(string.Empty); return; }
             ShowUpsert(plan);
             foreach (var refused in automatic.Where(r => !r.Uploaded))
                 if (UpsertRows.FirstOrDefault(r => r.Profile.Id == refused.Profile.Id) is { } row) MarkRefused(row, refused.ErrorCode!);

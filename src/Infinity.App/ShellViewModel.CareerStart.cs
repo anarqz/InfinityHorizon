@@ -248,6 +248,45 @@ public sealed partial class ShellViewModel
         return parts.Count == 0 ? S["careers.no_sync"] : string.Join(" · ", parts);
     }
 
+    /// <summary>
+    /// W12 "download to this PC" (handoff §10): a cloud career's newest revision onto this PC, what its folder holds archived first
+    /// (today's <c>fi-launcher-archive</c>, <see cref="CloudSaves.InstallHeadAsync"/>). Only when the cloud is ahead or this PC has
+    /// nothing: a PC that moved on, or both, keeps its save (never deleted on a guess); its next Play settles it.
+    /// </summary>
+    public async Task DownloadCareerAsync(ProfileRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (!row.CanDownload || Playing || _session is not { } session || _install is null || CloudSaveClient() is not { } client
+            || ParseXuid(row.Profile) is not { } xuid) return;
+        if (System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Message = S["saves.game_running"]; return; }
+        var name = row.Gamertag;
+        await Run(async () =>
+        {
+            var access = await session.Tokens.AccessAsync(CancellationToken.None);
+            var (head, failure) = await client.Saves.HeadAsync(access, xuid);
+            if (head is null || failure is not null) { Log($"profiles: download {row.Profile.Game} {row.Profile.ProfileId} → {failure?.Code ?? "no head"}"); Message = S["careers.download_failed"]; return; }
+            if (head.IsCloudExpired() || head.Revision == 0) { Message = S.Format("careers.download_nothing", ("name", name)); return; }
+            var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
+            var decision = client.Saves.Decide(root, xuid, head);
+            switch (decision.Decision)
+            {
+                case SyncDecision.InSync:
+                    Message = S.Format("careers.download_in_sync", ("name", name));
+                    return;
+                case SyncDecision.Download or SyncDecision.FastForward:
+                    var outcome = await client.Saves.InstallHeadAsync(access, root, xuid, head, decision.LocalContent, "before-download");
+                    Log($"profiles: download {row.Profile.Game} {row.Profile.ProfileId} r{head.Revision} → {(outcome.Failure is null ? "installed" : outcome.Failure.Code)}");
+                    Message = outcome.Failure is null ? S.Format("careers.downloaded", ("name", name), ("rev", head.Revision.ToString(CultureInfo.CurrentCulture)))
+                        : S["careers.download_failed"];
+                    return;
+                default:
+                    Log($"profiles: download {row.Profile.Game} {row.Profile.ProfileId} → kept ({decision.Decision})");
+                    Message = S.Format("careers.download_local_newer", ("name", name));
+                    return;
+            }
+        });
+    }
+
     private void ChangedCareerStart()
     {
         Changed(nameof(ShowCareerStart));

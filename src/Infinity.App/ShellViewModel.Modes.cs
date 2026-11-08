@@ -424,6 +424,9 @@ public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = f
     /// <summary>CR-S98: "Delete profile" (every game) on every account profile of a server that lists them.</summary>
     public bool CanDeleteWholeProfile => OnAccount && Card is not null;
 
+    /// <summary>W12: "Download to this PC" on a started career the cloud holds a revision of (a game with cloud saves).</summary>
+    public bool CanDownload => OnAccount && Card is { State: CareerState.Started, Career.Cloud.Revision: > 0 };
+
     /// <summary>The career link's words, with the game's title.</summary>
     public string DeleteCareerLabel { get; init; } = string.Empty;
 

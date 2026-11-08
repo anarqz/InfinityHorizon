@@ -895,6 +895,11 @@
                                 Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
                                 Click="OnDeleteProfile" Visibility="{Binding CanDeleteFromCloud, Converter={StaticResource Visible}}"
                                 IsEnabled="{Binding DataContext.CanAskDeleteProfile, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        <!-- W12: the cloud career's newest revision onto this PC (what is there archived first). -->
+                        <Button Content="{Binding DataContext.S[careers.download], RelativeSource={RelativeSource AncestorType=Window}}"
+                                Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
+                                Click="OnDownloadCareer" Visibility="{Binding CanDownload, Converter={StaticResource Visible}}"
+                                IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
                         <!-- CR-S98 (OD-207): delete the chosen game's career, or the whole profile (every game); both typed. -->
                         <Button Content="{Binding DeleteCareerLabel}" Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
                                 Click="OnDeleteProfile" Visibility="{Binding CanDeleteCareer, Converter={StaticResource Visible}}"

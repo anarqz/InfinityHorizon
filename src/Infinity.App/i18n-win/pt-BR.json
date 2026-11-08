@@ -1210,5 +1210,11 @@
   "profiles.delete_career_last": "Esta é a última carreira de {name}: o perfil vai junto, e o nome {name} fica livre para qualquer pessoa.",
   "profiles.delete_all_title": "Apagar o perfil {name}, em todos os jogos?",
   "profiles.delete_all_body": "Isto apaga {name} e todas as suas carreiras da nuvem, na hora e para sempre, em todos os jogos: saves na nuvem e o histórico, pinturas e criações, pontuações, mensagens e o resto. Não há como desfazer, e o nome {name} fica livre para qualquer pessoa.",
-  "profiles.delete_in_use_game": "Este perfil está jogando {game} agora. Feche o jogo lá e tente de novo."
+  "profiles.delete_in_use_game": "Este perfil está jogando {game} agora. Feche o jogo lá e tente de novo.",
+  "careers.download": "Baixar para este PC",
+  "careers.downloaded": "A carreira na nuvem de {name} (revisão {rev}) está neste PC agora. O que havia aqui fica guardado no fi-launcher-archive da pasta de saves.",
+  "careers.download_in_sync": "Este PC já tem o save mais novo de {name} na nuvem.",
+  "careers.download_nothing": "A nuvem não tem save de {name} para baixar.",
+  "careers.download_local_newer": "O save de {name} neste PC tem progresso que a nuvem não tem, então foi mantido. Jogue para sincronizar.",
+  "careers.download_failed": "Não foi possível baixar o save da nuvem agora. Tente mais tarde."
 }
