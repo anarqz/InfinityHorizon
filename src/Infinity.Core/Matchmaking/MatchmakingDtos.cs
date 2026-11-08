@@ -94,7 +94,7 @@ public static class WorldActivities
     public static IReadOnlyList<string> Joinable { get; } = [FreeRoam, RoadTrip, Race];
 
     /// <summary>OD-190 (WORLDS_OFFICIAL §11.2): what a quick join (<c>POST /mm/v1/join {activity}</c>, no world id, no code) asks for.</summary>
-    public static IReadOnlyList<string> Placement { get; } = [FreeRoam, CarMeet, RoadTrip];
+    public static IReadOnlyList<string> Placement { get; } = [FreeRoam, CarMeet, RoadTrip, Race];
 }
 
 /// <summary>A world as one caller sees it (MATCHMAKING_API.md §2.1).</summary>

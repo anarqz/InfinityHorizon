@@ -20,8 +20,20 @@ public sealed partial class WorldsBridge
     private JoinModesWorld? _joinModesWorld;
     private int _joinModesBusy;
 
-    private void ObserveJoinModes(WorldView world) =>
-        Volatile.Write(ref _joinModesWorld, new JoinModesWorld(world.Id, world.Modes ?? world.Mode, world.Game));
+    private void ObserveJoinModes(WorldView world)
+    {
+        var next = new JoinModesWorld(world.Id, world.Modes ?? world.Mode, world.Game);
+        var before = Interlocked.Exchange(ref _joinModesWorld, next);
+        // W14: the leader's own change is already in _joinModesWorld (SetJoinModesCoreAsync), so only another player's shows here;
+        // the first read of a lobby is no change.
+        if (before is { } known && known.Id == next.Id && world.Private == true && UiJoinModes.Of(known.Modes) != UiJoinModes.Of(next.Modes)
+            && !PrivateLobbyPolicy.MayInvite(world.Leader ?? string.Empty, _ownXuid))
+        {
+            var who = _text(PrivateLobbyNotices.JoinModesChoiceKeys[UiJoinModes.Of(next.Modes)]);
+            _freeRoamToasts.Enqueue(PrivateLobbyNotices.Done(PrivateLobbyNotices.Text(_text, PrivateLobbyNotices.JoinModesChanged)
+                .Replace("{who}", who, StringComparison.Ordinal)));
+        }
+    }
 
     /// <summary>
     /// The private lobby's "Who can join" as last read (no request), for the overlay after every <see cref="UiFrame.MyWorld"/>;
