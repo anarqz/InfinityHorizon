@@ -88,12 +88,21 @@ public sealed partial class ShellViewModel
     {
         if (StartCard is not { } card || _session is null) return;
         if (fromExisting && !card.Offers.FromExisting) return;
+        if (fromExisting && card.Player.Mode != "hardcore" && !HasAzimuthSaves()) { Message = S["saves.none_found"]; return; } // review L1: nothing to start from, nothing created
         await Run(async () =>
         {
-            var row = await EnsureCareerAsync(card);
+            var (row, alreadyStarted) = await EnsureCareerAsync(card);
             if (row is null) return;
             _startRow = null;
             ChangedCareerStart();
+            if (alreadyStarted)
+            {
+                // review M2 (plan §5): a 409 CAREER_EXISTS whose refreshed career has a cloud revision, progress or a pending seed is just chosen
+                Log($"profiles: start {row.Game} {row.ProfileId} → exists and started, chosen");
+                ChooseProfile(row);
+                Message = S.Format("careers.exists_chosen", ("game", GameLabel), ("name", ProfileName.Plain(row.Gamertag)));
+                return;
+            }
             if (!fromExisting)
             {
                 Log($"profiles: start {row.Game} {row.ProfileId} fresh");
@@ -123,10 +132,10 @@ public sealed partial class ShellViewModel
     /// The career of the card's profile in the chosen game: the existing (empty) one, or a new one from <c>POST /players/{xuid}/careers</c>.
     /// Null when it could not be made (the reason is in <see cref="Message"/> and the log).
     /// </summary>
-    private async Task<Profile?> EnsureCareerAsync(BoardCard card)
+    private async Task<(Profile? Row, bool AlreadyStarted)> EnsureCareerAsync(BoardCard card)
     {
-        if (card.CareerRow is { } existing) return existing;
-        if (_session is not { } session) return null;
+        if (card.CareerRow is { } existing) return (existing, false);
+        if (_session is not { } session) return (null, false);
         var game = CurrentGame.Id;
         var xuid = card.Player.Xuid;
         CareerCreateOutcome outcome = CareerCreateOutcome.Unavailable;
@@ -155,29 +164,33 @@ public sealed partial class ShellViewModel
             case CareerCreateOutcome.Created or CareerCreateOutcome.Exists:
                 await session.RefreshMeAsync();
                 FillProfiles();
-                if (session.Me is { } me && CareerStart.CareerRow(me, xuid, game) is { } row) return row;
+                if (session.Me is { } me && CareerStart.CareerRow(me, xuid, game) is { } row)
+                {
+                    var started = outcome == CareerCreateOutcome.Exists && ProfileRows.FirstOrDefault(r => r.Card?.Player.Xuid == xuid)?.Card?.State == CareerState.Started;
+                    return (row, started);
+                }
                 Message = S["careers.not_listed"];
-                return null;
+                return (null, false);
             case CareerCreateOutcome.ModeNotAllowed:
                 Message = S.Format("careers.no_hardcore", ("game", GameLabel));
-                return null;
+                return (null, false);
             case CareerCreateOutcome.GameClosed:
                 Message = S.Format("careers.game_closed", ("game", GameLabel));
-                return null;
+                return (null, false);
             case CareerCreateOutcome.Banned:
                 Message = BannedText((error as ApiException)?.Details);
-                return null;
+                return (null, false);
             case CareerCreateOutcome.ProfileGone:
                 await session.RefreshMeAsync();
                 FillProfiles();
                 Message = ErrorText(code ?? ErrorCodes.AccountsNotFound);
-                return null;
+                return (null, false);
             case CareerCreateOutcome.Unavailable when error is not ApiException:
                 Message = S["native.unreachable"];
-                return null;
+                return (null, false);
             default:
                 Message = ErrorText(code ?? "HTTP.EMPTY");
-                return null;
+                return (null, false);
         }
     }
 
@@ -209,6 +222,19 @@ public sealed partial class ShellViewModel
     /// <summary>The refused check names the career or its source: the player may delete the empty career instead (§6.7).</summary>
     public bool ShowSeedDeleteCareer => _seedStarting is not null && _seedOffer is { Result.Outcome: SeedCheckOutcome.Refused or SeedCheckOutcome.SourceUsed };
 
+    /// <summary>Review M1: profiles whose career of the chosen game has an accepted seed pending in this game's sync store (not yet committed).</summary>
+    private HashSet<string> SeedPendingXuids(Me me)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        if (!CurrentGame.FullFeatures || CloudSaveClient() is not { } client) return set;
+        foreach (var player in me.Players ?? [])
+        {
+            if (player.Careers.Any(c => c.Game == CurrentGame.Id) && ulong.TryParse(player.Xuid, out var xuid)
+                && client.Saves.State(xuid)?.PendingUpload is { Kind: CommitKinds.SeedFromProfile }) set.Add(player.Xuid);
+        }
+        return set;
+    }
+
     /// <summary>This PC has an Azimuth save of the chosen game (a Noob career may start from it, OD-41).</summary>
     private bool HasAzimuthSaves()
     {
@@ -224,6 +250,7 @@ public sealed partial class ShellViewModel
         var game = GameLabel;
         var state = card.State switch
         {
+            CareerState.Started when card.SeedPending => S["careers.seed_pending"],
             CareerState.Empty => S["careers.not_started"],
             CareerState.None => S.Format("careers.none", ("game", game)),
             CareerState.NotOffered => S.Format("careers.no_hardcore", ("game", game)),

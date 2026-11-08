@@ -56,8 +56,7 @@ public static class CareerStart
     /// The Start card of a <paramref name="mode"/> profile in <paramref name="game"/>. Hardcore: none when the game allows no Hardcore career
     /// (§6.2); Fresh always; "from an existing profile" only on a game with cloud saves, while the server allows it and the profile keeps a
     /// cloud line (<see cref="ProfileSeed.Offered"/>, §4.10, OD-214) and the account has another profile's career of the game. Noob: Fresh;
-    /// "from an existing" on a game with cloud saves when there is another profile's career (NoobFromHardcore) or an Azimuth save on this PC
-    /// (OD-41). FM5 Noob: Fresh only (no cloud saves).
+    /// "from a save on this PC" on a game with cloud saves only when an Azimuth install with a readable save of the game exists (OD-41, review L1). FM5 Noob: Fresh only (no cloud saves).
     /// </summary>
     public static CareerOffers Offers(string mode, GameDefinition game, BoardFlags flags, IReadOnlyList<Profile> sources)
     {
@@ -71,7 +70,8 @@ public static class CareerStart
             var seeded = game.FullFeatures && ProfileSeed.Offered(flags.HardcoreFromProfile, flags.HardcoreKeepsCloud) && sameGame.Count > 0;
             return new CareerOffers(true, seeded, seeded ? sameGame : []);
         }
-        var copy = game.FullFeatures && (sameGame.Count > 0 || flags.AzimuthSaves);
+        // review L1: the flow runs the OD-41 local picker only, so it is offered only with a readable Azimuth save of the game on this PC
+        var copy = game.FullFeatures && flags.AzimuthSaves;
         return new CareerOffers(true, copy, game.FullFeatures ? sameGame : []);
     }
 

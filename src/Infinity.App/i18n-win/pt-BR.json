@@ -1192,6 +1192,8 @@
   "careers.started": "A carreira de {game} de {name} começa do zero.",
   "careers.none": "Sem carreira em {game}",
   "careers.no_hardcore": "{game} ainda não tem carreiras Hardcore",
+  "careers.seed_pending": "Semente aceita, aguarda o primeiro Play",
+  "careers.exists_chosen": "A carreira de {game} de {name} já existe, então foi escolhida.",
   "careers.not_started": "Carreira não iniciada",
   "careers.no_sync": "Ainda sem sincronização",
   "careers.new": "Carreira nova",
