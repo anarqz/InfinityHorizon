@@ -57,7 +57,7 @@ static DWORD WINAPI game_watch_thread(void *parameter) {
                 if (!fi_watch_chain_read(memory_read, object, watch, &chained)) {
                     continue;
                 }
-                value = (unsigned)chained;
+                value = watch->bytes > sizeof(value) ? chained != 0 : (unsigned)chained; /* 8 bytes: set or not */
             } else if (watch->kind == FI_WATCH_POINTER_ONCE) {
                 if (last[i] != 1) {
                     last[i] = 1;
