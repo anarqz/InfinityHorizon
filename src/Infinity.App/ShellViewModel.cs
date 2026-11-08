@@ -570,7 +570,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
                 var row = card.CareerRow ?? new Profile(card.Player.ProfileId, game, card.Player.Xuid, card.Player.Gamertag, card.Player.Gamertag,
                     card.Player.Mode, card.Player.Status, card.Career?.CreatedAt ?? string.Empty, null, card.Player.RenameNotice);
                 if (card.CareerRow is not null) Profiles.Add(row); // only real careers are choosable rows (seed sources, saves, the gate)
-                ProfileRows.Add(new ProfileRow(row, CareerLine(card, row), OnAccount: true, Card: card));
+                ProfileRows.Add(new ProfileRow(row, CareerLine(card, row), OnAccount: true, Card: card)
+                {
+                    DeleteCareerLabel = S.Format("careers.delete", ("game", GameLabel)),
+                });
             }
             foreach (var (profile, local) in LocalOnlyRows(game, board.AccountId))
             {

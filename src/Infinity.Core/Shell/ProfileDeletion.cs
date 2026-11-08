@@ -84,6 +84,26 @@ public static class ProfileDeletion
         };
     }
 
+    /// <summary>
+    /// CR-S98 §6.5: <c>SESSIONS.PROFILE_IN_USE</c> <c>details.game</c>, the game a career of the profile is in use in; null when absent (an
+    /// older server, or another refusal).
+    /// </summary>
+    public static string? InUseGame(ProfileDeletionOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        return outcome.Result == ProfileDeletionResult.InUse && outcome.Details is { ValueKind: JsonValueKind.Object } d
+            && d.TryGetProperty("game", out var game) && game.ValueKind == JsonValueKind.String && game.GetString() is { Length: > 0 } id ? id : null;
+    }
+
+    /// <summary>
+    /// CR-S98 (CAREERS.md §3): deleting <paramref name="game"/>'s career of a profile deletes the profile too when it is its last live career.
+    /// </summary>
+    public static bool IsLastCareer(Me me, string xuid, string game)
+    {
+        ArgumentNullException.ThrowIfNull(me);
+        return me.Players?.FirstOrDefault(p => p.Xuid == xuid)?.Careers is not { } careers || careers.All(c => c.Game == game);
+    }
+
     /// <summary><c>details.ticketExpiresAt</c> minus <paramref name="now"/>, when it is a future RFC 3339 time.</summary>
     private static TimeSpan? TicketWait(JsonElement? details, DateTimeOffset now) =>
         details is { ValueKind: JsonValueKind.Object } d && d.TryGetProperty("ticketExpiresAt", out var at) && at.ValueKind == JsonValueKind.String

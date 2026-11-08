@@ -234,7 +234,8 @@ public sealed partial class ShellViewModel
                 _ => ProgressText(card.Career!.Progress!),
             },
         };
-        return mode + " · " + state;
+        // §6.10: until the owner's cleanup, an account may hold more than one profile of a mode; each is listed and says so
+        return mode + " · " + state + (card.Duplicate ? " · " + S["careers.duplicate"] : string.Empty);
     }
 
     private string ProgressText(CareerProgress progress)
