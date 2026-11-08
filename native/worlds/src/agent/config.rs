@@ -146,6 +146,18 @@ pub fn game_of(activity: &str) -> &'static str {
     }
 }
 
+/// OD-192 item 7: every official FH2 world's voice mode, fixed (item 8: nobody changes an
+/// official lobby's options). The server's `OfficialWorldSettings` has no voice field, so the
+/// agent decides it.
+pub const OFFICIAL_VOICE: &str = "proximity";
+
+/// The `voice` of an official world's `world.open` (DEDICATED_SERVER.md §4.3): proximity with
+/// the engine's default R 150 m / r0 10 m / 2 s pose age / no pose not heard, nobody muted;
+/// `None` for a game whose module has no voice field (FM5).
+pub fn official_voice(game: &str) -> Option<serde_json::Value> {
+    (game == GAME).then(|| serde_json::json!({"mode": OFFICIAL_VOICE, "lobbyMuted": []}))
+}
+
 /// The server's base URL, validated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerUrl {

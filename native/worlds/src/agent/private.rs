@@ -37,8 +37,10 @@ pub fn leader_of(state: &Value) -> Option<String> {
         .map(String::from)
 }
 
-/// The announce body (MATCHMAKING_API §2.9 `Heartbeat`): `peers`, `activity`, `inProgress` only
-/// when true (OD-194), and `leader` only for a private world that has one (§12.8b).
+/// The announce body (MATCHMAKING_API §2.9 `Heartbeat`): `peers`, `activity`, `voice` for an FH2
+/// world (OD-192 item 7: proximity, so the server's world row says what the engine runs),
+/// `inProgress` only when true (OD-194), and `leader` only for a private world that has one
+/// (§12.8b).
 pub fn announce_body(
     peers: &[String],
     activity: &str,
@@ -47,6 +49,9 @@ pub fn announce_body(
     leader: Option<&str>,
 ) -> Value {
     let mut body = json!({"peers": peers, "activity": activity});
+    if super::config::official_voice(super::config::game_of(activity)).is_some() {
+        body["voice"] = Value::String(super::config::OFFICIAL_VOICE.to_string());
+    }
     if in_progress {
         body["inProgress"] = Value::Bool(true);
     }
@@ -130,21 +135,26 @@ mod tests {
         let peers = vec!["1000000000000102".to_string()];
         assert_eq!(
             announce_body(&peers, "freeroam", false, false, Some("1000000000000102")).to_string(),
-            r#"{"activity":"freeroam","peers":["1000000000000102"]}"#,
+            r#"{"activity":"freeroam","peers":["1000000000000102"],"voice":"proximity"}"#,
             "public: no leader even when one is known"
         );
         assert_eq!(
             announce_body(&peers, "roadtrip", true, false, None).to_string(),
-            r#"{"activity":"roadtrip","inProgress":true,"peers":["1000000000000102"]}"#
+            r#"{"activity":"roadtrip","inProgress":true,"peers":["1000000000000102"],"voice":"proximity"}"#
         );
         assert_eq!(
             announce_body(&peers, "freeroam", false, true, Some("1000000000000102")).to_string(),
-            r#"{"activity":"freeroam","leader":"1000000000000102","peers":["1000000000000102"]}"#
+            r#"{"activity":"freeroam","leader":"1000000000000102","peers":["1000000000000102"],"voice":"proximity"}"#
         );
         assert_eq!(
             announce_body(&[], "freeroam", false, true, None).to_string(),
-            r#"{"activity":"freeroam","peers":[]}"#,
+            r#"{"activity":"freeroam","peers":[],"voice":"proximity"}"#,
             "private with nobody leading: no member"
+        );
+        // OD-192 item 7: FH2's official worlds say proximity; FM5's race has no voice field
+        assert_eq!(
+            announce_body(&peers, "race", false, false, None).to_string(),
+            r#"{"activity":"race","peers":["1000000000000102"]}"#
         );
     }
 

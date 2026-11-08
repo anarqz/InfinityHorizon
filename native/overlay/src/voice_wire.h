@@ -19,6 +19,9 @@
 //          u16 (R in metres in proximity, else 0)}
 //   0xC0FA team, after 0xC0F9 (OD-165: only a running team event's participants), 4 bytes: {ver, flags (bit 0 a team event
 //          runs for this listener), team (0 red, 1 blue), reserved}; absent: no team event for this player
+//   0xC0FB curve, after 0xC0F9/0xC0FA (proximity only, and only when r0 is not the default 10 m; batch-1107
+//          PROXIMITY_VOICE.md), 4 bytes: {ver, reserved, r0 u16 (full volume within, metres; 1 to R/2)}; absent or
+//          unusable: r0 = 10 m
 #pragma once
 
 #include <cmath>
@@ -31,9 +34,10 @@ namespace fi::voice_wire {
 
 constexpr uint16_t kVoiceKind = 0x3E93, kControlKind = 0x3E94;
 constexpr uint16_t kVoiceUp = 0xC0F3, kVoiceDown = 0xC0F4, kControlUp = 0xC0F5, kStateDown = 0xC0F6;
-constexpr uint16_t kPose = 0xC0F8, kMode = 0xC0F9, kTeam = 0xC0FA;
+constexpr uint16_t kPose = 0xC0F8, kMode = 0xC0F9, kTeam = 0xC0FA, kCurve = 0xC0FB;
 constexpr uint8_t kVersion = 1;
-constexpr size_t kMaxDatagram = 548, kMaxOpus = 400, kMaxSeats = 12, kPoseSize = 48, kModeSize = 4, kTeamSize = 4;
+constexpr size_t kMaxDatagram = 548, kMaxOpus = 400, kMaxSeats = 12, kPoseSize = 48, kModeSize = 4, kTeamSize = 4, kCurveSize = 4;
+constexpr uint16_t kDefaultFull = 10; // r0 without 0xC0FB
 enum : uint8_t { kTeamRunning = 1, kTeamRed = 0, kTeamBlue = 1 };
 constexpr uint32_t kMagic = 0x2112A442;
 enum : uint8_t { kModeOff = 0, kModeOpen = 1, kModeProximity = 2 };
@@ -257,6 +261,8 @@ struct StateDown {
     // OD-165: a usable 0xC0FA came with it (a team event runs for this player: voice is its team's only), and its team
     bool team_present = false;
     uint8_t team = kTeamRed;
+    // r0 in metres from a usable 0xC0FB (proximity only), else 0: the curve's default (kDefaultFull)
+    uint16_t full = 0;
 };
 
 // 0xC0F9's receiver rules: ver 1, 4 bytes, mode <= 2, range >= 20 in proximity and 0 otherwise, (lobby = 0) == (mode = 0).
@@ -294,12 +300,21 @@ inline bool DecodeStateDown(const uint8_t *data, size_t size, StateDown &out) {
         s.team_present = true;
         s.team = t[2];
     }
+    // 0xC0FB's receiver rules: ver 1, 4 bytes, with a usable proximity 0xC0F9, 1 <= r0 <= R/2, else ignored (r0 10 m)
+    const uint8_t *c = nullptr;
+    size_t c_size = 0;
+    if (s.mode_present && s.mode == kModeProximity && Attribute(data, size, kControlKind, kCurve, &c, &c_size) && c_size == kCurveSize &&
+        c[0] == kVersion) {
+        const uint16_t full = Rd16(c + 2);
+        if (full >= 1 && full <= s.range / 2) s.full = full;
+    }
     out = std::move(s);
     return true;
 }
 
 // State down as a new relay writes it (tests; the golden vectors): 0xC0F9 after 0xC0F6 unless `with_mode` is false (a
-// pre-CR-L46 relay), then 0xC0FA when `team_present` (a team event's participant). Empty for values the decoder would refuse.
+// pre-CR-L46 relay), then 0xC0FA when `team_present` (a team event's participant), then 0xC0FB when `full` is set in
+// proximity and is not 10 m. Empty for values the decoder would refuse.
 inline std::vector<uint8_t> EncodeStateDown(const StateDown &s, bool with_mode, const uint8_t transaction[12]) {
     if (s.lobby > 1 || (s.bundle != 3 && s.bundle != 6) || s.seats.size() > kMaxSeats || (with_mode && !ModeConsistent(s.lobby, s.mode, s.range))) return {};
     std::vector<uint8_t> v(4 + s.seats.size() * 10, 0);
@@ -318,10 +333,15 @@ inline std::vector<uint8_t> EncodeStateDown(const StateDown &s, bool with_mode, 
     uint8_t mode[kModeSize] = {kVersion, s.mode};
     Be16(mode + 2, s.range);
     const uint8_t team[kTeamSize] = {kVersion, kTeamRunning, s.team, 0};
-    Attr attrs[3] = {{kStateDown, v.data(), v.size()}};
+    const bool curve_present = with_mode && s.mode == kModeProximity && s.full != 0 && s.full != kDefaultFull;
+    if (curve_present && s.full > s.range / 2) return {};
+    uint8_t curve[kCurveSize] = {kVersion, 0};
+    Be16(curve + 2, s.full);
+    Attr attrs[4] = {{kStateDown, v.data(), v.size()}};
     size_t n = 1;
     if (with_mode) attrs[n++] = {kMode, mode, kModeSize};
     if (s.team_present) attrs[n++] = {kTeam, team, kTeamSize};
+    if (curve_present) attrs[n++] = {kCurve, curve, kCurveSize};
     return Indication(kControlKind, attrs, n, transaction);
 }
 
