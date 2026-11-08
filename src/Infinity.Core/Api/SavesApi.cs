@@ -136,7 +136,7 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
     public async Task<UploadDryRunResult> DryRunUploadAsync(string access, string xuid, SaveCommitRequest commit, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(commit);
-        using var request = Request(HttpMethod.Post, Base(xuid) + "/upload-check", access);
+        using var request = Request(HttpMethod.Post, Base(xuid, "/upload-check"), access);
         CommitHeaders(request, commit, withLease: false);
         using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
         return UploadDryRunResult.From(await Json<UploadCheck>(response, cancellation).ConfigureAwait(false));
@@ -168,16 +168,27 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
     private readonly HttpClient _http;
     private readonly string _client;
 
-    public SavesApiClient(HttpClient http, Uri saves, string clientHeader)
+    /// <param name="game">CR-S98: the game whose career every route names (<c>?game=</c>, CAREERS.md §3); null against a server before
+    /// CR-S98 (no <c>players</c> in <c>/me</c>), where the bare route means FH2.</param>
+    public SavesApiClient(HttpClient http, Uri saves, string clientHeader, string? game = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         Saves = ApiClient.CheckOrigin(saves);
         _client = clientHeader;
+        Game = string.IsNullOrEmpty(game) ? null : game;
     }
 
     public Uri Saves { get; }
 
-    private static string Base(string xuid) => $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/save";
+    /// <summary>The <c>?game=</c> every route sends; null sends none.</summary>
+    public string? Game { get; }
+
+    /// <summary><c>/launcher/v1/profiles/{xuid}/save{suffix}</c>, then <c>?game=</c> and <paramref name="query"/> (without its <c>?</c>).</summary>
+    private string Base(string xuid, string suffix = "", string? query = null)
+    {
+        var path = $"/launcher/v1/profiles/{Uri.EscapeDataString(xuid)}/save{suffix}" + ApiClient.GameQuery(Game, first: true);
+        return string.IsNullOrEmpty(query) ? path : path + (Game is null ? "?" : "&") + query;
+    }
 
     private HttpRequestMessage Request(HttpMethod method, string path, string access)
     {
@@ -196,15 +207,15 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
 
     public async Task<SaveApiResult<RevisionPage>> RevisionsAsync(string access, string xuid, ulong? before, uint limit, CancellationToken cancellation = default)
     {
-        var query = string.Create(CultureInfo.InvariantCulture, $"?limit={limit}") + (before is { } b ? string.Create(CultureInfo.InvariantCulture, $"&before={b}") : "");
-        using var request = Request(HttpMethod.Get, Base(xuid) + "/revisions" + query, access);
+        var query = string.Create(CultureInfo.InvariantCulture, $"limit={limit}") + (before is { } b ? string.Create(CultureInfo.InvariantCulture, $"&before={b}") : "");
+        using var request = Request(HttpMethod.Get, Base(xuid, "/revisions", query), access);
         using var response = await _http.SendAsync(request, cancellation).ConfigureAwait(false);
         return await Json<RevisionPage>(response, cancellation).ConfigureAwait(false);
     }
 
     public async Task<SaveApiResult<SaveBundleDownload>> BundleAsync(string access, string xuid, ulong revision, CancellationToken cancellation = default)
     {
-        using var request = Request(HttpMethod.Get, Base(xuid) + string.Create(CultureInfo.InvariantCulture, $"/revisions/{revision}/bundle"), access);
+        using var request = Request(HttpMethod.Get, Base(xuid, string.Create(CultureInfo.InvariantCulture, $"/revisions/{revision}/bundle")), access);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
@@ -251,7 +262,7 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
     public async Task<SaveApiResult<SeedCheck>> CheckSeedAsync(string access, string targetXuid, string sourceXuid, byte[] bundle, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(bundle);
-        using var request = Request(HttpMethod.Post, Base(targetXuid) + "/check", access);
+        using var request = Request(HttpMethod.Post, Base(targetXuid, "/check"), access);
         request.Headers.TryAddWithoutValidation(SeedSourceHeader, sourceXuid);
         request.Content = new ByteArrayContent(bundle);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue(Infinity.Core.Saves.Fh2Bundle.MediaType);
@@ -266,7 +277,7 @@ public sealed class SavesApiClient : ISaveApi, ISaveUploadDryRun
     /// </summary>
     public async Task<SaveApiResult<SaveHead>> SeedAsync(string access, string xuid, string idempotencyKey, string? sessionId, ulong? fence, CancellationToken cancellation = default)
     {
-        using var request = Request(HttpMethod.Post, Base(xuid) + "/seed", access);
+        using var request = Request(HttpMethod.Post, Base(xuid, "/seed"), access);
         request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
         if (sessionId is not null && fence is { } f)
         {

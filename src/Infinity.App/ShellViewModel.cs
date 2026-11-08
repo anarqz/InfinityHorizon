@@ -287,7 +287,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ? S["signin.needs_account"] + " " + S.Format("signin.form_email", ("email", email))
         : S["signin.needs_account"];
 
-    public string ProfilesText => Profiles.Count == 0 ? S["profiles.none_yet"]
+    public string ProfilesText => ProfileRows.Count == 0 ? S["profiles.none_yet"]
         : S.Format(OfflineMode ? "offline.profiles_local" : "profiles.from_server", ("game", GameLabel));
 
     public void CancelSignIn()
@@ -368,6 +368,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Gate = _gate.ChooseGame(game.Id);
         RememberGame(game.Id);
         ResetContentLocation();
+        _startRow = null; // OD-214: another game, another pick
+        _seedStarting = null;
         FillProfiles();
         // W11: the Mods page follows the game: its cards, ExtraOptions card and settings are read again for the one now chosen
         _selectedMod = null; _ini = null; _iniDirty = false; ModOptions.Clear();
@@ -413,6 +415,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (_gate.Game is not null)
         {
             Gate = _gate with { ProfileTag = null, ProfileKey = null };
+            _startRow = null;
             FillProfiles();
             _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: clears a previous profile's integrity result
         }
@@ -558,6 +561,27 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _rowLocals.Clear();
         // OD-118: offline the local profiles; signed in the account's plus the local ones not on it (offline-only until uploaded).
         var game = _gate.Game ?? "";
+        if (!OfflineMode && _session?.Me is { Players: not null } board)
+        {
+            // OD-214: the account's profiles (both modes) with the chosen game's career on each; local-only rows as before
+            var flags = new BoardFlags(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves());
+            foreach (var card in ProfileBoard.Build(board, CurrentGame, flags))
+            {
+                var row = card.CareerRow ?? new Profile(card.Player.ProfileId, game, card.Player.Xuid, card.Player.Gamertag, card.Player.Gamertag,
+                    card.Player.Mode, card.Player.Status, card.Career?.CreatedAt ?? string.Empty, null, card.Player.RenameNotice);
+                if (card.CareerRow is not null) Profiles.Add(row); // only real careers are choosable rows (seed sources, saves, the gate)
+                ProfileRows.Add(new ProfileRow(row, CareerLine(card, row), OnAccount: true, Card: card)
+                {
+                    DeleteCareerLabel = S.Format("careers.delete", ("game", GameLabel)),
+                });
+            }
+            // W12 (handoff §10, D): signed in the list is the cloud's; this PC's local profiles are hidden, never deleted (offline lists
+            // them; a Noob career starts from this PC's saves through "Start from a save on this PC")
+            if (_startRow?.Card is { } open)
+                _startRow = ProfileRows.FirstOrDefault(r => r.Card?.Player.ProfileId == open.Player.ProfileId && r.Card.Startable);
+            ChangedProfileList();
+            return;
+        }
         var rows = OfflineMode ? OfflineRows(game)
             : (_session?.Me?.Profiles.Where(p => p.Game == game).Select(p => (Row: p, Local: (LocalProfile?)null)) ?? [])
                 .Concat(_session?.Me is { } me ? LocalOnlyRows(game, me.AccountId) : []);
@@ -567,6 +591,15 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             ProfileRows.Add(new ProfileRow(profile, local is null ? ModeLine(profile) : ModeLine(profile) + " · " + LocalLine(local), OnAccount: local is null && !OfflineMode));
             if (local is not null) _rowLocals[profile.ProfileId] = local;
         }
+        ChangedProfileList();
+    }
+
+    private void ChangedProfileList()
+    {
+        ChangedCareerStart();
+        Changed(nameof(ShowNewProfile));
+        Changed(nameof(CanChooseNoob));
+        Changed(nameof(NewNoob));
         Changed(nameof(CanChooseHardcore));
         Changed(nameof(NewHardcore));
         Changed(nameof(ProfilesText));

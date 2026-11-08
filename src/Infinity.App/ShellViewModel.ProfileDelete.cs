@@ -14,6 +14,8 @@ namespace Infinity.App;
 public sealed partial class ShellViewModel
 {
     private Profile? _deleting;
+    /// <summary>CR-S98: "Delete profile" (every game, <c>DELETE /players/{xuid}</c>) instead of the chosen game's career.</summary>
+    private bool _deleteAllGames;
     private string? _deleteKey;
     private string _deleteTyped = string.Empty;
     private string? _deleteStatus;
@@ -23,9 +25,24 @@ public sealed partial class ShellViewModel
 
     public string DeleteProfileName => _deleting is null ? string.Empty : ProfileName.Plain(_deleting.Gamertag);
 
-    public string DeleteProfileTitle => _deleting is null ? string.Empty : S.Format("profiles.delete_title", ("name", DeleteProfileName));
+    /// <summary>CR-S98: the panel speaks of careers (a server that lists <c>players</c>); an older server's profile is its one career.</summary>
+    private bool DeleteSpeaksCareers => _session?.Me?.Players is not null;
 
-    public string DeleteProfileBody => _deleting is null ? string.Empty : S.Format("profiles.delete_body", ("name", DeleteProfileName));
+    private string DeleteGameLabel => _deleting is null ? string.Empty : GameTitle(_deleting.Game);
+
+    public string DeleteProfileTitle => _deleting is null ? string.Empty
+        : !DeleteSpeaksCareers ? S.Format("profiles.delete_title", ("name", DeleteProfileName))
+        : S.Format(_deleteAllGames ? "profiles.delete_all_title" : "profiles.delete_career_title", ("name", DeleteProfileName), ("game", DeleteGameLabel));
+
+    public string DeleteProfileBody => _deleting is null ? string.Empty
+        : !DeleteSpeaksCareers ? S.Format("profiles.delete_body", ("name", DeleteProfileName))
+        : _deleteAllGames ? S.Format("profiles.delete_all_body", ("name", DeleteProfileName))
+        : S.Format("profiles.delete_career_body", ("name", DeleteProfileName), ("game", DeleteGameLabel)) + " "
+            + S.Format(_session?.Me is { } me && ProfileDeletion.IsLastCareer(me, _deleting.Xuid, _deleting.Game) ? "profiles.delete_career_last" : "profiles.delete_career_keeps",
+                ("name", DeleteProfileName));
+
+    /// <summary>A game's title as the server lists it (else the launcher's catalog, else its id).</summary>
+    private string GameTitle(string game) => Games.FirstOrDefault(g => g.Id == game)?.Title ?? Infinity.Core.Process.GameDefinition.ById(game)?.Name ?? game.ToUpperInvariant();
 
     public string DeleteProfileTypeHint => _deleting is null ? string.Empty : S.Format("profiles.delete_type", ("name", DeleteProfileName));
 
@@ -63,15 +80,29 @@ public sealed partial class ShellViewModel
         }
         CancelConvert();
         _deleting = profile;
+        _deleteAllGames = false;
         _deleteKey = NewDeleteKey(); // kept for every retry of this deletion after a lost answer
         _deleteTyped = string.Empty;
         _deleteStatus = null;
         ChangedDelete();
     }
 
+    /// <summary>CR-S98 "Delete profile": every career of the profile, then the profile (<c>DELETE /players/{xuid}</c>), typed as a career.</summary>
+    public void AskDeleteWholeProfile(Profile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        // a card without a career of the chosen game stands for its profile: any of its live careers names it
+        AskDeleteProfile(_session?.Me?.Profiles.FirstOrDefault(p => p.ProfileId == profile.ProfileId && p.Xuid == profile.Xuid)
+            ?? _session?.Me?.Profiles.FirstOrDefault(p => p.Xuid == profile.Xuid && p.Status == "active") ?? profile);
+        if (_deleting is null || !DeleteSpeaksCareers) return;
+        _deleteAllGames = true;
+        ChangedDelete();
+    }
+
     public void CancelDeleteProfile()
     {
         _deleting = null;
+        _deleteAllGames = false;
         _deleteKey = null;
         _deleteTyped = string.Empty;
         _deleteStatus = null;
@@ -85,12 +116,16 @@ public sealed partial class ShellViewModel
         {
             return;
         }
+        var allGames = _deleteAllGames && DeleteSpeaksCareers;
+        // the careers this deletion removes, read before /me changes (a profile's every game, or the one career)
+        var rows = allGames ? session.Me!.Profiles.Where(p => p.Xuid == profile.Xuid).ToList() : [profile];
+        var playerId = session.Me?.Players?.FirstOrDefault(p => p.Xuid == profile.Xuid)?.ProfileId ?? profile.ProfileId;
         await Run(async () =>
         {
             ProfileDeletionOutcome outcome;
             try
             {
-                outcome = await session.DeleteProfileAsync(profile.Xuid, key);
+                outcome = allGames ? await session.DeletePlayerAsync(profile.Xuid, key) : await session.DeleteProfileAsync(profile.Xuid, key, game: profile.Game);
             }
             catch (ApiException e) when ((int)e.Status is >= 400 and < 500)
             {
@@ -98,24 +133,33 @@ public sealed partial class ShellViewModel
                 SetDeleteStatus(e.Code == ErrorCodes.AccountsBanned ? BannedText(e.Details) : ErrorText(e.Code));
                 throw;
             }
-            Log($"profiles: delete {profile.ProfileId} → {outcome.Result}");
+            Log(allGames ? $"profiles: delete profile {playerId} → {outcome.Result}"
+                : DeleteSpeaksCareers ? $"profiles: delete career {profile.Game} {profile.ProfileId} → {outcome.Result}"
+                : $"profiles: delete {profile.ProfileId} → {outcome.Result}");
             if (!outcome.Done)
             {
                 _deleteKey = NewDeleteKey();
                 SetDeleteStatus(DeleteRefusalText(outcome)); // in the panel, which stays open for another try
                 return;
             }
-            var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root, CurrentGame), LocalProfiles, session.Me?.AccountId ?? session.Tokens.AccountId,
-                profile, CloudSaveClient() is { } client ? client.Saves.Forget : null, DateTime.UtcNow);
-            foreach (var path in cleanup.Archived) Log("profiles: archived " + path);
-            foreach (var path in cleanup.NotArchived) Log("profiles: not archived (in use) " + path);
+            // each deleted career's save on this PC is archived from its own game's folder, its sync state forgotten for that game only
+            var fullyArchived = true;
+            foreach (var row in rows)
+            {
+                var game = Infinity.Core.Process.GameDefinition.ById(row.Game) ?? Infinity.Core.Process.GameDefinition.Fh2;
+                var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root, game), LocalProfiles,
+                    session.Me?.AccountId ?? session.Tokens.AccountId, row, ForgetSyncFor(game.Id), DateTime.UtcNow);
+                foreach (var path in cleanup.Archived) Log($"profiles: archived {row.Game} " + path);
+                foreach (var path in cleanup.NotArchived) Log($"profiles: not archived (in use) {row.Game} " + path);
+                fullyArchived &= cleanup.FullyArchived;
+            }
             var name = ProfileName.Plain(profile.Gamertag);
             CancelDeleteProfile();
-            if (_gate.ProfileKey == profile.ProfileId) Gate = _gate with { ProfileTag = null, ProfileKey = null }; // pick another profile
-            if (_chosenLocal is { } chosen && chosen.Cloud?.ProfileId == profile.ProfileId) _chosenLocal = null;
+            if (rows.Any(r => r.ProfileId == _gate.ProfileKey)) Gate = _gate with { ProfileTag = null, ProfileKey = null }; // pick another profile
+            if (_chosenLocal is { } chosen && rows.Any(r => r.ProfileId == chosen.Cloud?.ProfileId)) _chosenLocal = null;
             try { await session.RefreshMeAsync(); }
             finally { FillProfiles(); }
-            Message = S.Format(cleanup.FullyArchived ? "profiles.deleted" : "profiles.deleted_not_archived", ("name", name));
+            Message = S.Format(fullyArchived ? "profiles.deleted" : "profiles.deleted_not_archived", ("name", name));
         });
     }
 
@@ -127,6 +171,9 @@ public sealed partial class ShellViewModel
         return outcome.Result switch
         {
             ProfileDeletionResult.RateLimited => minutes is null ? S["profiles.delete_rate_limited_later"] : S.Format("profiles.delete_rate_limited", ("minutes", minutes)),
+            // CR-S98 §6.5: a career in use in another game says which
+            ProfileDeletionResult.InUse when ProfileDeletion.InUseGame(outcome) is { } game && game != CurrentGame.Id =>
+                S.Format("profiles.delete_in_use_game", ("game", GameTitle(game))),
             ProfileDeletionResult.InUse => minutes is null ? S["profiles.delete_in_use_now"] : S.Format("profiles.delete_in_use", ("minutes", minutes)),
             ProfileDeletionResult.DeletionPending => ErrorText(ErrorCodes.AccountsDeletionPending),
             ProfileDeletionResult.Banned => BannedText(outcome.Details),
@@ -135,6 +182,15 @@ public sealed partial class ShellViewModel
     }
 
     private static string NewDeleteKey() => Guid.CreateVersion7().ToString();
+
+    /// <summary>The sync-state forget of <paramref name="game"/>'s careers on this server (CR-S98: per game; null without a saves service).</summary>
+    private Func<ulong, bool>? ForgetSyncFor(string game)
+    {
+        if (game == CurrentGame.Id) return CloudSaveClient() is { } client ? client.Saves.Forget : null;
+        if (_session?.Info.Services?.Saves is not { } origin || !Uri.TryCreate(origin, UriKind.Absolute, out var saves)) return null;
+        var realm = saves.GetLeftPart(UriPartial.Authority);
+        return xuid => new SaveSyncStore(_stateDirectory, game).Forget(realm, xuid);
+    }
 
     private void SetDeleteStatus(string? text)
     {
