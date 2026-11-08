@@ -849,7 +849,8 @@ impl Agent {
             json!({"worldId": made.world, "game": GAME,
                 "host": {"kind": "official", "vmId": self.cfg.vm_id},
                 "activity": made.activity, "maxPlayers": self.cfg.max_players,
-                "races": true, "requireProof": true}),
+                "races": true, "requireProof": true,
+                "voice": config::official_voice(GAME)}),
         );
         if let Err(e) = opened {
             self.engine_refused("world.open", &e);
@@ -1236,6 +1237,9 @@ impl Agent {
             "activity": activity, "maxPlayers": max_players, "requireProof": true});
         if game == GAME {
             fields["races"] = Value::Bool(true);
+        }
+        if let Some(voice) = config::official_voice(game) {
+            fields["voice"] = voice;
         }
         let opened = control.request_retry("world.open", fields);
         if let Err(e) = opened {

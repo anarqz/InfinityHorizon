@@ -180,6 +180,8 @@ impl VoiceBlockTable {
 pub struct Voice {
     pub mode: VoiceMode,
     pub lobby_muted: Vec<u64>,
+    /// `voice.proximity`: R, r0, the pose age and the no-pose rule (used in proximity only).
+    pub tuning: voice::ProximityTuning,
 }
 
 impl Default for Voice {
@@ -187,6 +189,7 @@ impl Default for Voice {
         Voice {
             mode: VoiceMode::Open,
             lobby_muted: Vec::new(),
+            tuning: voice::ProximityTuning::default(),
         }
     }
 }
@@ -213,15 +216,70 @@ fn xuid_list(o: Obj, key: &str, max: usize) -> Result<Vec<u64>, CmdError> {
     Ok(out)
 }
 
-/// `world.voice` (and `world.open.voice`): strict mode (the C# maps unknown to open; §14).
-pub fn parse_voice(o: Obj) -> Result<Voice, CmdError> {
+/// `world.voice` (and `world.open.voice`): strict mode (the C# maps unknown to open; §14). An
+/// absent `proximity` keeps `current` (the world's settings, or the defaults at open).
+pub fn parse_voice(o: Obj, current: voice::ProximityTuning) -> Result<Voice, CmdError> {
     let mode = VoiceMode::parse(o.str("mode")?).ok_or_else(|| o.bad("mode"))?;
     let lobby_muted = if o.has("lobbyMuted") {
         xuid_list(o, "lobbyMuted", VOICE_LIST_MAX)?
     } else {
         Vec::new()
     };
-    Ok(Voice { mode, lobby_muted })
+    let tuning = if o.has("proximity") {
+        let path = if o.path.is_empty() {
+            "proximity"
+        } else {
+            "voice.proximity"
+        };
+        parse_proximity(Obj::new(o.obj("proximity")?, path))?
+    } else {
+        current
+    };
+    Ok(Voice {
+        mode,
+        lobby_muted,
+        tuning,
+    })
+}
+
+/// `voice.proximity` `{rangeM?, fullM?, maxPoseAgeMs?, noPose?}`: each absent field its default
+/// (150 m, 10 m, 2000 ms, `silent`); R 20-1000, r0 1-R/2, the age 100-10000, `silent` | `far`.
+pub fn parse_proximity(o: Obj) -> Result<voice::ProximityTuning, CmdError> {
+    let (lo, hi) = voice::RANGE_M_BOUNDS;
+    let range_m = o.opt_int(
+        "rangeM",
+        u64::from(lo),
+        u64::from(hi),
+        u64::from(voice::DEFAULT_RANGE_M),
+    )? as u16;
+    let full_m = o.opt_int(
+        "fullM",
+        1,
+        u64::from(range_m / 2),
+        u64::from(voice::DEFAULT_FULL_M),
+    )? as u16;
+    let (lo, hi) = voice::POSE_AGE_MS_BOUNDS;
+    let max_pose_age_ms = o.opt_int(
+        "maxPoseAgeMs",
+        u64::from(lo),
+        u64::from(hi),
+        u64::from(voice::DEFAULT_MAX_POSE_AGE_MS),
+    )? as u16;
+    let no_pose = if o.has("noPose") {
+        voice::NoPose::parse(o.str("noPose")?).ok_or_else(|| o.bad("noPose"))?
+    } else {
+        voice::NoPose::Silent
+    };
+    let t = voice::ProximityTuning {
+        range_m,
+        full_m,
+        max_pose_age_ms,
+        no_pose,
+    };
+    if !t.valid() {
+        return Err(o.bad("fullM"));
+    }
+    Ok(t)
 }
 
 /// `world.watch` (and `world.open.watch`); `Ok(None)` is `rules: null` (stop). An official world
@@ -316,7 +374,10 @@ impl Game for Fh2 {
         let o = info.request;
         let races = o.bool("races")?;
         let voice = if o.has("voice") {
-            parse_voice(Obj::new(o.obj("voice")?, "voice"))?
+            parse_voice(
+                Obj::new(o.obj("voice")?, "voice"),
+                voice::ProximityTuning::default(),
+            )?
         } else {
             Voice::default()
         };
@@ -515,6 +576,7 @@ impl Fh2World {
                 e.set_official_car_meet(true);
             }
             // the world's voice and watch apply to every engine, made now or later
+            e.set_voice_tuning(self.voice.tuning);
             e.set_voice(self.voice.mode, &self.voice.lobby_muted);
             if self.watch.is_some() {
                 self.apply_watch(&mut e);
@@ -951,7 +1013,11 @@ impl GameWorld for Fh2World {
                 Activity::Lobby(k) => k.as_str(),
                 Activity::CarMeet => "carmeet",
             },
-            "voice": {"mode": self.voice.mode.as_str(), "lobbyMuted": self.voice.lobby_muted},
+            "voice": {"mode": self.voice.mode.as_str(), "lobbyMuted": self.voice.lobby_muted,
+                "proximity": {"rangeM": self.voice.tuning.range_m,
+                    "fullM": self.voice.tuning.full_m,
+                    "maxPoseAgeMs": self.voice.tuning.max_pose_age_ms,
+                    "noPose": self.voice.tuning.no_pose.as_str()}},
             "watch": self.watch.as_ref().map(|w| json!({"rules": w.rules, "parts": w.parts})),
             "settings": format!("{:?}", self.settings),
         })
@@ -967,8 +1033,9 @@ impl GameWorld for Fh2World {
 
     fn command(&mut self, op: &str, o: Obj, ctx: &mut GameCtx) -> Option<CmdResult> {
         Some(match op {
-            "world.voice" => parse_voice(o).map(|v| {
+            "world.voice" => parse_voice(o, self.voice.tuning).map(|v| {
                 for e in self.engines.values_mut() {
+                    e.set_voice_tuning(v.tuning);
                     e.set_voice(v.mode, &v.lobby_muted);
                 }
                 self.voice = v;

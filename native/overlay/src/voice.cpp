@@ -488,19 +488,23 @@ void ApplyPose(const voice_wire::VoiceDown &down) {
     audio::SetPose(down.seat, SpatialPose(pose.talker, talker_jumped, nullptr), SpatialPose(pose.listener, self_jumped, pose.orient));
 }
 
-// The engine follows state down's mode (and, in proximity, its R: clients never hard-code it).
-void ApplyMode(uint8_t mode, uint16_t range) {
+// The engine follows state down's mode (and, in proximity, its R and r0: clients never hard-code them; r0 is 10 m without
+// 0xC0FB).
+void ApplyMode(uint8_t mode, uint16_t range, uint16_t full) {
     static uint8_t last_mode = 0xFF;
-    static uint16_t last_range = 0;
+    static uint16_t last_range = 0, last_full = 0;
     if (mode != last_mode) {
         last_mode = mode;
         audio::SetVoiceMode(static_cast<audio::VoiceMode>(mode));
         Log("voice: the relay's mode is %s", mode == voice_wire::kModeProximity ? "proximity" : mode == voice_wire::kModeOpen ? "open" : "off");
     }
-    if (mode == voice_wire::kModeProximity && range != last_range) {
+    const uint16_t r0 = full ? full : voice_wire::kDefaultFull;
+    if (mode == voice_wire::kModeProximity && (range != last_range || r0 != last_full)) {
         last_range = range;
-        audio::spatial::Params params; // the defaults (OD-164), with the relay's R
+        last_full = r0;
+        audio::spatial::Params params; // the defaults (OD-164), with the relay's R and r0
         params.range_m = static_cast<float>(range);
+        params.full_m = static_cast<float>(r0);
         audio::SetSpatialParams(params);
     }
 }
@@ -522,7 +526,7 @@ void VoiceArrived(const uint8_t *data, size_t size) {
     }
     voice_wire::StateDown state;
     if (voice_wire::DecodeStateDown(data, size, state)) {
-        ApplyMode(state.mode, state.range);
+        ApplyMode(state.mode, state.range, state.full);
         bool team_began = false;
         {
             std::lock_guard<std::mutex> lock(g_lock);

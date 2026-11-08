@@ -9,9 +9,13 @@
 //! talkers. Nothing is recorded: Opus packets pass through, only counters remain.
 //!
 //! In proximity each (talker, listener) pair is decided here: same hearing group, same event
-//! side, within R = 150 m with 15 % hysteresis, at most the 4 nearest per listener; the voice down
-//! then carries both cars sampled at this instant. In a team event each player hears only its
-//! hearing group (the team seams in [`super::seams`]), and state down is written per listener.
+//! side, both cars with a position at most 2 s old and strictly nearer than R = 150 m (no
+//! hysteresis; Alex, 2026-11-08), at most the 4 nearest per listener; the voice down then carries
+//! both cars sampled at this instant, from which the overlay sets the volume. A pair without a
+//! fresh position is not heard ([`codec::NoPose::Silent`]; a world may choose the reference's
+//! `far`). R, r0, the pose age and that choice are world settings ([`codec::ProximityTuning`]).
+//! In a team event each player hears only its hearing group (the team seams in
+//! [`super::seams`]), and state down is written per listener.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -19,19 +23,19 @@ use std::{
 };
 
 use super::{Engine, dict::DotMap};
-use crate::fh2::voice::{self as codec, Pose, PoseSide, Seat, VoiceMode, VoiceStatus, VoiceTag};
+use crate::fh2::voice::{
+    self as codec, Fix, Hearing, Pose, PoseSide, ProximityTuning, Seat, VoiceMode, VoiceStatus,
+    VoiceTag, distance,
+};
 
 pub const VOICE_PACKETS_PER_SECOND: f64 = 20.0;
 pub const VOICE_BYTES_PER_SECOND: f64 = 2048.0;
 pub const MAX_TALKERS: usize = 4;
 const TALKING_MS: i64 = 300;
 const VOICE_STATE_MS: i64 = 1000;
-/// R (§5c): the relay's, written in 0xC0F9; the host cannot choose it in v1.
-pub const PROXIMITY_RANGE: u16 = 150;
-/// The in-range bit clears past 1.15 R; a candidate replaces the farthest heard talker only
-/// when 1.15 × nearer.
+/// A candidate replaces the farthest heard talker only when 1.15 × nearer (the listener cap).
 const PROXIMITY_HYSTERESIS: f64 = 1.15;
-/// A car whose last own prediction is older than this is unknown.
+/// The jump counter's rule: a car unseen this long is "known again" on its next prediction.
 const CAR_KNOWN_MS: i64 = 1500;
 /// Velocity's provisional scale, m/s per raw unit (±32767 = ±200 m/s).
 const CAR_VELOCITY_SCALE: f64 = 200.0 / 32767.0;
@@ -54,8 +58,6 @@ struct VoicePeer {
     bytes: f64,
     /// Proximity: H(L), the talkers (serials) this listener hears now (at most 4).
     heard: Vec<u64>,
-    /// Proximity: the talkers whose in-range bit with this listener is set.
-    in_range: Vec<u64>,
 }
 
 /// An engine's voice state.
@@ -70,6 +72,7 @@ pub(crate) struct Voice {
     muted_for_lobby: BTreeSet<u64>,
     state_due: DotMap<u64, ()>,
     mode: VoiceMode,
+    tuning: ProximityTuning,
     last_state: i64,
     changed: bool,
     /// Why voice was dropped, by reason (counters only; proximity counts per pair).
@@ -85,6 +88,7 @@ impl Default for Voice {
             muted_for_lobby: BTreeSet::new(),
             state_due: DotMap::new(),
             mode: VoiceMode::Open,
+            tuning: ProximityTuning::default(),
             last_state: 0,
             changed: false,
             drops: BTreeMap::new(),
@@ -141,18 +145,22 @@ impl CarSample {
     }
 }
 
-/// Single-precision distance, as the reference computes it.
-fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let (dx, dy, dz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-    (dx * dx + dy * dy + dz * dz).sqrt()
+impl CarSample {
+    /// The car's position for the proximity gate (`sample_car` already bounds its age).
+    fn fix(&self) -> Option<Fix> {
+        self.known.then(|| Fix {
+            position: self.position(),
+            age_ms: i64::from(self.age),
+        })
+    }
 }
 
 impl Engine {
     // ---- launcher inputs ----
 
     /// The host's voice mode and the players it muted for everyone. Takes effect at once: the
-    /// next voice packet follows it, a mode change clears the proximity state (range bits, heard
-    /// sets), and every subscriber gets a state down now.
+    /// next voice packet follows it, a mode change clears the proximity state (heard sets), and
+    /// every subscriber gets a state down now.
     pub fn set_voice(&mut self, mode: VoiceMode, lobby_muted: &[u64]) {
         let muted: BTreeSet<u64> = lobby_muted.iter().copied().collect();
         if self.voice.mode == mode && self.voice.muted_for_lobby == muted {
@@ -161,12 +169,29 @@ impl Engine {
         if self.voice.mode != mode {
             for (_, v) in self.voice.peers.iter_mut() {
                 v.heard.clear();
-                v.in_range.clear();
             }
         }
         self.voice.mode = mode;
         self.voice.muted_for_lobby = muted;
         self.send_voice_states();
+    }
+
+    /// The world's proximity settings (R, r0, the pose age, the no-pose rule). A change clears
+    /// the heard sets and re-sends every state down (R and r0 ride in it).
+    pub fn set_voice_tuning(&mut self, tuning: ProximityTuning) {
+        if self.voice.tuning == tuning {
+            return;
+        }
+        for (_, v) in self.voice.peers.iter_mut() {
+            v.heard.clear();
+        }
+        self.voice.tuning = tuning;
+        self.send_voice_states();
+    }
+
+    /// The world's proximity settings.
+    pub fn voice_tuning(&self) -> ProximityTuning {
+        self.voice.tuning
     }
 
     /// The server's voice blocks changed (either source, §6.4): a talker blocked now leaves every
@@ -182,7 +207,7 @@ impl Engine {
             }
         }
         for s in blocked {
-            self.forget_heard(s, false);
+            self.forget_heard(s);
         }
         self.send_voice_states();
     }
@@ -311,7 +336,7 @@ impl Engine {
         if control.op == codec::LEAVE {
             if self.voice.peers.remove(&serial).is_some() {
                 self.voice.changed = true;
-                self.forget_heard(serial, false);
+                self.forget_heard(serial);
             }
             return;
         }
@@ -332,7 +357,6 @@ impl Engine {
                     packets: VOICE_PACKETS_PER_SECOND * 2.0,
                     bytes: VOICE_BYTES_PER_SECOND * 2.0,
                     heard: Vec::new(),
-                    in_range: Vec::new(),
                 },
             );
         }
@@ -417,7 +441,7 @@ impl Engine {
         };
         if let Some(reason) = refused {
             self.drop_voice(reason);
-            self.forget_heard(serial, false);
+            self.forget_heard(serial);
             self.flush_voice_states();
             return;
         }
@@ -504,8 +528,8 @@ impl Engine {
         }
     }
 
-    /// §5c "The relay's rules in proximity": per listener, side, range with hysteresis, the 4
-    /// nearest, then the pose.
+    /// §5c "The relay's rules in proximity": per listener, side, the gate (fresh positions,
+    /// nearer than R), the 4 nearest, then the pose.
     fn receive_proximity(&mut self, serial: u64, up: &codec::VoicePacket) {
         let Some(seat) = self.voice_seat_of(serial) else {
             self.drop_voice("no seat");
@@ -513,7 +537,8 @@ impl Engine {
         };
         self.start_packet(serial, up.tag);
         let talker = self.sample_car(serial);
-        let range = f64::from(PROXIMITY_RANGE);
+        let tuning = self.voice.tuning;
+        let range = f64::from(tuning.range_m);
         for listener in self.voice.peers.keys() {
             if listener == serial {
                 continue;
@@ -533,30 +558,15 @@ impl Engine {
                 continue;
             }
             let me = self.sample_car(listener);
-            let mine = if talker.known && me.known {
-                let d = f64::from(distance(talker.position(), me.position()));
-                let Some(v) = self.voice.peers.get_mut(&listener) else {
-                    continue;
-                };
-                if d <= range {
-                    if !v.in_range.contains(&serial) {
-                        v.in_range.push(serial);
-                    }
-                } else if d > range * PROXIMITY_HYSTERESIS {
-                    v.in_range.retain(|t| *t != serial);
-                }
-                if !v.in_range.contains(&serial) {
+            let mine = match codec::proximity_gate(talker.fix(), me.fix(), &tuning) {
+                Hearing::InRange(d) => Some(f64::from(d)),
+                // `far` only: a carless talker ranks last; a carless listener has no distances
+                Hearing::Unplaced => me.known.then_some(range),
+                Hearing::Drop(reason) => {
                     self.unhear(listener, serial);
-                    self.drop_voice("out of range");
+                    self.drop_voice(reason);
                     continue;
                 }
-                Some(d)
-            } else {
-                if let Some(v) = self.voice.peers.get_mut(&listener) {
-                    v.in_range.retain(|t| *t != serial); // cleared while either car is unknown
-                }
-                // a carless talker ranks last; a carless listener has no distances
-                me.known.then_some(range)
             };
             let heard = self
                 .voice
@@ -601,7 +611,7 @@ impl Engine {
             self.voice.forwarded += 1;
         }
         if self.voice.peers.get(&serial).is_some_and(|v| v.spurt_ended) {
-            self.forget_heard(serial, false); // its spurt ended: it leaves every heard set
+            self.forget_heard(serial); // its spurt ended: it leaves every heard set
         }
         self.flush_voice_states();
     }
@@ -615,7 +625,7 @@ impl Engine {
             let d = if sample.known {
                 f64::from(distance(sample.position(), me.position()))
             } else {
-                f64::from(PROXIMITY_RANGE)
+                f64::from(self.voice.tuning.range_m)
             };
             let seat = self.voice.seats.get(&member).map_or(-1, |s| i32::from(*s));
             if far.is_none_or(|(_, fd, fs)| d > fd || d == fd && seat > fs) {
@@ -635,14 +645,10 @@ impl Engine {
         }
     }
 
-    /// The talker leaves every heard set (its spurt ended, it left, or a rule now refuses it);
-    /// with `ranges` its range bits go too.
-    fn forget_heard(&mut self, talker: u64, ranges: bool) {
+    /// The talker leaves every heard set (its spurt ended, it left, or a rule now refuses it).
+    fn forget_heard(&mut self, talker: u64) {
         for listener in self.voice.peers.keys() {
             self.unhear(listener, talker);
-            if ranges && let Some(v) = self.voice.peers.get_mut(&listener) {
-                v.in_range.retain(|t| *t != talker);
-            }
         }
     }
 
@@ -679,9 +685,9 @@ impl Engine {
         }
     }
 
-    /// The player's car at this instant: known when its last own prediction is at most 1500 ms
-    /// old (a car sent again with a newer time never refreshes it). Position bits are copied as
-    /// received, velocity and orientation raw.
+    /// The player's car at this instant: known when its last own prediction is at most the
+    /// world's pose age old (2000 ms by default; a car sent again with a newer time never
+    /// refreshes it). Position bits are copied as received, velocity and orientation raw.
     fn sample_car(&self, serial: u64) -> CarSample {
         let Some(p) = self.peer(serial) else {
             return CarSample::default();
@@ -693,7 +699,9 @@ impl Engine {
         let (Some(at), Some(body)) = (p.last_car_at, &p.last_car_body) else {
             return unknown;
         };
-        if self.now - at > CAR_KNOWN_MS || body.len() != super::message::CAR_BODY_BITS {
+        if self.now - at > i64::from(self.voice.tuning.max_pose_age_ms)
+            || body.len() != super::message::CAR_BODY_BITS
+        {
             return unknown;
         }
         let mut r = body.reader();
@@ -796,11 +804,12 @@ impl Engine {
             seats,
             mode,
             range: if mode == VoiceMode::Proximity {
-                PROXIMITY_RANGE
+                self.voice.tuning.range_m
             } else {
                 0
             },
             team: listener.and_then(|l| self.team_of(l)),
+            full: self.voice.tuning.full_m,
         }
     }
 
@@ -851,7 +860,7 @@ impl Engine {
             if !v.spurt_ended && v.last_voice_at.is_some_and(|at| now - at >= TALKING_MS) {
                 v.spurt_ended = true;
                 self.voice.changed = true;
-                self.forget_heard(s, false);
+                self.forget_heard(s);
             }
         }
         if !self.voice.changed && now - self.voice.last_state < VOICE_STATE_MS {
@@ -866,6 +875,6 @@ impl Engine {
         let subscribed = self.voice.peers.remove(&serial).is_some();
         let seated = self.voice.seats.remove(&serial).is_some();
         self.voice.changed |= subscribed || seated;
-        self.forget_heard(serial, true);
+        self.forget_heard(serial);
     }
 }

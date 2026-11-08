@@ -10,7 +10,7 @@
 //!   12, count × xuid u64}; state down 0xC0F6 {ver, lobby u8, bundle u8, count u8 ≤ 12, count ×
 //!   {seat u8, xuid u64, state u8}}, then the mode 0xC0F9 {ver, mode, range u16} and, for a
 //!   running team event's participant only, the team 0xC0FA {ver, flags (bit 0 running), team,
-//!   0}.
+//!   0}, then in proximity with a non-default r0 the curve 0xC0FB {ver, 0, r0 u16}.
 //!
 //! A writer puts the message's attribute first; a reader finds it anywhere, and the whole
 //! datagram must walk (every attribute within it).
@@ -30,6 +30,10 @@ pub const LAYOUT_VERSION: u8 = 1;
 pub const MAX_OPUS: usize = 400;
 pub const MAX_SEATS: usize = 12;
 const POSE_LEN: usize = 48;
+
+/// 0xC0FB, the proximity curve (state down, proximity only, and only when r0 is not the default
+/// 10 m, so a default world's bytes are unchanged): {ver 1, 0, r0 u16 metres}.
+const CURVE: u16 = 0xC0FB;
 
 /// A voice header's flags: the last packet of a talk spurt.
 pub const END_OF_SPURT: u8 = 1;
@@ -89,6 +93,125 @@ impl VoiceMode {
             VoiceMode::Open => 1,
             VoiceMode::Proximity => 2,
         }
+    }
+}
+
+/// What proximity does with a pair where either car has no fresh position (menus, loading, a car
+/// swap, a stale prediction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NoPose {
+    /// Not heard (the default, Alex 2026-11-08: "only transfer voice data if cars < 150 m"): no
+    /// position proves no distance, so nothing is forwarded.
+    #[default]
+    Silent,
+    /// The CR-L46 reference rule: a carless talker ranks last and plays "far", a carless listener
+    /// hears in arrival order (unspatialized).
+    Far,
+}
+
+impl NoPose {
+    pub fn parse(s: &str) -> Option<NoPose> {
+        match s {
+            "silent" => Some(NoPose::Silent),
+            "far" => Some(NoPose::Far),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoPose::Silent => "silent",
+            NoPose::Far => "far",
+        }
+    }
+}
+
+/// A world's proximity settings (`world.open.voice.proximity`, `world.voice.proximity`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProximityTuning {
+    /// R: a pair is forwarded only while its cars are strictly nearer than this (metres; also
+    /// 0xC0F9's range, the overlay's silence point).
+    pub range_m: u16,
+    /// r0: full volume within (metres; the overlay's curve, 0xC0FB when not the default).
+    pub full_m: u16,
+    /// A car's last own prediction older than this has no position (ms).
+    pub max_pose_age_ms: u16,
+    pub no_pose: NoPose,
+}
+
+pub const DEFAULT_RANGE_M: u16 = 150;
+pub const DEFAULT_FULL_M: u16 = 10;
+pub const DEFAULT_MAX_POSE_AGE_MS: u16 = 2000;
+/// The settings' bounds (the overlay clamps R to 20-1000 m and r0 to 1 m-R/2 as well).
+pub const RANGE_M_BOUNDS: (u16, u16) = (20, 1000);
+pub const POSE_AGE_MS_BOUNDS: (u16, u16) = (100, 10000);
+
+impl Default for ProximityTuning {
+    fn default() -> ProximityTuning {
+        ProximityTuning {
+            range_m: DEFAULT_RANGE_M,
+            full_m: DEFAULT_FULL_M,
+            max_pose_age_ms: DEFAULT_MAX_POSE_AGE_MS,
+            no_pose: NoPose::Silent,
+        }
+    }
+}
+
+impl ProximityTuning {
+    /// Within the bounds: R 20-1000 m, r0 1 m-R/2, the pose age 100-10000 ms.
+    pub fn valid(&self) -> bool {
+        (RANGE_M_BOUNDS.0..=RANGE_M_BOUNDS.1).contains(&self.range_m)
+            && self.full_m >= 1
+            && self.full_m <= self.range_m / 2
+            && (POSE_AGE_MS_BOUNDS.0..=POSE_AGE_MS_BOUNDS.1).contains(&self.max_pose_age_ms)
+    }
+}
+
+/// One car as proximity sees it: its position (metres) and the age of its last own prediction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fix {
+    pub position: [f32; 3],
+    pub age_ms: i64,
+}
+
+/// A (talker, listener) pair's proximity verdict.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Hearing {
+    /// Both cars fresh and nearer than R: forwarded, at this distance (metres).
+    InRange(f32),
+    /// Either car without a fresh position, with [`NoPose::Far`]: forwarded unplaced.
+    Unplaced,
+    /// Not forwarded, for this reason (a drop counter).
+    Drop(&'static str),
+}
+
+/// Single-precision distance, as the reference computes it.
+pub fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let (dx, dy, dz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+/// The proximity gate (Alex, 2026-11-08): a pair is heard only when both cars have a position at
+/// most `max_pose_age_ms` old and they are strictly nearer than R; no hysteresis. Without a fresh
+/// position for either, [`ProximityTuning::no_pose`] decides.
+pub fn proximity_gate(talker: Option<Fix>, listener: Option<Fix>, t: &ProximityTuning) -> Hearing {
+    let fresh = |f: Option<Fix>| {
+        f.filter(|f| (0..=i64::from(t.max_pose_age_ms)).contains(&f.age_ms))
+            .map(|f| f.position)
+    };
+    match (fresh(talker), fresh(listener)) {
+        (Some(a), Some(b)) => {
+            let d = distance(a, b);
+            if d.is_finite() && d < f32::from(t.range_m) {
+                Hearing::InRange(d)
+            } else {
+                Hearing::Drop("out of range")
+            }
+        }
+        _ => match t.no_pose {
+            NoPose::Silent => Hearing::Drop("no pose"),
+            NoPose::Far => Hearing::Unplaced,
+        },
     }
 }
 
@@ -160,6 +283,9 @@ pub struct VoiceStatus {
     pub mode: VoiceMode,
     pub range: u16,
     pub team: Option<u8>,
+    /// r0 in metres for 0xC0FB; written only in proximity and when not [`DEFAULT_FULL_M`] (0:
+    /// never).
+    pub full: u16,
 }
 
 fn be16(d: &[u8], at: usize) -> u16 {
@@ -314,15 +440,18 @@ pub fn write_state(s: &VoiceStatus, txid: &[u8; 12]) -> Vec<u8> {
     }
     let mut mode = vec![LAYOUT_VERSION, s.mode.byte()];
     mode.extend_from_slice(&s.range.to_be_bytes());
-    match s.team {
-        None => stun::indication(CONTROL_KIND, txid, &[(STATE_DOWN, &v), (MODE, &mode)]),
-        Some(team) => {
-            let team = [LAYOUT_VERSION, 1, team, 0];
-            stun::indication(
-                CONTROL_KIND,
-                txid,
-                &[(STATE_DOWN, &v), (MODE, &mode), (TEAM, &team)],
-            )
-        }
+    let team = s.team.map(|team| [LAYOUT_VERSION, 1, team, 0]);
+    let curve =
+        (s.mode == VoiceMode::Proximity && s.full != 0 && s.full != DEFAULT_FULL_M).then(|| {
+            let f = s.full.to_be_bytes();
+            [LAYOUT_VERSION, 0, f[0], f[1]]
+        });
+    let mut attrs: Vec<(u16, &[u8])> = vec![(STATE_DOWN, &v), (MODE, &mode)];
+    if let Some(t) = &team {
+        attrs.push((TEAM, t));
     }
+    if let Some(c) = &curve {
+        attrs.push((CURVE, c));
+    }
+    stun::indication(CONTROL_KIND, txid, &attrs)
 }
