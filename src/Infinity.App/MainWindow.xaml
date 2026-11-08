@@ -28,6 +28,191 @@
         </ControlTemplate>
       </Setter.Value></Setter>
     </Style>
+    <!-- SAVE_MANAGER_UX (OD-207, OD-214): the save manager's look, after the owner's prototype: dark cards, HARDCORE orange, NOOB green,
+         Azimuth blue, plain chips, large choices. The accent of a button is its Background (bound per card). -->
+    <SolidColorBrush x:Key="SmCardSurface" Color="#FF140A1E" />
+    <SolidColorBrush x:Key="SmCardRaised" Color="#FF1E1029" />
+    <SolidColorBrush x:Key="SmLine" Color="#24F9EAEE" />
+    <SolidColorBrush x:Key="SmMenuSurface" Color="#FF241433" />
+    <SolidColorBrush x:Key="SmWarn" Color="#FFFFC24B" />
+    <SolidColorBrush x:Key="SmBad" Color="#FFFF5468" />
+    <Style x:Key="SmCard" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource SmCardSurface}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SmLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="Padding" Value="22,20" />
+    </Style>
+    <Style x:Key="SmModeTag" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="Black" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style x:Key="SmH1" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="22" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style x:Key="SmSub" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Margin" Value="0,0,0,20" />
+    </Style>
+    <Style x:Key="SmHint" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <!-- The one primary action of a card: filled with the slot's accent, dark text. -->
+    <Style x:Key="SmPrimary" TargetType="Button">
+      <Setter Property="Foreground" Value="#FF071018" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="Padding" Value="18,10" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Grid>
+            <Border x:Name="Box" CornerRadius="10" Background="{TemplateBinding Background}">
+              <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+            </Border>
+            <Border x:Name="Shine" CornerRadius="10" Background="#00FFFFFF" IsHitTestVisible="False" BorderThickness="2" BorderBrush="Transparent" />
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Shine" Property="Background" Value="#26FFFFFF" /></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Shine" Property="BorderBrush" Value="#CCFFFFFF" /></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Shine" Property="Background" Value="#33000000" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <!-- Secondary: the panel surface, a thin line that lights on hover. -->
+    <Style x:Key="SmButton" TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+      <Setter Property="Background" Value="{StaticResource SmCardRaised}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SmLine}" />
+      <Setter Property="Padding" Value="14,9" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Box" CornerRadius="10" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1">
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" RecognizesAccessKey="True" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityMuted}" /></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <Style x:Key="SmDanger" TargetType="Button" BasedOn="{StaticResource SmButton}">
+      <Setter Property="Foreground" Value="{StaticResource SmBad}" />
+      <Setter Property="BorderBrush" Value="#66FF5468" />
+    </Style>
+    <!-- A large choice (Start options): left-aligned title and hint; the accent lights its border on hover (Tag = accent). -->
+    <Style x:Key="SmChoice" TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+      <Setter Property="Background" Value="{StaticResource SmCardSurface}" />
+      <Setter Property="Padding" Value="18,16" />
+      <Setter Property="Margin" Value="0,0,0,10" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Box" CornerRadius="14" Background="{TemplateBinding Background}" BorderBrush="{StaticResource SmLine}" BorderThickness="1">
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Stretch" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" /></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <Style x:Key="SmMenuItem" TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Padding" Value="10,8" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Box" CornerRadius="7" Background="{TemplateBinding Background}">
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Left" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="Background" Value="#14FFFFFF" /></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="Background" Value="#1FFFFFFF" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <Style x:Key="SmLink" TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border Background="Transparent" Padding="6,4">
+            <TextBlock x:Name="Text" Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}">
+              <TextBlock.TextDecorations>
+                <TextDecoration Location="Underline" PenOffset="3"><TextDecoration.Pen><Pen Brush="#80F9EAEE" Thickness="1" DashStyle="{x:Static DashStyles.Dot}" /></TextDecoration.Pen></TextDecoration>
+              </TextBlock.TextDecorations>
+            </TextBlock>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{StaticResource InfinityText}" /></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Foreground" Value="{StaticResource InfinityPink}" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <Style x:Key="SmPill" TargetType="Border">
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="7,2" />
+      <Setter Property="Background" Value="#14FFFFFF" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style x:Key="SmNote" TargetType="Border">
+      <Setter Property="Background" Value="#0AFFFFFF" />
+      <Setter Property="BorderBrush" Value="{StaticResource SmLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="14,12" />
+      <Setter Property="Margin" Value="0,14,0,0" />
+    </Style>
+    <!-- A comparison card (Resolve, Copy): badge, title, key/value lines with ▲/▼. -->
+    <DataTemplate x:Key="SmCompareLines">
+      <ItemsControl ItemsSource="{Binding Lines}" Margin="0,10,0,0" Focusable="False">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border BorderBrush="#12FFFFFF" BorderThickness="0,0,0,1" Padding="0,7">
+              <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                  <TextBlock Text="{Binding Value}" FontWeight="SemiBold" />
+                  <TextBlock Text=" ▲" Foreground="{x:Static local:SlotBrushes.Noob}" Visibility="{Binding Up, Converter={StaticResource Visible}}" />
+                  <TextBlock Text=" ▼" Foreground="{StaticResource SmBad}" Visibility="{Binding Down, Converter={StaticResource Visible}}" />
+                </StackPanel>
+                <TextBlock Text="{Binding Key}" Foreground="{StaticResource InfinityMuted}" />
+              </DockPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </DataTemplate>
     <!-- OD-119: a news card (cover, title, date, summary, pinned, unread) and the PLAY column of the newest few. -->
     <DataTemplate x:Key="NewsCardTemplate">
       <Button Click="OnNewsCard" Margin="0,0,0,10" Background="{DynamicResource NewsCardSurface}" AutomationProperties.Name="{Binding Title}">
@@ -511,8 +696,28 @@
           <!-- CR-S52: a Hardcore line still empty starts from scratch or from one of the account's profiles, checked on the spot. The first
                Play's choice, then the server's dry run, shown before the player confirms (nothing is copied before an accepted check). -->
           <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSeedPanel, Converter={StaticResource Visible}}">
-          <Border Style="{StaticResource Card}" Padding="24,20" Width="540" VerticalAlignment="Center" HorizontalAlignment="Center">
+          <Border Style="{StaticResource SmCard}" Padding="26,22" Width="600" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
+              <!-- SAVE_MANAGER_UX §3: ‹ Back and the breadcrumb here too (Back = Not now: nothing was copied) -->
+              <DockPanel Margin="0,0,0,16">
+                <Button DockPanel.Dock="Left" Content="{Binding S[sm.back]}" Style="{StaticResource SmButton}" Padding="12,6" FontSize="13" Margin="0,0,12,0" Click="OnSeedCloseChoice" />
+                <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                  <Run Text="{Binding CheckTrail, Mode=OneWay}" Foreground="{StaticResource InfinityMuted}" /><Run Text="{Binding S[sm.check_title], Mode=OneWay}" FontWeight="SemiBold" />
+                </TextBlock>
+              </DockPanel>
+              <!-- §2.5: the check as a visible step list (Reading → Checking progression → Result) -->
+              <ItemsControl ItemsSource="{Binding CheckSteps}" Margin="0,0,0,14" Focusable="False" Visibility="{Binding ShowCheckSteps, Converter={StaticResource Visible}}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border BorderBrush="{StaticResource SmLine}" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,8">
+                      <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Glyph}" Foreground="{Binding GlyphBrush}" FontWeight="Black" Width="20" />
+                        <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
               <StackPanel Visibility="{Binding ShowSeedChoice, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding SeedChoiceTitle}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding S[seed.first_launch_body]}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
@@ -548,7 +753,13 @@
                 <WrapPanel Margin="0,14,0,0">
                   <Button Content="{Binding S[seed.confirm]}" Click="OnConfirmSeed" IsEnabled="{Binding Idle}" Margin="0,0,10,8" Padding="16,6"
                           Style="{StaticResource AccentButtonStyle}" Visibility="{Binding SeedCheckAccepted, Converter={StaticResource Visible}}" />
-                  <Button Content="{Binding S[seed.start_fresh]}" Click="OnDismissSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8" />
+                  <!-- §2.5: a refusal's ways out: a fresh HARDCORE career, or the source played as NOOB -->
+                  <Button Content="{Binding S[sm.check.fresh]}" Click="OnDismissSeed" IsEnabled="{Binding Idle}" Margin="0,0,10,8"
+                          Background="{x:Static local:SlotBrushes.Hardcore}" Style="{StaticResource SmPrimary}" Visibility="{Binding ShowCheckWaysOut, Converter={StaticResource Visible}}" />
+                  <Button Content="{Binding S[sm.check.as_noob]}" Click="OnPlaySourceAsNoob" IsEnabled="{Binding Idle}" Margin="0,0,10,8"
+                          Style="{StaticResource SmButton}" Visibility="{Binding CanPlaySourceAsNoob, Converter={StaticResource Visible}}" />
+                  <Button Content="{Binding S[seed.start_fresh]}" Click="OnDismissSeed" IsEnabled="{Binding Idle}" Padding="16,6" Margin="0,0,10,8"
+                          Visibility="{Binding ShowCheckWaysOut, Converter={StaticResource Hidden}}" />
                   <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnSeedCloseChoice" Style="{StaticResource LinkButton}" Margin="0,0,0,8"
                           Visibility="{Binding ShowSeedNotNow, Converter={StaticResource Visible}}" />
                   <!-- OD-214 (§6.7): a refused check leaves an empty career: start fresh (above) or delete it. -->
@@ -852,8 +1063,520 @@
                     Margin="0,16,0,0" Padding="18,8" IsEnabled="{Binding Idle}" />
           </StackPanel>
 
-          <!-- Choose a profile (from the server) or create one. -->
-          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowPickProfile, Converter={StaticResource Visible}}">
+          <!-- SAVE_MANAGER_UX.md (OD-207) under OD-214: the save manager is the Profiles page of a signed-in player (cards per mode with the
+               chosen game's career, the Azimuth strip, Manage saves, History, Resolve, Copy, Delete, Help Sensei). ‹ Back + breadcrumb on
+               every non-root screen; Esc and the mouse's back button do the same (MainWindow.xaml.cs). -->
+          <Grid x:Name="SavesPage" Visibility="{Binding ShowSaveManager, Converter={StaticResource Visible}}">
+            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <!-- head: ‹ Back, the breadcrumb, the game -->
+            <Border BorderBrush="{StaticResource SmLine}" BorderThickness="0,0,0,1" Padding="0,0,0,12" MinHeight="48">
+              <DockPanel LastChildFill="True">
+                <Button DockPanel.Dock="Left" Content="{Binding S[sm.back]}" Style="{StaticResource SmButton}" Padding="12,6" Margin="0,0,14,0" FontSize="13"
+                        Click="OnSavesBack" Visibility="{Binding SavesCanGoBack, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding S[sm.back]}" />
+                <Button DockPanel.Dock="Right" Style="{StaticResource SmButton}" Padding="12,6" Click="OnChangeGame" IsEnabled="{Binding Idle}"
+                        AutomationProperties.Name="{Binding GameLabel}">
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding GameLabel}" FontWeight="SemiBold" />
+                    <TextBlock Text="  ▾" Foreground="{StaticResource InfinityMuted}" />
+                  </StackPanel>
+                </Button>
+                <TextBlock VerticalAlignment="Center" FontSize="15" TextTrimming="CharacterEllipsis">
+                  <Run Text="{Binding SavesTrail, Mode=OneWay}" Foreground="{StaticResource InfinityMuted}" /><Run Text="{Binding SavesTrailLast, Mode=OneWay}" FontWeight="SemiBold" />
+                </TextBlock>
+              </DockPanel>
+            </Border>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+              <Grid Margin="0,22,4,18" MaxWidth="1040">
+
+                <!-- ============ HOME: both profile cards, the Azimuth strip ============ -->
+                <StackPanel Visibility="{Binding ShowSavesHome, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[shell.pick_profile]}" Style="{StaticResource PageTitle}" FontSize="26" Margin="9,0,9,4" />
+                  <TextBlock Text="{Binding SavesSubtitle}" Style="{StaticResource SmSub}" Margin="9,0,9,18" />
+                  <StackPanel Margin="9,0,9,16" Visibility="{Binding SavesEmpty, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding S[sm.empty_title]}" FontSize="18" FontWeight="Bold" />
+                    <TextBlock Text="{Binding S[sm.empty_body]}" Style="{StaticResource SmHint}" Margin="0,4,0,0" />
+                  </StackPanel>
+                  <ItemsControl ItemsSource="{Binding SaveCards}" Focusable="False" IsEnabled="{Binding Idle}">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Grid Margin="9">
+                          <Border MinHeight="290">
+                            <Border.Style>
+                              <Style TargetType="Border" BasedOn="{StaticResource SmCard}">
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Selected}" Value="True">
+                                    <Setter Property="BorderBrush" Value="{Binding Accent}" />
+                                    <Setter Property="BorderThickness" Value="2" />
+                                  </DataTrigger>
+                                  <DataTrigger Binding="{Binding IsExplainer}" Value="True">
+                                    <Setter Property="Background" Value="{Binding Soft}" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </Border.Style>
+                            <Grid>
+                              <!-- a profile of this mode -->
+                              <DockPanel Visibility="{Binding IsProfile, Converter={StaticResource Visible}}" LastChildFill="False">
+                                <DockPanel DockPanel.Dock="Top">
+                                  <Button DockPanel.Dock="Right" Content="⋯" Style="{StaticResource SmButton}" Width="38" Height="36" Padding="0" FontSize="18"
+                                          Click="OnSavesMenu" Visibility="{Binding HasMenu, Converter={StaticResource Visible}}" AutomationProperties.Name="⋯" />
+                                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding ModeLabel}" Foreground="{Binding Accent}" Style="{StaticResource SmModeTag}" />
+                                    <Border Style="{StaticResource SmPill}" Margin="10,0,0,0" Visibility="{Binding Selected, Converter={StaticResource Visible}}">
+                                      <TextBlock Text="{Binding DataContext.S[sm.selected], RelativeSource={RelativeSource AncestorType=Window}}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                                    </Border>
+                                  </StackPanel>
+                                </DockPanel>
+                                <DockPanel DockPanel.Dock="Top" Margin="0,16,0,0">
+                                  <Grid DockPanel.Dock="Left" Width="64" Height="64" VerticalAlignment="Top">
+                                    <Ellipse Fill="{Binding Soft}" Stroke="{Binding Accent}" StrokeThickness="2" />
+                                    <TextBlock Text="{Binding Initial}" Foreground="{Binding Accent}" FontSize="24" FontWeight="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <Ellipse Margin="2" Visibility="{Binding DataContext.HasDiscordAvatar, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource Visible}}">
+                                      <Ellipse.Fill><ImageBrush ImageSource="{Binding DataContext.DiscordAvatar, RelativeSource={RelativeSource AncestorType=Window}}" Stretch="UniformToFill" /></Ellipse.Fill>
+                                    </Ellipse>
+                                  </Grid>
+                                  <StackPanel Margin="16,2,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Gamertag}" FontSize="22" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Stats}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                               Visibility="{Binding HasStats, Converter={StaticResource Visible}}" />
+                                    <TextBlock Text="{Binding NoCareerTitle}" Foreground="{Binding Accent}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"
+                                               Visibility="{Binding HasNoCareer, Converter={StaticResource Visible}}" />
+                                  </StackPanel>
+                                </DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding NoCareerBody}" Style="{StaticResource SmHint}" Margin="0,14,0,0"
+                                           Visibility="{Binding HasNoCareer, Converter={StaticResource Visible}}" />
+                                <!-- the chip: plain words, a green or amber dot -->
+                                <Border DockPanel.Dock="Top" HorizontalAlignment="Left" CornerRadius="12" Padding="10,4" Margin="0,14,0,0" Background="#0DFFFFFF"
+                                        Visibility="{Binding HasChip, Converter={StaticResource Visible}}">
+                                  <StackPanel Orientation="Horizontal">
+                                    <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Noob}"
+                                             Visibility="{Binding ChipGood, Converter={StaticResource Visible}}" />
+                                    <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource SmWarn}"
+                                             Visibility="{Binding ChipWarn, Converter={StaticResource Visible}}" />
+                                    <TextBlock Text="{Binding ChipText}" FontSize="12" TextWrapping="Wrap">
+                                      <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                          <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+                                          <Style.Triggers><DataTrigger Binding="{Binding ChipWarn}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmWarn}" /></DataTrigger></Style.Triggers>
+                                        </Style>
+                                      </TextBlock.Style>
+                                    </TextBlock>
+                                  </StackPanel>
+                                </Border>
+                                <TextBlock DockPanel.Dock="Bottom" Text="{Binding Note}" FontSize="12" Foreground="{StaticResource InfinityGold}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                           Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
+                                <TextBlock DockPanel.Dock="Bottom" Text="{Binding Hint}" Style="{StaticResource SmHint}" Margin="0,12,0,0" />
+                                <Button DockPanel.Dock="Bottom" Content="{Binding PrimaryLabel}" Background="{Binding Accent}" Style="{StaticResource SmPrimary}"
+                                        HorizontalAlignment="Left" Margin="0,18,0,0" IsEnabled="{Binding PrimaryEnabled}" Click="OnSavesPrimary"
+                                        Visibility="{Binding HasPrimary, Converter={StaticResource Visible}}" />
+                              </DockPanel>
+                              <!-- the ⋯ menu (drawn in the card: no popup, which froze under Proton) -->
+                              <Border Visibility="{Binding MenuOpen, Converter={StaticResource Visible}}" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                      Margin="0,42,0,0" MinWidth="250" MaxWidth="330" Padding="6" CornerRadius="10" Background="{StaticResource SmMenuSurface}"
+                                      BorderBrush="{StaticResource SmLine}" BorderThickness="1" Panel.ZIndex="3">
+                                <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.55" Color="Black" /></Border.Effect>
+                                <ItemsControl ItemsSource="{Binding Menu}" Focusable="False">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <Button Style="{StaticResource SmMenuItem}" IsEnabled="{Binding Enabled}" Click="OnSavesMenuItem"
+                                              Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}" ToolTip="{Binding Reason}">
+                                        <StackPanel>
+                                          <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
+                                            <TextBlock.Style>
+                                              <Style TargetType="TextBlock">
+                                                <Style.Triggers><DataTrigger Binding="{Binding Danger}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmBad}" /></DataTrigger></Style.Triggers>
+                                              </Style>
+                                            </TextBlock.Style>
+                                          </TextBlock>
+                                          <TextBlock Text="{Binding Reason}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap"
+                                                     Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
+                                        </StackPanel>
+                                      </Button>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </Border>
+                              <!-- no profile of this mode: the explainer -->
+                              <StackPanel Visibility="{Binding IsExplainer, Converter={StaticResource Visible}}" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding ModeLabel}" Foreground="{Binding Accent}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" />
+                                <TextBlock Text="{Binding ExplainTitle}" FontSize="22" FontWeight="Bold" Margin="0,10,0,6" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding ExplainBody}" Style="{StaticResource SmHint}" FontSize="14" MaxWidth="400" MinHeight="64" HorizontalAlignment="Left" />
+                                <Button Content="{Binding CreateLabel}" Background="{Binding Accent}" Style="{StaticResource SmPrimary}" HorizontalAlignment="Left"
+                                        Margin="0,18,0,0" IsEnabled="{Binding CreateEnabled}" Click="OnSavesCreate" />
+                                <TextBlock Text="{Binding CreateNote}" Style="{StaticResource SmHint}" Margin="0,10,0,0" Visibility="{Binding HasCreateNote, Converter={StaticResource Visible}}" />
+                              </StackPanel>
+                            </Grid>
+                          </Border>
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <!-- the Azimuth strip: this PC's save of the chosen game's title -->
+                  <Grid Margin="9,12,9,0">
+                    <Rectangle RadiusX="14" RadiusY="14" Fill="{x:Static local:SlotBrushes.AzimuthSoft}" Stroke="#665AA8FF" StrokeThickness="1" StrokeDashArray="5 3" />
+                    <DockPanel Margin="18,14">
+                      <Border DockPanel.Dock="Left" Width="40" Height="40" CornerRadius="10" Background="{x:Static local:SlotBrushes.Azimuth}" VerticalAlignment="Center">
+                        <TextBlock Text="PC" Foreground="#FF03101F" FontWeight="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <Button DockPanel.Dock="Right" Content="{Binding S[sm.manage]}" Style="{StaticResource SmButton}" VerticalAlignment="Center" Margin="12,0,0,0"
+                              Click="OnOpenManageSaves" IsEnabled="{Binding Idle}" />
+                      <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding S[sm.strip.title]}" FontWeight="Bold" />
+                        <TextBlock Text="{Binding AzimuthStripLine}" Style="{StaticResource SmHint}" />
+                      </StackPanel>
+                    </DockPanel>
+                  </Grid>
+                  <Border Style="{StaticResource SmNote}" Margin="9,14,9,0" Visibility="{Binding ShowGameRunningNote, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding GameRunningText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
+                  </Border>
+                </StackPanel>
+
+                <!-- ============ CREATE: a profile of a mode the account has none of ============ -->
+                <StackPanel MaxWidth="620" Visibility="{Binding ShowSavesCreate, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding CreateTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding S[sm.create_sub]}" Style="{StaticResource SmSub}" />
+                  <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" FontSize="16" Padding="10,8"
+                           AutomationProperties.Name="{Binding CreateTitle}" />
+                  <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="12" Margin="0,6,0,0" Foreground="{StaticResource InfinityFaint}" />
+                  <TextBlock Text="{Binding AzimuthNameWarning}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding ShowAzimuthNameWarning, Converter={StaticResource Visible}}" />
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowSeedOption, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <CheckBox Content="{Binding S[seed.option]}" IsChecked="{Binding NewSeedFromProfile}" FontWeight="Bold" />
+                      <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
+                      <ListBox Margin="0,8,0,0" ItemsSource="{Binding SeedSources}" SelectedItem="{Binding NewSeedSource}" MaxHeight="160"
+                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Border>
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowNoobSeedOption, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <CheckBox Content="{Binding S[seed.noob_option]}" IsChecked="{Binding NewNoobFromHardcore}" FontWeight="Bold" />
+                      <ListBox Margin="0,8,0,0" ItemsSource="{Binding NoobSources}" SelectedItem="{Binding NewNoobSource}" MaxHeight="160"
+                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" Visibility="{Binding NewNoobFromHardcore, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Border>
+                  <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                    <Button Content="{Binding S[sm.create_confirm]}" Background="{Binding CreateAccent}" Style="{StaticResource SmPrimary}" Click="OnCreateProfile" IsEnabled="{Binding Idle}" />
+                    <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnSavesBack" />
+                  </StackPanel>
+                </StackPanel>
+
+                <!-- ============ START: where a career of the chosen game starts (OD-214, §2.6) ============ -->
+                <StackPanel MaxWidth="660" Visibility="{Binding ShowSavesStart, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding StartSub}" Style="{StaticResource SmSub}" />
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerFresh" IsEnabled="{Binding Idle}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[sm.start.fresh]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFreshHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerExisting" IsEnabled="{Binding StartFromProfileEnabled}"
+                          Visibility="{Binding ShowStartFromProfile, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding StartFromProfileLabel}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFromProfileHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnStartCareerExisting" IsEnabled="{Binding StartFromPcEnabled}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[sm.start.from_pc]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[sm.start.hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding S[seed.warning]}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                                 Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Border>
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
+                            Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
+                  </WrapPanel>
+                </StackPanel>
+
+                <!-- ============ RESOLVE: cloud vs this PC, the newer one recommended ============ -->
+                <StackPanel MaxWidth="860" Visibility="{Binding ShowSavesResolve, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding ResolveTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding S[sm.resolve_sub]}" Style="{StaticResource SmSub}" />
+                  <UniformGrid Columns="2">
+                    <Border Style="{StaticResource SmCard}" Margin="0,0,9,0" DataContext="{Binding ResolveCloud}">
+                      <StackPanel>
+                        <Grid HorizontalAlignment="Left">
+                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.NoobSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
+                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Noob}" />
+                          </Border>
+                          <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
+                            <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                          </Border>
+                        </Grid>
+                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
+                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                        <Button Content="{Binding ActionLabel}" Margin="0,16,0,0" HorizontalAlignment="Left" Click="OnResolveKeepCloud"
+                                IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
+                          <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SmButton}">
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Recommended}" Value="True">
+                                  <Setter Property="Background" Value="{x:Static local:SlotBrushes.Azimuth}" />
+                                  <Setter Property="Foreground" Value="#FF071018" />
+                                  <Setter Property="FontWeight" Value="Bold" />
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </Button.Style>
+                        </Button>
+                      </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource SmCard}" Margin="9,0,0,0" DataContext="{Binding ResolvePc}">
+                      <StackPanel>
+                        <Grid HorizontalAlignment="Left">
+                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.NoobSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
+                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Noob}" />
+                          </Border>
+                          <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
+                            <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                          </Border>
+                        </Grid>
+                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
+                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                        <Button Content="{Binding ActionLabel}" Margin="0,16,0,0" HorizontalAlignment="Left" Click="OnResolveKeepPc"
+                                IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
+                          <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SmButton}">
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Recommended}" Value="True">
+                                  <Setter Property="Background" Value="{x:Static local:SlotBrushes.Azimuth}" />
+                                  <Setter Property="Foreground" Value="#FF071018" />
+                                  <Setter Property="FontWeight" Value="Bold" />
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </Button.Style>
+                        </Button>
+                      </StackPanel>
+                    </Border>
+                  </UniformGrid>
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ResolveHardcore, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding S[sm.resolve_hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                  </Border>
+                </StackPanel>
+
+                <!-- ============ MANAGE SAVES: the three slots ============ -->
+                <StackPanel Visibility="{Binding ShowSavesManage, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[sm.manage]}" Style="{StaticResource SmH1}" Margin="8,0,8,6" />
+                  <TextBlock Text="{Binding ManageSub}" Style="{StaticResource SmSub}" Margin="8,0,8,18" />
+                  <ItemsControl ItemsSource="{Binding SlotCards}" Focusable="False" IsEnabled="{Binding Idle}">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="3" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource SmCard}" Margin="8" Padding="18">
+                          <DockPanel LastChildFill="False">
+                            <Border DockPanel.Dock="Top" Height="3" CornerRadius="2" Background="{Binding Accent}" Margin="0,0,0,14" HorizontalAlignment="Left" Width="36" />
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding Title}" Foreground="{Binding Accent}" Style="{StaticResource SmModeTag}" FontSize="12" TextWrapping="Wrap" />
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding Headline}" FontSize="18" FontWeight="Bold" Margin="0,10,0,2" TextWrapping="Wrap" />
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding Detail}" Style="{StaticResource SmHint}" />
+                            <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Actions}" Margin="0,14,0,0" Focusable="False">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                  <Button Content="{Binding Label}" Style="{StaticResource SmButton}" Margin="0,0,0,8" HorizontalAlignment="Stretch" IsEnabled="{Binding Enabled}"
+                                          Click="OnSlotAction" Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}" ToolTip="{Binding Reason}" ToolTipService.ShowOnDisabled="True" />
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Button DockPanel.Dock="Top" Content="{Binding DataContext.S[sm.restore_original], RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Style="{StaticResource SmButton}" HorizontalAlignment="Stretch" Click="OnRestoreOriginal" IsEnabled="{Binding CanRestoreOriginal}"
+                                    Visibility="{Binding IsAzimuth, Converter={StaticResource Visible}}" />
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding RestoreOriginalNote}" Style="{StaticResource SmHint}" FontSize="12" Margin="0,6,0,0"
+                                       Visibility="{Binding IsAzimuth, Converter={StaticResource Visible}}" />
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding Reasons}" Style="{StaticResource SmHint}" FontSize="12" Margin="0,10,0,0"
+                                       Visibility="{Binding HasReasons, Converter={StaticResource Visible}}" />
+                          </DockPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Border Style="{StaticResource SmNote}" Margin="8,6,8,0" Visibility="{Binding HasManageServerNote, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding ManageServerNote}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                  </Border>
+                  <TextBlock Text="{Binding HistorySizeText}" Style="{StaticResource SmHint}" Margin="8,10,8,0" />
+                  <Border Style="{StaticResource SmNote}" Margin="8,14,8,0" Visibility="{Binding ShowGameRunningNote, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding GameRunningText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
+                  </Border>
+                </StackPanel>
+
+                <!-- ============ COPY: compare, then confirm (only into Azimuth on this PC today) ============ -->
+                <StackPanel MaxWidth="860" Visibility="{Binding ShowSavesCopy, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding CopyTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding CopySub}" Style="{StaticResource SmSub}" />
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="60" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource SmCard}" DataContext="{Binding CopyFromSide}">
+                      <StackPanel>
+                        <Border Style="{StaticResource SmPill}" HorizontalAlignment="Left"><TextBlock Text="{Binding Title}" FontSize="12" TextWrapping="Wrap" /></Border>
+                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                      </StackPanel>
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="→" FontSize="28" Foreground="{StaticResource InfinityMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Border Grid.Column="2" Style="{StaticResource SmCard}" DataContext="{Binding CopyToSide}">
+                      <StackPanel>
+                        <Border Style="{StaticResource SmPill}" HorizontalAlignment="Left"><TextBlock Text="{Binding Title}" FontSize="12" TextWrapping="Wrap" /></Border>
+                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                      </StackPanel>
+                    </Border>
+                  </Grid>
+                  <Border Style="{StaticResource SmNote}"><TextBlock Text="{Binding CopyNote}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" /></Border>
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowCopyBlocked, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding CopyBlockedText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
+                  </Border>
+                  <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                    <Button Content="{Binding S[sm.copy_confirm]}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}"
+                            Click="OnConfirmCopy" IsEnabled="{Binding CanConfirmCopy}" />
+                    <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnSavesBack" />
+                  </StackPanel>
+                </StackPanel>
+
+                <!-- ============ HISTORY: one slot's timeline, this PC's entries and the cloud's revisions ============ -->
+                <Grid Visibility="{Binding ShowSavesHistory, Converter={StaticResource Visible}}">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="340" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                  <DockPanel Margin="0,0,18,0">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,12">
+                      <Button Content="{Binding S[sm.hardcore]}" Tag="Hardcore" Click="OnHistorySlot" Margin="0,0,6,0" FontWeight="SemiBold">
+                        <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
+                          <DataTrigger Binding="{Binding HistoryHardcoreOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Hardcore}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Hardcore}" /></DataTrigger>
+                        </Style.Triggers></Style></Button.Style>
+                      </Button>
+                      <Button Content="{Binding S[sm.azimuth]}" Tag="Azimuth" Click="OnHistorySlot" Margin="0,0,6,0" FontWeight="SemiBold">
+                        <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
+                          <DataTrigger Binding="{Binding HistoryAzimuthOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Azimuth}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Azimuth}" /></DataTrigger>
+                        </Style.Triggers></Style></Button.Style>
+                      </Button>
+                      <Button Content="{Binding S[sm.noob]}" Tag="Noob" Click="OnHistorySlot" FontWeight="SemiBold">
+                        <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
+                          <DataTrigger Binding="{Binding HistoryNoobOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Noob}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger>
+                        </Style.Triggers></Style></Button.Style>
+                      </Button>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding S[sm.history_empty]}" Style="{StaticResource SmHint}" Visibility="{Binding HistoryEmpty, Converter={StaticResource Visible}}" />
+                    <ItemsControl ItemsSource="{Binding HistoryRows}" Focusable="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Button Click="OnSelectHistory" Margin="0,0,0,8" HorizontalContentAlignment="Stretch" Padding="12,10">
+                            <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Setter Property="Background" Value="{StaticResource SmCardSurface}" /><Style.Triggers>
+                              <DataTrigger Binding="{Binding Selected}" Value="True"><Setter Property="BorderBrush" Value="{Binding DataContext.HistoryAccent, RelativeSource={RelativeSource AncestorType=Window}}" /></DataTrigger>
+                            </Style.Triggers></Style></Button.Style>
+                            <StackPanel HorizontalAlignment="Stretch">
+                              <StackPanel Orientation="Horizontal">
+                                <Border Style="{StaticResource SmPill}" Margin="0,0,8,0"><TextBlock Text="{Binding Origin}" FontSize="11" Foreground="{StaticResource InfinityMuted}" /></Border>
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                              </StackPanel>
+                              <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                              <TextBlock Text="{Binding When}" FontSize="12" Foreground="{StaticResource InfinityFaint}" />
+                            </StackPanel>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </DockPanel>
+                  <Border Grid.Column="1" Style="{StaticResource SmCard}" VerticalAlignment="Top" Visibility="{Binding HasHistorySelected, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding HistoryDetailTitle}" Foreground="{Binding HistoryAccent}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" />
+                      <TextBlock Text="{Binding HistoryDetailHeadline}" FontSize="22" FontWeight="Bold" Margin="0,8,0,2" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding HistoryDetailLine}" Style="{StaticResource SmHint}" />
+                      <WrapPanel Margin="0,16,0,0">
+                        <Button Content="{Binding S[sm.menu.copy_azimuth]}" Style="{StaticResource SmButton}" Margin="0,0,8,8" Click="OnHistoryCopy" IsEnabled="{Binding HistoryCanCopyToAzimuth}" />
+                        <Button Content="{Binding S[sm.open_explorer]}" Style="{StaticResource SmButton}" Margin="0,0,8,8" Click="OnHistoryOpenFolder"
+                                Visibility="{Binding HistoryCanOpenFolder, Converter={StaticResource Visible}}" />
+                      </WrapPanel>
+                      <TextBlock Text="{Binding HistoryCopyBlocked}" Style="{StaticResource SmHint}" FontSize="12" Visibility="{Binding HasHistoryCopyBlocked, Converter={StaticResource Visible}}" />
+                      <TextBlock Text="{Binding HistoryCloudCopyNote}" Style="{StaticResource SmHint}" FontSize="12" Margin="0,6,0,0" Visibility="{Binding HasHistoryCloudCopyNote, Converter={StaticResource Visible}}" />
+                      <TextBlock Text="{Binding HistoryDetailNote}" Style="{StaticResource SmHint}" Margin="0,14,0,0" />
+                    </StackPanel>
+                  </Border>
+                </Grid>
+
+                <!-- ============ DELETE: what is lost, the typed gamertag ============ -->
+                <StackPanel MaxWidth="640" Visibility="{Binding ShowSavesDelete, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding DeleteProfileTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding DeleteProfileBody}" Style="{StaticResource SmSub}" Foreground="#FFFFC1C9" Margin="0,0,0,10" />
+                  <TextBlock Text="{Binding S[profiles.delete_keeps]}" Style="{StaticResource SmHint}" />
+                  <TextBlock Text="{Binding DeleteProfileTypeHint}" Margin="0,18,0,6" TextWrapping="Wrap" FontWeight="SemiBold" />
+                  <TextBox Text="{Binding DeleteProfileTyped, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" FontSize="16" Padding="10,8"
+                           AutomationProperties.Name="{Binding DeleteProfileTypeHint}" />
+                  <TextBlock Text="{Binding DeleteProfileStatus}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding HasDeleteProfileStatus, Converter={StaticResource Visible}}" AutomationProperties.LiveSetting="Polite" />
+                  <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                    <Button Content="{Binding S[profiles.delete_confirm]}" Style="{StaticResource SmDanger}" Click="OnConfirmDeleteProfile" IsEnabled="{Binding CanConfirmDeleteProfile}" />
+                    <Button Content="{Binding S[profiles.delete_cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnCancelDeleteProfile" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding DeleteRateNote}" Style="{StaticResource SmHint}" Margin="0,14,0,0" />
+                </StackPanel>
+
+                <!-- ============ HELP SENSEI ============ -->
+                <StackPanel MaxWidth="780" Visibility="{Binding ShowSavesHelp, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[sm.help_title]}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding S[sm.help_sub]}" Style="{StaticResource SmSub}" />
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,18">
+                    <Grid Width="124" Height="124">
+                      <Ellipse Fill="{x:Static local:SlotBrushes.HardcoreSoft}" Stroke="{x:Static local:SlotBrushes.Hardcore}" StrokeThickness="2" />
+                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding S[sm.hardcore]}" Foreground="{x:Static local:SlotBrushes.Hardcore}" FontWeight="Black" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding S[sm.help.cloud]}" Foreground="{x:Static local:SlotBrushes.Hardcore}" FontSize="12" HorizontalAlignment="Center" />
+                      </StackPanel>
+                    </Grid>
+                    <TextBlock Text="⇄" FontSize="22" Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" Margin="16,0" />
+                    <Grid Width="124" Height="124">
+                      <Ellipse Fill="{x:Static local:SlotBrushes.AzimuthSoft}" Stroke="{x:Static local:SlotBrushes.Azimuth}" StrokeThickness="2" />
+                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding S[sm.azimuth]}" Foreground="{x:Static local:SlotBrushes.Azimuth}" FontWeight="Black" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding S[sm.help.pc]}" Foreground="{x:Static local:SlotBrushes.Azimuth}" FontSize="12" HorizontalAlignment="Center" />
+                      </StackPanel>
+                    </Grid>
+                    <TextBlock Text="⇄" FontSize="22" Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" Margin="16,0" />
+                    <Grid Width="124" Height="124">
+                      <Ellipse Fill="{x:Static local:SlotBrushes.NoobSoft}" Stroke="{x:Static local:SlotBrushes.Noob}" StrokeThickness="2" />
+                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding S[sm.noob]}" Foreground="{x:Static local:SlotBrushes.Noob}" FontWeight="Black" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding S[sm.help.cloud]}" Foreground="{x:Static local:SlotBrushes.Noob}" FontSize="12" HorizontalAlignment="Center" />
+                      </StackPanel>
+                    </Grid>
+                  </StackPanel>
+                  <TextBlock Text="{Binding S[sm.faq1_q]}" FontWeight="Bold" FontSize="15" Margin="0,8,0,4" />
+                  <TextBlock Text="{Binding S[sm.faq1_a]}" Style="{StaticResource SmHint}" FontSize="14" />
+                  <TextBlock Text="{Binding S[sm.faq2_q]}" FontWeight="Bold" FontSize="15" Margin="0,16,0,4" />
+                  <TextBlock Text="{Binding S[sm.faq2_a]}" Style="{StaticResource SmHint}" FontSize="14" />
+                  <TextBlock Text="{Binding S[sm.faq3_q]}" FontWeight="Bold" FontSize="15" Margin="0,16,0,4" />
+                  <TextBlock Text="{Binding S[sm.faq3_a]}" Style="{StaticResource SmHint}" FontSize="14" />
+                  <TextBlock Text="{Binding S[sm.faq4_q]}" FontWeight="Bold" FontSize="15" Margin="0,16,0,4" />
+                  <TextBlock Text="{Binding S[sm.faq4_a]}" Style="{StaticResource SmHint}" FontSize="14" />
+                  <WrapPanel Margin="0,20,0,0">
+                    <Button Content="{Binding S[sm.open_manage]}" Style="{StaticResource SmButton}" Margin="0,0,10,8" Click="OnOpenManageSaves" IsEnabled="{Binding Idle}" />
+                    <Button Content="{Binding S[sm.restore_original]}" Style="{StaticResource SmButton}" Margin="0,0,10,8" Click="OnRestoreOriginal" IsEnabled="{Binding Idle}" />
+                  </WrapPanel>
+                </StackPanel>
+
+                <!-- ============ DONE ============ -->
+                <StackPanel MaxWidth="620" Margin="0,60,0,0" Visibility="{Binding ShowSavesDone, Converter={StaticResource Visible}}">
+                  <TextBlock Text="✓" FontSize="40" Foreground="{x:Static local:SlotBrushes.Noob}" HorizontalAlignment="Center" />
+                  <TextBlock Text="{Binding DoneText}" Style="{StaticResource SmH1}" TextAlignment="Center" HorizontalAlignment="Center" />
+                  <TextBlock Text="{Binding S[sm.done_sub]}" Style="{StaticResource SmSub}" TextAlignment="Center" HorizontalAlignment="Center" />
+                  <Button Content="{Binding S[sm.back_to_saves]}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}" HorizontalAlignment="Center"
+                          Click="OnSavesHome" />
+                </StackPanel>
+              </Grid>
+            </ScrollViewer>
+            <!-- foot: Help Sensei -->
+            <Border Grid.Row="2" BorderBrush="{StaticResource SmLine}" BorderThickness="0,1,0,0" Padding="0,8,0,0"
+                    Visibility="{Binding ShowHelpLink, Converter={StaticResource Visible}}">
+              <Button Content="{Binding S[sm.help_link]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Click="OnOpenSavesHelp" />
+            </Border>
+          </Grid>
+
+          <!-- Choose a profile (from the server) or create one: offline, and against a server before CR-S98. -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowPlainProfiles, Converter={StaticResource Visible}}">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500" Margin="0,8">
               <TextBlock Text="{Binding S[shell.pick_profile]}" Style="{StaticResource PageTitle}" />
               <TextBlock Text="{Binding ProfilesText}" Margin="0,8,0,14" Style="{StaticResource PageSubtitle}" />

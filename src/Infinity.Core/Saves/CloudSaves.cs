@@ -533,6 +533,62 @@ public sealed class CloudSaves
     }
 
     /// <summary>
+    /// SAVE_MANAGER_UX.md §2.7 (History → Copy to Azimuth): downloads <paramref name="revision"/> of <paramref name="xuid"/>'s line,
+    /// verifies it as <see cref="DownloadAsync"/> does (size, <c>Repr-Digest</c>, the served revision, the content digest, every bundle check)
+    /// and installs it as the newest revision of another folder on this PC, <paramref name="targetXuid"/> (Azimuth's own player). The
+    /// profile's own folder and its sync mark are not touched; what the target held is archived first as <paramref name="label"/>.
+    /// </summary>
+    public async Task<DownloadOutcome> InstallRevisionOntoAsync(string access, string savesRoot, ulong xuid, ulong revision, string expectedContent,
+        ulong targetXuid, string label, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(expectedContent);
+        if (targetXuid == xuid) return new DownloadOutcome(null, null, SaveFailure.Integrity("a revision is restored onto the profile itself by a download"));
+        if (SaveReconcile.NormalizeDigest(expectedContent) is not { } expected)
+        {
+            return new DownloadOutcome(null, null, SaveFailure.Integrity("the revision has no content digest"));
+        }
+        SaveApiResult<SaveBundleDownload> result;
+        try
+        {
+            result = await _api.BundleAsync(access, Wire(xuid), revision, cancellation).ConfigureAwait(false);
+        }
+        catch (Exception e) when (IsNetwork(e, cancellation))
+        {
+            return new DownloadOutcome(null, null, SaveFailure.Network(e));
+        }
+        if (!result.Ok) return new DownloadOutcome(null, null, SaveFailure.From(result.Status, result.Error!, result.RetryAfter));
+        var download = result.Value!;
+        if (download.Revision is { } served && served != revision)
+            return new DownloadOutcome(null, null, SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture, $"asked for revision {revision}, the server sent {served}")));
+        if (download.Bytes.Length > Fh2Bundle.MaxBundle) return new DownloadOutcome(null, null, SaveFailure.Integrity("the bundle is over 384 KiB"));
+        if (download.BundleSha256 is null || download.BundleSha256 != Convert.ToHexStringLower(SHA256.HashData(download.Bytes)))
+            return new DownloadOutcome(null, null, SaveFailure.Integrity("the bundle does not match its Repr-Digest"));
+        ValidBundle bundle;
+        try
+        {
+            bundle = Fh2Bundle.Validate(download.Bytes);
+        }
+        catch (BundleException e)
+        {
+            return new DownloadOutcome(null, null, SaveFailure.Integrity(e.Message));
+        }
+        if (bundle.ContentSha256 != expected) return new DownloadOutcome(null, bundle, SaveFailure.Integrity("the downloaded save does not match the revision's content digest"));
+        try
+        {
+            var installed = CloudSaveFiles.Install(savesRoot, targetXuid, bundle.Files, expected, Guid.CreateVersion7().ToString("N"), label);
+            return new DownloadOutcome(installed, bundle, null);
+        }
+        catch (SaveException e) when (e.Landed)
+        {
+            return new DownloadOutcome(null, bundle, SaveFailure.Integrity(e.Message), e.LandedPath ?? CloudSaveFiles.ProfileDir(savesRoot, targetXuid));
+        }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
+        {
+            return new DownloadOutcome(null, bundle, SaveFailure.Integrity(e.Message));
+        }
+    }
+
+    /// <summary>
     /// Commits <paramref name="revision"/> on top of <paramref name="expected"/> (the head the decision
     /// was made on; <c>If-Match: "0"</c> only on an empty line). <see cref="CommitOutcome.Unchanged"/> without a
     /// request when the mark already says the cloud holds this content at <paramref name="expected"/>.

@@ -22,6 +22,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerConfig _config;
     private readonly string _stateDirectory;
+    /// <summary>The launcher's state root (every server's folder below it): SAVE_MANAGER_UX §7's history lives here, once per PC.</summary>
+    private readonly string _stateRoot;
     private readonly Infinity.Core.Diagnostics.BoundedRunLog _runLog;
     private ShellGate _gate = ShellGate.SignedOut;
     private AccountSession? _session;
@@ -40,6 +42,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _config = config;
         config.Validate();
         _stateDirectory = config.StateDirectory(stateDirectory);
+        _stateRoot = stateDirectory;
         _runLog=new(_stateDirectory);
         // OD-118: every Infinity client behind one gate; nothing is sent until the player clicks SIGN IN (or resumes an online run).
         InfinityGate = CreateInfinityGate(new HttpClientHandler { AllowAutoRedirect = false });
@@ -279,7 +282,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>CR-S69: a Supporter's account carries the small "Supporter" badge next to its e-mail; nothing else depends on it.</summary>
     public bool ShowSupporterBadge => SignedIn && IsSupporter;
 
-    public string GameLabel => _gate.Game is { } id ? Games.FirstOrDefault(g => g.Id == id)?.Title ?? id.ToUpperInvariant() : S["shell.pick_game"];
+    public string GameLabel => _gate.Game is { } id ? Games.FirstOrDefault(g => g.Id == id)?.Title ?? Infinity.Core.Process.GameDefinition.ById(id)?.Name ?? id.ToUpperInvariant() : S["shell.pick_game"];
 
     public string ProfileLabel => _gate.ProfileTag ?? S["shell.no_profile"];
 
@@ -370,6 +373,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ResetContentLocation();
         _startRow = null; // OD-214: another game, another pick
         _seedStarting = null;
+        _nav.Root(); // SAVE_MANAGER_UX §3: another game opens the save manager at its root
         FillProfiles();
         // W11: the Mods page follows the game: its cards, ExtraOptions card and settings are read again for the one now chosen
         _selectedMod = null; _ini = null; _iniDirty = false; ModOptions.Clear();
@@ -416,6 +420,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             Gate = _gate with { ProfileTag = null, ProfileKey = null };
             _startRow = null;
+            _nav.Root();
             FillProfiles();
             _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: clears a previous profile's integrity result
         }
@@ -429,6 +434,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
         await CreateLocalProfileAsync(game);
+        if (_nav.Current == SavesScreen.Create && HasLiveProfile(_createMode)) SavesHome(); // SAVE_MANAGER_UX: the new card shows on the home
     }
 
     public void SignOut()
@@ -597,6 +603,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     private void ChangedProfileList()
     {
         ChangedCareerStart();
+        FillSaveCards(); // SAVE_MANAGER_UX §4: the cards follow every /me and game change
         Changed(nameof(ShowNewProfile));
         Changed(nameof(CanChooseNoob));
         Changed(nameof(NewNoob));
