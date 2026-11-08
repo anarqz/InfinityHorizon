@@ -341,7 +341,7 @@
   "worlds.private_unavailable": "Private lobbies aren't available on this server yet",
   "worlds.client_update": "Update Infinity to use private lobbies",
   "worlds.private_failed": "Couldn't create your private lobby, try again shortly",
-  "worlds.private_hold": "Not available from a private lobby. Leave the lobby first",
+  "worlds.private_left": "You left your private lobby to join this activity",
   "worlds.private_pool": "No online lobbies for {time}: this Hardcore profile is flagged by the anti-cheat system",
   "worlds.private_pool_flagged": "No online lobbies while this Hardcore profile is flagged by the anti-cheat system",
   "worlds.private_not_leader": "Only the lobby leader can invite",
