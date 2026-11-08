@@ -40,9 +40,8 @@ public sealed partial class ShellViewModel
     public ObservableCollection<ManifestOptionItem> ModOptions { get; } = [];
     public bool OnMods => _onMods;
     public bool ShowMods => (InShell || DevelopmentMods) && _onMods && !ShowPickSave;
-    // OD-206 (W11 first step): every mod, its card and its settings file are FH2's until mods declare their games; on a game
-    // without FH2's features the page would write FH2's settings
-    public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy && CurrentGame.FullFeatures;
+    // OD-206 (W11): the page lists the mods that declare the chosen game (none declared: FH2) and that game's built-in options card
+    public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy && CurrentGame.HasModsPage;
     public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null && _externalMod is null;
     public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking;
     public bool ModsNews => _catalogLoaded && !_onMods && ModCards.Any(c => c.CanAct && (c.UpdateAvailable || c.Action == S["mods.install"]));
@@ -82,8 +81,9 @@ public sealed partial class ShellViewModel
         {
             var root = _install?.Root;
             // OD-125/127: ExtraOptions.Infinity's own ini, beside azimuth.exe; no managed install behind it
+            var game = CurrentGame;
             var ini = await Task.Run(() => selected.BuiltIn && root is not null
-                ? Infinity.Core.Process.ExtraOptionsInfinity.ReadSettings(root) : factory().ReadSettings(selected.Manifest));
+                ? Infinity.Core.Process.ExtraOptionsInfinity.ReadSettings(root, game) : factory().ReadSettings(selected.Manifest));
             if (!ReferenceEquals(_selectedMod, selected) && _selectedMod?.Manifest.Digest != selected.Manifest.Digest) return;
             _ini = ini; _iniManifest = selected.Manifest.Digest; ModOptions.Clear();
             foreach (var option in selected.Manifest.Document.GetProperty("config").GetProperty("options").EnumerateArray())
@@ -98,12 +98,12 @@ public sealed partial class ShellViewModel
     public void SaveIni()
     {
         if (_ini is null || _selectedMod is not { } selected || !ModsIdle || ModManagerFactory() is not { } factory) return;
-        var ini = _ini; var root = _install?.Root;
+        var ini = _ini; var root = _install?.Root; var game = CurrentGame;
         var edits = ModOptions.Where(o => o.Editable).Select(o => (o.Id, o.Text, o.Culture)).ToArray();
         _ = RunModOperationAsync(() => Task.Run(() =>
         {
             foreach (var option in edits) ini.Set(option.Id, option.Text, option.Culture);
-            if (selected.BuiltIn && root is not null) Infinity.Core.Process.ExtraOptionsInfinity.SaveSettings(root, ini);
+            if (selected.BuiltIn && root is not null) Infinity.Core.Process.ExtraOptionsInfinity.SaveSettings(root, ini, game);
             else factory().SaveSettings(selected.Manifest, ini);
         }), S["mods.options_saved"], preserveOptionsOnFailure: true);
     }

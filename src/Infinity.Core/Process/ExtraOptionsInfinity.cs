@@ -16,9 +16,11 @@ public static class ExtraOptionsInfinity
     /// <summary>The upstream ExtraOptions release ExtraOptions.Infinity is built from (<c>native/extraoptions</c>, MOD_VERSION).</summary>
     public const string ExtraOptionsVersion = "0.4.4";
 
-    private static readonly Lazy<ModManifest> BuiltIn = new(() =>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ModManifest> Manifests = new();
+
+    private static ModManifest Load(string resource) => Manifests.GetOrAdd(resource, name =>
     {
-        using var stream = typeof(ExtraOptionsInfinity).Assembly.GetManifestResourceStream("Infinity.Core.ExtraOptionsInfinity.manifest.json")
+        using var stream = typeof(ExtraOptionsInfinity).Assembly.GetManifestResourceStream(name)
             ?? throw new InvalidOperationException("the ExtraOptions.Infinity manifest is not embedded");
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
@@ -29,26 +31,48 @@ public static class ExtraOptionsInfinity
     /// OD-125/127: ExtraOptions as part of Infinity, for the Mods page: its options (<c>FH2_ExtraOptions.ini</c>) and their locks.
     /// No package or files: the hook install puts it in place, so it is never installed, disabled or removed as a mod.
     /// </summary>
-    public static ModManifest Manifest => BuiltIn.Value;
+    public static ModManifest Manifest => ManifestFor(GameDefinition.Fh2);
+
+    /// <summary>W11: the card and settings of one game's ExtraOptions.Infinity (the one winmm.dll serves both games).</summary>
+    public static ModManifest ManifestFor(GameDefinition game) => Load(game.ExtraOptionsManifestResource);
 
     /// <summary>The player's ExtraOptions settings; the ini is written first when there is none, as the hook needs it anyway.</summary>
-    public static ManifestIni ReadSettings(string azimuthRoot)
+    public static ManifestIni ReadSettings(string azimuthRoot) => ReadSettings(azimuthRoot, GameDefinition.Fh2);
+
+    /// <summary>
+    /// A game's settings. A game that seeds an ini has it written first; one that does not (FM5) reads a missing file as the
+    /// manifest's defaults, and nothing is written until the player saves.
+    /// </summary>
+    public static ManifestIni ReadSettings(string azimuthRoot, GameDefinition game)
     {
-        EnsureIni(azimuthRoot);
-        return new ManifestIni(Manifest, File.ReadAllBytes(Path.Combine(azimuthRoot, IniFile)));
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(game);
+        if (game.ExtraOptionsSeedResource is not null) EnsureIni(azimuthRoot, game);
+        return new ManifestIni(ManifestFor(game), SourceBytes(azimuthRoot, game));
+    }
+
+    private static byte[] SourceBytes(string azimuthRoot, GameDefinition game)
+    {
+        var path = Path.Combine(azimuthRoot, game.ExtraOptionsIni);
+        return File.Exists(path) ? File.ReadAllBytes(path) : ManifestIni.Defaults(ManifestFor(game));
     }
 
     /// <summary>
     /// Writes edited settings with the locks enforced, only if the file is still the one they were read from
     /// (otherwise <see cref="ModSettingsChangedException"/>); replaced in one step, never half written.
     /// </summary>
-    public static void SaveSettings(string azimuthRoot, ManifestIni settings)
+    public static void SaveSettings(string azimuthRoot, ManifestIni settings) => SaveSettings(azimuthRoot, settings, GameDefinition.Fh2);
+
+    public static void SaveSettings(string azimuthRoot, ManifestIni settings, GameDefinition game)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(settings);
-        if (settings.ManifestDigest != Manifest.Digest) throw new ModException("settings belong to another manifest", ModErrors.Settings);
-        var path = Path.Combine(azimuthRoot, IniFile);
-        if (!File.Exists(path) || ModManifest.Hash(File.ReadAllBytes(path)) != settings.SourceHash) throw new ModSettingsChangedException();
+        ArgumentNullException.ThrowIfNull(game);
+        if (settings.ManifestDigest != ManifestFor(game).Digest) throw new ModException("settings belong to another manifest", ModErrors.Settings);
+        var path = Path.Combine(azimuthRoot, game.ExtraOptionsIni);
+        // a missing file stands for the defaults (games that seed none); it must still be missing or unchanged
+        var current = File.Exists(path) || game.ExtraOptionsSeedResource is not null ? (File.Exists(path) ? File.ReadAllBytes(path) : null) : ManifestIni.Defaults(ManifestFor(game));
+        if (current is null || ModManifest.Hash(current) != settings.SourceHash) throw new ModSettingsChangedException();
         settings.EnforceLocks();
         var temporary = path + ".fi-new";
         File.WriteAllBytes(temporary, settings.ToBytes());
@@ -108,18 +132,21 @@ public static class ExtraOptionsInfinity
         return on ? null : "treasure map on again after Hardcore";
     }
 
-    private const string Resource = "Infinity.Core.FH2_ExtraOptions.ini";
-
     /// <summary>Writes the embedded ini beside <c>azimuth.exe</c> when none is there; returns what happened, for the log.</summary>
-    public static string EnsureIni(string azimuthRoot)
+    public static string EnsureIni(string azimuthRoot) => EnsureIni(azimuthRoot, GameDefinition.Fh2);
+
+    /// <summary>The same for one game; a game with no seed ini has nothing to write.</summary>
+    public static string EnsureIni(string azimuthRoot, GameDefinition game)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
-        var path = Path.Combine(azimuthRoot, IniFile);
+        ArgumentNullException.ThrowIfNull(game);
+        var path = Path.Combine(azimuthRoot, game.ExtraOptionsIni);
         if (File.Exists(path))
         {
             return "ini kept";
         }
-        using var stream = typeof(ExtraOptionsInfinity).Assembly.GetManifestResourceStream(Resource)
+        if (game.ExtraOptionsSeedResource is not { } resource) return "no ini needed";
+        using var stream = typeof(ExtraOptionsInfinity).Assembly.GetManifestResourceStream(resource)
             ?? throw new InvalidOperationException("the ExtraOptions.Infinity ini is not embedded");
         var temporary = path + ".fi-new";
         using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))

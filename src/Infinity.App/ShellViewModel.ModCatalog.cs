@@ -433,8 +433,10 @@ public sealed partial class ShellViewModel
         ModCards.Clear();
         // OD-125/127: ExtraOptions is part of Infinity (ExtraOptions.Infinity, the hook): pinned first, always on, no install, disable or
         // removal; its options are the only thing to change (with the Azimuth folder known)
-        var extraOptions = Infinity.Core.Process.ExtraOptionsInfinity.Manifest;
-        ModCards.Add(new(extraOptions, extraOptions.Text("name", S.Locale), extraOptions.Text("description", S.Locale), S["mods.builtin_extraoptions"],
+        var game = CurrentGame;
+        var extraOptions = Infinity.Core.Process.ExtraOptionsInfinity.ManifestFor(game);
+        ModCards.Add(new(extraOptions, extraOptions.Text("name", S.Locale), extraOptions.Text("description", S.Locale),
+            S.Format("mods.builtin_extraoptions", ("file", game.ExtraOptionsIni)),
             S["mods.no_dependencies"], "", false, _install is not null,
             extraOptions.Document.GetProperty("author").GetString() + " · " + extraOptions.Document.GetProperty("license").GetString() + " · " + extraOptions.Version,
             S["mods.badge_builtin"])
@@ -444,6 +446,8 @@ public sealed partial class ShellViewModel
         {
             // whatever an older catalog still lists for it
             if (fact.Manifest.Id == ManagedModFiles.BuiltInExtraOptions) continue;
+            // W11: a mod belongs to the games it declares (none declared: FH2); an update that moves it between games is judged by the new manifest
+            if (!(fact.Next ?? fact.Manifest).IsForGame(game.Id)) continue;
             var mod = fact.Manifest; var installed = fact.Installed;
             var compatible = _install is not null && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray().Any(v => v.GetString() == _install.Version);
             // Custom executable code runs only through the development runtime until custom signing is designed (OD-114).

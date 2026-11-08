@@ -19,7 +19,26 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
         Path.Combine("media", "db", "gamedb.slt"), FullFeatures: false)
-    { PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false };
+    {
+        PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false,
+        ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
+        ExtraOptionsSeedResource = null,
+    };
+
+    /// <summary>W11: the game has a Mods page (its ExtraOptions card, and the catalog mods that declare the game).</summary>
+    public bool HasModsPage { get; init; } = true;
+
+    /// <summary>W10/W11: ExtraOptions.Infinity's settings file for the game, beside <c>azimuth.exe</c>.</summary>
+    public string ExtraOptionsIni { get; init; } = "FH2_ExtraOptions.ini";
+
+    /// <summary>The embedded manifest that describes the game's ExtraOptions card and its settings.</summary>
+    public string ExtraOptionsManifestResource { get; init; } = "Infinity.Core.ExtraOptionsInfinity.manifest.json";
+
+    /// <summary>
+    /// The embedded ini written when the game has none. Null: no file is written, and a missing file or key means the
+    /// settings' defaults (FM5 reads only the keys it finds).
+    /// </summary>
+    public string? ExtraOptionsSeedResource { get; init; } = "Infinity.Core.FH2_ExtraOptions.ini";
 
     /// <summary>
     /// CR-S103: the game has official pool worlds a flagged player is moved to (FH2). Without them (FM5) the server ends a flagged
