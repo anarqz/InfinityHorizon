@@ -1211,13 +1211,13 @@ public sealed partial class ShellViewModel
     {
         get
         {
-            var states = HardcoreCheck.Steps(_seedOffer?.Result.Outcome, _busy);
+            var states = HardcoreCheck.Steps(_seedOffer?.Result.Outcome, _busy || _seedPhase != SeedPhase.None, _seedPhase == SeedPhase.Downloading);
             string[] keys = ["sm.check.read", "sm.check.progress", "sm.check.result"];
             return [.. states.Select((s, i) => new CheckStepRow(S[keys[i]], s))];
         }
     }
 
-    public bool ShowCheckSteps => ShowSeedCheck || (ShowSeedChoice && _busy);
+    public bool ShowCheckSteps => ShowSeedCheck || (ShowSeedChoice && (_busy || _seedPhase != SeedPhase.None));
 
     /// <summary>A refused check offers "Start a fresh HARDCORE career" and, when the source is a NOOB career, "Play it as NOOB".</summary>
     public bool ShowCheckWaysOut => HardcoreCheck.OffersWaysOut(_seedOffer?.Result.Outcome);

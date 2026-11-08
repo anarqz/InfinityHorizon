@@ -34,12 +34,35 @@ public enum SeedCheckOutcome
 public sealed record SeedCheckResult(SeedCheckOutcome Outcome, SeedCheck? Check, string? Code, TimeSpan? RetryAfter);
 
 /// <summary>
+/// OD-216: the source's latest cloud revision as the check reads it: the verified bytes (<see cref="Packed"/>) and their revision, or
+/// nothing listed (<see cref="IsNoRevision"/>), or why it could not be read (<see cref="Error"/>, the HTTP status, <c>Retry-After</c>).
+/// </summary>
+public sealed record SeedSource(PackedRevision? Packed, ulong? Revision, ErrorBody? Error, HttpStatusCode? Status, TimeSpan? RetryAfter)
+{
+    /// <summary>The source profile has no cloud revision: nothing to check, nothing seeded.</summary>
+    public static SeedSource NoRevision { get; } = new(null, null, null, null, null);
+
+    public bool IsNoRevision => Packed is null && Error is null;
+
+    public static SeedSource Failed(ErrorBody error, HttpStatusCode status, TimeSpan? retryAfter, ulong? revision = null) =>
+        new(null, revision, error, status, retryAfter);
+}
+
+/// <summary>OD-216: the source read from the cloud, then the dry run's answer (null when the source could not be read).</summary>
+public sealed record SeedRun(SeedSource Source, SeedCheckResult? Result, HttpStatusCode? CheckStatus = null)
+{
+    /// <summary>The server answered the check (any status): it counted against the account's 5 a day.</summary>
+    public bool Answered => CheckStatus is not null;
+}
+
+/// <summary>
 /// CR-S52 (owner 2026-10-26, "a Hardcore profile seeded from an existing profile, checked on the spot"): a new Hardcore profile may
 /// start from another of the account's profiles' career, where the server allows it. The order is the contract's: the Hardcore profile
-/// is created on the server first, then the source's newest sealed local revision is checked (<c>POST .../save/check</c>), the result is
-/// shown, and only after the player confirms an accepted check is that revision copied into the new profile's folder and recorded as the
-/// pending <c>seed_from_profile</c> commit, sent at the profile's first launch before the game starts (<see cref="SessionSaves"/>). Any
-/// refusal leaves the profile on its <c>fresh_start</c> (an empty career, CR-S51). The source's own folder is only read.
+/// is created on the server first, then (OD-216) the source's latest CLOUD revision is downloaded and checked at once
+/// (<c>POST .../save/check</c>), the result is shown as the step list, and only an accepted check is installed into the new profile's
+/// folder and recorded as the pending <c>seed_from_profile</c> commit, which the Play that follows sends under its lease before the game
+/// starts (<see cref="SessionSaves"/>; a commit needs the play session's lease, SAVES_API.md §4.3). Any refusal leaves the profile on its
+/// <c>fresh_start</c> (an empty career, CR-S51). This PC's folders are never the source.
 /// </summary>
 public static class ProfileSeed
 {
@@ -76,13 +99,50 @@ public static class ProfileSeed
     }
 
     /// <summary>
-    /// The source's newest sealed revision on this PC (<c>User_&lt;source XUID&gt;</c>, the folder an account's Noob profile plays),
-    /// read and packed: the bytes the dry run checks and, on confirm, the ones copied and committed. Null when this PC has none.
+    /// OD-216 (CAREERS.md §6.7): the source's latest cloud revision, downloaded (SAVES_API.md §4.2: <c>GET .../save/revisions?limit=1</c>,
+    /// then <c>GET .../save/revisions/{rev}/bundle</c>) and verified as every download is (size, <c>Repr-Digest</c>, the served revision,
+    /// the listed content digest, every bundle check): the bytes the dry run checks and, on accept, the ones committed. This PC's folders
+    /// are never the source. <see cref="SeedSource.NoRevision"/> when the source has no cloud revision; a failure carries its code.
     /// </summary>
-    public static PackedRevision? ReadSource(string savesRoot, ulong sourceXuid)
+    public static async Task<SeedSource> FetchSourceAsync(ISaveApi api, string access, string sourceXuid, CancellationToken cancellation = default)
     {
-        var newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(savesRoot, sourceXuid));
-        return newest is null ? null : CloudSaveFiles.Pack(newest);
+        ArgumentNullException.ThrowIfNull(api);
+        var page = await api.RevisionsAsync(access, sourceXuid, null, 1, cancellation).ConfigureAwait(false);
+        if (!page.Ok || page.Value is null)
+        {
+            return SeedSource.Failed(page.Error ?? new ErrorBody("HTTP.EMPTY", "empty body", null), page.Status, page.RetryAfter);
+        }
+        if (page.Value.Items is not [var newest, ..]) return SeedSource.NoRevision;
+        var download = await api.BundleAsync(access, sourceXuid, newest.Revision, cancellation).ConfigureAwait(false);
+        if (!download.Ok || download.Value is null)
+        {
+            return SeedSource.Failed(download.Error ?? new ErrorBody("HTTP.EMPTY", "empty body", null), download.Status, download.RetryAfter, newest.Revision);
+        }
+        var (bundle, failure) = CloudSaves.VerifyDownload(download.Value, newest.Revision, newest.ContentSha256);
+        if (bundle is null || failure is not null)
+        {
+            return SeedSource.Failed(new ErrorBody(failure?.Code ?? NotSent, failure?.Message ?? "the bundle was not read", null), download.Status, null, newest.Revision);
+        }
+        return new SeedSource(new PackedRevision(bundle.Label, bundle.Files, download.Value.Bytes, bundle.ContentSha256), newest.Revision, null, null, null);
+    }
+
+    /// <summary>
+    /// OD-216: the whole check as the player sees it, at once: the source's latest cloud revision (<see cref="FetchSourceAsync"/>), then
+    /// the dry run (<c>POST .../save/check</c>, <c>X-Fi-Seed-Source</c>) against <paramref name="targetXuid"/>'s empty Hardcore career.
+    /// <see cref="SeedRun.Result"/> is null when the source could not be read (nothing was sent to the check, nothing counted).
+    /// <paramref name="checking"/> runs between the download and the check (the step list moves on); <see cref="SeedRun.Answered"/> says
+    /// whether the server answered the check (it counts every answer against the day's 5).
+    /// </summary>
+    public static async Task<SeedRun> CheckFromCloudAsync(SavesApiClient api, string access, string targetXuid, string sourceXuid,
+        Action<SeedSource>? checking = null, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        // resumes on the caller's context (no ConfigureAwait(false)): checking moves the caller's step list
+        var source = await FetchSourceAsync(api, access, sourceXuid, cancellation);
+        if (source.Packed is not { } packed) return new SeedRun(source, null);
+        checking?.Invoke(source);
+        var answer = await api.CheckSeedAsync(access, targetXuid, sourceXuid, packed.Bundle, cancellation).ConfigureAwait(false);
+        return new SeedRun(source, Interpret(answer), answer.Status);
     }
 
     /// <summary>

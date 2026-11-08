@@ -321,8 +321,10 @@ public static class HardcoreCheck
 {
     /// <param name="outcome">The dry run's answer, null while it runs (or before it ran).</param>
     /// <param name="running">The request is in flight.</param>
-    public static IReadOnlyList<CheckStepState> Steps(SeedCheckOutcome? outcome, bool running) => outcome switch
+    /// <param name="downloading">OD-216: the source's latest cloud revision is being downloaded (the first step runs).</param>
+    public static IReadOnlyList<CheckStepState> Steps(SeedCheckOutcome? outcome, bool running, bool downloading = false) => outcome switch
     {
+        null when downloading => [CheckStepState.Running, CheckStepState.Waiting, CheckStepState.Waiting],
         null when running => [CheckStepState.Done, CheckStepState.Running, CheckStepState.Waiting],
         null => [CheckStepState.Waiting, CheckStepState.Waiting, CheckStepState.Waiting],
         SeedCheckOutcome.Accepted => [CheckStepState.Done, CheckStepState.Done, CheckStepState.Done],

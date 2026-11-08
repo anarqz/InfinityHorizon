@@ -557,22 +557,8 @@ public sealed class CloudSaves
             return new DownloadOutcome(null, null, SaveFailure.Network(e));
         }
         if (!result.Ok) return new DownloadOutcome(null, null, SaveFailure.From(result.Status, result.Error!, result.RetryAfter));
-        var download = result.Value!;
-        if (download.Revision is { } served && served != revision)
-            return new DownloadOutcome(null, null, SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture, $"asked for revision {revision}, the server sent {served}")));
-        if (download.Bytes.Length > Fh2Bundle.MaxBundle) return new DownloadOutcome(null, null, SaveFailure.Integrity("the bundle is over 384 KiB"));
-        if (download.BundleSha256 is null || download.BundleSha256 != Convert.ToHexStringLower(SHA256.HashData(download.Bytes)))
-            return new DownloadOutcome(null, null, SaveFailure.Integrity("the bundle does not match its Repr-Digest"));
-        ValidBundle bundle;
-        try
-        {
-            bundle = Fh2Bundle.Validate(download.Bytes);
-        }
-        catch (BundleException e)
-        {
-            return new DownloadOutcome(null, null, SaveFailure.Integrity(e.Message));
-        }
-        if (bundle.ContentSha256 != expected) return new DownloadOutcome(null, bundle, SaveFailure.Integrity("the downloaded save does not match the revision's content digest"));
+        var (bundle, invalid) = VerifyDownload(result.Value!, revision, expected);
+        if (bundle is null || invalid is not null) return new DownloadOutcome(null, bundle, invalid ?? SaveFailure.Integrity("the bundle was not read"));
         try
         {
             var installed = CloudSaveFiles.Install(savesRoot, targetXuid, bundle.Files, expected, Guid.CreateVersion7().ToString("N"), label);
@@ -586,6 +572,34 @@ public sealed class CloudSaves
         {
             return new DownloadOutcome(null, bundle, SaveFailure.Integrity(e.Message));
         }
+    }
+
+    /// <summary>
+    /// The checks of a downloaded revision before anything uses it (SAVES_API.md §4.2): the served revision, at most 384 KiB, the bytes'
+    /// <c>Repr-Digest</c>, every bundle check, and the content digest the revision was listed with. The valid bundle, else why not (a
+    /// bundle that reads but holds other content is returned with its failure).
+    /// </summary>
+    public static (ValidBundle? Bundle, SaveFailure? Failure) VerifyDownload(SaveBundleDownload download, ulong revision, string expectedContent)
+    {
+        ArgumentNullException.ThrowIfNull(download);
+        if (SaveReconcile.NormalizeDigest(expectedContent) is not { } expected) return (null, SaveFailure.Integrity("the revision has no content digest"));
+        if (download.Revision is { } served && served != revision)
+            return (null, SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture, $"asked for revision {revision}, the server sent {served}")));
+        if (download.Bytes.Length > Fh2Bundle.MaxBundle) return (null, SaveFailure.Integrity("the bundle is over 384 KiB"));
+        if (download.BundleSha256 is null || download.BundleSha256 != Convert.ToHexStringLower(SHA256.HashData(download.Bytes)))
+            return (null, SaveFailure.Integrity("the bundle does not match its Repr-Digest"));
+        ValidBundle bundle;
+        try
+        {
+            bundle = Fh2Bundle.Validate(download.Bytes);
+        }
+        catch (BundleException e)
+        {
+            return (null, SaveFailure.Integrity(e.Message));
+        }
+        return bundle.ContentSha256 != expected
+            ? (bundle, SaveFailure.Integrity("the downloaded save does not match the revision's content digest"))
+            : (bundle, null);
     }
 
     /// <summary>
