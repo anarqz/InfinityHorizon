@@ -557,6 +557,7 @@ public sealed class PlaySupervisor
         // the overlay's Worlds tab: answers off the loop, the seat renewed in the background
         var worlds = overlay is null ? null : _config.Worlds?.Invoke(() => _ticket);
         if (worlds is not null && Process.GameDefinition.ById(_config.Game) is { } worldsGame) worlds.HasPoolWorlds = worldsGame.HasPoolWorlds; // CR-S103
+        if (worlds is not null && Process.GameDefinition.ById(_config.Game) is { } friendsGame) worlds.SessionGame = friendsGame.Id; // W15: "Add friend" names a profile of it
         // W7b: SessionReady frames waiting for the hook's SessionReadyResult, by nonce
         var sessionReadyWaits = new System.Collections.Concurrent.ConcurrentDictionary<uint, TaskCompletionSource<byte>>();
         var sessionReadyNonce = 0;
@@ -1007,6 +1008,7 @@ public sealed class PlaySupervisor
                                 {
                                     var inboxOverlay = overlay;
                                     var inboxStop = onlineStop.Token;
+                                    inbox.Observer ??= worlds.OnInvitesPolledAsync; // W15: the friends sidebar's join requests and online toasts
                                     inboxRun ??= Task.Run(() => inbox.RunAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop), inboxStop);
                                     _ = inbox.ResendAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop);
                                 }
@@ -1022,6 +1024,14 @@ public sealed class PlaySupervisor
                             case Overlay.UiIncoming.JoinModesSet joinModes when worlds is not null && !suspended:
                                 // OD-210 (CR-S101, W14): the private lobby's leader chose who can join; one notice, the lobby again
                                 _ = JoinModesSetAsync(worlds, overlay, joinModes.Request.Modes, onlineStop.Token);
+                                break;
+                            case Overlay.UiIncoming.FriendsAct friendsAct when worlds is not null && !suspended:
+                                // OD-211 (CR-S102, W15): the right FRIENDS sidebar's action; one result, then the state as it is now
+                                _ = FriendsActAsync(worlds, overlay, friendsAct.Request, onlineStop.Token);
+                                break;
+                            case Overlay.UiIncoming.FriendsAct friendsAct:
+                                _ = overlay.SendIfAcceptedAsync(new Overlay.UiFrame.FriendsResult(friendsAct.Request.Kind, Overlay.UiFriendsResult.Failed,
+                                    _config.Text?["friends.failed"] ?? "That did not work. Try again."), stop.Token);
                                 break;
                             case Overlay.UiIncoming.Panel panel:
                                 _config.OverlayStatus?.Panel(panel.Open);
@@ -1221,6 +1231,25 @@ public sealed class PlaySupervisor
         catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException or InvalidOperationException or HttpRequestException)
         {
             if (!cancellation.IsCancellationRequested) _emit(new SupervisorEvent.Note("worlds: invite: not sent (" + error.GetType().Name + ")"));
+        }
+    }
+
+    /// <summary>
+    /// OD-211 (CR-S102, W15): one action of the FRIENDS sidebar (0x2B): the call, its result (0x2C, a notice that always shows), and the
+    /// state (0x2A) as the lists are now.
+    /// </summary>
+    private async Task FriendsActAsync(Matchmaking.WorldsBridge worlds, OverlayChannel overlay, Overlay.UiFrame.FriendsAction action, CancellationToken cancellation)
+    {
+        try
+        {
+            var result = await worlds.FriendsActAsync(action, cancellation).ConfigureAwait(false);
+            if (_online.IsPaused || cancellation.IsCancellationRequested) return;
+            if (result is not null) await overlay.SendIfAcceptedAsync(result, cancellation).ConfigureAwait(false);
+            await overlay.SendIfAcceptedAsync(worlds.FriendsStateFrame(), cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException or InvalidOperationException or HttpRequestException)
+        {
+            if (!cancellation.IsCancellationRequested) _emit(new SupervisorEvent.Note("friends: action not answered (" + error.GetType().Name + ")"));
         }
     }
 

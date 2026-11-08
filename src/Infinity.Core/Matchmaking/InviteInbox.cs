@@ -63,6 +63,12 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
     public bool Stopped { get; private set; }
 
     /// <summary>
+    /// W15 (OD-211): sees every good answer before it is applied (the friends sidebar's join requests and online toasts); its failures
+    /// never stop the inbox.
+    /// </summary>
+    public Func<InviteList, Func<UiFrame, CancellationToken, Task>, CancellationToken, Task>? Observer { get; set; }
+
+    /// <summary>
     /// Polls until <paramref name="cancellation"/> ends or the server refuses the caller; <paramref name="send"/> takes each prompt and
     /// withdrawal (the overlay channel, which drops what its overlay's protocol does not have).
     /// </summary>
@@ -81,6 +87,15 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
                     var list = await _read(cancellation).ConfigureAwait(false);
                     if (failures > 0) _log($"invites: the inbox answers again after {failures} failed polls");
                     failures = 0;
+                    if (Observer is { } observer)
+                    {
+                        try { await observer(list, send, cancellation).ConfigureAwait(false); }
+                        catch (Exception error) when (!cancellation.IsCancellationRequested && error is ApiException or HttpRequestException or IOException
+                            or InvalidOperationException or ProtocolException or System.Text.Json.JsonException)
+                        {
+                            _log($"invites: the friends observer failed ({error.GetType().Name})");
+                        }
+                    }
                     await ApplyAsync(list, send, cancellation).ConfigureAwait(false);
                     wait = PollEvery;
                 }

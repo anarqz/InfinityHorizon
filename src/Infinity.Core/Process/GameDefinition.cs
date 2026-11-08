@@ -55,6 +55,9 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     /// <summary>The allowed titles.</summary>
     public static readonly IReadOnlyList<GameDefinition> All = [Fh2, Fm5];
 
+    /// <summary>W15: the short label the friends sidebar and its toasts use ("FH2", "FM5"); a new game needs no row.</summary>
+    public string ShortName => Id.ToUpperInvariant();
+
     /// <summary>The title as Azimuth's <c>[title-&lt;id&gt;]</c> writes it.</summary>
     public string TitleKey => TitleId.ToLowerInvariant();
 
