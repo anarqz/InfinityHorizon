@@ -52,36 +52,25 @@ static DWORD WINAPI game_watch_thread(void *parameter) {
                 continue;
             }
             unsigned value = 0;
-            if (watch->kind == FI_WATCH_CHAIN) {
-                unsigned long long chained = 0;
-                if (!fi_watch_chain_read(memory_read, object, watch, &chained)) {
-                    continue;
-                }
-                value = watch->bytes > sizeof(value) ? chained != 0 : (unsigned)chained; /* 8 bytes: set or not */
-            } else if (watch->kind == FI_WATCH_POINTER_ONCE) {
+            if (watch->kind == FI_WATCH_POINTER_ONCE) {
                 if (last[i] != 1) {
                     last[i] = 1;
                     game_watch_log_pointer(watch->label, object);
                 }
                 continue;
             }
-            if (watch->kind == FI_WATCH_NONNULL) {
-                unsigned long long pointer = 0;
-                if (watch->bytes > sizeof(pointer) || !memory_read(object + watch->offset, &pointer, watch->bytes)) {
-                    continue;
-                }
-                value = pointer != 0;
-            } else {
+            if (watch->kind == FI_WATCH_HEARTBEAT) {
                 if (watch->bytes > sizeof(value) || !memory_read(object + watch->offset, &value, watch->bytes)) {
                     continue;
                 }
-                if (watch->kind == FI_WATCH_HEARTBEAT) {
-                    if (value != raw[i]) {
-                        raw[i] = value;
-                        changed_at[i] = now;
-                    }
-                    value = changed_at[i] && now - changed_at[i] <= GAME_HEARTBEAT_MS;
+                if (value != raw[i]) {
+                    raw[i] = value;
+                    changed_at[i] = now;
                 }
+                value = changed_at[i] && now - changed_at[i] <= GAME_HEARTBEAT_MS;
+            } else if (!fi_watch_value(memory_read, object, watch, &value)) {
+                /* VALUE, NONNULL and CHAIN (game_profile.h; a CHAIN row's value is its walk's, never object+offset) */
+                continue;
             }
             if (value != last[i]) {
                 last[i] = value;

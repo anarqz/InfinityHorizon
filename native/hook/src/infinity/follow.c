@@ -43,7 +43,18 @@
 
    Diagnostics: a queued start (module+0x150) that stays for more than FH_QUEUED_LOG_MS is logged
    once with what keeps it parked (the entity at +0xc0, bytes +0x15c, +0x15d, +0x170, dwords +0x134,
-   +0x130, +0x124). Read only. */
+   +0x130, +0x124). Read only.
+
+   T-1108-J diagnostics (static RE of the FH2 Durango project, read only). Exactly three writers set the entity at +0xc0:
+   FUN_140816640 (a start: from the lobby map at +0xf0, +0x120 = its lobby type; called by OnStartMatchmaking and the network
+   update FUN_1407d4790), FUN_1408183f0 (a session join: from +0xe0, +0x120 = 7; called by Update's +0x134/+0x130 branches and
+   FUN_140818340, which joins the Party's game session) and Update's +0x170 branch (a restart: from +0xd0). The senders of
+   NetworkStartMatchmaking (descriptor game+0x34bdaf8) are menus (PauseMenuTiled's callback FUN_140dcaf80, FUN_1408bc120,
+   FUN_140d883b0, FUN_140715eb0) and FUN_1407d4790; the Party statics slot 6 caller (FUN_141791000) only sets the Party's own
+   state. So a search that starts outside the menus is a session join that follows the Party manager (DAT_1436e2958: +0x2e8 in a
+   party, +0x30 its game session, +0x48 and +0x50 the gates Update reads). The detour logs, read only and at most once a second,
+   each change of the entity (started, with its source told by which field it was copied from, or ended) or of the queued start,
+   the whole state at FollowHost, at the move's unpark disconnect and 1 s after it. */
 #include "infinity.h"
 #include "../core/logging.h"
 #include "../core/support.h"
@@ -62,6 +73,12 @@
 #define FH_DISCONNECT_RVA 0x34bdc28u /* NetworkMatchmakingRequestDisconnect's event descriptor */
 #define FH_DELETE_RVA 0x31c7b0u      /* the game's operator delete */
 #define FH_QUEUED_LOG_MS 5000u
+#define FH_RESTART_OFFSET 0xd0u /* the entity Update's +0x170 branch restarts (shared_ptr) */
+#define FH_JOIN_OFFSET 0xe0u    /* the entity FUN_1408183f0 joins a session with (shared_ptr) */
+#define FH_TARGET_OFFSET 0x140u /* the session FUN_140817030 stores to join, null when none */
+#define FH_PARTY_RVA 0x36e2958u /* the Party manager pointer Update's gates read */
+#define FH_WATCH_MS 1000u       /* at most one state-change line a second */
+#define FH_UNPARK_CHECK_MS 1000u
 
 /* push rbp; push rbx; push rsi; push rdi; push r12; push r14; push r15; lea rbp,[rsp-27h] */
 static const unsigned char fh_update_bytes[16] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41,
@@ -117,9 +134,15 @@ static int fh_released_logged;
 static void *fh_queued_seen;
 static ULONGLONG fh_queued_since;
 static int fh_queued_logged;
+/* T-1108-J diagnostics, game thread only: the entity and queued start last logged, when, whether the hook's own start ran since,
+   and when the move's unpark disconnect was sent (0 none) */
+static void *fh_watch_entity, *fh_watch_queued;
+static ULONGLONG fh_watch_at;
+static int fh_own_start;
+static ULONGLONG fh_unpark_at;
 
 /* A bounded log line: text and unsigned decimals appended to `line` (capacity FH_LINE). */
-#define FH_LINE 256u
+#define FH_LINE 400u
 static void fh_put(char *line, size_t *n, const char *text) {
     while (*text && *n + 1 < FH_LINE) line[(*n)++] = *text++;
     line[*n] = 0;
@@ -133,6 +156,169 @@ static void fh_put_number(char *line, size_t *n, unsigned value) {
     } while (value && d < 10);
     while (d && *n + 1 < FH_LINE) line[(*n)++] = digits[--d];
     line[*n] = 0;
+}
+
+/* T-1108-J: the module's matchmaking state, read only (see the header). source: 0 no entity, 1 a start (the lobby map), 2 a
+   session join (+0xe0), 3 a restart (+0xd0). party: 1 when the Party manager pointer was readable and set. */
+enum { FH_SOURCE_NONE = 0, FH_SOURCE_START = 1, FH_SOURCE_JOIN = 2, FH_SOURCE_RESTART = 3 };
+typedef struct {
+    void *entity, *queued;
+    unsigned source, lobby, queued_lobby, target;
+    unsigned b15c, b15d, b170, d134, d130, d124;
+    unsigned party, p2e8, p30, p48, p50;
+} FhState;
+
+static int fh_state_read(unsigned char *module, FhState *state) {
+    unsigned char block[0x178u - FH_ENTITY_OFFSET];
+    state->entity = state->queued = 0;
+    state->source = state->lobby = state->queued_lobby = state->target = 0;
+    state->b15c = state->b15d = state->b170 = state->d134 = state->d130 = state->d124 = 0;
+    state->party = state->p2e8 = state->p30 = state->p48 = state->p50 = 0;
+    if (!memory_read(module + FH_ENTITY_OFFSET, block, sizeof(block))) return 0;
+#define FH_AT(offset) (block + (offset) - FH_ENTITY_OFFSET)
+    void *restart = 0, *join = 0, *target = 0;
+    memory_copy(&state->entity, FH_AT(FH_ENTITY_OFFSET), sizeof(void *));
+    memory_copy(&restart, FH_AT(FH_RESTART_OFFSET), sizeof(void *));
+    memory_copy(&join, FH_AT(FH_JOIN_OFFSET), sizeof(void *));
+    memory_copy(&target, FH_AT(FH_TARGET_OFFSET), sizeof(void *));
+    memory_copy(&state->queued, FH_AT(FH_QUEUED_OFFSET), sizeof(void *));
+    memory_copy(&state->d134, FH_AT(0x134u), 4);
+    memory_copy(&state->d130, FH_AT(0x130u), 4);
+    memory_copy(&state->d124, FH_AT(0x124u), 4);
+    state->lobby = *FH_AT(FH_LOBBY_OFFSET);
+    state->b15c = *FH_AT(0x15cu);
+    state->b15d = *FH_AT(0x15du);
+    state->b170 = *FH_AT(0x170u);
+#undef FH_AT
+    state->target = target != 0;
+    state->source = !state->entity          ? FH_SOURCE_NONE
+                    : state->entity == join    ? FH_SOURCE_JOIN
+                    : state->entity == restart ? FH_SOURCE_RESTART
+                                               : FH_SOURCE_START;
+    if (state->queued) {
+        unsigned char lobby = 0;
+        if (memory_read(state->queued, &lobby, 1)) state->queued_lobby = lobby;
+    }
+    unsigned char *party = 0;
+    if (fh_game && memory_read_pointer(fh_game + FH_PARTY_RVA, (void **)&party)) {
+        unsigned char b2e8 = 0, b50 = 0;
+        void *session = 0;
+        state->party = memory_read(party + 0x2e8, &b2e8, 1) && memory_read(party + 0x30, &session, sizeof(session)) &&
+                       memory_read(party + 0x48, &state->p48, 4) && memory_read(party + 0x50, &b50, 1);
+        state->p2e8 = b2e8;
+        state->p30 = session != 0;
+        state->p50 = b50;
+    }
+    return 1;
+}
+
+static void fh_put_source(char *line, size_t *n, const FhState *state) {
+    if (state->source == FH_SOURCE_JOIN) {
+        fh_put(line, n, "a session join: an invite, the Party's game session or a rejoin");
+    } else if (state->source == FH_SOURCE_RESTART) {
+        fh_put(line, n, "the module's restart (+170)");
+    } else {
+        fh_put(line, n, "a start for lobby type ");
+        fh_put_number(line, n, state->lobby);
+    }
+}
+
+/* " entity=1 (<source>) +120=N queued=1 (lobby type N) +15c=.. +140=N party +2e8=N +30=N +48=N +50=N" */
+static void fh_put_state(char *line, size_t *n, const FhState *state) {
+    fh_put(line, n, " entity=");
+    fh_put_number(line, n, state->entity != 0);
+    if (state->entity) {
+        fh_put(line, n, " (");
+        fh_put_source(line, n, state);
+        fh_put(line, n, ")");
+    }
+    fh_put(line, n, " +120=");
+    fh_put_number(line, n, state->lobby);
+    fh_put(line, n, " queued=");
+    fh_put_number(line, n, state->queued != 0);
+    if (state->queued) {
+        fh_put(line, n, " (lobby type ");
+        fh_put_number(line, n, state->queued_lobby);
+        fh_put(line, n, ")");
+    }
+    fh_put(line, n, " +15c=");
+    fh_put_number(line, n, state->b15c);
+    fh_put(line, n, " +15d=");
+    fh_put_number(line, n, state->b15d);
+    fh_put(line, n, " +170=");
+    fh_put_number(line, n, state->b170);
+    fh_put(line, n, " +134=");
+    fh_put_number(line, n, state->d134);
+    fh_put(line, n, " +130=");
+    fh_put_number(line, n, state->d130);
+    fh_put(line, n, " +124=");
+    fh_put_number(line, n, state->d124);
+    fh_put(line, n, " +140=");
+    fh_put_number(line, n, state->target);
+    if (!state->party) {
+        fh_put(line, n, " party=none");
+        return;
+    }
+    fh_put(line, n, " party +2e8=");
+    fh_put_number(line, n, state->p2e8);
+    fh_put(line, n, " +30=");
+    fh_put_number(line, n, state->p30);
+    fh_put(line, n, " +48=");
+    fh_put_number(line, n, state->p48);
+    fh_put(line, n, " +50=");
+    fh_put_number(line, n, state->p50);
+}
+
+/* "FOLLOW: the game's matchmaking <when>:" and the state. */
+static void fh_state_log(unsigned char *module, const char *when) {
+    FhState state;
+    char line[FH_LINE];
+    size_t n = 0;
+    fh_put(line, &n, "FOLLOW: the game's matchmaking ");
+    fh_put(line, &n, when);
+    fh_put(line, &n, ":");
+    if (fh_state_read(module, &state)) {
+        fh_put_state(line, &n, &state);
+    } else {
+        fh_put(line, &n, " unreadable");
+    }
+    fh_put(line, &n, ".\r\n");
+    log_append(line);
+}
+
+/* After each Update: a change of the entity (the game's search started or ended) or of the queued start, at most once every
+   FH_WATCH_MS (changes in between are folded into the next line); change-only, read only. */
+static void fh_search_watch(unsigned char *module) {
+    void *entity = 0, *queued = 0;
+    if (!memory_read(module + FH_ENTITY_OFFSET, &entity, sizeof(entity)) ||
+        !memory_read(module + FH_QUEUED_OFFSET, &queued, sizeof(queued))) {
+        return;
+    }
+    if (entity == fh_watch_entity && queued == fh_watch_queued) {
+        fh_own_start = 0; /* the hook's start was only queued, or changed nothing */
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    FhState state;
+    if ((fh_watch_at && now - fh_watch_at < FH_WATCH_MS) || !fh_state_read(module, &state)) return;
+    char line[FH_LINE];
+    size_t n = 0;
+    if (state.entity && state.entity != fh_watch_entity) {
+        fh_put(line, &n, "FOLLOW: the game's matchmaking search started (");
+        fh_put_source(line, &n, &state);
+        fh_put(line, &n, fh_own_start ? "; by the hook's FollowHost start):" : "; not the hook's):");
+        fh_own_start = 0;
+    } else if (!state.entity && fh_watch_entity) {
+        fh_put(line, &n, "FOLLOW: the game's matchmaking search ended:");
+    } else {
+        fh_put(line, &n, "FOLLOW: the game's queued matchmaking start changed:");
+    }
+    fh_put_state(line, &n, &state);
+    fh_put(line, &n, ".\r\n");
+    log_append(line);
+    fh_watch_entity = state.entity;
+    fh_watch_queued = state.queued;
+    fh_watch_at = now;
 }
 
 /* A queued start that waits longer than FH_QUEUED_LOG_MS: what parks it, once per queued start. */
@@ -178,6 +364,35 @@ static void fh_queued_watch(unsigned char *module) {
     fh_put_number(line, &n, d130);
     fh_put(line, &n, " +124=");
     fh_put_number(line, &n, d124);
+    /* T-1108-J: what the entity is (its source and lobby type), the session target, and the Party gates Update reads */
+    FhState state;
+    if (fh_state_read(module, &state)) {
+        fh_put(line, &n, " | the game's search:");
+        if (state.entity) {
+            fh_put(line, &n, " ");
+            fh_put_source(line, &n, &state);
+        } else {
+            fh_put(line, &n, " none");
+        }
+        fh_put(line, &n, " +120=");
+        fh_put_number(line, &n, state.lobby);
+        fh_put(line, &n, " queued lobby type ");
+        fh_put_number(line, &n, state.queued_lobby);
+        fh_put(line, &n, " +140=");
+        fh_put_number(line, &n, state.target);
+        if (state.party) {
+            fh_put(line, &n, " party +2e8=");
+            fh_put_number(line, &n, state.p2e8);
+            fh_put(line, &n, " +30=");
+            fh_put_number(line, &n, state.p30);
+            fh_put(line, &n, " +48=");
+            fh_put_number(line, &n, state.p48);
+            fh_put(line, &n, " +50=");
+            fh_put_number(line, &n, state.p50);
+        } else {
+            fh_put(line, &n, " party=none");
+        }
+    }
     fh_put(line, &n, "\r\n");
     log_append(line);
 }
@@ -286,6 +501,8 @@ static void fh_move_unpark(unsigned char *module, unsigned lobby) {
     ((FhSendFn)(uintptr_t)(fh_game + FH_SEND_RVA))(module, fh_game + FH_DISCONNECT_RVA);
     fh_log_lobby("FOLLOW: an invite's move waits behind the game's own matchmaking: that search is disconnected; the queued "
                  "start (lobby type ", lobby, ") runs once it ends.\r\n");
+    fh_state_log(module, "at the unpark disconnect");
+    fh_unpark_at = GetTickCount64();
 }
 
 static void fh_update(void *module, float dt) {
@@ -313,6 +530,7 @@ static void fh_update(void *module, float dt) {
     if (pending) {
         unsigned lobby = (unsigned)pending & 0xffu, is_public = ((unsigned)pending >> 8) & 1u;
         int move = ((unsigned)pending & FH_PENDING_MOVE) != 0;
+        fh_state_log(module, move ? "at an invite's FollowHost" : "at FollowHost");
         if (GetTickCount64() - (ULONGLONG)fh_pending_at > FH_PENDING_MS || !fi_launch_live() || fi_launch_suspended()) {
             log_append(move ? "FOLLOW: an invite's move came too late or online is closed; dropped.\r\n"
                             : "FOLLOW: a host change came too late or online is closed; dropped.\r\n");
@@ -320,6 +538,7 @@ static void fh_update(void *module, float dt) {
             if (!fh_move_blocked(module, lobby)) {
                 FhStartArgument argument = {(unsigned char)lobby, (unsigned char)is_public, {0, 0}, -1, -1};
                 ((FhStartFn)(uintptr_t)(fh_game + FH_START_RVA))(module, &argument);
+                fh_own_start = 1;
                 fh_log_lobby("FOLLOW: an invite's move: matchmaking started for lobby type ", lobby,
                              " (the player confirms; the game leaves its current session itself).\r\n");
             }
@@ -330,13 +549,19 @@ static void fh_update(void *module, float dt) {
         } else {
             FhStartArgument argument = {(unsigned char)lobby, (unsigned char)is_public, {0, 0}, -1, -1};
             ((FhStartFn)(uintptr_t)(fh_game + FH_START_RVA))(module, &argument);
+            fh_own_start = 1;
             log_append(lobby == FH_LOBBY_ROAD_TRIP
                            ? "FOLLOW: the host is in Online Road Trip: matchmaking started (the player confirms).\r\n"
                            : "FOLLOW: the host is in Online Free Roam: matchmaking started (the player confirms).\r\n");
         }
     }
     fh_queued_watch(module);
+    if (fh_unpark_at && GetTickCount64() - fh_unpark_at >= FH_UNPARK_CHECK_MS) {
+        fh_unpark_at = 0;
+        fh_state_log(module, "1 s after the unpark disconnect");
+    }
     fh_update_original(module, dt);
+    fh_search_watch(module);
 }
 
 /* One datagram the game sends its world through the joiner's proxy: when its first NerdCore message
