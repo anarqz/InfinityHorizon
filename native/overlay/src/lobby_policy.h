@@ -9,9 +9,11 @@
 //   nobody. Replace InviteGateOf, nothing else, when the rule changes.
 // - The notice rule (T-L3; fixes T-L6's M1): a notice the launcher marks "always" (a private create's result and its hold, the
 //   flagged Hardcore message with its time left) shows in every lobby; every other notice follows OD-192 (none in an official
-//   lobby, private ones included). Invite prompts are not notices: they are their own modal frame and always show.
-// - The invite prompts (0x23): one shown at a time, at most kMaxWaiting waiting, a repeated id refreshes its prompt, expires 0
-//   withdraws it, and a prompt past its time goes away without an answer (the server's invite expires on its own).
+//   lobby, private ones included). Invite prompts are not notices: they are their own toasts and always show (the launcher holds
+//   them back while this player races, INVITE_UX).
+// - The invite toasts (0x23): up to three on screen, at most kMaxWaiting in all, a repeated id refreshes its toast, expires 0
+//   withdraws it, and a toast past its time slides away without an answer (the server's invite expires on its own). Accepting is
+//   a hold of Y (HoldRing); the FRIENDS sidebar's invite mode words each friend's Invite (InviteStateOf, InviteSends).
 #pragma once
 
 #include <cstddef>
@@ -79,135 +81,189 @@ inline uint8_t NextJoinModes(const LobbyJoinModesFrame &j) {
 // The notice rule: true when a toast with these flags shows now.
 inline bool ToastShows(bool in_official_lobby, uint8_t flags) { return !in_official_lobby || (flags & kToastAlways) != 0; }
 
+// The invite toasts (0x23, INVITE_UX 2026-11-08): at most kMaxShown on screen (top right, the oldest on top), the rest queued, at
+// most kMaxWaiting in all. Each lives for the time the launcher gave it (the invite's answer window), counted from its arrival; a
+// toast that goes (answered, withdrawn, past its time) stays kSlideMs as "leaving" so it can slide out, then it is purged.
 class InviteQueue {
 public:
-    static constexpr size_t kMaxWaiting = 4;
-    static constexpr int kAccept = 0, kDecline = 1;
+    static constexpr size_t kMaxShown = 3, kMaxWaiting = 8;
+    static constexpr uint64_t kSlideMs = 320;
     struct Entry {
         InvitePromptFrame prompt;
         uint64_t deadline_ms = 0;
+        uint64_t shown_ms = 0;   // when it first came on screen (0: still queued): its slide in
+        uint64_t leaving_ms = 0; // when it went (0: live): its slide out
+        bool live() const { return leaving_ms == 0; }
     };
 
     // A prompt from the launcher at `now_ms`: shown or queued; expires 0 withdraws its id. False: dropped (the queue is full).
     bool Offer(const InvitePromptFrame &p, uint64_t now_ms) {
-        for (auto it = entries_.begin(); it != entries_.end(); ++it) {
-            if (it->prompt.id != p.id) continue;
-            if (p.expires == 0) {
-                if (it == entries_.begin()) focus_ = kDecline;
-                entries_.erase(it);
-            } else {
-                it->prompt = p;
-                it->deadline_ms = now_ms + static_cast<uint64_t>(p.expires) * 1000;
+        for (auto &e : entries_) {
+            if (!e.live() || e.prompt.id != p.id) continue;
+            if (p.expires == 0) Leave(e, now_ms);
+            else {
+                e.prompt = p;
+                e.deadline_ms = now_ms + static_cast<uint64_t>(p.expires) * 1000;
             }
             return true;
         }
         if (p.expires == 0) return true; // nothing of that id: already gone
-        if (entries_.size() >= kMaxWaiting) return false;
-        entries_.push_back({p, now_ms + static_cast<uint64_t>(p.expires) * 1000});
+        if (Waiting() >= kMaxWaiting) return false;
+        entries_.push_back({p, now_ms + static_cast<uint64_t>(p.expires) * 1000, 0, 0});
         return true;
     }
 
-    // Drops every prompt past its time (no answer is sent). True when the shown one went.
+    // Every live toast past its time leaves (no answer is sent); a toast that left kSlideMs ago is purged. True when one left.
     bool Expire(uint64_t now_ms) {
-        bool shown = false;
-        for (auto it = entries_.begin(); it != entries_.end();) {
-            if (now_ms >= it->deadline_ms) {
-                if (it == entries_.begin()) { shown = true; focus_ = kDecline; }
-                it = entries_.erase(it);
-            } else {
-                ++it;
+        bool left = false;
+        for (auto &e : entries_) {
+            if (e.live() && now_ms >= e.deadline_ms) {
+                Leave(e, now_ms);
+                left = true;
             }
         }
-        return shown;
+        for (auto it = entries_.begin(); it != entries_.end();) {
+            if (!it->live() && now_ms >= it->leaving_ms + kSlideMs) it = entries_.erase(it);
+            else ++it;
+        }
+        return left;
     }
 
-    const Entry *Current() const { return entries_.empty() ? nullptr : &entries_.front(); }
-    size_t Waiting() const { return entries_.size(); }
+    // The first live toast (the one a hold answers), or null.
+    const Entry *Current() const {
+        for (const auto &e : entries_)
+            if (e.live()) return &e;
+        return nullptr;
+    }
+    // Live toasts, shown and queued.
+    size_t Waiting() const {
+        size_t n = 0;
+        for (const auto &e : entries_) n += e.live() ? 1 : 0;
+        return n;
+    }
 
-    // Whole seconds left on the shown prompt (rounded up), 0 when none.
+    // What to draw at `now_ms`, in order: the first kMaxShown live toasts and every leaving one (the ones that just came on screen
+    // get their shown_ms).
+    std::vector<Entry> Drawn(uint64_t now_ms) {
+        std::vector<Entry> out;
+        size_t live = 0;
+        for (auto &e : entries_) {
+            if (e.live()) {
+                if (live++ >= kMaxShown) continue;
+                if (e.shown_ms == 0) e.shown_ms = now_ms ? now_ms : 1;
+            }
+            out.push_back(e);
+        }
+        return out;
+    }
+
+    // Whole seconds left on a toast (rounded up), 0 when past.
+    static uint32_t SecondsLeft(const Entry &e, uint64_t now_ms) {
+        if (now_ms >= e.deadline_ms) return 0;
+        return static_cast<uint32_t>((e.deadline_ms - now_ms + 999) / 1000);
+    }
     uint32_t SecondsLeft(uint64_t now_ms) const {
         const Entry *e = Current();
-        if (!e || now_ms >= e->deadline_ms) return 0;
-        return static_cast<uint32_t>((e->deadline_ms - now_ms + 999) / 1000);
+        return e ? SecondsLeft(*e, now_ms) : 0;
     }
 
-    // The shown prompt's two buttons: 0 Accept, 1 Decline (focused first: an A meant for the guide never accepts).
-    int Focus() const { return focus_; }
-    void Move(int to) { focus_ = to <= 0 ? 0 : 1; }
-
-    // The player answered the shown prompt: its id (to send with the answer) and the next one is shown. False: none shown.
-    bool Answer(std::string *id) {
-        if (entries_.empty()) return false;
-        if (id) *id = entries_.front().prompt.id;
-        entries_.pop_front();
-        focus_ = kDecline;
-        return true;
+    // The player accepted the first live toast: its id (to send with the answer); it leaves and the next one moves up. False: none.
+    bool Answer(std::string *id, uint64_t now_ms = 0) {
+        for (auto &e : entries_) {
+            if (!e.live()) continue;
+            if (id) *id = e.prompt.id;
+            Leave(e, now_ms);
+            return true;
+        }
+        return false;
     }
 
-    void Clear() {
-        entries_.clear();
-        focus_ = kDecline;
-    }
+    void Clear() { entries_.clear(); }
 
 private:
+    static void Leave(Entry &e, uint64_t now_ms) { e.leaving_ms = now_ms ? now_ms : 1; }
     std::deque<Entry> entries_;
-    int focus_ = kDecline;
 };
 
-// The friend picker (T-L4, 0x25): what it lists and which row has the focus. Only the launcher opens it (flag open: the game's
-// Invite friends or the pane's button answered with a picker); a picker without the flag only refreshes an open one. Only an
-// available friend may be chosen; choosing marks that row invited at once (no double send) until the launcher's refresh.
-class FriendPickerModel {
+// "Hold (Y) to accept" (INVITE_UX): a ring fills while the button is held, kHoldSeconds to full; released early it drains (kDrainSeconds
+// from full to empty). Update returns true exactly once, on the frame the ring completes; after that, and when the ring starts (a toast
+// came while Y was already down, as a rewind), the button must be released before it can fill again. A long frame counts as at most
+// kMaxStep, so a hitch never completes a hold on its own.
+class HoldRing {
 public:
-    void Set(const FriendPickerFrame &frame) {
-        if (!frame.open() && !shown_) return; // a refresh for a closed picker
-        shown_ = true;
-        status_ = frame.status;
-        rows_ = frame.friends;
-        if (frame.open()) focus_ = FirstAvailable();
-        Clamp();
+    static constexpr float kHoldSeconds = 1.2f, kDrainSeconds = 0.4f, kMaxStep = 0.1f;
+    bool Update(bool held, float dt) {
+        dt = dt < 0 ? 0 : dt > kMaxStep ? kMaxStep : dt;
+        if (!held) {
+            armed_ = true;
+            progress_ -= dt / kDrainSeconds;
+            if (progress_ < 0) progress_ = 0;
+            return false;
+        }
+        if (!armed_) return false;
+        progress_ += dt / kHoldSeconds;
+        if (progress_ < 1) return false;
+        progress_ = 0;
+        armed_ = false; // the next toast needs a new press
+        return true;
     }
-    void Close() { shown_ = false; }
-    void Clear() {
-        shown_ = false;
-        rows_.clear();
-        focus_ = 0;
-    }
-    bool Shown() const { return shown_; }
-    uint8_t Status() const { return status_; }
-    const std::vector<PickerFriend> &Rows() const { return rows_; }
-    int Focus() const { return focus_; }
-    void Move(int delta) {
-        focus_ += delta;
-        Clamp();
-    }
-    void FocusRow(int row) {
-        focus_ = row;
-        Clamp();
-    }
-    // The focused row's XUID when it may be invited (the row is then marked invited); empty otherwise.
-    std::string Choose() {
-        if (!shown_ || focus_ < 0 || static_cast<size_t>(focus_) >= rows_.size()) return {};
-        PickerFriend &row = rows_[static_cast<size_t>(focus_)];
-        if (row.state != kPickerAvailable) return {};
-        row.state = kPickerInvited;
-        return row.xuid;
+    float Progress() const { return progress_; }
+    bool Armed() const { return armed_; }
+    // The toasts went (none to accept): empty, and a new press is needed.
+    void Reset() {
+        progress_ = 0;
+        armed_ = false;
     }
 
 private:
-    int FirstAvailable() const {
-        for (size_t i = 0; i < rows_.size(); ++i)
-            if (rows_[i].state == kPickerAvailable) return static_cast<int>(i);
-        return 0;
+    float progress_ = 0;
+    bool armed_ = false;
+};
+
+// The FRIENDS sidebar's invite mode (INVITE_UX, protocol 12): what one friend row's Invite says. Only Available invites; every other
+// state is the row's reason, shown greyed. `sending`: this overlay asked for that friend and the launcher has not answered yet.
+enum class InviteRowState : uint8_t { Available, Sending, Invited, InLobby, Offline, Excluded, NoLobby };
+inline InviteRowState InviteStateOf(const FriendRowFrame &r, bool have_lobby, bool sending) {
+    if (!have_lobby) return InviteRowState::NoLobby;
+    if (r.Has(kFriendInLobby)) return InviteRowState::InLobby;
+    if (r.Has(kFriendInvited)) return InviteRowState::Invited;
+    if (sending) return InviteRowState::Sending;
+    if (!r.Has(kFriendOnline)) return InviteRowState::Offline;
+    if (r.Has(kFriendExcluded) || !r.Has(kFriendCanInvite)) return InviteRowState::Excluded;
+    return InviteRowState::Available;
+}
+
+// The invites this overlay asked for (0x2B kind 7) and the launcher has not answered (0x2C kind 7, in order): a second press on the
+// same friend sends nothing until then, or until kForgetMs (a lost answer never locks a row).
+class InviteSends {
+public:
+    static constexpr uint64_t kForgetMs = 15000;
+    bool Begin(const std::string &id, uint64_t now_ms) {
+        Forget(now_ms);
+        if (Sending(id, now_ms)) return false;
+        sent_.push_back({id, now_ms});
+        return true;
     }
-    void Clamp() {
-        if (focus_ >= static_cast<int>(rows_.size())) focus_ = static_cast<int>(rows_.size()) - 1;
-        if (focus_ < 0) focus_ = 0;
+    bool Sending(const std::string &id, uint64_t now_ms) const {
+        for (const auto &s : sent_)
+            if (s.id == id && now_ms < s.at + kForgetMs) return true;
+        return false;
     }
-    bool shown_ = false;
-    uint8_t status_ = kPickerList;
-    std::vector<PickerFriend> rows_;
-    int focus_ = 0;
+    void Answered() {
+        if (!sent_.empty()) sent_.pop_front();
+    }
+    void Clear() { sent_.clear(); }
+    size_t Pending() const { return sent_.size(); }
+
+private:
+    struct Sent {
+        std::string id;
+        uint64_t at = 0;
+    };
+    void Forget(uint64_t now_ms) {
+        while (!sent_.empty() && now_ms >= sent_.front().at + kForgetMs) sent_.pop_front();
+    }
+    std::deque<Sent> sent_;
 };
 
 } // namespace fi

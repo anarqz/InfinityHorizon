@@ -1161,8 +1161,9 @@
                every non-root screen; Esc and the mouse's back button do the same (MainWindow.xaml.cs). -->
           <Grid x:Name="SavesPage" Visibility="{Binding ShowSaveManager, Converter={StaticResource Visible}}">
             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-            <!-- head: ‹ Back, the breadcrumb, the game -->
-            <Border BorderBrush="{StaticResource SmLine}" BorderThickness="0,0,0,1" Padding="0,0,0,12" MinHeight="48">
+            <!-- head: ‹ Back, the breadcrumb, the game; none at the root (owner 2026-11-08, INVITE_UX C: no stray "Saves" above "Profiles") -->
+            <Border BorderBrush="{StaticResource SmLine}" BorderThickness="0,0,0,1" Padding="0,0,0,12" MinHeight="48"
+                    Visibility="{Binding SavesCanGoBack, Converter={StaticResource Visible}}">
               <DockPanel LastChildFill="True">
                 <Button DockPanel.Dock="Left" Content="{Binding S[sm.back]}" Style="{StaticResource SmButton}" Padding="12,6" Margin="0,0,14,0" FontSize="13"
                         Click="OnSavesBack" Visibility="{Binding SavesCanGoBack, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding S[sm.back]}" />

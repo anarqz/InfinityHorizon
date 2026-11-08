@@ -73,7 +73,8 @@ public enum UiDirection
 /// 0x1F-0x22: the game's PLAYER ACTIONS friend and report items, OD-193 F-2, protocol 5; 0x23-0x24: the private lobby's invite
 /// prompt and its answer, OD-204 T-L3, protocol 6; 0x25-0x27: the private lobby's friend picker and its invite, OD-204 T-L4,
 /// protocol 7; 0x28-0x29: the private lobby's "Who can join", OD-210 CR-S101 W14, protocol 8; 0x2A-0x2C: the friends sidebar, OD-211
-/// CR-S102 W15, protocol 10; 0x2D: a friend's Discord avatar, protocol 11; native/overlay/src/ui_frames.h and
+/// CR-S102 W15, protocol 10; 0x2D: a friend's Discord avatar, protocol 11; 0x2E: open the FRIENDS sidebar (to invite), INVITE_UX,
+/// protocol 12, with FriendRow's in-lobby and invited flags; native/overlay/src/ui_frames.h and
 /// pipe.cpp are the other end). The hook
 /// never sees it. Protocol 9 (OD-208): players host no world, so the lobby list, join by code, create and hosted frames
 /// (0x07-0x0C, 0x14, 0x15) and WorldAction close (1) and kick (3) are gone from the pipe; either end refuses them as unknown.
@@ -81,7 +82,7 @@ public enum UiDirection
 public abstract record UiFrame
 {
     /// <summary>What this launcher speaks; <see cref="UiSession"/> also accepts <see cref="MinProtocolVersion"/>.</summary>
-    public const ushort ProtocolVersion = 11;
+    public const ushort ProtocolVersion = 12;
 
     /// <summary>Protocol 1 overlays know only 0x01-0x13: never send them a protocol 2 frame.</summary>
     public const ushort MinProtocolVersion = 1;
@@ -126,6 +127,9 @@ public abstract record UiFrame
     /// <summary>The lowest type that needs protocol 11 (a friend's Discord avatar, OD-211, CR-S102).</summary>
     public const byte FirstProtocol11Type = 0x2D;
 
+    /// <summary>The lowest type that needs protocol 12 (open the FRIENDS sidebar to invite, INVITE_UX 2026-11-08).</summary>
+    public const byte FirstProtocol12Type = 0x2E;
+
     /// <summary>W15: the most friend rows, incoming friend requests, join requests, profiles per friend one <see cref="FriendsState"/> carries.</summary>
     public const int MaxFriendRows = 64, MaxFriendRequests = 16, MaxJoinRequests = 8, MaxFriendProfiles = 4;
 
@@ -133,7 +137,7 @@ public abstract record UiFrame
     public const int MaxFriendName = 64, MaxFriendGame = 8, MaxFriendUrl = 160, MaxFriendMessage = 160;
 
     /// <summary>The last type of the UI pipe.</summary>
-    public const byte LastType = 0x2D;
+    public const byte LastType = 0x2E;
 
     /// <summary>T-L4: the most friends one <see cref="FriendPicker"/> lists (the launcher keeps the first ones, available ones first).</summary>
     public const int MaxPickerFriends = 100;
@@ -794,6 +798,24 @@ public abstract record UiFrame
         }
     }
 
+    /// <summary>
+    /// 0x2E, launcher → overlay (protocol 12, owner 2026-11-08, docs/launcher/batch-1107/INVITE_UX.md): open the guide with the FRIENDS
+    /// sidebar shown and focused; <c>Mode</c> <see cref="UiFriendsOpen"/> (<see cref="UiFriendsOpen.Invite"/>: each friend row offers
+    /// Invite). Sent for Invite friends (the game's and the Private Lobby pane's) right after a fresh <see cref="FriendsState"/>; it
+    /// replaces the centred <see cref="FriendPicker"/>, which only a protocol 7-11 overlay still gets.
+    /// </summary>
+    public sealed record FriendsOpen(byte Mode) : UiFrame
+    {
+        public override byte Type => 0x2E;
+
+        public override UiDirection Direction => UiDirection.ToOverlay;
+
+        internal void Validate()
+        {
+            if (Mode > UiFriendsOpen.Max) throw new ProtocolException("invalid friends open mode");
+        }
+    }
+
     internal static void CheckVolume(byte volume)
     {
         if (volume is < MinVolume or > MaxVolume) throw new ProtocolException("invalid volume");
@@ -1135,6 +1157,10 @@ public abstract record UiFrame
                 w.U16(fa.Side);
                 if (fa.Rgba.Length > 0) w.Fixed(fa.Rgba, fa.Rgba.Length, "friend avatar");
                 break;
+            case FriendsOpen o: // INVITE_UX (protocol 12)
+                o.Validate();
+                w.U8(o.Mode);
+                break;
         }
         return w.Finish("ui frame");
     }
@@ -1217,6 +1243,7 @@ public abstract record UiFrame
             0x2A => DecodeFriendsState(ref r),
             0x2B => new FriendsAction(r.U8(), r.Str(), r.Str()),
             0x2C => new FriendsResult(r.U8(), r.U8(), r.Str()),
+            0x2E => new FriendsOpen(r.U8()),
             _ => DecodeFriendAvatar(ref r),
         };
         r.End();
@@ -1224,7 +1251,7 @@ public abstract record UiFrame
         {
             case PlayerDetailsQuery or PaneActionClick or ServerStatus or VoiceState or VoiceCommand or VoiceDevice or RosterMods
                 or PlayerStateQuery or PlayerState or PlayerActionRequest or PlayerActionDone or InvitePrompt or InviteAnswer or Toast
-                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet or FriendsState or FriendsAction or FriendsResult or FriendAvatar:
+                or FriendPicker or InviteSend or LobbyJoinModes or JoinModesSet or FriendsState or FriendsAction or FriendsResult or FriendAvatar or FriendsOpen:
                 _ = frame.Encode(); // the same rules as the sender's
                 break;
         }
@@ -1463,7 +1490,25 @@ public static class UiFriendFlag
 {
     public const ushort Online = 1, Favorite = 2, Supporter = 4, CanAsk = 8, CanInvite = 0x10, Excluded = 0x20, Racing = 0x40, Private = 0x80;
 
-    public const ushort All = 0xFF;
+    /// <summary>INVITE_UX (protocol 12): in this player's private lobby already; this launcher's invite into it is pending. Never with <see cref="CanInvite"/>.</summary>
+    public const ushort InLobby = 0x100, Invited = 0x200;
+
+    /// <summary>Every flag a protocol 10-11 overlay knows (the rest is masked off for it, <see cref="UiSession.ForProtocol"/>).</summary>
+    public const ushort AllProtocol10 = 0xFF;
+
+    public const ushort All = 0x3FF;
+}
+
+/// <summary><see cref="UiFrame.FriendsOpen"/>'s modes (INVITE_UX, protocol 12).</summary>
+public static class UiFriendsOpen
+{
+    /// <summary>The plain list, focused.</summary>
+    public const byte List = 0;
+
+    /// <summary>Invite mode: INVITE PLAYERS, each friend row with its Invite (or the reason it cannot).</summary>
+    public const byte Invite = 1;
+
+    public const byte Max = Invite;
 }
 
 /// <summary><see cref="FriendRow.Activity"/> (W15): what an online friend does; the overlay words it with the game ("Racing on FH2").</summary>
@@ -1575,6 +1620,7 @@ public sealed record FriendRow(string Id, string Name, ushort Flags, string Game
         if (ProfileUrl.Length != 0 && !ProfileUrl.StartsWith("https://", StringComparison.Ordinal)) throw new ProtocolException("a profile link is https");
         if (Flags > UiFriendFlag.All || Activity > UiFriendActivity.Max || Excluded > UiFriendExcluded.Max) throw new ProtocolException("invalid friend row");
         if (((Flags & UiFriendFlag.Excluded) != 0) != (Excluded != UiFriendExcluded.None)) throw new ProtocolException("excluded flag and reason agree");
+        if ((Flags & UiFriendFlag.CanInvite) != 0 && (Flags & (UiFriendFlag.InLobby | UiFriendFlag.Invited)) != 0) throw new ProtocolException("an invited or present friend cannot be invited");
         UiFrame.Bound(Profiles.Count, UiFrame.MaxFriendProfiles, "friend profiles");
         foreach (var profile in Profiles) profile.Validate();
     }
@@ -1980,7 +2026,19 @@ public sealed class UiSession
             && (frame.Type < UiFrame.FirstProtocol4Type || Protocol >= 4) && (frame.Type < UiFrame.FirstProtocol5Type || Protocol >= 5)
             && (frame.Type < UiFrame.FirstProtocol6Type || Protocol >= 6) && (frame.Type < UiFrame.FirstProtocol7Type || Protocol >= 7)
             && (frame.Type < UiFrame.FirstProtocol8Type || Protocol >= 8) && (frame.Type < UiFrame.FirstProtocol10Type || Protocol >= 10)
-            && (frame.Type < UiFrame.FirstProtocol11Type || Protocol >= 11);
+            && (frame.Type < UiFrame.FirstProtocol11Type || Protocol >= 11) && (frame.Type < UiFrame.FirstProtocol12Type || Protocol >= 12);
+    }
+
+    /// <summary>
+    /// <paramref name="frame"/> as an overlay of <paramref name="protocol"/> reads it: a protocol 10-11 overlay refuses a
+    /// <see cref="UiFrame.FriendsState"/> row flag past <see cref="UiFriendFlag.AllProtocol10"/>, so the protocol 12 flags are masked off
+    /// for it. Every other frame is unchanged.
+    /// </summary>
+    public static UiFrame ForProtocol(UiFrame frame, ushort protocol)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (protocol >= 12 || frame is not UiFrame.FriendsState state || state.Friends.All(f => f.Flags <= UiFriendFlag.AllProtocol10)) return frame;
+        return state with { Friends = state.Friends.Select(f => f with { Flags = (ushort)(f.Flags & UiFriendFlag.AllProtocol10) }).ToList() };
     }
 
     /// <summary>Replaces the status line; returns the frame to send when the overlay is ready.</summary>
@@ -2020,7 +2078,7 @@ public sealed class UiSession
             || frame.Type >= UiFrame.FirstProtocol4Type && Protocol < 4 || frame.Type >= UiFrame.FirstProtocol5Type && Protocol < 5
             || frame.Type >= UiFrame.FirstProtocol6Type && Protocol < 6 || frame.Type >= UiFrame.FirstProtocol7Type && Protocol < 7
             || frame.Type >= UiFrame.FirstProtocol8Type && Protocol < 8 || frame.Type >= UiFrame.FirstProtocol10Type && Protocol < 10
-            || frame.Type >= UiFrame.FirstProtocol11Type && Protocol < 11)
+            || frame.Type >= UiFrame.FirstProtocol11Type && Protocol < 11 || frame.Type >= UiFrame.FirstProtocol12Type && Protocol < 12)
         {
             throw new ProtocolException($"protocol {Protocol} overlay sent type 0x{frame.Type:x2}");
         }

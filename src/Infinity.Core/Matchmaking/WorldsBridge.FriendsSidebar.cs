@@ -80,6 +80,9 @@ public sealed partial class WorldsBridge
         set => _isRacing = value;
     }
 
+    /// <summary><see cref="IsRacing"/> as it is now (INVITE_UX: the invite inbox holds new invite toasts back while it is true).</summary>
+    public bool IsRacingNow() => IsRacing();
+
     /// <summary>The friends' Discord avatars (null: initials only); the same cache as the launcher's sidebar.</summary>
     public Shell.FriendAvatars? Avatars { get; init; }
 
@@ -91,6 +94,7 @@ public sealed partial class WorldsBridge
     private readonly SemaphoreSlim _friendsRead = new(1, 1);
     private IReadOnlyList<(string Id, string WorldId, string Name)> _joinRequests = [];
     private bool _invitesPolled;
+    private readonly HashSet<string> _invitesSeen = new(StringComparer.Ordinal); // the invite ids whose inviter's avatar went ahead
     private string _lastFriendsKey = string.Empty;
 
     // ------------------------------------------------------------------ the state
@@ -102,15 +106,17 @@ public sealed partial class WorldsBridge
     /// <summary>
     /// The sidebar's state from <paramref name="list"/> (null: not read, so "could not load"). <paramref name="haveLobby"/>: this player
     /// leads a private lobby, whose "Who can join" is <paramref name="joinModes"/> (a friend with no profile that fits is excluded).
+    /// INVITE_UX (protocol 12): with <paramref name="mine"/> (that lobby) a friend already in it is marked in this lobby, and one in
+    /// <paramref name="invited"/> (this launcher's pending invites into it, by friend account) invited; neither may be invited again.
     /// </summary>
     public static UiFrame.FriendsState FriendsStateOf(FriendList? list, bool haveLobby, UiFrame.LobbyJoinModes joinModes,
-        IEnumerable<(string Id, string Name)> joinRequests, DateTimeOffset now)
+        IEnumerable<(string Id, string Name)> joinRequests, DateTimeOffset now, UiFrame.MyWorld? mine = null, IReadOnlyCollection<string>? invited = null)
     {
         ArgumentNullException.ThrowIfNull(joinRequests);
         var asks = joinRequests.Where(r => ValidId(r.Id) && r.Name.Length > 0).Take(UiFrame.MaxJoinRequests)
             .Select(r => new FriendRequestRow(r.Id, Clip(r.Name, UiFrame.MaxFriendName))).Where(r => r.Name.Length > 0).ToList();
         if (list is null) return new UiFrame.FriendsState((byte)(haveLobby ? UiFriendsFlags.HaveLobby : 0), [], [], asks);
-        var rows = list.Friends.Select(f => RowOf(f, haveLobby, joinModes, now)).Where(r => r is not null).Select(r => r!)
+        var rows = list.Friends.Select(f => RowOf(f, haveLobby, joinModes, now, haveLobby ? mine : null, invited)).Where(r => r is not null).Select(r => r!)
             .OrderBy(r => (r.Flags & UiFriendFlag.Online) != 0 ? 0 : 1).Take(UiFrame.MaxFriendRows).ToList(); // stable: the server's presence order
         var requests = list.Incoming.Select(r => new FriendRequestRow(r.Id, Clip(FirstName(r.Profiles), UiFrame.MaxFriendName)))
             .Where(r => ValidId(r.Id) && r.Name.Length > 0).Take(UiFrame.MaxFriendRequests).ToList();
@@ -122,7 +128,8 @@ public sealed partial class WorldsBridge
     private static bool ValidId(string id) => id.Length is > 0 and <= UiFrame.MaxPaneId
         && id.All(c => char.IsAsciiLetterOrDigit(c) || c is ':' or '.' or '_' or '-');
 
-    private static FriendRow? RowOf(Friend friend, bool haveLobby, UiFrame.LobbyJoinModes joinModes, DateTimeOffset now)
+    private static FriendRow? RowOf(Friend friend, bool haveLobby, UiFrame.LobbyJoinModes joinModes, DateTimeOffset now, UiFrame.MyWorld? mine,
+        IReadOnlyCollection<string>? invited)
     {
         if (!ValidId(friend.Id)) return null;
         var playing = friend.Playing;
@@ -142,7 +149,12 @@ public sealed partial class WorldsBridge
         if (haveLobby && online && !FitsLobby(friend, joinModes, playing)) excluded = UiFriendExcluded.Mode;
         if (excluded != UiFriendExcluded.None) flags |= UiFriendFlag.Excluded;
         if (inWorld) flags |= UiFriendFlag.CanAsk;
-        if (haveLobby && online && excluded == UiFriendExcluded.None) flags |= UiFriendFlag.CanInvite;
+        var inLobby = mine is { WorldId.Length: > 0 } lobby && (friend.Profiles.Any(p => lobby.Members.Any(m => m.Xuid == p.Xuid))
+            || playing is { State: "in_world" } && playing.WorldId == lobby.WorldId);
+        var pending = !inLobby && mine is not null && invited?.Contains(friend.Id) == true;
+        if (inLobby) flags |= UiFriendFlag.InLobby;
+        if (pending) flags |= UiFriendFlag.Invited;
+        if (haveLobby && online && excluded == UiFriendExcluded.None && !inLobby && !pending) flags |= UiFriendFlag.CanInvite;
         var days = friend.AccountSince is { } since && DateTimeOffset.TryParse(since, CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var created)
             ? (uint)Math.Clamp((now - created).TotalDays, 0, 365 * 100) : FriendRow.Unknown;
@@ -174,7 +186,7 @@ public sealed partial class WorldsBridge
         }
         var mine = Volatile.Read(ref _mineSnapshot);
         var haveLobby = InPrivateMine(mine) && PrivateLobbyPolicy.MayInvite(mine.Leader, _ownXuid);
-        return FriendsStateOf(list, haveLobby, JoinModesFrame(), joins.Select(j => (j.Id, j.Name)), Now);
+        return FriendsStateOf(list, haveLobby, JoinModesFrame(), joins.Select(j => (j.Id, j.Name)), Now, mine, haveLobby ? InvitedInto(mine.WorldId) : null);
     }
 
     // ------------------------------------------------------------------ racing (the toast rule)
@@ -350,6 +362,18 @@ public sealed partial class WorldsBridge
         {
             changed = !_joinRequests.Select(r => r.Id).SequenceEqual(requests.Select(r => r.Id), StringComparer.Ordinal);
             _joinRequests = requests;
+        }
+        // INVITE_UX: a new invite's toast shows its inviter's avatar, which the overlay has only with a FriendsState (and its 0x2D) sent
+        // before it: the list (read if it never was) goes out ahead of the prompt (the inbox applies the list after this observer)
+        var fresh = false;
+        foreach (var item in list.Items)
+            if (item.Kind == OfferKinds.Invite && ValidId(item.Id) && _invitesSeen.Add(item.Id)) fresh = true; // every new id is remembered
+        if (fresh)
+        {
+            if (_invitesSeen.Count > 256) _invitesSeen.Clear();
+            bool have;
+            lock (_friendsLock) have = _friendsList is not null;
+            if (have || await ReadFriendsAsync(force: false, cancellation).ConfigureAwait(false)) changed = true;
         }
         IReadOnlyList<FriendOnline> online = first || list.Online is not { Count: > 0 } ? Array.Empty<FriendOnline>() : list.Online.Take(MaxOnlineToasts).ToList();
         if (online.Count > 0)

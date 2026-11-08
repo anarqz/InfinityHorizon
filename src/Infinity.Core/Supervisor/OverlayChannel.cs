@@ -207,6 +207,7 @@ public sealed class OverlayChannel : IDisposable
             if (open) _incoming.Writer.TryWrite(new UiIncoming.Event(UiEventKind.Passthrough, $"ui pipe: dropped type 0x{frame.Type:x2} for protocol {Protocol}"));
             return;
         }
+        frame = UiSession.ForProtocol(frame, Protocol); // INVITE_UX: an older overlay gets the friend flags it knows
         await _write.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {

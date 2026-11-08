@@ -52,7 +52,8 @@ public sealed partial class ShellViewModel
     }
     partial void InspectConfiguration(ref bool needsAttention);
 
-    public string? DisplayMessage => _messageForConfiguration && !ShowSetup ? null : Message;
+    // owner 2026-11-08 (INVITE_UX C): the plain "Signed in." confirmation is not shown under the Profiles cards (the header says it)
+    public string? DisplayMessage => _messageForConfiguration && !ShowSetup || Message == S["signin.done_toast"] ? null : Message;
 
     private void ConfigurationMessage(string message, bool error = false, bool integrity = false)
     {

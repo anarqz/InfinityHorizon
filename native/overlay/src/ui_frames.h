@@ -86,6 +86,12 @@
 //   0x2D FriendAvatar, launcher -> overlay {str id (PaneKey: a 0x2A friend row's id), u16 side (96, or 0: none), side * side * 4
 //        bytes of straight-alpha RGBA}: the launcher fetched it from cdn.discordapp.com only and decoded it; the overlay draws it in
 //        the friend's disc (the initials until one arrives) and never fetches anything
+// Protocol 12 (owner 2026-11-08, INVITE_UX): inviting is the FRIENDS sidebar, never a centred picker
+//   0x2E FriendsOpen, launcher -> overlay {u8 mode (0 the list, 1 invite: each friend row gets an Invite action)}: opens the guide with
+//        the FRIENDS sidebar shown and focused. The launcher sends it for the game's Invite friends and the Private Lobby pane's 0x26,
+//        right after a fresh 0x2A; to an older overlay it still sends 0x25 (and this overlay takes a 0x25 with the open flag as mode 1).
+//   0x2A FriendsState's row flags gain bit 8 in this lobby and bit 9 invited (this launcher's invite into it is pending); can invite
+//        (bit 4) is never set with either. A protocol 10-11 overlay never gets them (the launcher masks them off).
 // Additive fields of older frames (an older reader ignores them):
 //   0x03 Toast ends with u8 flags (bit 0 always: shown even in an official lobby, the T-L3 notice rule), written only when not 0
 //   0x0E MyWorld ends with str leader (the lobby leader's decimal XUID) after the private flag, written only when private and known
@@ -102,7 +108,7 @@
 
 namespace fi {
 
-constexpr uint16_t kUiProtocol = 11;
+constexpr uint16_t kUiProtocol = 12;
 constexpr size_t kMaxLobbyMods = 32; // OD-181: a roster player's declared mods
 constexpr size_t kMaxServerHost = 128, kMaxAvatarSide = 128;
 constexpr size_t kMaxPaneSections = 8, kMaxPaneEntries = 32, kMaxPaneActions = 4;
@@ -707,7 +713,7 @@ constexpr size_t kMaxFriendName = 64, kMaxFriendGame = 8, kMaxFriendUrl = 160, k
 constexpr uint32_t kFriendAgeUnknown = 0xFFFFFFFFu;
 enum : uint8_t { kFriendsLoaded = 1, kFriendsHaveLobby = 2, kFriendsFlagsAll = 3 };
 enum : uint16_t { kFriendOnline = 1, kFriendFavorite = 2, kFriendSupporter = 4, kFriendCanAsk = 8, kFriendCanInvite = 0x10, kFriendExcluded = 0x20,
-                  kFriendRacing = 0x40, kFriendPrivate = 0x80, kFriendFlagsAll = 0xFF };
+                  kFriendRacing = 0x40, kFriendPrivate = 0x80, kFriendInLobby = 0x100, kFriendInvited = 0x200, kFriendFlagsAll = 0x3FF };
 enum : uint8_t { kActOffline = 0, kActMenus = 1, kActFreeRoam = 2, kActCarMeet = 3, kActRoadTrip = 4, kActRace = 5, kActMax = kActRace };
 enum : uint8_t { kExcludedNone = 0, kExcludedMode = 1, kExcludedOther = 2, kExcludedMax = kExcludedOther };
 enum : uint8_t { kFriendsRefresh = 1, kFriendsAdd = 2, kFriendsAccept = 3, kFriendsDecline = 4, kFriendsUnfriend = 5, kFriendsAsk = 6,
@@ -776,6 +782,7 @@ inline bool DecodeFriendsState(const uint8_t *body, size_t size, FriendsStateFra
         row.profile_url = r.Text(kMaxFriendUrl);
         if (r.ok && (!PaneKey(row.id) || row.name.empty() || row.flags > kFriendFlagsAll || row.activity > kActMax || row.excluded > kExcludedMax ||
                      (row.Has(kFriendExcluded) != (row.excluded != kExcludedNone)) ||
+                     (row.Has(kFriendCanInvite) && (row.flags & (kFriendInLobby | kFriendInvited)) != 0) ||
                      (!row.profile_url.empty() && row.profile_url.rfind("https://", 0) != 0)))
             r.ok = false;
         const size_t profiles = r.Count(kMaxFriendProfiles);
@@ -899,6 +906,24 @@ inline std::vector<uint8_t> EncodeFriendAvatar(const FriendAvatarFrame &a) {
     wire::Str(b, a.id);
     wire::U16(b, a.side);
     b.insert(b.end(), a.rgba.begin(), a.rgba.end());
+    return b;
+}
+
+// ---------------------------------------------------------------- protocol 12: open the FRIENDS sidebar (INVITE_UX, 2026-11-08)
+enum : uint8_t { kFriendsOpenList = 0, kFriendsOpenInvite = 1, kFriendsOpenMax = kFriendsOpenInvite };
+
+// Strict, as the launcher writes it (UiFrame.FriendsOpen.Validate)
+inline bool DecodeFriendsOpen(const uint8_t *body, size_t size, uint8_t &mode) {
+    wire::Reader r{body, size};
+    const uint8_t m = r.U8();
+    if (r.ok && m > kFriendsOpenMax) r.ok = false;
+    if (!r.Done()) return false;
+    mode = m;
+    return true;
+}
+inline std::vector<uint8_t> EncodeFriendsOpen(uint8_t mode) {
+    std::vector<uint8_t> b;
+    wire::U8(b, mode);
     return b;
 }
 

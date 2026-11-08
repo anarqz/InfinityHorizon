@@ -37,8 +37,8 @@ pub fn leader_of(state: &Value) -> Option<String> {
         .map(String::from)
 }
 
-/// The announce body (MATCHMAKING_API §2.9 `Heartbeat`): `peers`, `activity`, `voice` for an FH2
-/// world (OD-192 item 7: proximity, so the server's world row says what the engine runs),
+/// The announce body (MATCHMAKING_API §2.9 `Heartbeat`): `peers`, `activity`, `voice` per game
+/// (FH2 proximity, FM5 open; OD-192 item 7, owner 2026-11-08, so the server's world row says what the engine runs),
 /// `inProgress` only when true (OD-194), and `leader` only for a private world that has one
 /// (§12.8b).
 pub fn announce_body(
@@ -49,8 +49,8 @@ pub fn announce_body(
     leader: Option<&str>,
 ) -> Value {
     let mut body = json!({"peers": peers, "activity": activity});
-    if super::config::official_voice(super::config::game_of(activity)).is_some() {
-        body["voice"] = Value::String(super::config::OFFICIAL_VOICE.to_string());
+    if let Some(mode) = super::config::official_voice_mode(super::config::game_of(activity)) {
+        body["voice"] = Value::String(mode.to_string());
     }
     if in_progress {
         body["inProgress"] = Value::Bool(true);
@@ -151,10 +151,10 @@ mod tests {
             r#"{"activity":"freeroam","peers":[],"voice":"proximity"}"#,
             "private with nobody leading: no member"
         );
-        // OD-192 item 7: FH2's official worlds say proximity; FM5's race has no voice field
+        // FH2's official worlds say proximity (OD-192 item 7); FM5's say open (owner, 2026-11-08)
         assert_eq!(
             announce_body(&peers, "race", false, false, None).to_string(),
-            r#"{"activity":"race","peers":["1000000000000102"]}"#
+            r#"{"activity":"race","peers":["1000000000000102"],"voice":"open"}"#
         );
     }
 

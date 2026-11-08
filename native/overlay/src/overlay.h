@@ -71,24 +71,18 @@ bool WorldsMuteHint();        // X mutes the focused player (OD-154; the footer'
 bool WorldsOfficial();        // OD-192: the player is in an official lobby, a private one included (any thread): no notices
 bool WorldsPrivate();         // OD-204: the player is in a private official lobby (any thread): the tab is the Private Lobby
 
-// --- the invite prompt (invite.cpp, OD-204 T-L3, WORLDS_OFFICIAL §12.5): a modal Accept / Decline, never a toast
+// --- the invite toasts (invite.cpp, INVITE_UX 2026-11-08, WORLDS_OFFICIAL §12.5): top right, "Hold (Y) to accept"
+// The keyboard's hold key when no pad is there (or besides it): F6, never passed to the game while a toast shows.
+constexpr unsigned kHoldKey = VK_F6;
+constexpr const char *kHoldKeyName = "F6";
 void SetInvitePrompt(const InvitePromptFrame &prompt); // any thread (0x23); expires 0 withdraws that id
-void InvitesDisconnected();                             // any thread: the launcher went away, every prompt goes
-bool InvitePromptOpen();                                // render thread: a prompt is shown
-// Render thread, while the guide is open: the prompt holds the controller (true: used). With the guide closed the prompt only
-// shows, with how to open the guide, so a prompt never takes the pad from the game while driving.
-bool InviteNavigate(Nav nav);
-void InviteMouse(float width, float height);                // render thread, every frame, before the guide: a modal's clicks
-void DrawInvitePrompt(float width, float height, float dt); // render thread, every frame, over the guide
-// --- the friend picker (friend_picker.cpp, OD-204 T-L4, WORLDS_OFFICIAL §12.5): opened by the launcher (0x25 with the open flag),
-// modal inside the guide; an available friend chosen sends 0x27 InviteSend
-void SetFriendPicker(const FriendPickerFrame &picker); // any thread (0x25)
-void FriendPickerDisconnected();                         // any thread: the launcher went away
-bool FriendPickerOpen();                                 // any thread
-void FriendPickerTick();                                 // render thread, every frame, before the guide (opens the guide)
-bool PickerNavigate(Nav nav);                            // render thread, while the guide is open (true: used)
-void PickerMouse(float width, float height);             // render thread, every frame, before the guide
-void DrawFriendPicker(float width, float height, float dt); // render thread, every frame, over the guide (under an invite prompt)
+void InvitesDisconnected();                             // any thread: the launcher went away, every toast goes
+bool InvitePromptOpen();                                // any thread: an invite is pending (shown or queued)
+bool InviteToastsOnScreen();                            // any thread: a live toast shows now (input.cpp holds Y and F6 back from the game)
+void SetInviteHold(bool held);                          // render thread, every frame before DrawUi: the pad's Y or F6 is down
+void DrawInviteToasts(float width, float height, float dt); // render thread, every frame: draws, runs the hold ring, accepts
+void DevHoldInvite();                                   // the dev host only (command 28): as if Y were held from now on
+bool PadPresent();                                      // input.cpp: a controller was read (the toast shows Y, else the F6 key)
 void DrawWorldsTab(ImDrawList *dl, float x, float y, float w, float bottom, float dt);
 // A player's details in my lobby (their volume, mute, moderation, friend, report) fill the second column beside the
 // guide while open; the tab keeps showing the lobby. Drawn after DrawWorldsTab, x..x + w.
@@ -102,6 +96,10 @@ void FriendsDisconnected();                          // any thread: the launcher
 float FriendsSidebarWidth();                         // render thread: the sidebar's width, so the guide's columns stop short of it
 bool FriendsFocused();                               // render thread: the controller is in the sidebar
 bool FriendsTyping();                                // render thread: the on-screen keyboard is up (the game window's keys type there)
+// Protocol 12 (0x2E FriendsOpen, or an older launcher's 0x25 with the open flag): open the guide with the sidebar focused; `invite`: each
+// friend row offers Invite (the game's Invite friends, the Private Lobby pane's button). Any thread; applied by FriendsTick.
+void FriendsOpen(bool invite);
+std::string FriendIdByName(const std::string &name); // any thread: the FRIENDS row whose shown or profile name it is (its avatar), or ""
 void FriendsEnter();
 void FriendsLeave();
 void FriendsChar(char16_t c);                        // any thread: WM_CHAR from the game window while the guide is open
@@ -182,8 +180,7 @@ void SendMyWorldQuery();
 // action: 2 leave, 4 add friend, 5 report (reason 1 cheating, 2 abuse, 3 other). 1 close and 3 kick are retired (OD-208).
 void SendWorldAction(uint8_t action, const std::string &xuid, const std::string &gamertag, uint8_t reason);
 void SendInviteAnswer(const std::string &invite, bool accept); // 0x24 (protocol 6, T-L3)
-void SendFriendPickerAsk();                                   // 0x26 (protocol 7, T-L4): the pane's Invite friends
-void SendInviteSend(const std::string &xuid);                 // 0x27 (protocol 7, T-L4): a friend chosen in the picker
+void SendFriendPickerAsk();                                   // 0x26 (protocol 7, T-L4): the pane's Invite friends (answered by 0x2E)
 void SendFriendsAction(uint8_t kind, const std::string &id, const std::string &text); // 0x2B (protocol 10, W15)
 void SendJoinModesSet(uint8_t modes);                         // 0x29 (protocol 8, OD-210 W14): the leader's "Who can join"
 

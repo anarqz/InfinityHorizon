@@ -146,16 +146,27 @@ pub fn game_of(activity: &str) -> &'static str {
     }
 }
 
-/// OD-192 item 7: every official FH2 world's voice mode, fixed (item 8: nobody changes an
-/// official lobby's options). The server's `OfficialWorldSettings` has no voice field, so the
-/// agent decides it.
+/// Owner decision (2026-11-08): the voice mode of an official world is per game and explicit,
+/// never a default. FH2's official worlds are proximity (OD-192 item 7; nobody changes an official
+/// lobby's options, item 8); FM5's keep open voice. The server's `OfficialWorldSettings` has no
+/// voice field, so the agent decides it from this table.
+pub const OFFICIAL_VOICE_MODES: [(&str, &str); 2] = [(GAME, "proximity"), (FM5, "open")];
+
+/// FH2's official voice mode (kept for callers that name the game).
 pub const OFFICIAL_VOICE: &str = "proximity";
 
-/// The `voice` of an official world's `world.open` (DEDICATED_SERVER.md §4.3): proximity with
-/// the engine's default R 150 m / r0 10 m / 2 s pose age / no pose not heard, nobody muted;
-/// `None` for a game whose module has no voice field (FM5).
+/// An official world's voice mode for a game, `None` for a game the table does not list.
+pub fn official_voice_mode(game: &str) -> Option<&'static str> {
+    OFFICIAL_VOICE_MODES
+        .iter()
+        .find(|(g, _)| *g == game)
+        .map(|(_, m)| *m)
+}
+
+/// The `voice` of an official world's `world.open` (DEDICATED_SERVER.md §4.3): the game's mode
+/// with the engine's default R 150 m / r0 10 m / 2 s pose age (proximity), nobody muted.
 pub fn official_voice(game: &str) -> Option<serde_json::Value> {
-    (game == GAME).then(|| serde_json::json!({"mode": OFFICIAL_VOICE, "lobbyMuted": []}))
+    official_voice_mode(game).map(|mode| serde_json::json!({"mode": mode, "lobbyMuted": []}))
 }
 
 /// The server's base URL, validated.
