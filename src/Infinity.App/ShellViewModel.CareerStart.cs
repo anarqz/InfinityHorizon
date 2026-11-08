@@ -168,6 +168,9 @@ public sealed partial class ShellViewModel
                 _seedChoice = row;
                 _seedChoiceSource = sources is [var only] ? only : null;
                 ChangedSeedCheck();
+                // OD-216: picking "from my other profile" runs the check at once (its latest cloud revision); with several sources of the
+                // mode (pre-cleanup duplicates) the player picks one first
+                if (_seedChoiceSource is { } source) await CheckSeedAsync(row, source.Profile, fromPlay: false);
                 return;
             }
             Log($"profiles: start {row.Game} {row.ProfileId} from a save on this PC");

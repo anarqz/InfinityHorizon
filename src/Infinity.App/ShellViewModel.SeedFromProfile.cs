@@ -28,10 +28,12 @@ internal sealed record SeedOffer(Profile Target, Profile Source, PackedRevision 
 /// <item>the owner's warning shows with the option (the creation form, or the first Play of a Hardcore profile at revision 0), with the
 /// limit of 5 checks a day; the player picks the source among the account's own profiles on the server;</item>
 /// <item>the Hardcore profile exists on the server (at creation the usual upsert runs first);</item>
-/// <item>the source's newest sealed revision on this PC goes to <c>POST .../save/check</c> (the dry run: nothing committed);</item>
-/// <item>the answer is shown (accepted, or the reasons in words) and the player confirms or starts a new career;</item>
-/// <item>on confirm, that revision is copied into the profile's folder and recorded as the pending <c>seed_from_profile</c> commit, which
-/// the next Play sends under its lease before the game starts; a refusal there falls back to <c>fresh_start</c> (§4.9).</item>
+/// <item>OD-216: as soon as the source is picked, its latest CLOUD revision is downloaded (§4.2) and goes to <c>POST .../save/check</c>
+/// (the dry run: nothing committed); this PC's folders are never the source;</item>
+/// <item>the answer is shown as the step list (accepted, or the reasons in words);</item>
+/// <item>accepted: that revision is installed into the profile's folder and recorded as the pending <c>seed_from_profile</c> commit, which
+/// the Play that follows sends under its lease before the game starts (a commit needs the session's lease, §4.3); a refusal there falls
+/// back to <c>fresh_start</c> (§4.9).</item>
 /// </list>
 /// Nothing is ever copied into a Hardcore profile without an accepted check.
 /// </summary>
@@ -289,68 +291,106 @@ public sealed partial class ShellViewModel
     };
 
     /// <summary>
-    /// Step 3: the dry run for <paramref name="target"/> (a Hardcore profile on the server) from <paramref name="source"/>'s newest sealed
-    /// revision on this PC. Whatever the answer, nothing is copied yet.
+    /// Step 3 (OD-216): as soon as the source is picked, its latest CLOUD revision is downloaded (SAVES_API.md §4.2) and checked against
+    /// <paramref name="target"/>'s empty Hardcore career (§4.10). This PC's folders are never the source. An accepted check starts the
+    /// career at once (<see cref="ConfirmSeedAsync"/>: the seed is recorded and the Play that follows commits it under its lease).
     /// </summary>
     private Task CheckSeedAsync(Profile target, Profile source, bool fromPlay) =>
-        RunOrStep(S["busy.checking"], () => CheckSeedCoreAsync(target, source, fromPlay));
+        RunOrStep(S.Format("busy.seed_downloading", ("source", ProfileName.Plain(source.Gamertag))), () => CheckSeedCoreAsync(target, source, fromPlay));
 
     private async Task CheckSeedCoreAsync(Profile target, Profile source, bool fromPlay)
     {
         var sourceName = ProfileName.Plain(source.Gamertag);
+        if (!ServerAllowsSeedFromProfile || !CurrentGame.HardcoreCareers)
+        {
+            // gated on /info saves.hardcoreFromProfile; a game without Hardcore careers (FM5) never reaches the check
+            Log($"seed: check not offered (server={ServerAllowsSeedFromProfile}, hardcore careers={CurrentGame.HardcoreCareers})");
+            Message = S["seed.unavailable"];
+            return;
+        }
         if (_install is null || _session is not { } session || CloudSaveClient() is not { } client
-            || ParseXuid(target) is null || ParseXuid(source) is not { } sourceXuid)
+            || ParseXuid(target) is null || ParseXuid(source) is null)
         {
             Log($"seed: check not started (install={_install is not null}, session={_session is not null}, saves={CloudSaveClient() is not null})");
             Message = S["seed.failed"];
             return;
         }
-        Log("seed: reading the source's newest sealed revision on this PC");
-        Message = S["seed.checking"];
-        var savesRoot = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
-        PackedRevision? packed;
-        try { packed = await Task.Run(() => ProfileSeed.ReadSource(savesRoot, sourceXuid)); }
-        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
-        {
-            Log("seed: the source's save was not read: " + e.GetType().Name);
-            packed = null;
-        }
-        if (packed is null)
-        {
-            Log("seed: the source has no sealed revision on this PC");
-            Message = S.Format("seed.no_source_save", ("source", sourceName));
-            return;
-        }
-        SeedCheckResult result;
+        _seedPhase = SeedPhase.Downloading; // the step list shows "downloading" then "checking" while this runs
+        ChangedCheckSteps();
+        SeedRun run;
         try
         {
             var access = await session.Tokens.AccessAsync(CancellationToken.None);
-            Log($"seed: sending the check ({packed.Bundle.Length} bytes)");
-            var answer = await client.Api.CheckSeedAsync(access, target.Xuid, source.Xuid, packed.Bundle);
-            _seedChecks.Add(DateTimeOffset.UtcNow); // the server counts every check it answers, accepted or refused (§4.10)
-            if (answer.Status == System.Net.HttpStatusCode.TooManyRequests)
+            Log($"seed: downloading {source.ProfileId}'s latest cloud revision for the check");
+            run = await ProfileSeed.CheckFromCloudAsync(client.Api, access, target.Xuid, source.Xuid, fetched =>
+            {
+                _seedPhase = SeedPhase.Checking;
+                ChangedCheckSteps();
+                BusyStep(S["busy.checking"]);
+                Log($"seed: sending the check of {source.ProfileId} r{fetched.Revision} ({fetched.Packed!.Bundle.Length} bytes)");
+            });
+            if (run.Answered) _seedChecks.Add(DateTimeOffset.UtcNow); // the server counts every check it answers, accepted or refused (§4.10)
+            if (run.CheckStatus == System.Net.HttpStatusCode.TooManyRequests)
                 while (SeedChecksToday < ProfileSeed.DailyChecks) _seedChecks.Add(DateTimeOffset.UtcNow); // the day's are used up
-            result = ProfileSeed.Interpret(answer);
         }
         catch (ApiException e)
         {
             Log($"seed: check answered {(int)e.Status} {e.Code}");
-            Message = ErrorText(e.Code) + " " + S["seed.failed"];
+            Message = Describe(e) + " " + S["seed.not_started"];
             return;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             Log("seed: check unreachable: " + e.GetType().Name);
-            Message = S["native.unreachable"] + " " + S["seed.failed"];
+            Message = S["native.unreachable"] + " " + S["seed.not_started"];
             return;
         }
-        Log($"seed: check of {packed.ContentSha256[..12]} for the Hardcore profile: {result.Outcome} {result.Code} {string.Join(",", result.Check?.Reasons ?? [])}");
+        finally
+        {
+            _seedPhase = SeedPhase.None;
+            ChangedCheckSteps();
+        }
+        if (run.Source.IsNoRevision)
+        {
+            Log($"seed: {source.ProfileId} has no cloud revision: nothing checked, nothing seeded");
+            Message = S.Format("seed.no_cloud_revision", ("source", sourceName));
+            return;
+        }
+        if (run.Result is not { } result || run.Source.Packed is not { } packed)
+        {
+            var error = run.Source.Error!;
+            Log($"seed: {source.ProfileId}'s cloud revision {run.Source.Revision?.ToString(CultureInfo.InvariantCulture) ?? "-"} not read: {(int?)run.Source.Status} {error.Code} {error.Message}");
+            var why = run.Source.Status is { } status && (int)status >= 400
+                ? Describe(new ApiException(status, error.Code, error.Message, error.Details, run.Source.RetryAfter))
+                : S["seed.source_invalid"];
+            Message = S.Format("seed.source_unreadable", ("source", sourceName), ("reason", why));
+            return;
+        }
+        Log($"seed: check of {source.ProfileId} r{run.Source.Revision} ({packed.ContentSha256[..12]}) for the Hardcore profile: {result.Outcome} {result.Code} {string.Join(",", result.Check?.Reasons ?? [])}");
         _seedOffer = new SeedOffer(target, source, packed, result, fromPlay);
         Message = null;
         ChangedSeedCheck();
+        if (result.Outcome == SeedCheckOutcome.Accepted) _ = StartAcceptedSeedAsync(); // OD-216: an accepted check starts the career
     }
 
-    /// <summary>Step 5: the player confirmed an accepted check: the checked revision is copied in and recorded; a waiting Play goes on.</summary>
+    /// <summary>Where the running check is (downloading the source, then the server's check): the step list shows it.</summary>
+    private SeedPhase _seedPhase;
+
+    private enum SeedPhase { None, Downloading, Checking }
+
+    /// <summary>OD-216: an accepted check goes on by itself once the busy overlay that ran it closes (the step list showed it accepted).</summary>
+    private async Task StartAcceptedSeedAsync()
+    {
+        for (var waited = 0; _busy && waited < 150; waited++) await Task.Delay(200);
+        if (_busy)
+        {
+            Log("seed: the accepted check did not start the career: the launcher stayed busy (the player confirms)");
+            return; // the accepted screen keeps its "Start from this career"
+        }
+        await ConfirmSeedAsync();
+    }
+
+    /// <summary>Step 5: an accepted check (on its own, or the player's confirm): the checked cloud revision is installed and recorded; a waiting Play goes on.</summary>
     public async Task ConfirmSeedAsync()
     {
         if (_seedOffer is not { Result.Outcome: SeedCheckOutcome.Accepted } offer) return;
