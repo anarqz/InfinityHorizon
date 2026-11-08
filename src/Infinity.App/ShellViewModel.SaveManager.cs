@@ -178,11 +178,11 @@ public sealed partial class ShellViewModel
         var s => s,
     };
 
-    private bool On(SavesScreen screen) => ShowPickProfile && !OfflineMode && SavesCurrent == screen;
+    private bool On(SavesScreen screen) => ShowProfiles && !OfflineMode && SavesCurrent == screen;
 
     /// <summary>The save manager draws the Profiles page (signed in to a server that lists <c>players</c>); offline keeps the plain list.</summary>
-    public bool ShowSaveManager => ShowPickProfile && !OfflineMode && _session?.Me?.Players is not null;
-    public bool ShowPlainProfiles => ShowPickProfile && !ShowSaveManager;
+    public bool ShowSaveManager => ShowProfiles && !OfflineMode && _session?.Me?.Players is not null;
+    public bool ShowPlainProfiles => ShowProfiles && !ShowSaveManager;
     public bool ShowSavesHome => ShowSaveManager && SavesCurrent == SavesScreen.Home;
     public bool ShowSavesCreate => ShowSaveManager && SavesCurrent == SavesScreen.Create;
     public bool ShowSavesStart => ShowSaveManager && SavesCurrent == SavesScreen.Start;
@@ -205,7 +205,8 @@ public sealed partial class ShellViewModel
         {
             var trail = _nav.Trail;
             if (SavesCurrent == SavesScreen.Home) return string.Empty;
-            return string.Concat(trail.Take(trail.Count - 1).Select(s => ScreenTitle(s) + "  ›  "));
+            // owner 2026-11-08: the save tools act on PLAY's selected game, which the breadcrumb names first
+            return GameLabel + "  ›  " + string.Concat(trail.Take(trail.Count - 1).Select(s => ScreenTitle(s) + "  ›  "));
         }
     }
 
@@ -327,22 +328,10 @@ public sealed partial class ShellViewModel
         var card = row.Card!;
         var chip = ChipOf(row);
         var selected = _gate.ProfileKey is { } key && key == card.CareerId;
-        string primary; string kind; bool enabled;
-        switch (card.State)
-        {
-            case CareerState.Started when SaveChips.NeedsResolve(chip):
-                (primary, kind, enabled) = (S["sm.resolve"], "resolve", true);
-                break;
-            case CareerState.Started:
-                (primary, kind, enabled) = (selected ? S["sm.playing_as"] : S.Format("sm.play_as", ("mode", ModeWord(slot))), "play", !selected);
-                break;
-            case CareerState.NotOffered:
-                (primary, kind, enabled) = (S.Format("sm.no_hardcore", ("game", GameLabel)), "none", false);
-                break;
-            default:
-                (primary, kind, enabled) = (S.Format("sm.start_career", ("game", GameLabel)), "start", card.Startable);
-                break;
-        }
+        // owner 2026-11-08: the Profiles page manages profiles only; Play and Start live on PLAY. Its one primary is Resolve, when a
+        // sync chip needs the player (the same action is in the ⋯ menu).
+        var (primary, kind, enabled) = card.State == CareerState.Started && SaveChips.NeedsResolve(chip)
+            ? (S["sm.resolve"], "resolve", true) : (string.Empty, "none", false);
         return new SaveCard(slot, ModeWord(slot))
         {
             Row = row,
@@ -359,7 +348,7 @@ public sealed partial class ShellViewModel
             },
             NoCareerBody = card.State switch
             {
-                CareerState.None or CareerState.Empty => S[card.Offers.FromExisting ? "sm.no_career_hint" : "sm.no_career_hint_fresh"],
+                CareerState.None or CareerState.Empty => S.Format("sm.no_career_on_play", ("game", GameLabel)),
                 CareerState.NotOffered => S.Format("sm.no_hardcore_hint", ("game", GameLabel)),
                 _ => string.Empty,
             },
@@ -375,24 +364,53 @@ public sealed partial class ShellViewModel
 
     private List<MenuAction> MenuOf(SaveSlot slot, ProfileRow row, SaveChipKind chip)
     {
+        // owner 2026-11-08: the Profiles page's ⋯ tools (ProfileTools): manage, history, resolve, copy, download, help, restore original,
+        // rename, delete; none plays or starts a career (PLAY does)
         var card = row.Card!;
         var list = new List<MenuAction>();
         var running = _gameRunning;
-        if (card.State == CareerState.Started)
+        var started = card.State == CareerState.Started;
+        foreach (var id in ProfileTools.Menu(started, SaveChips.CanDownload(chip) && CurrentGame.FullFeatures, row.CanDeleteCareer, row.CanDeleteWholeProfile))
         {
-            var local = LocalSaveOf(card.Player.Xuid) is not null;
-            list.Add(new MenuAction("copy-azimuth", S["sm.menu.copy_azimuth"], local && !running,
-                running ? S["sm.block.GameRunning"] : local ? null : S["sm.block.NoSource"]));
-            var other = slot == SaveSlot.Hardcore ? SaveSlot.Noob : SaveSlot.Hardcore;
-            var target = CopyTargets.Of(slot, Facts()).FirstOrDefault(t => t.To == other);
-            if (target is { Block: CopyBlock.StartInstead })
-                list.Add(new MenuAction("start-other", S.Format("sm.menu.start_other", ("mode", ModeWord(other))), true));
-            if (SaveChips.CanDownload(chip) && CurrentGame.FullFeatures)
-                list.Add(new MenuAction("download", S["sm.menu.download"], !running, running ? S["sm.block.GameRunning"] : null));
+            switch (id)
+            {
+                case ProfileTools.ManageSaves:
+                    list.Add(new MenuAction(id, S["sm.manage"], true));
+                    break;
+                case ProfileTools.History:
+                    list.Add(new MenuAction(id, S["sm.menu.history"], true));
+                    break;
+                case ProfileTools.Resolve:
+                    var needs = SaveChips.NeedsResolve(chip);
+                    list.Add(new MenuAction(id, S["sm.resolve"], needs, needs ? null : S["sm.menu.resolve_nothing"]));
+                    break;
+                case ProfileTools.CopyTo:
+                    var local = LocalSaveOf(card.Player.Xuid) is not null;
+                    list.Add(new MenuAction(id, S["sm.menu.copy_azimuth"], local && !running,
+                        running ? S["sm.block.GameRunning"] : local ? null : S["sm.block.NoSource"]));
+                    break;
+                case ProfileTools.Download:
+                    list.Add(new MenuAction(id, S["sm.menu.download"], !running, running ? S["sm.block.GameRunning"] : null));
+                    break;
+                case ProfileTools.HelpSensei:
+                    list.Add(new MenuAction(id, S["sm.help_link"], true));
+                    break;
+                case ProfileTools.RestoreOriginal:
+                    list.Add(new MenuAction(id, S["sm.menu.restore_original"], !running, running ? S["sm.block.GameRunning"] : null));
+                    break;
+                case ProfileTools.Rename:
+                    var renamable = RenamableCopy(card.Player) is not null;
+                    list.Add(new MenuAction(id, S["sm.menu.rename"], renamable && Idle, renamable ? null : S["sm.menu.rename_server"]));
+                    break;
+                case ProfileTools.DeleteCareer:
+                    list.Add(new MenuAction(id, S.Format("sm.menu.delete_career", ("game", GameLabel)), CanAskDeleteProfile, Danger: true));
+                    break;
+                case ProfileTools.DeleteProfile:
+                    list.Add(new MenuAction(id, S["sm.menu.delete_profile"], CanAskDeleteProfile, Danger: true));
+                    break;
+            }
         }
-        list.Add(new MenuAction("history", S["sm.menu.history"], true));
-        if (row.CanDeleteCareer) list.Add(new MenuAction("delete-career", S.Format("sm.menu.delete_career", ("game", GameLabel)), CanAskDeleteProfile, Danger: true));
-        if (row.CanDeleteWholeProfile) list.Add(new MenuAction("delete-profile", S["sm.menu.delete_profile"], CanAskDeleteProfile, Danger: true));
+        _ = slot;
         return list;
     }
 
@@ -596,11 +614,23 @@ public sealed partial class ShellViewModel
         _menuFor = null;
         switch (action.Id)
         {
+            case ProfileTools.ManageSaves:
+                OpenManageSaves();
+                break;
+            case ProfileTools.Resolve:
+                OpenResolve(row);
+                break;
+            case ProfileTools.HelpSensei:
+                OpenSavesHelp();
+                break;
+            case ProfileTools.RestoreOriginal:
+                OpenRestoreOriginal();
+                break;
+            case ProfileTools.Rename:
+                OpenRename(row.Card?.Player);
+                break;
             case "copy-azimuth":
                 OpenCopyFromProfile(card.Slot, row);
-                break;
-            case "start-other":
-                StartOtherFrom(card.Slot);
                 break;
             case "history":
                 await OpenHistoryAsync(card.Slot);
@@ -632,15 +662,6 @@ public sealed partial class ShellViewModel
     public string CreateTitle => S.Format("sm.create_title", ("mode", ModeWord(_createMode == "hardcore" ? SaveSlot.Hardcore : SaveSlot.Noob)));
 
     public Brush CreateAccent => SlotBrushes.Accent(_createMode == "hardcore" ? SaveSlot.Hardcore : SaveSlot.Noob);
-
-    /// <summary>"Start the other profile from this" (the ⋯ menu): the other mode's Start screen with this profile as its source.</summary>
-    private void StartOtherFrom(SaveSlot slot)
-    {
-        var other = slot == SaveSlot.Hardcore ? "noob" : "hardcore";
-        if (ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == other && r.Card.Startable) is not { } target) return;
-        PickProfileRow(target);
-        if (_startRow is not null) SavesGo(SavesScreen.Start);
-    }
 
     private SlotFacts Facts()
     {

@@ -23,7 +23,8 @@ public sealed partial class ShellViewModel
     /// <summary>A Hardcore career started "from an existing profile": the seed panels end by choosing it instead of playing.</summary>
     private Profile? _seedStarting;
 
-    public bool ShowCareerStart => _startRow is not null && ShowPickProfile;
+    /// <summary>Owner 2026-11-08: a career starts from PLAY's inline choice only.</summary>
+    public bool ShowCareerStart => ShowPlayStart;
 
     private BoardCard? StartCard => _startRow?.Card;
 
@@ -246,7 +247,9 @@ public sealed partial class ShellViewModel
     {
         if (_seedStarting?.ProfileId != target.ProfileId) return;
         _seedStarting = null;
-        if (_gate.Game == target.Game && _gate.Step == ShellStep.PickProfile) ChooseProfile(target);
+        if (_gate.Game != target.Game) return;
+        ChooseProfile(target);
+        if (_playAfterStart) _ = PlayAfterStartAsync(); // owner 2026-11-08: a career started from PLAY plays once chosen
     }
 
     /// <summary>The refused check's "Delete career": the seed panels close and the typed confirmation opens for the empty career.</summary>
@@ -254,7 +257,9 @@ public sealed partial class ShellViewModel
     {
         if (_seedOffer?.Target is not { } target) return;
         _seedStarting = null;
+        _playAfterStart = false;
         CloseSeedChoice();
+        OpenProfiles(); // the typed confirmation is the Profiles page's
         AskDeleteProfile(target);
     }
 
@@ -263,6 +268,8 @@ public sealed partial class ShellViewModel
     {
         if (StartCard?.CareerRow is not { } row) return;
         CancelCareerStart();
+        _playAfterStart = false;
+        OpenProfiles(); // the typed confirmation is the Profiles page's
         AskDeleteProfile(row);
     }
 
@@ -367,6 +374,14 @@ public sealed partial class ShellViewModel
     private void ChangedCareerStart()
     {
         Changed(nameof(ShowCareerStart));
+        Changed(nameof(ShowPlayStart));
+        Changed(nameof(StartFromProfileEnabled));
+        Changed(nameof(StartFromProfileLabel));
+        Changed(nameof(StartFromProfileHint));
+        Changed(nameof(ShowStartFromProfile));
+        Changed(nameof(StartFromPcEnabled));
+        Changed(nameof(StartFromPcHint));
+        Changed(nameof(StartAccent));
         Changed(nameof(CareerStartTitle));
         Changed(nameof(CareerStartBody));
         Changed(nameof(CareerStartFromExisting));

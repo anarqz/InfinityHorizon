@@ -92,8 +92,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         DisengageOnline(); // OD-118: from here until SIGN IN, not a single request to Infinity
         RememberLaunchMode(LaunchModeStore.Offline);
         FillOfflineGames();
-        var offline = _gate.PlayOffline();
-        Gate = GameToChooseAlone() is { } alone ? offline.ChooseGame(alone) : offline;
+        // owner 2026-11-08: no game picker; PLAY opens on the last game selected (local settings), its tiles change it
+        Gate = _gate.PlayOffline(OpenPlayGame());
         ResetContentLocation();
         FillProfiles();
         EnsureModCatalog(); // T1f: offline, Play needs the (GitHub) catalog's requirements; never wait for Mods to be opened
@@ -251,11 +251,34 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowNeedsAccount => _pending is not null;
 
-    public bool ShowPickGame => _gate.Step == ShellStep.PickGame && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
+    /// <summary>Owner 2026-11-08: the Profiles page (sidebar PROFILES): profile management only.</summary>
+    private bool _onProfiles;
 
-    public bool ShowPickProfile => _gate.Step == ShellStep.PickProfile && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
+    /// <summary>No other page is open over PLAY or Profiles.</summary>
+    private bool NoOtherPage => InShell && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
 
-    public bool ShowHome => Ready && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
+    /// <summary>The Profiles page is shown (owner 2026-11-08; it replaced the profile picker step).</summary>
+    public bool ShowProfiles => _onProfiles && NoOtherPage;
+
+    /// <summary>PLAY: open as soon as the launcher is past the welcome screen (the game is PLAY's tiles, the profile its two buttons).</summary>
+    public bool ShowHome => !_onProfiles && NoOtherPage;
+
+    /// <summary>The page the shell frames now (the FRIENDS column follows it, <see cref="ShellLayout.FriendsColumn"/>).</summary>
+    public ShellPage CurrentPage => ShowHome ? ShellPage.Home : ShowProfiles ? ShellPage.Profiles : _onNews ? ShellPage.News : _onAccount ? ShellPage.Account : ShellPage.Help;
+
+    /// <summary>Opens the Profiles page at its root (sidebar PROFILES, PLAY's "manage profiles").</summary>
+    public void OpenProfiles()
+    {
+        if (!InShell) return;
+        LeaveAccount();
+        _onMods = _onSetup = _onBugReport = _onNews = false;
+        _crashOpen = false;
+        _onProfiles = true;
+        _nav.Root();
+        _copy = null; _subject = null; _menuFor = null;
+        FillProfiles();
+        Changed(string.Empty);
+    }
 
     public bool Idle => !_busy;
 
@@ -365,9 +388,12 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Message = Message is { } after && after != S["signin.done_toast"] ? firstLine + " " + after : firstLine;
     });
 
+    /// <summary>A game tile on PLAY (owner 2026-11-08): instant, from the one <c>/me</c> and this PC's files; never a request or a spinner.</summary>
     public void ChooseGame(GameInfo game)
     {
         ArgumentNullException.ThrowIfNull(game);
+        if (Playing && game.Id != _gate.Game) return; // the game running keeps its selection
+        if (game.Id == _gate.Game) return;
         Gate = _gate.ChooseGame(game.Id);
         RememberGame(game.Id);
         ResetContentLocation();
@@ -400,32 +426,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: a profile with the check is checked in the background
     }
 
-    /// <summary>Re-opens the game picker (top bar "change").</summary>
-    public void ChangeGame()
-    {
-        if (Playing || _busy) return;
-        OpenHome();
-        if (_session is not null || (OfflineMode && Games.Count > 1))
-        {
-            Gate = _gate with { Game = null, ProfileTag = null, ProfileKey = null };
-        }
-    }
-
-    /// <summary>Re-opens the profile picker (top bar "change").</summary>
-    public void ChangeProfile()
-    {
-        if (Playing || _busy) return;
-        OpenHome();
-        if (_gate.Game is not null)
-        {
-            Gate = _gate with { ProfileTag = null, ProfileKey = null };
-            _startRow = null;
-            _nav.Root();
-            FillProfiles();
-            _ = RefreshIntegrityAutomaticallyAsync(); // OD-113: clears a previous profile's integrity result
-        }
-    }
-
     public async Task CreateProfileAsync()
     {
         // OD-118: created on this PC (no cloud call); signed in, uploaded at once by the idempotent upsert.
@@ -442,8 +442,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (Playing || _busy) return;
         _nativeFlow.Clear();
         LeaveAccount(); _onNews = false;
-        _onMods = _onSetup = _onBugReport = _loginOpen = false;
+        _onMods = _onSetup = _onBugReport = _loginOpen = _onProfiles = false;
         _playStatus = null;
+        ClearFriends(); // owner 2026-11-08: the FRIENDS column belongs to the account
         ClearDiscord(); // CR-S63
         ClearWebsite(); // CR-L47
         ClearShellStatus(); // CR-L40
@@ -485,13 +486,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         LeaveAccount();
         _onMods = _onSetup = _onBugReport = _onNews = false;
         FillServerGames(session.Info.Games ?? []);
-        var gate = _gate.SignIn(session.Email ?? (me.Profiles.Count > 0 ? ProfileName.Plain(me.Profiles[0].Gamertag) : me.AccountId[..8]));
-        // One game served: choose it for the player, as the owner's flow only asks when there is a choice.
-        if (GameToChooseAlone() is { } alone)
-        {
-            gate = gate.ChooseGame(alone);
-        }
-        Gate = gate;
+        // owner 2026-11-08: no game picker; PLAY opens on the last game selected (local settings), its tiles change it
+        Gate = _gate.SignIn(session.Email ?? (me.Profiles.Count > 0 ? ProfileName.Plain(me.Profiles[0].Gamertag) : me.AccountId[..8]), OpenPlayGame());
+        _onProfiles = false;
         ResetContentLocation();
         FillProfiles();
         if (session.Deletion is not null)
@@ -503,6 +500,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         else Message = S["signin.done_toast"];
         _ = RefreshDiscordAsync(); // CR-S63: the account's Discord handle on its profile rows (after sign-in only, OD-118)
         RestartShellStatus(now: true); // CR-L40: the connected server's figures in the sidebar, then every 30 s
+        StartFriendsPoll(); // owner 2026-11-08: the header's friends counts and dot, from the presence poll (never a click)
         await RefreshIntegrityAutomaticallyAsync();
         await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
     }
@@ -619,6 +617,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ChangedSeedForm();
         ChangedNoobSeedForm();
         FillWebsiteSwitches(); // CR-L47: the account page's switches follow the same /me
+        FillPlayBoard(); // owner 2026-11-08: PLAY's two buttons follow the same /me and game (no request)
     }
 
     private bool CheckName()
@@ -701,6 +700,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        StopFriendsPoll();
         _newsClient?.Dispose();
         if (_pickerHttp.IsValueCreated) _pickerHttp.Value.Dispose();
         _integrityLifetime.Cancel();

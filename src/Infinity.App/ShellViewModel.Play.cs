@@ -123,6 +123,7 @@ public sealed partial class ShellViewModel
                 StartMods();
             }
             RefreshHook();
+            FillPlayBoard(); // owner 2026-11-08: PLAY's buttons say when Azimuth is missing
             Changed(string.Empty);
         }
     }
