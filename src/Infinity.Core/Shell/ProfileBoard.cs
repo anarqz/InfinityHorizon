@@ -41,7 +41,8 @@ public enum CareerProgressKind
 /// <param name="HardcoreFromProfile"><c>ServerInfo.saves.hardcoreFromProfile</c> (SAVES_API.md §4.10, OD-214).</param>
 /// <param name="HardcoreKeepsCloud">A Hardcore profile of this account keeps a cloud line on this server (OD-52).</param>
 /// <param name="AzimuthSaves">This PC has an Azimuth save of the game a Noob career may start from (OD-41).</param>
-public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, bool AzimuthSaves = false);
+/// <param name="SeedPendingXuids">Profiles whose career of the game holds an accepted seed waiting for its first Play on this PC (a pending <c>seed_from_profile</c>): they count as started, never as empty (review M1).</param>
+public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, bool AzimuthSaves = false, IReadOnlySet<string>? SeedPendingXuids = null);
 
 /// <summary>
 /// One profile on the Profiles page of the chosen game: the <see cref="Player"/>, its career of the game (<see cref="Career"/> and, joined by
@@ -60,6 +61,9 @@ public sealed record BoardCard(Player Player, Career? Career, Profile? CareerRow
     public bool Startable => State is CareerState.None or CareerState.Empty && Offers.Any;
 
     public CareerProgressKind ProgressKind => ProfileBoard.ProgressKind(Career);
+
+    /// <summary>An accepted seed waits for this career's first Play on this PC (review M1): started, not empty.</summary>
+    public bool SeedPending { get; init; }
 }
 
 /// <summary>
@@ -86,17 +90,18 @@ public static class ProfileBoard
         {
             var career = player.Careers.FirstOrDefault(c => c.Game == game.Id);
             var row = career is null ? null : me.Profiles.FirstOrDefault(p => p.ProfileId == career.CareerId);
-            var state = StateOf(player, career, game);
+            var seedPending = flags.SeedPendingXuids?.Contains(player.Xuid) == true && career is not null && row is not null;
+            var state = StateOf(player, career, game, seedPending);
             var offers = state is CareerState.None or CareerState.Empty
                 ? CareerStart.Offers(player.Mode, game, flags, ProfileSeed.Sources(me.Profiles, game.Id, player.Xuid))
                 : CareerOffers.Nothing;
-            cards.Add(new BoardCard(player, career, row, state, offers, modes[player.Mode] > 1));
+            cards.Add(new BoardCard(player, career, row, state, offers, modes[player.Mode] > 1) { SeedPending = seedPending });
         }
         return cards;
     }
 
     /// <summary>Where <paramref name="player"/>'s career of <paramref name="game"/> stands.</summary>
-    public static CareerState StateOf(Player player, Career? career, GameDefinition game)
+    public static CareerState StateOf(Player player, Career? career, GameDefinition game, bool seedPending = false)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(game);
@@ -105,7 +110,7 @@ public static class ProfileBoard
             return player.Mode == "hardcore" && !game.HardcoreCareers ? CareerState.NotOffered : CareerState.None;
         }
         // §6.7: on a game with cloud saves, a career nothing started (no revision, no sync, never played) is not started in the UI
-        return game.FullFeatures && career is { Cloud: null, Progress: null, LastPlayedAt: null } ? CareerState.Empty : CareerState.Started;
+        return game.FullFeatures && !seedPending && career is { Cloud: null, Progress: null, LastPlayedAt: null } ? CareerState.Empty : CareerState.Started;
     }
 
     /// <summary>What the progress line of <paramref name="career"/> says.</summary>
