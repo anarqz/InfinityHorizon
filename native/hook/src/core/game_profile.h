@@ -68,6 +68,28 @@ static inline int fi_watch_chain_read(FiWatchReader read, const unsigned char *r
     return read(at + watch->chain[watch->chain_count - 1], value, watch->bytes);
 }
 
+/* The value a VALUE, NONNULL or CHAIN row logs, from `object` (the pointer read at `global`): VALUE the `bytes` (1 to 4) at
+   `offset`; NONNULL 1 when the 8 bytes at `offset` are set; CHAIN the walk's last value (8-byte rows: 1 set, 0 null). 0 when a
+   read failed or a chain link was null (nothing logged). A CHAIN row never reads `object + offset`: live FM5 (SAURON, W16) logged
+   the low half of *(CLobby+0) and *(U+0), the objects' vftables (310387240 = 0x1280c9e8, 310543072), when the watch thread fell
+   through from the walk to that read. HEARTBEAT and POINTER_ONCE stay the thread's own (they keep state). */
+static inline int fi_watch_value(FiWatchReader read, const unsigned char *object, const FiGameWatch *watch, unsigned *value) {
+    unsigned long long wide = 0;
+    *value = 0;
+    if (watch->kind == FI_WATCH_CHAIN) {
+        if (!fi_watch_chain_read(read, object, watch, &wide)) return 0;
+        *value = watch->bytes > sizeof(*value) ? wide != 0 : (unsigned)wide;
+        return 1;
+    }
+    if (watch->kind == FI_WATCH_NONNULL) {
+        if (watch->bytes > sizeof(wide) || !read(object + watch->offset, &wide, watch->bytes)) return 0;
+        *value = wide != 0;
+        return 1;
+    }
+    if (watch->kind != FI_WATCH_VALUE || watch->bytes < 1 || watch->bytes > sizeof(*value)) return 0;
+    return read(object + watch->offset, value, watch->bytes);
+}
+
 /* A game whose main update the hook does not detour has its readiness (the launcher's Event 5) polled from
    these terms: each reads a pointer at `global`, then `bytes` (1 to 8) at `offset`, and compares it with `value`. */
 enum { FI_READY_EQ = 0, FI_READY_NE = 1, FI_READY_GE = 2 };
