@@ -84,6 +84,10 @@ inline bool ToastShows(bool in_official_lobby, uint8_t flags) { return !in_offic
 // The invite toasts (0x23, INVITE_UX 2026-11-08): at most kMaxShown on screen (top right, the oldest on top), the rest queued, at
 // most kMaxWaiting in all. Each lives for the time the launcher gave it (the invite's answer window), counted from its arrival; a
 // toast that goes (answered, withdrawn, past its time) stays kSlideMs as "leaving" so it can slide out, then it is purged.
+// OD-223 revised (owner 2026-11-08): the second line of an invite notice (0x23 with notice set: the game is off the screens that take it).
+constexpr const char *kInviteNoticeEn = "Go into Multiplayer to accept it";
+constexpr const char *kInviteNoticePtBr = "Entre no Multiplayer para aceitar";
+
 class InviteQueue {
 public:
     static constexpr size_t kMaxShown = 3, kMaxWaiting = 8;
@@ -167,10 +171,18 @@ public:
         return e ? SecondsLeft(*e, now_ms) : 0;
     }
 
-    // The player accepted the first live toast: its id (to send with the answer); it leaves and the next one moves up. False: none.
+    // Whether a hold may answer now: the first live toast is an accept toast (OD-223 revised: a notice takes no hold and no Y).
+    bool Holdable() const {
+        const Entry *e = Current();
+        return e != nullptr && !e->prompt.notice;
+    }
+
+    // The player accepted the first live toast: its id (to send with the answer); it leaves and the next one moves up. False: none, or
+    // the first one is a notice (it is never answered here).
     bool Answer(std::string *id, uint64_t now_ms = 0) {
         for (auto &e : entries_) {
             if (!e.live()) continue;
+            if (e.prompt.notice) return false;
             if (id) *id = e.prompt.id;
             Leave(e, now_ms);
             return true;

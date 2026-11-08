@@ -13,6 +13,9 @@
 //   in the game (FH2's Y is the rewind); the Y that completed a hold stays held back until it is released.
 // - With the guide open the toasts are hidden (Y is the guide's there) and keep counting down; they come back when it closes.
 // - The launcher holds new invites back while this player races (InviteInbox.Holding); they come after the race with their time left.
+// - OD-223 revised: off the screens where the game may take an invite (FM5: off its MULTIPLAYER hoppers screen) the launcher sends the
+//   toast as a notice: the same slide-in, "Go into Multiplayer to accept it", no ring, Y left to the game. It sends the same id again as
+//   the accept toast once the game is there (and as a notice again when it leaves); nothing is ever declined automatically.
 #include "overlay.h"
 
 #include <algorithm>
@@ -134,13 +137,16 @@ void DrawInviteToasts(float width, float height, float dt) {
     std::vector<InviteQueue::Entry> drawn;
 
     std::string top_id;
+    bool holdable = false;
     {
         std::lock_guard<std::mutex> lock(g_lock);
         if (g_queue.Expire(now)) Log("invite: a prompt's time ran out without an answer");
         if (const auto *current = g_queue.Current()) top_id = current->prompt.id;
+        holdable = g_queue.Holdable();
         if (!SidebarOpen()) drawn = g_queue.Drawn(now);
     }
-    const bool live = !top_id.empty() && !SidebarOpen() && !InPassthrough();
+    // OD-223 revised: a notice on top takes no hold and leaves Y to the game
+    const bool live = holdable && !SidebarOpen() && !InPassthrough();
     g_on_screen = live;
     if (!live) g_ring.Reset();
     else if (g_ring.Update(g_held || g_dev_hold, dt)) Accept();
@@ -181,9 +187,16 @@ void DrawInviteToasts(float width, float height, float dt) {
         dl->PushClipRect(ImVec2(tx, a.y), ImVec2(b.x - pad_x - tsz.x - 8 * s, b.y), true);
         TextAt(dl, f.body, ImVec2(tx, a.y + 12 * s), kText, line.c_str(), alpha);
         dl->PopClipRect();
-        TextAt(dl, f.small, ImVec2(tx, a.y + 36 * s), kTextDim, ActivityName(e.prompt.activity), alpha);
+        if (e.prompt.notice) { // OD-223 revised: "Go into Multiplayer to accept it", no ring
+            TextAt(dl, f.small, ImVec2(tx, a.y + 36 * s), kText, T(kInviteNoticeEn, kInviteNoticePtBr), alpha);
+            TextAt(dl, f.small, ImVec2(tx, a.y + 60 * s), kTextDim, ActivityName(e.prompt.activity), alpha);
+        } else {
+            TextAt(dl, f.small, ImVec2(tx, a.y + 36 * s), kTextDim, ActivityName(e.prompt.activity), alpha);
+        }
         const float hy = a.y + 74 * s;
-        if (first && !leaving) { // "Hold (Y) to accept", the ring on the glyph
+        if (e.prompt.notice || leaving) {
+            // nothing more: a notice has no hold line, a leaving toast none either
+        } else if (first) { // "Hold (Y) to accept", the ring on the glyph
             const char *hold = T("Hold", "Segure"), *accept = T("to accept", "para aceitar");
             const ImVec2 hs = Measure(f.small, hold);
             TextAt(dl, f.small, ImVec2(tx, hy - hs.y / 2), kText, hold, alpha);
@@ -191,7 +204,7 @@ void DrawInviteToasts(float width, float height, float dt) {
             const ImVec2 gc(tx + hs.x + 8 * s + r + 4 * s, hy);
             HoldGlyph(dl, gc, r, g_ring.Progress(), pad, alpha);
             TextAt(dl, f.small, ImVec2(gc.x + r + 12 * s, hy - hs.y / 2), kText, accept, alpha);
-        } else if (!leaving) {
+        } else {
             TextAt(dl, f.small, ImVec2(tx, hy - Measure(f.small, "N").y / 2), kTextDim, T("Next in line", "Próximo da fila"), alpha);
         }
         const float total = e.prompt.expires ? static_cast<float>(e.prompt.expires) : 1.0f;

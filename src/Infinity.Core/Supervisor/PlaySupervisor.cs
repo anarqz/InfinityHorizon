@@ -845,14 +845,20 @@ public sealed class PlaySupervisor
                         if (frame is Frame.Event { Kind: HookEvents.Screen } screen && worlds is not null)
                         {
                             worlds.ObserveScreen(screen.Detail);
-                            // OD-223: off the screens that take invites (FM5: its hoppers screen) a showing invite is withdrawn and declined
+                            // OD-223 revised: on the screens that take invites (FM5: its hoppers screen) a held invite becomes the accept
+                            // toast, off them a notice again; never declined
                             if (worlds.Inbox is { } screenInbox && overlay is not null && inboxRun is not null)
-                                _ = screenInbox.EnforceAcceptableAsync(overlay.SendIfAcceptedAsync, onlineStop.Token);
+                                _ = screenInbox.SyncScreenAsync(overlay.SendIfAcceptedAsync, onlineStop.Token);
                         }
                         // OD-208: the game left the online world on its own (its car database changed): the seat goes now
                         if (frame is Frame.Event { Kind: HookEvents.WorldLeft } left && worlds is not null)
                         {
                             _ = worlds.GameLeftOnlineAsync(left.Detail, stop.Token);
+                        }
+                        // OD-224 (T-1108-L): the game's lobby kind (Event 10, FM5): leaving its private match ends that seat at once
+                        if (frame is Frame.Event { Kind: HookEvents.LobbyKind } lobbyKind && worlds is not null)
+                        {
+                            _ = worlds.ObserveLobbyKindAsync(lobbyKind.Detail, stop.Token);
                         }
                         // live (test.9): back from a Road Trip the game opens its free roam connection (Event 3) around
                         // closing the Road Trip one (Event 4); joining again calls off the pending close or leave
@@ -1019,7 +1025,7 @@ public sealed class PlaySupervisor
                                     var inboxStop = onlineStop.Token;
                                     inbox.Observer ??= worlds.OnInvitesPolledAsync; // W15: the friends sidebar's join requests and online toasts
                                     inbox.Holding ??= worlds.IsRacingNow; // INVITE_UX: no invite toast while racing; it comes after the race
-                                    inbox.Acceptable ??= worlds.InviteScreenAllows; // OD-223: off the game's invite screens, declined at once
+                                    inbox.Acceptable ??= worlds.InviteScreenAllows; // OD-223 revised: off the game's invite screens, held as a notice
                                     inboxRun ??= Task.Run(() => inbox.RunAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop), inboxStop);
                                     _ = inbox.ResendAsync(inboxOverlay.SendIfAcceptedAsync, inboxStop);
                                 }
@@ -1304,7 +1310,12 @@ public sealed class PlaySupervisor
             var notice = await inbox.AnswerAsync(answer.InviteId, answer.Accept, cancellation,
                 answer.Accept && worlds is not null ? worlds.AcceptInviteAsync : null).ConfigureAwait(false);
             if (cancellation.IsCancellationRequested) return;
-            if (answer.Accept) await overlay.SendIfAcceptedAsync(Overlay.UiFrame.InvitePrompt.Withdraw(answer.InviteId), cancellation).ConfigureAwait(false);
+            if (answer.Accept)
+            {
+                await overlay.SendIfAcceptedAsync(Overlay.UiFrame.InvitePrompt.Withdraw(answer.InviteId), cancellation).ConfigureAwait(false);
+                // OD-223 revised: an accept that came off the invite screens stays held: shown again as a notice now
+                await inbox.SyncScreenAsync(overlay.SendIfAcceptedAsync, cancellation).ConfigureAwait(false);
+            }
             if (notice is not null) await overlay.ToastAsync(notice, cancellation).ConfigureAwait(false);
         }
         catch (Exception error) when (error is OperationCanceledException or ProtocolException or IOException)

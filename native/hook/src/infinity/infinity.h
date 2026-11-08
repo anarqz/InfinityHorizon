@@ -170,6 +170,9 @@ void fi_launch_event(unsigned kind, const char *detail);
 /* OD-211 (CR-S102): the game's rich-presence screen id changed (detail its decimal id, 0..255; activity.c): the launcher's online
    toasts are not shown on a race screen */
 #define FI_EVENT_SCREEN 9u
+/* OD-224 (T-1108-L): the game's lobby kind changed (detail its decimal value, 0..255, 0 none; game_profile.h
+   FI_WATCH_EVENT_LOBBY_KIND rows, FM5 only): the launcher ends a private lobby's seat when the game leaves it */
+#define FI_EVENT_LOBBY_KIND 10u
 /* the decimal detail of Event 9 into `out` (at least 4 bytes, NUL-terminated); its length */
 size_t fi_activity_screen_detail(unsigned screen, char *out);
 #define FI_NOTICE_INFO 0u

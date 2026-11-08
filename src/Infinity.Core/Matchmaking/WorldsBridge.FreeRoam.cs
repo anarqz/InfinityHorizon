@@ -586,6 +586,7 @@ public sealed partial class WorldsBridge
     {
         if (seat.World.Id != seat.WorldId) { _seatActivity = null; return; }
         if (seat.Session is { } session) Volatile.Write(ref _seatSession, new SeatSessionRef(seat.WorldId, session));
+        ObserveInviteHolds(seat.WorldId, seat.World); // R-1108-I2: no seat held for an invite: its "Invited" mark goes
         ObservePrivate(seat.WorldId, seat.World); // T-L6: the private official seat class
         if (seat.World.Official == true) Volatile.Write(ref _seatOfficial, seat.WorldId);
         var activity = seat.World.Activity;
