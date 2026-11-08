@@ -1210,5 +1210,11 @@
   "profiles.delete_career_last": "This is the last career of {name}: the profile goes with it, and the name {name} becomes free for anyone to take.",
   "profiles.delete_all_title": "Delete the profile {name}, in every game?",
   "profiles.delete_all_body": "This erases {name} and every one of its careers from the cloud, at once and for good, in every game: cloud saves and their history, liveries and creations, scores, messages and the rest. There is no undo, and the name {name} becomes free for anyone to take.",
-  "profiles.delete_in_use_game": "This profile is playing {game} right now. Close the game there, then try again."
+  "profiles.delete_in_use_game": "This profile is playing {game} right now. Close the game there, then try again.",
+  "careers.download": "Download to this PC",
+  "careers.downloaded": "The cloud career of {name} (revision {rev}) is on this PC now. What was there is kept in the saves folder's fi-launcher-archive.",
+  "careers.download_in_sync": "This PC already has the newest cloud save of {name}.",
+  "careers.download_nothing": "The cloud holds no save of {name} to download.",
+  "careers.download_local_newer": "This PC's save of {name} has progress the cloud does not have, so it was kept. Play to sync it.",
+  "careers.download_failed": "The cloud save could not be downloaded now. Try again later."
 }

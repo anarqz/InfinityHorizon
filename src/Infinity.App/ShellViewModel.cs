@@ -575,12 +575,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
                     DeleteCareerLabel = S.Format("careers.delete", ("game", GameLabel)),
                 });
             }
-            foreach (var (profile, local) in LocalOnlyRows(game, board.AccountId))
-            {
-                Profiles.Add(profile);
-                ProfileRows.Add(new ProfileRow(profile, ModeLine(profile) + " · " + LocalLine(local!)));
-                _rowLocals[profile.ProfileId] = local!;
-            }
+            // W12 (handoff §10, D): signed in the list is the cloud's; this PC's local profiles are hidden, never deleted (offline lists
+            // them; a Noob career starts from this PC's saves through "Start from a save on this PC")
             if (_startRow?.Card is { } open)
                 _startRow = ProfileRows.FirstOrDefault(r => r.Card?.Player.ProfileId == open.Player.ProfileId && r.Card.Startable);
             ChangedProfileList();
