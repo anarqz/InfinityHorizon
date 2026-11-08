@@ -76,6 +76,7 @@ public sealed partial class ShellViewModel
     {
         _startRow = null;
         ChangedCareerStart();
+        SavesPop(SavesScreen.Start);
     }
 
     /// <summary>"Start fresh": the career exists (created or already there), then it is chosen; a Hardcore one starts from scratch (§4.9).</summary>
@@ -301,6 +302,8 @@ public sealed partial class ShellViewModel
                     Message = S.Format("careers.download_in_sync", ("name", name));
                     return;
                 case SyncDecision.Download or SyncDecision.FastForward:
+                    // SAVE_MANAGER_UX §7.1/§8: what this PC holds goes to the launcher's history first; a failed copy stops here
+                    if (!ArchiveFirst("restore", ProfileFolder(row), "sm.reason.download", [("mode", ModeWordIn(row))], "cloud", "this-pc", row)) return;
                     var outcome = await client.Saves.InstallHeadAsync(access, root, xuid, head, decision.LocalContent, "before-download");
                     Log($"profiles: download {row.Profile.Game} {row.Profile.ProfileId} r{head.Revision} → {(outcome.Failure is null ? "installed" : outcome.Failure.Code)}");
                     Message = outcome.Failure is null ? S.Format("careers.downloaded", ("name", name), ("rev", head.Revision.ToString(CultureInfo.CurrentCulture)))

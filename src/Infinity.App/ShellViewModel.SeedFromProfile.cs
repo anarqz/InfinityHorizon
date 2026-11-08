@@ -414,6 +414,7 @@ public sealed partial class ShellViewModel
         Changed(nameof(SeedCheckText));
         Changed(nameof(SeedCheckReasons));
         Changed(nameof(SeedCheckSummary));
+        ChangedCheckSteps(); // SAVE_MANAGER_UX §2.5: the step list and the refusal's ways out
     }
 
     /// <summary>ACCOUNTS.BANNED in words, with the CR-S52 review when <c>details.review</c> says so (ACCOUNTS.md §10).</summary>

@@ -58,6 +58,8 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => Shown();
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
+        KeyDown += OnSavesBackKey; // SAVE_MANAGER_UX §3: Esc goes back (a focused control that uses Esc handles it first)
+        MouseUp += OnSavesMouseBack;
         var handled = false;
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
@@ -278,6 +280,52 @@ public partial class MainWindow : Window
     }
 
     private async void OnCreateProfile(object sender, RoutedEventArgs e) => await _vm.CreateProfileAsync();
+
+    // SAVE_MANAGER_UX (OD-207, OD-214): the save manager's screens
+    private void OnSavesBack(object sender, RoutedEventArgs e) => _vm.SavesBack();
+    private void OnSavesHome(object sender, RoutedEventArgs e) => _vm.SavesHome();
+    private async void OnSavesPrimary(object sender, RoutedEventArgs e) => await _vm.SavesPrimaryAsync((SaveCard)((FrameworkElement)sender).DataContext);
+    private void OnSavesMenu(object sender, RoutedEventArgs e) => _vm.ToggleSavesMenu((SaveCard)((FrameworkElement)sender).DataContext);
+    private async void OnSavesMenuItem(object sender, RoutedEventArgs e)
+    {
+        var element = (FrameworkElement)sender;
+        if (element.Tag is SaveCard card && element.DataContext is MenuAction action) await _vm.SavesMenuAsync(card, action);
+    }
+    private void OnSavesCreate(object sender, RoutedEventArgs e) => _vm.OpenCreateProfile((SaveCard)((FrameworkElement)sender).DataContext);
+    private void OnOpenManageSaves(object sender, RoutedEventArgs e) => _vm.OpenManageSaves();
+    private void OnOpenSavesHelp(object sender, RoutedEventArgs e) => _vm.OpenSavesHelp();
+    private async void OnSlotAction(object sender, RoutedEventArgs e)
+    {
+        var element = (FrameworkElement)sender;
+        if (element.Tag is SlotCard slot && element.DataContext is MenuAction action) await _vm.SlotActionAsync(slot, action);
+    }
+    private void OnRestoreOriginal(object sender, RoutedEventArgs e) => _vm.OpenRestoreOriginal();
+    private async void OnConfirmCopy(object sender, RoutedEventArgs e) => await _vm.ConfirmCopyAsync();
+    private async void OnHistorySlot(object sender, RoutedEventArgs e)
+    {
+        if (Enum.TryParse<Infinity.Core.Shell.SaveSlot>(((FrameworkElement)sender).Tag as string, out var slot)) await _vm.ShowHistorySlotAsync(slot);
+    }
+    private void OnSelectHistory(object sender, RoutedEventArgs e) => _vm.SelectHistory((HistoryRow)((FrameworkElement)sender).DataContext);
+    private void OnHistoryOpenFolder(object sender, RoutedEventArgs e) => _vm.HistoryOpenFolder();
+    private void OnHistoryCopy(object sender, RoutedEventArgs e) => _vm.HistoryCopyToAzimuth();
+    private async void OnResolveKeepCloud(object sender, RoutedEventArgs e) => await _vm.ResolveKeepCloudAsync();
+    private void OnResolveKeepPc(object sender, RoutedEventArgs e) => _vm.ResolveKeepPc();
+    private void OnPlaySourceAsNoob(object sender, RoutedEventArgs e) => _vm.PlaySourceAsNoob();
+
+    /// <summary>§3: Esc and the mouse's back button go one step back (the HARDCORE check first, then the save manager's screens).</summary>
+    private void OnSavesBackKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape || e.Handled || DataContext is not ShellViewModel vm) return;
+        if (vm.ShowSeedPanel) { vm.CloseSeedChoice(); e.Handled = true; }
+        else if (vm.ShowSaveManager && vm.SavesCanGoBack) { vm.SavesBack(); e.Handled = true; }
+    }
+
+    private void OnSavesMouseBack(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != System.Windows.Input.MouseButton.XButton1 || DataContext is not ShellViewModel vm) return;
+        if (vm.ShowSeedPanel) { vm.CloseSeedChoice(); e.Handled = true; }
+        else if (vm.ShowSaveManager && vm.SavesCanGoBack) { vm.SavesBack(); e.Handled = true; }
+    }
 
     private void OnChangeGame(object sender, RoutedEventArgs e) => _vm.ChangeGame();
 

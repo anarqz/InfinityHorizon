@@ -64,7 +64,7 @@ public sealed partial class ShellViewModel
     public bool HasDeleteProfileStatus => !string.IsNullOrEmpty(_deleteStatus);
 
     public bool CanConfirmDeleteProfile => _deleting is not null && Idle && !Playing && _session is not null
-        && string.Equals(_deleteTyped.Trim(), DeleteProfileName, StringComparison.OrdinalIgnoreCase);
+        && DeleteConfirm.Matches(_deleteTyped, DeleteProfileName);
 
     /// <summary>The rows' "Delete from the cloud" links are enabled (never while playing or busy).</summary>
     public bool CanAskDeleteProfile => Idle && !Playing && _session?.Me is not null && !OfflineMode;
@@ -85,6 +85,7 @@ public sealed partial class ShellViewModel
         _deleteTyped = string.Empty;
         _deleteStatus = null;
         ChangedDelete();
+        SavesGo(SavesScreen.Delete); // SAVE_MANAGER_UX §4: its own screen, with Back
     }
 
     /// <summary>CR-S98 "Delete profile": every career of the profile, then the profile (<c>DELETE /players/{xuid}</c>), typed as a career.</summary>
@@ -107,6 +108,7 @@ public sealed partial class ShellViewModel
         _deleteTyped = string.Empty;
         _deleteStatus = null;
         ChangedDelete();
+        SavesPop(SavesScreen.Delete);
     }
 
     /// <summary>"Delete for good": the DELETE, then this PC's cleanup on 204 or 404.</summary>
@@ -147,6 +149,7 @@ public sealed partial class ShellViewModel
             foreach (var row in rows)
             {
                 var game = Infinity.Core.Process.GameDefinition.ById(row.Game) ?? Infinity.Core.Process.GameDefinition.Fh2;
+                ArchiveDeletedCareer(game, row, allGames); // SAVE_MANAGER_UX §7.1: deleting is archiving, into the launcher's history first
                 var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root, game), LocalProfiles,
                     session.Me?.AccountId ?? session.Tokens.AccountId, row, ForgetSyncFor(game.Id), DateTime.UtcNow);
                 foreach (var path in cleanup.Archived) Log($"profiles: archived {row.Game} " + path);
