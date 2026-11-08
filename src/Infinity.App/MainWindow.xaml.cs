@@ -654,6 +654,7 @@ public partial class MainWindow : Window
 
     // CR-L41.2: Join from link
     private async void OnJoinFromLink(object sender, RoutedEventArgs e) => await _vm.JoinFromLinkAsync();
+    private void OnToggleJoinLink(object sender, RoutedEventArgs e) => _vm.ToggleJoinLink();
     private async void OnJoinLinkKey(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Enter) return;

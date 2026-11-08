@@ -79,4 +79,34 @@ public static class ShellLayout
 
     /// <summary>The header's friends button shows signed in only.</summary>
     public static bool FriendsButton(bool signedIn) => signedIn;
+
+    /// <summary>
+    /// Owner 2026-11-08 (games-5): the header's right side. Signed in: <c>{avatar} {e-mail} (exit)</c> (with the Supporter chip, Moderation
+    /// when allowed and the friends toggle); signed out on the shell (the offline path): one Sign in button and nothing of an account.
+    /// </summary>
+    public static HeaderAccount Header(ShellGate gate)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        return gate.SignedIn ? HeaderAccount.Account : gate.Offline ? HeaderAccount.SignInButton : HeaderAccount.None;
+    }
+
+    /// <summary>The header avatar's initial when no Discord avatar is linked: the e-mail's first letter or digit, upper case; "?" without one.</summary>
+    public static string AvatarInitial(string? email)
+    {
+        var first = (email ?? string.Empty).FirstOrDefault(char.IsLetterOrDigit);
+        return first == default ? "?" : char.ToUpperInvariant(first).ToString();
+    }
+}
+
+/// <summary>What the header's right side shows (<see cref="ShellLayout.Header"/>).</summary>
+public enum HeaderAccount
+{
+    /// <summary>No header (the sign-in screen).</summary>
+    None,
+
+    /// <summary>Avatar, e-mail, (exit).</summary>
+    Account,
+
+    /// <summary>A single Sign in button.</summary>
+    SignInButton,
 }

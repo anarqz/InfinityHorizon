@@ -75,7 +75,9 @@
         <ControlTemplate TargetType="Button">
           <Grid>
             <Border x:Name="Box" CornerRadius="10" Background="{TemplateBinding Background}">
-              <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+              <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True">
+                <ContentPresenter.Resources><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap" /></Style></ContentPresenter.Resources>
+              </ContentPresenter>
             </Border>
             <Border x:Name="Shine" CornerRadius="10" Background="#00FFFFFF" IsHitTestVisible="False" BorderThickness="2" BorderBrush="Transparent" />
           </Grid>
@@ -100,7 +102,10 @@
       <Setter Property="Template"><Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="Box" CornerRadius="10" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1">
-            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" RecognizesAccessKey="True" />
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" RecognizesAccessKey="True">
+              <!-- games-5: a long label (pt-BR) wraps inside a narrow column instead of being cut -->
+              <ContentPresenter.Resources><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap" /></Style></ContentPresenter.Resources>
+            </ContentPresenter>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityMuted}" /></Trigger>
@@ -403,22 +408,32 @@
                     Content="{Binding S[moderation.open]}" Click="OnToggleModerationPane" VerticalAlignment="Center"
                     AutomationProperties.Name="{Binding S[moderation.open]}"
                     Visibility="{Binding CanModerate, Converter={StaticResource Visible}}" />
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+            <!-- Owner 2026-11-08 (games-5): signed in, "{avatar} {e-mail} (exit)": the Discord avatar when linked (loaded once, async), else a
+                 round initial in the accent colour; the Supporter chip before it. -->
+            <StackPanel x:Name="HeaderAccountPanel" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                         IsEnabled="{Binding CanChangeIdentity}"
-                        Visibility="{Binding SignedIn, Converter={StaticResource Visible}}">
+                        Visibility="{Binding ShowHeaderAccount, Converter={StaticResource Visible}}">
               <!-- CR-S69: a Supporter's account carries a small badge; every account is an Infinity Racer otherwise. -->
-              <Border Background="{StaticResource InfinityPink}" CornerRadius="8" Padding="7,1" Margin="0,0,8,0" VerticalAlignment="Center"
+              <Border Background="{StaticResource InfinityPink}" CornerRadius="8" Padding="7,1" Margin="0,0,10,0" VerticalAlignment="Center"
                       ToolTip="{Binding S[shell.supporter_badge_tip]}"
                       Visibility="{Binding ShowSupporterBadge, Converter={StaticResource Visible}}">
                 <TextBlock Text="{Binding S[shell.supporter_badge]}" FontSize="10" FontWeight="Bold" Foreground="White" />
               </Border>
-              <TextBlock Text="{Binding Email}" MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding Email}"
+              <Grid x:Name="HeaderAvatar" Width="28" Height="28" Margin="0,0,8,0" VerticalAlignment="Center" AutomationProperties.Name="{Binding Email}">
+                <Ellipse Fill="#33FF4F8B" Stroke="{StaticResource InfinityPink}" StrokeThickness="1.5" />
+                <TextBlock Text="{Binding AccountInitial}" Foreground="{StaticResource InfinityPink}" FontSize="13" FontWeight="Black"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <Ellipse Visibility="{Binding HasDiscordAvatar, Converter={StaticResource Visible}}">
+                  <Ellipse.Fill><ImageBrush ImageSource="{Binding DiscordAvatar}" Stretch="UniformToFill" /></Ellipse.Fill>
+                </Ellipse>
+              </Grid>
+              <TextBlock Text="{Binding Email}" MaxWidth="200" TextTrimming="CharacterEllipsis" ToolTip="{Binding Email}"
                          VerticalAlignment="Center" Foreground="{StaticResource InfinityMuted}" />
               <Button Content="{Binding S[shell.exit]}" Style="{StaticResource LinkButton}" Click="OnSignOut" />
             </StackPanel>
-            <!-- OD-118: on the offline path the top right keeps Sign in. -->
-            <Button DockPanel.Dock="Right" Content="{Binding S[offline.sign_in]}" Style="{StaticResource AccentButtonStyle}" Click="OnOpenSignIn" Padding="14,6"
-                    VerticalAlignment="Center" IsEnabled="{Binding Idle}" Visibility="{Binding OfflineMode, Converter={StaticResource Visible}}" />
+            <!-- OD-118; games-5: signed out (the offline path) the top right is a single Sign in button. -->
+            <Button x:Name="HeaderSignIn" DockPanel.Dock="Right" Content="{Binding S[offline.sign_in]}" Style="{StaticResource AccentButtonStyle}" Click="OnOpenSignIn" Padding="14,6"
+                    VerticalAlignment="Center" IsEnabled="{Binding Idle}" Visibility="{Binding ShowHeaderSignIn, Converter={StaticResource Visible}}" />
           </DockPanel>
         </Border>
 
@@ -1144,6 +1159,10 @@
                 <Button DockPanel.Dock="Left" Content="{Binding S[sm.back]}" Style="{StaticResource SmButton}" Padding="12,6" Margin="0,0,14,0" FontSize="13"
                         Click="OnSavesBack" Visibility="{Binding SavesCanGoBack, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding S[sm.back]}" />
                 <!-- owner 2026-11-08: the save tools act on PLAY's selected game (chosen there, shown here) -->
+                <!-- games-5: History's Refresh, small, at the right of the head row (out of the slot filters) -->
+                <Button x:Name="HistoryRefresh" DockPanel.Dock="Right" Content="{Binding S[sm.history_refresh]}" Style="{StaticResource SmButton}" Padding="10,4" FontSize="12"
+                        Margin="10,0,0,0" VerticalAlignment="Center" Click="OnHistoryRefresh" IsEnabled="{Binding Idle}"
+                        Visibility="{Binding ShowSavesHistory, Converter={StaticResource Visible}}" />
                 <Border DockPanel.Dock="Right" Style="{StaticResource SmPill}" Padding="12,6" ToolTip="{Binding S[sm.game_from_play]}">
                   <StackPanel Orientation="Horizontal">
                     <TextBlock Text="{Binding S[sm.game_label]}" Foreground="{StaticResource InfinityMuted}" FontSize="12" VerticalAlignment="Center" />
@@ -1327,10 +1346,10 @@
                       <TextBlock Text="{Binding NoobSeedPlanText}" Style="{StaticResource SmHint}" Margin="0,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                   </Border>
-                  <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                  <WrapPanel Margin="0,18,0,0">
                     <Button Content="{Binding S[sm.create_confirm]}" Background="{Binding CreateAccent}" Style="{StaticResource SmPrimary}" Click="OnCreateProfile" IsEnabled="{Binding Idle}" />
                     <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnSavesBack" />
-                  </StackPanel>
+                  </WrapPanel>
                 </StackPanel>
 
                 <!-- owner 2026-11-08: a career starts on PLAY (its inline choice), never on the Profiles page -->
@@ -1350,7 +1369,7 @@
                             <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                           </Border>
                         </Grid>
-                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
+                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
                         <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
                         <Button Content="{Binding ActionLabel}" Margin="0,16,0,0" HorizontalAlignment="Left" Click="OnResolveKeepCloud"
                                 IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
@@ -1378,7 +1397,7 @@
                             <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
                           </Border>
                         </Grid>
-                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
+                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
                         <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
                         <Button Content="{Binding ActionLabel}" Margin="0,16,0,0" HorizontalAlignment="Left" Click="OnResolveKeepPc"
                                 IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
@@ -1469,35 +1488,36 @@
                   <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowCopyBlocked, Converter={StaticResource Visible}}">
                     <TextBlock Text="{Binding CopyBlockedText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
                   </Border>
-                  <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                  <WrapPanel Margin="0,18,0,0">
                     <Button Content="{Binding S[sm.copy_confirm]}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}"
                             Click="OnConfirmCopy" IsEnabled="{Binding CanConfirmCopy}" />
                     <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnSavesBack" />
-                  </StackPanel>
+                  </WrapPanel>
                 </StackPanel>
 
                 <!-- ============ HISTORY: one slot's timeline, this PC's entries and the cloud's revisions ============ -->
                 <Grid Visibility="{Binding ShowSavesHistory, Converter={StaticResource Visible}}">
-                  <Grid.ColumnDefinitions><ColumnDefinition Width="340" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                  <!-- games-5: the list and the detail share the width (no fixed column), so nothing is cut at 1280 px or with FRIENDS open -->
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="5*" MinWidth="240" /><ColumnDefinition Width="6*" MinWidth="240" /></Grid.ColumnDefinitions>
                   <DockPanel Margin="0,0,18,0">
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,12">
-                      <Button Content="{Binding S[sm.hardcore]}" Tag="Hardcore" Click="OnHistorySlot" Margin="0,0,6,0" FontWeight="SemiBold">
+                    <!-- the slot filters wrap; Refresh moved to the head row (right of the breadcrumb) -->
+                    <WrapPanel x:Name="HistoryFilters" DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                      <Button Content="{Binding S[sm.hardcore]}" Tag="Hardcore" Click="OnHistorySlot" Margin="0,0,6,6" FontWeight="SemiBold">
                         <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
                           <DataTrigger Binding="{Binding HistoryHardcoreOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Hardcore}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Hardcore}" /></DataTrigger>
                         </Style.Triggers></Style></Button.Style>
                       </Button>
-                      <Button Content="{Binding S[sm.azimuth]}" Tag="Azimuth" Click="OnHistorySlot" Margin="0,0,6,0" FontWeight="SemiBold">
+                      <Button Content="{Binding S[sm.azimuth]}" Tag="Azimuth" Click="OnHistorySlot" Margin="0,0,6,6" FontWeight="SemiBold">
                         <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
                           <DataTrigger Binding="{Binding HistoryAzimuthOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Azimuth}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Azimuth}" /></DataTrigger>
                         </Style.Triggers></Style></Button.Style>
                       </Button>
-                      <Button Content="{Binding S[sm.noob]}" Tag="Noob" Click="OnHistorySlot" FontWeight="SemiBold">
+                      <Button Content="{Binding S[sm.noob]}" Tag="Noob" Click="OnHistorySlot" Margin="0,0,6,6" FontWeight="SemiBold">
                         <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
                           <DataTrigger Binding="{Binding HistoryNoobOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Noob}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger>
                         </Style.Triggers></Style></Button.Style>
                       </Button>
-                      <Button Content="{Binding S[sm.history_refresh]}" Style="{StaticResource SmButton}" Margin="12,0,0,0" Click="OnHistoryRefresh" IsEnabled="{Binding Idle}" />
-                    </StackPanel>
+                    </WrapPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding S[sm.history_empty]}" Style="{StaticResource SmHint}" Visibility="{Binding HistoryEmpty, Converter={StaticResource Visible}}" />
                     <ItemsControl ItemsSource="{Binding HistoryRows}" Focusable="False">
                       <ItemsControl.ItemTemplate>
@@ -1507,10 +1527,10 @@
                               <DataTrigger Binding="{Binding Selected}" Value="True"><Setter Property="BorderBrush" Value="{Binding DataContext.HistoryAccent, RelativeSource={RelativeSource AncestorType=Window}}" /></DataTrigger>
                             </Style.Triggers></Style></Button.Style>
                             <StackPanel HorizontalAlignment="Stretch">
-                              <StackPanel Orientation="Horizontal">
-                                <Border Style="{StaticResource SmPill}" Margin="0,0,8,0"><TextBlock Text="{Binding Origin}" FontSize="11" Foreground="{StaticResource InfinityMuted}" /></Border>
-                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
-                              </StackPanel>
+                              <DockPanel>
+                                <Border DockPanel.Dock="Left" Style="{StaticResource SmPill}" Margin="0,0,8,0"><TextBlock Text="{Binding Origin}" FontSize="11" Foreground="{StaticResource InfinityMuted}" /></Border>
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                              </DockPanel>
                               <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,4,0,0" />
                               <TextBlock Text="{Binding When}" FontSize="12" Foreground="{StaticResource InfinityFaint}" />
                             </StackPanel>
@@ -1521,7 +1541,7 @@
                   </DockPanel>
                   <Border Grid.Column="1" Style="{StaticResource SmCard}" VerticalAlignment="Top" Visibility="{Binding HasHistorySelected, Converter={StaticResource Visible}}">
                     <StackPanel>
-                      <TextBlock Text="{Binding HistoryDetailTitle}" Foreground="{Binding HistoryAccent}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" />
+                      <TextBlock Text="{Binding HistoryDetailTitle}" Foreground="{Binding HistoryAccent}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" TextWrapping="Wrap" />
                       <TextBlock Text="{Binding HistoryDetailHeadline}" FontSize="22" FontWeight="Bold" Margin="0,8,0,2" TextWrapping="Wrap" />
                       <TextBlock Text="{Binding HistoryDetailLine}" Style="{StaticResource SmHint}" />
                       <WrapPanel Margin="0,16,0,0">
@@ -1546,10 +1566,10 @@
                            AutomationProperties.Name="{Binding DeleteProfileTypeHint}" />
                   <TextBlock Text="{Binding DeleteProfileStatus}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
                              Visibility="{Binding HasDeleteProfileStatus, Converter={StaticResource Visible}}" AutomationProperties.LiveSetting="Polite" />
-                  <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                  <WrapPanel Margin="0,18,0,0">
                     <Button Content="{Binding S[profiles.delete_confirm]}" Style="{StaticResource SmDanger}" Click="OnConfirmDeleteProfile" IsEnabled="{Binding CanConfirmDeleteProfile}" />
                     <Button Content="{Binding S[profiles.delete_cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnCancelDeleteProfile" />
-                  </StackPanel>
+                  </WrapPanel>
                   <TextBlock Text="{Binding DeleteRateNote}" Style="{StaticResource SmHint}" Margin="0,14,0,0" />
                 </StackPanel>
 
@@ -1773,45 +1793,61 @@
           <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
             <Grid>
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-            <StackPanel MaxWidth="900" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,8">
-              <!-- Owner 2026-11-08 (the PLAY revamp): title, the game tiles, one button per profile, "manage profiles". -->
-              <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                <TextBlock Text="{Binding PlayTitle}" FontSize="40" FontWeight="Black" VerticalAlignment="Center" />
-                <Border Padding="8,2" CornerRadius="4" Margin="14,0,0,0" VerticalAlignment="Center" Background="{StaticResource InfinityWarnSurface}">
-                  <TextBlock Text="BETA" Foreground="{StaticResource InfinityGold}" FontWeight="Bold" FontSize="10" />
-                </Border>
-              </StackPanel>
-              <!-- the catalog's games: our own tiles (short code, name, accent; never game art), a horizontal scrollbar when they overflow -->
-              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,16,0,0" PanningMode="HorizontalOnly"
-                            Focusable="False" IsEnabled="{Binding Idle}">
+            <StackPanel x:Name="PlayColumn" MaxWidth="760" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8,0,8">
+              <!-- Owner 2026-11-08 (the PLAY revamp; games-5 after the wireframe): one centered column: our logo, the game tiles, one button per
+                   profile, "manage profiles". -->
+              <Image x:Name="PlayLogo" Source="{StaticResource BrandLogo}" Width="380" HorizontalAlignment="Center" Margin="0,0,0,8"
+                     RenderOptions.BitmapScalingMode="HighQuality" AutomationProperties.Name="{Binding PlayTitle}" />
+              <!-- every catalog game (PlayTiles): its cover (OD-217, shipped in the package) or the styled tile, the name small under it; a game
+                   this Azimuth install lacks is dimmed with the reason. A horizontal scrollbar when they overflow. -->
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,16,0,6" PanningMode="HorizontalOnly"
+                            HorizontalAlignment="Center" Focusable="False" IsEnabled="{Binding Idle}">
                 <ItemsControl ItemsSource="{Binding GameCards}" Focusable="False">
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Button Click="OnSelectGameTile" IsEnabled="{Binding Enabled}" Width="208" Height="120" Margin="0,0,12,12" Cursor="Hand"
-                              FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" ToolTip="{Binding Title}">
+                      <Button Click="OnSelectGameTile" IsEnabled="{Binding Enabled}" Width="168" Margin="8,0,8,12" Cursor="Hand" VerticalAlignment="Top"
+                              FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" ToolTip="{Binding Title}" ToolTipService.ShowOnDisabled="True">
                         <Button.Template>
                           <ControlTemplate TargetType="Button">
-                            <Grid>
-                              <Border x:Name="Box" CornerRadius="14" Background="{StaticResource SmCardSurface}" BorderBrush="{StaticResource SmLine}" BorderThickness="1" />
-                              <Border x:Name="Glow" CornerRadius="14" Background="{Binding Soft}" Opacity="0" Margin="1" />
-                              <Border CornerRadius="0,0,14,14" Height="4" VerticalAlignment="Bottom" Margin="1" Background="{Binding Accent}" Opacity="0.85" />
-                              <StackPanel Margin="18,14,18,14" VerticalAlignment="Top">
-                                <TextBlock Text="{Binding ShortCode}" FontSize="32" FontWeight="Black" Foreground="{Binding Accent}" />
-                                <TextBlock Text="{Binding Tagline}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource InfinityMuted}" />
-                              </StackPanel>
-                              <TextBlock Text="{Binding Title}" Margin="18,0,18,14" VerticalAlignment="Bottom" FontSize="12" TextTrimming="CharacterEllipsis"
-                                         Foreground="{StaticResource InfinityText}" />
-                            </Grid>
+                            <StackPanel Background="Transparent">
+                              <Grid Width="168" Height="168">
+                                <Grid x:Name="Art">
+                                  <Border CornerRadius="14" Background="{StaticResource SmCardSurface}" />
+                                  <!-- the styled tile: no cover file, or one that did not decode -->
+                                  <Grid Visibility="{Binding HasCover, Converter={StaticResource Hidden}}">
+                                    <Border x:Name="Glow" CornerRadius="14" Background="{Binding Soft}" Opacity="0" Margin="1" />
+                                    <Border CornerRadius="0,0,14,14" Height="4" VerticalAlignment="Bottom" Margin="1" Background="{Binding Accent}" Opacity="0.85" />
+                                    <StackPanel Margin="18,16,18,14" VerticalAlignment="Top">
+                                      <TextBlock Text="{Binding ShortCode}" FontSize="36" FontWeight="Black" Foreground="{Binding Accent}" />
+                                      <TextBlock Text="{Binding Tagline}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource InfinityMuted}" />
+                                    </StackPanel>
+                                  </Grid>
+                                  <Border CornerRadius="14" Visibility="{Binding HasCover, Converter={StaticResource Visible}}">
+                                    <Border.Background><ImageBrush ImageSource="{Binding Cover}" Stretch="UniformToFill" /></Border.Background>
+                                  </Border>
+                                </Grid>
+                                <Border x:Name="Ring" CornerRadius="14" BorderBrush="{StaticResource SmLine}" BorderThickness="1" />
+                              </Grid>
+                              <TextBlock x:Name="Name" Text="{Binding Title}" Margin="0,8,0,0" FontSize="12" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                         Foreground="{StaticResource InfinityMuted}" />
+                              <TextBlock Text="{Binding Reason}" Margin="0,2,0,0" FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
+                                         Foreground="{StaticResource InfinityFaint}" Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
+                            </StackPanel>
                             <ControlTemplate.Triggers>
-                              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityMuted}" /></Trigger>
+                              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Ring" Property="BorderBrush" Value="{StaticResource InfinityMuted}" /></Trigger>
                               <DataTrigger Binding="{Binding Selected}" Value="True">
-                                <Setter TargetName="Box" Property="BorderBrush" Value="{Binding Accent}" />
-                                <Setter TargetName="Box" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="Ring" Property="BorderBrush" Value="{Binding Accent}" />
+                                <Setter TargetName="Ring" Property="BorderThickness" Value="3" />
                                 <Setter TargetName="Glow" Property="Opacity" Value="1" />
+                                <Setter TargetName="Name" Property="Foreground" Value="{StaticResource InfinityText}" />
+                                <Setter TargetName="Name" Property="FontWeight" Value="SemiBold" />
                               </DataTrigger>
-                              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
-                              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+                              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Ring" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
+                              <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Art" Property="Opacity" Value="0.35" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                              </Trigger>
                             </ControlTemplate.Triggers>
                           </ControlTemplate>
                         </Button.Template>
@@ -1821,26 +1857,27 @@
                 </ItemsControl>
               </ScrollViewer>
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
-                <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" Margin="0,6,0,14" Foreground="{StaticResource InfinityMuted}" />
+                <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,14"
+                           Foreground="{StaticResource InfinityMuted}" />
                 <!-- §1.1: mods never block Play silently; the reason and the way to Mods are shown here. -->
                 <!-- OD-118 T1c: the notice above its buttons, which wrap, so neither is clipped at 1172x746 in pt-BR. -->
                 <StackPanel Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Left" Foreground="{StaticResource InfinityGold}" />
-                  <WrapPanel Margin="0,8,0,0">
+                  <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Center" TextAlignment="Center" Foreground="{StaticResource InfinityGold}" />
+                  <WrapPanel Margin="0,8,0,0" HorizontalAlignment="Center">
                     <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="0,0,8,6" />
                     <!-- OD-118 T1f: the catalog failed: retry it here (GitHub, never Infinity). -->
                     <Button Content="{Binding S[updater.retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,4" Margin="0,0,8,6"
                             Visibility="{Binding ShowCatalogRetry, Converter={StaticResource Visible}}" />
                   </WrapPanel>
                 </StackPanel>
-                <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Left" Margin="0,0,0,14"
+                <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Center" Margin="0,0,0,14"
                         Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <!-- one button per profile: its career in the selected game, then PLAY {MODE} (or start / create / resolve / not offered) -->
                 <ItemsControl x:Name="PlayButtonsRow" ItemsSource="{Binding PlayButtons}" Focusable="False" IsEnabled="{Binding CanUsePlayButtons}" Visibility="{Binding ShowPlayStart, Converter={StaticResource Hidden}}">
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Button Click="OnPlayButton" IsEnabled="{Binding Enabled}" Margin="0,0,14,0" MinHeight="168" Cursor="Hand"
+                      <Button Click="OnPlayButton" IsEnabled="{Binding Enabled}" Margin="7,0" MinHeight="168" Cursor="Hand"
                               FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" HorizontalContentAlignment="Stretch">
                         <Button.Template>
                           <ControlTemplate TargetType="Button">
@@ -1862,7 +1899,7 @@
                                 <TextBlock DockPanel.Dock="Top" Text="{Binding Note}" Margin="0,10,0,0" Style="{StaticResource SmHint}"
                                            Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
                                 <Border x:Name="Action" DockPanel.Dock="Bottom" Margin="0,16,0,0" CornerRadius="10" Background="{Binding Accent}" Padding="14,11">
-                                  <TextBlock Text="{Binding Title}" Foreground="#FF071018" FontWeight="Black" FontSize="17" HorizontalAlignment="Center" TextWrapping="Wrap"
+                                  <TextBlock x:Name="ActionText" Text="{Binding Title}" Foreground="#FF071018" FontWeight="Black" FontSize="17" HorizontalAlignment="Center" TextWrapping="Wrap"
                                              TextAlignment="Center" />
                                 </Border>
                               </DockPanel>
@@ -1871,7 +1908,16 @@
                               <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="Background" Value="{StaticResource SmCardRaised}" /></Trigger>
                               <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource InfinityPink}" /></Trigger>
                               <Trigger Property="IsPressed" Value="True"><Setter TargetName="Action" Property="Opacity" Value="0.8" /></Trigger>
-                              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
+                              <!-- games-5: a disabled button (the game has no such mode, a game running, no Azimuth) is clearly off: grey, no accent, no
+                                   hover; its reason is the line above (Note). Last, so it wins over the hover. -->
+                              <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Box" Property="Background" Value="{StaticResource SmCardSurface}" />
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource SmLine}" />
+                                <Setter TargetName="Action" Property="Background" Value="#FF2B2631" />
+                                <Setter TargetName="ActionText" Property="Foreground" Value="{StaticResource InfinityFaint}" />
+                                <Setter Property="Opacity" Value="0.75" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                              </Trigger>
                             </ControlTemplate.Triggers>
                           </ControlTemplate>
                         </Button.Template>
@@ -1880,7 +1926,7 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <!-- (1) START {MODE} CAREER: the inline choice (fresh / from my other profile / from this PC's save); Play follows -->
-                <StackPanel Visibility="{Binding ShowPlayStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Left">
+                <StackPanel Visibility="{Binding ShowPlayStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Center">
                   <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
                   <TextBlock Text="{Binding StartSub}" Style="{StaticResource SmSub}" />
                   <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFresh" IsEnabled="{Binding Idle}">
@@ -1915,8 +1961,8 @@
                             Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
                   </WrapPanel>
                 </StackPanel>
-                <Button Content="{Binding S[play.manage_profiles]}" Style="{StaticResource SmLink}" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OnNavProfiles" />
-                <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" FontWeight="Bold"
+                <Button Content="{Binding S[play.manage_profiles]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Margin="0,14,0,0" Click="OnNavProfiles" />
+                <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" TextAlignment="Center" FontWeight="Bold"
                            AutomationProperties.LiveSetting="Polite" />
               </StackPanel>
               <Border Style="{StaticResource Card}" Background="#EE170B22" BorderBrush="#775A184D" Margin="0,2,0,0"
@@ -1944,26 +1990,24 @@
                           IsEnabled="{Binding CanLeaveQueue}" />
                 </StackPanel>
               </Border>
-              <WrapPanel Margin="0,14,0,0" Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
-                <Button Content="{Binding S[supervisor.quit_button]}" Margin="0,0,14,0" Click="OnQuitGame"
+              <!-- games-5: the old page's "Use a save from this PC" link is gone (a save from this PC is one of START CAREER's choices and a
+                   Profiles tool); only Quit game stays here while a game runs. -->
+              <WrapPanel Margin="0,14,0,0" HorizontalAlignment="Center" Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
+                <Button Content="{Binding S[supervisor.quit_button]}" Margin="0" Click="OnQuitGame"
                         Visibility="{Binding GameStarted, Converter={StaticResource Visible}}" />
-                <Button Content="{Binding S[saves.use_pc_save]}" Style="{StaticResource LinkButton}" Margin="0"
-                        Click="OnOpenSavePicker" IsEnabled="{Binding CanPickSave}"
-                        Visibility="{Binding ShowHardcoreSaveNote, Converter={StaticResource Hidden}}" />
-                <!-- B2: a Hardcore career always starts fresh; no save from this PC is offered to it. -->
-                <TextBlock Text="{Binding S[saves.hardcore_fresh]}" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
-                           VerticalAlignment="Center" Visibility="{Binding ShowHardcoreSaveNote, Converter={StaticResource Visible}}" />
               </WrapPanel>
               <!-- OD-133: a career a fresh start moved aside on this PC comes back (server dry run first; disabled until MB-133-1). -->
-              <StackPanel Margin="0,8,0,0" Visibility="{Binding ShowCareerRestoreEntry, Converter={StaticResource Visible}}">
-                <Button Content="{Binding S[restore.entry]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Margin="0"
+              <StackPanel Margin="0,8,0,0" HorizontalAlignment="Center" Visibility="{Binding ShowCareerRestoreEntry, Converter={StaticResource Visible}}">
+                <Button Content="{Binding S[restore.entry]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Center" Margin="0"
                         Click="OnOpenCareerRestore" IsEnabled="{Binding CanRestoreCareer}" />
-                <TextBlock Text="{Binding CareerRestoreNote}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityFaint}" Margin="0,2,0,0" />
+                <TextBlock Text="{Binding CareerRestoreNote}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center" Foreground="{StaticResource InfinityFaint}" Margin="0,2,0,0" />
               </StackPanel>
-              <!-- CR-L41.2: Join from link (the Join lobby button of a Discord card; the path on Steam Deck). It only fills the field. -->
-              <StackPanel Margin="0,22,0,0" MaxWidth="560" HorizontalAlignment="Left" Visibility="{Binding ShowJoinFromLink, Converter={StaticResource Visible}}">
-                <TextBlock Text="{Binding S[join.title]}" FontWeight="Bold" />
-                <TextBlock Text="{Binding S[join.hint]}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,6" Foreground="{StaticResource InfinityMuted}" />
+              <!-- CR-L41.2: Join from link (the Join lobby button of a Discord card; the path on Steam Deck). It only fills the field.
+                   games-5: a small link at the bottom of the column; its field opens on a click, or by itself when a link arrives. -->
+              <Button x:Name="JoinLinkToggle" Content="{Binding S[join.title]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Margin="0,22,0,0"
+                      Click="OnToggleJoinLink" Visibility="{Binding ShowJoinFromLink, Converter={StaticResource Visible}}" />
+              <StackPanel Margin="0,6,0,0" MaxWidth="460" HorizontalAlignment="Center" Visibility="{Binding ShowJoinLinkForm, Converter={StaticResource Visible}}">
+                <TextBlock Text="{Binding S[join.hint]}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,6" Foreground="{StaticResource InfinityMuted}" />
                 <DockPanel>
                   <Button DockPanel.Dock="Right" Content="{Binding S[join.button]}" Click="OnJoinFromLink" IsEnabled="{Binding CanJoinFromLink}" Margin="8,0,0,0" Padding="12,6" />
                   <TextBox Text="{Binding JoinLinkDraft, UpdateSourceTrigger=PropertyChanged}" Padding="10,6" KeyDown="OnJoinLinkKey"

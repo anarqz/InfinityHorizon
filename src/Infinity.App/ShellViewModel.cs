@@ -302,6 +302,14 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public string Email => _gate.AccountEmail ?? string.Empty;
 
+    /// <summary>Owner 2026-11-08 (games-5): the header's right side (<see cref="ShellLayout.Header"/>).</summary>
+    public bool ShowHeaderAccount => ShellLayout.Header(_gate) == HeaderAccount.Account;
+
+    public bool ShowHeaderSignIn => ShellLayout.Header(_gate) == HeaderAccount.SignInButton;
+
+    /// <summary>The header avatar without a linked Discord avatar: a round initial in the accent colour.</summary>
+    public string AccountInitial => ShellLayout.AvatarInitial(_gate.AccountEmail);
+
     /// <summary>CR-S69: a Supporter's account carries the small "Supporter" badge next to its e-mail; nothing else depends on it.</summary>
     public bool ShowSupporterBadge => SignedIn && IsSupporter;
 

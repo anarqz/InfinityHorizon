@@ -1489,6 +1489,8 @@
   "play.stats_credits": "CR {credits}",
   "play.stats_hours": "{hours}h",
   "play.manage_profiles": "manage profiles",
+  "play.tile_not_in_install": "Not in this Azimuth install",
+  "play.tile_closed": "Not open right now",
   "play.friends_title": "FRIENDS",
   "play.friends_close": "Close friends",
   "play.friends_add": "Add",

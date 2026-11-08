@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Security.Cryptography;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Infinity.Core.Api;
 using Infinity.Core.Process;
 using Infinity.Core.Shell;
@@ -10,17 +11,22 @@ using Infinity.Core.Shell;
 namespace Infinity.App;
 
 /// <summary>
-/// Owner 2026-11-08: a game tile of PLAY's row. Our own art only (rule 3: no game file or game art): the catalog's short code, name, tagline
-/// and accent (<see cref="GameDefinition.TileAccent"/>).
+/// Owner 2026-11-08: a game tile of PLAY's row: the game's cover (OD-217: shipped in the package, <see cref="GameCover"/>), else the styled
+/// tile (the catalog's short code, tagline and accent); the name small under it, and why a tile is dimmed.
 /// </summary>
 public sealed record GameCard(GameInfo Info, string Title, string ShortCode, string Tagline, Brush Accent, Brush Soft, bool Selected)
 {
-    public bool Enabled => Info.Accepting;
+    public ImageSource? Cover { get; init; }
+    public bool HasCover => Cover is not null;
+    public bool Enabled { get; init; } = true;
+    public string Reason { get; init; } = string.Empty;
+    public bool HasReason => Reason.Length > 0;
 }
 
 /// <summary>
 /// OD-206: which games this PC offers. The allowed titles (<see cref="GameDefinition.All"/>) found in Azimuth's <c>data\titles</c>;
-/// signed in, also those the server lists (a closed game stays hidden). Each game's folder and cover come from <c>data\azimuth.ini</c>.
+/// signed in, also those the server lists (a game it does not list stays hidden). Each game's folder comes from <c>data\azimuth.ini</c>.
+/// PLAY's tiles show every catalog game and dim the ones this install lacks (<see cref="PlayTiles"/>).
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -50,16 +56,89 @@ public sealed partial class ShellViewModel
         }
     }
 
-    /// <summary>PLAY's tiles follow <see cref="Games"/> and the selected game (no file or request: the catalog's data only).</summary>
+    /// <summary>
+    /// PLAY's tiles (games-5): every catalog game (<see cref="PlayTiles"/>), those this install lacks dimmed with the reason; no request. The
+    /// covers load off the UI thread once and are cached; a missing or unreadable one is logged and the tile stays the styled one.
+    /// </summary>
     private void FillGameCards()
     {
         GameCards.Clear();
-        foreach (var game in Games)
+        var served = OfflineMode || _session is null ? null : _session.Info.Games ?? [];
+        foreach (var tile in PlayTiles.Build(Games, served))
         {
-            var definition = GameDefinition.ById(game.Id);
-            var accent = TileBrush(definition?.TileAccent, 0xFF);
-            GameCards.Add(new GameCard(game, game.Title, definition?.ShortName ?? game.Id.ToUpperInvariant(), definition?.TileTagline ?? string.Empty,
-                accent, TileBrush(definition?.TileAccent, 0x2E), game.Id == _gate.Game));
+            var definition = tile.Game;
+            var game = tile.Info;
+            var art = ArtOf(definition);
+            GameCards.Add(new GameCard(game, art?.Name ?? definition.Name, definition.ShortName, definition.TileTagline,
+                TileBrush(definition.TileAccent, 0xFF), TileBrush(definition.TileAccent, 0x2E), game.Id == _gate.Game)
+            {
+                Cover = art?.Image,
+                Enabled = tile.Selectable,
+                Reason = tile.State switch
+                {
+                    PlayTileState.NotInInstall => S["play.tile_not_in_install"],
+                    PlayTileState.Closed => S["play.tile_closed"],
+                    _ => string.Empty,
+                },
+            });
+        }
+    }
+
+    /// <summary>A tile's art from this PC (owner 2026-11-08: covers from the user's own game files): the cover (null: the styled tile) and the ini's name.</summary>
+    private sealed record TileArt(ImageSource? Image, string? Name);
+
+    /// <summary>The art per Azimuth folder and game, read and decoded once off the UI thread, at tile size.</summary>
+    private readonly Dictionary<string, TileArt> _tileArt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _tileArtLoading = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The cover's decoded width: the 168 px square tile, twice for high DPI.</summary>
+    private const int CoverDecodePixels = 336;
+
+    /// <summary>The cached art, or null while it loads (the load fills the tiles again when done).</summary>
+    private TileArt? ArtOf(GameDefinition game)
+    {
+        var root = _install?.Root;
+        if (string.IsNullOrWhiteSpace(root)) return null;
+        var key = root + "|" + game.Id;
+        if (_tileArt.TryGetValue(key, out var cached)) return cached;
+        if (_tileArtLoading.Add(key)) _ = LoadTileArtAsync(key, root, game);
+        return null;
+    }
+
+    private async Task LoadTileArtAsync(string key, string root, GameDefinition game)
+    {
+        var (art, problem) = await Task.Run(() =>
+        {
+            var read = GameCover.Read(root, game); // read only: nothing in Azimuth or the game folder is ever written
+            var (image, decodeProblem) = DecodeCover(read);
+            return (new TileArt(image, AzimuthTitles.DisplayName(root, game)), read.Problem ?? decodeProblem);
+        }).ConfigureAwait(true);
+        _tileArt[key] = art;
+        _tileArtLoading.Remove(key);
+        Log(art.Image is null ? $"play: {game.Id} cover {problem}; the styled tile is shown" : $"play: {game.Id} cover read from the game folder");
+        if (_install?.Root == root) FillGameCards();
+    }
+
+    private static (ImageSource? Image, string? Problem) DecodeCover(CoverRead read)
+    {
+        if (read.Bytes is not { } bytes) return (null, null);
+        try
+        {
+            var bitmap = new BitmapImage();
+            using (var stream = new MemoryStream(bytes))
+            {
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.DecodePixelWidth = CoverDecodePixels;
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+            }
+            bitmap.Freeze();
+            return (bitmap, null);
+        }
+        catch (Exception error) when (error is IOException or NotSupportedException or InvalidOperationException or ArgumentException or FileFormatException)
+        {
+            return (null, "not decoded (" + error.GetType().Name + ")");
         }
     }
 
