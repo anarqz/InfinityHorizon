@@ -34,14 +34,39 @@ enum {
     FI_WATCH_VALUE = 0,        /* the value (bytes 1 to 4), at each change */
     FI_WATCH_NONNULL = 1,      /* a pointer (bytes 8): 1 set, 0 null, at each change */
     FI_WATCH_HEARTBEAT = 2,    /* a counter (bytes 4): 1 while it changed within the last second, 0 when it stopped */
-    FI_WATCH_POINTER_ONCE = 3  /* the pointer at `global` itself, in hex, once it is set (offset and bytes unused) */
+    FI_WATCH_POINTER_ONCE = 3, /* the pointer at `global` itself, in hex, once it is set (offset and bytes unused) */
+    FI_WATCH_CHAIN = 4         /* a pointer chain (W16): the value (bytes 1 to 4), at each change; see FiGameWatch */
 };
 
-/* Read only, for reverse engineering: a pointer at `global`, then `bytes` at `offset` in what it points to. */
+/* Read only, for reverse engineering: a pointer at `global`, then `bytes` at `offset` in what it points to.
+   FI_WATCH_CHAIN: `chain_count` (1 to FI_WATCH_CHAIN_MAX) offsets, `offset` unused. Starting from the pointer at `global`,
+   each offset but the last is added and the pointer there read (null stops the walk, nothing is logged); the last offset
+   addresses the `bytes` that are logged at each change. Other kinds leave chain_count 0. */
+enum { FI_WATCH_CHAIN_MAX = 6 };
 typedef struct {
     const char *label;
     unsigned global, offset, bytes, kind;
+    unsigned chain_count, chain[FI_WATCH_CHAIN_MAX];
 } FiGameWatch;
+
+/* The chain walk of a FI_WATCH_CHAIN row, with the reader passed in so a test can run it on a fake heap
+   (game_patches.h passes memory_read). 1 and the value (little endian, `bytes` wide) when every pointer was readable and set. */
+typedef int (*FiWatchReader)(const void *address, void *output, size_t size);
+static inline int fi_watch_chain_read(FiWatchReader read, const unsigned char *root, const FiGameWatch *watch,
+                                      unsigned long long *value) {
+    const unsigned char *at = root;
+    *value = 0;
+    if (watch->kind != FI_WATCH_CHAIN || !at || !watch->chain_count || watch->chain_count > FI_WATCH_CHAIN_MAX ||
+        watch->bytes < 1 || watch->bytes > sizeof(*value)) {
+        return 0;
+    }
+    for (unsigned i = 0; i + 1 < watch->chain_count; ++i) {
+        if (!read(at + watch->chain[i], &at, sizeof(at)) || !at) {
+            return 0;
+        }
+    }
+    return read(at + watch->chain[watch->chain_count - 1], value, watch->bytes);
+}
 
 /* A game whose main update the hook does not detour has its readiness (the launcher's Event 5) polled from
    these terms: each reads a pointer at `global`, then `bytes` (1 to 8) at `offset`, and compares it with `value`. */
@@ -103,22 +128,28 @@ static const FiGamePatch fi_fm5_patches[] = {
 
 /* The states the hopper screen decides on (response spec 9). */
 static const FiGameWatch fi_fm5_watches[] = {
-    {"FM5 WATCH party state +48", 0x261d198u, 0x48u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH party requested +4c", 0x261d198u, 0x4cu, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH party flag +290", 0x261d198u, 0x290u, 1, FI_WATCH_VALUE},
-    {"FM5 WATCH cloud config +11510", 0x261d1a0u, 0x11510u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4, FI_WATCH_VALUE},
+    {"FM5 WATCH party state +48", 0x261d198u, 0x48u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH party requested +4c", 0x261d198u, 0x4cu, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH party flag +290", 0x261d198u, 0x290u, 1, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH cloud config +11510", 0x261d1a0u, 0x11510u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH sessions +38", 0x261d1a0u, 0x38u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH ticket +114f8", 0x261d1a0u, 0x114f8u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH match requester +b0", 0x261d188u, 0xb0u, 4, FI_WATCH_VALUE, 0, {0}},
     /* R8 (lobby spec 12): the game-ready predicate's terms, to verify it on the first boot. F+0x5c, the frame
        timestamp, changes every frame and is not logged here. */
-    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4, FI_WATCH_VALUE},
-    {"FM5 WATCH ready F+48 (set in a race)", 0x25d0398u, 0x48u, 8, FI_WATCH_NONNULL},
+    {"FM5 WATCH ready S+10", 0x261d1a0u, 0x10u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH ready L+40 (1 race)", 0x25e6e40u, 0x40u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH ready L+38", 0x25e6e40u, 0x38u, 4, FI_WATCH_VALUE, 0, {0}},
+    {"FM5 WATCH ready F+48 (set in a race)", 0x25d0398u, 0x48u, 8, FI_WATCH_NONNULL, 0, {0}},
     /* the predicate's main risk: the frame timestamp stopping on some screen */
-    {"FM5 WATCH ready heartbeat F+5c", 0x25d0398u, 0x5cu, 4, FI_WATCH_HEARTBEAT},
-    {"FM5 WATCH ready F", 0x25d0398u, 0, 0, FI_WATCH_POINTER_ONCE},
+    {"FM5 WATCH ready heartbeat F+5c", 0x25d0398u, 0x5cu, 4, FI_WATCH_HEARTBEAT, 0, {0}},
+    {"FM5 WATCH ready F", 0x25d0398u, 0, 0, FI_WATCH_POINTER_ONCE, 0, {0}},
+    /* W16 (lobby spec 12 "Screen id, for diagnosis"): the UserInterface U=*(0x25f88a0); the top screen id is
+       **(*(*(*(U+0x58)+0x20)+8)+0x10) (0x1408e6580; 0 when *(s+0x28)==0, not checked here). VERIFIED statically (SAURON), id 0x6e is a
+       race start. Read it to tell when the lobby screen is on top. The GameOptions chain itself (screen+0x360 -> CLobby, CLobby+0x130 ->
+       go, go+0x38 owned at -2, go+0x40 granted alongside) has no stable root yet: add its two rows below as
+       {label, 0x25f88a0u, 0, 4, FI_WATCH_CHAIN, n, {...}} once the lobby screen has a known global or chain from U (docs/launcher/batch-1107/ITEM5.md). */
+    {"FM5 WATCH top screen id", 0x25f88a0u, 0, 4, FI_WATCH_CHAIN, 5, {0x58u, 0x20u, 0x8u, 0x10u, 0}},
 };
 
 /* SAURON's R8 (lobby spec 12, static, verified by T1's first values): S=*0x14261d1a0, L=*0x1425e6e40,

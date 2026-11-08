@@ -52,7 +52,13 @@ static DWORD WINAPI game_watch_thread(void *parameter) {
                 continue;
             }
             unsigned value = 0;
-            if (watch->kind == FI_WATCH_POINTER_ONCE) {
+            if (watch->kind == FI_WATCH_CHAIN) {
+                unsigned long long chained = 0;
+                if (!fi_watch_chain_read(memory_read, object, watch, &chained)) {
+                    continue;
+                }
+                value = (unsigned)chained;
+            } else if (watch->kind == FI_WATCH_POINTER_ONCE) {
                 if (last[i] != 1) {
                     last[i] = 1;
                     game_watch_log_pointer(watch->label, object);
