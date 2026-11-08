@@ -732,6 +732,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _nativeFlow.Dispose();
         LeaveAccount();
         _discordAvatarHttp?.Dispose();
+        _friendAvatarsCache?.Dispose();
         _session?.Dispose();
         ReleaseInstanceLock();
     }

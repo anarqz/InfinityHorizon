@@ -807,6 +807,7 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
 
     private void ObserveRequest(SeatRequest? request)
     {
+        if (request is { State: OfferStates.Accepted } accepted) ObserveRequestAccepted(accepted); // CR-S102: the requester's view
         if (request is { State: OfferStates.Pending } && DateTimeOffset.TryParse(request.ExpiresAt,
             System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var expires)
             && expires > Now)

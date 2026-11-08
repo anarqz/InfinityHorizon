@@ -16,7 +16,7 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     public static readonly GameDefinition Fh2 = new("fh2", AzimuthTitles.Fh2Name, "1A96545B", ModeCaches.Fh2StashDir, ModeCaches.Fh2Caches,
         Path.Combine("media", "stripped", "gamedbRC.slt"), FullFeatures: true)
     {
-        TileAccent = "#FFFF4F8B", TileTagline = "Horizon",    };
+        TileAccent = "#FFFF4F8B", TileTagline = "Horizon", RaceScreens = [4, 5, 6, 7, 8, 18],    };
 
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
@@ -73,6 +73,13 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     /// lobby kind, as FH2's free roam and Road Trip do.
     /// </summary>
     public string? PrivateCreateActivity { get; init; }
+
+    /// <summary>
+    /// OD-211 (CR-S102): the game's rich-presence screen ids that are a race (the hook's Event 9 reports the screen; FH2: 4-8, the solo
+    /// events, and 18 <c>ONLINE_RACE</c>, as the server's <c>fi_domain::activity::FH2_RACE_SCREENS</c>). No online toast shows on one.
+    /// Empty: the hook reports no screen for the game (FM5: its race is the official race lobby, activity <c>race</c>).
+    /// </summary>
+    public IReadOnlyList<int> RaceScreens { get; init; } = [];
 
     /// <summary>The allowed titles.</summary>
     public static readonly IReadOnlyList<GameDefinition> All = [Fh2, Fm5];

@@ -118,6 +118,12 @@ void OnFrame(uint8_t type, const uint8_t *body, size_t size) {
         else Log("ui pipe: malformed FriendsResult ignored");
         break;
     }
+    case 0x2D: { // protocol 11 (OD-211, CR-S102): a friend's Discord avatar
+        FriendAvatarFrame avatar;
+        if (DecodeFriendAvatar(body, size, avatar)) SetFriendAvatar(std::move(avatar));
+        else Log("ui pipe: malformed FriendAvatar ignored");
+        break;
+    }
     case 0x28: { // protocol 8 (OD-210, W14): the private lobby's "Who can join"
         LobbyJoinModesFrame modes;
         if (DecodeLobbyJoinModes(body, size, modes)) SetLobbyJoinModes(std::move(modes));

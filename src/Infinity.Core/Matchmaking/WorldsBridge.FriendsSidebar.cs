@@ -73,9 +73,18 @@ public sealed partial class WorldsBridge
     /// <summary>The game of this play session (<see cref="GameDefinition.Id"/>): "Add friend" names a profile of it.</summary>
     public string SessionGame { get; set; } = InviteGame;
 
-    /// <summary>True while the game reports a race in progress (no online toast then). Default: never (the hook does not report it yet).</summary>
-    public Func<bool> IsRacing { get; set; } = () => false;
+    /// <summary>True while this player races (no online toast then, CORE_API §4.2a). Default <see cref="RacingNow"/>; tests replace it.</summary>
+    public Func<bool> IsRacing
+    {
+        get => _isRacing ?? RacingNow;
+        set => _isRacing = value;
+    }
 
+    /// <summary>The friends' Discord avatars (null: initials only); the same cache as the launcher's sidebar.</summary>
+    public Shell.FriendAvatars? Avatars { get; init; }
+
+    private Func<bool>? _isRacing;
+    private int _screen = -1; // the hook's last rich-presence screen id (Event 9), -1 none reported
     private readonly object _friendsLock = new();
     private FriendList? _friendsList;
     private long _friendsReadAt = long.MinValue;
@@ -168,6 +177,119 @@ public sealed partial class WorldsBridge
         return FriendsStateOf(list, haveLobby, JoinModesFrame(), joins.Select(j => (j.Id, j.Name)), Now);
     }
 
+    // ------------------------------------------------------------------ racing (the toast rule)
+
+    /// <summary>
+    /// CORE_API §4.2a's toast rule, "none while the player is in a race", from what this launcher sees itself (the server's
+    /// <c>doing.racing</c> is about friends, never about the caller): the hook's last screen (Event 9) is one of the session game's
+    /// <see cref="Process.GameDefinition.RaceScreens"/> (FH2: 4-8, 18), or the seat's world runs activity <c>race</c> (FM5's official race
+    /// lobby) while the game plays there.
+    /// </summary>
+    public bool RacingNow()
+    {
+        var screen = Volatile.Read(ref _screen);
+        if (screen >= 0 && Process.GameDefinition.ById(SessionGame)?.RaceScreens.Contains(screen) == true) return true;
+        string? activity;
+        lock (_mineState) activity = _seatActivity is { } seen && seen.WorldId == Volatile.Read(ref _seatWorld) ? seen.Activity : null;
+        return activity == WorldActivities.Race && Volatile.Read(ref _gameInWorld) != 0;
+    }
+
+    /// <summary>The hook's Event 9: the game's rich-presence screen id (decimal 0..255), sent when it changes. Anything else is ignored.</summary>
+    public void ObserveScreen(string detail)
+    {
+        var screen = detail is { Length: > 0 and <= 3 } && detail.All(char.IsAsciiDigit) ? int.Parse(detail, CultureInfo.InvariantCulture) : -1;
+        if (screen is < 0 or > 255)
+        {
+            _log("friends: a malformed screen report was ignored");
+            return;
+        }
+        Volatile.Write(ref _screen, screen);
+    }
+
+    // ------------------------------------------------------------------ avatars (0x2D)
+
+    private readonly Dictionary<string, string> _avatarsSent = new(StringComparer.Ordinal); // friend id -> the avatar URL the overlay has
+    private readonly SemaphoreSlim _avatarSending = new(1, 1);
+    private Func<UiFrame, CancellationToken, Task>? _avatarSend;
+    private int _avatarsHooked;
+
+    /// <summary>A new overlay said hello: it has no friend avatar yet.</summary>
+    public void FriendsOverlayHello()
+    {
+        lock (_friendsLock) _avatarsSent.Clear();
+    }
+
+    /// <summary>
+    /// After a <see cref="UiFrame.FriendsState"/>: each listed friend's Discord avatar the overlay lacks (0x2D, from the cache), a clear for
+    /// one whose link went, and a load for each not cached yet (sent when it arrives). Nothing is fetched twice (<see cref="Shell.FriendAvatars"/>).
+    /// </summary>
+    public async Task SendFriendAvatarsAsync(Func<UiFrame, CancellationToken, Task> send, CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        if (Avatars is not { } avatars) return;
+        Volatile.Write(ref _avatarSend, send);
+        if (Interlocked.Exchange(ref _avatarsHooked, 1) == 0) avatars.Loaded += loaded => { _ = AvatarArrivedAsync(); };
+        await _avatarSending.WaitAsync(cancellation).ConfigureAwait(false);
+        try
+        {
+            var frames = new List<UiFrame.FriendAvatar>();
+            lock (_friendsLock)
+            {
+                var wanted = (_friendsList?.Friends ?? []).Where(f => ValidId(f.Id)).Take(UiFrame.MaxFriendRows)
+                    .ToDictionary(f => f.Id, f => Shell.FriendAvatars.Allowed(f.Discord?.AvatarUrl) ? f.Discord!.AvatarUrl : null, StringComparer.Ordinal);
+                foreach (var (id, url) in wanted)
+                {
+                    if (url is null)
+                    {
+                        if (_avatarsSent.Remove(id)) frames.Add(UiFrame.FriendAvatar.Clear(id));
+                        continue;
+                    }
+                    if (_avatarsSent.TryGetValue(id, out var sent) && sent == url) continue;
+                    if (avatars.Get(url) is { } rgba)
+                    {
+                        frames.Add(new UiFrame.FriendAvatar(id, UiFrame.AvatarSide, rgba));
+                        _avatarsSent[id] = url;
+                    }
+                    else _ = avatars.Want(url);
+                }
+                foreach (var gone in _avatarsSent.Keys.Where(id => !wanted.ContainsKey(id)).ToList()) _avatarsSent.Remove(gone);
+            }
+            foreach (var frame in frames) await send(frame, cancellation).ConfigureAwait(false);
+        }
+        finally
+        {
+            _avatarSending.Release();
+        }
+    }
+
+    private async Task AvatarArrivedAsync()
+    {
+        if (Volatile.Read(ref _avatarSend) is not { } send) return;
+        try { await SendFriendAvatarsAsync(send, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception e) when (e is ProtocolException or IOException or InvalidOperationException or ObjectDisposedException or OperationCanceledException)
+        {
+            _log($"friends: an avatar was not sent ({e.GetType().Name})");
+        }
+    }
+
+    // ------------------------------------------------------------------ the requester's side of an accepted request (CR-S102)
+
+    // the request this player sent last (its id, the friend's world, the friend's name, the world's activity), until the seat read says
+    // the leader accepted it; then it is offered once as an invite prompt by the next invites poll
+    private sealed record AskedRequest(string Id, string WorldId, string Name, string? Activity);
+    private AskedRequest? _askedRequest, _acceptedRequest;
+
+    /// <summary>The seat read's <c>request</c> (MATCHMAKING_API §3.4): this player's request was accepted by the leader.</summary>
+    private void ObserveRequestAccepted(SeatRequest request)
+    {
+        if (Volatile.Read(ref _askedRequest) is { } asked && asked.Id == request.Id && asked.WorldId == request.WorldId
+            && Interlocked.CompareExchange(ref _askedRequest, null, asked) == asked)
+        {
+            Volatile.Write(ref _acceptedRequest, asked);
+            _log("friends: the leader accepted this player's request to join; it is offered as an invite");
+        }
+    }
+
     // ------------------------------------------------------------------ reads
 
     private async Task<bool> ReadFriendsAsync(bool force, CancellationToken cancellation)
@@ -246,6 +368,12 @@ public sealed partial class WorldsBridge
             if (await ReadFriendsAsync(force: true, cancellation).ConfigureAwait(false)) changed = true;
         }
         if (changed) await SendFriendsStateAsync(send, cancellation).ConfigureAwait(false);
+        // CR-S102: the leader let this player in (the seat read saw it): it shows as an invite, then the invite's own accept flow
+        if (Interlocked.Exchange(ref _acceptedRequest, null) is { } accepted)
+        {
+            if (Inbox is { } inbox) await inbox.OfferAcceptedRequestAsync(accepted.Id, accepted.WorldId, accepted.Name, accepted.Activity, send, cancellation).ConfigureAwait(false);
+            else _log("friends: an accepted request has no inbox in this session to show it");
+        }
     }
 
     private async Task SendFriendsStateAsync(Func<UiFrame, CancellationToken, Task> send, CancellationToken cancellation)
@@ -254,6 +382,7 @@ public sealed partial class WorldsBridge
         try
         {
             await send(state, cancellation).ConfigureAwait(false);
+            await SendFriendAvatarsAsync(send, cancellation).ConfigureAwait(false);
         }
         catch (ProtocolException error)
         {
@@ -378,22 +507,66 @@ public sealed partial class WorldsBridge
         var answer = await _mm.RequestAsync(playing.WorldId!, mods, cancellation).ConfigureAwait(false);
         if (answer.Ok)
         {
+            // CR-S102: remembered until the seat read says the leader accepted it (then it shows as an invite)
+            if (answer.Value is { Id.Length: > 0 } sent)
+                Volatile.Write(ref _askedRequest, new AskedRequest(sent.Id, playing.WorldId!, name, playing.Doing?.Activity ?? playing.OfficialActivity));
             _log("friends: asked to join a friend's world");
             return Result(action, UiFriendsResult.Done, "friends.ask_sent", name);
         }
         var error = answer.Error!;
         _log($"friends: ask to join refused ({(int)error.Status} {error.Kind} {error.Reason})");
-        // today's server: 409 {reason: "official"} (no leader-answered requests yet): a clean refusal
-        var key = error.Kind switch
+        return Result(action, UiFriendsResult.Refused, AskRefusalKey(error), name);
+    }
+
+    /// <summary>
+    /// The words of a refused "Ask to join" (<c>POST /mm/v1/worlds/{id}/requests</c>, MATCHMAKING_API §2.10 and §3.4, CR-S102), a
+    /// <c>friends.*</c> key ({name}: the friend).
+    /// </summary>
+    public static string AskRefusalKey(MmError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return error.Kind switch
         {
-            MmErrorKind.Conflict when error.Reason == "official" => "friends.ask_unavailable",
-            MmErrorKind.Conflict when error.Reason == ConflictReasons.Full => "friends.ask_full",
-            MmErrorKind.NotFound or MmErrorKind.WorldNotFound => "friends.ask_not_in_world",
+            MmErrorKind.Conflict => error.Reason switch
+            {
+                ConflictReasons.Official => "friends.ask_unavailable", // a public official world takes no requests
+                ConflictReasons.NotLeader => "friends.ask_no_leader",
+                ConflictReasons.OwnWorld => "friends.ask_own",
+                ConflictReasons.Seated => "friends.ask_seated",
+                ConflictReasons.Full or ConflictReasons.PendingLimit => "friends.ask_full",
+                ConflictReasons.Pool => "friends.ask_pool",
+                ConflictReasons.ClientUpdate => "friends.ask_update",
+                _ => "friends.ask_failed",
+            },
+            MmErrorKind.NotFound => "friends.ask_friends_only", // PORTAL.NOT_FOUND: not a friend of the leader's account
+            MmErrorKind.WorldNotFound => "friends.ask_not_in_world", // closed, another mode's, or kicked from it
             MmErrorKind.NotHost => "friends.ask_friends_only",
             MmErrorKind.RateLimited => "friends.try_later",
             _ => "friends.ask_failed",
         };
-        return Result(action, UiFriendsResult.Refused, key, name);
+    }
+
+    /// <summary>The words of a refused accept of a request to join by the leader (<c>POST …/requests/{rid}/accept</c>), a <c>friends.*</c> key.</summary>
+    public static string AcceptRefusalKey(MmError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return error.Kind switch
+        {
+            MmErrorKind.Conflict => error.Reason switch
+            {
+                ConflictReasons.NotLeader => "friends.join_not_leader",
+                ConflictReasons.NotAllowed => "friends.join_not_allowed",
+                ConflictReasons.Full => "friends.join_full",
+                ConflictReasons.SeatedElsewhere => "friends.join_elsewhere",
+                ConflictReasons.Ended => "friends.join_gone",
+                ConflictReasons.Pool => "friends.join_pool",
+                _ => "friends.join_failed",
+            },
+            MmErrorKind.NotFound => "friends.join_gone",
+            MmErrorKind.NotHost => "friends.join_not_leader",
+            MmErrorKind.RateLimited => "friends.try_later",
+            _ => "friends.join_failed",
+        };
     }
 
     private async Task<UiFrame.FriendsResult> InviteAsync(UiFrame.FriendsAction action, CancellationToken cancellation)
@@ -425,14 +598,18 @@ public sealed partial class WorldsBridge
             return Result(action, UiFriendsResult.Done, "friends.declined");
         }
         var answer = await _mm.AcceptRequestAsync(known.WorldId, known.Id, cancellation).ConfigureAwait(false);
-        if (answer.Ok || answer.Error?.Kind is MmErrorKind.NotFound)
+        if (answer.Ok)
         {
             DropJoinRequest(known.Id);
-            _log($"friends: join request {(answer.Ok ? "accepted" : "gone")}");
-            return answer.Ok ? Result(action, UiFriendsResult.Done, "friends.join_accepted", known.Name) : Result(action, UiFriendsResult.Refused, "friends.join_gone");
+            _log("friends: join request accepted");
+            return Result(action, UiFriendsResult.Done, "friends.join_accepted", known.Name);
         }
-        _log($"friends: join request refused ({(int)answer.Error!.Status} {answer.Error.Kind} {answer.Error.Reason})");
-        return Result(action, UiFriendsResult.Failed, answer.Error.Kind == MmErrorKind.RateLimited ? "friends.try_later" : "friends.join_failed", known.Name);
+        var error = answer.Error!;
+        _log($"friends: join request refused ({(int)error.Status} {error.Kind} {error.Reason})");
+        var key = AcceptRefusalKey(error);
+        // a request that can never be accepted here leaves the list at once; seated_elsewhere, full and a rate limit keep it
+        if (key is "friends.join_gone" or "friends.join_not_leader" or "friends.join_not_allowed" or "friends.join_pool") DropJoinRequest(known.Id);
+        return Result(action, key is "friends.join_failed" or "friends.try_later" ? UiFriendsResult.Failed : UiFriendsResult.Refused, key, known.Name);
     }
 
     private void DropJoinRequest(string id)

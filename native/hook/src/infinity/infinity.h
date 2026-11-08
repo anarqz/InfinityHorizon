@@ -167,6 +167,11 @@ void fi_launch_event(unsigned kind, const char *detail);
 #define FI_EVENT_ACTIVITY 7u
 /* OD-208: the game left the online world on its own (detail "cars": the car database changed); the launcher leaves the seat */
 #define FI_EVENT_WORLD_LEFT 8u
+/* OD-211 (CR-S102): the game's rich-presence screen id changed (detail its decimal id, 0..255; activity.c): the launcher's online
+   toasts are not shown on a race screen */
+#define FI_EVENT_SCREEN 9u
+/* the decimal detail of Event 9 into `out` (at least 4 bytes, NUL-terminated); its length */
+size_t fi_activity_screen_detail(unsigned screen, char *out);
 #define FI_NOTICE_INFO 0u
 #define FI_NOTICE_WARNING 1u
 #define FI_NOTICE_ERROR 2u

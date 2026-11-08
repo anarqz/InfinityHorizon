@@ -164,6 +164,11 @@ bool InstallRenderHooks();
 void SetAvatar(AvatarImage avatar);
 // Render thread: the avatar's texture for ImDrawList::AddImageRounded, or 0 (draw the initials).
 uint64_t AvatarTexture();
+// OD-211 (CR-S102, 0x2D FriendAvatar): any thread; kept for at most 64 friends (the oldest goes), uploaded by the render thread into one
+// atlas of 96 x 96 slots. Side 0 drops that friend's image.
+void SetFriendAvatar(FriendAvatarFrame avatar);
+// Render thread: the atlas texture and the uv rectangle of a friend's avatar once uploaded, else 0 (draw the initials).
+uint64_t FriendAvatarTexture(const std::string &id, float &u0, float &v0, float &u1, float &v1);
 
 // --- the UI pipe to the launcher (pipe.cpp)
 void StartPipe(const wchar_t *name);

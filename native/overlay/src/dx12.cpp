@@ -26,7 +26,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -155,7 +157,7 @@ void ReleaseTargets() {
 }
 
 // ---------------------------------------------------------------- the avatar (CR-L40 §1.3)
-constexpr UINT kSrvSlots = 3; // 0 ImGui's font, 1 and 2 the avatar's, alternating
+constexpr UINT kSrvSlots = 4; // 0 ImGui's font, 1 and 2 the avatar's, alternating, 3 the friends' avatar atlas
 
 std::mutex g_avatar_lock;
 AvatarImage g_avatar_pending; // what the launcher sent last (side 0: none)
@@ -294,6 +296,206 @@ void RecordAvatarCopy(ID3D12GraphicsCommandList *list) {
     Retire(g_av.upload); // this frame's signal is fence_next: the buffer goes once it passed
 }
 
+// ---------------------------------------------------------------- the friends' avatars (OD-211, CR-S102, 0x2D)
+// One atlas texture of 8 x 8 slots of 96 x 96 (768 x 768), SRV slot 3, created at the first friend avatar. The pipe thread leaves
+// each friend's pixels in g_friend_pending (at most kFriendSlots; the oldest goes); the render thread uploads at most
+// kFriendUploadsPerFrame changed ones a frame through their own upload buffers, recorded into that frame's command list ahead of
+// the draw (the atlas goes COPY_DEST and back to PIXEL_SHADER_RESOURCE around the copies). Every pass runs on the one presenting
+// queue, so a slot rewritten now is never one an earlier frame still reads, and a slot drawn only once its copy was recorded (ready).
+constexpr UINT kFriendSlots = 64, kAtlasColumns = 8, kAtlasSide = kFriendAvatarSide * kAtlasColumns, kFriendUploadsPerFrame = 4;
+constexpr UINT kFriendSrvSlot = 3;
+
+std::mutex g_friend_lock;
+struct FriendPixels {
+    std::vector<uint8_t> rgba;
+    uint64_t serial = 0; // bumped by every SetFriendAvatar of that friend
+};
+std::map<std::string, FriendPixels> g_friend_pending; // under g_friend_lock
+uint64_t g_friend_serial = 0;                         // under g_friend_lock
+
+struct FriendSlot {
+    std::string id;      // empty: free
+    uint64_t serial = 0; // the pixels it holds (or is being given)
+    bool ready = false;  // its copy is recorded: drawable
+};
+struct FriendCopy {
+    ID3D12Resource *upload;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
+    UINT slot;
+};
+struct FriendAtlas {
+    ID3D12Resource *texture = nullptr;
+    bool readable = false; // PIXEL_SHADER_RESOURCE (else COPY_DEST, as created)
+    bool reset = false;    // a new renderer: everything is uploaded again
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    FriendSlot slots[kFriendSlots];
+    std::vector<FriendCopy> copies; // to record into this frame's list
+    std::vector<Retired> retired;
+} g_fa;
+
+void ReleaseFriendRetired() {
+    const UINT64 done = g.fence->GetCompletedValue();
+    auto &list = g_fa.retired;
+    for (size_t i = 0; i < list.size();) {
+        if (list[i].fence <= done) {
+            list[i].resource->Release();
+            list[i] = list.back();
+            list.pop_back();
+        } else {
+            ++i;
+        }
+    }
+}
+
+bool CreateFriendAtlas() {
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = kAtlasSide;
+    desc.Height = kAtlasSide;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    if (FAILED(g.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(&g_fa.texture)))) {
+        Log("friend avatars: atlas not created");
+        return false;
+    }
+    g_fa.readable = false;
+    const UINT step = g.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = g.srv_heap->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(kFriendSrvSlot) * step;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = desc.Format;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1;
+    g.device->CreateShaderResourceView(g_fa.texture, &srv, cpu);
+    g_fa.gpu = g.srv_heap->GetGPUDescriptorHandleForHeapStart();
+    g_fa.gpu.ptr += static_cast<UINT64>(kFriendSrvSlot) * step;
+    return true;
+}
+
+// Render thread, before the frame is drawn: slots follow the pending set; changed pixels get an upload buffer each (no wait).
+void PrepareFriendAvatars() {
+    ReleaseFriendRetired();
+    if (g_fa.reset) {
+        g_fa.reset = false;
+        if (g_fa.texture) g_fa.retired.push_back({g_fa.texture, g.fence_next});
+        g_fa.texture = nullptr;
+        for (auto &slot : g_fa.slots) slot = FriendSlot{};
+    }
+    struct Upload {
+        UINT slot;
+        std::vector<uint8_t> rgba;
+    };
+    std::vector<Upload> uploads;
+    {
+        std::lock_guard<std::mutex> lock(g_friend_lock);
+        for (auto &slot : g_fa.slots) {
+            if (!slot.id.empty() && g_friend_pending.find(slot.id) == g_friend_pending.end()) slot = FriendSlot{}; // dropped or evicted
+        }
+        for (const auto &[id, pixels] : g_friend_pending) {
+            if (uploads.size() >= kFriendUploadsPerFrame) break;
+            UINT at = kFriendSlots, free = kFriendSlots;
+            for (UINT i = 0; i < kFriendSlots; ++i) {
+                if (g_fa.slots[i].id == id) { at = i; break; }
+                if (free == kFriendSlots && g_fa.slots[i].id.empty()) free = i;
+            }
+            if (at == kFriendSlots) at = free;
+            if (at == kFriendSlots) break; // never: the pending set holds at most kFriendSlots
+            FriendSlot &slot = g_fa.slots[at];
+            if (slot.id == id && slot.serial == pixels.serial) continue; // up to date (or its copy already prepared)
+            slot.id = id;
+            slot.serial = pixels.serial;
+            slot.ready = false;
+            uploads.push_back({at, pixels.rgba});
+        }
+    }
+    if (uploads.empty()) return;
+    if (!g_fa.texture && !CreateFriendAtlas()) {
+        for (const auto &u : uploads) g_fa.slots[u.slot] = FriendSlot{};
+        return;
+    }
+    D3D12_RESOURCE_DESC one{};
+    one.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    one.Width = kFriendAvatarSide;
+    one.Height = kFriendAvatarSide;
+    one.DepthOrArraySize = 1;
+    one.MipLevels = 1;
+    one.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    one.SampleDesc.Count = 1;
+    one.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    for (const auto &u : uploads) {
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+        UINT64 bytes = 0;
+        g.device->GetCopyableFootprints(&one, 0, 1, 0, &footprint, nullptr, nullptr, &bytes);
+        D3D12_RESOURCE_DESC buffer{};
+        buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        buffer.Width = bytes;
+        buffer.Height = 1;
+        buffer.DepthOrArraySize = 1;
+        buffer.MipLevels = 1;
+        buffer.SampleDesc.Count = 1;
+        buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        ID3D12Resource *upload = nullptr;
+        void *mapped = nullptr;
+        const D3D12_RANGE none{0, 0};
+        if (FAILED(g.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                     IID_PPV_ARGS(&upload))) ||
+            FAILED(upload->Map(0, &none, &mapped))) {
+            Log("friend avatars: upload buffer not created");
+            if (upload) g_fa.retired.push_back({upload, g.fence_next});
+            g_fa.slots[u.slot] = FriendSlot{};
+            continue;
+        }
+        const size_t row = static_cast<size_t>(kFriendAvatarSide) * 4;
+        for (UINT y = 0; y < kFriendAvatarSide; ++y) {
+            memcpy(static_cast<uint8_t *>(mapped) + footprint.Offset + static_cast<size_t>(y) * footprint.Footprint.RowPitch,
+                   u.rgba.data() + y * row, row);
+        }
+        upload->Unmap(0, nullptr);
+        g_fa.copies.push_back({upload, footprint, u.slot});
+    }
+}
+
+// Into the frame's command list, before ImGui draws: the atlas writable, each copy into its slot, the atlas readable again.
+void RecordFriendCopies(ID3D12GraphicsCommandList *list) {
+    if (g_fa.copies.empty() || !g_fa.texture) return;
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = g_fa.texture;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    if (g_fa.readable) {
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        list->ResourceBarrier(1, &barrier);
+    }
+    for (const auto &copy : g_fa.copies) {
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource = g_fa.texture;
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource = copy.upload;
+        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint = copy.footprint;
+        list->CopyTextureRegion(&dst, (copy.slot % kAtlasColumns) * kFriendAvatarSide, (copy.slot / kAtlasColumns) * kFriendAvatarSide, 0, &src, nullptr);
+        g_fa.slots[copy.slot].ready = true;
+        g_fa.retired.push_back({copy.upload, g.fence_next}); // this frame's signal is fence_next: the buffer goes once it passed
+    }
+    g_fa.copies.clear();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    list->ResourceBarrier(1, &barrier);
+    g_fa.readable = true;
+}
+
 void WaitIdle() {
     auto *queue = g.queue;
     if (!queue || !g.fence) {
@@ -358,6 +560,7 @@ bool Initialise(IDXGISwapChain3 *swapchain) {
     D3D12_DESCRIPTOR_HEAP_DESC rtv{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, desc.BufferCount, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
     D3D12_DESCRIPTOR_HEAP_DESC srv{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvSlots, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
     g_av.seen = 0; // a new heap: the avatar is uploaded again from the pixels kept
+    g_fa.reset = true; // and the friends' avatars
     if (FAILED(g.device->CreateDescriptorHeap(&rtv, IID_PPV_ARGS(&g.rtv_heap))) ||
         FAILED(g.device->CreateDescriptorHeap(&srv, IID_PPV_ARGS(&g.srv_heap)))) {
         return false;
@@ -431,6 +634,7 @@ void Draw(IDXGISwapChain3 *swapchain) {
 
     PollController();
     PrepareAvatar();
+    PrepareFriendAvatars();
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     // The image is the back buffer, whatever size Windows gives the window (DPI scaling, a
@@ -463,6 +667,7 @@ void Draw(IDXGISwapChain3 *swapchain) {
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     g.list->ResourceBarrier(1, &barrier);
     RecordAvatarCopy(g.list);
+    RecordFriendCopies(g.list);
     g.list->OMSetRenderTargets(1, &frame.rtv, FALSE, nullptr);
     g.list->SetDescriptorHeaps(1, &g.srv_heap);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g.list);
@@ -638,5 +843,36 @@ void SetAvatar(AvatarImage avatar) {
 }
 
 uint64_t AvatarTexture() { return g_av.texture ? g_av.gpu.ptr : 0; }
+
+void SetFriendAvatar(FriendAvatarFrame avatar) {
+    std::lock_guard<std::mutex> lock(g_friend_lock);
+    if (avatar.side == 0) {
+        g_friend_pending.erase(avatar.id);
+        return;
+    }
+    auto &pixels = g_friend_pending[avatar.id];
+    pixels.rgba = std::move(avatar.rgba);
+    pixels.serial = ++g_friend_serial;
+    while (g_friend_pending.size() > kFriendSlots) { // the oldest set goes
+        auto oldest = g_friend_pending.begin();
+        for (auto it = g_friend_pending.begin(); it != g_friend_pending.end(); ++it)
+            if (it->second.serial < oldest->second.serial) oldest = it;
+        g_friend_pending.erase(oldest);
+    }
+}
+
+uint64_t FriendAvatarTexture(const std::string &id, float &u0, float &v0, float &u1, float &v1) {
+    if (!g_fa.texture || !g_fa.readable || id.empty()) return 0;
+    for (UINT i = 0; i < kFriendSlots; ++i) {
+        if (!g_fa.slots[i].ready || g_fa.slots[i].id != id) continue;
+        const float cell = 1.0f / kAtlasColumns;
+        u0 = (i % kAtlasColumns) * cell;
+        v0 = (i / kAtlasColumns) * cell;
+        u1 = u0 + cell;
+        v1 = v0 + cell;
+        return g_fa.gpu.ptr;
+    }
+    return 0;
+}
 
 } // namespace fi

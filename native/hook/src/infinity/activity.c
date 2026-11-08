@@ -188,13 +188,35 @@ void fi_activity_inactivity_after(void *self, uint64_t before) {
     InterlockedExchange64(&act_idle_at, (LONG64)act_now());
 }
 
+/* OD-211 (CR-S102): a changed rich-presence screen goes to the launcher as Event 9 (detail the decimal id): its online toasts
+   are never shown in a race. Only on a change, so at most a few events a minute. */
+size_t fi_activity_screen_detail(unsigned screen, char *out) {
+    char digits[4];
+    size_t n = 0, at = 0;
+    if (screen > 255) screen = 255;
+    do {
+        digits[n++] = (char)('0' + screen % 10);
+        screen /= 10;
+    } while (screen && n < 3);
+    while (n) out[at++] = digits[--n];
+    out[at] = 0;
+    return at;
+}
+
+static void fi_activity_screen_event(unsigned screen) {
+    char detail[4];
+    fi_activity_screen_detail(screen, detail);
+    fi_launch_event(FI_EVENT_SCREEN, detail);
+}
+
 void fi_activity_presence_after(void *self, uint64_t before) {
     int screen;
     (void)before;
     if (!self) return;
     unsigned long long now = act_now();
     memory_copy(&screen, (unsigned char *)self + ACT_SCREEN, sizeof(screen));
-    InterlockedExchange(&act_screen, screen < 0 ? 0 : screen > 255 ? 255 : screen);
+    LONG clamped = screen < 0 ? 0 : screen > 255 ? 255 : screen;
+    if (InterlockedExchange(&act_screen, clamped) != clamped) fi_activity_screen_event((unsigned)clamped);
     InterlockedExchange64(&act_presence_at, (LONG64)now);
     unsigned char *manager = 0;
     memory_copy(&manager, act_game + ACT_INPUT_MANAGER_RVA, sizeof(manager));

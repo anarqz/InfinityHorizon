@@ -42,6 +42,13 @@ public static class HookEvents
     public const byte WorldLeft = 8;
 
     /// <summary>
+    /// OD-211 (CR-S102): the game's rich-presence screen id changed (hook activity.c; detail the decimal id, 0..255), the screen the
+    /// server's <c>X-Fi-Activity</c> <c>rp</c> carries. The launcher's toast rule reads it ("none while racing",
+    /// <see cref="Process.GameDefinition.RaceScreens"/>); it is never shown or logged per change.
+    /// </summary>
+    public const byte Screen = 9;
+
+    /// <summary>
     /// An <see cref="Activity"/> detail as the overlay's idle warning: only when it carries <c>evict_in</c> (the seat
     /// goes to a waiting player in N seconds); null otherwise, or when the detail is malformed.
     /// </summary>

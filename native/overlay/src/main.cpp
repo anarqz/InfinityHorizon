@@ -203,6 +203,19 @@ extern "C" __declspec(dllexport) void fi_overlay_dev(int32_t command) {
         st.requests = {{"30", "Synthetic#00519"}};
         st.joins = {{"r1", "Synthetic#00601"}};
         SetFriendsState(st);
+        // CR-S102 (0x2D): a synthetic avatar (a gradient, no one's image) for the first friend; the others keep their initials
+        FriendAvatarFrame avatar;
+        avatar.id = "10";
+        avatar.side = kFriendAvatarSide;
+        avatar.rgba.resize(static_cast<size_t>(kFriendAvatarSide) * kFriendAvatarSide * 4);
+        for (size_t i = 0; i < avatar.rgba.size(); i += 4) {
+            const size_t x = (i / 4) % kFriendAvatarSide, y = (i / 4) / kFriendAvatarSide;
+            avatar.rgba[i] = static_cast<uint8_t>(x * 255 / kFriendAvatarSide);
+            avatar.rgba[i + 1] = static_cast<uint8_t>(y * 255 / kFriendAvatarSide);
+            avatar.rgba[i + 2] = 200;
+            avatar.rgba[i + 3] = 255;
+        }
+        SetFriendAvatar(std::move(avatar));
         break;
     }
     case 25: Navigate(Nav::Y); break;

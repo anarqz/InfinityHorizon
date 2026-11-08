@@ -47,8 +47,13 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
     // a prompt this inbox sent: its invite, its local deadline (the clock's), whether the player answered it; T-L5: the invite's world and
     // game session (the accept's join), and ReofferAt (the clock's): an accept the launcher could not serve now (the game in an event, another
     // lobby request in flight) is shown again from then while the server still lists it; 0 none
+    // CR-S102: FromRequest, a prompt made by this launcher for this player's own request that the leader accepted (the server lists it in
+    // no inbox): it ends at its deadline only, and its decline sends nothing (the seat the accept held lapses on its own)
     private sealed record Shown(UiFrame.InvitePrompt Prompt, long Deadline, bool Answered, string WorldId = "", string? Activity = null,
-        GameSessionReference? Session = null, long ReofferAt = 0);
+        GameSessionReference? Session = null, long ReofferAt = 0, bool FromRequest = false);
+
+    /// <summary>CR-S102: how long the prompt of an accepted request to join stays (the seat it holds is the server's to keep or lapse).</summary>
+    public static readonly TimeSpan AcceptedRequestPrompt = TimeSpan.FromSeconds(60);
 
     /// <summary>T-L5: how long an accept the launcher could not serve now waits before its prompt shows again (while still pending).</summary>
     public static readonly TimeSpan ReofferAfter = TimeSpan.FromSeconds(30);
@@ -167,7 +172,7 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
             }
             foreach (var (id, shown) in _shown.ToList())
             {
-                if (listed.Contains(id) && shown.Deadline > now) continue;
+                if ((listed.Contains(id) || shown.FromRequest) && shown.Deadline > now) continue;
                 _shown.Remove(id);
                 if (!shown.Answered) outgoing.Add(UiFrame.InvitePrompt.Withdraw(id));
             }
@@ -232,7 +237,7 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
             InviteAcceptAnswer result;
             try
             {
-                result = await join(new InviteAccept(inviteId, answered.WorldId, answered.Activity, left, answered.Session), cancellation).ConfigureAwait(false);
+                result = await join(new InviteAccept(inviteId, answered.WorldId, answered.Activity, left, answered.Session, answered.FromRequest), cancellation).ConfigureAwait(false);
             }
             catch (Exception error) when (!cancellation.IsCancellationRequested && error is ApiException or HttpRequestException
                 or OperationCanceledException or IOException or InvalidOperationException or TimeoutException)
@@ -252,6 +257,11 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
             else _log($"invites: accepted ({result.Outcome.ToString().ToLowerInvariant()})");
             return result.Notice;
         }
+        if (answered.FromRequest)
+        {
+            _log("invites: the accepted request to join was declined here; nothing is sent (its seat lapses on its own)");
+            return null;
+        }
         try
         {
             try { await _decline(inviteId, cancellation).ConfigureAwait(false); }
@@ -265,6 +275,33 @@ public sealed class InviteInbox(Func<CancellationToken, Task<InviteList>> read, 
             _log($"invites: decline failed ({(error is ApiException api ? $"HTTP {(int)api.Status} {api.Code}" : error.GetType().Name)}); it lapses on its own");
             return PrivateLobbyNotices.Toast(_text, PrivateLobbyNotices.DeclineFailed);
         }
+    }
+
+    /// <summary>
+    /// CR-S102 (MATCHMAKING_API §2.10, §3.4): the leader accepted this player's request to join <paramref name="worldId"/> (the seat read
+    /// said so). It shows as an invite (0x23, from <paramref name="leader"/>, for <see cref="AcceptedRequestPrompt"/>), then the invite's
+    /// own accept flow (<see cref="AnswerAsync"/>). Shown once per request id.
+    /// </summary>
+    public async Task OfferAcceptedRequestAsync(string requestId, string worldId, string leader, string? activity, Func<UiFrame, CancellationToken, Task> send,
+        CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        var from = Cut(leader ?? string.Empty, 64);
+        if (!PromptId(requestId) || string.IsNullOrEmpty(worldId) || from.Length == 0)
+        {
+            _log("invites: an accepted request the pipe cannot carry; not shown");
+            return;
+        }
+        var shownActivity = activity is { } a && Encoding.UTF8.GetByteCount(a) <= UiFrame.MaxInviteActivity ? a : string.Empty;
+        var prompt = new UiFrame.InvitePrompt(requestId, from, shownActivity, (ushort)AcceptedRequestPrompt.TotalSeconds);
+        lock (_lock)
+        {
+            if (_shown.ContainsKey(requestId)) return;
+            _shown[requestId] = new Shown(prompt, _clock.GetTimestamp() + (long)(AcceptedRequestPrompt.TotalSeconds * _clock.TimestampFrequency), false,
+                worldId, activity, null, FromRequest: true);
+        }
+        _log("invites: an accepted request to join is prompted as an invite");
+        await send(prompt, cancellation).ConfigureAwait(false);
     }
 
     private async Task WithdrawAllAsync(Func<UiFrame, CancellationToken, Task> send, CancellationToken cancellation)

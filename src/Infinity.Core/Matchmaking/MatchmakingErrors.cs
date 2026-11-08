@@ -90,8 +90,11 @@ public static class ConflictReasons
     /// <summary>OD-204 (MATCHMAKING_API §2.10, WORLDS_OFFICIAL §12.8b): <c>POST …/invites</c> from anyone but the private lobby's current leader.</summary>
     public const string NotLeader = "not_leader";
 
+    /// <summary>§2.9/§2.10 (CR-S102): a request to join a public official world (only private ones take requests).</summary>
+    public const string Official = "official";
+
     public static IReadOnlyList<string> All { get; } = [NoCode, Full, PendingLimit, OwnWorld, Seated, HostNotSupporter, Ended, SeatedElsewhere, NotAllowed, Mods,
-        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect, LobbiesFull, ClientUpdate, Region, NotLeader];
+        Modes, NoRelay, LauncherUpdateRequired, RelayBusy, Activity, Pool, NoDirect, OfficialDirect, LobbiesFull, ClientUpdate, Region, NotLeader, Official];
 
     /// <summary>The <c>worlds.*</c> key of a CR-S57 relay refusal, or null for any other error.</summary>
     public static string? RelayKey(MmError? error) => error is { Kind: MmErrorKind.Conflict } ? error.Reason switch

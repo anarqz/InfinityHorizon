@@ -473,6 +473,10 @@
                             <Grid DockPanel.Dock="Left" Width="32" Height="32" VerticalAlignment="Center">
                               <Ellipse Fill="{StaticResource SmCardRaised}" />
                               <TextBlock Text="{Binding Initial}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                              <!-- CR-S102: the friend's Discord avatar once loaded (cdn.discordapp.com only), over the initial -->
+                              <Ellipse Visibility="{Binding HasAvatar, Converter={StaticResource Visible}}">
+                                <Ellipse.Fill><ImageBrush ImageSource="{Binding Avatar}" Stretch="UniformToFill" /></Ellipse.Fill>
+                              </Ellipse>
                               <Ellipse Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Bottom" Stroke="{StaticResource InfinitySurface}" StrokeThickness="2">
                                 <Ellipse.Style>
                                   <Style TargetType="Ellipse">
@@ -484,6 +488,8 @@
                             </Grid>
                             <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                               <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                              <TextBlock Text="{Binding Discord}" FontSize="10" Foreground="#FF7888FF" TextTrimming="CharacterEllipsis"
+                                         Visibility="{Binding HasDiscord, Converter={StaticResource Visible}}" />
                               <TextBlock Text="{Binding Status}" FontSize="11" TextWrapping="Wrap">
                                 <TextBlock.Style>
                                   <Style TargetType="TextBlock">
@@ -534,6 +540,8 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </StackPanel>
+                <!-- CR-S102: a leader accepts requests to join with the game's ticket, so in the in-game overlay, never here -->
+                <TextBlock Text="{Binding S[play.friends_requests_overlay]}" Style="{StaticResource SmHint}" Margin="0,12,8,0" TextWrapping="Wrap" />
               </StackPanel>
             </ScrollViewer>
           </DockPanel>
