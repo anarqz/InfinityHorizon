@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "kind": "mod",
+  "builtIn": true,
+  "id": "extraoptions",
+  "version": "0.4.4",
+  "games": [
+    "fm5"
+  ],
+  "name": {
+    "en": "Extra Options",
+    "pt-BR": "Extra Options"
+  },
+  "description": {
+    "en": "Options for Forza Motorsport 5. Part of Infinity: it runs inside the Infinity hook (ExtraOptions.Infinity), always on.",
+    "pt-BR": "Opções do Forza Motorsport 5. Parte do Infinity: roda dentro do hook do Infinity (ExtraOptions.Infinity), sempre ativo."
+  },
+  "author": "Arthur (RokkuDayo)",
+  "license": "GPL-3.0",
+  "homepage": "https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions",
+  "runtime": "standalone",
+  "review": {
+    "status": "reviewed",
+    "blockers": []
+  },
+  "compatibility": {
+    "azimuthVersions": [
+      "1.0.4"
+    ],
+    "gameBuilds": [],
+    "verification": "built-in"
+  },
+  "dependencies": [],
+  "conflicts": [],
+  "files": {
+    "game": [],
+    "azimuth": []
+  },
+  "runtimeOutputs": [],
+  "databaseMigrations": [],
+  "config": {
+    "root": "azimuth",
+    "path": "FM5_ExtraOptions.ini",
+    "format": "ini",
+    "preserveOnDisable": true,
+    "options": [
+      {
+        "id": "frontend-skipintro",
+        "section": "Frontend",
+        "key": "SkipIntro",
+        "label": {
+          "en": "Skip the intro",
+          "pt-BR": "Pular a introdução"
+        },
+        "description": {
+          "en": "Starts straight at \"Press Start\". Applies at the next launch.",
+          "pt-BR": "Abre direto no \"Press Start\". Vale a partir da próxima abertura do jogo."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      }
+    ]
+  }
+}

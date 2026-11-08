@@ -369,6 +369,11 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         RememberGame(game.Id);
         ResetContentLocation();
         FillProfiles();
+        // W11: the Mods page follows the game: its cards, ExtraOptions card and settings are read again for the one now chosen
+        _selectedMod = null; _ini = null; _iniDirty = false; ModOptions.Clear();
+        if (!CanOpenMods) _onMods = false;
+        _ = RefreshModsAsync();
+        Changed(nameof(CanOpenMods));
     }
 
     /// <summary>The game folder and its check belong to one game: read again for the one now chosen.</summary>

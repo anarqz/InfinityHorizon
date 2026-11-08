@@ -26,6 +26,11 @@ public sealed class ModManifest
     public long PackageBytes => Document.GetProperty("package").GetProperty("bytes").GetInt64();
     public IReadOnlyList<ManifestFile> Files { get; }
     public IReadOnlyList<ManifestDependency> Dependencies { get; }
+    /// <summary>OD-206 (W11): the server game ids the mod is for (<c>games</c>); a manifest that declares none is FH2's, as every mod was before.</summary>
+    public IReadOnlyList<string> Games { get; }
+    public const string DefaultGame = "fh2";
+    /// <summary>True when the mod is offered for the game with this id.</summary>
+    public bool IsForGame(string gameId) => Games.Contains(gameId, StringComparer.Ordinal);
     /// <summary>Wine/Proton native-first overrides applied while the mod is enabled (launch.wineDllOverrides).</summary>
     public IReadOnlyList<ModWineOverride> WineDllOverrides { get; }
     /// <summary>Legacy parked copies (adoption.parkedFiles): mapped binary destination to its parked Azimuth-relative path.</summary>
@@ -221,6 +226,7 @@ public sealed class ModManifest
         if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
             || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !ValidId(d.Id) || IsCustomId(d.Id) && !IsCustom || d.Versions.Count == 0
                 || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
+        Games = Document.TryGetProperty("games", out var games) ? ParseGames(games) : [DefaultGame];
         Multiplayer = ModMultiplayer.Parse(Document);
         if (DatabaseBase is not null && Multiplayer is not { EntersLobbySet: true }) throw new ModException("a database base affects multiplayer", ModErrors.Unsupported);
         if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => c.GetString() is not { } other || !ValidId(other)))
@@ -436,6 +442,15 @@ public sealed class ModManifest
     }
     public string Text(string field, string locale) => Document.GetProperty(field).TryGetProperty(locale, out var text)
         ? text.GetString()! : Document.GetProperty(field).GetProperty("en").GetString()!;
+    private static string[] ParseGames(JsonElement games)
+    {
+        if (games.ValueKind != JsonValueKind.Array) throw new ModException("invalid games");
+        var ids = games.EnumerateArray().Select(g => g.ValueKind == JsonValueKind.String ? g.GetString()! : "").ToArray();
+        if (ids.Length is < 1 or > 8 || ids.Distinct(StringComparer.Ordinal).Count() != ids.Length
+            || ids.Any(id => id.Length is < 1 or > 16 || id.Any(c => !char.IsAsciiLetterLower(c) && !char.IsAsciiDigit(c)))) throw new ModException("invalid games");
+        return ids;
+    }
+
     public static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
     public static void ValidatePath(string path)

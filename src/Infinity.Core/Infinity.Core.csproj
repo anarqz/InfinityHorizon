@@ -28,6 +28,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\native\extraoptions-infinity\FH2_ExtraOptions.ini" LogicalName="Infinity.Core.FH2_ExtraOptions.ini" />
     <EmbeddedResource Include="Process\ExtraOptionsInfinity.manifest.json" LogicalName="Infinity.Core.ExtraOptionsInfinity.manifest.json" />
+    <EmbeddedResource Include="Process\ExtraOptionsInfinity.Fm5.manifest.json" LogicalName="Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json" />
   </ItemGroup>
 
   <!-- OD-166: the built-in copy of InfinityMods' parity-non-required.json, for a start without network or cache. -->

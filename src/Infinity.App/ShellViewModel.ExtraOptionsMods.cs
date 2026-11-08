@@ -29,7 +29,8 @@ public sealed partial class ShellViewModel
     /// <summary>Reads <c>mods\</c>, <c>loadorder.txt</c> and the last <c>FH2_ExtraOptions.log</c> off the UI thread.</summary>
     private async Task RefreshExtraOptionsModsAsync()
     {
-        if (_install is not { } install) { ExtraOptionsModItems.Clear(); Changed(nameof(HasExtraOptionsMods)); return; }
+        // W11: the mods folder and its load order are FH2's; a game without mods of its own lists none
+        if (_install is not { } install || !CurrentGame.FullFeatures) { ExtraOptionsModItems.Clear(); Changed(nameof(HasExtraOptionsMods)); return; }
         IReadOnlyList<ExtraOptionsMod> mods; IReadOnlyDictionary<string, ExtraOptionsModStatus> status;
         try { (mods, status) = await Task.Run(() => { var m = ExtraOptionsMods.Scan(install.Root); return (m, ExtraOptionsMods.ReadStatus(install.Root, m)); }); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)

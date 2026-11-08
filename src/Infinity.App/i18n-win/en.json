@@ -533,7 +533,7 @@
   "mods.title": "Mods",
   "mods.subtitle": "Only mods Infinity checked to be compatible and safe. They are downloaded from their official pages and checked file by file.",
   "mods.not_installed": "Not installed",
-  "mods.builtin_extraoptions": "Included with Infinity: ExtraOptions runs inside the Infinity hook (ExtraOptions.Infinity). Its settings are in FH2_ExtraOptions.ini beside azimuth.exe.",
+  "mods.builtin_extraoptions": "Included with Infinity: ExtraOptions runs inside the Infinity hook (ExtraOptions.Infinity). Its settings are in {file} beside azimuth.exe.",
   "eomods.title": "Installed manually",
   "eomods.hint": "Mods copied into ExtraOptions' mods folder by hand, outside Infinity's catalog. ExtraOptions loads them; Infinity does not check them. Changes apply the next time the game starts.",
   "eomods.manual_online": "May not work online: other players need the same mod, and Hardcore turns it off.",
