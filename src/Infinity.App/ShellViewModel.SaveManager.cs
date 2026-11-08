@@ -33,6 +33,9 @@ public static class SlotBrushes
     }
 }
 
+/// <summary>The open ⋯ menu: its owner (a <see cref="SaveCard"/> or a <see cref="ProfileGameRow"/>) and its items.</summary>
+public sealed record FloatingMenuView(object Owner, IReadOnlyList<MenuAction> Items);
+
 /// <summary>One action of a card's ⋯ menu: its words, whether it can run now, and why not.</summary>
 public sealed record MenuAction(string Id, string Label, bool Enabled, string? Reason = null, bool Danger = false)
 {
@@ -78,6 +81,8 @@ public sealed record ProfileGameRow(string ProfileId, string GameId, string Name
     public bool HasCover => Cover is not null;
     public bool HasCareerData { get; init; }
     public string ChipText { get; init; } = string.Empty;
+    /// <summary>The chip's full sentence (its tooltip); <see cref="ChipText"/> is the short form that fits the row.</summary>
+    public string ChipTip { get; init; } = string.Empty;
     public ChipTone ChipTone { get; init; }
     public bool HasChip => !string.IsNullOrEmpty(ChipText);
     public bool ChipGood => ChipTone == ChipTone.Good;
@@ -151,7 +156,8 @@ public sealed record CheckStepRow(string Text, CheckStepState State)
 public sealed partial class ShellViewModel
 {
     private readonly SavesNav _nav = new();
-    private string? _menuFor;
+    /// <summary>Owner 2026-11-08: the one open ⋯ menu (a card's or a game row's), drawn floating over the page.</summary>
+    private readonly FloatingMenuState _menu = new();
     private ProfileRow? _subject;
     private SaveSlot _historySlot = SaveSlot.Azimuth;
     private HistoryRow? _historySelected;
@@ -223,7 +229,7 @@ public sealed partial class ShellViewModel
     public void SavesBack()
     {
         PruneSaves();
-        _menuFor = null;
+        _menu.Close();
         switch (SavesCurrent)
         {
             case SavesScreen.Start: CancelCareerStart(); return; // pops itself
@@ -253,7 +259,7 @@ public sealed partial class ShellViewModel
 
     private void SavesGo(SavesScreen screen)
     {
-        _menuFor = null;
+        _menu.Close();
         PruneSaves();
         _nav.Push(screen);
         Message = null;
@@ -263,7 +269,7 @@ public sealed partial class ShellViewModel
     public void SavesHome()
     {
         _nav.Root();
-        _startRow = null; _copy = null; _subject = null; _menuFor = null;
+        _startRow = null; _copy = null; _subject = null; _menu.Close();
         FillSaveCards();
         ChangedSaves();
     }
@@ -311,7 +317,31 @@ public sealed partial class ShellViewModel
             foreach (var row in rows) SaveCards.Add(CardOf(slot, row));
         }
         AzimuthStripLine = StripLine();
+        // owner 2026-11-08 (image 7): the open ⋯ floats over the page; its owner (a card or a game row) and items come from the rebuilt cards
+        OpenMenu = SaveCards.Where(c => c.MenuOpen).Select(c => new FloatingMenuView(c, c.Menu)).Concat(
+            SaveCards.SelectMany(c => c.Games).Where(g => g.MenuOpen).Select(g => new FloatingMenuView(g, g.Menu))).FirstOrDefault();
+        if (OpenMenu is null) _menu.Close();
+        Changed(nameof(OpenMenu));
+        Changed(nameof(ShowFloatingMenu));
+        Changed(nameof(FloatingMenuIsCard));
+        Changed(nameof(FloatingMenuIsRow));
         ChangedSaves();
+    }
+
+    /// <summary>The open ⋯ menu, floating (null: none).</summary>
+    public FloatingMenuView? OpenMenu { get; private set; }
+
+    public bool ShowFloatingMenu => OpenMenu is not null && _menu.OpenKey is not null && ShowSavesHome;
+
+    public bool FloatingMenuIsCard => OpenMenu?.Owner is SaveCard;
+
+    public bool FloatingMenuIsRow => OpenMenu?.Owner is ProfileGameRow;
+
+    /// <summary>An outside click or Esc: the open ⋯ closes.</summary>
+    public void CloseMenu()
+    {
+        if (!_menu.Close()) return;
+        FillSaveCards();
     }
 
     private string ModeWord(SaveSlot slot) => S[slot == SaveSlot.Hardcore ? "sm.hardcore" : slot == SaveSlot.Noob ? "sm.noob" : "sm.azimuth"];
@@ -340,7 +370,7 @@ public sealed partial class ShellViewModel
             Row = row,
             Hint = S[slot == SaveSlot.Hardcore ? "sm.hint_hardcore" : "sm.hint_noob"],
             Selected = selected,
-            MenuOpen = _menuFor == card.Player.ProfileId,
+            MenuOpen = _menu.IsOpen(card.Player.ProfileId),
             Menu = ProfileMenuOf(row),
             Games = GameRowsOf(slot, row),
             Note = card.Duplicate ? S["careers.duplicate"] : string.Empty,
@@ -382,14 +412,17 @@ public sealed partial class ShellViewModel
                 var facts = new ProfileGameFacts(game, card);
                 var chip = card is null ? SaveChipKind.None : ChipOf(card);
                 var art = ArtOf(game);
+                // owner 2026-11-08 (image 7): no cloud progress but a save on this PC says what is known (its credits when readable)
+                var local = !facts.HasCareerData && card is not null && card.State != CareerState.NotOffered ? LocalSaveOf(card.Player.Xuid) : null;
                 return new ProfileGameRow(profileId, game.Id, art?.Name ?? game.Name, game.ShortName,
-                    TileBrush(game.TileAccent, 0xFF), TileBrush(game.TileAccent, 0x2E), GameRowLine(facts))
+                    TileBrush(game.TileAccent, 0xFF), TileBrush(game.TileAccent, 0x2E), GameRowLine(facts, local))
                 {
                     Cover = art?.Image,
                     HasCareerData = facts.HasCareerData,
-                    ChipText = ChipText(chip, card?.Career),
+                    ChipText = ChipShort(chip, card?.Career),
+                    ChipTip = ChipText(chip, card?.Career),
                     ChipTone = SaveChips.Tone(chip),
-                    MenuOpen = _menuFor == profileId + "|" + game.Id,
+                    MenuOpen = _menu.IsOpen(profileId + "|" + game.Id),
                     Menu = CareerMenuOf(slot, facts, chip),
                 };
             }));
@@ -398,9 +431,30 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>"LV 15 · CR 15,858 · 22h", or "No career data yet" (a game without the mode's careers says so).</summary>
-    private string GameRowLine(ProfileGameFacts facts) =>
+    private string GameRowLine(ProfileGameFacts facts, SaveProfile? local = null) =>
         facts.Card?.State == CareerState.NotOffered ? S.Format("sm.no_hardcore", ("game", facts.Game.Name))
-        : facts.HasCareerData ? PlayStats(facts.Card!.Career) : S["sm.row.no_data"];
+        : facts.HasCareerData ? PlayStats(facts.Card!.Career)
+        : local is not null ? LocalRowLine(facts.Game, local)
+        : S["sm.row.no_data"];
+
+    /// <summary>"Save on this PC · CR 15,858 · not uploaded yet" (a game without cloud saves: no upload part); no level, which only the server derives (CR-S81).</summary>
+    private string LocalRowLine(GameDefinition game, SaveProfile local)
+    {
+        var key = game.FullFeatures ? "sm.row.local" : "sm.row.local_cloudless";
+        return local.Credits is { } credits
+            ? S.Format(key + "_credits", ("credits", credits.ToString("N0", SavesCulture)))
+            : S[key];
+    }
+
+    /// <summary>The chip's short words on a row (the full sentence is its tooltip, <see cref="ProfileGameRow.ChipTip"/>).</summary>
+    private string ChipShort(SaveChipKind kind, Career? career) => kind switch
+    {
+        SaveChipKind.NotSyncedYet => S["sm.chip.short.not_synced"],
+        SaveChipKind.NotCompared => S["sm.chip.short.not_compared"],
+        SaveChipKind.NewCareer => S["sm.chip.short.new"],
+        SaveChipKind.SeedPending => S["sm.chip.short.seed"],
+        _ => ChipText(kind, career),
+    };
 
     /// <summary>A game row's ⋯ (owner 2026-11-08): that game's career actions, each opening the existing screen with the game set.</summary>
     private List<MenuAction> CareerMenuOf(SaveSlot slot, ProfileGameFacts facts, SaveChipKind chip)
@@ -415,7 +469,9 @@ public sealed partial class ShellViewModel
             : !Games.Any(g => g.Id == game.Id) ? S["play.tile_not_in_install"]
             : Playing ? S["play.session_active"] : null;
         var canDeleteCareer = card?.CareerRow is not null;
-        foreach (var id in ProfileTools.CareerMenu(facts.Started, SaveChips.CanDownload(chip) && game.FullFeatures, canDeleteCareer))
+        // NOOB_FROM_FILE: a Noob profile of a game with Noob careers (catalog data) may start its career from a save folder on this PC
+        var fromFile = slot == SaveSlot.Noob && card is not null && card.State != CareerState.NotOffered;
+        foreach (var id in ProfileTools.CareerMenu(facts.Started, SaveChips.CanDownload(chip) && game.FullFeatures, canDeleteCareer, fromFile))
         {
             var action = id switch
             {
@@ -423,6 +479,8 @@ public sealed partial class ShellViewModel
                     ? new MenuAction(id, S["sm.menu.copy_azimuth"], !running, running ? S["sm.block.GameRunning"] : null)
                     : new MenuAction(id, S["sm.menu.copy_azimuth"], false, S["sm.block.NoSource"]),
                 ProfileTools.StartOther => StartOtherAction(slot, game),
+                ProfileTools.FromFile => new MenuAction(id, S["save_file.menu"], !running && !Playing && _install is not null,
+                    running || Playing ? S["sm.block.GameRunning"] : _install is null ? S["play.setup_needed"] : null),
                 ProfileTools.History => new MenuAction(id, S["sm.menu.history"], true),
                 ProfileTools.Resolve => SaveChips.NeedsResolve(chip)
                     ? new MenuAction(id, S["sm.resolve"], true) : new MenuAction(id, S["sm.resolve"], false, S["sm.menu.resolve_nothing"]),
@@ -629,7 +687,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         var id = card.Row?.Card?.Player.ProfileId;
-        _menuFor = _menuFor == id ? null : id;
+        if (id is not null) _menu.Toggle(id); else _menu.Close();
         FillSaveCards();
     }
 
@@ -637,7 +695,7 @@ public sealed partial class ShellViewModel
     public void ToggleGameRowMenu(ProfileGameRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        _menuFor = _menuFor == row.MenuKey ? null : row.MenuKey;
+        _menu.Toggle(row.MenuKey);
         FillSaveCards();
     }
 
@@ -648,7 +706,7 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(action);
         if (card.Row is not { } row) return;
         if (!action.Enabled) { if (action.Reason is { } why) Message = why; return; }
-        _menuFor = null;
+        _menu.Close();
         switch (action.Id)
         {
             case ProfileTools.HelpSensei:
@@ -673,7 +731,7 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(gameRow);
         ArgumentNullException.ThrowIfNull(action);
         if (!action.Enabled) { if (action.Reason is { } why) Message = why; return; }
-        _menuFor = null;
+        _menu.Close();
         if (gameRow.GameId != _gate.Game)
         {
             if (Games.FirstOrDefault(g => g.Id == gameRow.GameId) is not { } info || Playing)
@@ -696,6 +754,9 @@ public sealed partial class ShellViewModel
                 break;
             case ProfileTools.StartOther:
                 StartOtherProfileFrom(row);
+                break;
+            case ProfileTools.FromFile:
+                StartFromFileOfRow(row);
                 break;
             case ProfileTools.History:
                 await OpenHistoryAsync(slot);
@@ -1359,6 +1420,7 @@ public sealed partial class ShellViewModel
         foreach (var name in new[]
         {
             nameof(SavesCurrent), nameof(ShowSaveManager), nameof(ShowPlainProfiles), nameof(ShowSavesHome), nameof(ShowSavesCreate), nameof(ShowSavesStart),
+            nameof(ShowFloatingMenu),
             nameof(ShowSavesResolve), nameof(ShowSavesManage), nameof(ShowSavesCopy), nameof(ShowSavesHistory), nameof(ShowSavesDelete),
             nameof(ShowSavesHelp), nameof(ShowSavesDone), nameof(ShowHelpLink), nameof(SavesCanGoBack), nameof(SavesTrail), nameof(SavesTrailLast),
             nameof(SavesSubtitle), nameof(SavesEmpty), nameof(AzimuthStripLine), nameof(ShowGameRunningNote), nameof(GameRunningText),

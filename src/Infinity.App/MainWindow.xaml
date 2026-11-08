@@ -1253,13 +1253,13 @@
                                                   AutomationProperties.Name="{Binding Name}" />
                                           <!-- the game's sync chip: plain words, a green or amber dot -->
                                           <Border DockPanel.Dock="Right" CornerRadius="12" Padding="8,3" Margin="8,0,0,0" Background="#0DFFFFFF" VerticalAlignment="Center"
-                                                  MaxWidth="170" Visibility="{Binding HasChip, Converter={StaticResource Visible}}">
+                                                  MaxWidth="220" Visibility="{Binding HasChip, Converter={StaticResource Visible}}" ToolTip="{Binding ChipTip}">
                                             <StackPanel Orientation="Horizontal">
                                               <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Noob}"
                                                        Visibility="{Binding ChipGood, Converter={StaticResource Visible}}" />
                                               <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{StaticResource SmWarn}"
                                                        Visibility="{Binding ChipWarn, Converter={StaticResource Visible}}" />
-                                              <TextBlock Text="{Binding ChipText}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChipText}">
+                                              <TextBlock Text="{Binding ChipText}" FontSize="11" TextWrapping="Wrap" MaxWidth="190">
                                                 <TextBlock.Style>
                                                   <Style TargetType="TextBlock">
                                                     <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
@@ -1274,31 +1274,6 @@
                                             <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
                                           </StackPanel>
                                         </DockPanel>
-                                        <!-- the row's ⋯ menu, in the flow under the row (no popup, which froze under Proton) -->
-                                        <Border Visibility="{Binding MenuOpen, Converter={StaticResource Visible}}" HorizontalAlignment="Right" Margin="0,6,0,0"
-                                                MinWidth="250" MaxWidth="330" Padding="6" CornerRadius="10" Background="{StaticResource SmMenuSurface}"
-                                                BorderBrush="{StaticResource SmLine}" BorderThickness="1">
-                                          <ItemsControl ItemsSource="{Binding Menu}" Focusable="False">
-                                            <ItemsControl.ItemTemplate>
-                                              <DataTemplate>
-                                                <Button Style="{StaticResource SmMenuItem}" IsEnabled="{Binding Enabled}" Click="OnGameRowMenuItem"
-                                                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}" ToolTip="{Binding Reason}">
-                                                  <StackPanel>
-                                                    <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
-                                                      <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                          <Style.Triggers><DataTrigger Binding="{Binding Danger}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmBad}" /></DataTrigger></Style.Triggers>
-                                                        </Style>
-                                                      </TextBlock.Style>
-                                                    </TextBlock>
-                                                    <TextBlock Text="{Binding Reason}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap"
-                                                               Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
-                                                  </StackPanel>
-                                                </Button>
-                                              </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                          </ItemsControl>
-                                        </Border>
                                       </StackPanel>
                                     </DataTemplate>
                                   </ItemsControl.ItemTemplate>
@@ -1307,32 +1282,6 @@
                                            Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
                                 <TextBlock DockPanel.Dock="Bottom" Text="{Binding Hint}" Style="{StaticResource SmHint}" Margin="0,12,0,0" />
                               </DockPanel>
-                              <!-- the ⋯ menu (drawn in the card: no popup, which froze under Proton) -->
-                              <Border Visibility="{Binding MenuOpen, Converter={StaticResource Visible}}" HorizontalAlignment="Right" VerticalAlignment="Top"
-                                      Margin="0,42,0,0" MinWidth="250" MaxWidth="330" Padding="6" CornerRadius="10" Background="{StaticResource SmMenuSurface}"
-                                      BorderBrush="{StaticResource SmLine}" BorderThickness="1" Panel.ZIndex="3">
-                                <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.55" Color="Black" /></Border.Effect>
-                                <ItemsControl ItemsSource="{Binding Menu}" Focusable="False">
-                                  <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                      <Button Style="{StaticResource SmMenuItem}" IsEnabled="{Binding Enabled}" Click="OnSavesMenuItem"
-                                              Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}" ToolTip="{Binding Reason}">
-                                        <StackPanel>
-                                          <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
-                                            <TextBlock.Style>
-                                              <Style TargetType="TextBlock">
-                                                <Style.Triggers><DataTrigger Binding="{Binding Danger}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmBad}" /></DataTrigger></Style.Triggers>
-                                              </Style>
-                                            </TextBlock.Style>
-                                          </TextBlock>
-                                          <TextBlock Text="{Binding Reason}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap"
-                                                     Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
-                                        </StackPanel>
-                                      </Button>
-                                    </DataTemplate>
-                                  </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                              </Border>
                               <!-- no profile of this mode: the explainer -->
                               <StackPanel Visibility="{Binding IsExplainer, Converter={StaticResource Visible}}" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding ModeLabel}" Foreground="{Binding Accent}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" />
@@ -1995,6 +1944,13 @@
                       <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
                     </StackPanel>
                   </Button>
+                  <!-- NOOB_FROM_FILE (owner 2026-11-08): a Noob career from a save folder on this PC; the in-launcher picker, then the confirmation below -->
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromFile" IsEnabled="{Binding StartFromFileEnabled}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[save_file.option]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding StartFromFileHint}" Style="{StaticResource SmHint}" FontSize="14" />
+                    </StackPanel>
+                  </Button>
                   <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
                     <StackPanel>
                       <TextBlock Text="{Binding S[sm.start.hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
@@ -2006,6 +1962,17 @@
                     <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnClosePlayStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
                     <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
                             Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
+                  </WrapPanel>
+                </StackPanel>
+                <!-- NOOB_FROM_FILE: the checked save, confirmed before anything is created or written; Play follows the copy -->
+                <StackPanel Visibility="{Binding ShowFileStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Center">
+                  <TextBlock Text="{Binding FileStartTitle}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding FileStartBody}" Style="{StaticResource SmSub}" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding FileStartWarning}" FontSize="13" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                             Visibility="{Binding HasFileStartWarning, Converter={StaticResource Visible}}" />
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button Content="{Binding S[save_file.confirm]}" Click="OnConfirmFileStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" IsEnabled="{Binding Idle}" />
+                    <Button Content="{Binding S[save_file.cancel]}" Click="OnCancelFileStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
                   </WrapPanel>
                 </StackPanel>
                 <Button Content="{Binding S[play.manage_profiles]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Margin="0,14,0,0" Click="OnNavProfiles" />
@@ -2802,6 +2769,61 @@
         </StackPanel>
       </Border>
     </Border>
+    <!-- Owner 2026-11-08 (image 7): the Profiles page's ⋯ menus (a profile card's and each game row's) float over the page, by their button
+         (bottom-right aligned, above it near the bottom, inside the window). Drawn in the window (no WPF Popup: a Popup window froze under
+         Proton); an outside click, Esc or an item closes it; arrows and Tab cycle its items. -->
+    <Grid x:Name="MenuLayer" Panel.ZIndex="95" Visibility="{Binding ShowFloatingMenu, Converter={StaticResource Visible}}" KeyDown="OnMenuLayerKey">
+      <Border Background="Transparent" MouseDown="OnMenuBackdrop" MouseWheel="OnMenuBackdropWheel" />
+      <Canvas>
+        <Border x:Name="FloatingMenuPanel" MinWidth="250" MaxWidth="330" Padding="6" CornerRadius="10" Background="{StaticResource SmMenuSurface}"
+                BorderBrush="{StaticResource SmLine}" BorderThickness="1" KeyboardNavigation.TabNavigation="Cycle"
+                KeyboardNavigation.DirectionalNavigation="Cycle">
+          <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.55" Color="Black" /></Border.Effect>
+          <StackPanel>
+            <ItemsControl ItemsSource="{Binding OpenMenu.Items}" Focusable="False" Visibility="{Binding FloatingMenuIsCard, Converter={StaticResource Visible}}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Style="{StaticResource SmMenuItem}" IsEnabled="{Binding Enabled}" Click="OnSavesMenuItem"
+                          Tag="{Binding DataContext.OpenMenu.Owner, RelativeSource={RelativeSource AncestorType=Window}}" ToolTip="{Binding Reason}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
+                        <TextBlock.Style>
+                          <Style TargetType="TextBlock">
+                            <Style.Triggers><DataTrigger Binding="{Binding Danger}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmBad}" /></DataTrigger></Style.Triggers>
+                          </Style>
+                        </TextBlock.Style>
+                      </TextBlock>
+                      <TextBlock Text="{Binding Reason}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap"
+                                 Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <ItemsControl ItemsSource="{Binding OpenMenu.Items}" Focusable="False" Visibility="{Binding FloatingMenuIsRow, Converter={StaticResource Visible}}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Style="{StaticResource SmMenuItem}" IsEnabled="{Binding Enabled}" Click="OnGameRowMenuItem"
+                          Tag="{Binding DataContext.OpenMenu.Owner, RelativeSource={RelativeSource AncestorType=Window}}" ToolTip="{Binding Reason}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
+                        <TextBlock.Style>
+                          <Style TargetType="TextBlock">
+                            <Style.Triggers><DataTrigger Binding="{Binding Danger}" Value="True"><Setter Property="Foreground" Value="{StaticResource SmBad}" /></DataTrigger></Style.Triggers>
+                          </Style>
+                        </TextBlock.Style>
+                      </TextBlock>
+                      <TextBlock Text="{Binding Reason}" FontSize="11" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap"
+                                 Visibility="{Binding HasReason, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </Canvas>
+    </Grid>
     <!-- Owner 2026-10-28: the launcher's own file and folder picker for every caller (never the Windows dialog): a pane on the
          right above any screen (the first-run notice too); a pick goes back to the caller, the backdrop or Escape (B) cancels. -->
     <Grid Panel.ZIndex="96" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">

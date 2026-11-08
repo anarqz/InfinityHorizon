@@ -209,6 +209,13 @@ public partial class MainWindow : Window
 
     private void OnClosePlayStart(object sender, RoutedEventArgs e) => _vm.ClosePlayStart();
 
+    // NOOB_FROM_FILE (owner 2026-11-08): a Noob career from a save folder on this PC
+    private void OnPlayStartFromFile(object sender, RoutedEventArgs e) => _vm.PlayStartFromFile();
+
+    private async void OnConfirmFileStart(object sender, RoutedEventArgs e) => await _vm.ConfirmFileStartAsync();
+
+    private void OnCancelFileStart(object sender, RoutedEventArgs e) => _vm.CancelFileStart();
+
     private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
 
     // Owner 2026-11-08: the FRIENDS sidebar (header toggle)
@@ -339,14 +346,78 @@ public partial class MainWindow : Window
     // SAVE_MANAGER_UX (OD-207, OD-214): the save manager's screens
     private void OnSavesBack(object sender, RoutedEventArgs e) => _vm.SavesBack();
     private void OnSavesHome(object sender, RoutedEventArgs e) => _vm.SavesHome();
-    private void OnSavesMenu(object sender, RoutedEventArgs e) => _vm.ToggleSavesMenu((SaveCard)((FrameworkElement)sender).DataContext);
+    private void OnSavesMenu(object sender, RoutedEventArgs e)
+    {
+        _vm.ToggleSavesMenu((SaveCard)((FrameworkElement)sender).DataContext);
+        PlaceFloatingMenu((FrameworkElement)sender);
+    }
+
+    // owner 2026-11-08 (image 7): the open ⋯ floats by its button, inside the window; an outside click, the wheel, Esc or a resize closes it
+    private FrameworkElement? _menuAnchor;
+    private bool _menuResizeHooked;
+
+    private void PlaceFloatingMenu(FrameworkElement anchor)
+    {
+        _menuAnchor = anchor;
+        if (!_menuResizeHooked) { SizeChanged += (_, _) => _vm.CloseMenu(); _menuResizeHooked = true; }
+        Dispatcher.BeginInvoke(() =>
+        {
+            // the cards are rebuilt when a menu opens: the anchor is the open menu's ⋯ button as drawn now
+            if (!_vm.ShowFloatingMenu) return;
+            UpdateLayout();
+            if (OpenMenuButton(this) is { } drawn) _menuAnchor = drawn;
+            if (_menuAnchor is not { IsVisible: true } button || !button.IsDescendantOf(this)) { _vm.CloseMenu(); return; }
+            FloatingMenuPanel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var menu = FloatingMenuPanel.DesiredSize;
+            var at = button.TransformToAncestor(MenuLayer).TransformBounds(new Rect(button.RenderSize));
+            var spot = Infinity.Core.Shell.MenuPlacement.Place(at.Left, at.Top, at.Width, at.Height, menu.Width, menu.Height, MenuLayer.ActualWidth, MenuLayer.ActualHeight);
+            System.Windows.Controls.Canvas.SetLeft(FloatingMenuPanel, spot.Left);
+            System.Windows.Controls.Canvas.SetTop(FloatingMenuPanel, spot.Top);
+            FloatingMenuPanel.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.First));
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>The ⋯ button of the open menu's card or game row.</summary>
+    private static System.Windows.Controls.Button? OpenMenuButton(DependencyObject root)
+    {
+        var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is System.Windows.Controls.Button { Content: "⋯", DataContext: SaveCard { MenuOpen: true } or ProfileGameRow { MenuOpen: true } } button && button.IsVisible) return button;
+            if (OpenMenuButton(child) is { } found) return found;
+        }
+        return null;
+    }
+
+    private void CloseFloatingMenu()
+    {
+        _vm.CloseMenu();
+        if (_menuAnchor is { IsVisible: true } button) button.Focus();
+        _menuAnchor = null;
+    }
+
+    private void OnMenuBackdrop(object sender, System.Windows.Input.MouseButtonEventArgs e) { CloseFloatingMenu(); e.Handled = true; }
+
+    private void OnMenuBackdropWheel(object sender, System.Windows.Input.MouseWheelEventArgs e) => CloseFloatingMenu();
+
+    private void OnMenuLayerKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true;
+        CloseFloatingMenu();
+    }
     private void OnSavesMenuItem(object sender, RoutedEventArgs e)
     {
         var element = (FrameworkElement)sender;
         if (element.Tag is SaveCard card && element.DataContext is MenuAction action) _vm.SavesMenu(card, action);
     }
     // owner 2026-11-08: each game row's own ⋯ (its career actions)
-    private void OnGameRowMenu(object sender, RoutedEventArgs e) => _vm.ToggleGameRowMenu((ProfileGameRow)((FrameworkElement)sender).DataContext);
+    private void OnGameRowMenu(object sender, RoutedEventArgs e)
+    {
+        _vm.ToggleGameRowMenu((ProfileGameRow)((FrameworkElement)sender).DataContext);
+        PlaceFloatingMenu((FrameworkElement)sender);
+    }
     private async void OnGameRowMenuItem(object sender, RoutedEventArgs e)
     {
         var element = (FrameworkElement)sender;

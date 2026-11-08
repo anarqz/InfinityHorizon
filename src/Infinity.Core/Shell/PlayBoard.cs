@@ -148,6 +148,8 @@ public static class ProfileTools
     public const string Resolve = "resolve";
     public const string CopyTo = "copy-azimuth";
     public const string StartOther = "start-other";
+    /// <summary>NOOB_FROM_FILE (owner 2026-11-08): a Noob career of the row's game from a save folder on this PC.</summary>
+    public const string FromFile = "from-file";
     public const string Download = "download";
     public const string HelpSensei = "help";
     public const string Rename = "rename";
@@ -158,7 +160,7 @@ public static class ProfileTools
     public static IReadOnlyList<string> ProfileLevel { get; } = [DeleteProfile, Rename, HelpSensei];
 
     /// <summary>A game row's career tools, in the menu's order (owner 2026-11-08).</summary>
-    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, StartOther, History, Resolve, ManageSaves, Download, DeleteCareer];
+    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, StartOther, FromFile, History, Resolve, ManageSaves, Download, DeleteCareer];
 
     /// <summary>The profile card's menu (whether each is enabled is the page's).</summary>
     /// <param name="canRename">The server allows this profile a rename now (a name change notice): otherwise Rename is not listed.</param>
@@ -176,10 +178,12 @@ public static class ProfileTools
     /// <param name="started">The profile has a started career of the row's game (its saves can be copied, resolved, downloaded, start the other profile).</param>
     /// <param name="canDownload">Its sync chip allows a download onto this PC (a game with cloud saves).</param>
     /// <param name="canDeleteCareer">A career of the game exists to delete.</param>
-    public static IReadOnlyList<string> CareerMenu(bool started, bool canDownload, bool canDeleteCareer)
+    /// <param name="fromFile">A Noob profile whose mode the game has: its career of the game may start from a save folder on this PC.</param>
+    public static IReadOnlyList<string> CareerMenu(bool started, bool canDownload, bool canDeleteCareer, bool fromFile = false)
     {
         var list = new List<string>();
         if (started) { list.Add(CopyTo); list.Add(StartOther); }
+        if (fromFile) list.Add(FromFile);
         list.Add(History);
         if (started) list.Add(Resolve);
         list.Add(ManageSaves);

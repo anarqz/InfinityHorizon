@@ -24,7 +24,13 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     {
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
-        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport",    };
+        ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,    };
+
+    /// <summary>
+    /// NOOB_FROM_FILE (owner 2026-11-08): where the game keeps a profile's saves and what a career revision holds, so a save copied off a
+    /// PC is checked and placed by data. Its cloud sync follows <see cref="FullFeatures"/> (FM5: local only until FM5SAVE1).
+    /// </summary>
+    public Infinity.Core.Saves.SaveLayout Saves { get; init; } = Infinity.Core.Saves.SaveLayout.Fh2;
 
     /// <summary>
     /// Owner 2026-11-08 (PLAY's game tiles): the tile's accent colour (<c>#AARRGGBB</c>), drawn by the launcher: the selected tile's border,
