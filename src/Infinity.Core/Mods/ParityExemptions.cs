@@ -67,7 +67,7 @@ public sealed class ParityExemptions
                 if (entry.ValueKind != JsonValueKind.Object || entry.EnumerateObject().Any(p => p.Name is not ("id" or "name" or "description")))
                     throw Invalid("entry fields");
                 var id = Text(entry, "id", 64);
-                if (!ModManifest.ValidId(id) || ModManifest.IsCustomId(id)) throw Invalid("id");
+                if (!ModManifest.ValidId(id)) throw Invalid("id");
                 if (!ids.Add(id)) throw Invalid("duplicate id");
                 mods.Add(new(id, Text(entry, "name", 128), Text(entry, "description", 1024)));
             }

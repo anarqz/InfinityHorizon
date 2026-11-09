@@ -184,13 +184,13 @@ public sealed partial class ShellViewModel
             Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : "") + ": " + error.Message);
             mods = ModLaunchPreparation.None;
         }
-        // OD-113: native mods play online (modded lobbies only) when the signed runtime and a hook that hosts it are present.
-        ModRuntimePackage? nativeRuntime = null;
-        if (mods.HasEnabledNative)
+        // OD-232: an enabled mod in a retired format still changes the game (half a media override, a loader DLL), so it never goes
+        // online as vanilla: refused until it is disabled or removed on Mods (offline it stays a warning).
+        if (mods.RetiredOnlineMods is { Count: > 0 } retired)
         {
-            var (runtime, refusal) = await NativeModsForOnlineAsync(mods.HasEnabledDataSql);
-            if (refusal is not null) { Message = refusal; return; }
-            nativeRuntime = runtime;
+            Log("mods: online refused, retired mods enabled: " + string.Join(", ", retired.Select(m => m.Id)));
+            Message = RetiredOnlineRefusal(retired.Select(m => m.Text("name", S.Locale)));
+            await RefreshModsAsync(); return;
         }
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         var startingInstall = _install;
@@ -217,31 +217,11 @@ public sealed partial class ShellViewModel
             // CR-L39: the keys this session's validated /info published and the realm's pin matched.
             : _config.Custom ? (TicketKeys.FromTrust(_session.Info.Trust!), TicketPolicy.ForCustom)
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
-        // N-H2/OD-113: a development package's native mods carry a FIMOD003 plan (this launch's nonce) to the hook and use the
-        // runtime source: ready only on a verified ModsReport for that nonce and digest.
-        NativeModPlan? nativePlan = null;
-        Infinity.Core.Matchmaking.IModSetSource modSet;
-        if (nativeRuntime is not null)
-        {
-            var launchModSet = await Infinity.Core.Matchmaking.LaunchPlanModSetSource.FromManagedModsAsync(ManagedMods);
-            if (launchModSet.State.Phase == Infinity.Core.Matchmaking.ModSetPhase.Failed)
-            { Log("mods: lobby mod set unavailable (" + launchModSet.State.Reason + ")"); Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
-            nativePlan = await PrepareOnlineNativePlanAsync(nativeRuntime);
-            if (nativePlan is null) return;
-            if (!ReferenceEquals(_session, startingSession) || !CanPlay) { await EndNativeModSessionAsync(nativePlan); return; }
-            modSet = Infinity.Core.Matchmaking.ModSets.ForLaunch(launchModSet, nativePlan);
-            if (!PrepareAzimuth(_install, ProfileHardcore))
-            { Message = PrepareAzimuthFailed; await EndNativeModSessionAsync(nativePlan); return; }
-        }
-        else
-        {
-            // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
-            if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
-            var built = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
-            if (built is null) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
-            modSet = built;
-        }
-        if (!ReferenceEquals(_session, startingSession) || !CanPlay) { if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan); return; }
+        // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
+        if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
+        var modSet = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
+        if (modSet is null) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         using var onlineActivity = new OnlineActivity();
         StartOverlayStatusFeed(_session); // CR-L40 §1.3: the guide's server status and avatar
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
@@ -249,7 +229,6 @@ public sealed partial class ShellViewModel
             Overlay = LoadOverlayPackage(),
             OverlayStatus = _overlayStatusFeed,
             NativeDllOverrides = mods.DllOverrides,
-            ModEnvironment = nativePlan?.Environment ?? [],
             FallbackIdentity = FallbackIdentityFor(profile),
             Saves = SessionSavesFor(profile),
             Worlds = WorldsFor(profile.Mode, profile.Xuid, onlineActivity, modSet),
@@ -272,8 +251,6 @@ public sealed partial class ShellViewModel
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
             },
         };
-        if (nativePlan is not null) config = config with { MinimumOnlineHookBuild = Math.Max(config.MinimumOnlineHookBuild,
-            mods.HasEnabledDataSql ? DataModSqlHookBuild : NativeModOnlineHookBuild) };
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
         _waitingForAdmission = true;
@@ -298,8 +275,6 @@ public sealed partial class ShellViewModel
         }
         finally
         {
-            // OD-113: the session database restore runs after the game exited, as offline, before Play can start again
-            if (nativePlan is not null) await EndNativeModSessionAsync(nativePlan);
             if (caches)
             {
                 SwitchCaches(_install.Root, online: false);
@@ -412,22 +387,10 @@ public sealed partial class ShellViewModel
         PresenceOn(e); // OD-136: the Discord card
         switch (e)
         {
-            case SupervisorEvent.ModsReported reported:
-                // N-H2: the supervisor fed the hook's ModsReport (0x1b) to this launch's runtime mod set; a report for another nonce or plan is ignored.
-                Log(reported.Accepted switch
-                {
-                    true => "mods: runtime report accepted (" + _playModSet?.State.Phase + ")",
-                    false => "mods: runtime report ignored (not this launch's plan)",
-                    null => "mods: runtime report ignored (no native plan)",
-                });
-                foreach (var entry in reported.Report.Mods)
-                    Log($"mods: report {entry.Id} {entry.Version} state={entry.State switch { 1 => "ready", 2 => "failed", _ => "starting" }} compat={Convert.ToHexStringLower(entry.CompatibilitySha256)[..16]}");
-                break;
             case SupervisorEvent.ModsFailed failed:
-                // OD-113: no modded matchmaking for this launch; the game itself goes on (or the runtime already ended it)
-                Log("mods: runtime mod set failed (" + failed.Reason + ")");
-                var why = RuntimeReason();
-                Message = why is null ? S["mods.online_failed"] : S["mods.online_failed"] + " (" + why + ")";
+                // no modded matchmaking for this launch (ExtraOptions loaded none of the planned mods); the game itself goes on
+                Log("mods: lobby mod set failed (" + failed.Reason + ")");
+                Message = S["mods.online_failed"];
                 _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
                 SetStatus(Message);
                 break;
@@ -486,14 +449,6 @@ public sealed partial class ShellViewModel
                 Changed(nameof(HookLine));
                 Changed(string.Empty);
                 break;
-            case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed { Code: ModRuntimeExitCode } }:
-                // the hook ended the session on purpose: the selected mods failed after they began loading (N-M4), not a crash
-                _modRuntimeEnded = true;
-                var reason = RuntimeReason();
-                Message = reason is null ? S["mods.runtime_ended"] : S["mods.runtime_ended"] + " (" + reason + ")";
-                _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
-                SetStatus(Message);
-                break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.IdentityRefused }:
                 // B1: the hook closed the game before it read a save: no profile identity could be set (never Azimuth's own career)
                 Message = S["supervisor.identity_refused"];
@@ -504,7 +459,6 @@ public sealed partial class ShellViewModel
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
                 break;
             case SupervisorEvent.CrashCaptured captured:
-                if (_modRuntimeEnded) { _modRuntimeEnded = false; Log("crash: not presented (the mod runtime ended the session)"); break; }
                 PresentCrash(captured.Incident);
                 break;
             case SupervisorEvent.Exited:

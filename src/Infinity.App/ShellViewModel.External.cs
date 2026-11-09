@@ -60,31 +60,19 @@ public sealed partial class ShellViewModel
     public string ExternalNotice => _externalMod is { ExternalSources: [var first, ..] }
         ? S.Format("external.notice", ("hint", first.Hint ?? first.LabelText(S.Locale))) : "";
     public bool ExternalAllOk => ExternalRows.Count > 0 && ExternalRows.All(r => r.Ok);
-    public bool CanInstallExternal => ModsIdle && ExternalAllOk && !ExternalRows.Any(r => r.Checking) && _externalMod is not null && _install is not null && !ModRecoveryRequired
-        && !ExternalNeedsGameFolder;
-    /// <summary>The mod writes game files and no game folder is chosen: the pane asks for it before Install (never a refusal after it).</summary>
-    public bool ExternalNeedsGameFolder => _externalMod is { } mod && ContentLocation is null && NeedsGameFolder(mod);
-    /// <summary>Game files to write, or (OD-127) the stock database an ExtraOptions addon's database.json is built from.</summary>
-    private static bool NeedsGameFolder(ModManifest mod) => mod.Files.Any(f => f.Root == "game") || mod.AddonDatabase is not null;
+    public bool CanInstallExternal => ModsIdle && ExternalAllOk && !ExternalRows.Any(r => r.Checking) && _externalMod is not null && _install is not null && !ModRecoveryRequired;
     public bool ExternalInstalled => _externalMod is { } mod && _modHealth.Installed.Any(i => i.Id == mod.Id);
     public string ExternalInstallLabel => ExternalInstalled && !ExternalUpdate ? S["external.recheck_done"]
         : ExternalReplaced.Count > 0 ? Counted("external.install_replacing", ExternalReplaced.Count) : S["external.install"];
     private bool ExternalUpdate => _externalMod is { } mod && _modHealth.Installed.FirstOrDefault(i => i.Id == mod.Id)?.Manifest?.SameContent(mod) == false;
 
     /// <summary>
-    /// Before Install: the game folder the files go to and the existing files they replace (backed up, restored on disable or
-    /// uninstall). Shown so a wrong folder — a real game picked for a test pack — is visible before anything is written.
+    /// Before Install: the folder the files go to and the existing files they replace (backed up, restored on disable or
+    /// uninstall). Shown so a wrong folder is visible before anything is written.
     /// </summary>
-    private IReadOnlyList<string> ExternalReplaced
-    {
-        get
-        {
-            // Azimuth-root files count without a game folder too (review, T2 M7); game files need the folder.
-            return _externalMod is { } mod ? ReplacedBy(mod) : [];
-        }
-    }
-    /// <summary>The same install preview as every mod (Alex, 1.0.11); empty while a game folder it needs is missing (the pane says so).</summary>
-    public string ExternalTargetText => _externalMod is { } mod && !(ContentLocation is null && NeedsGameFolder(mod)) ? PreviewTextFor(mod) : "";
+    private IReadOnlyList<string> ExternalReplaced => _externalMod is { } mod ? ReplacedBy(mod) : [];
+    /// <summary>The same install preview as every mod (Alex, 1.0.11).</summary>
+    public string ExternalTargetText => _externalMod is { } mod ? PreviewTextFor(mod) : "";
     public bool ExternalReplaces => ExternalAllOk && ExternalReplaced.Count > 0;
     public string ExternalReplacesText => ExternalReplaced is { Count: > 0 } files
         ? Counted("external.replaces", files.Count, ("files", FileList(files))) : "";
@@ -97,7 +85,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         var mod = update ? card.Next : card.Manifest;
-        if (mod is not { IsExternal: true } || ModManagerFactory() is not { } factory || !ModsIdle || update && !card.CanAct) return;
+        if (mod is not { IsExternal: true, Retired: false } || ModManagerFactory() is not { } factory || !ModsIdle || update && !card.CanAct) return;
         _externalMod = mod; _showModInfo = false; _showModOptions = false; _selectedMod = card;
         if (ShowBrowser) StopBrowsing();
         ExternalRows.Clear();
@@ -198,7 +186,7 @@ public sealed partial class ShellViewModel
             + "\n    " + S.Format("external.file_expected", ("bytes", f.File.Bytes.ToString("N0", CultureInfo.CurrentCulture)), ("sha", f.File.Sha256))));
     }
 
-    /// <summary>Installs (or, when already installed, finishes the re-check of) the mod from the store, with the runtime its database base needs.</summary>
+    /// <summary>Installs (or, when already installed, finishes the re-check of) the mod from the store.</summary>
     public async Task InstallExternalAsync()
     {
         if (!CanInstallExternal || _externalMod is not { } mod) return;
@@ -226,7 +214,6 @@ public sealed partial class ShellViewModel
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
-            if (mod.NeedsRuntime) await RequireRuntimeAsync();
             var manager = await Task.Run(ModManagerFactory()!);
             await Task.Run(() => manager.InstallExternal(mod, progress, update, hardcore));
             RecordModSource(mod.Id);

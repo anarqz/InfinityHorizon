@@ -38,11 +38,13 @@ public sealed partial class ManagedModFiles
         var log = new List<string>();
         try
         {
-            var wanted = InstalledManifests().Where(m => Receipt(m) is { Enabled: true })
+            var wanted = InstalledSnapshots(out var unreadable).Where(m => Receipt(m) is { Enabled: true })
                 .SelectMany(m => m.WineDllOverrides.Where(w => w.AppDefaults).Select(w => w.Module)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var owned = ReadWineRecord();
             foreach (var module in wanted) { log.Add(module + ": " + WineOverrides.Set(module, true)); owned.Add(module); }
-            foreach (var module in owned.Where(m => !wanted.Contains(m)).ToArray()) { log.Add(module + ": " + WineOverrides.Set(module, false)); owned.Remove(module); }
+            // An unreadable installation may still need its overrides: nothing is removed until every receipt reads again.
+            if (unreadable.Count == 0)
+                foreach (var module in owned.Where(m => !wanted.Contains(m)).ToArray()) { log.Add(module + ": " + WineOverrides.Set(module, false)); owned.Remove(module); }
             WriteWineRecord(owned);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ModException) { log.Add("failed: " + error.GetType().Name); }

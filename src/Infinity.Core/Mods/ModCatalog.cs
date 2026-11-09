@@ -17,9 +17,6 @@ public sealed record ModCatalog(string CatalogId, long Sequence, DateTimeOffset?
     /// </summary>
     public IReadOnlyList<ModRequirement> Required { get; init; } = [];
 
-    /// <summary>OD-116: the catalog's runtime entry (the signed native mod runtime), or null.</summary>
-    public ModRuntimeEntry? Runtime { get; init; }
-
     /// <summary>OD-116: downloads may come from any HTTPS host; each is pinned by its SHA-256 and size instead.</summary>
     public bool AnyDownloadHost { get; init; }
 
@@ -146,8 +143,6 @@ public static class ModCatalogTrust
     {
         if (ModManifest.Hash(raw) != entry.ManifestSha256) throw new ModException("manifest digest mismatch", ModErrors.Digest);
         var mod = new ModManifest(raw);
-        // OD-114: the reserved custom prefix comes only from the player's custom folder, never from a catalog.
-        if (mod.IsCustom || ModManifest.IsCustomId(entry.Id)) throw new ModException("a catalog cannot carry a custom mod", ModErrors.Catalog);
         if (mod.Id != entry.Id || mod.Version != entry.Version) throw new ModException("catalog identity mismatch", ModErrors.Catalog);
         return mod;
     }

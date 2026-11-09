@@ -64,14 +64,8 @@ public sealed record SupervisorConfig(
     public Matchmaking.IModSetSource? Mods { get; init; }
 
     /// <summary>
-    /// OD-113: a native mod launch's plan handoff (<see cref="Infinity.Core.Mods.NativeModPlan.Environment"/>: FI_MOD_PLAN, FI_MOD_PLAN_HASH,
-    /// FI_MOD_RUNTIME, FI_MOD_RUNTIME_HASH), added to the game's environment next to FI_LAUNCH. Only those names; empty: no native mods.
-    /// </summary>
-    public IReadOnlyList<(string Name, string Value)> ModEnvironment { get; init; } = [];
-
-    /// <summary>
-    /// OD-113: how long after the hook's handshake a <see cref="Matchmaking.RuntimeModSetSource"/> may stay not ready. Past it the set
-    /// fails for this launch (no modded matchmaking): a hook without the mod host, or a runtime that never reports, is never waited on forever.
+    /// How long after the hook's handshake an <see cref="Matchmaking.ExtraOptionsModSetSource"/> waits for ExtraOptions' log of this run.
+    /// Past it the set settles with what the log says (no modded matchmaking when nothing loaded): never waited on forever.
     /// </summary>
     public TimeSpan ModReportDeadline { get; init; } = TimeSpan.FromSeconds(90);
 
@@ -162,20 +156,7 @@ public abstract record SupervisorEvent
     /// </summary>
     public sealed record GameCar(int CarKey) : SupervisorEvent;
 
-    /// <summary>
-    /// N-H2 (OD-112): the hook forwarded the native mod runtime's report. Unverified here: check the nonce and
-    /// plan digest against this launch's plan and each mod's hashes against what was prepared before using it.
-    /// </summary>
-    public sealed record ModsReported(Session.Frame.ModsReport Report) : SupervisorEvent
-    {
-        /// <summary>
-        /// OD-113: what the session's mod set made of it (the supervisor routes it, <see cref="Matchmaking.ModSets.Report"/>): true accepted,
-        /// false another launch's nonce or plan (ignored), null no runtime source (no native plan).
-        /// </summary>
-        public bool? Accepted { get; init; }
-    }
-
-    /// <summary>OD-113: the session's runtime mod set failed (a failed report, or no ready report in time): no modded matchmaking for this launch.</summary>
+    /// <summary>The session's mod set failed (ExtraOptions loaded none of the planned mods, or its log never answered): no modded matchmaking for this launch.</summary>
     public sealed record ModsFailed(string Reason) : SupervisorEvent;
 
     /// <summary>Something the overlay reported (Overlay.UiEventKind: first frame, passthrough, ...).</summary>
@@ -252,8 +233,6 @@ public sealed class PlaySupervisor
     {
         _uiPipes = uiPipes;
         _config = config ?? throw new ArgumentNullException(nameof(config));
-        if (config.ModEnvironment.Any(e => !Infinity.Core.Mods.NativeModPlan.EnvironmentNames.Contains(e.Name, StringComparer.Ordinal)))
-            throw new ArgumentException("only the native mod plan's variables", nameof(config));
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _spawner = spawner ?? throw new ArgumentNullException(nameof(spawner));
         _pipes = pipes ?? throw new ArgumentNullException(nameof(pipes));
@@ -409,8 +388,6 @@ public sealed class PlaySupervisor
             env.Add((Launch.EnvOfflineXuid, fallback.Xuid));
             env.Add((Launch.EnvOfflineGamertag, fallback.Gamertag));
         }
-        // OD-113: the native plan rides the online launch too; the hook accepts it there only as FIMOD003 (mod_host.c)
-        env.AddRange(_config.ModEnvironment);
         if (WineHost.Detected)
         {
             // OD-125: the hook is ExtraOptions.Infinity's winmm.dll; Wine loads it only native-first (AppDefaults)
@@ -725,12 +702,8 @@ public sealed class PlaySupervisor
                             await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
                         }
                         var frame = received.Frame;
-                        if (frame is Frame.ModsReport mods)
-                        {
-                            // N-H2/OD-113: the session's set verifies it (nonce, plan digest, hashes) and turns ready or failed
-                            if (endpoint.Greeted) RouteModsReport(mods);
-                            continue;
-                        }
+                        // the retired native mod runtime's report (OD-113; OD-232): no launch plans one, so nothing reads it
+                        if (frame is Frame.ModsReport) continue;
                         if(frame is Frame.UdpDiagnostic diagnostic)
                         {
                             if(endpoint.Greeted && !suspended && tokensOpen)worlds?.RecordUdpDiagnostic(diagnostic);
@@ -1404,15 +1377,6 @@ public sealed class PlaySupervisor
         return result;
     }
 
-    private void RouteModsReport(Frame.ModsReport report)
-    {
-        var before = _config.Mods?.State.Phase;
-        var accepted = Matchmaking.ModSets.Report(_config.Mods, report);
-        _emit(new SupervisorEvent.ModsReported(report) { Accepted = accepted });
-        if (accepted == true && before != Matchmaking.ModSetPhase.Failed && _config.Mods!.State.Phase == Matchmaking.ModSetPhase.Failed)
-            _emit(new SupervisorEvent.ModsFailed(_config.Mods.State.Reason ?? "runtime"));
-    }
-
     /// <summary>How often <see cref="WatchExtraOptionsModsAsync"/> reads ExtraOptions' log until the set settles.</summary>
     public static readonly TimeSpan ExtraOptionsLogPoll = TimeSpan.FromSeconds(2);
 
@@ -1435,14 +1399,6 @@ public sealed class PlaySupervisor
         if (mods.State.Phase == Matchmaking.ModSetPhase.Failed) _emit(new SupervisorEvent.ModsFailed(mods.State.Reason ?? "not_loaded"));
     }
 
-    /// <summary>OD-113: a runtime set still not ready at the deadline fails for this launch (cancelled when this game process ends).</summary>
-    private async Task ExpireModsAsync(Matchmaking.RuntimeModSetSource mods, CancellationToken cancellation)
-    {
-        try { await Task.Delay(_config.ModReportDeadline, _clock, cancellation).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return; }
-        if (mods.Expire("timeout")) _emit(new SupervisorEvent.ModsFailed("timeout"));
-    }
-
     private async Task<SessionRecord> OnFrame(Frame frame, LauncherEndpoint endpoint, IControlPipe pipe, GameToken token, SessionRecord state, CancellationToken cancellation)
     {
         var (replies, evt) = endpoint.Handle(frame, token);
@@ -1463,7 +1419,6 @@ public sealed class PlaySupervisor
                 else
                 {
                     _emit(new SupervisorEvent.Running());
-                    if (_config.Mods is Matchmaking.RuntimeModSetSource runtimeMods) _ = ExpireModsAsync(runtimeMods, cancellation);
                     if (_config.Mods is Matchmaking.ExtraOptionsModSetSource extraOptionsMods) _ = WatchExtraOptionsModsAsync(extraOptionsMods, cancellation);
                     if (_config.Overlay is { } package)
                     {

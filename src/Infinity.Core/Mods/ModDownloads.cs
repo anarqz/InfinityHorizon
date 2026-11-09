@@ -9,8 +9,6 @@ namespace Infinity.Core.Mods;
 public sealed class ModException(string message, string code = ModErrors.Failed) : Exception(message)
 {
     public string Code { get; } = code;
-    /// <summary>A mod id the localized message names (for example the enabled mod that already replaces the database); never a path.</summary>
-    public string? Detail { get; init; }
 }
 
 /// <summary>The stable categories of <see cref="ModException.Code"/>.</summary>
@@ -34,27 +32,19 @@ public static class ModErrors
     public const string Relink = "relink";
     /// <summary>A Hardcore profile with a mod that affects multiplayer (OD-112 follow-up).</summary>
     public const string Hardcore = "hardcore";
-    /// <summary>A custom mod whose exact manifest digest the player has not confirmed yet (OD-114).</summary>
-    public const string Unconfirmed = "unconfirmed";
-    /// <summary>A data mod whose SQL needs the mod runtime with data-mod support (FIMOD004), which this launcher does not have.</summary>
-    public const string RuntimeRequired = "runtime_required";
-    /// <summary>Another enabled mod already replaces the game database (<see cref="ModException.Detail"/> names it); one base at a time.</summary>
-    public const string DatabaseBase = "database_base";
+    /// <summary>OD-232: an installation in a format the launcher no longer supports: it is only disabled or removed, never enabled or updated.</summary>
+    public const string Retired = "retired";
     /// <summary>Add from URL: the address could not be downloaded (not HTTPS, unreachable, not found).</summary>
     public const string UrlDownload = "url_download";
-    /// <summary>Add from URL: the download is not a readable ZIP, is too large, or lacks a file its manifest maps.</summary>
+    /// <summary>Add from URL or a ZIP: the archive is not readable, too large, or holds a path that is not a plain file of the mod's folder.</summary>
     public const string Archive = "archive";
-    /// <summary>Add from URL: the ZIP has several or an invalid <c>infinity-mod.json</c>, or one that is not a custom mod.</summary>
+    /// <summary>Add from URL or a ZIP (OD-232): several <c>mod.json</c>, or one that is not a loader manifest (format 1, a valid id).</summary>
     public const string ArchiveManifest = "archive_manifest";
-    /// <summary>Add from URL: the ZIP has no <c>infinity-mod.json</c> at all; the mod was never adapted to Infinity's schema.</summary>
+    /// <summary>Add from URL or a ZIP (OD-232): no <c>mod.json</c> at the archive's top or in one top folder.</summary>
     public const string ArchiveNoManifest = "archive_no_manifest";
-    /// <summary>Add from URL: the custom folder already holds the most custom mods the launcher lists.</summary>
-    public const string CustomFull = "custom_full";
-    /// <summary>OD-116: a native mod needs the Infinity mod runtime, and no verified one is installed or listed by the catalog.</summary>
-    public const string RuntimeMissing = "runtime_missing";
     /// <summary>OD-117: the player's own files for a mod are missing, different, not checked yet, or the chosen source is unusable.</summary>
     public const string ExternalFiles = "external_files";
-    /// <summary>The mod writes game files (media overrides) and no game folder is chosen yet (Configure → Game folder).</summary>
+    /// <summary>A retired installation's game files (OD-232) are restored, and no game folder is chosen (Configure → Game folder).</summary>
     public const string GameFolder = "game_folder";
 }
 

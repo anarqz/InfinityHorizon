@@ -17,9 +17,10 @@ public sealed record ModFileJournal(string ReceiptName, ManagedModReceipt Receip
 public sealed record ModDrift(string Root, string Path, string? Expected, string? Actual);
 
 /// <summary>
-/// Receipt-driven, journaled changes to the Azimuth and game folders for manifest mods. Every
-/// mutation holds the bucket lock, requires the game closed, journals before it writes and rolls
-/// back on failure. Mod state never blocks ordinary Play by itself: see <see cref="Inspect"/>.
+/// Receipt-driven, journaled changes for manifest mods: OD-232's ExtraOptions mods, in <c>&lt;Azimuth&gt;\mods\&lt;id&gt;\</c>. A
+/// receipt of a retired format (game-folder files, a native or data mod, a custom mod) is still read so the mod can be disabled and
+/// uninstalled, restoring every file it names. Every mutation holds the bucket lock, requires the game closed, journals before it
+/// writes and rolls back on failure. Mod state never blocks ordinary Play by itself: see <see cref="Inspect"/>.
 /// </summary>
 public sealed partial class ManagedModFiles
 {
@@ -119,19 +120,6 @@ public sealed partial class ManagedModFiles
 
     public bool Verified(ModManifest manifest) => !RecoveryRequiredHere && Receipt(manifest) is not null && Drift(manifest).Count == 0;
 
-    /// <summary>
-    /// OD-113: the mapped files a multiplayer fingerprint names (every file but licences, the settings file and seeded files) whose
-    /// current bytes are not the manifest's, as <c>root/path</c>. The lobby set is built only when this is empty, so a data mod's
-    /// entry stands for the exact files the game will read; an accepted re-baseline (H3) of such a file counts as a mismatch.
-    /// </summary>
-    public IReadOnlyList<string> ManifestMismatches(ModManifest manifest)
-    {
-        ArgumentNullException.ThrowIfNull(manifest);
-        return manifest.Files.Where(f => f.Role is not ("license" or "config") && f.Mode != "seed")
-            .Where(f => !string.Equals(Current(Target(f.Root, f.Destination)), f.Hash, StringComparison.OrdinalIgnoreCase))
-            .Select(f => f.Root + "/" + f.Destination).ToList();
-    }
-
     /// <summary>Managed files that differ from the receipt's expected state.</summary>
     public IReadOnlyList<ModDrift> Drift(ModManifest manifest)
     {
@@ -164,7 +152,6 @@ public sealed partial class ManagedModFiles
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(downloadHosts);
         if (!update) CheckProfile(manifest, hardcore);
         if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported);
-        if (manifest.IsCustom) throw new ModException("custom mods install from their local folder", ModErrors.Unsupported);
         if (!update && Held(manifest.Id) is { } held && held.ManifestHash == manifest.Digest)
         {
             // the files kept on this PC by its uninstall: nothing is downloaded (every object is checked against its digest as it is read)
@@ -208,7 +195,6 @@ public sealed partial class ManagedModFiles
 
     private static Dictionary<ManifestFile, Func<byte[]>> VerifyPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages)
     {
-        if (manifest.IsCustom) throw new ModException("custom mods install from their local folder", ModErrors.Unsupported);
         var verified = new Dictionary<ManifestFile, Func<byte[]>>();
         foreach (var (name, spec) in PackageSpecs(manifest))
         {
@@ -233,19 +219,6 @@ public sealed partial class ManagedModFiles
 
     internal void InstallVerifiedPackages(ModManifest manifest, IReadOnlyDictionary<string, byte[]> packages, IProgress<string>? progress = null, bool update = false, bool hardcore = false) =>
         InstallFrom(manifest, () => VerifyPackages(manifest, packages), progress, update, hardcore);
-
-    /// <summary>
-    /// The files of a custom mod (OD-114) from its own folder, <c>&lt;home&gt;/mods/custom/&lt;id&gt;/files/&lt;root&gt;/&lt;destination&gt;</c>,
-    /// installed like a package once the player confirmed this exact manifest digest. Every file's size and SHA-256 is checked
-    /// before anything is written and again as it is read, one file at a time.
-    /// </summary>
-    public void InstallCustom(ModManifest manifest, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
-    {
-        ArgumentNullException.ThrowIfNull(manifest);
-        if (!manifest.IsCustom) throw new ModException("not a custom mod", ModErrors.Unsupported);
-        RequireCustomConfirmation(manifest);
-        InstallFrom(manifest, () => VerifyCustomFiles(manifest), progress, update, hardcore);
-    }
 
     /// <summary>OD-125: the catalog id of ExtraOptions, which comes with Infinity as ExtraOptions.Infinity (never installed as a mod).</summary>
     public const string BuiltInExtraOptions = "extraoptions";
@@ -278,6 +251,8 @@ public sealed partial class ManagedModFiles
         var installed = ReadReceipt(manifest.Id);
         if (installed is not null && !update) throw new ModException("already managed; use enable or disable", installed.ManifestHash == manifest.Digest ? ModErrors.Failed : ModErrors.Unsupported);
         if (installed is not null && installed.ManifestHash == manifest.Digest) throw new ModException("this version is already installed");
+        // OD-232: an installation in a retired format is never updated; it is removed (restoring what it replaced) first
+        if (installed is not null && SnapshotFor(installed).Retired) throw new ModException("remove the retired installation first", ModErrors.Retired);
         if (installed is not null)
         {
             if (installed.Enabled) CheckProfile(manifest, hardcore); // an enabled mod stays enabled across its update
@@ -319,6 +294,7 @@ public sealed partial class ManagedModFiles
             owned.Any(f => f.Root == "game") ? _game : null, _azimuth, null, CreatedDirectories(owned)), changes), progress);
         if (File.Exists(HeldPath(manifest.Id))) RemoveFile(HeldPath(manifest.Id)); // installed again: the receipt names its files now
         ReconcileWineOverrides();
+        KeepLoadFirstOnTop();
     }
 
     private void AddConfig(ModManifest manifest, List<ManagedModFile> owned, List<ModFileChange> changes)
@@ -392,6 +368,7 @@ public sealed partial class ManagedModFiles
             GameRoot = owned.Any(f => f.Root == "game") ? _game : null, CreatedDirectories = created }, changes), progress);
         RemoveCreatedDirectories(created);
         ReconcileWineOverrides();
+        KeepLoadFirstOnTop();
     }
 
     /// <summary>
@@ -403,13 +380,8 @@ public sealed partial class ManagedModFiles
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (enabled) CheckProfile(manifest, hardcore); // disabling is always allowed
-        if (enabled && manifest.IsCustom) RequireCustomConfirmation(manifest);
-        // OD-117: an external mod's database base obeys the same rules on enable as on install (runtime, one base at a time).
-        if (enabled && manifest.IsExternal && manifest.DatabaseBase is not null)
-        {
-            if (!DataSqlRuntimeAvailable()) throw new ModException("a database base needs the mod runtime", ModErrors.RuntimeRequired);
-            CheckDatabaseBase(manifest);
-        }
+        // OD-232: a retired format is only disabled or removed, never enabled again
+        if (enabled && manifest.Retired) throw new ModException("this mod's format is no longer supported", ModErrors.Retired);
         using var gate = Lock();
         var receipt = Receipt(manifest) ?? throw new ModException("mod has no installation receipt");
         if (receipt.Enabled == enabled) return;
@@ -428,6 +400,7 @@ public sealed partial class ManagedModFiles
         Execute(new(manifest.Id + ".receipt.json", receipt with { Enabled = enabled }, changes), progress);
         if (!enabled) RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
         ReconcileWineOverrides();
+        if (enabled) KeepLoadFirstOnTop();
     }
 
     /// <summary>H3 "accept current files": the files now on disk become what the receipt expects. No game file is written.</summary>
@@ -490,8 +463,9 @@ public sealed partial class ManagedModFiles
             Execute(new(id + ".receipt.json", receipt with { Files = receipt.Files.Select(f => copies.Contains(f) ? f with { Before = null } : f).ToList() },
                 copies.Select(f => new ModFileChange(f.Root, f.Path, f.After, null)).ToList()), progress);
         }
-        // the game no longer has the mod's files; this PC keeps them for a later install until the player purges them
-        try { Hold(SnapshotFor(receipt)); }
+        // the game no longer has the mod's files; this PC keeps them for a later install until the player purges them (OD-232: a
+        // retired format is never installed again, so nothing of it is kept)
+        try { if (SnapshotFor(receipt) is { Retired: false } snapshot) Hold(snapshot); }
         catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException) { } // nothing to reuse; the uninstall still completes
         var archive = Safe(BackupRoot, "uninstalled-" + id + "-" + Guid.NewGuid().ToString("N") + ".json");
         File.Move(ReceiptPath(id), archive);
@@ -686,13 +660,16 @@ public sealed partial class ManagedModFiles
         Atomic(Path.Combine(BackupRoot, manifest.Id + ".manifest.json"), manifest.Snapshot());
     }
 
-    /// <summary>The exact manifest a receipt was written for: its content-addressed snapshot, or the legacy per-id copy when it matches.</summary>
+    /// <summary>
+    /// The exact manifest a receipt was written for: its content-addressed snapshot, or the legacy per-id copy when it matches. Read as
+    /// an installation (<see cref="ModManifest.Installed"/>): a retired format is listed, never refused.
+    /// </summary>
     private ModManifest SnapshotFor(ManagedModReceipt receipt)
     {
         foreach (var name in new[] { "manifests/" + receipt.ManifestHash + ".json", receipt.Id + ".manifest.json" })
         {
             var path = Safe(BackupRoot, name);
-            if (File.Exists(path) && ModManifest.Hash(File.ReadAllBytes(path)) == receipt.ManifestHash) return new ModManifest(File.ReadAllBytes(path));
+            if (File.Exists(path) && ModManifest.Hash(File.ReadAllBytes(path)) == receipt.ManifestHash) return ModManifest.Installed(File.ReadAllBytes(path));
         }
         throw new ModException("installed manifest snapshot missing", ModErrors.Recovery);
     }

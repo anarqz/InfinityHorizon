@@ -23,12 +23,18 @@ public sealed record ModHealth(bool RecoveryHere, bool RecoveryElsewhere, IReadO
     public bool GameRelink { get; init; }
     public static ModHealth Empty { get; } = new(false, false, [], [], []);
     public bool BlocksPlay => RecoveryHere;
-    /// <summary>An enabled mod needs the native runtime (a native mod, or a data mod with SQL).</summary>
-    public bool HasEnabledNative => Installed.Any(i => i.Enabled && i.Manifest?.NeedsRuntime == true);
     public bool AnyEnabled => Installed.Any(i => i.Enabled);
+    /// <summary>OD-232: an installed mod of a retired format, still on, is a warning until the player removes it.</summary>
     public bool HasWarnings => Problems.Count > 0 || RecoveryElsewhere || RelinkCandidates.Count > 0
-        || Installed.Any(i => i.Problem is not null || i.Enabled && (i.Drift.Count > 0 || i.SettingsIssues.Count > 0));
+        || Installed.Any(i => i.Problem is not null || i.Enabled && (i.Drift.Count > 0 || i.SettingsIssues.Count > 0 || i.Manifest?.Retired == true));
 }
+
+/// <summary>
+/// A session database the retired native mod runtime published for one launch (OD-113, retired by OD-232): kept only so an interrupted
+/// session of an earlier launcher is still restored by recovery (<see cref="ManagedModFiles.Recover"/>, <see cref="ManagedModFiles.ResolveRecovery"/>).
+/// </summary>
+public sealed record SessionDatabaseJournal(string AzimuthRoot, string GameRoot, string Target, string Baseline, string Prepared, bool Existed,
+    IReadOnlyList<string>? CreatedDirectories = null);
 
 public sealed partial class ManagedModFiles
 {
@@ -198,6 +204,88 @@ public sealed partial class ManagedModFiles
         var path = Path.Combine(BackupRoot, "pending.json");
         RejectLinks(path);
         if (File.Exists(path)) File.Move(path, Path.Combine(BackupRoot, "transaction-accepted-" + Guid.NewGuid().ToString("N") + ".json"));
+    }
+
+    // An earlier launcher's native mod session (OD-113, retired by OD-232): nothing publishes a session database any more, but one an
+    // interrupted session left is still put back exactly as before, so the stock database is never shadowed by a session copy.
+
+    private string SessionJournal => Path.Combine(BackupRoot, "database-session.json");
+
+    private static void NoDatabaseSidecars(string path)
+    {
+        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
+            if (File.Exists(path + suffix)) throw new ModException("close SQLite writers and checkpoint the database first");
+    }
+
+    private SessionDatabaseJournal ReadSessionJournal()
+    {
+        RejectLinks(SessionJournal);
+        var journal = JsonSerializer.Deserialize<SessionDatabaseJournal>(File.ReadAllBytes(SessionJournal)) ?? throw new ModException("invalid database session journal", ModErrors.Recovery);
+        if (!string.Equals(journal.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(journal.GameRoot, _game, StringComparison.OrdinalIgnoreCase)) throw new ModException("database session belongs to another installation", ModErrors.Recovery);
+        return journal;
+    }
+
+    /// <summary>
+    /// Ends a session database: the baseline returns when an override existed before; otherwise the
+    /// session's own copy is removed with the folders the session created (M11), so nothing shadows
+    /// the stock database afterwards. The stock source is never touched.
+    /// </summary>
+    private void RestoreSessionDatabase()
+    {
+        CheckGame();
+        if (!File.Exists(SessionJournal)) return;
+        var journal = ReadSessionJournal();
+        var target = Safe(_game!, journal.Target); NoDatabaseSidecars(target);
+        var current = Current(target);
+        if (current != journal.Baseline && current != journal.Prepared && !(current is null && !journal.Existed))
+            throw new ModException("session database changed outside the runtime; preserved for recovery", ModErrors.Recovery);
+        var original = ObjectBytes(journal.Baseline); _ = ObjectBytes(journal.Prepared);
+        CheckGame();
+        FinishSessionDatabase(journal, target, original);
+    }
+
+    private void FinishSessionDatabase(SessionDatabaseJournal journal, string target, byte[] original)
+    {
+        if (journal.Existed) Atomic(target, original);
+        else
+        {
+            RemoveFile(target);
+            foreach (var directory in (journal.CreatedDirectories ?? []).OrderByDescending(d => d.Length))
+            {
+                var path = Safe(_game!, directory);
+                if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any()) Directory.Delete(path, recursive: false);
+            }
+        }
+        File.Move(SessionJournal, Path.Combine(BackupRoot, "database-session-" + Guid.NewGuid().ToString("N") + ".json"));
+    }
+
+    /// <summary>
+    /// H4c resolution for a refused restore: the current database and its SQLite sidecars are kept as
+    /// backup objects (listed in the archived record), then the original state returns as above.
+    /// </summary>
+    private void ResolveSessionDatabase()
+    {
+        CheckGame();
+        if (!File.Exists(SessionJournal)) return;
+        SessionDatabaseJournal journal;
+        try { journal = ReadSessionJournal(); }
+        catch (Exception error) when (error is ModException or JsonException)
+        {
+            File.Move(SessionJournal, Path.Combine(BackupRoot, "database-session-unreadable-" + Guid.NewGuid().ToString("N") + ".json"));
+            return;
+        }
+        var target = Safe(_game!, journal.Target);
+        var kept = new List<string>();
+        foreach (var path in new[] { target, target + "-wal", target + "-shm", target + "-journal" })
+        {
+            if (!File.Exists(path)) continue;
+            if (new FileInfo(path).Length > 512L * 1024 * 1024) throw new ModException("database too large to keep a backup", ModErrors.Recovery);
+            kept.Add(Path.GetFileName(path) + "=" + Store(File.ReadAllBytes(path)));
+        }
+        Atomic(Path.Combine(BackupRoot, "database-session-kept-" + Guid.NewGuid().ToString("N") + ".json"), JsonSerializer.SerializeToUtf8Bytes(kept));
+        foreach (var sidecar in new[] { "-wal", "-shm", "-journal" }) RemoveFile(target + sidecar);
+        FinishSessionDatabase(journal, target, ObjectBytes(journal.Baseline));
     }
 
     /// <summary>A manager for another bucket folder, built from the roots its own records name; null when that Azimuth folder is gone.</summary>

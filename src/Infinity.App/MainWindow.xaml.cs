@@ -636,6 +636,8 @@ public partial class MainWindow : Window
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
     private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);
     private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
+    private async void OnInstallModSet(object sender, RoutedEventArgs e) => await _vm.InstallSetAsync((ModSetCard)((FrameworkElement)sender).DataContext);
+    private async void OnUninstallModCard(object sender, RoutedEventArgs e) => await _vm.UninstallModCardAsync((ModCard)((FrameworkElement)sender).DataContext);
     private void OnSelectedModOptions(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) _vm.SelectMod(card); }
     private void OnCloseModPanel(object sender, RoutedEventArgs e) => _vm.CloseModPanel();
     private void OnClearModSearch(object sender, RoutedEventArgs e) => _vm.ModSearch = "";
@@ -646,7 +648,6 @@ public partial class MainWindow : Window
     private async void OnResolveMods(object sender, RoutedEventArgs e) => await _vm.ResolveModRecoveryAsync();
     private async void OnRelinkMods(object sender, RoutedEventArgs e) => await _vm.RelinkModsAsync();
     private async void OnConfirmModUpdate(object sender, RoutedEventArgs e) => await _vm.ConfirmModUpdateAsync();
-    private async void OnConfirmCustomMod(object sender, RoutedEventArgs e) => await _vm.ConfirmCustomModAsync();
     private async void OnAcceptModFiles(object sender, RoutedEventArgs e) => await _vm.AcceptModFilesAsync();
     private async void OnDisableModKeeping(object sender, RoutedEventArgs e) => await _vm.DisableModKeepingFilesAsync();
     private async void OnRepairModSettings(object sender, RoutedEventArgs e) => await _vm.RepairModSettingsAsync();

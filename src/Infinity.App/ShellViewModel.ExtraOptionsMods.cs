@@ -36,7 +36,7 @@ public sealed partial class ShellViewModel
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         { Log("extraoptions mods: not read (" + e.GetType().Name + ")"); mods = []; status = new Dictionary<string, ExtraOptionsModStatus>(); }
         ExtraOptionsModItems.Clear();
-        // Owner 2026-10-28: the launcher's own mods (catalog or custom) have their cards; this list is what was put there by hand
+        // Owner 2026-10-28: the launcher's own mods have their cards; this list is what was put there by hand (or added from a ZIP)
         var managed = ManagedExtraOptionsFolders();
         // a folder ExtraOptions loads nothing from (what an uninstalled mod's own settings leave behind) is no mod: not listed
         foreach (var mod in mods.Where(m => !managed.Contains(m.Folder) && (m.HasMedia || m.HasDatabase || m.HasStrings || m.Plugins > 0 || m.ManifestError is not null)))
@@ -148,7 +148,15 @@ public sealed partial class ShellViewModel
         finally { _parityFetching = false; }
     }
 
-    /// <summary>The <c>mods\</c> folders of the mods the launcher installed (any catalog or custom mod, on or off).</summary>
+    /// <summary>
+    /// OD-232: the folders kept first in <c>loadorder.txt</c>: installed mods with <see cref="ModManifest.LoadFirst"/>, and the catalog's
+    /// load-first ids (a Common copied in by hand is still its id's folder).
+    /// </summary>
+    private string[] LoadFirstFolders() =>
+        _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>().Where(m => m.LoadFirst && !m.Retired).Select(ExtraOptionsMods.FolderOf).OfType<string>()
+            .Concat(_manifestCatalog.Where(m => m.LoadFirst).Select(m => m.Id)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    /// <summary>The <c>mods\</c> folders of the mods the launcher installed (on or off).</summary>
     private HashSet<string> ManagedExtraOptionsFolders() =>
         _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>()
             .Select(ExtraOptionsMods.FolderOf).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -201,7 +209,7 @@ public sealed partial class ShellViewModel
             if (exempt.Count > 0) Log("mods: parity-exempt (" + ParityExemptionsNow.Source + "): " + string.Join(", ", exempt.Select(e => e.ModId)));
             allowed.UnionWith(exempt.Select(e => e.Folder));
             foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, allowed,
-                         Path.Combine(_stateDirectory, HardcoreHeldFile)))
+                         Path.Combine(_stateDirectory, HardcoreHeldFile), LoadFirstFolders()))
                 Log(note);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)

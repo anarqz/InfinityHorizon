@@ -1,19 +1,18 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
-using System.Globalization;
 using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
+/// <summary>
+/// A manifest's <c>multiplayer</c> metadata: whether the mod changes anything for other players (Hardcore profiles refuse it,
+/// OD-112 follow-up). The lobby set itself comes from what ExtraOptions loads (<c>ExtraOptionsModSetSource</c>), not from it.
+/// </summary>
 public sealed record ModMultiplayer(string Impact, string CompatibilityId, int Revision, IReadOnlyList<string> Settings)
 {
-    internal static ModMultiplayer? Parse(JsonElement document)
+    /// <param name="legacyCustom">An installed OD-114 custom mod (retired by OD-232), whose compatibility id carries the custom prefix.</param>
+    internal static ModMultiplayer? Parse(JsonElement document, bool legacyCustom = false)
     {
-        var isNative = document.TryGetProperty("runtime", out var runtime) && runtime.GetString() == "infinity-native";
-        if (!document.TryGetProperty("multiplayer", out var value))
-        {
-            if (isNative) throw new ModException("native mod needs multiplayer metadata");
-            return null;
-        }
+        if (!document.TryGetProperty("multiplayer", out var value)) return null;
         if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Count() != 6
             || value.GetProperty("schemaVersion").GetInt32() != 1 || value.GetProperty("match").GetString() != "exact")
             throw new ModException("unsupported multiplayer metadata");
@@ -21,9 +20,7 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         var id = value.GetProperty("compatibilityId").GetString()!;
         var revision = value.GetProperty("revision").GetInt32();
         var settings = value.GetProperty("settings").EnumerateArray().Select(s => s.GetString()!).ToArray();
-        // A custom mod's compatibility id carries the reserved custom prefix, so no custom lobby entry can pose as an official one (OD-114).
-        var custom = ModManifest.IsCustomId(document.GetProperty("id").GetString());
-        if (impact is not ("gameplay" or "cosmetic" or "unknown") || (custom ? !ModManifest.IsCustomId(id) || !ModManifest.ValidId(id) : !Identifier(id)) || revision < 1
+        if (impact is not ("gameplay" or "cosmetic" or "unknown") || (legacyCustom ? !ModManifest.LegacyCustomId(id) : !Identifier(id)) || revision < 1
             || settings.Length > 64 || settings.Any(s => !Identifier(s)) || settings.Distinct(StringComparer.Ordinal).Count() != settings.Length)
             throw new ModException("invalid multiplayer metadata");
         var options = document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
@@ -31,26 +28,13 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         if (options.Select(o => o.GetProperty("id").GetString()).Distinct(StringComparer.Ordinal).Count() != options.Length
             || settings.Any(s => !options.Any(o => o.GetProperty("id").GetString() == s)))
             throw new ModException("unknown multiplayer setting");
-        if (isNative)
-        {
-            var native = document.GetProperty("nativeHost");
-            if (native.GetProperty("abi").GetInt32() != 1 || native.GetProperty("runtime").GetString() != "infinity_mod.dll"
-                || native.GetProperty("entryPoint").GetString() != "InfinityModInitializeV1") throw new ModException("unsupported native ABI");
-            var binary = native.GetProperty("binary").GetString()!;
-            ModManifest.ValidatePath(binary);
-            if (!document.GetProperty("files").GetProperty("azimuth").EnumerateArray().Any(f =>
-                f.GetProperty("destination").GetString() == binary && f.GetProperty("role").GetString() == "binary"))
-                throw new ModException("native binary missing from mappings");
-            if (document.GetProperty("config").ValueKind != JsonValueKind.Object) throw new ModException("native settings required");
-        }
         return new(impact, id, revision, Array.AsReadOnly(settings));
     }
 
     /// <summary>
-    /// The one classification shared by the lobby mod set (OD-112, ModSets) and Hardcore profiles (OD-112
-    /// follow-up): a mod affects multiplayer exactly when its manifest declares <c>multiplayer</c> with an
-    /// impact other than <c>cosmetic</c> (<c>gameplay</c> and <c>unknown</c> count). A manifest without
-    /// <c>multiplayer</c> (a client-only mod; native mods must declare it) does not.
+    /// The one classification Hardcore profiles use (OD-112 follow-up): a mod affects multiplayer exactly when its manifest declares
+    /// <c>multiplayer</c> with an impact other than <c>cosmetic</c> (<c>gameplay</c> and <c>unknown</c> count). A manifest without
+    /// <c>multiplayer</c> (a client-only mod) does not.
     /// </summary>
     public bool EntersLobbySet => Impact != "cosmetic";
 
@@ -60,71 +44,6 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
 
     private static bool Identifier(string? value) => value is { Length: > 0 and <= 64 }
         && value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
-
-    public string Fingerprint(ModManifest manifest, IReadOnlyDictionary<string, JsonElement> effectiveSettings)
-    {
-        if (manifest.Multiplayer != this) throw new ModException("multiplayer metadata does not belong to manifest");
-        var document = manifest.Document;
-        var options = document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
-            ? config.GetProperty("options").EnumerateArray().ToDictionary(o => o.GetProperty("id").GetString()!, StringComparer.Ordinal)
-            : new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        using var output = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(output))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("format", "infinity-mod-compatibility-v1");
-            writer.WriteString("id", manifest.Id); writer.WriteString("version", manifest.Version);
-            writer.WriteString("runtime", document.TryGetProperty("runtime", out var runtime) ? runtime.GetString() : "unknown");
-            writer.WriteString("compatibilityId", CompatibilityId); writer.WriteNumber("revision", Revision);
-            writer.WriteString("impact", Impact);
-            // OD-114: a custom mod is matched by its exact manifest too, so only the identical pack joins.
-            if (manifest.IsCustom) writer.WriteString("manifestSha256", manifest.Digest);
-            writer.WritePropertyName("game"); Canonical(writer, document.GetProperty("compatibility"));
-            writer.WritePropertyName("nativeHost");
-            if (document.TryGetProperty("nativeHost", out var host)) Canonical(writer, host); else writer.WriteNullValue();
-            writer.WriteStartArray("files");
-            foreach (var file in manifest.Files.Where(f => f.Role != "license").OrderBy(f => f.Root, StringComparer.Ordinal).ThenBy(f => f.Destination, StringComparer.Ordinal))
-            {
-                writer.WriteStartArray(); writer.WriteStringValue(file.Root); writer.WriteStringValue(file.Destination);
-                writer.WriteStringValue(file.Hash); writer.WriteNumberValue(file.Bytes); writer.WriteStringValue(file.Mode); writer.WriteEndArray();
-            }
-            writer.WriteEndArray();
-            writer.WriteStartArray("dependencies");
-            foreach (var dependency in document.GetProperty("dependencies").EnumerateArray().OrderBy(d => d.GetProperty("id").GetString(), StringComparer.Ordinal)) Canonical(writer, dependency);
-            writer.WriteEndArray();
-            foreach (var field in new[] { "database", "databaseSql", "databaseBase", "launch", "readiness", "incompatibleFiles" })
-                if (document.TryGetProperty(field, out var capability)) { writer.WritePropertyName(field); Canonical(writer, capability); }
-            writer.WritePropertyName("migrations"); Canonical(writer, document.GetProperty("databaseMigrations"));
-            writer.WriteStartObject("config");
-            if (document.GetProperty("config") is { ValueKind: JsonValueKind.Object } settingsConfig)
-                foreach (var field in new[] { "root", "path", "format" })
-                    if (settingsConfig.TryGetProperty(field, out var property)) { writer.WritePropertyName(field); Canonical(writer, property); }
-            writer.WriteStartArray("bindings");
-            foreach (var key in Settings.Order(StringComparer.Ordinal))
-            {
-                var option = options[key]; writer.WriteStartObject();
-                foreach (var field in new[] { "id", "section", "key", "type", "encoding", "default", "minimum", "maximum", "step", "decimals" })
-                    if (option.TryGetProperty(field, out var property)) { writer.WritePropertyName(field); Canonical(writer, property); }
-                if (option.TryGetProperty("choices", out var choices))
-                {
-                    writer.WriteStartArray("choices");
-                    foreach (var choice in choices.EnumerateArray()) Canonical(writer, choice.GetProperty("value"));
-                    writer.WriteEndArray();
-                }
-                writer.WriteEndObject();
-            }
-            writer.WriteEndArray(); writer.WriteEndObject();
-            writer.WriteStartObject("settings");
-            foreach (var key in Settings.Order(StringComparer.Ordinal))
-            {
-                if (!effectiveSettings.TryGetValue(key, out var value)) throw new ModException("missing effective multiplayer setting");
-                ValidateValue(options[key], value);
-                writer.WritePropertyName(key); Canonical(writer, value);
-            }
-            writer.WriteEndObject(); writer.WriteEndObject();
-        }
-        return ModManifest.Hash(output.ToArray());
-    }
 
     internal static void ValidateValue(JsonElement option, JsonElement value)
     {
@@ -138,23 +57,5 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         if (type == "enum" && value.ValueKind == JsonValueKind.String && option.GetProperty("choices").EnumerateArray()
             .Any(c => c.GetProperty("value").GetString() == value.GetString())) return;
         throw new ModException("invalid effective multiplayer setting");
-    }
-
-    private static void Canonical(Utf8JsonWriter writer, JsonElement value)
-    {
-        switch (value.ValueKind)
-        {
-            case JsonValueKind.Object:
-                writer.WriteStartObject();
-                foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
-                { writer.WritePropertyName(property.Name); Canonical(writer, property.Value); }
-                writer.WriteEndObject(); break;
-            case JsonValueKind.Array:
-                writer.WriteStartArray(); foreach (var item in value.EnumerateArray()) Canonical(writer, item); writer.WriteEndArray(); break;
-            case JsonValueKind.Number:
-                if (!value.TryGetDecimal(out var number)) throw new ModException("unsupported compatibility number");
-                writer.WriteRawValue(number.ToString("G29", CultureInfo.InvariantCulture)); break;
-            default: value.WriteTo(writer); break;
-        }
     }
 }

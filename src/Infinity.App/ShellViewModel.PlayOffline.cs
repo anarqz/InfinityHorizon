@@ -109,15 +109,13 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>
-    /// The game's environment for an offline Play (OD-118): the native mods' plan, <c>FI_LAUNCH=v1;offline</c> (the hook then never
-    /// reaches a network), the launcher's path, the profile's offline identity and, under Wine, the mods' native DLL overrides. No
-    /// server, ticket or token is ever part of it.
+    /// The game's environment for an offline Play (OD-118): <c>FI_LAUNCH=v1;offline</c> (the hook then never reaches a network), the
+    /// launcher's path, the profile's offline identity and, under Wine, the mods' native DLL overrides. No server, ticket or token is
+    /// ever part of it.
     /// </summary>
-    internal static List<(string Name, string Value)> OfflineLaunchEnvironment(LocalProfile profile, IEnumerable<(string Name, string Value)>? planEnvironment,
-        IReadOnlyList<string> overrides)
+    internal static List<(string Name, string Value)> OfflineLaunchEnvironment(LocalProfile profile, IReadOnlyList<string> overrides)
     {
-        var environment = (planEnvironment ?? []).ToList();
-        environment.Add((Launch.EnvLaunch, Launch.EnvOffline));
+        var environment = new List<(string Name, string Value)> { (Launch.EnvLaunch, Launch.EnvOffline) };
         environment.Add((Launch.EnvLauncherExe, Environment.ProcessPath ?? "infinity.exe"));
         environment.Add((EnvOfflineXuid, profile.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture)));
         environment.Add((EnvOfflineGamertag, profile.Name));
@@ -143,34 +141,23 @@ public sealed partial class ShellViewModel
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         RefreshHook();
         if (_hook is not { Verified: true }) { Message = S["play.setup_needed"]; return; }
-        NativeModPlan? plan = null;
         _modOperation = true; _modProgress = S["mods.session_prepare"]; Busy = true;
         _play = new CancellationTokenSource(); Changed(string.Empty);
         try
         {
-            var key = NativeModKey;
-            ModRuntimePackage? runtime = null;
             IReadOnlyList<string> overrides = [];
-            var hasNative = false;
+            var prepared = ModLaunchPreparation.None;
             var fullFeatures = CurrentGame.FullFeatures;
             await Task.Run(() =>
             {
                 if (!fullFeatures) return; // OD-206: this game has no mods
-                var prepared = factory().PrepareForLaunch(); // locks enforced, Wine overrides reconciled (paired with their removal)
-                overrides = prepared.DllOverrides; hasNative = prepared.HasEnabledNative;
+                prepared = factory().PrepareForLaunch(); // locks enforced, Wine overrides reconciled (paired with their removal)
+                overrides = prepared.DllOverrides;
             });
-            if (hasNative)
-            {
-                // OD-116: the runtime is the catalog's (installed under the mods home, from GitHub: allowed offline), found and checked
-                // exactly as for online Play, with the same reasons when it cannot be used.
-                var (found, refusal) = await NativeModsForOnlineAsync();
-                if (found is null) { _modLaunchFailure = refusal; Message = refusal; return; }
-                runtime = found;
-                plan = await Task.Run(() => factory().PrepareNativeLaunch(runtime.Runtime, runtime.Helper, key));
-                _nativePlanPath = plan.Environment.FirstOrDefault(v => v.Name == "FI_MOD_PLAN").Value;
-            }
+            // OD-232: an enabled retired mod is refused only online; offline it plays as installed, with the warning
+            foreach (var warning in prepared.Warnings) Log("mods: " + warning);
             if (!PrepareAzimuth(install)) { Message = PrepareAzimuthFailed; return; }
-            var environment = OfflineLaunchEnvironment(profile, plan?.Environment, overrides);
+            var environment = OfflineLaunchEnvironment(profile, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
             using var uiPipe = OfflineOverlay(environment);
@@ -199,7 +186,7 @@ public sealed partial class ShellViewModel
             // and the Infinity gate refuses anything until the launcher is back (even for a signed-in player's local profile).
             _offlineWrapUp = true;
             Log("play: offline game ended (code " + code.ToString(CultureInfo.InvariantCulture) + "); back to the launcher, nothing synced");
-            // B1: the hook refuses to play a launcher profile on Azimuth's own save; any other code is the mod runtime's
+            // B1: the hook refuses to play a launcher profile on Azimuth's own save; any other code ended the session unexpectedly
             SetStatus(code == 0 || code == ExitDisposition.QuitForcedExit ? S["status.ended"]
                 : code == ExitDisposition.IdentityRefusedExit ? S["supervisor.identity_refused"] : S["mods.runtime_failed"]);
         }
@@ -208,8 +195,6 @@ public sealed partial class ShellViewModel
         finally
         {
             _modOperation = true; Busy = true; _modProgress = S["mods.session_prepare"]; Changed(string.Empty);
-            try { if (plan is not null) await Task.Run(plan.Dispose); }
-            catch (Exception error) when (ManagedModFiles.IsStateError(error)) { Message = S["mods.recovery_needed"]; }
             _offlineChild = null;
             _play?.Dispose(); _play = null; _playTask = null; _modOperation = false; Busy = false;
             try { await RefreshModsAsync(); } // local: the mods' state on disk

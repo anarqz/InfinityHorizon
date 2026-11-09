@@ -174,7 +174,7 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (Infinity.Core.Mods.ManagedModFiles.IsStateError(error))
         {
             Log("integrity: media overrides unreadable: " + Infinity.Core.Mods.ManagedModFiles.Code(error));
-            return [new(Infinity.Core.Mods.ModManifest.MediaOverrideFolder, "unreadable")];
+            return [new(Infinity.Core.Mods.ManagedModFiles.MediaOverrideFolder, "unreadable")];
         }
     }
 
