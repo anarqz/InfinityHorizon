@@ -52,11 +52,22 @@ public sealed partial class WorldsBridge
     private void StartGroupSeatWatch(CancellationToken cancellation)
     {
         if (!OnlineOpen || OfficialCarMeetSeat() is not { } carMeet) return;
+        // T-1109-C: only a car meet the game was in can be left. A car meet seat the quick join reserved moments ago, which the game
+        // never joined (not played here, not seated by the server), is the game LEAVING FREE ROAM on its way into it: no watch, or the
+        // game's join into the car meet would be held for 10 s while the seat's 15 s give-up runs
+        if (_seat.GrantId is not { } held || !Played(held) && !SeatedIn(carMeet))
+        {
+            _log($"worlds: the game left free roam on its way into the car meet {carMeet} (its seat never played): no group seat watch");
+            return;
+        }
         if (Interlocked.CompareExchange(ref _groupWatchFrom, carMeet, null) is not null) return; // one watch at a time
         Volatile.Write(ref _groupNudge, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         _log($"worlds: the game left the official car meet {carMeet}; its seat is read until a group world's seat arrives (at most {(int)GroupSeatWatchLimit.TotalSeconds} s)");
         Volatile.Write(ref _groupWatch, WatchGroupSeatAsync(carMeet, cancellation));
     }
+
+    // the last seat read says the server seated this player in `world` (its announce lists the game: it was there)
+    private bool SeatedIn(string world) => Volatile.Read(ref _mineSnapshot) is { Role: Overlay.UiWorldRole.Seated } mine && mine.WorldId == world;
 
     private async Task WatchGroupSeatAsync(string carMeet, CancellationToken cancellation)
     {
