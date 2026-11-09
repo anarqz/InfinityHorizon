@@ -19,26 +19,17 @@ public sealed partial class ShellViewModel
 
     public bool SelectedModInstallPreview => _selectedMod is { Installed: false } card && _installPreviewDigest == card.Manifest.Digest;
 
-    /// <summary>The mod writes game files and no game folder is set: the preview says so and Install waits.</summary>
-    public bool InstallPreviewNeedsGameFolder => SelectedModInstallPreview && ContentLocation is null && _selectedMod!.Manifest.Files.Any(f => f.Root == "game");
-
-    /// <summary>The folders <paramref name="mod"/> writes into (Azimuth's and the game's).</summary>
-    private List<string> FoldersFor(ModManifest mod)
-    {
-        var folders = new List<string>();
-        if (mod.Files.Any(f => f.Root == "azimuth") && _install?.Root is { } azimuth) folders.Add(azimuth);
-        if (mod.Files.Any(f => f.Root == "game") && ContentLocation?.Mount is { } mount) folders.Add(mount);
-        return folders;
-    }
+    /// <summary>The folder <paramref name="mod"/> installs into: its own ExtraOptions folder (OD-232), <c>&lt;Azimuth&gt;\mods\&lt;id&gt;</c>.</summary>
+    private string FolderFor(ModManifest mod) => _install?.Root is { } azimuth ? System.IO.Path.Combine(ExtraOptionsMods.ModsDirectory(azimuth), mod.Id) : "";
 
     /// <summary>
-    /// The existing files <paramref name="mod"/> would replace (the game's or another installation's; not its own installed ones, so an
-    /// update counts only what it newly covers), backed up and restored later.
+    /// The existing files <paramref name="mod"/> would replace (a copy placed by hand; not its own installed ones, so an update counts
+    /// only what it newly covers), backed up and restored later.
     /// </summary>
     private IReadOnlyList<string> ReplacedBy(ModManifest mod)
     {
         if (ModManagerFactory() is not { } factory) return [];
-        var key = mod.Digest + "|" + ContentLocation?.Mount + "|" + _install?.Root;
+        var key = mod.Digest + "|" + _install?.Root;
         if (_previewReplaced?.Key != key)
             try { _previewReplaced = (key, factory().ExistingFilesReplaced(mod)); }
             catch (Exception error) when (ManagedModFiles.IsStateError(error)) { _previewReplaced = (key, []); }
@@ -52,7 +43,7 @@ public sealed partial class ShellViewModel
     /// <summary>Alex (1.0.11): "Installs into &lt;folder&gt; · replaces N files (backed up, restored on disable or uninstall)".</summary>
     private string PreviewTextFor(ModManifest mod)
     {
-        var path = string.Join(" · ", FoldersFor(mod));
+        var path = FolderFor(mod);
         var count = ReplacedBy(mod).Count;
         return count > 0 ? Counted("mods.preview_replaces", count, ("path", path)) : S.Format("mods.preview_into", ("path", path));
     }
@@ -61,8 +52,7 @@ public sealed partial class ShellViewModel
 
     private IReadOnlyList<string> PreviewReplaced => SelectedModInstallPreview ? ReplacedBy(_selectedMod!.Manifest) : [];
 
-    public string InstallPreviewText => !SelectedModInstallPreview ? ""
-        : InstallPreviewNeedsGameFolder ? S["mods.error.game_folder"] : PreviewTextFor(_selectedMod!.Manifest);
+    public string InstallPreviewText => !SelectedModInstallPreview ? "" : PreviewTextFor(_selectedMod!.Manifest);
 
     public string InstallPreviewFiles => PreviewReplaced is { Count: > 0 } files ? FileList(files) : "";
 
@@ -73,8 +63,7 @@ public sealed partial class ShellViewModel
     // A reviewed update (review, T2 M7): the same preview for the files the new version newly covers, before its confirmation.
     private ModManifest? UpdatePreviewManifest => _selectedMod is { UpdateAvailable: true, Next: { IsExternal: false } next } ? next : null;
 
-    public string UpdatePreviewText => UpdatePreviewManifest is not { } next ? ""
-        : ContentLocation is null && next.Files.Any(f => f.Root == "game") ? S["mods.error.game_folder"] : PreviewTextFor(next);
+    public string UpdatePreviewText => UpdatePreviewManifest is not { } next ? "" : PreviewTextFor(next);
 
     public string UpdatePreviewFiles => UpdatePreviewManifest is { } next && ReplacedBy(next) is { Count: > 0 } files ? FileList(files) : "";
 
@@ -83,7 +72,7 @@ public sealed partial class ShellViewModel
     public string ConfirmUpdateLabel => UpdatePreviewManifest is { } next && ReplacedBy(next).Count is var count and > 0
         ? Counted("mods.update_replacing", count) : S["mods.confirm_update"];
 
-    public bool CanConfirmInstall => SelectedModInstallPreview && ModsIdle && _selectedMod!.CanAct && !InstallPreviewNeedsGameFolder;
+    public bool CanConfirmInstall => SelectedModInstallPreview && ModsIdle && _selectedMod!.CanAct;
 
     /// <summary>Opens the information pane with the install preview (the card's Install).</summary>
     private void ShowInstallPreview(ModCard card)

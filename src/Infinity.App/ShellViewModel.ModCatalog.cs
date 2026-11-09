@@ -23,13 +23,11 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     public bool CanUninstall => Installed && !Drift;
     /// <summary>Not installed, its files kept on this PC by the uninstall (installing again needs no download); Purge deletes them.</summary>
     public bool Held { get; init; }
-    /// <summary>OD-114: a custom, unofficial mod from the player's custom folder (shown with its badge).</summary>
-    public bool Custom => Manifest.IsCustom;
-    public string CustomBadge { get; init; } = "";
-    /// <summary>The custom-mod or unofficial-catalog badge is shown.</summary>
-    public bool ShowSourceBadge => CustomBadge.Length > 0;
-    /// <summary>The player still has to confirm this exact custom manifest (the update's, when one is pending) before acting.</summary>
-    public bool NeedsConfirmation { get; init; }
+    /// <summary>OD-232: an installation in a format the launcher no longer supports (disable or remove only).</summary>
+    public bool Retired => Manifest.Retired;
+    /// <summary>OD-116: the unofficial-catalog badge.</summary>
+    public string SourceBadge { get; init; } = "";
+    public bool ShowSourceBadge => SourceBadge.Length > 0;
     /// <summary>The version line under the name ("v1.2.0"; a <see cref="BuiltIn"/> card says it is part of Infinity).</summary>
     public string VersionText { get; init; } = "";
     /// <summary>OD-125/127: part of Infinity (ExtraOptions.Infinity): always there and on; only its options change.</summary>
@@ -38,7 +36,7 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
 }
 
 /// <summary>What the background refresh learned about one manifest (M10: no disk access while building cards).</summary>
-internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Installed, bool CanAdopt, string? Blocker, ModManifest? Next, bool Confirmed = false)
+internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Installed, bool CanAdopt, string? Blocker, ModManifest? Next)
 {
     /// <summary>Not installed, with its files kept on this PC by its uninstall.</summary>
     public bool Held { get; init; }
@@ -61,22 +59,24 @@ public sealed partial class ShellViewModel
     private IReadOnlyList<ModCardFacts> _modFacts = [];
     private int _modRefresh;
     public ObservableCollection<ModCard> ModCards { get; } = [];
-    public IEnumerable<ModCard> FilteredModCards => ModCards.Where(card => string.IsNullOrWhiteSpace(_modSearch)
-        || card.Name.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase)
-        || card.Manifest.Id.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase)
-        || card.Credits.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase));
+    /// <summary>The mod cards shown on their own: every card but the packs a set card holds (OD-232, <see cref="ModSetCards"/>).</summary>
+    public IEnumerable<ModCard> FilteredModCards => ModCards.Where(card => MatchesSearch(card) && !SetMemberIds.Contains(card.Manifest.Id));
     public string ModSearch
     {
         get => _modSearch;
-        set { _modSearch = value ?? ""; Changed(); Changed(nameof(FilteredModCards)); Changed(nameof(ModSearchEmpty)); Changed(nameof(NoMatchingMods)); }
+        set
+        {
+            _modSearch = value ?? ""; Changed(); Changed(nameof(FilteredModCards)); Changed(nameof(FilteredModSetCards)); Changed(nameof(ModSearchEmpty));
+            Changed(nameof(NoMatchingMods));
+        }
     }
     public bool ModSearchEmpty => string.IsNullOrWhiteSpace(_modSearch);
     public bool HasModCards => ModCards.Count > 0;
-    public bool NoMatchingMods => HasModCards && !FilteredModCards.Any();
+    public bool NoMatchingMods => HasModCards && !FilteredModCards.Any() && !FilteredModSetCards.Any();
     public ModCard? SelectedMod => _selectedMod;
     public bool ShowModInfo => _showModInfo && ShowMods && _selectedMod is not null && _externalMod is null;
     /// <summary>OD-117: an installed mod of the player's own files can be re-checked or pointed at another copy.</summary>
-    public bool SelectedModExternal => ModsIdle && _selectedMod is { Installed: true } selected && selected.Manifest.IsExternal;
+    public bool SelectedModExternal => ModsIdle && _selectedMod is { Installed: true, Retired: false } selected && selected.Manifest.IsExternal;
     public string SelectedModFiles => _selectedMod is not { } selected ? "" :
         S.Format("mods.file_summary", ("game", selected.Manifest.Files.Count(f => f.Root == "game").ToString(CultureInfo.CurrentCulture)),
             ("azimuth", selected.Manifest.Files.Count(f => f.Root == "azimuth").ToString(CultureInfo.CurrentCulture)))
@@ -86,12 +86,7 @@ public sealed partial class ShellViewModel
     public bool SelectedModSettingsIssues => ModsIdle && _selectedMod is { SettingsIssues: true };
     public bool SelectedModCanUninstall => ModsIdle && _selectedMod is { CanUninstall: true } && !ModRecoveryRequired;
     public bool SelectedModCanPurge => ModsIdle && _selectedMod is { Held: true, Installed: false } && !ModRecoveryRequired;
-    public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true, NeedsConfirmation: false };
-    /// <summary>OD-114: the confirmation an unreviewed custom mod needs before its first install or enable (and each new digest).</summary>
-    public bool SelectedModNeedsConfirmation => _selectedMod is { Custom: true, NeedsConfirmation: true };
-    public string SelectedModConfirmation => _selectedMod is not { Custom: true } selected ? ""
-        : S["mods.custom_confirm_text"] + ((selected.Next ?? selected.Manifest).HasExecutableCode ? "\n\n" + S["mods.custom_executable"] : "");
-    public bool CanConfirmCustomMod => ModsIdle && _install is not null && !ModRecoveryRequired && SelectedModNeedsConfirmation;
+    public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true, Retired: false };
     public bool CanConfirmModUpdate => ModsIdle && _selectedMod is { UpdateAvailable: true, CanAct: true };
 
     public async Task SelectModAsync(ModCard card)
@@ -140,11 +135,6 @@ public sealed partial class ShellViewModel
 #endif
         }
     }
-    /// <summary>
-    /// OD-126 (owner 2026-10-28: "Every mod should be added through ExtraOption plugin loader"): mods in the retired native format
-    /// install and play only in a development package, which carries its own signed runtime; a production launcher never installs one.
-    /// </summary>
-    public bool NativeModsAvailable => DevelopmentMods && _nativeRuntime is not null;
     public bool HasManifestCatalog => _catalogLoaded;
     public bool ModOperationBusy => _modOperation;
     public bool ModContentEnabled => !_modOperation;
@@ -180,14 +170,18 @@ public sealed partial class ShellViewModel
     private IReadOnlyList<string> HardcoreRefusedMods => !ProfileHardcore ? [] : _modHealth.Installed
         .Where(i => i.Enabled && i.Manifest is { } m && ModMultiplayer.AffectsMultiplayer(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
     private string HardcoreRefusal(IEnumerable<string> names) => S.Format("mods.hardcore_refused", ("mods", string.Join(", ", names)));
-
+    /// <summary>OD-232: enabled installations of a retired format an online launch refuses (<see cref="ModLaunchPreparation.BlocksOnline"/>), by name.</summary>
+    private IReadOnlyList<string> RetiredOnlineMods => !PlaysOnline ? [] : _modHealth.Installed
+        .Where(i => i.Enabled && i.Manifest is { } m && ModLaunchPreparation.BlocksOnline(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
+    private string RetiredOnlineRefusal(IEnumerable<string> names) => S.Format("mods.retired_online_refused", ("mods", string.Join(", ", names)));
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
-    // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it carries the runtime native and data mods need; it never blocks Play).
+    // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it never blocks Play).
     public string? ModPlayNotice => _install is null ? null : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
         : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
         : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
         : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
+        : RetiredOnlineMods is { Count: > 0 } retired ? RetiredOnlineRefusal(retired)
         : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
 
@@ -199,7 +193,7 @@ public sealed partial class ShellViewModel
 
     public string ModFolder => _install?.Root ?? S["setup.not_found"];
 
-    /// <summary>The stable launcher data home: the bucket (game_backup) and the custom mods folder live here, shared by every profile.</summary>
+    /// <summary>The stable launcher data home: the bucket (game_backup) lives here, shared by every profile.</summary>
     // The game's mods are shared by every server's state: production and custom (CR-L39) state folders sit under the root.
     private string ModHome => _config.Production ? Directory.GetParent(_stateDirectory)!.FullName
         : _config.Custom ? Directory.GetParent(Directory.GetParent(_stateDirectory)!.FullName)!.FullName : _stateDirectory;
@@ -211,8 +205,7 @@ public sealed partial class ShellViewModel
         var azimuth = _install.Root; var game = ContentLocation?.Mount;
         var state = ModHome;
         var cache = DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null;
-        var dataSql = DataModSqlReady;
-        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache) { DataSqlRuntimeAvailable = () => dataSql };
+        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache);
     }
 
     /// <summary>Constructs the manager; only for code already off the UI thread or the harness.</summary>
@@ -355,10 +348,7 @@ public sealed partial class ShellViewModel
         var version = ++_modRefresh;
         var factory = ModManagerFactory();
         var catalog = _manifestCatalog;
-        var key = NativeModKey;
-        var home = ModHome;
         var (health, error, facts) = await Task.Run(() => ReadModState(factory, catalog));
-        _nativeRuntime = await Task.Run(() => LocateRuntime(key));
         if (version != _modRefresh) return;
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts;
@@ -371,14 +361,14 @@ public sealed partial class ShellViewModel
 
     private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official)
     {
-        // Owner 2026-10-28: the catalog's mods only; a custom mod installed earlier still has its card from its receipt (below), to disable or uninstall
+        // Owner 2026-10-28: the catalog's mods only; a mod installed earlier that the catalog no longer lists (OD-232: a retired format
+        // too) still has its card from its receipt (below), to disable or uninstall
         var catalog = official.ToArray();
         if (factory is null) return (ModHealth.Empty, null, catalog.Select(m => new ModCardFacts(m, null, false, null, null)).ToArray());
         ManagedModFiles manager;
         try { manager = factory(); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
         { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray()); }
-        bool Confirmed(ModManifest m) { try { return m.IsCustom && manager.CustomConfirmed(m); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return false; } }
         // OD-125/127: a receipt from when the catalog installed ExtraOptions as a mod no longer stands for anything (it is built in)
         try { manager.RetireBuiltInReceipt(); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
         var health = manager.Inspect();
@@ -391,7 +381,7 @@ public sealed partial class ShellViewModel
             var manifest = installed?.Manifest is { } same && same.SameContent(listed) ? same : listed;
             if (installed?.Manifest is { } current && current.Digest != manifest.Digest)
             {
-                facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest, Confirmed(manifest)));
+                facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest));
                 continue;
             }
             var adopt = false; var held = false;
@@ -399,11 +389,15 @@ public sealed partial class ShellViewModel
             facts.Add(new(manifest, installed, adopt, installed?.Problem ?? Blocker(() =>
             {
                 if (installed is { Enabled: true }) manager.CheckDependents(manifest.Id);
-                else if (installed is null || installed.Drift.Count == 0) { manager.CheckDependencies(manifest); manager.CheckDatabaseBase(manifest); }
-            }), null, Confirmed(manifest)) { Held = held });
+                else if (installed is null || installed.Drift.Count == 0) manager.CheckDependencies(manifest);
+            }), null) { Held = held });
         }
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
-            facts.Add(new(installed.Manifest!, installed, false, Blocker(() => { if (installed.Enabled) manager.CheckDependents(installed.Id); else manager.CheckDependencies(installed.Manifest!); }), null, Confirmed(installed.Manifest!)));
+            facts.Add(new(installed.Manifest!, installed, false, Blocker(() =>
+            {
+                if (installed.Enabled) manager.CheckDependents(installed.Id);
+                else if (!installed.Manifest!.Retired) manager.CheckDependencies(installed.Manifest!); // OD-232: a retired one is never enabled
+            }), null));
         return (health, null, facts);
     }
 
@@ -450,18 +444,22 @@ public sealed partial class ShellViewModel
             if (!(fact.Next ?? fact.Manifest).IsForGame(game.Id)) continue;
             var mod = fact.Manifest; var installed = fact.Installed;
             var compatible = _install is not null && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray().Any(v => v.GetString() == _install.Version);
-            // Custom executable code runs only through the development runtime until custom signing is designed (OD-114).
-            var nativeBlocked = mod.IsNative && !(mod.IsCustom ? DevelopmentMods : NativeModsAvailable);
-            var custom = mod.IsCustom;
             string status, badge, action; bool canAct; ModManifest? dependency = null;
             if (_modHealth.RecoveryHere) { status = S["mods.recovery_needed"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
             else if (installed?.Problem is not null) { status = S["mods.recovery_problems"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
+            else if (installed is not null && mod.Retired)
+            {
+                // OD-232: a retired format (game-folder files, a native or data mod, a custom mod): disable or remove only, never
+                // enable or update; removing it restores what it replaced
+                status = S[installed.Drift.Count > 0 ? "mods.drift_warning" : "mods.retired"]; badge = S["mods.badge_retired"];
+                action = S[installed.Enabled ? "mods.disable_action" : "mods.enable_action"];
+                canAct = installed.Enabled && installed.Drift.Count == 0 && fact.Blocker is null;
+            }
             else if (fact.Next is { } next)
             {
                 status = S.Format("mods.update_available", ("from", mod.Version), ("to", next.Version));
                 badge = S["mods.update"]; action = S["mods.review_update"];
-                canAct = (custom ? !next.CustomBlocked : !expired) && next.SupportedForInstall && !(next.IsNative && !(custom ? DevelopmentMods : NativeModsAvailable))
-                    && fact.Blocker is null && installed!.Drift.Count == 0;
+                canAct = !expired && next.SupportedForInstall && fact.Blocker is null && installed!.Drift.Count == 0;
             }
             else if (installed is not null)
             {
@@ -469,24 +467,24 @@ public sealed partial class ShellViewModel
                 badge = S[drift || installed.SettingsIssues.Count > 0 ? "mods.badge_attention" : installed.Enabled ? "mods.badge_on" : "mods.badge_off"];
                 status = drift ? S["mods.drift_warning"] : installed.SettingsIssues.Count > 0 ? S["mods.settings_issues"] : S[installed.Enabled ? "mods.managed_on" : "mods.managed_off"];
                 action = S[installed.Enabled ? "mods.disable_action" : "mods.enable_action"];
-                canAct = fact.Blocker is null && !(installed.Enabled && drift) && !(!installed.Enabled && nativeBlocked);
+                canAct = fact.Blocker is null && !(installed.Enabled && drift);
             }
             else if (fact.CanAdopt)
             {
                 status = S["mods.unmanaged"]; badge = status; action = S["mods.adopt"];
-                canAct = compatible && fact.Blocker is null && !nativeBlocked;
+                canAct = compatible && fact.Blocker is null;
             }
             else
             {
-                status = expired ? S["mods.catalog_expired"] : nativeBlocked ? S["mods.native_unavailable"]
+                status = expired ? S["mods.catalog_expired"]
                     : mod.IsExternal ? S.Format("external.card_status", ("hint", mod.ExternalSources[0].Hint ?? mod.ExternalSources[0].LabelText(S.Locale)))
                     : S["mods.not_installed"];
                 // OD-117: a mod of the player's own files opens its set-up pane instead of downloading anything.
                 badge = S[mod.IsExternal ? "external.badge" : "mods.not_installed"]; action = S[mod.IsExternal ? "external.setup" : "mods.install"];
-                // A custom mod needs no catalog (it has no download); an official one waits for a fresh catalog.
-                canAct = compatible && !nativeBlocked && fact.Blocker is null && (custom ? !mod.CustomBlocked : !expired && _catalog is not null);
+                // An official mod waits for a fresh catalog.
+                canAct = compatible && fact.Blocker is null && !expired && _catalog is not null;
             }
-            if (fact.Blocker is not null && installed?.Problem is null && fact.Next is null && !(installed is { Enabled: true } && installed.Drift.Count > 0))
+            if (fact.Blocker is not null && installed?.Problem is null && fact.Next is null && !mod.Retired && !(installed is { Enabled: true } && installed.Drift.Count > 0))
             {
                 // T5d: a dependency state says which mod, never a generic "Needs attention". An enabled mod others depend on is fine:
                 // it keeps its badge, and only its Disable waits.
@@ -508,15 +506,7 @@ public sealed partial class ShellViewModel
                 }
                 else { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
             }
-            if ((!mod.SupportedForInstall || mod.CustomBlocked) && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
-            // FIMOD004: a data mod's SQL needs the runtime and hook that apply it; until then listed, never installed or enabled.
-            if (((fact.Next ?? mod).HasDatabaseSql || (fact.Next ?? mod).DatabaseBase is not null) && !DataModSqlInstallable && !(installed is { Enabled: true } && fact.Next is null))
-            {
-                // T5d: name what is missing. A reviewed data mod waits for a verified hook (build 85+), or for the catalog's runtime.
-                var hookMissing = !(_hook is { Verified: true } && Infinity.Core.Process.HookInstaller.Build(_hook.Version) >= DataModSqlHookBuild);
-                status = S[hookMissing ? "mods.needs_hook" : "mods.data_sql_runtime"]; badge = S[hookMissing ? "mods.badge_hook" : "mods.badge_attention"]; canAct = false;
-                if (dependency is not null) { dependency = null; action = S[mod.IsExternal ? "external.setup" : "mods.install"]; } // the hook comes first
-            }
+            if (!mod.SupportedForInstall && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
             if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
             {
                 // Hardcore: unavailable on this profile; an enabled one keeps its Disable action and its files.
@@ -530,23 +520,22 @@ public sealed partial class ShellViewModel
                     (_manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id) + " " + string.Join(" / ", d.Versions)));
             if (_install is null) requirements += "\n" + S["mods.choose_folder"];
             ModCards.Add(new(mod, mod.Text("name", S.Locale), mod.Text("description", S.Locale), status, requirements,
-                action, canAct, mod.ConfigPath is not null && installed is not null && installed.Problem is null,
+                action, canAct, mod.ConfigPath is not null && installed is not null && installed.Problem is null && !mod.Retired,
                 mod.Document.GetProperty("author").GetString() + " · " + mod.Document.GetProperty("license").GetString() + " · " + mod.Version, badge)
             {
                 VersionText = "v" + mod.Version,
                 Installed = installed is not null && installed.Problem is null, Enabled = installed?.Enabled == true, Dependency = dependency,
                 Held = installed is null && fact.Held,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
-                UpdateAvailable = fact.Next is not null, Next = fact.Next, UpdateSummary = fact.Next is { } upcoming ? UpdateSummary(mod, upcoming) : "",
-                // OD-116: every mod of a player-chosen catalog says so, and a native one that it runs code with the game.
-                CustomBadge = custom ? S["mods.custom_badge"]
-                    : UsingCustomCatalog && _manifestCatalog.Any(m => m.Id == mod.Id) || installed is not null && UnofficialSource(mod.Id) is not null
-                    ? S[mod.IsNative ? "catalog.badge_native" : "catalog.badge"] : "",
-                // Disabling never needs it; installing, enabling and each update's new digest do.
-                NeedsConfirmation = custom && !fact.Confirmed && !(installed is { Enabled: true } && fact.Next is null),
+                UpdateAvailable = fact.Next is not null && !mod.Retired, Next = mod.Retired ? null : fact.Next,
+                UpdateSummary = fact.Next is { } upcoming && !mod.Retired ? UpdateSummary(mod, upcoming) : "",
+                // OD-116: every mod of a player-chosen catalog says so.
+                SourceBadge = UsingCustomCatalog && _manifestCatalog.Any(m => m.Id == mod.Id) || installed is not null && UnofficialSource(mod.Id) is not null
+                    ? S["catalog.badge"] : "",
             });
         }
         if (_selectedMod is { } selected) _selectedMod = ModCards.FirstOrDefault(card => card.Manifest.Id == selected.Manifest.Id);
+        RefreshModSetCards(); // OD-232: the sets' packs, as rows of one card per set
         Changed(nameof(FilteredModCards)); Changed(nameof(NoMatchingMods)); Changed(nameof(SelectedMod)); Changed(nameof(SelectedModFiles)); Changed(nameof(HasModCards));
     }
 
@@ -572,9 +561,6 @@ public sealed partial class ShellViewModel
     {
         ModSettingsChangedException => S["mods.settings_changed"],
         HttpRequestException or OperationCanceledException => S["mods.download_failed"],
-        // OD-114 follow-up: one database base at a time, naming the enabled mod that already replaces it
-        ModException { Code: ModErrors.DatabaseBase, Detail: { } other } => S.Format("mods.error.database_base_named", ("mod",
-            _modFacts.FirstOrDefault(f => f.Manifest.Id == other)?.Manifest.Text("name", S.Locale) ?? other)),
         ModException mod => ModErrorText(mod.Code),
         _ => S["mods.transaction_failed"],
     };
@@ -588,7 +574,7 @@ public sealed partial class ShellViewModel
         if (current is not { CanAct: true }) return;
         // T5d: a card waiting for a dependency installs (or enables) that dependency, through its own preview.
         if (current.Dependency is { } needed && ModCards.FirstOrDefault(c => c.Manifest.Id == needed.Id) is { } first) { await ActOnModAsync(first); return; }
-        if (current.UpdateAvailable || current.NeedsConfirmation) { ShowModInformation(current); return; } // reviewed (and a custom mod confirmed) first, in the information pane
+        if (current.UpdateAvailable) { ShowModInformation(current); return; } // reviewed first, in the information pane
         if (!current.Installed && current.Manifest.IsExternal) { await OpenExternalSetupAsync(current); return; }
         if (NeedsInstallPreview(current)) { ShowInstallPreview(current); return; } // Alex (1.0.11): where it goes and what it replaces, first
         var mod = current.Manifest;
@@ -598,10 +584,8 @@ public sealed partial class ShellViewModel
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
-            if (mod.NeedsRuntime && !(current.Installed && current.Enabled)) await RequireRuntimeAsync(); // OD-116: installing a native mod installs its runtime
-            var manager = await Task.Run(ModManagerFactory() ?? factory); // after the runtime step: a data mod sees the runtime it installed
+            var manager = await Task.Run(factory);
             if (!current.Installed && current.Action == S["mods.adopt"]) await Task.Run(() => manager.Adopt(mod, hardcore));
-            else if (!current.Installed && mod.IsCustom) await Task.Run(() => manager.InstallCustom(mod, progress, hardcore: hardcore));
             else if (!current.Installed)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -615,13 +599,6 @@ public sealed partial class ShellViewModel
     /// <summary>This catalog's download host rule (OD-116: any HTTPS host, every download pinned); nothing without a catalog.</summary>
     private Func<string, bool> CatalogHosts => _catalog?.AllowsHost ?? (_ => false);
 
-    /// <summary>A native or SQL data mod's runtime, installed from the catalog when missing or changed; refused when none verifies.</summary>
-    private async Task RequireRuntimeAsync()
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        if (await EnsureRuntimeAsync(timeout.Token) is null) throw new ModException("no verified mod runtime", ModErrors.RuntimeMissing);
-    }
-
     public Task ConfirmModUpdateAsync()
     {
         if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next } card) return Task.CompletedTask;
@@ -630,27 +607,11 @@ public sealed partial class ShellViewModel
         return RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
-            if (next.NeedsRuntime) await RequireRuntimeAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-            var manager = await Task.Run(ModManagerFactory() ?? factory); // after the runtime step: a data mod sees the runtime it installed
-            if (next.IsCustom) await Task.Run(() => manager.InstallCustom(next, progress, update: true, hardcore: hardcore));
-            else { await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore); RecordModSource(next.Id); }
+            var manager = await Task.Run(factory);
+            await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
+            RecordModSource(next.Id);
         }, S["mods.updated"]);
-    }
-
-    /// <summary>
-    /// OD-114: the player's explicit confirmation of an unreviewed custom mod, recorded for its exact manifest digest (the pending
-    /// update's when there is one); then the card's action continues (an update still shows its reviewed change first).
-    /// </summary>
-    public async Task ConfirmCustomModAsync()
-    {
-        if (!CanConfirmCustomMod || _selectedMod is not { } selected || ModManagerFactory() is not { } factory) return;
-        var target = selected.Next ?? selected.Manifest;
-        var confirmed = false;
-        await RunModOperationAsync(async () => { await Task.Run(() => factory().ConfirmCustom(target)); confirmed = true; }, S["mods.custom_confirmed"]);
-        if (!confirmed || ModCards.FirstOrDefault(c => c.Manifest.Id == selected.Manifest.Id) is not { } card) return;
-        if (card.UpdateAvailable) ShowModInformation(card);
-        else { _showModInfo = false; await ActOnModAsync(card); }
     }
 
     private Task SelectedModOperation(Action<ManagedModFiles, ModManifest> operation, string done)

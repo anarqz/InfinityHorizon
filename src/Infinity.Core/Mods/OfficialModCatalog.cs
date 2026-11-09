@@ -9,27 +9,23 @@ namespace Infinity.Core.Mods;
 /// <summary>A pinned download of a catalog entry: HTTPS address, SHA-256 (lowercase hex) and size.</summary>
 public sealed record CatalogDownload(Uri Url, string Sha256, long Bytes);
 
-/// <summary>The catalog's runtime entry (OD-116): the signed native mod runtime as a download of its own; native mods depend on it.</summary>
-public sealed record ModRuntimeEntry(string Id, string Version, CatalogDownload Download);
-
 /// <summary>
 /// OD-116: the mod catalog is one unsigned JSON file, the official one committed on <c>main</c> of InfinityMods (OD-166) and
 /// read from raw.githubusercontent.com. Its only integrity check is the SHA-256 (and size) pinned for every download: a download
 /// that differs is refused. No signature, sequence, expiry, download-host list, <c>required</c> or <c>availability</c>.
 /// <para>
 /// Schema 2: <c>{"schemaVersion": 2, "mods": [entry…]}</c>. A mod entry carries its details (<c>id</c>, <c>version</c>,
-/// <c>name</c>/<c>description</c> {en, pt-BR}, <c>author</c>), <c>download</c> {url, sha256, bytes}, optional
-/// <c>additionalDownloads</c> {name: download}, optional <c>requires</c> (["infinity-mod-runtime"]) and <c>install</c>: the existing
-/// manifest body (files, config, runtime, dependencies, multiplayer…) without the fields the entry itself carries. The launcher
-/// rebuilds the manifest from both, so every rule of <see cref="ModManifest"/> still applies. The entry <c>infinity-mod-runtime</c>
-/// has no <c>install</c>: its download is the runtime package (<see cref="ModRuntimePackage"/>).
+/// <c>name</c>/<c>description</c> {en, pt-BR}, <c>author</c>), <c>download</c> {url, sha256, bytes} (or OD-117's
+/// <c>externalSources</c>), optional <c>additionalDownloads</c> {name: download} and <c>install</c>: the existing manifest body
+/// (files, config, runtime, dependencies, multiplayer…) without the fields the entry itself carries. The launcher rebuilds the
+/// manifest from both, so every rule of <see cref="ModManifest"/> still applies: OD-232's ExtraOptions mods only. An entry in a
+/// retired format, the former <c>infinity-mod-runtime</c> entry or a <c>requires</c> refuses the catalog, like any invalid entry.
 /// </para>
 /// </summary>
 public static class OfficialModCatalog
 {
     public const int SchemaVersion = 2;
     public const int MaxCatalogBytes = 1024 * 1024;
-    public const string RuntimeId = "infinity-mod-runtime";
     public const long MaxDownloadBytes = 64L * 1024 * 1024;
     /// <summary>OD-166: the official catalog is <c>catalog.json</c> on InfinityMods' <c>main</c>.</summary>
     public static Uri OfficialUrl { get; } = new("https://raw.githubusercontent.com/anarqz/InfinityMods/main/catalog.json");
@@ -47,8 +43,8 @@ public static class OfficialModCatalog
     /// <summary>Fields the entry carries, so an <c>install</c> object never repeats or overrides them.</summary>
     private static readonly string[] ReservedInstallFields = [.. EntryFields, "package", "additionalPackages", "payload", "externalSources"];
 
-    /// <summary>Parses a schema-2 catalog into manifests (rebuilt from the entries) and its runtime entry.</summary>
-    public static (IReadOnlyList<ModManifest> Mods, ModRuntimeEntry? Runtime) Parse(byte[] raw)
+    /// <summary>Parses a schema-2 catalog into manifests (rebuilt from the entries).</summary>
+    public static IReadOnlyList<ModManifest> Parse(byte[] raw)
     {
         ArgumentNullException.ThrowIfNull(raw);
         if (raw.Length is <= 0 or > MaxCatalogBytes || raw.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf })) throw new ModException("invalid catalog", ModErrors.Catalog);
@@ -62,33 +58,22 @@ public static class OfficialModCatalog
             if (root.EnumerateObject().Any(p => p.Name is not ("schemaVersion" or "mods"))) throw new ModException("unknown catalog field", ModErrors.Catalog);
             var list = root.GetProperty("mods");
             if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 512) throw new ModException("invalid catalog mods", ModErrors.Catalog);
-            var mods = new List<ModManifest>(); ModRuntimeEntry? runtime = null; var requires = new List<string>();
+            var mods = new List<ModManifest>();
             var ids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var entry in list.EnumerateArray())
             {
                 var id = entry.GetProperty("id").GetString()!;
                 if (!ids.Add(id)) throw new ModException("duplicate catalog id", ModErrors.Catalog);
-                // OD-116 ("drop both"): no required mods and no availability, on any entry (the runtime's too) or inside its install;
+                // OD-116 ("drop both"): no required mods and no availability, on any entry or inside its install;
                 // refused rather than silently ignored, so a catalog author never believes they take effect.
                 foreach (var dropped in DroppedFields)
                     if (entry.TryGetProperty(dropped, out _) || entry.TryGetProperty("install", out var body) && body.ValueKind == JsonValueKind.Object && body.TryGetProperty(dropped, out _))
                         throw new ModException("catalog v2 has no '" + dropped + "' (OD-116)", ModErrors.Catalog);
-                if (id == RuntimeId)
-                {
-                    if (entry.TryGetProperty("install", out _)) throw new ModException("the runtime entry installs no files", ModErrors.Catalog);
-                    var version = entry.GetProperty("version").GetString()!;
-                    if (version.Length is < 1 or > 64) throw new ModException("invalid runtime version", ModErrors.Catalog);
-                    runtime = new(id, version, Download(entry.GetProperty("download")));
-                    continue;
-                }
-                var manifest = Manifest(entry);
-                if (entry.TryGetProperty("requires", out var required))
-                    foreach (var name in required.EnumerateArray())
-                        requires.Add(name.GetString() is RuntimeId ? RuntimeId : throw new ModException("unknown catalog requirement", ModErrors.Catalog));
-                mods.Add(manifest);
+                // OD-232: no native mod runtime to list or require (its former entry has no install, so it is refused below too).
+                if (entry.TryGetProperty("requires", out _)) throw new ModException("catalog v2 has no 'requires' (OD-232)", ModErrors.Catalog);
+                mods.Add(Manifest(entry));
             }
-            if (requires.Count > 0 && runtime is null) throw new ModException("a mod requires the runtime the catalog does not list", ModErrors.Catalog);
-            return (mods.AsReadOnly(), runtime);
+            return mods.AsReadOnly();
         }
         // A bad entry (its manifest's own refusal included) is a bad catalog: the player sees one message for it.
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or ArgumentException
@@ -121,8 +106,6 @@ public static class OfficialModCatalog
             node["additionalPackages"] = packages;
         }
         var manifest = new ModManifest(Encoding.UTF8.GetBytes(node.ToJsonString()));
-        // OD-114: the reserved custom prefix comes only from the player's custom folder, never from a catalog.
-        if (manifest.IsCustom) throw new ModException("a catalog cannot carry a custom mod", ModErrors.Catalog);
         if (manifest.IsBuiltIn) throw new ModException("a catalog cannot carry a built-in mod", ModErrors.Catalog);
         return manifest;
     }
@@ -134,8 +117,8 @@ public static class OfficialModCatalog
     public static JsonObject Entry(ModManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        if (manifest.IsCustom) throw new ModException("a catalog cannot carry a custom mod", ModErrors.Catalog);
         if (manifest.IsBuiltIn) throw new ModException("a catalog cannot carry a built-in mod", ModErrors.Catalog);
+        if (manifest.Retired) throw new ModException("a catalog carries only ExtraOptions mods (OD-232)", ModErrors.Catalog);
         var body = JsonNode.Parse(manifest.Document.GetRawText())!.AsObject();
         var entry = new JsonObject();
         foreach (var field in EntryFields) { entry[field] = body[field]?.DeepClone(); body.Remove(field); }
@@ -149,7 +132,6 @@ public static class OfficialModCatalog
             foreach (var (name, value) in additional) downloads[name] = Download(value!);
             entry["additionalDownloads"] = downloads; body.Remove("additionalPackages");
         }
-        if (manifest.NeedsRuntime) entry["requires"] = new JsonArray(RuntimeId);
         entry["install"] = body;
         return entry;
     }
@@ -235,10 +217,10 @@ public static class OfficialModCatalog
 
     private static ModCatalog Build(Uri url, byte[] raw, bool cached)
     {
-        var (mods, runtime) = Parse(raw);
+        var mods = Parse(raw);
         var official = IsOfficial(url);
         return new(official ? "infinity-official" : "unofficial", 0, null, null, [], mods, Trusted: official, Cached: cached)
-        { Runtime = runtime, AnyDownloadHost = true };
+        { AnyDownloadHost = true };
     }
 
     /// <summary>One cache file per catalog address, so switching back to the official catalog never shows a custom one's mods.</summary>

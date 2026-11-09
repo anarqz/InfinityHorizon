@@ -4,6 +4,14 @@ using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
+/// <summary>
+/// OD-232: a mod the launcher installs is an ExtraOptions mod: every file under <c>&lt;Azimuth&gt;\mods\&lt;id&gt;\</c>, its own
+/// <c>mod.json</c> among them (plugins included), from a pinned download or the player's own files (OD-117). Every other format
+/// (the Infinity native runtime, game-folder and media-override files, whole-database replacement, startup SQL, the
+/// <c>extraOptionsAddon</c> conversion, Infinity's own custom mods) is refused from a catalog like any invalid manifest; an
+/// installed manifest that used one (<see cref="Installed"/>) is read with <see cref="RetiredFeatures"/>, so that mod stays
+/// listed and removable but is never installed, updated or enabled again.
+/// </summary>
 public sealed class ModManifest
 {
     private readonly byte[] _bytes;
@@ -11,16 +19,8 @@ public sealed class ModManifest
     public string Id => Document.GetProperty("id").GetString()!;
     public string Version => Document.GetProperty("version").GetString()!;
     public string Digest { get; }
-    /// <summary>The reserved prefix of custom (player-supplied, unreviewed) mod ids (OD-114); official ids never contain a dot.</summary>
-    public const string CustomPrefix = "custom.";
-    /// <summary>A custom mod (OD-114): loaded from the player's custom folder, never from a catalog; its payload is a local <c>files/</c> tree.</summary>
-    public bool IsCustom => IsCustomId(Id);
     /// <summary>OD-125/127: part of Infinity (only ExtraOptions.Infinity, from the launcher itself): options only, nothing to install.</summary>
     public bool IsBuiltIn => Document.TryGetProperty("builtIn", out var builtIn) && builtIn.ValueKind == JsonValueKind.True;
-    /// <summary>A custom mod that maps executable code (a native binary): only a development native runtime may load it.</summary>
-    public bool HasExecutableCode => Files.Any(f => f.Role == "binary" || ExecutableExtension(f.Destination));
-    /// <summary>A custom mod whose manifest still lists review blockers: listed, never installed or enabled.</summary>
-    public bool CustomBlocked => IsCustom && Document.GetProperty("review").GetProperty("blockers").GetArrayLength() > 0;
     public string PackageUrl => Document.GetProperty("package").GetProperty("url").GetString()!;
     public string PackageHash => Document.GetProperty("package").GetProperty("sha256").GetString()!;
     public long PackageBytes => Document.GetProperty("package").GetProperty("bytes").GetInt64();
@@ -36,16 +36,34 @@ public sealed class ModManifest
     /// <summary>Legacy parked copies (adoption.parkedFiles): mapped binary destination to its parked Azimuth-relative path.</summary>
     public IReadOnlyDictionary<string, string> ParkedFiles { get; }
     public ModMultiplayer? Multiplayer { get; }
-    public bool NeedsDatabaseCoordination => Document.GetProperty("databaseMigrations").GetArrayLength() > 0
-        || Document.GetProperty("runtimeOutputs").GetArrayLength() > 0;
     public string? ConfigPath => Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
         ? config.GetProperty("path").GetString() : null;
 
-    public bool IsNative => Document.TryGetProperty("runtime", out var value) && value.GetString() == "infinity-native";
-    public bool SupportedForInstall => !NeedsDatabaseCoordination
-        && Document.TryGetProperty("runtime", out var value) && value.GetString() is "standalone" or "infinity-native";
+    /// <summary>
+    /// OD-232: what an installed manifest uses that this launcher no longer supports (the manifest field, or <c>infinity-native</c>,
+    /// <c>game-files</c>, <c>custom</c>, <c>loader</c>, <c>outside-mod-folder</c>, <c>mod-json</c>); empty for every manifest it accepts.
+    /// </summary>
+    public IReadOnlyList<string> RetiredFeatures { get; }
+    /// <summary>OD-232: an installed mod in a format the launcher no longer supports: listed and removable only.</summary>
+    public bool Retired => RetiredFeatures.Count > 0;
+    public bool SupportedForInstall => !Retired && Document.TryGetProperty("runtime", out var value) && value.GetString() == "standalone";
 
-    public ModManifest(byte[] bytes)
+    /// <summary>
+    /// OD-232 (<c>install.loadOrder: "first"</c>, the ZephyrSkies Commons): the launcher keeps this mod's folder at the top of
+    /// <c>loadorder.txt</c> (loaded first, lowest priority), ahead of every other mod; see <see cref="ExtraOptionsMods.ArrangeLoadOrder"/>.
+    /// </summary>
+    public bool LoadFirst { get; }
+
+    /// <summary>A manifest from a catalog or a development file: anything that is not an ExtraOptions mod is refused (OD-232).</summary>
+    public ModManifest(byte[] bytes) : this(bytes, installed: false) { }
+
+    /// <summary>
+    /// OD-232: an installed mod's manifest snapshot. A retired feature is recorded in <see cref="RetiredFeatures"/> instead of refused
+    /// (its own rules are no longer checked), so the mod is still listed and its uninstall restores what its receipt names.
+    /// </summary>
+    internal static ModManifest Installed(byte[] bytes) => new(bytes, installed: true);
+
+    private ModManifest(byte[] bytes, bool installed)
     {
         ArgumentNullException.ThrowIfNull(bytes);
         if (bytes.Length > 256 * 1024) throw new ModException("manifest too large");
@@ -54,6 +72,12 @@ public sealed class ModManifest
         RejectDuplicates(json.RootElement);
         Document = json.RootElement.Clone();
         if (Document.GetProperty("schemaVersion").GetInt32() != 1) throw new ModException("unsupported manifest");
+        var retired = new List<string>();
+        void Retire(string feature)
+        {
+            if (!installed) throw new ModException("OD-232: the launcher installs only ExtraOptions mods (" + feature + ")", ModErrors.Unsupported);
+            if (!retired.Contains(feature, StringComparer.Ordinal)) retired.Add(feature);
+        }
         foreach (var field in new[] { "name", "description" })
         {
             var localized = Document.GetProperty(field);
@@ -63,12 +87,25 @@ public sealed class ModManifest
         }
         foreach (var field in new[] { "version", "author", "license" }) ValidateText(Document.GetProperty(field));
         foreach (var version in Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray()) ValidateText(version);
-        _ = NeedsDatabaseCoordination;
+        // OD-114's custom mods (custom.<name>, a local files/ payload) were retired by OD-232; only their installations are still read.
+        var legacyCustom = LegacyCustomId(Id);
+        if (legacyCustom) Retire("custom");
+        else if (!ValidId(Id)) throw new ModException("invalid mod id");
+        if (Document.TryGetProperty("runtime", out var runtime) && runtime.ValueKind == JsonValueKind.String && runtime.GetString() == "infinity-native"
+            || Document.TryGetProperty("nativeHost", out _)) Retire("infinity-native");
+        foreach (var field in new[] { "database", "databaseSql", "databaseBase", "extraOptionsAddon", "readiness" })
+            if (Document.TryGetProperty(field, out _)) Retire(field);
+        foreach (var field in new[] { "databaseMigrations", "runtimeOutputs" })
+            if (Document.GetProperty(field) is var list && (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 0)) Retire(field);
+        if (Document.TryGetProperty("payload", out _)) Retire("custom");
+        // OD-232: an ExtraOptions mod lives only in its own folder; ExtraOptions.Infinity's options file sits beside azimuth.exe.
+        var folder = ExtraOptionsMods.ModsFolder + "/" + Id + "/";
         ExternalSources = ExternalSourcesOf(Document);
         if (ConfigPath is { } configPath)
         {
             ValidatePath(configPath);
             if (!configPath.EndsWith(".ini", StringComparison.OrdinalIgnoreCase)) throw new ModException("INI configuration must use an ini file");
+            if (!IsBuiltIn && !configPath.StartsWith(folder, StringComparison.Ordinal)) Retire("outside-mod-folder");
             var config = Document.GetProperty("config");
             if (config.TryGetProperty("root", out var configRoot) && configRoot.GetString() != "azimuth"
                 || config.TryGetProperty("format", out var configFormat) && configFormat.GetString() != "ini") throw new ModException("unsupported configuration format");
@@ -100,85 +137,7 @@ public sealed class ModManifest
                 }
             }
         }
-        if (Document.TryGetProperty("databaseSql", out var sql))
-        {
-            // FIMOD004: a data mod's startup SQL, a file of its own folder pinned like any file. Custom data mods only for now;
-            // a native mod registers its SQL itself (InfinityModRegisterDatabaseV1), never both.
-            if (IsNative || !IsCustom || sql.ValueKind != JsonValueKind.Object || sql.EnumerateObject().Count() != 3
-                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported data mod SQL", ModErrors.Unsupported);
-            var path = sql.GetProperty("path").GetString()!; var hash = sql.GetProperty("sha256").GetString()!; var size = sql.GetProperty("bytes").GetInt64();
-            ValidatePath(path);
-            if (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || !path.EndsWith(".sql", StringComparison.Ordinal)
-                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c)) || size is < 1 or > DataModSql.MaxBytes)
-                throw new ModException("invalid data mod SQL", ModErrors.Unsupported);
-            DatabaseSql = new(path, hash, size);
-        }
-        if (Document.TryGetProperty("databaseBase", out var baseDb))
-        {
-            // OD-114 follow-up: a car pack's whole database, used as shipped as the session database's base (never the stock file).
-            // OD-117: a catalog mod may carry one only from the player's own files (an external source), never from a download.
-            if (IsNative || !(IsCustom || IsExternal) || baseDb.ValueKind != JsonValueKind.Object || baseDb.EnumerateObject().Count() != 4
-                || !Document.TryGetProperty("database", out _)) throw new ModException("unsupported database base", ModErrors.Unsupported);
-            var path = baseDb.GetProperty("source").GetString()!; var hash = baseDb.GetProperty("sha256").GetString()!;
-            var size = baseDb.GetProperty("bytes").GetInt64(); var violations = baseDb.GetProperty("foreignKeyViolations").GetInt64();
-            var local = IsExternal ? ExternalPath(path) : path;
-            ValidatePath(local);
-            if (!IsExternal && (!path.StartsWith(CustomSqlFolder + "/", StringComparison.Ordinal) || path.Count(c => c == '/') != 1)
-                || !(local.EndsWith(".slt", StringComparison.OrdinalIgnoreCase) || local.EndsWith(".db", StringComparison.OrdinalIgnoreCase) || local.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
-                || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c))
-                || size is < 100 or > MaxDatabaseBaseBytes || violations is < 0 or > int.MaxValue) throw new ModException("invalid database base", ModErrors.Unsupported);
-            DatabaseBase = new(path, hash, size, (int)violations);
-        }
-        if (Document.TryGetProperty("extraOptionsAddon", out var addon))
-        {
-            // OD-127: a car pack as ExtraOptions' own addon: its files under mods/<id>/media/ and the database.json ExtraOptions merges,
-            // built from the player's edited database on their PC (derived from their files, so never shipped). No runtime database.
-            if (!IsExternal || addon.ValueKind != JsonValueKind.Object || addon.EnumerateObject().Count() != 1 || DatabaseBase is not null
-                || Document.TryGetProperty("database", out _) || !addon.TryGetProperty("database", out var addonDb) || addonDb.ValueKind != JsonValueKind.Object
-                || addonDb.EnumerateObject().Count() != 8)
-                throw new ModException("unsupported addon", ModErrors.Unsupported);
-            string Field(string name) => addonDb.GetProperty(name).GetString()!;
-            var source = Field("source"); var hash = Field("sha256"); var size = addonDb.GetProperty("bytes").GetInt64(); var target = Field("target");
-            ValidatePath(source[(source.IndexOf(':') + 1)..]); ValidatePath(target);
-            // OD-127: the target is the one database the loader merges addons into; the exporter checks it is a database
-            if (ExternalSources.All(s => s.Id != ExternalSourceId(source)) || hash.Length != 64 || hash.Any(c => !char.IsAsciiHexDigitLower(c) && !char.IsAsciiDigit(c))
-                || size is < 100 or > MaxDatabaseBaseBytes || !target.StartsWith("media/", StringComparison.Ordinal) || !target.EndsWith(".slt", StringComparison.OrdinalIgnoreCase)
-                || Field("idConflicts") is not ("error" or "nearest") || Field("updates") is not ("error" or "override" or "ignore")
-                || Field("deletes") is not ("error" or "include" or "ignore") || Field("foreignKeys") is not ("error" or "allow"))
-                throw new ModException("invalid addon database", ModErrors.Unsupported);
-            AddonDatabase = new(source, hash, size, target, Field("idConflicts"), Field("updates"), Field("deletes"), Field("foreignKeys"));
-        }
-        if (Document.TryGetProperty("database", out var db))
-        {
-            if (!(IsNative || DatabaseSql is not null || DatabaseBase is not null) || db.GetProperty("root").GetString() != "game" || db.GetProperty("access").GetString() != "startup"
-                || db.GetProperty("revision").GetInt32() < 1 || db.GetProperty("tables").GetArrayLength() is var tableCount && (tableCount < (DatabaseBase is not null && DatabaseSql is null ? 0 : 1) || tableCount > (DatabaseSql is null ? DataModSql.MaxNativeTables : DataModSql.MaxTables))) throw new ModException("unsupported database capability");
-            var target = db.GetProperty("path").GetString()!; var seed = db.GetProperty("seedFrom").GetString()!;
-            ValidatePath(target); ValidatePath(seed); if (target.Equals(seed, StringComparison.OrdinalIgnoreCase)) throw new ModException("session database must be distinct from the baseline");
-            // OD-115: the runtime's session copy is game data the runtime owns, so it too is an override; the baseline is only read.
-            if (!UnderMediaOverride(target)) throw new ModException("session database must be a media override", ModErrors.Unsupported);
-            foreach (var table in db.GetProperty("tables").EnumerateArray())
-            {
-                var name = table.GetString()!;
-                if (name.Length is < 1 or > 64 || name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase)
-                    || name.StartsWith("_infinity", StringComparison.OrdinalIgnoreCase) || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')) throw new ModException("invalid database table permission");
-            }
-        }
-        if (Document.TryGetProperty("readiness", out var readiness))
-        {
-            ValidatePath(readiness.GetProperty("module").GetString()!); ValidatePath(readiness.GetProperty("log").GetString()!);
-            if (readiness.GetProperty("contains").GetString() is not { Length: > 0 and <= 512 }) throw new ModException("invalid readiness marker");
-        }
-        if (!ValidId(Id)) throw new ModException("invalid mod id");
-        if (IsCustom && (!Document.TryGetProperty("review", out var review) || !review.TryGetProperty("blockers", out var blockers)
-            || blockers.ValueKind != JsonValueKind.Array || blockers.EnumerateArray().Any(b => b.ValueKind != JsonValueKind.String)))
-            throw new ModException("invalid custom review", ModErrors.Unsupported);
         Digest = Hash(_bytes);
-        foreach (var output in Document.GetProperty("runtimeOutputs").EnumerateArray())
-            if (output.ValueKind == JsonValueKind.Object && output.TryGetProperty("root", out var outputRoot) && outputRoot.GetString() == "game"
-                && (!output.TryGetProperty("path", out var outputPath) || outputPath.GetString() is not { } written || !UnderMediaOverride(written)))
-                throw new ModException("runtime game output must be a media override", ModErrors.Unsupported);
-        var reviewed = Document.TryGetProperty("review", out var reviewState) && reviewState.ValueKind == JsonValueKind.Object
-            && reviewState.TryGetProperty("status", out var status) && status.GetString() == "reviewed";
         var files = new List<ManifestFile>();
         foreach (var root in new[] { "game", "azimuth" })
             foreach (var file in Document.GetProperty("files").GetProperty(root).EnumerateArray())
@@ -186,23 +145,19 @@ public sealed class ModManifest
                 var item = new ManifestFile(root, file.GetProperty("source").GetString()!, file.GetProperty("destination").GetString()!,
                     file.GetProperty("sha256").GetString()!, file.GetProperty("bytes").GetInt64(),
                     file.GetProperty("role").GetString()!, file.GetProperty("mode").GetString()!,
-                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary",
-                    file.TryGetProperty("loader", out var loader) ? loader.ValueKind switch
-                    {
-                        JsonValueKind.True => true, JsonValueKind.False => false, _ => throw new ModException("invalid loader flag"),
-                    } : false);
+                    file.TryGetProperty("package", out var package) ? package.GetString()! : "primary");
+                // OD-115's loader (a proxy DLL the game process loads by itself) and every game-folder file were retired by OD-232.
+                if (file.TryGetProperty("loader", out var loader))
+                {
+                    if (loader.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw new ModException("invalid loader flag");
+                    if (loader.ValueKind == JsonValueKind.True) Retire("loader");
+                }
+                if (root == "game") Retire("game-files");
+                else if (!item.Destination.StartsWith(folder, StringComparison.Ordinal)) Retire("outside-mod-folder");
                 ValidatePath(IsExternal ? ExternalPath(item.Source) : item.Source); ValidatePath(item.Destination);
                 // OD-117: the player's own files are data only, never code the game or a loader would run.
-                if (IsExternal && (item.Role == "binary" || item.Loader || ExecutableExtension(item.Destination) || ExecutableExtension(item.Source)))
+                if (IsExternal && (item.Role == "binary" || ExecutableExtension(item.Destination) || ExecutableExtension(item.Source)))
                     throw new ModException("external files carry no executable code", ModErrors.Unsupported);
-                // OD-115/OD-111: a loader is a binary the game process loads by itself (a top-level proxy DLL of its root). Only a reviewed
-                // official manifest may declare one; it is the only mapping allowed in the game root outside the media overrides.
-                if (item.Loader && (IsCustom || !reviewed || item.Role != "binary" || item.Mode == "seed" || item.Destination.Contains('/')
-                    || !item.Destination.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
-                    throw new ModException("a loader is a top-level binary of a reviewed official manifest", ModErrors.Unsupported);
-                // OD-115: mods never write the game's own files; every game-root change is an override the game reads instead.
-                if (item.Root == "game" && !item.Loader && !UnderMediaOverride(item.Destination))
-                    throw new ModException("game files change only through media overrides", ModErrors.Unsupported);
                 if (item.Bytes is < 0 or > 64 * 1024 * 1024 || (item.Hash.Length != 64 || item.Hash.Any(c => !char.IsAsciiHexDigit(c)))
                     || item.Mode is not ("add" or "replace" or "add-or-replace" or "seed")) throw new ModException("invalid file mapping");
                 if (item.Role is not ("binary" or "config" or "asset" or "user-asset" or "license")
@@ -210,49 +165,36 @@ public sealed class ModManifest
                     || item.Role == "config" && (item.Root != "azimuth" || item.Mode != "seed" || item.Destination != ConfigPath)
                     || item.Root == "azimuth" && item.Destination.Equals(ConfigPath, StringComparison.OrdinalIgnoreCase) && item.Role != "config")
                     throw new ModException("invalid file role or settings mapping");
-                if (IsCustom && (item.Source != item.Root + "/" + item.Destination
-                    || (item.Role == "binary" || ExecutableExtension(item.Destination)) && !IsNative))
-                    throw new ModException("custom mods map their files tree and carry no executable code", ModErrors.Unsupported);
                 files.Add(item);
             }
         if (files.Count > 512 || files.Select(f => f.Root + "/" + f.Destination).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Count)
             throw new ModException("duplicate or excessive files");
         Files = files.AsReadOnly();
-        // OD-127: an ExtraOptions addon maps the pack's media only, under its own folder; mod.json and database.json are made at install
-        if (AddonDatabase is not null && Files.Any(f => f.Root != "azimuth" || !f.Destination.StartsWith("mods/" + Id + "/media/", StringComparison.Ordinal)))
-            throw new ModException("an addon's files go under mods/" + Id + "/media/", ModErrors.Unsupported);
+        // OD-232: ExtraOptions loads the folder by its own mod.json, which the launcher checks against this manifest at install.
+        if (!IsBuiltIn && !Files.Any(f => f.Root == "azimuth" && f.Destination == folder + "mod.json")) Retire("mod-json");
         Dependencies = Document.GetProperty("dependencies").EnumerateArray().Select(d => new ManifestDependency(
             d.GetProperty("id").GetString()!, d.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray())).ToArray();
+        bool Known(string? id) => ValidId(id) || legacyCustom && LegacyCustomId(id);
         if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
-            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !ValidId(d.Id) || IsCustomId(d.Id) && !IsCustom || d.Versions.Count == 0
+            || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !Known(d.Id) || d.Versions.Count == 0
                 || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
         Games = Document.TryGetProperty("games", out var games) ? ParseGames(games) : [DefaultGame];
-        Multiplayer = ModMultiplayer.Parse(Document);
-        if (DatabaseBase is not null && Multiplayer is not { EntersLobbySet: true }) throw new ModException("a database base affects multiplayer", ModErrors.Unsupported);
-        if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => c.GetString() is not { } other || !ValidId(other)))
+        Multiplayer = ModMultiplayer.Parse(Document, legacyCustom);
+        if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => !Known(c.GetString())))
             throw new ModException("invalid conflicts");
         if (IsBuiltIn)
         {
             // OD-125/127: ExtraOptions.Infinity comes with Infinity's hook; its manifest (embedded in the launcher) only describes its options.
-            if (Id != ManagedModFiles.BuiltInExtraOptions || IsCustom || IsExternal || Files.Count > 0 || Document.TryGetProperty("package", out _)
-                || Document.TryGetProperty("additionalPackages", out _) || Document.TryGetProperty("payload", out _)) throw new ModException("invalid built-in mod", ModErrors.Unsupported);
+            if (Id != ManagedModFiles.BuiltInExtraOptions || IsExternal || Files.Count > 0 || Document.TryGetProperty("package", out _)
+                || Document.TryGetProperty("additionalPackages", out _)) throw new ModException("invalid built-in mod", ModErrors.Unsupported);
         }
-        else if (IsCustom)
-        {
-            // A custom mod has no download: its payload is the player's own files tree next to its manifest.
-            if (Document.TryGetProperty("package", out _) || Document.TryGetProperty("additionalPackages", out _)
-                || !Document.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object
-                || payload.EnumerateObject().Count() != 2 || payload.GetProperty("format").GetString() != "folder"
-                || payload.GetProperty("path").GetString() != CustomPayloadFolder) throw new ModException("invalid custom payload", ModErrors.Unsupported);
-        }
-        else if (Document.TryGetProperty("payload", out _)) throw new ModException("only custom mods use a local payload", ModErrors.Unsupported);
         else if (IsExternal)
         {
             // OD-117: no download at all; every byte comes from the player's sources, checked against these pins.
             if (Document.TryGetProperty("package", out _) || Document.TryGetProperty("additionalPackages", out _))
                 throw new ModException("a mod of external files has no download", ModErrors.Unsupported);
         }
-        else ValidatePackage(Document.GetProperty("package"));
+        else if (!legacyCustom) ValidatePackage(Document.GetProperty("package"));
         var packageNames = new HashSet<string>(StringComparer.Ordinal) { "primary" };
         if (Document.TryGetProperty("additionalPackages", out var additional))
             foreach (var p in additional.EnumerateObject())
@@ -287,12 +229,19 @@ public sealed class ModManifest
                     throw new ModException("parked legacy files must name a mapped azimuth binary");
             }
         ParkedFiles = parked;
+        // OD-232: "first" is the only load order a manifest may ask for (anything else is refused like any invalid field).
+        if (Document.TryGetProperty("loadOrder", out var loadOrder))
+        {
+            if (loadOrder.ValueKind != JsonValueKind.String || loadOrder.GetString() != "first") throw new ModException("invalid load order");
+            LoadFirst = true;
+        }
         if (Document.TryGetProperty("incompatibleFiles", out var incompatible))
             foreach (var file in incompatible.EnumerateArray())
             {
                 if (file.GetProperty("root").GetString() is not ("game" or "azimuth")) throw new ModException("invalid incompatible file root");
                 ValidatePath(file.GetProperty("path").GetString()!);
             }
+        RetiredFeatures = retired.AsReadOnly();
     }
 
     /// <summary>
@@ -316,7 +265,7 @@ public sealed class ModManifest
     private static System.Collections.ObjectModel.ReadOnlyCollection<ExternalSource> ExternalSourcesOf(JsonElement document)
     {
         if (!document.TryGetProperty("externalSources", out var list)) return new([]);
-        if (IsCustomId(document.GetProperty("id").GetString()) || list.ValueKind != JsonValueKind.Array || list.GetArrayLength() is < 1 or > 8)
+        if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() is < 1 or > 8)
             throw new ModException("invalid external sources", ModErrors.Unsupported);
         var sources = new List<ExternalSource>();
         foreach (var item in list.EnumerateArray())
@@ -353,48 +302,21 @@ public sealed class ModManifest
             throw new ModException("invalid manifest text");
     }
 
-    /// <summary>
-    /// OD-115: the game-root folder whose files the game reads in place of its own media (<c>mediaoverride/X</c> over
-    /// <c>media/X</c>). Every game-root mapping, runtime output and session database lives below it, except a declared loader.
-    /// </summary>
-    public const string MediaOverrideFolder = "mediaoverride";
+    /// <summary>OD-114's reserved prefix of the retired custom mods (OD-232): only an installed one's manifest still carries it.</summary>
+    private const string LegacyCustomPrefix = "custom.";
 
-    /// <summary>A game-root relative path strictly below <see cref="MediaOverrideFolder"/> (any letter case, as Windows resolves it).</summary>
-    public static bool UnderMediaOverride(string? path) => path is { Length: > 14 } && path.StartsWith(MediaOverrideFolder + "/", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>The payload folder of a custom mod, next to its manifest: <c>files/&lt;root&gt;/&lt;destination&gt;</c>.</summary>
-    public const string CustomPayloadFolder = "files";
-    /// <summary>The folder of a custom data mod's startup SQL, next to <see cref="CustomPayloadFolder"/> (never installed into the game).</summary>
-    public const string CustomSqlFolder = "database";
-
-    /// <summary>FIMOD004: the data mod's startup SQL (custom data mods), applied by the runtime to the session database; null when none.</summary>
-    public DataModSqlFile? DatabaseSql { get; }
-    public bool HasDatabaseSql => DatabaseSql is not null;
-    /// <summary>OD-114 follow-up: a car pack's whole replacement database, the session database's base; at most one enabled mod has one.</summary>
-    public DatabaseBaseFile? DatabaseBase { get; }
-    public const long MaxDatabaseBaseBytes = 64L * 1024 * 1024;
-    /// <summary>OD-127: an external pack installed as ExtraOptions' own addon, whose database.json is built from its edited database; null when not.</summary>
-    public ExtraOptionsAddonDatabase? AddonDatabase { get; }
-    /// <summary>The session database's write permissions (<c>database.tables</c>), for native and SQL data mods alike.</summary>
-    public IReadOnlyList<string> DatabaseTables => Document.TryGetProperty("database", out var db)
-        ? db.GetProperty("tables").EnumerateArray().Select(t => t.GetString()!).ToArray() : [];
-    /// <summary>Needs the native runtime at launch: a native mod, or a data mod whose SQL the runtime applies.</summary>
-    public bool NeedsRuntime => IsNative || HasDatabaseSql || DatabaseBase is not null;
-
-    public static bool IsCustomId(string? id) => id is not null && id.StartsWith(CustomPrefix, StringComparison.Ordinal);
-
-    /// <summary>Official ids: <c>^[a-z][a-z0-9-]{0,63}$</c> (no dot). Custom ids: <c>custom.</c> + <c>[a-z0-9][a-z0-9-]{0,56}</c>. The two never collide.</summary>
-    public static bool ValidId(string? id)
+    /// <summary>A retired custom mod's id (<c>custom.</c> + <c>[a-z0-9][a-z0-9-]{0,56}</c>), read only from an installation (OD-232).</summary>
+    internal static bool LegacyCustomId(string? id)
     {
-        if (id is null) return false;
-        if (IsCustomId(id))
-        {
-            var rest = id[CustomPrefix.Length..];
-            return rest.Length is >= 1 and <= 57 && (char.IsAsciiLetterLower(rest[0]) || char.IsAsciiDigit(rest[0]))
-                && rest.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
-        }
-        return id.Length is >= 1 and <= 64 && char.IsAsciiLetterLower(id[0]) && id.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+        if (id is null || !id.StartsWith(LegacyCustomPrefix, StringComparison.Ordinal)) return false;
+        var rest = id[LegacyCustomPrefix.Length..];
+        return rest.Length is >= 1 and <= 57 && (char.IsAsciiLetterLower(rest[0]) || char.IsAsciiDigit(rest[0]))
+            && rest.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
     }
+
+    /// <summary>Mod ids: <c>^[a-z][a-z0-9-]{0,63}$</c>.</summary>
+    public static bool ValidId(string? id) =>
+        id is { Length: >= 1 and <= 64 } && char.IsAsciiLetterLower(id[0]) && id.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 
     private static readonly string[] Executables = [".dll", ".exe", ".asi", ".sys", ".com", ".bat", ".cmd", ".ps1", ".scr", ".msi", ".cpl", ".ocx", ".drv", ".vbs"];
     /// <summary>A file Windows or a loader would execute, by extension.</summary>
@@ -485,29 +407,8 @@ public sealed class ModManifest
     }
 }
 
-/// <summary>One mapped file. <see cref="Loader"/>: a binary the game process loads by itself (OD-115 game-root exception, reviewed official manifests only).</summary>
-public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary", bool Loader = false);
-/// <summary>A data mod's startup SQL file: its path in the mod folder, SHA-256 and size.</summary>
-public sealed record DataModSqlFile(string Path, string Sha256, long Bytes);
-/// <summary>A car pack's whole database: its path in the mod folder, SHA-256, size and the foreign-key violations it ships with (recorded, not refused).</summary>
-public sealed record DatabaseBaseFile(string Path, string Sha256, long Bytes, int ForeignKeyViolations);
-
-/// <summary>
-/// OD-127: the edited database of an external pack (its source, pin and size) and the ExtraOptions exporter policies its
-/// database.json is built with on the player's PC, against the stock <see cref="Target"/> (game-relative) of the chosen game folder.
-/// </summary>
-public sealed record ExtraOptionsAddonDatabase(string Source, string Sha256, long Bytes, string Target, string IdConflicts, string Updates, string Deletes, string ForeignKeys)
-{
-    /// <summary>The exporter's options for this pack (the manifest's policies; the strings are checked when the manifest is read).</summary>
-    public ExtraOptionsDatabaseDiffOptions DiffOptions => new()
-    {
-        Target = Target,
-        IdConflicts = IdConflicts == "nearest" ? DatabaseDiffIdConflicts.Nearest : DatabaseDiffIdConflicts.Error,
-        Updates = Updates switch { "override" => DatabaseDiffUpdates.Override, "ignore" => DatabaseDiffUpdates.Ignore, _ => DatabaseDiffUpdates.Error },
-        Deletes = Deletes switch { "include" => DatabaseDiffDeletes.Include, "ignore" => DatabaseDiffDeletes.Ignore, _ => DatabaseDiffDeletes.Error },
-        ForeignKeys = ForeignKeys == "allow" ? DatabaseDiffForeignKeys.Allow : DatabaseDiffForeignKeys.Error,
-    };
-}
+/// <summary>One mapped file: its root (<c>azimuth</c>; <c>game</c> only in a retired installation, OD-232), source, destination and pin.</summary>
+public sealed record ManifestFile(string Root, string Source, string Destination, string Hash, long Bytes, string Role, string Mode, string Package = "primary");
 public sealed record ManifestDependency(string Id, IReadOnlyList<string> Versions);
 public sealed record ModWineOverride(string Module, bool AppDefaults);
 /// <summary>OD-117: one of the player's own sources a mod reads (a folder, a file such as a ZIP, or either), with its texts.</summary>

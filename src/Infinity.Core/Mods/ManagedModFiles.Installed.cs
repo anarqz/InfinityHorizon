@@ -4,14 +4,21 @@ using System.Text.Json;
 namespace Infinity.Core.Mods;
 
 /// <summary>What a launch needs from mod state, gathered off the UI thread; warnings never block Play.</summary>
-/// <param name="HasEnabledNative">An enabled mod needs the native runtime: a native mod or a data mod with SQL (FIMOD004).</param>
-public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, bool HasEnabledNative, IReadOnlyList<string> Warnings)
+public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, IReadOnlyList<string> Warnings)
 {
-    /// <summary>An enabled data mod carries SQL for the runtime (FIMOD004): the runtime and hook must support data-mod SQL.</summary>
-    public bool HasEnabledDataSql { get; init; }
-    public static ModLaunchPreparation None { get; } = new([], false, []);
+    public static ModLaunchPreparation None { get; } = new([], []);
     /// <summary>Enabled mods that affect multiplayer (<see cref="ModMultiplayer.AffectsMultiplayer"/>): what a Hardcore launch refuses.</summary>
     public IReadOnlyList<ModManifest> MultiplayerMods { get; init; } = [];
+    /// <summary>
+    /// OD-232: enabled installations of a retired format whose multiplayer impact is not declared cosmetic (no metadata counts as not
+    /// cosmetic). Their files still change the game (half a media override, a loader DLL), so an online launch is refused until the
+    /// player disables or removes them; offline they are a warning.
+    /// </summary>
+    public IReadOnlyList<ModManifest> RetiredOnlineMods { get; init; } = [];
+
+    /// <summary>See <see cref="RetiredOnlineMods"/>: a retired installation that blocks online play while enabled.</summary>
+    public static bool BlocksOnline(ModManifest manifest) =>
+        (manifest ?? throw new ArgumentNullException(nameof(manifest))).Retired && manifest.Multiplayer is not { Impact: "cosmetic" };
 }
 
 /// <summary>A Hardcore launch with enabled mods that affect multiplayer; nothing was changed.</summary>
@@ -58,7 +65,6 @@ public sealed partial class ManagedModFiles
         using var gate = Lock();
         var enabled = AdoptionState(manifest) ?? throw new ModException("existing files cannot be adopted", ModErrors.Conflict);
         if (enabled) CheckProfile(manifest, hardcore);
-        if (manifest.IsCustom) RequireCustomConfirmation(manifest);
         if (enabled) CheckDependencies(manifest);
         var files = new List<ManagedModFile>(); var changes = new List<ModFileChange>();
         foreach (var file in manifest.Files)
@@ -110,7 +116,8 @@ public sealed partial class ManagedModFiles
             // OD-125/127: ExtraOptions comes with Infinity (ExtraOptions.Infinity), always on; never a managed mod to check
             if (id == BuiltInExtraOptions) continue;
             var target = installed.SingleOrDefault(m => m.Id == id) ?? throw new ModException("required dependency is not managed", ModErrors.Dependency);
-            if (!dependency.GetProperty("versions").EnumerateArray().Any(v => v.GetString() == target.Version)
+            // OD-232: an installation in a retired format satisfies nothing; it is only there to be removed
+            if (target.Retired || !dependency.GetProperty("versions").EnumerateArray().Any(v => v.GetString() == target.Version)
                 || Receipt(target) is not { Enabled: true } || !Verified(target)) throw new ModException("required dependency is disabled or incompatible", ModErrors.Dependency);
             CheckDependencies(target, visiting);
             if (dependency.TryGetProperty("settings", out var settings) && settings.GetArrayLength() > 0)
@@ -142,18 +149,48 @@ public sealed partial class ManagedModFiles
                 throw new ModException("disable dependent mods first", ModErrors.Dependency);
     }
 
-    public IReadOnlyList<ModManifest> InstalledManifests()
+    /// <summary>
+    /// Every installed mod's manifest, OD-232's retired formats included (<see cref="ModManifest.Retired"/>: listed and removable only).
+    /// A receipt or snapshot that cannot be read is left out (isolated per receipt, as <see cref="Inspect()"/> and
+    /// <see cref="PrepareForLaunch"/> do), so one damaged mod never blocks operations on every other one; it is shown with its problem.
+    /// </summary>
+    public IReadOnlyList<ModManifest> InstalledManifests() => InstalledSnapshots(out _);
+
+    private ModManifest[] InstalledSnapshots(out IReadOnlyList<string> unreadable)
     {
+        var skipped = new List<string>(); unreadable = skipped;
         if (!Directory.Exists(BackupRoot)) return [];
-        return Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Select(path =>
+        var manifests = new List<ModManifest>();
+        foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
         {
-            RejectLinks(path);
-            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path)) ?? throw new ModException("invalid receipt", ModErrors.Recovery);
-            var manifest = SnapshotFor(receipt);
-            if (!manifest.SupportedForInstall) throw new ModException("installed manifest uses unsupported capabilities", ModErrors.Unsupported);
-            _ = Receipt(manifest);
-            return manifest;
-        }).ToArray();
+            try
+            {
+                RejectLinks(path);
+                var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path)) ?? throw new ModException("invalid receipt", ModErrors.Recovery);
+                var manifest = SnapshotFor(receipt);
+                _ = Receipt(manifest);
+                manifests.Add(manifest);
+            }
+            catch (Exception error) when (IsStateError(error)) { skipped.Add(Path.GetFileName(path)[..^".receipt.json".Length]); }
+        }
+        return [.. manifests];
+    }
+
+    /// <summary>OD-232: the <c>mods\</c> folders of the installed mods that load first (<see cref="ModManifest.LoadFirst"/>).</summary>
+    public IReadOnlyList<string> LoadFirstFolders() => InstalledManifests().Where(m => m.LoadFirst && !m.Retired)
+        .Select(ExtraOptionsMods.FolderOf).OfType<string>().ToArray();
+
+    /// <summary>
+    /// OD-232, after an install, update or enable: the load-first mods back at the top of <c>loadorder.txt</c> (game closed: the caller
+    /// holds the lock). Only when one is installed; a file that cannot be arranged now is arranged again before the next launch.
+    /// </summary>
+    private void KeepLoadFirstOnTop()
+    {
+        try
+        {
+            if (LoadFirstFolders() is { Count: > 0 } first) ExtraOptionsMods.ArrangeLoadOrder(_azimuth, first);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ModException) { }
     }
 
     public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))));
@@ -232,6 +269,8 @@ public sealed partial class ManagedModFiles
                 catch (Exception error) when (IsStateError(error)) { warnings.Add(id + ": unreadable " + Code(error)); continue; } // shown on Mods, never a Play blocker
                 if (!receipt.Enabled) continue;
                 enabled.Add(manifest);
+                // OD-232: still on (what the game reads stays as installed), shown on Mods to be removed
+                if (manifest.Retired) warnings.Add(manifest.Id + ": retired (" + string.Join(", ", manifest.RetiredFeatures) + ")");
                 if (DriftOf(receipt).Count > 0) warnings.Add(manifest.Id + ": drift");
                 if (manifest.ConfigPath is not { } config || !File.Exists(Target("azimuth", config))) continue;
                 var settings = ReadSettings(manifest);
@@ -243,9 +282,11 @@ public sealed partial class ManagedModFiles
             }
         }
         var multiplayer = enabled.Where(ModMultiplayer.AffectsMultiplayer).ToArray();
+        var retired = enabled.Where(ModLaunchPreparation.BlocksOnline).ToArray();
         if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))
-            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql || m.DatabaseBase is not null) };
+            return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings)
+            { MultiplayerMods = multiplayer, RetiredOnlineMods = retired };
         ReconcileWineOverrides();
-        return new(NativeDllOverrides(), enabled.Any(m => m.NeedsRuntime), warnings) { MultiplayerMods = multiplayer, HasEnabledDataSql = enabled.Any(m => m.HasDatabaseSql || m.DatabaseBase is not null) };
+        return new(NativeDllOverrides(), warnings) { MultiplayerMods = multiplayer, RetiredOnlineMods = retired };
     }
 }

@@ -169,12 +169,14 @@ public static class ExtraOptionsMods
     /// disabled and remembered in <paramref name="stateFile"/>; any other profile: the mods a Hardcore launch disabled, and that
     /// are still disabled, are enabled again. Returns one log line per change.
     /// </summary>
-    public static IReadOnlyList<string> PrepareForLaunch(string azimuthRoot, bool hardcore, IReadOnlySet<string> allowedInHardcore, string stateFile)
+    /// <param name="first">The mods kept at the top of the load order (<see cref="ModManifest.LoadFirst"/>), by id or folder.</param>
+    public static IReadOnlyList<string> PrepareForLaunch(string azimuthRoot, bool hardcore, IReadOnlySet<string> allowedInHardcore, string stateFile,
+        IEnumerable<string>? first = null)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(allowedInHardcore);
         ArgumentNullException.ThrowIfNull(stateFile);
-        var notes = new List<string>(ArrangeLoadOrder(azimuthRoot));
+        var notes = new List<string>(ArrangeLoadOrder(azimuthRoot, first));
         var held = ReadHeld(stateFile);
         var mods = Scan(azimuthRoot);
         if (hardcore)
@@ -213,8 +215,8 @@ public static class ExtraOptionsMods
     }
 
     /// <summary>
-    /// Before a catalog mod is installed or updated (OD-126): an ExtraOptions mod lives only in <c>mods/&lt;id&gt;/</c>, and its
-    /// own <c>mod.json</c> agrees with the Infinity manifest (id, version, dependencies), since ExtraOptions loads by the one
+    /// Before a catalog mod is installed or updated (OD-126, OD-232): an ExtraOptions mod lives only in <c>mods/&lt;id&gt;/</c>, and
+    /// its own <c>mod.json</c> agrees with the Infinity manifest (id, version, dependencies), since ExtraOptions loads by the one
     /// and the launcher installs by the other. <paramref name="read"/> returns a package file's verified bytes by destination.
     /// </summary>
     public static void CheckPackage(ModManifest manifest, Func<string, byte[]?> read)
@@ -222,7 +224,6 @@ public static class ExtraOptionsMods
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(read);
         var azimuth = manifest.Files.Where(f => f.Root == "azimuth").ToList();
-        if (!azimuth.Any(f => ModsSubfolder(f.Destination) is not null)) return; // not an ExtraOptions mod folder
         var folder = FolderOf(manifest);
         if (folder is null || manifest.Files.Any(f => f.Root != "azimuth"))
             throw new ModException("an ExtraOptions mod installs only into its own mods folder", ModErrors.Unsupported);
@@ -231,13 +232,7 @@ public static class ExtraOptionsMods
         var dependencies = manifest.Dependencies.Select(d => d.Id).Where(d => d != ManagedModFiles.BuiltInExtraOptions)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var file = azimuth.FirstOrDefault(f => f.Destination.Equals(ModsFolder + "/" + folder + "/mod.json", StringComparison.OrdinalIgnoreCase))
-            ?? azimuth.FirstOrDefault(f => f.Destination.Equals(ModsFolder + "/" + folder + "/addon.json", StringComparison.OrdinalIgnoreCase));
-        if (file is null)
-        {
-            // Without a manifest ExtraOptions names the mod by its folder and knows no dependencies to order or check.
-            if (dependencies.Count > 0) throw new ModException("an ExtraOptions mod with dependencies needs its mod.json", ModErrors.Unsupported);
-            return;
-        }
+            ?? throw new ModException("an ExtraOptions mod needs its mod.json", ModErrors.Unsupported);
         var bytes = read(file.Destination) ?? throw new ModException("the mod's mod.json is missing from the package", ModErrors.Unsupported);
         string? id = null, version = null; var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -266,8 +261,14 @@ public static class ExtraOptionsMods
     /// Before a launch, game closed (OD-126): every folder gets its line (an unlisted one is appended, enabled, as ExtraOptions
     /// would), and a mod listed before one of its dependencies moves to just after the last of them, since ExtraOptions refuses
     /// a mod whose dependency loads later. Other lines, comments and the remaining order stay. Returns one log line per move.
+    /// <para>
+    /// OD-232: the mods named in <paramref name="first"/> (by id or folder; <see cref="ModManifest.LoadFirst"/>, the ZephyrSkies Commons)
+    /// go first: right after the file's leading comment and blank lines, ordered by id (ordinal, so <c>fm5-zs-fm5-common</c> before
+    /// <c>zs-fm6-zs-fm6-common</c>), each keeping its enabled or <c># disabled</c> state. Every other line keeps its relative order; then
+    /// dependencies still go before dependents. A second run changes nothing.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<string> ArrangeLoadOrder(string azimuthRoot)
+    public static IReadOnlyList<string> ArrangeLoadOrder(string azimuthRoot, IEnumerable<string>? first = null)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         var mods = Scan(azimuthRoot);
@@ -280,6 +281,26 @@ public static class ExtraOptionsMods
         int LineOf(ExtraOptionsMod mod) => file.Lines.FindIndex(l => Entry(l) is { } e && e.Folder.Equals(mod.Folder, StringComparison.OrdinalIgnoreCase));
         ExtraOptionsMod? Named(string name) => mods.FirstOrDefault(m => m.Id.Equals(name, StringComparison.OrdinalIgnoreCase))
             ?? mods.FirstOrDefault(m => m.Folder.Equals(name, StringComparison.OrdinalIgnoreCase));
+        var top = (first ?? []).Select(Named).OfType<ExtraOptionsMod>().DistinctBy(m => m.Folder, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(m => m.Id, StringComparer.Ordinal).ThenBy(m => m.Folder, StringComparer.Ordinal).ToList();
+        if (top.Count > 0)
+        {
+            var indices = top.Select(LineOf).Where(i => i >= 0).ToList();
+            var block = indices.ToHashSet();
+            // The leading comments and blank lines (never a line of an existing mod folder) stay above.
+            bool Header(string line) => line.Trim(' ', '\t') is var text && (text.Length == 0 || text.StartsWith('#'))
+                && !(Entry(line) is { } e && mods.Any(m => m.Folder.Equals(e.Folder, StringComparison.OrdinalIgnoreCase)));
+            var start = 0;
+            while (start < file.Lines.Count && !block.Contains(start) && Header(file.Lines[start])) start++;
+            var arranged = file.Lines.Take(start).Concat(indices.Select(i => file.Lines[i]))
+                .Concat(file.Lines.Select((line, i) => (line, i)).Where(x => x.i >= start && !block.Contains(x.i)).Select(x => x.line)).ToList();
+            if (!arranged.SequenceEqual(file.Lines, StringComparer.Ordinal))
+            {
+                file.Lines.Clear(); file.Lines.AddRange(arranged);
+                notes.Add("extraoptions mods: " + string.Join(", ", top.Select(m => m.Folder)) + " first in loadorder.txt");
+                changed = true;
+            }
+        }
         // A mod in a dependency cycle has no valid place (ExtraOptions refuses it anyway): it stays where it is, so the file
         // does not change at every launch.
         var cyclic = mods.Where(m =>

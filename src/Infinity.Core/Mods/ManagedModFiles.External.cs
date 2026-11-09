@@ -37,7 +37,8 @@ public readonly record struct ExternalProgress(int Files, int TotalFiles, long B
 /// the player picks a folder (the pack's top or any parent), a file or a ZIP for each; the launcher finds the expected layout
 /// inside it (by relative path, ignoring letter case, then by size and SHA-256 for renamed files), checks every file against
 /// its pin and COPIES each verified file into the backup object store, so the source may move or vanish afterwards. The mod
-/// then installs from the store like any package. No link is ever made; nothing is distributed (Absolute rule 3).
+/// then installs from the store like any package, into its one ExtraOptions folder (OD-232). No link is ever made; nothing is
+/// distributed (Absolute rule 3).
 /// </summary>
 public sealed partial class ManagedModFiles
 {
@@ -46,16 +47,14 @@ public sealed partial class ManagedModFiles
     public const string SourceGone = "source_gone", SourceTooLarge = "source_too_large", SourceNotZip = "source_not_zip", SourceLinked = "source_linked";
     private const int MaxSourceDepth = 16;
 
-    /// <summary>Every file an external mod reads from its sources: its mappings and its database base.</summary>
+    /// <summary>Every file an external mod reads from its sources: its mappings.</summary>
     public static IReadOnlyList<ExternalFile> ExternalFiles(ModManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (!manifest.IsExternal) return [];
         static ExternalFile Of(string source, string sha256, long bytes) => new(ModManifest.ExternalSourceId(source), source[(source.IndexOf(':') + 1)..], sha256, bytes);
-        var files = manifest.Files.Select(f => Of(f.Source, f.Hash.ToLowerInvariant(), f.Bytes)).ToList();
-        if (manifest.DatabaseBase is { } baseDb) files.Add(Of(baseDb.Path, baseDb.Sha256, baseDb.Bytes));
-        if (manifest.AddonDatabase is { } addonDb) files.Add(Of(addonDb.Source, addonDb.Sha256, addonDb.Bytes));
-        return files.DistinctBy(f => (f.SourceId, f.Path.ToLowerInvariant(), f.Sha256)).ToArray();
+        return manifest.Files.Select(f => Of(f.Source, f.Hash.ToLowerInvariant(), f.Bytes))
+            .DistinctBy(f => (f.SourceId, f.Path.ToLowerInvariant(), f.Sha256)).ToArray();
     }
 
     /// <summary>The expected files the store does not hold yet (all of them on first use; only changed ones for an update).</summary>
@@ -124,9 +123,15 @@ public sealed partial class ManagedModFiles
     {
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(picked);
         if (manifest.ExternalSources.All(s => s.Id != sourceId)) throw new ModException("unknown external source", ModErrors.Unsupported);
-        var expected = ExternalFiles(manifest).Where(f => f.SourceId == sourceId).ToArray();
         using var gate = Lock(); // retention never prunes objects while they are being checked and stored
         using var source = SourceEntries.Open(picked);
+        return Check(manifest, sourceId, picked, source, progress, cancellation);
+    }
+
+    /// <summary>The check of one source against an opened pick (the caller holds the lock).</summary>
+    private ExternalSourceCheck Check(ModManifest manifest, string sourceId, string picked, SourceEntries source, IProgress<ExternalProgress>? progress, CancellationToken cancellation)
+    {
+        var expected = ExternalFiles(manifest).Where(f => f.SourceId == sourceId).ToArray();
         var (prefix, matched) = Match(source.Entries, expected);
         var bySize = source.Entries.ToLookup(e => e.Bytes);
         var results = new List<ExternalFileCheck>(); long done = 0; var total = expected.Sum(f => f.Bytes); var fromSource = 0;
@@ -154,7 +159,7 @@ public sealed partial class ManagedModFiles
         }
         RememberCheckedObjects(manifest);
         if (fromSource > 0) RememberExternalChoice(manifest.Id, sourceId, picked); // under the lock: two rows never lose each other's pick
-        var root = prefix is null ? null : source.Describe(prefix);
+        var root = prefix is null ? null : source.Describe(prefix, matched.Values);
         return new(sourceId, picked, root, results.AsReadOnly()) { FromSource = fromSource, DifferentInPick = differentInPick.AsReadOnly() };
     }
 
@@ -215,20 +220,15 @@ public sealed partial class ManagedModFiles
         return replaced.AsReadOnly();
     }
 
-    /// <summary>The selected game folder files are installed into (the game's Mount), or null.</summary>
-    public string? GameFolder => _game;
-
     /// <summary>
     /// OD-117 install: every expected file must already be in the store (checked when copied, checked again when read). Same
-    /// transaction as a package: backups of what it replaces, receipts, settings, one database base at a time (OD-114).
+    /// transaction as a package: backups of what it replaces, receipts, settings.
     /// </summary>
     public void InstallExternal(ModManifest manifest, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (!manifest.IsExternal) throw new ModException("not a mod of external files", ModErrors.Unsupported);
         if (!update) CheckProfile(manifest, hardcore);
-        if (manifest.DatabaseBase is not null && !DataSqlRuntimeAvailable()) throw new ModException("a database base needs the mod runtime", ModErrors.RuntimeRequired);
-        CheckDatabaseBase(manifest);
         InstallFrom(manifest, () => VerifyExternalFiles(manifest), progress, update, hardcore);
     }
 
@@ -242,53 +242,7 @@ public sealed partial class ManagedModFiles
             var digest = file.Hash.ToLowerInvariant();
             verified.Add(file, () => ObjectBytes(digest) is var bytes && bytes.LongLength == file.Bytes ? bytes : throw new ModException("stored file damaged", ModErrors.Digest));
         }
-        if (manifest.DatabaseBase is { } baseDb)
-        {
-            var bytes = ObjectBytes(baseDb.Sha256);
-            if (bytes.LongLength != baseDb.Bytes || !StandaloneSqlite(bytes)) throw new ModException("database base must be a checkpointed rollback-journal SQLite file", ModErrors.Unsupported);
-        }
-        if (manifest.AddonDatabase is { } addonDb) AddAddonFiles(manifest, addonDb, verified);
         return verified;
-    }
-
-    /// <summary>
-    /// OD-127: an ExtraOptions addon's own files, made on this PC: its mod.json, and its database.json exported (ExtraOptions'
-    /// exporter, ported) from the stock database of the chosen game folder to the pack's verified edited one. Installed, updated,
-    /// disabled and removed like the mapped files; the stock database is only read.
-    /// </summary>
-    private void AddAddonFiles(ModManifest manifest, ExtraOptionsAddonDatabase addonDb, Dictionary<ManifestFile, Func<byte[]>> verified)
-    {
-        if (_game is null) throw new ModException("the game folder is needed to build the addon's database", ModErrors.ExternalFiles);
-        // read only, so not through Target() (which refuses writing databases); the manifest's path was validated relative
-        var stock = Path.GetFullPath(Path.Combine(_game, addonDb.Target.Replace('/', Path.DirectorySeparatorChar)));
-        if (!stock.StartsWith(Path.GetFullPath(_game).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new ModException("the addon's database is outside the game folder", ModErrors.Unsupported);
-        if (!File.Exists(stock)) throw new ModException("the game folder has no " + addonDb.Target, ModErrors.ExternalFiles);
-        var edited = ObjectBytes(addonDb.Sha256);
-        if (edited.LongLength != addonDb.Bytes || !StandaloneSqlite(edited)) throw new ModException("the pack's database must be a checkpointed rollback-journal SQLite file", ModErrors.Unsupported);
-        var database = ExportAddonDatabase(stock, edited, addonDb);
-        var modJson = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?>
-        {
-            ["format_version"] = 1, ["id"] = manifest.Id, ["name"] = manifest.Text("name", "en"), ["version"] = manifest.Version,
-            ["database"] = "database.json", ["media"] = "media", ["strings"] = null,
-        }, IndentedJson);
-        var folder = "mods/" + manifest.Id + "/";
-        foreach (var (name, bytes) in new[] { ("mod.json", modJson), ("database.json", database) })
-            verified.Add(new("azimuth", "generated:" + name, folder + name, ModManifest.Hash(bytes), bytes.LongLength, "asset", "add-or-replace"), () => bytes);
-    }
-
-    private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
-
-    /// <summary>The database.json for <paramref name="edited"/> against <paramref name="stockPath"/>, with the manifest's exporter policies.</summary>
-    private static byte[] ExportAddonDatabase(string stockPath, byte[] edited, ExtraOptionsAddonDatabase addonDb)
-    {
-        var scratch = Path.Combine(Path.GetTempPath(), "fi-addon-db-" + Guid.NewGuid().ToString("N") + ".slt");
-        File.WriteAllBytes(scratch, edited);
-        try
-        {
-            return ExtraOptionsDatabaseDiff.Export(stockPath, scratch, addonDb.DiffOptions).Json.ToArray();
-        }
-        finally { RemoveFile(scratch); } // the one safe delete (ManagedModFiles.Paths.cs)
     }
 
     private string ExternalChoicesPath => Path.Combine(_state, "mods", "external-sources.json");
@@ -320,12 +274,22 @@ public sealed partial class ManagedModFiles
         Atomic(path, JsonSerializer.SerializeToUtf8Bytes(all, Json));
     }
 
-    /// <summary>A picked source's files: a folder walked without following links, one ZIP's entries, or one plain file.</summary>
+    /// <summary>At most this many ZIPs inside a picked folder are read as packs (one level: a ZIP inside one of them is only a file).</summary>
+    internal const int MaxNestedZips = 256;
+
+    /// <summary>
+    /// A picked source's files: a folder walked without following links, one ZIP's entries, or one plain file. A folder's ZIPs (a folder
+    /// of pack ZIPs, OD-232) are also read one level deep: each entry is addressed as if the ZIP were extracted beside it
+    /// (<c>sub/Pack.zip</c> holding <c>Pack/mod.json</c> gives <c>sub/Pack/mod.json</c>), so <c>pack:Pack/…</c> matches inside any ZIP whose
+    /// top folder is <c>Pack</c>. A ZIP inside a mod folder (one with a <c>mod.json</c> above it) is that mod's own file and is
+    /// not opened; nor is a ZIP that cannot be read (it stays a plain file). Entries with a link, an absolute path or <c>..</c> are left out.
+    /// </summary>
     private sealed class SourceEntries : IDisposable
     {
         private readonly ZipArchive? _zip;
+        private readonly List<ZipArchive> _nested = [];
         private readonly string _picked;
-        public IReadOnlyList<SourceEntry> Entries { get; }
+        public IReadOnlyList<SourceEntry> Entries { get; private set; } = [];
 
         private SourceEntries(string picked, ZipArchive? zip, IReadOnlyList<SourceEntry> entries) { _picked = picked; _zip = zip; Entries = entries; }
 
@@ -341,13 +305,43 @@ public sealed partial class ManagedModFiles
                 var options = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = MaxSourceDepth, IgnoreInaccessible = true,
                     AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System, ReturnSpecialDirectories = false };
                 var entries = new List<SourceEntry>();
+                var zips = new List<(string Relative, string Path)>();
+                var modFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var file in new DirectoryInfo(full).EnumerateFiles("*", options))
                 {
                     if (entries.Count >= MaxSourceEntries) throw new ModException(SourceTooLarge, ModErrors.ExternalFiles);
                     var path = file.FullName;
-                    entries.Add(new(Path.GetRelativePath(full, path).Replace('\\', '/'), file.Length, limit => ReadFile(path, limit)));
+                    var relative = Path.GetRelativePath(full, path).Replace('\\', '/');
+                    entries.Add(new(relative, file.Length, limit => ReadFile(path, limit)));
+                    if (file.Name.Equals("mod.json", StringComparison.OrdinalIgnoreCase)) modFolders.Add(Parent(relative));
+                    else if (file.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase)) zips.Add((relative, path));
                 }
-                return new(full, null, entries);
+                var source = new SourceEntries(full, null, entries);
+                try
+                {
+                    // In walk order (stable), the ZIPs no mod folder holds: one level, at most MaxNestedZips of them.
+                    foreach (var (relative, path) in zips.Where(z => !InsideModFolder(z.Relative, modFolders)))
+                    {
+                        if (source._nested.Count >= MaxNestedZips) throw new ModException(SourceTooLarge, ModErrors.ExternalFiles);
+                        ZipArchive? zip = null;
+                        try
+                        {
+                            zip = ZipFile.OpenRead(path);
+                            if (entries.Count + zip.Entries.Count > MaxSourceEntries) throw new ModException(SourceTooLarge, ModErrors.ExternalFiles);
+                            var beside = Parent(relative) is { Length: > 0 } folder ? folder + "/" : "";
+                            var inner = zip.Entries.Where(e => !e.FullName.EndsWith('/') && !e.FullName.EndsWith('\\') && PlainEntry(e))
+                                .Select(e => new SourceEntry(beside + e.FullName.Replace('\\', '/'), e.Length, limit => ReadEntry(e, limit)) { Container = path, Inside = beside })
+                                .ToArray();
+                            source._nested.Add(zip); zip = null;
+                            entries.AddRange(inner);
+                        }
+                        // not a readable ZIP (or one the player's system keeps closed): only a file of the pick
+                        catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException or NotSupportedException) { }
+                        finally { zip?.Dispose(); }
+                    }
+                }
+                catch { source.Dispose(); throw; }
+                return source;
             }
             if (!File.Exists(full)) throw new ModException(SourceGone, ModErrors.ExternalFiles);
             if (full.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
@@ -373,11 +367,45 @@ public sealed partial class ManagedModFiles
         }
 
         /// <summary>The matched pack root, for the player: a folder path, or the ZIP with the folder inside it.</summary>
-        public string Describe(string prefix) => _zip is null
-            ? Path.TrimEndingDirectorySeparator(Path.Combine(_picked, prefix.Replace('/', Path.DirectorySeparatorChar)))
-            : prefix.Length == 0 ? _picked : _picked + " › " + prefix.TrimEnd('/');
+        public string Describe(string prefix, IEnumerable<SourceEntry> matched)
+        {
+            if (_zip is not null) return prefix.Length == 0 ? _picked : _picked + " › " + prefix.TrimEnd('/');
+            // A pack read inside one of the folder's ZIPs: the ZIP most matched files came from, with the folder inside it.
+            if (matched.GroupBy(e => e.Container).OrderByDescending(g => g.Count()).FirstOrDefault() is { Key: { } container } nested)
+            {
+                var inside = nested.First().Inside;
+                var inner = prefix.Length > inside.Length ? prefix[inside.Length..].TrimEnd('/') : "";
+                return inner.Length == 0 ? container : container + " › " + inner;
+            }
+            return Path.TrimEndingDirectorySeparator(Path.Combine(_picked, prefix.Replace('/', Path.DirectorySeparatorChar)));
+        }
 
-        public void Dispose() => _zip?.Dispose();
+        public void Dispose()
+        {
+            _zip?.Dispose();
+            foreach (var zip in _nested) zip.Dispose();
+            _nested.Clear();
+        }
+
+        private static string Parent(string relative) => relative.LastIndexOf('/') is var slash and > 0 ? relative[..slash] : "";
+
+        /// <summary>The ZIP sits in a folder of the pick (or the pick itself) that holds a <c>mod.json</c>: one mod's own file.</summary>
+        private static bool InsideModFolder(string relative, HashSet<string> modFolders)
+        {
+            for (var folder = Parent(relative); ; folder = Parent(folder))
+            {
+                if (modFolders.Contains(folder)) return true;
+                if (folder.Length == 0) return false;
+            }
+        }
+
+        /// <summary>A nested entry the player's pack could hold: no link, and a relative path every manifest source could name.</summary>
+        private static bool PlainEntry(ZipArchiveEntry entry)
+        {
+            if ((entry.ExternalAttributes >> 16 & 0xF000) == 0xA000 || (entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0) return false;
+            try { ModManifest.ValidatePath(entry.FullName.Replace('\\', '/')); return true; }
+            catch (ModException) { return false; }
+        }
 
         private static byte[] ReadFile(string path, long limit)
         {
@@ -396,5 +424,11 @@ public sealed partial class ManagedModFiles
         }
     }
 
-    private sealed record SourceEntry(string Path, long Bytes, Func<long, byte[]> Read);
+    private sealed record SourceEntry(string Path, long Bytes, Func<long, byte[]> Read)
+    {
+        /// <summary>The folder's ZIP this entry was read from (one level, OD-232), or null.</summary>
+        public string? Container { get; init; }
+        /// <summary>The ZIP's own folder inside the pick (<c>sub/</c>; empty at the top) that prefixes the entry's path.</summary>
+        public string Inside { get; init; } = "";
+    }
 }
