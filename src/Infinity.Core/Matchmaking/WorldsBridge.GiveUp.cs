@@ -19,7 +19,22 @@ public sealed partial class WorldsBridge
     /// </summary>
     public static readonly TimeSpan PrivateSeatGiveUp = TimeSpan.FromSeconds(60);
 
-    private static TimeSpan GiveUpAfter(byte kind) => FreeRoamKind.IsPrivateCreate(kind) ? PrivateSeatGiveUp : SeatGiveUp;
+    /// <summary>
+    /// T-1109-C: the bound for a car meet ask's seat. A car meet's ticket is never found at its POST (MATCHMAKING_API §4a
+    /// <c>CarMeet_qos</c>): the game learns the match from its own ticket poll, about every 5 s, then leaves free roam, writes its
+    /// target session and only then connects (live 3.0.0, 2026-11-09 00:15:36: Ready to the game's OpenConnection took 9 s). Before
+    /// OD-208 the hook's proven-route report (RelayFallback DirectOk, about 1 s after Ready) marked the seat played, so 15 s never
+    /// cut a car meet; that report is gone and the join is the only proof, so a car meet gets two more polls of room. Still bounded:
+    /// FINDING SESSION never waits forever (the owner's rule), and the same release and CancelMatchmaking follow.
+    /// </summary>
+    public static readonly TimeSpan CarMeetSeatGiveUp = TimeSpan.FromSeconds(30);
+
+    private static TimeSpan GiveUpAfter(byte kind) => kind switch
+    {
+        _ when FreeRoamKind.IsPrivateCreate(kind) => PrivateSeatGiveUp,
+        FreeRoamKind.CarMeet => CarMeetSeatGiveUp,
+        _ => SeatGiveUp,
+    };
 
     /// <summary>Writes <see cref="Session.Frame.CancelMatchmaking"/> to the hook (the supervisor's control pipe).</summary>
     public Func<CancellationToken, Task>? SendCancelMatchmaking { get; set; }
@@ -59,6 +74,18 @@ public sealed partial class WorldsBridge
             CancelFreeRoamLeave(bound);
             _log($"worlds: the seat in {Volatile.Read(ref _seatWorld) ?? "its world"} plays ({how}); no give-up");
         }
+    }
+
+    /// <summary>
+    /// T-1109-C: the game joined a world while its join is held (a group seat watch or a staged install decides which grant it binds
+    /// to): the game is connecting, so the give-up is called off now; the bind marks the seat played when the hold ends. Since OD-208
+    /// the hook no longer reports a proven route (RelayFallback DirectOk), so the join is the only proof and must not be lost here.
+    /// </summary>
+    private void JoinHeldCallsOffGiveUp()
+    {
+        if (Interlocked.Exchange(ref _giveUp, null) is not { } bound) return;
+        CancelFreeRoamLeave(bound);
+        _log($"worlds: the game joined {Volatile.Read(ref _seatWorld) ?? "its world"} while its seat is settled; no give-up");
     }
 
     /// <summary>
@@ -107,6 +134,7 @@ public sealed partial class WorldsBridge
         if (!due || !OnlineOpen || _seat.GrantId != grant || Played(grant)) return;
         // a new lobby ask or the player's own join is the game's flow now: it decides (and re-arms) on its own
         if (Volatile.Read(ref _joinAttempt) != 0) return;
+        if (Volatile.Read(ref _joinDeferred) != 0) return; // T-1109-C: the game joined; its bind waits for the seat to settle
         lock (_freeRoamState) if (_freeRoamRun is { IsCompleted: false }) return;
         var reason = GiveUpReason(grant);
         var after = (int)giveUpAfter.TotalSeconds;

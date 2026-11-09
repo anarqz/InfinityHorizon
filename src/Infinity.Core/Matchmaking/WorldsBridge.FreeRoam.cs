@@ -194,6 +194,7 @@ public sealed partial class WorldsBridge
         // W-6: with a seat staged it is installed first and the join bound to it
         JoinedFor(); // the lobby this connection is (a car meet's, after a car meet ask)
         if (!JoinStaged() && !HoldJoinForGroupSeat()) { SeatPlays("the game joined"); GameInWorld(true); }
+        else JoinHeldCallsOffGiveUp();
         if (pending is null) return;
         CancelFreeRoamLeave(pending);
         if (Volatile.Read(ref _seatWorld) is { } world) _log($"worlds: the game joined again; {world} stays");
