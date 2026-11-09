@@ -150,6 +150,7 @@ public sealed partial class ShellViewModel
             foreach (var row in rows)
             {
                 var game = Infinity.Core.Process.GameDefinition.ById(row.Game) ?? Infinity.Core.Process.GameDefinition.Fh2;
+                if (ulong.TryParse(row.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var deletedXuid)) ForgetKeptThisPc(game.Id, deletedXuid);
                 ArchiveDeletedCareer(game, row, allGames); // SAVE_MANAGER_UX §7.1: deleting is archiving, into the launcher's history first
                 var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root, game), LocalProfiles,
                     session.Me?.AccountId ?? session.Tokens.AccountId, row, ForgetSyncFor(game.Id), DateTime.UtcNow);

@@ -526,11 +526,32 @@ public sealed partial class ShellViewModel
     /// <summary>The chip of a card, from this PC's files and sync state only (no request).</summary>
     private SaveChipKind ChipOf(ProfileRow row) => ChipOf(row.Card!);
 
+    /// <summary>
+    /// "Keep this PC" choices made on Resolve, per (game, XUID), in memory only (no sync-state change): the chip shows "uploads at the
+    /// next Play" and that Play commits this PC's save without asking again. Read by a Play's save step off the UI thread.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Game, ulong Xuid), KeptThisPc> _keptThisPc = new();
+
+    private void ForgetKeptThisPc(string game, ulong xuid)
+    {
+        if (_keptThisPc.TryRemove((game, xuid), out _)) Log($"saves: keep this PC of {game} {xuid} forgotten");
+    }
+
+    /// <summary>The recorded choice for this cloud revision and this PC's save; a stale one (either side moved) is dropped.</summary>
+    private KeptThisPc? KeptThisPcFor(string game, ulong xuid, ulong? cloudRevision, string? localContent)
+    {
+        if (!_keptThisPc.TryGetValue((game, xuid), out var kept)) return null;
+        if (kept.Matches(cloudRevision, localContent)) return kept;
+        _keptThisPc.TryRemove(new KeyValuePair<(string, ulong), KeptThisPc>((game, xuid), kept));
+        Log($"saves: keep this PC of {game} {xuid} is stale (the cloud or this PC moved), dropped");
+        return null;
+    }
+
     /// <summary>The chip of a career of the current game (or of the row's game being read, <see cref="InGame"/>).</summary>
     private SaveChipKind ChipOf(BoardCard card)
     {
         if (card.State != CareerState.Started) return SaveChipKind.None;
-        string? content = null; SyncMark? mark = null; var pending = false;
+        string? content = null; SyncMark? mark = null; var pending = false; KeptThisPc? kept = null;
         if (ulong.TryParse(card.Player.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) && SavesRootNow is { } root)
         {
             try
@@ -544,8 +565,10 @@ public sealed partial class ShellViewModel
                 mark = state.Mark;
                 pending = state.PendingUpload is not null && state.PendingUpload.Kind != CommitKinds.SeedFromProfile;
             }
+            if (CurrentGame.CloudSaves)
+                kept = KeptThisPcFor(CurrentGame.Id, xuid, card.Career?.Cloud?.Revision is long r and > 0 ? (ulong)r : null, content);
         }
-        return SaveChips.Of(new SaveChipInput(card.State, CurrentGame.CloudSaves, card.Career?.Cloud?.Revision, content, mark, pending, card.SeedPending));
+        return SaveChips.Of(new SaveChipInput(card.State, CurrentGame.CloudSaves, card.Career?.Cloud?.Revision, content, mark, pending, card.SeedPending, kept));
     }
 
     private string ChipText(SaveChipKind kind, Career? career) => kind switch
@@ -911,6 +934,7 @@ public sealed partial class ShellViewModel
         if (_subject is not { } row || _session is not { } session || _install is null || CloudSaveClient() is not { } client || ParseXuid(row.Profile) is not { } xuid) return;
         RefreshGameRunning();
         if (_gameRunning) { Message = S["saves.game_running"]; return; }
+        ForgetKeptThisPc(CurrentGame.Id, xuid); // the player now picks the cloud
         await Run(S.Format("busy.downloading", ("mode", BusyMode(row.Profile.Mode))), async () =>
         {
             SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
@@ -928,13 +952,29 @@ public sealed partial class ShellViewModel
         });
     }
 
-    /// <summary>"Keep this PC": nothing is written now; this PC's save goes up at the next Play (the session's upload, with the HARDCORE check).</summary>
+    /// <summary>
+    /// "Keep this PC": nothing is written now; the choice is recorded for this cloud revision and this PC's save, so the card no longer
+    /// asks to resolve and the next Play sends this PC's save (the session's upload, with the HARDCORE check) without asking again.
+    /// </summary>
     public void ResolveKeepPc()
     {
         if (_subject is not { } row) return;
+        if (CurrentGame.CloudSaves && row.Card?.Career?.Cloud?.Revision is long revision and > 0 && SavesRootNow is { } root
+            && ulong.TryParse(row.Profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid))
+        {
+            string? content = null;
+            try
+            {
+                if (AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
+                    content = SaveReconcile.NormalizeDigest(CurrentGame.Saves.Bundle.ContentDigest(newest));
+            }
+            catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { }
+            if (content is not null) _keptThisPc[(CurrentGame.Id, xuid)] = new KeptThisPc((ulong)revision, content);
+            else Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} keep this PC not recorded (this PC's save unreadable)");
+        }
         Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} keep this PC (uploaded at the next Play)");
         PickProfileRow(row);
-        Message = S["sm.kept_pc"];
+        Done(S["sm.kept_pc"]); // the prototype's Keep this PC lands on Done, as Keep cloud does
     }
 
     private static string ModeWordIn(ProfileRow row) => row.Hardcore ? "HARDCORE" : "NOOB";

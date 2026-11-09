@@ -211,10 +211,17 @@ public sealed partial class ShellViewModel
         {
             return null;
         }
+        var game = CurrentGame.Id;
         return new SessionSaves(client.Saves, client.Api, ct => session.Tokens.AccessAsync(ct), AzimuthSaves.SavesRoot(_install.Root, CurrentGame), xuid,
-            (step, detail) => _ui.Post(_ => RenderSave(step, detail), null))
+            (step, detail) =>
+            {
+                if (step is SaveStep.Uploaded) ForgetKeptThisPc(game, xuid); // the kept save is in the cloud: the choice is spent
+                _ui.Post(_ => RenderSave(step, detail), null);
+            })
         {
             ResolveConflict = AskSaveConflictAsync,
+            // Saves › Resolve "Keep this PC" for exactly this cloud head and this PC's save: committed without asking again
+            KeptThisPc = conflict => KeptThisPcFor(game, xuid, conflict.Cloud.Revision, conflict.LocalContent) is not null,
             Checkpoints = session.Info.Checkpoints, // OD122-L3: the server's cadence while the game runs
             Note = Log, // OD-133: the fresh-start guard's decisions
             ResolveRefusedFreshStart = AskRefusedFreshStartAsync, // OD-133: a first save refused as past its start

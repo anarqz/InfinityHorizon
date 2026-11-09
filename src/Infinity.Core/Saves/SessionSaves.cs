@@ -99,7 +99,8 @@ public sealed record FreshStartRefusal(string? Rule, string? RefusedAtUtc);
 /// What the player sees of a conflict: the cloud's head and this PC's newest sealed revision (each number null when unknown; this PC's
 /// side has no level, <see cref="AzimuthSaves.Credits"/>).
 /// </summary>
-public sealed record SaveConflict(SaveHead Cloud, int? LocalCredits, DateTime? LocalSavedUtc)
+/// <param name="LocalContent">The content digest of this PC's newest sealed revision the decision was made on (null when unknown).</param>
+public sealed record SaveConflict(SaveHead Cloud, int? LocalCredits, DateTime? LocalSavedUtc, string? LocalContent = null)
 {
     /// <summary>An empty line (revision 0) has nothing to install: only this PC's save, or not now, can be offered.</summary>
     public bool CanKeepCloud => Cloud.Revision > 0;
@@ -145,6 +146,12 @@ public sealed class SessionSaves
 
     /// <summary>Asks the player how to settle a conflict; null keeps the old rule (the launch stops).</summary>
     public Func<SaveConflict, CancellationToken, Task<ConflictChoice>>? ResolveConflict { get; init; }
+
+    /// <summary>
+    /// The player already chose "Keep this PC" for exactly this cloud head and this PC's save (Saves › Resolve, SAVE_MANAGER_UX §4): a
+    /// conflict, or a cloud ahead of an unchanged PC, commits this PC's save (<c>resolve_keep_local</c>) without asking. Null: never.
+    /// </summary>
+    public Func<SaveConflict, bool>? KeptThisPc { get; init; }
 
     /// <summary>The session holds the profile's line (a lease and a head).</summary>
     public bool HasLine => _line is not null;
@@ -316,9 +323,16 @@ public sealed class SessionSaves
             await InstallCloudAsync(access, head, decision.LocalContent, "lapsed", cancellation).ConfigureAwait(false);
             return;
         }
+        if (decision.Decision is SyncDecision.Conflict or SyncDecision.FastForward && head.Revision > 0 && KeptThisPc is { } keptThisPc
+            && keptThisPc(LocalConflict(head, decision.LocalContent)))
+        {
+            Note?.Invoke($"save: keep this PC over revision {head.Revision.ToString(CultureInfo.InvariantCulture)}, as chosen on Resolve");
+            await KeepThisPcAsync(access, head, cancellation).ConfigureAwait(false);
+            return;
+        }
         if (decision.Decision is SyncDecision.Conflict && ResolveConflict is { } ask)
         {
-            var conflict = LocalConflict(head);
+            var conflict = LocalConflict(head, decision.LocalContent);
             switch (await ask(conflict, cancellation).ConfigureAwait(false))
             {
                 case ConflictChoice.KeepCloud when conflict.CanKeepCloud:
@@ -395,13 +409,13 @@ public sealed class SessionSaves
     }
 
     /// <summary>The conflict as the player sees it: the cloud's head and this PC's newest sealed revision (credits, when).</summary>
-    private SaveConflict LocalConflict(SaveHead head)
+    private SaveConflict LocalConflict(SaveHead head, string? localContent)
     {
         var folder = AzimuthSaves.FolderFor(_xuid);
         SaveProfile? local = null;
         try { local = AzimuthSaves.List(_savesRoot).FirstOrDefault(s => string.Equals(s.Folder, folder, StringComparison.OrdinalIgnoreCase)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-        return new SaveConflict(head, local?.Credits, local?.LastPlayedUtc);
+        return new SaveConflict(head, local?.Credits, local?.LastPlayedUtc, localContent);
     }
 
     private bool _freshStart;

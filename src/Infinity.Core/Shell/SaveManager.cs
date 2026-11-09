@@ -134,8 +134,23 @@ public enum ChipTone
 /// <param name="Mark">What this PC last agreed with the cloud (sync-state), null when never.</param>
 /// <param name="PendingUpload">An upload is recorded and not sent yet.</param>
 /// <param name="SeedPending">An accepted seed waits for the first Play.</param>
+/// <param name="KeptThisPc">The player chose "Keep this PC" on Resolve (null: never, or not since the launcher started).</param>
 public sealed record SaveChipInput(CareerState State, bool CloudSaves, long? CloudRevision, string? LocalContent, SyncMark? Mark,
-    bool PendingUpload = false, bool SeedPending = false);
+    bool PendingUpload = false, bool SeedPending = false, KeptThisPc? KeptThisPc = null);
+
+/// <summary>
+/// "Keep this PC" chosen on Resolve (SAVE_MANAGER_UX §4): nothing is written then; the choice holds for the cloud revision and this
+/// PC's save it was made on, and the next Play sends this PC's save. Either side moving since makes it stale (ignored).
+/// </summary>
+/// <param name="CloudRevision">The cloud revision the player resolved against.</param>
+/// <param name="LocalContent">This PC's newest sealed save's content digest then (64 lower-hex digits).</param>
+public sealed record KeptThisPc(ulong CloudRevision, string LocalContent)
+{
+    /// <summary>The choice still describes these two sides: the same cloud revision and the same save on this PC.</summary>
+    public bool Matches(ulong? cloudRevision, string? localContent) =>
+        cloudRevision is { } cloud && cloud == CloudRevision && SaveReconcile.NormalizeDigest(localContent) is { } local
+        && string.Equals(local, SaveReconcile.NormalizeDigest(LocalContent), StringComparison.Ordinal);
+}
 
 /// <summary>The one tested place for the cards' chips (§2.3) and the Resolve choice (§4 "Resolve").</summary>
 public static class SaveChips
@@ -154,13 +169,15 @@ public static class SaveChips
         if (input.Mark is not { } mark || local is null) return SaveChipKind.NotCompared;
         var pcMoved = !string.Equals(local, SaveReconcile.NormalizeDigest(mark.Content), StringComparison.Ordinal);
         var cloudMoved = mark.Revision != cloud;
-        return (pcMoved, cloudMoved) switch
+        var kind = (pcMoved, cloudMoved) switch
         {
             (false, false) => SaveChipKind.Synced,
             (true, false) => SaveChipKind.ThisPcNewer,
             (false, true) => mark.Revision < cloud ? SaveChipKind.CloudNewer : SaveChipKind.NotCompared,
             (true, true) => SaveChipKind.BothChanged,
         };
+        // the player already chose this PC's save over this cloud revision: it waits for the next Play, nothing to resolve
+        return NeedsResolve(kind) && input.KeptThisPc?.Matches(cloud, local) == true ? SaveChipKind.WaitingUpload : kind;
     }
 
     public static ChipTone Tone(SaveChipKind kind) => kind switch

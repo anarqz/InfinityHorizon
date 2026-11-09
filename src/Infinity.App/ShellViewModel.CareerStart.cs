@@ -361,6 +361,7 @@ public sealed partial class ShellViewModel
                 case SyncDecision.Download or SyncDecision.FastForward:
                     // SAVE_MANAGER_UX §7.1/§8: what this PC holds goes to the launcher's history first; a failed copy stops here
                     if (!ArchiveFirst("restore", ProfileFolder(row), "sm.reason.download", [("mode", ModeWordIn(row))], "cloud", "this-pc", row)) return;
+                    ForgetKeptThisPc(CurrentGame.Id, xuid); // the cloud's save replaces this PC's: an earlier "Keep this PC" no longer holds
                     var outcome = await client.Saves.InstallHeadAsync(access, root, xuid, head, decision.LocalContent, "before-download");
                     Log($"profiles: download {row.Profile.Game} {row.Profile.ProfileId} r{head.Revision} → {(outcome.Failure is null ? "installed" : outcome.Failure.Code)}");
                     Message = outcome.Failure is null ? S.Format("careers.downloaded", ("name", name), ("rev", head.Revision.ToString(CultureInfo.CurrentCulture)))
