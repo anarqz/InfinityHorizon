@@ -124,9 +124,22 @@ public sealed partial class ShellViewModel
         {
             Message = S["saves.cloning"];
             CloneResult result;
+            SaveProfile picked;
             try
             {
-                result = await Task.Run(() => AzimuthSaves.Clone(savesRoot, choice.Save, xuid, DateTime.UtcNow));
+                // review 3.1.1: the picked folder's save as it is now (a fresh scan under this overlay), never the picker's cached one
+                if ((await FreshSavesListAsync(savesRoot, AzimuthSaves.FolderFor(xuid))).FirstOrDefault(s =>
+                        string.Equals(s.Folder, choice.Save.Folder, StringComparison.OrdinalIgnoreCase)) is not { } fresh)
+                {
+                    Log("save clone: " + choice.Save.Folder + " has no sealed save any more");
+                    CloseSavePicker();
+                    Message = S["saves.clone_failed"] + " (" + S["saves.none_found"] + ")";
+                    return;
+                }
+                if (fresh.Revision.Number != choice.Save.Revision.Number)
+                    Log($"save clone: {fresh.Folder} moved on since the picker opened (r{choice.Save.Revision.Number:x16} -> r{fresh.Revision.Number:x16}); its newest is copied");
+                picked = fresh;
+                result = await Task.Run(() => AzimuthSaves.Clone(savesRoot, picked, xuid, DateTime.UtcNow));
             }
             catch (SaveException e) when (e.Landed)
             {
@@ -140,12 +153,12 @@ public sealed partial class ShellViewModel
                 Message = S["saves.clone_failed"] + " (" + e.Message + ")";
                 return;
             }
-            Log($"save clone {choice.Save.Folder}/{choice.Save.Revision.Number:x16} -> {result.Target}/{result.Number:x16}, {result.Backups.Count} backups in {AzimuthSaves.ArchiveDir}");
+            Log($"save clone {picked.Folder}/{picked.Revision.Number:x16} -> {result.Target}/{result.Number:x16}, {result.Backups.Count} backups in {AzimuthSaves.ArchiveDir}");
             CloseSavePicker();
             Message = S.Format("saves.cloned", ("title", choice.Title), ("name", ProfileName.Plain(target.Gamertag)));
             try
             {
-                new SaveLinks(_stateDirectory, CurrentGame.Id).Set(target.Xuid, new SaveLink(choice.Save.Folder, choice.Save.Revision.Number, result.Number, DateTime.UtcNow));
+                new SaveLinks(_stateDirectory, CurrentGame.Id).Set(target.Xuid, new SaveLink(picked.Folder, picked.Revision.Number, result.Number, DateTime.UtcNow));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {

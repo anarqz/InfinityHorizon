@@ -94,9 +94,16 @@ public sealed partial class ManagedModFiles
     }
 
     /// <summary>M9 for the game folder: receipts recorded for a game folder that no longer exists whose game files all match, as recorded, in the selected one.</summary>
-    public IReadOnlyList<string> GameRelinkCandidates()
+    public IReadOnlyList<string> GameRelinkCandidates() => GameRelinkCandidates(fresh: false);
+
+    /// <param name="fresh">
+    /// Every game file hashed now (<see cref="Current"/>): <see cref="RelinkGame"/>'s decision, which rewrites receipts. The page's read
+    /// (<see cref="Inspect()"/>) uses the kept hashes (<see cref="CachedCurrent"/>), which only decide what is shown.
+    /// </param>
+    private List<string> GameRelinkCandidates(bool fresh)
     {
         if (_game is null || !Directory.Exists(BackupRoot)) return [];
+        Func<string, string?> current = fresh ? Current : CachedCurrent;
         var result = new List<string>();
         foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json"))
         {
@@ -107,7 +114,7 @@ public sealed partial class ManagedModFiles
             catch (JsonException) { continue; }
             if (receipt?.Files is null || receipt.GameRoot is not { } old || string.Equals(old, _game, StringComparison.OrdinalIgnoreCase) || Directory.Exists(old)
                 || !string.Equals(receipt.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)) continue;
-            if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => CachedCurrent(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
+            if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => current(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
                 result.Add(receipt.Id);
         }
         return result;
@@ -117,7 +124,8 @@ public sealed partial class ManagedModFiles
     public void RelinkGame()
     {
         using var gate = Lock();
-        foreach (var id in GameRelinkCandidates())
+        // review 3.1.1: decided from the game files as they are now (hashed again under the lock), never the page's kept hashes
+        foreach (var id in GameRelinkCandidates(fresh: true))
         {
             var path = ReceiptPath(id);
             var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path))!;

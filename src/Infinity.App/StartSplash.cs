@@ -116,10 +116,20 @@ internal static class StartSplash
         App.Log("ui: start splash not shown (" + e.GetType().Name + "); the launcher starts without it");
     }
 
+    /// <summary>Tests only: thrown while the splash is built on its thread (an error the old fixed list did not name).</summary>
+    internal static Func<Exception>? BuildFaultForTests { get; set; }
+
+    /// <summary>Tests only: a new splash may be shown again in this process (its last one ended).</summary>
+    internal static void ResetForTests()
+    {
+        lock (Gate) { _phase = Phase.NotShown; Failure = string.Empty; _shownAt = _closedAt = 0; }
+    }
+
     private static void Run(string text)
     {
         try
         {
+            if (BuildFaultForTests?.Invoke() is { } fault) throw fault;
             var window = Build(text);
             lock (Gate)
             {
@@ -135,10 +145,15 @@ internal static class StartSplash
             }
             Dispatcher.Run();
         }
-        catch (Exception e) when (e is InvalidOperationException or IOException or NotSupportedException or System.ComponentModel.Win32Exception
-                                       or System.Runtime.InteropServices.COMException or OutOfMemoryException or UnauthorizedAccessException)
+        // review 3.1.1: any error on this background thread, not a fixed list (an unhandled one would end the whole launcher): logged, the
+        // splash closed, the launcher starts without it. Only what nothing can carry on from goes through.
+        catch (Exception e) when (e is not (StackOverflowException or AccessViolationException))
         {
             Fail(e);
+            Window? built;
+            lock (Gate) built = _window;
+            try { built?.Close(); }
+            catch (Exception closing) when (closing is not (StackOverflowException or AccessViolationException)) { App.Log("ui: start splash not closed (" + closing.GetType().Name + ")"); }
         }
         finally
         {

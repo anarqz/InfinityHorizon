@@ -30,32 +30,50 @@ public sealed partial class ShellViewModel
     /// OD-126: the mods of <c>mods\</c> are prepared for the profile (Hardcore online plays without them).
     /// </summary>
     /// <returns>False only when a Hardcore launch could not hold the Treasure Map off: that launch must not start.</returns>
-    private bool PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
+    /// <remarks>
+    /// Review 3.1.1: what it needs of the view model is read on the UI thread, then every file step (FM5's held folders and receipts, the
+    /// load order, the inis, the title) runs on a worker, so a launch never holds the dispatcher here.
+    /// </remarks>
+    private async Task<bool> PrepareAzimuthAsync(AzimuthInstall? install, bool hardcore = false)
     {
         if (install is null) return true;
+        var game = CurrentGame;
+        var packageRoot = ContentLocation?.PackageRoot;
+        var mods = game.FullFeatures || ExtraOptionsLayout.HasModsFolder(game.Id) ? ExtraOptionsLaunchInputsFor(game.Id) : null;
+        var state = _stateDirectory;
+        var (ok, fm5) = await Task.Run(() => PrepareAzimuthFiles(install, hardcore, game, packageRoot, mods, state));
+        _fm5LaunchState = fm5;
+        return ok;
+    }
+
+    /// <summary>The file steps of <see cref="PrepareAzimuthAsync"/>: no view-model state but its inputs and the log (runs on a worker).</summary>
+    private (bool Ok, Fm5LaunchState? Fm5) PrepareAzimuthFiles(AzimuthInstall install, bool hardcore, GameDefinition game, string? packageRoot,
+        ExtraOptionsLaunchInputs? mods, string stateDirectory)
+    {
         // OD-233: the old flat mods folder has already moved to the per-game folders: both launches (PlayAsync, PlayOfflineAsync) await
         // PrepareModsLayoutAsync, off the UI thread, before they read any mod; a stop there ended the launch with its reason
         // OD-206: a game without FH2's features only needs naming, and without that the launch stops: Azimuth would start the game named before
-        if (!CurrentGame.FullFeatures)
+        Fm5LaunchState? fm5 = null;
+        if (!game.FullFeatures)
         {
             // OD-233: FM5's ExtraOptions 0.6.0 loads mods (catalog only) and reads its own ini with the server's locks
-            if (ExtraOptionsLayout.HasModsFolder(CurrentGame.Id)) PrepareExtraOptionsMods(install, hardcore, CurrentGame.Id);
-            try { Log("extraoptions: " + ExtraOptionsInfinity.EnforceLocks(install.Root, CurrentGame)); }
+            if (mods is not null) fm5 = PrepareExtraOptionsMods(install, hardcore, mods);
+            try { Log("extraoptions: " + ExtraOptionsInfinity.EnforceLocks(install.Root, game)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or Infinity.Core.Mods.ModException)
             { Log("extraoptions: locks not written (" + e.GetType().Name + ")"); }
             try
             {
-                Log("azimuth: " + AzimuthTitles.EnsureTitle(install.Root, CurrentGame, ContentLocation?.PackageRoot));
-                return AzimuthTitles.Names(install.Root, CurrentGame);
+                Log("azimuth: " + AzimuthTitles.EnsureTitle(install.Root, game, packageRoot));
+                return (AzimuthTitles.Names(install.Root, game), fm5);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 Log("azimuth: title not written (" + e.GetType().Name + ")");
-                return false;
+                return (false, fm5);
             }
         }
-        PrepareExtraOptionsMods(install, hardcore);
-        try { Log("azimuth: " + AzimuthTitles.EnsureFh2(install.Root, ContentLocation?.PackageRoot)); }
+        if (mods is not null) fm5 = PrepareExtraOptionsMods(install, hardcore, mods);
+        try { Log("azimuth: " + AzimuthTitles.EnsureFh2(install.Root, packageRoot)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("azimuth: title not written (" + e.GetType().Name + ")"); }
         try { Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(install.Root)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { Log("extraoptions: ini not written (" + e.GetType().Name + ")"); }
@@ -66,16 +84,16 @@ public sealed partial class ShellViewModel
         // owner 2026-10-29: the online tabs on (once, they were Infinity's lock), the Treasure Map held off for Hardcore
         try
         {
-            Log("extraoptions: " + ExtraOptionsInfinity.EnableOnlineTabsOnce(install.Root, Path.Combine(_stateDirectory, "extraoptions-online-tabs-on")));
-            if (ExtraOptionsInfinity.HoldTreasureMapForHardcore(install.Root, hardcore, Path.Combine(_stateDirectory, "extraoptions-treasure-map-held")) is { } note)
+            Log("extraoptions: " + ExtraOptionsInfinity.EnableOnlineTabsOnce(install.Root, Path.Combine(stateDirectory, "extraoptions-online-tabs-on")));
+            if (ExtraOptionsInfinity.HoldTreasureMapForHardcore(install.Root, hardcore, Path.Combine(stateDirectory, "extraoptions-treasure-map-held")) is { } note)
                 Log("extraoptions: " + note);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or Infinity.Core.Mods.ModException)
         {
             Log("extraoptions: launch settings not applied (" + e.GetType().Name + ")");
-            return !hardcore; // fail closed: a Hardcore profile never plays with the Treasure Map
+            return (!hardcore, fm5); // fail closed: a Hardcore profile never plays with the Treasure Map
         }
-        return true;
+        return (true, fm5);
     }
 
     private string PrepareAzimuthFailed => _modsLayoutFailure ?? S[CurrentGame.FullFeatures ? "extraoptions.treasure_map_hold_failed" : "play.setup_needed"];
@@ -258,7 +276,8 @@ public sealed partial class ShellViewModel
             : _config.Custom ? (TicketKeys.FromTrust(_session.Info.Trust!), TicketPolicy.ForCustom)
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
-        if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
+        if (!await PrepareAzimuthAsync(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
+        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) return;
         var modSet = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
         if (modSet is null) { Message = ModSetRefusal; await RefreshModsAsync(); return; }
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
@@ -326,8 +345,12 @@ public sealed partial class ShellViewModel
             FinishSaveUploadJob(); // the session (and its post-game upload) is over: the upload toast ends with it
             SavesChanged(); // a session uploads: the cached cloud revisions of this game are read again when next shown
             _waitingForAdmission = _queued = _leavingQueue = false;
-            await RefreshHookAsync();
-            await PrimeLocalFactsQuietlyAsync();
+            try
+            {
+                await RefreshHookAsync();
+                await PrimeLocalFactsQuietlyAsync();
+            }
+            catch (Exception error) when (!IsFatal(error)) { Log("play: after-session refresh failed: " + error.GetType().Name); } // the session's end still completes
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;

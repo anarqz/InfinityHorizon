@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
 
 namespace Infinity.Core.Mods;
@@ -203,17 +204,89 @@ public sealed partial class ManagedModFiles
         var (length, written) = (file.Length, file.LastWriteTimeUtc);
         if (HashCache.TryGetValue(key, out var known) && known.Length == length && known.Written == written) return known.Hash;
         var hash = ModManifest.Hash(File.ReadAllBytes(path));
+        Interlocked.Increment(ref _keptHashesComputed);
         file.Refresh();
         // changed while it was read: not kept (the next read hashes it again)
         if (file.Exists && file.Length == length && file.LastWriteTimeUtc == written)
         {
-            if (HashCache.Count > 200_000) HashCache.Clear();
+            if (HashCache.Count > KeptHashesMax) HashCache.Clear();
             HashCache[key] = (length, written, hash);
+            Interlocked.Increment(ref _keptHashesChanged);
         }
         return hash;
     }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, DateTime Written, string Hash)> HashCache = new(StringComparer.Ordinal);
+    private static long _keptHashesComputed, _keptHashesChanged, _keptHashesSaved;
+
+    /// <summary>The most kept hashes (in memory and on disk); past it the memory starts again and the file keeps the newest read's.</summary>
+    public const int KeptHashesMax = 200_000;
+
+    /// <summary>How many files the page's reads hashed so far in this process (not answered from the kept hashes): checks and the log.</summary>
+    public static long KeptHashesComputed => Interlocked.Read(ref _keptHashesComputed);
+
+    private sealed record KeptHash(string Path, long Length, long WrittenTicks, string Sha256);
+
+    /// <summary>
+    /// 3.1.1 (owner 2026-11-10, a 61 s first read of 45 large mods): the kept hashes of <see cref="CachedCurrent"/> are read back from the
+    /// launcher's state at its start (<paramref name="file"/>, written by <see cref="SaveKeptHashes"/>), so a later launch reads the mods
+    /// in well under a second. Still only for reads that decide nothing: an entry is used only while the file's full path, length and
+    /// last write (UTC) are the recorded ones, and every change, Repair and file check hashes again (<see cref="Current"/>). An unreadable
+    /// or oversized file is ignored (the next read hashes and writes it again). Runs on a worker. Returns the entries loaded.
+    /// </summary>
+    public static int LoadKeptHashes(string file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        try
+        {
+            var info = new FileInfo(file);
+            if (!info.Exists || info.Length > 64L * 1024 * 1024) return 0;
+            var entries = JsonSerializer.Deserialize<List<KeptHash>>(File.ReadAllBytes(file)) ?? [];
+            var loaded = 0;
+            foreach (var entry in entries.Take(KeptHashesMax))
+            {
+                if (entry.Path is not { Length: > 0 } path || entry.Sha256 is not { Length: 64 } sha || !sha.All(char.IsAsciiHexDigitLower)) continue;
+                var kept = (entry.Length, new DateTime(entry.WrittenTicks, DateTimeKind.Utc), sha);
+                // an entry already in memory for the same stamp stays (it was hashed in this process); another stamp gives way
+                HashCache.AddOrUpdate(path, kept, (_, known) => known.Length == kept.Length && known.Written == kept.Item2 ? known : kept);
+                loaded++;
+            }
+            Interlocked.Exchange(ref _keptHashesSaved, Interlocked.Read(ref _keptHashesChanged));
+            return loaded;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException or OverflowException) { return 0; }
+    }
+
+    /// <summary>
+    /// Writes the kept hashes to <paramref name="file"/> atomically (a temporary file, then a replace), only when a read kept new ones
+    /// since the last write, and only for files that still exist (bounded by <see cref="KeptHashesMax"/>). Runs on a worker. False when
+    /// nothing was written (nothing new, or the disk refused: logged by the caller, the next read tries again).
+    /// </summary>
+    public static bool SaveKeptHashes(string file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        var changed = Interlocked.Read(ref _keptHashesChanged);
+        if (changed == Interlocked.Read(ref _keptHashesSaved)) return false;
+        var temporary = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            var entries = HashCache.Where(e => File.Exists(e.Key)).Take(KeptHashesMax)
+                .Select(e => new KeptHash(e.Key, e.Value.Length, e.Value.Written.Ticks, e.Value.Hash)).ToList();
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(file))!);
+            File.WriteAllBytes(temporary, JsonSerializer.SerializeToUtf8Bytes(entries));
+            File.Move(temporary, file, overwrite: true);
+            Interlocked.Exchange(ref _keptHashesSaved, changed);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            try { if (File.Exists(temporary)) RemoveFile(temporary); } catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            return false;
+        }
+    }
+
+    /// <summary>Forgets every kept hash in memory (a new launcher process starts empty; checks use it to stand for one).</summary>
+    public static void ForgetKeptHashes() => HashCache.Clear();
 
     private static string HashCacheKey(string path) => Path.GetFullPath(path).ToUpperInvariant();
 

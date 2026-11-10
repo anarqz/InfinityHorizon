@@ -33,17 +33,35 @@ public sealed partial class ShellViewModel
     private bool OfflineUpdateQuiet => !_onlineEngaged && !_updateAwaitingCommit && !_updateRecoveryBlocked
         && _launcherUpdatePhase is UpdatePhase.Checking or UpdatePhase.Unavailable or UpdatePhase.Required or UpdatePhase.ReleaseUnavailable;
     public bool LauncherReleaseUnavailable => _launcherUpdatePhase == UpdatePhase.ReleaseUnavailable;
+
+    /// <summary>
+    /// The release floor (<c>/launcher/v1/info</c>) could not be read at the last check: not a forced update (nothing says this launcher is
+    /// too old). AUTO_UPDATE.md: a backend policy failure keeps Play restricted until the policy is readable; account operations, the
+    /// sign-in included, stay available. The banner says so, with a retry, instead of the full update screen.
+    /// </summary>
+    public bool LauncherFloorUnread => _updateFloorUnread && _launcherUpdatePhase == UpdatePhase.Unavailable && _onlineEngaged
+        && !_updateAwaitingCommit && !_updateRecoveryBlocked;
+    private volatile bool _updateFloorUnread;
+
     public bool LauncherUpdateBusy => _updateAwaitingCommit || _updateChecking || _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying;
-    public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport
+    public bool ShowLauncherUpdate => !ShowOnlineStatusPage && !LauncherUpdateAllowsPlay && !Playing && !_updateSupport && !LauncherFloorUnread
         && !(DevelopmentMods && ShowMods && !_updateAwaitingCommit && !_updateRecoveryBlocked
             && _launcherUpdatePhase is not (UpdatePhase.Downloading or UpdatePhase.Verifying or UpdatePhase.Applying or UpdatePhase.RecoveryRequired));
     public bool ShowLauncherUpdateBanner => !OfflineUpdateQuiet && !ShowOnlineStatusBanner && !ShowOnlineStatusPage && (LauncherReleaseUnavailable && LauncherUpdateAllowsPlay || !LauncherUpdateAllowsPlay && !ShowLauncherUpdate);
-    public string LauncherUpdateBannerAction => S[LauncherReleaseUnavailable ? "updater.retry" : "updater.open"];
+    public string LauncherUpdateBannerAction => S[LauncherReleaseUnavailable || LauncherFloorUnread ? "updater.retry" : "updater.open"];
+
+    /// <summary>The banner's button: a read that failed (GitHub's list, or the floor) is tried again; any other state opens the update screen.</summary>
+    public async Task LauncherUpdateBannerAsync()
+    {
+        if (LauncherReleaseUnavailable || LauncherFloorUnread) await CheckLauncherUpdatesAsync();
+        else OpenLauncherUpdate();
+    }
     public bool CanRetryLauncherUpdate => !LauncherUpdateBusy && !Playing;
     public bool CanCancelLauncherUpdate => _updateDownload is not null && _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying;
     public bool CanApplyLauncherUpdate => _launcherUpdatePhase == UpdatePhase.Required && !LauncherUpdateBusy && !_updateRecoveryBlocked && !Playing && !IntegrityChecking && !_busy && CrashIdle;
     public string LauncherUpdateVersion => S.Format("updater.versions", ("current", Version), ("target", _updateTarget ?? "—"));
-    public string LauncherUpdateStatus => _updateAwaitingCommit ? S["updater.applying"] : _updateFailureKey is { } failure ? S[failure] : S["updater." + (_launcherUpdatePhase switch
+    public string LauncherUpdateStatus => _updateAwaitingCommit ? S["updater.applying"] : _updateFailureKey is { } failure ? S[failure]
+        : LauncherFloorUnread ? S["updater.floor_unread"] : S["updater." + (_launcherUpdatePhase switch
     {
         UpdatePhase.Checking => "checking", UpdatePhase.Current => "current", UpdatePhase.Required => "required",
         UpdatePhase.Downloading => "downloading", UpdatePhase.Verifying => "verifying", UpdatePhase.Applying => "applying",
@@ -85,6 +103,7 @@ public sealed partial class ShellViewModel
         if (LauncherUpdateBusy && _launcherUpdatePhase != UpdatePhase.Checking) return;
         if (_updateChecking) return;
         _updateFailureKey = null;
+        _updateFloorUnread = false;
         _updateChecking = true; _launcherUpdatePhase = UpdatePhase.Checking; Changed(string.Empty);
         _updater ??= new UpdateCoordinator(_stateDirectory) { Log = Log };
         try
@@ -111,8 +130,13 @@ public sealed partial class ShellViewModel
             (_launcherUpdatePhase, _updateTarget) = (decision.Phase, decision.TargetVersion);
         }
         catch (Exception error) when (UpdateFailure(error))
-        { _launcherUpdatePhase = UpdatePhase.Unavailable; Log("update: check unavailable (" + error.GetType().Name + ")"); }
+        {
+            // the floor was not read: "couldn't check the launcher version" with a retry, never the forced update (LauncherFloorUnread)
+            _launcherUpdatePhase = UpdatePhase.Unavailable; _updateFloorUnread = true;
+            Log("update: check unavailable (" + error.GetType().Name + "); the release floor is unknown, Play waits for it");
+        }
         finally { _updateChecking = false; KeepOfflineUpdatePhase(); Changed(string.Empty); }
+        ContinueStoppedStartup(); // a start stopped at the forced update continues once the floor allows this launcher
     }
 
     /// <summary>
@@ -186,6 +210,24 @@ public sealed partial class ShellViewModel
         catch { _serverReachable = false; throw; }
     }
 
+    /// <summary>
+    /// The floor of the /launcher/v1/info the sign-in read (the start's own read had failed): the release floor decides from it as the check
+    /// would have, with GitHub's release list as already discovered; no request. A floor above this launcher is the forced update then.
+    /// </summary>
+    private void AdoptSignInFloor(ServerInfo info)
+    {
+        if (_updater is null || _updateChecking || !LauncherFloorUnread) return;
+        try
+        {
+            var decision = UpdateDecisionForTests is { } fake ? fake(info) : _updater.Evaluate(Version, info, _gate.Game);
+            (_launcherUpdatePhase, _updateTarget) = (decision.Phase, decision.TargetVersion);
+            _updateFloorUnread = false;
+            Log("update: release floor taken from the sign-in's /launcher/v1/info (" + decision.Phase + ")");
+        }
+        catch (Exception error) when (UpdateFailure(error)) { Log("update: the sign-in's floor not decided (" + error.GetType().Name + "); the banner keeps the retry"); }
+        Changed(string.Empty);
+    }
+
     private async Task<bool> RefreshLauncherPolicyAsync()
     {
         if (_updateRecoveryBlocked) return false;
@@ -196,8 +238,9 @@ public sealed partial class ShellViewModel
             var info = await UpdateServerInfoAsync(bound.Token);
             var decision = _updater?.Evaluate(Version, info, _gate.Game) ?? new(UpdatePhase.Unavailable, null);
             (_launcherUpdatePhase, _updateTarget) = (decision.Phase, decision.TargetVersion);
+            _updateFloorUnread = false;
         }
-        catch (Exception error) when (UpdateFailure(error)) { _launcherUpdatePhase = UpdatePhase.Unavailable; }
+        catch (Exception error) when (UpdateFailure(error)) { _launcherUpdatePhase = UpdatePhase.Unavailable; _updateFloorUnread = true; }
         if (!LauncherUpdateAllowsPlay) _updateSupport = false;
         Changed(string.Empty);
         return LauncherUpdateAllowsPlay;

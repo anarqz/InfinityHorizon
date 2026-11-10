@@ -47,6 +47,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     internal async Task PrimeLocalFactsAsync()
     {
+        if (PrimeLocalFactsForTests is { } fake) { await fake(); return; }
         // no Invalidate here: the worker re-checks every known answer (Prime), and the UI thread keeps the previous ones meanwhile
         var root = _install?.Root;
         var current = CurrentGame;
@@ -65,11 +66,33 @@ public sealed partial class ShellViewModel
         if (changed) Log($"saves: this PC's saves scanned off the UI thread in {watch.ElapsedMilliseconds} ms");
     }
 
-    /// <summary><see cref="PrimeLocalFactsAsync"/> that never throws (an unreadable folder is reported by the read that needs it).</summary>
+    /// <summary>Tests only: replaces the scan (a check makes it throw what a broken saves folder throws).</summary>
+    internal Func<Task>? PrimeLocalFactsForTests { get; set; }
+
+    /// <summary>
+    /// <see cref="PrimeLocalFactsAsync"/> that never throws (an unreadable folder is reported by the read that needs it). Every error but a
+    /// fatal one is logged and skipped: a <see cref="SaveException"/> (a folder whose revision counter is exhausted) or any other must never
+    /// leave the overlay of the action that awaited it up.
+    /// </summary>
     private async Task PrimeLocalFactsQuietlyAsync()
     {
         try { await PrimeLocalFactsAsync(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { Log("saves: scan skipped: " + e.GetType().Name); }
+        catch (Exception e) when (!IsFatal(e)) { Log("saves: scan skipped: " + e.GetType().Name + ": " + e.Message); }
+    }
+
+    /// <summary>An exception nothing should try to carry on from (the process is in trouble): never swallowed.</summary>
+    internal static bool IsFatal(Exception e) => e is OutOfMemoryException or StackOverflowException or AccessViolationException
+        or System.Runtime.InteropServices.SEHException;
+
+    /// <summary>
+    /// Owner 2026-11-10 review: an action that copies, clones, adopts or archives decides from this PC's saves as they are now, never from
+    /// the cards' last scan (the UI thread trusts it, <see cref="SaveScanCache.TrustWithinEpoch"/>): the scan re-checked off the UI thread,
+    /// then the list read on a worker. Called under the action's own overlay.
+    /// </summary>
+    private async Task<IReadOnlyList<SaveProfile>> FreshSavesListAsync(string savesRoot, string? exclude = null)
+    {
+        await PrimeLocalFactsQuietlyAsync();
+        return await Task.Run(() => _saveScan.List(savesRoot, exclude));
     }
 
     /// <summary>azimuth.exe was running at the last off-thread scan.</summary>
@@ -107,7 +130,7 @@ public sealed partial class ShellViewModel
         if (!InShell || _busy || _busyState.IsBusy || Playing || _install is null) return;
         var before = _saveScan.Computations;
         var wasRunning = _gameRunning;
-        await PrimeLocalFactsAsync();
+        await PrimeLocalFactsQuietlyAsync(); // the window's Activated handler: an error is logged, never thrown into the dispatcher
         if (_saveScan.Computations == before && wasRunning == _gameRunning) return;
         if (_busy || _busyState.IsBusy) return; // an action started meanwhile: its own end rebuilds the screen
         FillProfiles();

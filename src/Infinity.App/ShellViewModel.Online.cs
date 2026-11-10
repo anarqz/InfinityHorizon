@@ -118,6 +118,7 @@ public sealed partial class ShellViewModel
             Log("online status: unavailable (" + error.GetType().Name + ")");
         }
         finally { _onlineChecking = false; _onlineAnswered = _onlineEngaged; Changed(string.Empty); }
+        ContinueStoppedStartup(); // a start stopped at the closed service continues once the status reads open
     }
 
     partial void PrepareOnlineStatusRequest(ref Task<OnlineStatus>? request, CancellationToken cancellation);

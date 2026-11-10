@@ -769,6 +769,7 @@
   "updater.current": "Your launcher is compatible with the latest release and server policy.",
   "updater.required": "A launcher update is required before you can play online.",
   "updater.unavailable": "We could not verify launcher compatibility with the server. Check your connection and try again before playing online.",
+  "updater.floor_unread": "Couldn't check the launcher version with the server. You can sign in; online Play waits until the version is checked. Check your connection and try again.",
   "updater.release_unavailable": "We could not find the latest launcher release on GitHub. You can continue, but your online experience may be affected.",
   "updater.downloading": "Downloading the verified update. Your current installation remains available until the update is ready.",
   "updater.verifying": "Verifying the complete update package…",

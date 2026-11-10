@@ -121,11 +121,21 @@ public sealed class LocalHistory
     public HistoryItem? EnsureOriginal(string savesRoot, DateTime nowUtc)
     {
         ArgumentNullException.ThrowIfNull(savesRoot);
-        if (HasOriginal) return null;
-        if (Directory.Exists(OriginalFolder)) Directory.Delete(OriginalFolder, recursive: true); // a half-written one from a crash
-        return Write(OriginalFolder, Original, PlayerDir(savesRoot), new HistoryReason("Azimuth's save as Infinity first found it", "O save do Azimuth como o Infinity o encontrou"),
-            nowUtc, null, null, null);
+        // review 3.1.1: callers run concurrently (the cards' background copy, an action's archive-first): one writer per title at a time,
+        // so a second caller never deletes the first one's half-written original/ as a crash leftover; it finds it complete instead
+        lock (TitleLock(Root))
+        {
+            if (HasOriginal) return null;
+            if (Directory.Exists(OriginalFolder)) Directory.Delete(OriginalFolder, recursive: true); // a half-written one from a crash
+            return Write(OriginalFolder, Original, PlayerDir(savesRoot), new HistoryReason("Azimuth's save as Infinity first found it", "O save do Azimuth como o Infinity o encontrou"),
+                nowUtc, null, null, null);
+        }
     }
+
+    /// <summary>One lock per title's history folder (every <see cref="LocalHistory"/> of it in this process shares it).</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> TitleLocks = new(StringComparer.OrdinalIgnoreCase);
+
+    private static object TitleLock(string root) => TitleLocks.GetOrAdd(System.IO.Path.GetFullPath(root), _ => new object());
 
     /// <summary>Every entry, newest first, <c>original</c> last; a folder whose <c>entry.json</c> does not read is skipped.</summary>
     public IReadOnlyList<HistoryItem> List()

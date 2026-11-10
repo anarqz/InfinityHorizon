@@ -2929,7 +2929,7 @@
     </Grid>
     <!-- Owner 2026-10-28: the launcher's own file and folder picker for every caller (never the Windows dialog): a pane on the
          right above any screen (the first-run notice too); a pick goes back to the caller, the backdrop or Escape (B) cancels. -->
-    <Grid Panel.ZIndex="96" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
+    <Grid x:Name="BrowserLayer" Panel.ZIndex="96" Visibility="{Binding ShowBrowser, Converter={StaticResource Visible}}">
       <!-- No dim: under Wine a composited backdrop draws the text boxes behind it as grey bars (T2b/T4b); a transparent one still takes the click. -->
       <Border Background="Transparent" MouseDown="OnPickerBackdrop" />
       <Border x:Name="PickerPane" HorizontalAlignment="Right" Width="440" Padding="22,22,16,16" Background="{StaticResource InfinitySurface}"
@@ -3021,8 +3021,10 @@
       <TextBlock Text="{Binding JobsMoreText}" Margin="0,6,4,0" HorizontalAlignment="Right" Foreground="{StaticResource InfinityMuted}"
                  Visibility="{Binding HasJobsMore, Converter={StaticResource Visible}}" />
     </StackPanel>
-    <!-- owner 2026-11-08: every network or save action shows this modal overlay (spinner + what is happening); clicks and keys stop here -->
-    <Border x:Name="BusyOverlay" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="None"
+    <!-- owner 2026-11-08: every network or save action shows this modal overlay (spinner + what is happening); clicks and keys stop here.
+         Review 3.1.1: above the ⋯ menus (95) and the file picker (96), so neither stays clickable under a lock or a load; only the mod
+         operation's own progress screen (100) is above it. -->
+    <Border x:Name="BusyOverlay" Panel.ZIndex="97" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="None"
             Visibility="{Binding ShowBusyOverlay, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding BusyLabel}">
       <Border HorizontalAlignment="Center" VerticalAlignment="Center" Padding="30,24" CornerRadius="10" MinWidth="320"
               Background="{StaticResource SmCardRaised}" BorderBrush="{StaticResource SmLine}" BorderThickness="1">

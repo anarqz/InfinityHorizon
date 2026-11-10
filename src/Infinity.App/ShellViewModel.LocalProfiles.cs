@@ -70,7 +70,7 @@ public sealed partial class ShellViewModel
         var noobSource = !hardcore && NewNoobFromHardcore ? NewNoobSource?.Profile : null;
         if (!hardcore && NewNoobFromHardcore && noobSource is null) { Message = S["seed.pick_source"]; return; }
         // fix 2026-11-08: the source must have a save (this PC's or the cloud's) before anything is created; otherwise say why, create nothing
-        if (noobSource is not null && NoobPlanBeforeCreate(noobSource, NewName.Trim()) is null) return;
+        if (noobSource is not null && await NoobPlanBeforeCreateAsync(noobSource, NewName.Trim()) is null) return;
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow, SignedIn ? _session?.Me?.AccountId : null); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
@@ -126,8 +126,13 @@ public sealed partial class ShellViewModel
     {
         if (_install is null || ParseXuid(target) is not { } xuid) return false;
         SaveProfile? azimuth;
-        try { azimuth = SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid)).FirstOrDefault(s => s.IsOffline); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Azimuth career not read: " + e.Message); return false; }
+        // review 3.1.1: whether there is a career to adopt is read fresh (the scan off the UI thread, under the copy's overlay)
+        try
+        {
+            using (Loading(S["busy.copying"]))
+                azimuth = (await FreshSavesListAsync(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid))).FirstOrDefault(s => s.IsOffline);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { Log("saves: Azimuth career not read: " + e.Message); return false; }
         if (azimuth is null) { Log("saves: no Azimuth career to adopt"); return false; }
         _saveTarget = target;
         await PickSaveAsync(Describe(azimuth));
