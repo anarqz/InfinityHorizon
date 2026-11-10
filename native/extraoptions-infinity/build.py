@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.4 made of ExtraOptions 0.4.4
-(native/extraoptions, a submodule pinned to an upstream release), Infinity's patch series
-(patches/*.patch, applied to a copy) and the ForzaInfinity hook (native/hook, built with
-FI_EO_BUILD and src/core/fi_rename.h).
+"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.4 made of ExtraOptions 0.6.0
+(native/extraoptions, a submodule pinned to upstream main 869b60e, the source of the 0.6.0 release;
+OD-233), Infinity's patch series (patches/*.patch, applied to a copy) and the ForzaInfinity hook
+(native/hook, built with FI_EO_BUILD and src/core/fi_rename.h).
 
-The FM5 title profile (upstream features/fm5.c, --fm5) is in the same DLL; see patches/0004.
+The FM5 title profile (upstream fm5/, --fm5) is in the same DLL; see patches/0004. FH3 (--fh3) is
+not built.
 
 Usage: python build.py /path/to/zig [--dev] [--build-dir DIR] [--output PATH]
 
@@ -38,11 +39,11 @@ def hook_build():
 
 def extraoptions_version():
     """MOD_VERSION of the submodule's extra_options.h, so the product version follows the pinned release."""
-    for line in (EXTRAOPTIONS / "extra_options.h").read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in (EXTRAOPTIONS / "shared" / "extra_options.h").read_text(encoding="utf-8", errors="replace").splitlines():
         parts = line.split()
         if len(parts) >= 3 and parts[:2] == ["#define", "MOD_VERSION"]:
             return parts[2].strip('"')
-    raise SystemExit("native/extraoptions/extra_options.h has no MOD_VERSION")
+    raise SystemExit("native/extraoptions/shared/extra_options.h has no MOD_VERSION")
 
 
 def run(command, **kwargs):

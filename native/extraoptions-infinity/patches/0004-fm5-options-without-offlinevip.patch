@@ -1,6 +1,6 @@
---- a/adapters/azimuth.c
-+++ b/adapters/azimuth.c
-@@ -237,6 +237,10 @@ static void *on_map_game(void *output, const void *folder, const void *package,
+--- a/shared/adapters/azimuth.c
++++ b/shared/adapters/azimuth.c
+@@ -248,6 +248,10 @@
                 FM5 owns its verification, INI and diagnostic log. */
              if (!fm5_initialize(title, mapped ? game : NULL, game_path, mod_directory))
                  notify_refusal();
@@ -10,10 +10,10 @@
 +                fi_eo_game_mapped(game, mod_instance);
          } else
  #endif
-         if (fi_hook_title(title)) {
---- a/features/fm5.c
-+++ b/features/fm5.c
-@@ -12,9 +12,6 @@ typedef struct {
+ #ifdef EO_ENABLE_FH3
+--- a/fm5/fm5.c
++++ b/fm5/fm5.c
+@@ -24,9 +24,6 @@
      size_t length, capacity;
  } GameString;
  typedef unsigned char (*InitializeFiles)(void *);
@@ -23,32 +23,38 @@
  typedef void *(*Allocate)(size_t);
  typedef void *(*ConstructVolume)(void *, const GameString *, unsigned char);
  typedef void (*Reference)(void *);
-@@ -47,13 +44,17 @@ static int rejected(const char *reason) {
+@@ -60,13 +57,22 @@
      return 0;
  }
  
--static int option(const wchar_t *section, const wchar_t *key) {
-+/* ExtraOptions.Infinity: a missing or invalid key takes the caller's default. Upstream's was 1 for every key;
-+   the options that change cars (AllRimsCategory) or bring in mods (MediaOverrides) are 0 here, and the
-+   launcher writes the rest. */
-+static int option(const wchar_t *section, const wchar_t *key, int fallback) {
++/* ExtraOptions.Infinity: a missing or invalid key takes the feature default. Upstream's is 1 for every key but
++   E3StartScreen; the options that change cars (AllRimsCategory) or bring in loose files (EnableMediaOverrides,
++   and its older spelling MediaOverrides) are 0 here, and the launcher writes the rest. */
++static int fi_default_off(const wchar_t *key) {
++    return CompareStringOrdinal(key,-1,L"E3StartScreen",-1,FALSE)==CSTR_EQUAL ||
++           CompareStringOrdinal(key,-1,L"AllRimsCategory",-1,FALSE)==CSTR_EQUAL ||
++           CompareStringOrdinal(key,-1,L"EnableMediaOverrides",-1,FALSE)==CSTR_EQUAL;
++}
++
+ static int option(const wchar_t *section, const wchar_t *key) {
+-    int default_value=CompareStringOrdinal(key,-1,L"E3StartScreen",-1,FALSE)!=CSTR_EQUAL;
++    int default_value=!fi_default_off(key);
      wchar_t value[16];
--    GetPrivateProfileStringW(section, key, L"1", value, ARRAY_COUNT(value), ini_path);
-+    GetPrivateProfileStringW(section, key, fallback ? L"1" : L"0", value, ARRAY_COUNT(value), ini_path);
+     GetPrivateProfileStringW(section, key, L"", value, ARRAY_COUNT(value), ini_path);
+     /* Accept the previous FM5 spelling while publishing FH2's canonical name. */
+     if(!value[0] && CompareStringOrdinal(key,-1,L"EnableMediaOverrides",-1,FALSE)==CSTR_EQUAL)
+-        GetPrivateProfileStringW(section,L"MediaOverrides",L"1",value,ARRAY_COUNT(value),ini_path);
++        GetPrivateProfileStringW(section,L"MediaOverrides",L"",value,ARRAY_COUNT(value),ini_path);
+     if(!value[0]){value[0]=default_value?L'1':L'0';value[1]=0;}
      if (value[0] == L'0' && !value[1]) return 0;
      if (value[0] == L'1' && !value[1]) return 1;
--    write_log("CONFIG: invalid boolean; expected 0 or 1, using default 1.\r\n");
--    return 1;
-+    write_log(fallback ? "CONFIG: invalid boolean; expected 0 or 1, using default 1.\r\n"
-+                       : "CONFIG: invalid boolean; expected 0 or 1, using default 0.\r\n");
-+    return fallback;
- }
- 
- static int verify_file(const wchar_t *path) {
-@@ -137,22 +138,6 @@ static unsigned char initialize_files(void *filesystem) {
-     return result;
- }
- 
+@@ -160,22 +166,6 @@
+     fm5_badge_files(filesystem);
+     write_log(override && pc ? "FILES: native mounts ready: mediaoverride > mediapc > original media.\r\n"
+                             : "FILES: an override mount failed; native asset fallback retained.\r\n");
+-    return result;
+-}
+-
 -static int load_profile(void *profile, void *owner, unsigned mode) {
 -    int result = ((LoadProfile)(image + 0x1a0490))(profile, owner, mode);
 -    if (result == 0) {
@@ -62,33 +68,12 @@
 -        ((SetVip)(image + 0x1a12f0))(profile, (unsigned char)(flags | 1));
 -        write_log("VIP: local profile loaded; native VIP value and gamer flag synchronized.\r\n");
 -    }
--    return result;
--}
--
- /* Startup-only transaction: check every enabled site before making any changes,
-    acquire all write permissions first, and restore original bytes on failure. */
- static int apply(Site *sites, unsigned count) {
-@@ -224,7 +209,7 @@ int fm5_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
-         nt.FileHeader.TimeDateStamp != FM5_TIMESTAMP || nt.OptionalHeader.SizeOfImage != FM5_IMAGE_SIZE ||
-         !readable_image(game) || !verify_file(executable))
-         return rejected("REFUSED: unsupported or modified FM5 executable; no FM5 patches applied.");
--    if (!option(L"Global", L"Enabled")) {
-+    if (!option(L"Global", L"Enabled", 1)) {
-         status_set("OK: FM5 Extra Options disabled in FM5_ExtraOptions.ini.");
-         write_log(status_get());
-         write_log("\r\n");
-@@ -233,7 +218,7 @@ int fm5_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
-     image = game;
-     Site sites[24];
-     unsigned count = 0;
--    if (option(L"Frontend", L"SkipIntro")) {
-+    if (option(L"Frontend", L"SkipIntro", 1)) {
-         /* Follow all three native DisableSplashIntro=true paths, including the
-            normal completion notification. The press-start screen is retained. */
-         sites[count++] = (Site){0x13a345, 6, {0x0f,0x85,0x48,3,0,0}, {0xe9,0x49,3,0,0,0x90}, 0};
-@@ -241,25 +226,10 @@ int fm5_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
-         sites[count++] = (Site){0x13b9d5, 2, {0x74,0x2d}, {0x90,0x90}, 0};
-         write_log("INTRO: splash intro skip enabled.\r\n");
+     return result;
+ }
+ 
+@@ -292,24 +282,9 @@
+             {0xc7,0x41,0x3c,4,0,0,0,0xc3,0x90,0x90}, 0};
+         write_log("PARENTAL: local UGC and multiplayer privileges allowed.\r\n");
      }
 -    if (option(L"Content", L"OfflineVIP")) {
 -        /* Preserve the incoming gamer flags in EBP while enabling VIP bit 0.
@@ -108,32 +93,25 @@
 -        sites[count++] = call;
 -        write_log("VIP: native VIP setter and offline profile-load synchronization enabled.\r\n");
 -    }
--    if (option(L"Files", L"MediaOverrides")) {
 +    /* Content/OfflineVIP is removed (ExtraOptions.Infinity): VIP is the Infinity server's, and no INI key can
 +       bring this block back (sites 0x1a130e, 0x22e9f2, 0x22ea79 are never written). */
 +    write_log("VIP: the Infinity server's; Content/OfflineVIP does not exist in this build.\r\n");
-+    if (option(L"Files", L"MediaOverrides", 0)) {
-         Site thunk = {0x5cf963, 12, {0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc},
-                        {0x48,0xb8,0,0,0,0,0,0,0,0,0xff,0xe0}, 0};
-         uintptr_t callback = (uintptr_t)initialize_files;
-@@ -271,16 +241,16 @@ int fm5_initialize(unsigned title_id, unsigned char *game, const wchar_t *execut
-         sites[count++] = call;
-         write_log("FILES: override mounts scheduled after native file-system initialization.\r\n");
-     }
--    if (option(L"Frontend", L"AllRimsCategory")) {
-+    if (option(L"Frontend", L"AllRimsCategory", 0)) {
-         count += fm5_rims_prepare(game, sites + count);
-         write_log("RIMS: all aftermarket and factory rim categories enabled; native donor assets.\r\n");
-     }
-     if (!apply(sites, count))
-         return rejected("REFUSED: FM5 patch bytes or page protections changed; no FM5 patches applied.");
+     unsigned mod_sites=option(L"Mods",L"Enabled")?fm5_mods_prepare(game,sites+count,executable,directory,option(L"Mods",L"DatabaseCache")):0;
+     count+=mod_sites;override_folders_enabled=option(L"Files",L"EnableMediaOverrides");
+     {
+@@ -359,12 +334,10 @@
+     if (local_liveries)
+         write_log(livery_sites ? "LOCAL DESIGNS: FM5 local Drivatar liveries enabled.\r\n"
+                                : "LOCAL DESIGNS: FM5 local Drivatar liveries unavailable. Check the lineup cap and save path.\r\n");
 -#ifdef FH2_AZIMUTH
--    if (option(L"Compatibility", L"GenerateMissingSaveCommits"))
--        azimuth_repair_title_markers((unsigned char *)GetModuleHandleW(NULL), FM5_TITLE_ID, write_log);
+-    if (option(L"Compatibility", L"GenerateMissingSaveCommits")){
+-        uint64_t begin=boot_diag_now();azimuth_repair_title_markers((unsigned char *)GetModuleHandleW(NULL), FM5_TITLE_ID, write_log);
+-        boot_diag_end("boot.generate_missing_save_commits",NULL,begin);
+-    }
 -#endif
 +    /* ExtraOptions.Infinity: Compatibility/GenerateMissingSaveCommits is the Infinity server's, always off, as
-+       patch 0002 does for DisableAzimuthSaveChecksums: azimuth_repair_title_markers would promote torn revisions to
-+       valid ones, against the cloud saves (M11). The key is not read and azimuth_repair_title_markers is never called. */
++       patch 0002 does for FH2: azimuth_repair_title_markers would promote torn revisions to valid ones, against
++       the cloud saves (M11, OD-233). The key is not read and azimuth_repair_title_markers is never called. */
 +    write_log("INFINITY: GenerateMissingSaveCommits is the Infinity server's: off, whatever FM5_ExtraOptions.ini says.\r\n");
      status_set("OK: FM5 Extra Options initialized (7B35D917); FH2 features not loaded.");
      write_log(status_get());

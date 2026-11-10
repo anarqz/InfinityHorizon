@@ -1,6 +1,6 @@
---- a/adapters/azimuth.c
-+++ b/adapters/azimuth.c
-@@ -18,17 +18,6 @@
+--- a/shared/adapters/azimuth.c
++++ b/shared/adapters/azimuth.c
+@@ -23,17 +23,6 @@
      const char *success;
  } HostProfile;
  static const HostProfile host_profiles[] = {
@@ -18,7 +18,7 @@
      {AZIMUTH_104, 8613376u, 0x3f2c0u, 0xa684bu, 0xa1384u, 0xa4e09u,
       {0x56,0xd2,0xc9,0xcb,0x6c,0xcf,0x3a,0xe1,0x83,0x6d,0xee,0x96,0x76,0xb6,0x42,0x85,
        0xf3,0xa2,0x47,0xef,0xa2,0xd1,0x2c,0xf0,0x2c,0x6c,0x74,0x26,0x96,0xb3,0xb0,0x92},
-@@ -40,6 +29,8 @@
+@@ -45,6 +34,8 @@
  #define MAP_GAME_THUNK (host_profile->thunk)
  
  typedef void *(*MapGame)(void *, const void *, const void *, const void *);
@@ -27,7 +27,7 @@
  typedef int(WINAPI *MessageBoxFunction)(HWND, LPCWSTR, LPCWSTR, UINT);
  static HINSTANCE mod_instance;
  static unsigned char *host_image;
-@@ -250,10 +241,16 @@
+@@ -267,10 +258,16 @@
              nt.FileHeader.TimeDateStamp != GAME_TIMESTAMP ||
              nt.OptionalHeader.SizeOfImage != GAME_IMAGE_SIZE || !game_image_is_readable(game)) {
              refuse("REFUSED: Azimuth's mapped game does not match FH2. No game patches applied.");
@@ -46,8 +46,8 @@
 +            }
          }
      }
-     SetLastError(error);
-@@ -298,7 +295,7 @@
+     boot_diag_end("boot.EO_runtime_initialization",NULL,runtime_begin);
+@@ -317,7 +314,7 @@
          }
      }
      return refuse("REFUSED: unsupported Azimuth build. Extra Options " MOD_VERSION
@@ -58,7 +58,7 @@
  
 --- a/build.py
 +++ b/build.py
-@@ -100,6 +100,10 @@
+@@ -105,6 +105,10 @@
      parser.add_argument("--build-dir", type=Path)
      parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
      parser.add_argument("--rebuild", action="store_true", help="Ignore cached build inputs")
@@ -69,22 +69,22 @@
      arguments = parser.parse_args()
      if arguments.jobs < 1:
          parser.error("--jobs must be positive")
-@@ -140,6 +144,9 @@
+@@ -151,6 +155,9 @@
      return arguments
  
  
 +PRODUCT_VERSION = ""
 +
 +
- def version_resource(filename, fm5=False):
+ def version_resource(filename, fm5=False, fh3=False):
      version = re.search(r'#define MOD_VERSION "([\d.]+)"',
-                         (SOURCE / "extra_options.h").read_text()).group(1)
-@@ -163,10 +170,11 @@
-         return struct.pack("<H", len(data)) + data[2:]
- 
-     title = "Forza Horizon 2 / Motorsport 5 Extra Options" if fm5 else "Forza Horizon 2 Extra Options"
+                         (SOURCE / "shared/extra_options.h").read_text()).group(1)
+@@ -182,10 +189,11 @@
+         names.append("Horizon 3")
+         titles.append("FH3: 4CE1DFAB")
+     title = " / ".join(names) + " Extra Options"
 -    strings = {"FileDescription": title + " - " + ("Azimuth adapter" if filename == "winmm.dll" else "Mezcal adapter"),
-+    strings = {"FileDescription": "ExtraOptions.Infinity: Forza Horizon 2 Extra Options with the ForzaInfinity hook",
++    strings = {"FileDescription": "ExtraOptions.Infinity: " + title + " with the ForzaInfinity hook",
                 "FileVersion": version, "InternalName": "FH2_ExtraOptions",
 -               "OriginalFilename": filename, "ProductName": title,
 -               "ProductVersion": version, "LegalCopyright": "Arthur (RokkuDayo)",
@@ -92,9 +92,9 @@
 +               "ProductVersion": PRODUCT_VERSION or version,
 +               "LegalCopyright": "GPL-3.0; Arthur (RokkuDayo); ForzaInfinity",
                 "CompanyName": "Arthur (RokkuDayo)",
-                "Comments": ("Unofficial in-process game mod. FH2: 1A96545B. FM5: 7B35D917 (Azimuth only)."
-                             if fm5 else "Unofficial in-process game mod. Forza Horizon 2 only: 1A96545B.")}
-@@ -283,8 +291,10 @@
+                "Comments": "Unofficial in-process game mod. " + ". ".join(titles) + "."}
+     entries = b"".join(padded(block(key, wide(value), text=True)) for key, value in strings.items())
+@@ -302,8 +310,10 @@
          "/out:" + str(output),
          "/implib:" + str(directory / "extra_options.lib"),
          *objects,
@@ -105,7 +105,7 @@
          str(resource),
      ]
      if options.azimuth:
-@@ -295,7 +305,9 @@
+@@ -314,7 +324,9 @@
  
  
  def main():
@@ -113,11 +113,11 @@
      options = parse_arguments()
 +    PRODUCT_VERSION = options.product_version
      generate()
-     compiler = options.zig.resolve()
-     filename = (
---- a/settings.c
-+++ b/settings.c
-@@ -59,23 +59,23 @@
+     if options.fm5:
+         layout = (SOURCE / "fm5/ui/video_options.xaml").read_text(encoding="utf-8")
+--- a/fh2/settings.c
++++ b/fh2/settings.c
+@@ -59,14 +59,14 @@
  void settings_defaults(ModOptions *options) {
      *options = (ModOptions){
          .enabled = 1,
@@ -135,14 +135,12 @@
          .snap_car_to_road = 1,
          .unlock_storm_island_cars = 1,
          .disable_parental_locks = 1,
--        .custom_gamerpic = 1,
-+        .custom_gamerpic = 0,
-         .free_photo_camera = 1,
+@@ -74,7 +74,7 @@
          .unlock_treasure_map = 0,
          .autodrive = 0,
          .autodrive_cinematic = 1,
--        .disable_azimuth_save_checksums = 1,
-+        .disable_azimuth_save_checksums = 0,
+-        .generate_missing_save_commits = 1,
++        .generate_missing_save_commits = 0,
          .smooth_sun_shadows = -1,
          .skip_ineligible_car_dialogue = 0,
          .minimap_follows_camera = 1,

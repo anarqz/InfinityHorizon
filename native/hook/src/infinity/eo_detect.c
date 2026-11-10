@@ -14,7 +14,7 @@
       ExtraOptions). Wine without the override loads its own winmm even for the file next to
       azimuth.exe and reports that file's path: its "Wine builtin DLL" header mark is ABSENT too;
    2. its export Fh2TweaksStatus, else FOREIGN_WINMM (another proxy);
-   3. its VS_FIXEDFILEINFO (version resource 1): the supported build's (0.2.98.0; 0.4.4.0 under
+   3. its VS_FIXEDFILEINFO (version resource 1): the supported build's (0.2.98.0; 0.6.0.0 under
       FI_EO_BUILD, where that winmm.dll is ExtraOptions.Infinity itself), else OTHER_VERSION;
    4. Fh2TweaksStatus(): "OK:..." is 0298_OK, anything else (DISABLED, REFUSED, INACTIVE) is
       0298_INACTIVE.
@@ -24,7 +24,7 @@
 #include "../core/support.h"
 
 /* The ExtraOptions build headlight and roof sync supports (infinity.h: FI_EO_SUPPORTED, FI_EO_NAME,
-   FI_EO_SHOWN): the player's 0.2.98, or ExtraOptions.Infinity's own 0.4.4 under FI_EO_BUILD. */
+   FI_EO_SHOWN): the player's 0.2.98, or ExtraOptions.Infinity's own 0.6.0 under FI_EO_BUILD. */
 #define EO_SUPPORTED_MS FI_EO_SUPPORTED_MS
 #define EO_SUPPORTED_LS FI_EO_SUPPORTED_LS
 #define EO_SUPPORTED FI_EO_SUPPORTED
