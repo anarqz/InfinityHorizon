@@ -14,20 +14,32 @@ namespace Infinity.App;
 /// </summary>
 public sealed partial class ShellViewModel
 {
-    private readonly SaveScanCache _saveScan = new();
+    // owner 2026-11-10: the UI thread trusts the last off-thread scan (PrimeLocalFactsAsync re-checks every answer on its worker)
+    private readonly SaveScanCache _saveScan = new() { TrustWithinEpoch = true };
 
     /// <summary>The Azimuth folders whose saves history original was kept this run (once per folder and game, off the UI thread).</summary>
     private readonly HashSet<string> _originalKept = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The cached scan of <paramref name="savesRoot"/> (<see cref="AzimuthSaves.List"/>).</summary>
-    private IReadOnlyList<SaveProfile> SavesList(string savesRoot, string? exclude = null) => _saveScan.List(savesRoot, exclude);
+    private IReadOnlyList<SaveProfile> SavesList(string savesRoot, string? exclude = null)
+    {
+        using var span = Span();
+        return _saveScan.List(savesRoot, exclude);
+    }
 
     /// <summary>The cached newest sealed revision of one profile folder (<see cref="AzimuthSaves.NewestSealed"/>).</summary>
-    private LocalRevision? NewestSealedOf(string profileDir) => _saveScan.NewestSealed(profileDir);
+    private LocalRevision? NewestSealedOf(string profileDir)
+    {
+        using var span = Span();
+        return _saveScan.NewestSealed(profileDir);
+    }
 
     /// <summary>The cached content digest of <paramref name="revision"/> in <paramref name="game"/>'s bundle format.</summary>
-    private string ContentDigestOf(GameDefinition game, LocalRevision revision) =>
-        _saveScan.Digest(revision, game.Id, game.Saves.Bundle.ContentDigest);
+    private string ContentDigestOf(GameDefinition game, LocalRevision revision)
+    {
+        using var span = Span();
+        return _saveScan.Digest(revision, game.Id, game.Saves.Bundle.ContentDigest);
+    }
 
     /// <summary>
     /// Off the UI thread: every game's saves of this Azimuth folder scanned (lists, newest revisions, content digests), whether
@@ -35,7 +47,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     internal async Task PrimeLocalFactsAsync()
     {
-        _saveScan.Invalidate();
+        // no Invalidate here: the worker re-checks every known answer (Prime), and the UI thread keeps the previous ones meanwhile
         var root = _install?.Root;
         var current = CurrentGame;
         var keepOriginal = root is not null && _session is not null && !OfflineMode && _originalKept.Add(root + "|" + current.Id);

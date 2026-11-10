@@ -52,7 +52,8 @@ public sealed partial class ShellViewModel
         if (!CanOpenMods) return;
         LeaveAccount(); _onMods = true; _onSetup = false; _onBugReport = false; _onNews = false;
         Changed(string.Empty);
-        _ = _catalogLoaded ? RefreshModsAsync() : LoadModCatalogQuietlyAsync();
+        // the read started at launch may still run: the page shows its progress and fills when it ends (owner 2026-11-10)
+        _ = GuardAsync("open Mods", () => _catalogLoaded ? RefreshModsAsync() : LoadModCatalogQuietlyAsync());
     }
     public void OpenHome() { LeaveAccount(); _onMods = false; _onSetup = false; _onBugReport = false; _onNews = false; _onProfiles = false; FillPlayBoard(); Changed(string.Empty); }
 
@@ -64,13 +65,15 @@ public sealed partial class ShellViewModel
         // by hand waits for the catalog to name its game (after it loads, or before Play). A stop is shown on Play and Mods, and retried.
         var first = !_modsStarted;
         _modsStarted = true;
-        _ = StartModsAsync(first);
+        _ = GuardAsync("start the mods", () => StartModsAsync(first));
     }
 
     private async Task StartModsAsync(bool first)
     {
         // the process list off the UI thread too (owner 2026-11-10: the launcher never looks frozen)
         if (_install is not null && !await Task.Run(GameRunning)) await PrepareModsLayoutAsync(receiptsOnly: !_catalogLoaded, background: true);
+        // owner 2026-11-10: FM5 takes hand-copied mods again; what its former catalog-only rule held off is turned back on (once)
+        await RestoreFm5CatalogOnlyHoldAsync();
         await RefreshModsAsync();
         if (!first) { EnsureModCatalog(); return; } // T1f: a game folder found or changed in the shell loads it too
         await StartModsOnceAsync();
@@ -82,7 +85,7 @@ public sealed partial class ShellViewModel
         if (InShell || DevelopmentMods) await LoadModCatalogQuietlyAsync();
     }
 
-    private void RefreshMods() => _ = RefreshModsAsync();
+    private void RefreshMods() => _ = GuardAsync("read the mods", RefreshModsAsync);
 
     private async Task LoadSelectedOptionsAsync()
     {
@@ -102,13 +105,17 @@ public sealed partial class ShellViewModel
                     () => { _iniDirty = true; Changed(nameof(IniDirty)); }));
         }
         catch (Exception e) when (ManagedModFiles.IsStateError(e))
-        { _ini = null; Message = S["mods.settings_changed"]; }
+        { Log("mods: options not read (" + e.GetType().Name + (e is ModException mod ? " " + mod.Code : "") + ")"); _ini = null; Message = S["mods.settings_changed"]; }
+        catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or ArgumentException or FormatException)
+        { Log("mods: options not shown: " + ErrorChain(e)); _ini = null; ModOptions.Clear(); Message = S["mods.options_unreadable"]; }
         Changed(nameof(ShowModOptions));
     }
 
     public void SaveIni()
     {
-        if (_ini is null || _selectedMod is not { } selected || !ModsIdle || ModManagerFactory() is not { } factory) return;
+        // owner 2026-11-10: never a silent no-op; the draft stays and the pane says what Save waits for
+        if (!ModsIdle) { Message = ModOptionsWait; Changed(nameof(ModOptionsWait)); return; }
+        if (_ini is null || _selectedMod is not { } selected || ModManagerFactory() is not { } factory) return;
         var ini = _ini; var root = _install?.Root; var game = CurrentGame;
         var edits = ModOptions.Where(o => o.Editable).Select(o => (o.Id, o.Text, o.Culture)).ToArray();
         _ = RunModOperationAsync(() => Task.Run(() =>
@@ -118,8 +125,12 @@ public sealed partial class ShellViewModel
             else factory().SaveSettings(selected.Manifest, ini);
         }), S["mods.options_saved"], preserveOptionsOnFailure: true, label: S.Format("mods.lock.settings", ("mod", ModName(selected.Manifest))));
     }
-    public async Task RevertIniAsync() { await LoadSelectedOptionsAsync(); Changed(string.Empty); }
-    public void RevertIni() => _ = RevertIniAsync();
+    public async Task RevertIniAsync()
+    {
+        if (!ModsIdle) { Message = ModOptionsWait; Changed(nameof(ModOptionsWait)); return; }
+        await LoadSelectedOptionsAsync(); Changed(string.Empty);
+    }
+    public void RevertIni() => _ = GuardAsync("undo the options", RevertIniAsync);
     private static bool GameRunning()
     {
         var processes = System.Diagnostics.Process.GetProcessesByName("azimuth");

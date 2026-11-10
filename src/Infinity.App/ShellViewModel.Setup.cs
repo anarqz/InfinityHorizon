@@ -169,7 +169,14 @@ public sealed partial class ShellViewModel
         _onSetup = true;
         _onMods = false;
         _onBugReport = false; _onNews = false;
-        RefreshHook();
+        Changed(string.Empty);
+        // owner 2026-11-10: the hook package and the installed hook are hashed and checked on a worker; the page follows when they are in
+        _ = RefreshHookAndShowAsync();
+    }
+
+    private async Task RefreshHookAndShowAsync()
+    {
+        await RefreshHookAsync();
         Changed(string.Empty);
     }
 

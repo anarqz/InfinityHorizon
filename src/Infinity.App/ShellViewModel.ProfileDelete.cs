@@ -145,19 +145,29 @@ public sealed partial class ShellViewModel
                 SetDeleteStatus(DeleteRefusalText(outcome)); // in the panel, which stays open for another try
                 return;
             }
-            // each deleted career's save on this PC is archived from its own game's folder, its sync state forgotten for that game only
-            var fullyArchived = true;
-            foreach (var row in rows)
+            // each deleted career's save on this PC is archived from its own game's folder, its sync state forgotten for that game only;
+            // owner 2026-11-10: the copies, verifications and moves run on a worker (under the busy overlay), never on the window's thread
+            var installRoot = _install?.Root;
+            var account = session.Me?.AccountId ?? session.Tokens.AccountId;
+            _ = StringsIn("en"); _ = StringsIn("pt-BR"); // the history's two reasons, loaded here once
+            var steps = rows.Select(row => (Row: row, Game: Infinity.Core.Process.GameDefinition.ById(row.Game) ?? Infinity.Core.Process.GameDefinition.Fh2))
+                .Select(s => (s.Row, s.Game, Forget: ForgetSyncFor(s.Game.Id))).ToList();
+            var localProfiles = LocalProfiles;
+            var fullyArchived = await Task.Run(() =>
             {
-                var game = Infinity.Core.Process.GameDefinition.ById(row.Game) ?? Infinity.Core.Process.GameDefinition.Fh2;
-                if (ulong.TryParse(row.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var deletedXuid)) ForgetKeptThisPc(game.Id, deletedXuid);
-                ArchiveDeletedCareer(game, row, allGames); // SAVE_MANAGER_UX §7.1: deleting is archiving, into the launcher's history first
-                var cleanup = ProfileDeletion.CleanUp(_install is null ? null : AzimuthSaves.SavesRoot(_install.Root, game), LocalProfiles,
-                    session.Me?.AccountId ?? session.Tokens.AccountId, row, ForgetSyncFor(game.Id), DateTime.UtcNow);
-                foreach (var path in cleanup.Archived) Log($"profiles: archived {row.Game} " + path);
-                foreach (var path in cleanup.NotArchived) Log($"profiles: not archived (in use) {row.Game} " + path);
-                fullyArchived &= cleanup.FullyArchived;
-            }
+                var all = true;
+                foreach (var (row, game, forget) in steps)
+                {
+                    if (ulong.TryParse(row.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var deletedXuid)) ForgetKeptThisPc(game.Id, deletedXuid);
+                    ArchiveDeletedCareer(game, row, allGames, installRoot); // SAVE_MANAGER_UX §7.1: deleting is archiving, into the launcher's history first
+                    var cleanup = ProfileDeletion.CleanUp(installRoot is null ? null : AzimuthSaves.SavesRoot(installRoot, game), localProfiles,
+                        account, row, forget, DateTime.UtcNow);
+                    foreach (var path in cleanup.Archived) Log($"profiles: archived {row.Game} " + path);
+                    foreach (var path in cleanup.NotArchived) Log($"profiles: not archived (in use) {row.Game} " + path);
+                    all &= cleanup.FullyArchived;
+                }
+                return all;
+            });
             var name = ProfileName.Plain(profile.Gamertag);
             CancelDeleteProfile();
             if (rows.Any(r => r.ProfileId == _gate.ProfileKey)) Gate = _gate with { ProfileTag = null, ProfileKey = null }; // pick another profile

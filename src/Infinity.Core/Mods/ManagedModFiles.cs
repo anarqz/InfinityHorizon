@@ -130,8 +130,9 @@ public sealed partial class ManagedModFiles
         return receipt is null ? [] : DriftOf(receipt);
     }
 
-    private List<ModDrift> DriftOf(ManagedModReceipt receipt) => receipt.Files.Where(f => !f.Preserve)
-        .Select(f => (File: f, Actual: Current(Target(f.Root, f.Path)), Expected: receipt.Enabled ? f.After : f.Before))
+    /// <param name="cached">The mod state read (<see cref="Inspect()"/>): hashes kept by size and time (<see cref="CachedCurrent"/>); every operation re-hashes.</param>
+    private List<ModDrift> DriftOf(ManagedModReceipt receipt, bool cached = false) => receipt.Files.Where(f => !f.Preserve)
+        .Select(f => (File: f, Actual: cached ? CachedCurrent(Target(f.Root, f.Path)) : Current(Target(f.Root, f.Path)), Expected: receipt.Enabled ? f.After : f.Before))
         .Where(x => x.Actual != x.Expected).Select(x => new ModDrift(x.File.Root, x.File.Path, x.Expected, x.Actual)).ToList();
 
     /// <summary>OD-112 follow-up: on a Hardcore profile no mod that affects multiplayer may become enabled.</summary>

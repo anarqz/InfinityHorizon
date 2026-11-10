@@ -110,6 +110,8 @@ public sealed record SlotCard(SaveSlot Slot, string Title, string Headline, stri
 public sealed record HistoryRow(string Origin, string Title, string Detail, bool Cloud)
 {
     public HistoryItem? Item { get; init; }
+    /// <summary>The newest save inside <see cref="Item"/> (<see cref="LocalHistory.NewestSave"/>, verified off the UI thread when the row was built).</summary>
+    internal SaveProfile? Save { get; init; }
     public SaveRevision? Revision { get; init; }
     public bool Selected { get; init; }
     public string When { get; init; } = string.Empty;
@@ -295,38 +297,69 @@ public sealed partial class ShellViewModel
 
     public string GameRunningText => S.Format("sm.running", ("game", GameLabel));
 
+    /// <summary>
+    /// For the screens (owner 2026-11-10: no process list on the UI thread): the last off-thread answer at once, and a fresh one from a
+    /// worker; the save screens follow when it changed. A write asks <see cref="RefreshGameRunningNowAsync"/> and waits for it.
+    /// </summary>
     private void RefreshGameRunning()
     {
-        bool running;
-        try { running = SavesForceRunning || Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0; }
-        catch (InvalidOperationException) { running = Playing; }
-        _gameRunning = running;
+        _gameRunning = SavesForceRunning || Playing || _azimuthRunning;
+        _ = RefreshGameRunningNowAsync(notify: true);
+    }
+
+    /// <summary>Whether azimuth.exe runs, read now on a worker.</summary>
+    private async Task RefreshGameRunningNowAsync(bool notify = false)
+    {
+        var running = await Task.Run(AzimuthRunning);
+        _azimuthRunning = running;
+        var now = SavesForceRunning || Playing || running;
+        if (now == _gameRunning) return;
+        _gameRunning = now;
+        if (!notify) return;
+        if (On(SavesScreen.Manage)) FillSlotCards();
+        ChangedSaves();
     }
 
     /// <summary>The cards of the home, rebuilt from <see cref="ProfileRows"/> (HARDCORE first, then NOOB; a missing mode is its explainer).</summary>
     private void FillSaveCards()
     {
-        SaveCards.Clear();
-        if (OfflineMode || _session?.Me?.Players is null) { ChangedSaves(); return; }
+        using var span = Span();
+        if (OfflineMode || _session?.Me?.Players is null) { SaveCards.Clear(); ChangedSaves(); return; }
         // owner 2026-11-10: no process list or folder copy on the UI thread here; both come from the last off-thread scan
         _gameRunning = SavesForceRunning || Playing || _azimuthRunning;
         KeepOriginalInBackground();
+        var cards = new List<SaveCard>();
         foreach (var (slot, mode) in new[] { (SaveSlot.Hardcore, "hardcore"), (SaveSlot.Noob, "noob") })
         {
             var rows = ProfileRows.Where(r => r.Card?.Player.Mode == mode).ToList();
-            if (rows.Count == 0) { SaveCards.Add(Explainer(slot)); continue; }
-            foreach (var row in rows) SaveCards.Add(CardOf(slot, row));
+            if (rows.Count == 0) { cards.Add(Explainer(slot)); continue; }
+            foreach (var row in rows) cards.Add(CardOf(slot, row));
         }
+        // owner 2026-11-10: in place; a card that did not change keeps its drawing (re-adding the four cards was ~80 ms of layout, on any
+        // page), and a game switch that changes them all draws one per frame
+        _saveCardsWanted = cards;
+        SyncSaveCards(cards);
         AzimuthStripLine = StripLine();
         // owner 2026-11-08 (image 7): the open ⋯ floats over the page; its owner (a card or a game row) and items come from the rebuilt cards
-        OpenMenu = SaveCards.Where(c => c.MenuOpen).Select(c => new FloatingMenuView(c, c.Menu)).Concat(
-            SaveCards.SelectMany(c => c.Games).Where(g => g.MenuOpen).Select(g => new FloatingMenuView(g, g.Menu))).FirstOrDefault();
+        OpenMenu = cards.Where(c => c.MenuOpen).Select(c => new FloatingMenuView(c, c.Menu)).Concat(
+            cards.SelectMany(c => c.Games).Where(g => g.MenuOpen).Select(g => new FloatingMenuView(g, g.Menu))).FirstOrDefault();
         if (OpenMenu is null) _menu.Close();
         Changed(nameof(OpenMenu));
         Changed(nameof(ShowFloatingMenu));
         Changed(nameof(FloatingMenuIsCard));
         Changed(nameof(FloatingMenuIsRow));
         ChangedSaves();
+    }
+
+    private List<SaveCard>? _saveCardsWanted;
+
+    private void SyncSaveCards(List<SaveCard> cards) =>
+        ListSync.Sync(SaveCards, cards, SameSaveCard, SameSaveCardKey, Later(() => { if (ReferenceEquals(_saveCardsWanted, cards)) SyncSaveCards(cards); }), budget: 1);
+
+    /// <summary>Harness seam: the cards a fill still draws a few per frame, all at once now.</summary>
+    internal void SettleSaveCards()
+    {
+        if (_saveCardsWanted is { } cards) ListSync.Sync(SaveCards, cards, SameSaveCard, SameSaveCardKey);
     }
 
     /// <summary>The open ⋯ menu, floating (null: none).</summary>
@@ -401,6 +434,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private List<ProfileGameRow> GameRowsOf(SaveSlot slot, ProfileRow row)
     {
+        using var span = Span();
         var rows = new List<ProfileGameRow>();
         if (_session?.Me is not { Players: not null } board) return rows;
         var profileId = row.Card!.Player.ProfileId;
@@ -637,6 +671,7 @@ public sealed partial class ShellViewModel
     /// <summary>Owner 2026-11-08: the Azimuth strip, one line per catalog game present in this Azimuth install (its own player's save).</summary>
     private string StripLine()
     {
+        using var span = Span();
         if (_install is null) return S["sm.strip.no_install"];
         var present = GameDefinition.Available(_install.Root);
         if (present.Count == 0) return S["sm.strip.no_games"];
@@ -661,18 +696,23 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// §7.1 "Every write first archives": <paramref name="folder"/> into a new history entry, verified. False (and the reason shown) when it
-    /// could not be kept: the caller then writes nothing.
+    /// could not be kept: the caller then writes nothing. Owner 2026-11-10 (the window never freezes): the copy and its verification (a
+    /// whole saves folder, the first time its original too) run on a worker; the caller awaits it under its busy overlay.
     /// </summary>
-    private bool ArchiveFirst(string action, string? folder, string reasonKey, (string, string)[] args, string? from = null, string? to = null, ProfileRow? row = null)
+    private async Task<bool> ArchiveFirstAsync(string action, string? folder, string reasonKey, (string, string)[] args, string? from = null, string? to = null, ProfileRow? row = null)
     {
         if (SavesRootNow is not { } root) return false;
         try
         {
             var history = History();
-            history.EnsureOriginal(root, DateTime.UtcNow);
             var reason = new HistoryReason(StringsIn("en").Format(reasonKey, args), StringsIn("pt-BR").Format(reasonKey, args));
             var profile = row is null ? null : new HistoryProfile(row.Profile.Xuid, row.Gamertag, row.Profile.Mode);
-            var item = history.Archive(action, folder, reason, DateTime.UtcNow, from, to, profile, slug: from is null ? null : from + " to " + to);
+            var slug = from is null ? null : from + " to " + to;
+            var item = await Task.Run(() =>
+            {
+                history.EnsureOriginal(root, DateTime.UtcNow);
+                return history.Archive(action, folder, reason, DateTime.UtcNow, from, to, profile, slug: slug);
+            });
             Log($"saves: history {item.Name} ({item.Entry.Files.Count} files)");
             return true;
         }
@@ -930,7 +970,7 @@ public sealed partial class ShellViewModel
     public async Task ResolveKeepCloudAsync()
     {
         if (_subject is not { } row || _session is not { } session || _install is null || CloudSaveClient() is not { } client || ParseXuid(row.Profile) is not { } xuid) return;
-        RefreshGameRunning();
+        await RefreshGameRunningNowAsync();
         if (_gameRunning) { Message = S["saves.game_running"]; return; }
         ForgetKeptThisPc(CurrentGame.Id, xuid); // the player now picks the cloud
         await Run(S.Format("busy.downloading", ("mode", BusyMode(row.Profile.Mode))), async () =>
@@ -942,7 +982,7 @@ public sealed partial class ShellViewModel
             var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
             var decision = client.Saves.Decide(root, xuid, head);
             if (decision.Failure is not null) { Message = S["careers.download_failed"]; return; }
-            if (!ArchiveFirst("resolve", ProfileFolder(row), "sm.reason.resolve_cloud", [("mode", ModeWordIn(row))], "this-pc", "cloud", row)) return;
+            if (!await ArchiveFirstAsync("resolve", ProfileFolder(row), "sm.reason.resolve_cloud", [("mode", ModeWordIn(row))], "this-pc", "cloud", row)) return;
             var outcome = await client.Saves.InstallHeadAsync(access, root, xuid, head, decision.LocalContent, "before-resolve");
             Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} keep cloud r{head.Revision} → {(outcome.Failure is null ? "installed" : outcome.Failure.Code)}");
             if (outcome.Failure is not null) { Message = S["careers.download_failed"]; return; }
@@ -981,18 +1021,29 @@ public sealed partial class ShellViewModel
 
     public string ManageSub => S.Format("sm.manage_sub", ("game", GameLabel));
 
-    public string HistorySizeText
+    /// <summary>"N entries · X MB": read on a worker when Manage saves fills (owner 2026-11-10: a getter never reads every entry.json).</summary>
+    public string HistorySizeText { get; private set; } = string.Empty;
+
+    private int _historySizeRead;
+
+    private async Task RefreshHistorySizeAsync()
     {
-        get
+        var read = ++_historySizeRead;
+        LocalHistory history;
+        try { history = History(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+        var size = await Task.Run(() =>
         {
             try
             {
-                var history = History();
                 var items = history.List();
-                return S.Format("sm.history_size", ("count", items.Count.ToString(SavesCulture)), ("size", Size(items.Sum(i => i.Bytes))));
+                return ((int Count, long Bytes)?)(items.Count, items.Sum(i => i.Bytes));
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return string.Empty; }
-        }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        });
+        if (read != _historySizeRead) return;
+        HistorySizeText = size is { } s ? S.Format("sm.history_size", ("count", s.Count.ToString(SavesCulture)), ("size", Size(s.Bytes))) : string.Empty;
+        Changed(nameof(HistorySizeText));
     }
 
     private string Size(long bytes) => bytes >= 1 << 20 ? (bytes / 1048576.0).ToString("0.0", SavesCulture) + " MB"
@@ -1000,6 +1051,7 @@ public sealed partial class ShellViewModel
 
     private void FillSlotCards()
     {
+        using var span = Span();
         SlotCards.Clear();
         var facts = Facts();
         var needsServer = false;
@@ -1041,7 +1093,7 @@ public sealed partial class ShellViewModel
             });
         }
         ManageServerNote = needsServer ? S["sm.manage_server_note"] : string.Empty;
-        Changed(nameof(HistorySizeText));
+        _ = RefreshHistorySizeAsync();
         Changed(nameof(ManageServerNote));
         Changed(nameof(HasManageServerNote));
     }
@@ -1140,7 +1192,7 @@ public sealed partial class ShellViewModel
     public async Task ConfirmCopyAsync()
     {
         if (_copy is not { } plan || SavesRootNow is not { } root) return;
-        RefreshGameRunning();
+        await RefreshGameRunningNowAsync();
         if (_gameRunning) { Message = S["saves.game_running"]; ChangedSaves(); return; }
         var fromWord = plan.From == SaveSlot.Azimuth ? "azimuth" : plan.From.ToString().ToLowerInvariant();
         await Run(S["busy.copying"], async () =>
@@ -1149,12 +1201,13 @@ public sealed partial class ShellViewModel
             {
                 if (plan.Original)
                 {
-                    History().RestoreOriginal(root, DateTime.UtcNow);
+                    var history = History();
+                    await Task.Run(() => history.RestoreOriginal(root, DateTime.UtcNow));
                     Log($"saves: Azimuth's original save of {CurrentGame.Id} restored");
                     Done(S["sm.restored_original"]);
                     return;
                 }
-                if (!ArchiveFirst(plan.Entry is not null || plan.Cloud is not null ? "restore" : "copy", AzimuthFolder, "sm.reason.copy",
+                if (!await ArchiveFirstAsync(plan.Entry is not null || plan.Cloud is not null ? "restore" : "copy", AzimuthFolder, "sm.reason.copy",
                     [("from", plan.FromName), ("to", "Azimuth")], fromWord, "azimuth")) return;
                 if (plan.Cloud is { } rev && plan.CloudXuid is { } xuid)
                 {
@@ -1166,7 +1219,7 @@ public sealed partial class ShellViewModel
                 }
                 else
                 {
-                    var source = plan.Local ?? (plan.Entry is { } entry ? LocalHistory.NewestSave(entry) : null);
+                    var source = plan.Local ?? (plan.Entry is { } entry ? await Task.Run(() => LocalHistory.NewestSave(entry)) : null);
                     if (source is null) { Message = S["sm.block.NoSource"]; return; }
                     var result = await Task.Run(() => AzimuthSaves.Clone(root, source, AzimuthSaves.OfflineXuid, DateTime.UtcNow));
                     Log($"saves: copy {fromWord} → Azimuth r{result.Number}");
@@ -1181,12 +1234,23 @@ public sealed partial class ShellViewModel
         });
     }
 
-    public void OpenRestoreOriginal()
+    public void OpenRestoreOriginal() => _ = OpenRestoreOriginalAsync();
+
+    /// <summary>The original's entry and its newest save are read on a worker (every file verified), then the comparison opens.</summary>
+    private async Task OpenRestoreOriginalAsync()
     {
         var history = SafeHistory();
         if (history is null || !history.HasOriginal) { Message = S.Format("sm.restore_original_none", ("game", GameLabel)); return; }
-        var original = history.List().FirstOrDefault(i => i.IsOriginal);
-        OpenCopy(new CopyPlan(SaveSlot.Azimuth, S["sm.original_name"], null, original, null, null, true));
+        var (original, save) = await Task.Run(() =>
+        {
+            try
+            {
+                var item = history.List().FirstOrDefault(i => i.IsOriginal);
+                return (item, item is null ? null : LocalHistory.NewestSave(item));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { return (null, null); }
+        });
+        OpenCopy(new CopyPlan(SaveSlot.Azimuth, S["sm.original_name"], save, original, null, null, true));
     }
 
     // ------------------------------------------------------------------ History (§2.7, §7; cloud revisions of SAVES_API §4.2)
@@ -1204,7 +1268,7 @@ public sealed partial class ShellViewModel
     public string HistoryDetailNote => _historySelected?.Cloud == true ? S["sm.history_cloud_note"] : S["sm.history_local_note"];
     public bool HistoryCanOpenFolder => _historySelected is { Cloud: false };
     public bool HistoryCanCopyToAzimuth => _historySelected is { } r && !_gameRunning && Idle
-        && (r.Cloud ? r.Revision is not null && CloudSaveClient() is not null : r.Item is { } i && (i.IsOriginal || LocalHistory.NewestSave(i) is not null));
+        && (r.Cloud ? r.Revision is not null && CloudSaveClient() is not null : r.Item is { } i && (i.IsOriginal || r.Save is not null));
     public string HistoryCopyBlocked => _historySelected is null ? string.Empty : _gameRunning ? S["sm.block.GameRunning"]
         : HistoryCanCopyToAzimuth ? string.Empty : S["sm.block.NoSource"];
     public bool HasHistoryCopyBlocked => !string.IsNullOrEmpty(HistoryCopyBlocked);
@@ -1243,22 +1307,33 @@ public sealed partial class ShellViewModel
     /// <summary>The slot's timeline: this PC's history entries of the slot, then (profile slots) the cloud's revisions, newest first.</summary>
     private async Task FillHistoryAsync()
     {
+        var generation = ++_historyFill;
         HistoryRows.Clear();
         _historySelected = null;
         var rows = new List<(DateTimeOffset At, HistoryRow Row)>();
         var row = _historySlot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (_historySlot == SaveSlot.Hardcore ? "hardcore" : "noob"));
         if (SafeHistory() is { } history)
         {
-            foreach (var item in history.List())
+            // owner 2026-11-10: the entries are read and each one's newest save verified (every file hashed) on a worker
+            var azimuthSlot = _historySlot == SaveSlot.Azimuth;
+            var xuid = row?.Profile.Xuid;
+            var local = await Task.Run(() =>
             {
-                var mine = _historySlot == SaveSlot.Azimuth ? item.Entry.Profile is null : item.Entry.Profile?.Xuid == row?.Profile.Xuid;
-                if (!mine) continue;
+                try
+                {
+                    return history.List().Where(item => azimuthSlot ? item.Entry.Profile is null : item.Entry.Profile?.Xuid == xuid)
+                        .Select(item => (Item: item, Save: LocalHistory.NewestSave(item))).ToList();
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { return []; }
+            });
+            if (generation != _historyFill) return; // a newer fill (another slot, a refresh) owns the list now
+            foreach (var (item, save) in local)
+            {
                 var at = DateTimeOffset.TryParse(item.Entry.At, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var w) ? w : DateTimeOffset.MinValue;
-                var save = LocalHistory.NewestSave(item);
                 var title = item.IsOriginal ? S["sm.original_name"]
                     : save?.Credits is { } cr ? S.Format("sm.stats_credits", ("credits", cr.ToString("N0", SavesCulture)))
                     : item.Entry.Empty == true ? S["sm.history_empty_entry"] : Size(item.Bytes);
-                rows.Add((at, new HistoryRow(S["sm.origin.pc"], title, item.Entry.Reason.For(S.Locale), false) { Item = item, When = When(item.Entry.At) }));
+                rows.Add((at, new HistoryRow(S["sm.origin.pc"], title, item.Entry.Reason.For(S.Locale), false) { Item = item, Save = save, When = When(item.Entry.At) }));
             }
         }
         var read = _historyRead;
@@ -1286,10 +1361,15 @@ public sealed partial class ShellViewModel
                 Log("saves: cloud history not read: " + e.GetType().Name);
             }
         }
+        if (generation != _historyFill) return;
+        HistoryRows.Clear();
         foreach (var (_, r) in rows.OrderByDescending(r => r.At)) HistoryRows.Add(r);
         if (HistoryRows.Count > 0) SelectHistory(HistoryRows[0]);
         ChangedHistory();
     }
+
+    /// <summary>The newest history fill; an older one that resumes after it changes nothing.</summary>
+    private int _historyFill;
 
     private string? _cloudHistoryXuid;
 
@@ -1343,7 +1423,8 @@ public sealed partial class ShellViewModel
             if (row is null || ParseXuid(row.Profile) is not { } xuid) return;
             OpenCopy(new CopyPlan(_historySlot, name, null, null, rev, xuid, false));
         }
-        else if (r.Item is { } item) OpenCopy(new CopyPlan(_historySlot, item.IsOriginal ? S["sm.original_name"] : name, null, item, null, null, item.IsOriginal));
+        // the entry's newest save as the row found it off the UI thread (OpenCopy and the copy would otherwise verify it again here)
+        else if (r.Item is { } item) OpenCopy(new CopyPlan(_historySlot, item.IsOriginal ? S["sm.original_name"] : name, r.Save, item, null, null, item.IsOriginal));
     }
 
     // ------------------------------------------------------------------ Delete (§4), Done
@@ -1354,10 +1435,10 @@ public sealed partial class ShellViewModel
     /// §7.1 "Deleting is archiving": a deleted career's save on this PC goes into its own game's history before the cleanup moves it to the
     /// saves folder's archive. The server already deleted the career, so a failed copy is logged and the cleanup (which never deletes) goes on.
     /// </summary>
-    private void ArchiveDeletedCareer(Infinity.Core.Process.GameDefinition game, Profile row, bool allGames)
+    private void ArchiveDeletedCareer(Infinity.Core.Process.GameDefinition game, Profile row, bool allGames, string? installRoot)
     {
-        if (_install is null || !ulong.TryParse(row.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)) return;
-        var root = AzimuthSaves.SavesRoot(_install.Root, game);
+        if (installRoot is null || !ulong.TryParse(row.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)) return;
+        var root = AzimuthSaves.SavesRoot(installRoot, game);
         var folder = CloudSaveFiles.ProfileDir(root, xuid);
         if (!Directory.Exists(folder)) return;
         try

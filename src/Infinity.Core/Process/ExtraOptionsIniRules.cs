@@ -167,12 +167,27 @@ public static class ExtraOptionsIniRules
             var separator = line.IndexOf('=');
             if (separator < 0) continue; // GetPrivateProfileString skips it
             var key = line[..separator].Trim();
-            if (!Fm5Switches.Any(s => Is(s.Section, section) && Is(s.Key, key))) continue;
             var value = line[(separator + 1)..].Trim();
+            // GetPrivateProfileIntW stops at the first non-digit; a value the launcher writes is the whole number, in range
+            if (Fm5Numbers.FirstOrDefault(n => Is(n.Section, section) && Is(n.Key, key)) is { Key: not null } bound)
+            {
+                if (Number(value, bound.Maximum) is null) return "line " + number + ": " + section + "/" + key + " must be a number from 0 to " + bound.Maximum;
+                continue;
+            }
+            if (!Fm5Switches.Any(s => Is(s.Section, section) && Is(s.Key, key))) continue;
             if (value is not ("0" or "1")) return "line " + number + ": " + section + "/" + key + " must be 0 or 1";
         }
         return null;
     }
+
+    /// <summary>
+    /// The settings <c>fm5/fm5.c</c> reads with <c>GetPrivateProfileIntW</c> (0.6.0): the local Drivatar liveries switch and the lineup cap
+    /// (the ini's own comment: 0-16), with the largest value the launcher writes.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Section, string Key, uint Maximum)> Fm5Numbers =
+    [
+        ("Experiments", "LocalDrivatarLiveries", 1), ("Experiments", "MaxDrivatarLiveries", 16),
+    ];
 
     /// <summary>The switches <c>fm5/fm5.c</c> reads with <c>option()</c> (0.6.0, before Infinity's patch 0004 removes OfflineVIP).</summary>
     public static readonly IReadOnlyList<(string Section, string Key)> Fm5Switches =

@@ -95,6 +95,7 @@ public sealed partial class ShellViewModel
 
     private void ChangedSeedForm()
     {
+        using var span = Span();
         Changed(nameof(ShowSeedOption));
         Changed(nameof(NewSeedFromProfile));
         Changed(nameof(NewSeedSource));

@@ -134,7 +134,8 @@ public sealed partial class ShellViewModel
     {
         if (_session is null) return;
         _friendList = list;
-        FriendCards.Clear();
+        // owner 2026-11-10: every poll answer changes the column in place (a friend whose line did not change keeps its card)
+        var cards = new List<FriendCard>();
         foreach (var friend in LauncherFriends.Sorted(list))
         {
             var name = LauncherFriends.ShownName(friend);
@@ -145,14 +146,16 @@ public sealed partial class ShellViewModel
             var avatar = FriendAvatars.Allowed(url) ? FriendAvatarImage(url!) : null;
             if (avatar is null && FriendAvatars.Allowed(url)) _ = _friendAvatars.Want(url); // loaded once; the list is drawn again when it arrives
             var discord = friend.Discord?.Username is { Length: > 0 } user ? "@" + user : string.Empty;
-            FriendCards.Add(new FriendCard(friend.Id, name, FriendStatus(friend), friend.Online, friend.Tier == "vip", friend.Invite?.Id, profiles, avatar, discord));
+            cards.Add(new FriendCard(friend.Id, name, FriendStatus(friend), friend.Online, friend.Tier == "vip", friend.Invite?.Id, profiles, avatar, discord));
         }
-        FriendRequestCards.Clear();
+        ListSync.Sync(FriendCards, cards, (a, b) => a.Equals(b), (a, b) => a.Id == b.Id);
+        var requests = new List<FriendRequestCard>();
         foreach (var request in list.Incoming)
         {
             var asker = request.Profiles.Count > 0 ? request.Profiles[0].Gamertag : null;
-            if (!string.IsNullOrEmpty(asker)) FriendRequestCards.Add(new FriendRequestCard(request.Id, asker));
+            if (!string.IsNullOrEmpty(asker)) requests.Add(new FriendRequestCard(request.Id, asker));
         }
+        ListSync.Sync(FriendRequestCards, requests, (a, b) => a.Equals(b), (a, b) => a.Id == b.Id);
         ChangedFriends();
     }
 

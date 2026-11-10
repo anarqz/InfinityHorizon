@@ -39,6 +39,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     {
         S = strings;
         Games.CollectionChanged += (_, _) => FillGameCards();
+        ProfileRows.CollectionChanged += (_, _) => ScheduleProfileRowsShown();
         _config = config;
         config.Validate();
         _stateDirectory = config.StateDirectory(stateDirectory);
@@ -540,7 +541,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Signs back in with the session kept from the last run; any refusal falls back to the sign-in screen.</summary>
     public async Task ResumeSessionAsync()
     {
-        if (_session is not null || _busy || !OnlineServiceAllowsPlay || SessionStore.Load(_stateDirectory) is not { } saved)
+        // owner 2026-11-10: the kept session is read and decrypted (DPAPI) off the UI thread (the start's 158 ms wait in the harness)
+        var stateDirectory = _stateDirectory;
+        var saved = _session is not null || _busy || !OnlineServiceAllowsPlay ? null : await Task.Run(() => SessionStore.Load(stateDirectory));
+        if (saved is null || _session is not null || _busy)
         {
             _resuming = false;
             Changed(nameof(Resuming));
@@ -553,7 +557,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var (info, api) = await AccountSession.ConnectAsync(Http, _config, ClientHeader, cancellation.Token);
-            session = AccountSession.Resume(api, info, DeviceIdentity.Load(_stateDirectory, "windows"), saved);
+            var device = await Task.Run(() => DeviceIdentity.Load(stateDirectory, "windows"));
+            session = AccountSession.Resume(api, info, device, saved);
             await EnterAsync(session, cancellation.Token);
             Log("auth: session resumed");
             session = null;
@@ -587,8 +592,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     private void FillProfiles()
     {
+        using var span = Span();
         Profiles.Clear();
-        ProfileRows.Clear();
         _rowLocals.Clear();
         // OD-118: offline the local profiles; signed in the account's plus the local ones not on it (offline-only until uploaded).
         var game = _gate.Game ?? "";
@@ -596,16 +601,19 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             // OD-214: the account's profiles (both modes) with the chosen game's career on each; local-only rows as before
             // fix 2026-11-08: a Noob career whose folder holds a save (a Hardcore copy waiting for its first upload) is started, not "fresh"
+            var built = new List<ProfileRow>();
             foreach (var card in ProfileBoard.Build(board, CurrentGame, BoardFlagsNow(board)))
             {
                 var row = card.CareerRow ?? new Profile(card.Player.ProfileId, game, card.Player.Xuid, card.Player.Gamertag, card.Player.Gamertag,
                     card.Player.Mode, card.Player.Status, card.Career?.CreatedAt ?? string.Empty, null, card.Player.RenameNotice);
                 if (card.CareerRow is not null) Profiles.Add(row); // only real careers are choosable rows (seed sources, saves, the gate)
-                ProfileRows.Add(new ProfileRow(row, CareerLine(card, row), OnAccount: true, Card: card)
+                built.Add(new ProfileRow(row, CareerLine(card, row), OnAccount: true, Card: card)
                 {
                     DeleteCareerLabel = S.Format("careers.delete", ("game", GameLabel)),
                 });
             }
+            // owner 2026-11-10: in place (a row that did not change keeps its drawing and its instance)
+            ListSync.Sync(ProfileRows, built, SameProfileRow, SameProfileRowKey);
             // W12 (handoff §10, D): signed in the list is the cloud's; this PC's local profiles are hidden, never deleted (offline lists
             // them; a Noob career starts from this PC's saves through "Start from a save on this PC")
             if (_startRow?.Card is { } open)
@@ -616,6 +624,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         var rows = OfflineMode ? OfflineRows(game)
             : (_session?.Me?.Profiles.Where(p => p.Game == game).Select(p => (Row: p, Local: (LocalProfile?)null)) ?? [])
                 .Concat(_session?.Me is { } me ? LocalOnlyRows(game, me.AccountId) : []);
+        ProfileRows.Clear();
         foreach (var (profile, local) in rows)
         {
             Profiles.Add(profile);
@@ -631,6 +640,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     private void ChangedProfileList()
     {
+        using var span = Span();
         ChangedCareerStart();
         FillSaveCards(); // SAVE_MANAGER_UX §4: the cards follow every /me and game change
         Changed(nameof(ShowNewProfile));
@@ -724,7 +734,16 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>The translated text of a server error code, or null for a code this build has no text for.</summary>
     internal string? KnownErrorText(string code) => S["error." + code] is var text && text != "error." + code ? text : null;
 
-    private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    private void Changed([CallerMemberName] string? name = null)
+    {
+        if (PropertyChanged is not { } handler) return;
+        if (UiProfiler is not { } profiler) { handler(this, new PropertyChangedEventArgs(name)); return; }
+        // owner 2026-11-10: a notify-all re-reads every binding of the window; the watchdog names a slow one's caller
+        if (!string.IsNullOrEmpty(name)) { profiler.Notified(); handler(this, new PropertyChangedEventArgs(name)); return; }
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
+        handler(this, new PropertyChangedEventArgs(name));
+        profiler.NotifiedAll(start);
+    }
 
     public void Dispose()
     {

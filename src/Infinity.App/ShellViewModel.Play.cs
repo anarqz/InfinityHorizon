@@ -186,7 +186,7 @@ public sealed partial class ShellViewModel
         _modLaunchFailure = null;
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
-        RefreshHook(); // the hook as it is now, not as it was when the screen last looked
+        await RefreshHookAsync(); // the hook as it is now, not as it was when the screen last looked (read on a worker)
         // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
         if (!Playing && !EnsureHookCurrentForPlay()) return;
         if (!GameConfigurationReady && !Playing)
@@ -266,7 +266,7 @@ public sealed partial class ShellViewModel
         StartOverlayStatusFeed(_session); // CR-L40 §1.3: the guide's server status and avatar
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
         {
-            Overlay = LoadOverlayPackage(),
+            Overlay = await LoadOverlayPackageAsync(),
             OverlayStatus = _overlayStatusFeed,
             NativeDllOverrides = mods.DllOverrides,
             FallbackIdentity = FallbackIdentityFor(profile),

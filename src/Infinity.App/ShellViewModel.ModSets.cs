@@ -40,8 +40,9 @@ public sealed partial class ShellViewModel
     private readonly HashSet<string> _expandedSets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _setReports = new(StringComparer.Ordinal);
     public ObservableCollection<ModSetCard> ModSetCards { get; } = [];
-    public IEnumerable<ModSetCard> FilteredModSetCards => ModSetCards.Where(set => string.IsNullOrWhiteSpace(_modSearch)
-        || set.Title.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase) || set.Packs.Any(MatchesSearch));
+    // owner 2026-11-10: one list the window keeps, changed in place (ShellViewModel.ModCardsView.cs)
+    public IEnumerable<ModSetCard> FilteredModSetCards => ShownModSetCards(ModSetCards.Where(set => string.IsNullOrWhiteSpace(_modSearch)
+        || set.Title.Contains(_modSearch.Trim(), StringComparison.OrdinalIgnoreCase) || set.Packs.Any(MatchesSearch)));
     public bool HasModSetCards => ModSetCards.Count > 0;
 
     private bool MatchesSearch(ModCard card) => string.IsNullOrWhiteSpace(_modSearch)

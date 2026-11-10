@@ -139,11 +139,11 @@ public sealed partial class ShellViewModel
     {
         if (!CanSettle) return;
         _settling = true;
+        using var span = Span();
         try
         {
             SettleCount++;
             BusyTrace?.Add("settle");
-            _saveScan.Invalidate();
             if (InShell)
             {
                 FillPlayBoard();

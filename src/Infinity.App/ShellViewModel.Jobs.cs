@@ -85,13 +85,15 @@ public sealed partial class ShellViewModel
     {
         // running jobs first, then failures (they wait for Retry), then the checks of finished ones
         var toasts = Jobs.Toasts.OrderBy(j => j.State == JobState.Running ? 0 : j.State == JobState.Failed ? 1 : 2).ToList();
-        JobToasts.Clear();
+        // owner 2026-11-10: in place (a toast whose line did not change keeps its drawing and its spinner)
+        var shown = new List<JobToast>();
         foreach (var job in toasts.Take(ToastsShown))
         {
             var detail = job.State == JobState.Failed ? job.Error ?? S["native.failed"] : job.ProgressText ?? string.Empty;
-            JobToasts.Add(new JobToast(job, job.Label, detail, job.Running, job.State is JobState.Succeeded, job.State == JobState.Failed,
+            shown.Add(new JobToast(job, job.Label, detail, job.Running, job.State is JobState.Succeeded, job.State == JobState.Failed,
                 (job.Progress ?? 0) * 100, job.Progress is not null));
         }
+        ListSync.Sync(JobToasts, shown, (a, b) => a.Equals(b), (a, b) => ReferenceEquals(a.Job, b.Job));
         var more = toasts.Count - ToastsShown;
         JobsMoreText = more > 0 ? S.Format("jobs.more", ("count", more.ToString(CultureInfo.CurrentCulture))) : string.Empty;
         Changed(nameof(ShowJobToasts));

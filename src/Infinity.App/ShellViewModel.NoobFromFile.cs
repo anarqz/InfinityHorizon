@@ -141,7 +141,7 @@ public sealed partial class ShellViewModel
             var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
             // this profile's own folder, never another XUID's; what it holds goes to History first (§7.1)
             var target = CurrentGame.Saves.ProfileDir(root, xuid);
-            if (!ArchiveFirst("import", target, "save_file.reason", [("name", "NOOB · " + name), ("game", GameLabel)], "file", "noob"))
+            if (!await ArchiveFirstAsync("import", target, "save_file.reason", [("name", "NOOB · " + name), ("game", GameLabel)], "file", "noob"))
             {
                 Log("saves: save file copy stopped: History not written");
                 return;

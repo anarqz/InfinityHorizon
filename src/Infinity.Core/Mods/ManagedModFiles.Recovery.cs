@@ -57,7 +57,10 @@ public sealed partial class ManagedModFiles
     public static readonly TimeSpan SessionRetention = TimeSpan.FromDays(1);
 
     /// <summary>Reads everything the Mods page and Play need; content problems are reported, never thrown. Writes nothing.</summary>
-    public ModHealth Inspect()
+    public ModHealth Inspect() => Inspect(progress: null);
+
+    /// <param name="progress">Called before each installation is read: (done, total), for the Mods page's "Reading your mods… (3 of 44)".</param>
+    public ModHealth Inspect(Action<int, int>? progress)
     {
         var problems = new List<string>();
         var installed = new List<ModInstallation>();
@@ -70,8 +73,15 @@ public sealed partial class ManagedModFiles
             here = RecoveryRequiredHere;
             elsewhere = PendingFolders().Any(folder => !string.Equals(folder, BackupRoot, StringComparison.OrdinalIgnoreCase));
             if (Directory.Exists(BackupRoot))
-                foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json"))
-                    installed.Add(Inspect(Path.GetFileName(path)[..^".receipt.json".Length]));
+            {
+                var receipts = Directory.GetFiles(BackupRoot, "*.receipt.json");
+                for (var i = 0; i < receipts.Length; i++)
+                {
+                    progress?.Invoke(i, receipts.Length);
+                    installed.Add(Inspect(Path.GetFileName(receipts[i])[..^".receipt.json".Length]));
+                }
+                progress?.Invoke(receipts.Length, receipts.Length);
+            }
         }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
         IReadOnlyList<string> relink = [];
@@ -97,7 +107,7 @@ public sealed partial class ManagedModFiles
             catch (JsonException) { continue; }
             if (receipt?.Files is null || receipt.GameRoot is not { } old || string.Equals(old, _game, StringComparison.OrdinalIgnoreCase) || Directory.Exists(old)
                 || !string.Equals(receipt.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)) continue;
-            if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => Current(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
+            if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => CachedCurrent(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
                 result.Add(receipt.Id);
         }
         return result;
@@ -135,7 +145,7 @@ public sealed partial class ManagedModFiles
         try
         {
             // the record is intact from here: what fails now is the player's files or the disk, never a reason to archive it
-            var drift = DriftOf(receipt);
+            var drift = DriftOf(receipt, cached: true);
             IReadOnlyList<ManifestIniIssue> issues = [];
             if (manifest.ConfigPath is { } config && File.Exists(Target("azimuth", config)))
             {

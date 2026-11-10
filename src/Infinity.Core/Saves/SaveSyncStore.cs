@@ -270,25 +270,43 @@ public sealed class SaveSyncStore
         }
     }
 
+    /// <summary>
+    /// Owner 2026-11-10 (the launcher never freezes): the parsed file per path, with the length and write time it was read at. The cards
+    /// ask for a profile's state many times per refresh on the UI thread; an unchanged file (one stat) answers from memory, any change
+    /// (this store's write, another store's, another process) reads it again. The records are immutable, so sharing them is safe.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, long Ticks, SyncStateFile File)> Parsed =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private SyncStateFile Load()
     {
         try
         {
-            if (!File.Exists(FilePath))
+            var info = new FileInfo(FilePath);
+            if (!info.Exists)
             {
                 return new SyncStateFile(2, []);
             }
+            var key = info.FullName;
+            if (Parsed.TryGetValue(key, out var known) && known.Length == info.Length && known.Ticks == info.LastWriteTimeUtc.Ticks)
+            {
+                return known.File;
+            }
             var file = JsonSerializer.Deserialize<SyncStateFile>(File.ReadAllText(FilePath), Options);
-            return file is { Profiles: not null } && file.Profiles.All(p => p is { Realm: not null }
+            var valid = file is { Profiles: not null } && file.Profiles.All(p => p is { Realm: not null }
                     && (p.Mark is null || p.Mark.Content is not null)
                     && (p.PendingUpload is null || (p.PendingUpload.CommitId is not null && p.PendingUpload.Kind is not null
                         && p.PendingUpload.Content is not null && p.PendingUpload.BundleFile is not null && p.PendingUpload.BundleSha256 is not null)))
                 ? file
                 : throw new JsonException("no profiles, or a null entry");
+            // the stamp taken before the read: a write meanwhile leaves a newer stamp on disk, so the next read reads again
+            Parsed[key] = (info.Length, info.LastWriteTimeUtc.Ticks, valid);
+            return valid;
         }
         catch (JsonException)
         {
             // Kept for support, never deleted; an empty state decides Conflict, never an upload.
+            Parsed.TryRemove(Path.GetFullPath(FilePath), out _);
             KeepDamagedAside();
             return new SyncStateFile(2, []);
         }
@@ -315,7 +333,14 @@ public sealed class SaveSyncStore
         }
     }
 
-    private void Save(SyncStateFile file) => WriteAtomically(FilePath, JsonSerializer.SerializeToUtf8Bytes(file, Options));
+    private void Save(SyncStateFile file)
+    {
+        WriteAtomically(FilePath, JsonSerializer.SerializeToUtf8Bytes(file, Options));
+        // every write of this process goes through here: the cache holds what was just written (two writes inside the file system's
+        // time resolution with the same length would otherwise read as unchanged)
+        var info = new FileInfo(FilePath);
+        if (info.Exists) Parsed[info.FullName] = (info.Length, info.LastWriteTimeUtc.Ticks, file);
+    }
 
     private static void WriteAtomically(string path, byte[] bytes)
     {

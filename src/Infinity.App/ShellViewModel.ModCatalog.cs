@@ -57,10 +57,11 @@ public sealed partial class ShellViewModel
     private ModHealth _modHealth = ModHealth.Empty;
     private string? _modStateError;
     private IReadOnlyList<ModCardFacts> _modFacts = [];
-    private int _modRefresh;
     public ObservableCollection<ModCard> ModCards { get; } = [];
     /// <summary>The mod cards shown on their own: every card but the packs a set card holds (OD-232, <see cref="ModSetCards"/>).</summary>
-    public IEnumerable<ModCard> FilteredModCards => ModCards.Where(card => MatchesSearch(card) && !SetMemberIds.Contains(card.Manifest.Id));
+    // owner 2026-11-10: one list the window keeps, changed in place (ShellViewModel.ModCardsView.cs); the set members once, not per card.
+    // ModCards holds the chosen game's cards only (RefreshModCards), so a game switch syncs the shown list to that game's cards in place.
+    public IEnumerable<ModCard> FilteredModCards => ShownModCards(ModCards.Where(MatchesSearch).ExceptBy(SetMemberIds, card => card.Manifest.Id));
     public string ModSearch
     {
         get => _modSearch;
@@ -89,11 +90,16 @@ public sealed partial class ShellViewModel
     public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true, Retired: false };
     public bool CanConfirmModUpdate => ModsIdle && _selectedMod is { UpdateAvailable: true, CanAct: true };
 
+    /// <summary>
+    /// A card's click: its options (an installed mod with settings, the BuiltIn options card) or its information. Owner 2026-11-10
+    /// ("clicking on the built-in card's OPTIONS shows nothing"): reading is always safe, so both panes open whatever else runs (a game-file check,
+    /// an update check, a mod operation); only Save and Undo wait, and the pane says why (<see cref="ModOptionsWait"/>). Never silent.
+    /// </summary>
     public async Task SelectModAsync(ModCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
-        if (!ModsIdle) return;
-        if (card.HasOptions && !_showModOptions && !_iniDirty)
+        // the latest state first when nothing else is reading or changing it (a busy launcher keeps the cards it has)
+        if (card.HasOptions && !_showModOptions && !_iniDirty && ModsIdle)
         {
             await RefreshModsAsync();
             card = ModCards.FirstOrDefault(current => current.Manifest.Id == card.Manifest.Id) ?? card;
@@ -102,17 +108,37 @@ public sealed partial class ShellViewModel
         _showModInfo = !card.HasOptions;
         _showModOptions = card.HasOptions;
         if (card.HasOptions && !(_iniDirty && _iniManifest == card.Manifest.Digest)) await LoadSelectedOptionsAsync();
+        // the options could not be read: the information pane instead (with the reason in the message bar), never an empty sidebar
+        if (card.HasOptions && _ini is null) { _showModOptions = false; _showModInfo = true; }
         Changed(string.Empty);
     }
 
-    public void SelectMod(ModCard card) => _ = SelectModAsync(card);
+    public void SelectMod(ModCard card) => _ = GuardAsync("open a mod", () => SelectModAsync(card));
 
     public void ShowModInformation(ModCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
-        if (!ModsIdle) return;
         _selectedMod = card; _showModInfo = true; _showModOptions = false; _externalMod = null;
         Changed(string.Empty);
+    }
+
+    /// <summary>Why Save and Undo of the options wait now (empty when they don't): what the launcher is busy with.</summary>
+    public string ModOptionsWait => ModsIdle ? "" : S.Format("mods.options_wait", ("reason", S[ModsWaitReason]));
+    public bool HasModOptionsWait => ModOptionsWait.Length > 0;
+
+    /// <summary>
+    /// A click's work (the window's handlers await it): an exception is logged and said in the message bar, never lost in a
+    /// fire-and-forget task.
+    /// </summary>
+    internal async Task GuardAsync(string what, Func<Task> work)
+    {
+        try { await work(); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            Log("ui: " + what + " failed: " + ErrorChain(error));
+            Message = S["mods.click_failed"];
+            Changed(string.Empty);
+        }
     }
 
     public void CloseModPanel()
@@ -163,8 +189,36 @@ public sealed partial class ShellViewModel
         : CatalogExpired ? S["mods.catalog_expired"] : DevelopmentMods ? S["mods.catalog_dev"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"]
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
     public string ModCatalogSummary => S.Format((_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count") + (ModCards.Count == 1 ? "_one" : ""),
-        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "");
+        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
+        + (ModsReading ? " · " + S["jobs.mods_read"] : "");
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
+
+    /// <summary>Owner 2026-11-10: the page names its game ("Mods · Forza Motorsport 5").</summary>
+    public string ModsTitle => S.Format("mods.title_game", ("game", GameLabel));
+
+    /// <summary>The chosen game's mods folder, relative to Azimuth (<c>mods\Forza Motorsport 5</c>, OD-233).</summary>
+    public string ModsGameFolder => ExtraOptionsLayout.HasModsFolder(CurrentGame.Id)
+        ? S.Format("mods.game_folder", ("path", ExtraOptionsMods.ModsFolder + "\\" + ExtraOptionsLayout.GameFolder(CurrentGame.Id))) : "";
+
+    /// <summary>
+    /// Owner 2026-11-10: the game chips of the Mods page are PLAY's tiles (one selection: choosing a game here is choosing it on PLAY, and
+    /// the reverse), so they are <see cref="GameCards"/> themselves.
+    /// </summary>
+    public bool ShowModGameChips => GameCards.Count > 1;
+
+    /// <summary>A chip: the same choice as PLAY's tile (<see cref="SelectPlayGame"/>); the page reads the chosen game's mods again.</summary>
+    public void SelectModsGame(GameCard card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+        if (!card.Enabled) { Message = card.Reason.Length > 0 ? card.Reason : S["play.tile_not_in_install"]; return; }
+        if (Playing && card.Info.Id != _gate.Game) { Message = S["mods.wait.playing"]; return; }
+        SelectPlayGame(card);
+    }
+
+    /// <summary>The catalog is loaded and lists nothing for the chosen game: "No catalog mods for Forza Motorsport 5 yet".</summary>
+    public bool ShowModsEmptyForGame => _catalogLoaded && !ModsReading && string.IsNullOrWhiteSpace(_modSearch)
+        && !ModCards.Any(c => !c.BuiltIn) && ModSetCards.Count == 0;
+    public string ModsEmptyForGame => S.Format("mods.empty_game", ("game", GameLabel));
 
     /// <summary>Any interrupted operation in the bucket: mod changes wait for it (Play only for this folder, <see cref="ModPlayBlocked"/>).</summary>
     public bool ModRecoveryRequired => _modHealth.RecoveryHere || _modHealth.RecoveryElsewhere;
@@ -425,24 +479,134 @@ public sealed partial class ShellViewModel
         _catalogFailure = null;
     }
 
-    /// <summary>M10: reads mod state off the UI thread, then builds cards from that snapshot; the newest refresh wins.</summary>
-    internal async Task RefreshModsAsync()
-    {
-        var version = ++_modRefresh;
-        var factory = ModManagerFactory();
-        var catalog = _manifestCatalog;
-        var (health, error, facts) = await Task.Run(() => ReadModState(factory, catalog));
-        if (version != _modRefresh) return;
-        if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
-        _modHealth = health; _modStateError = error; _modFacts = facts;
-        NoteDuplicateDiscordMod(); // OD-136: once, when Bullet4fun's Discord RPC is installed
-        RefreshModCards();
-        await RefreshExtraOptionsModsAsync();
-        if (_selectedMod is { HasOptions: true } && !_iniDirty) await LoadSelectedOptionsAsync();
-        Changed(string.Empty);
+    /// <summary>The requests that arrived while a read ran: the next read serves them all (it starts after each of them).</summary>
+    private TaskCompletionSource? _modReadPending;
+    private bool _modReadRunning;
+
+    /// <summary>A mod state read is running or queued (the page says so instead of an empty "0 mods").</summary>
+    public bool ModsReading => _modReadRunning;
+
+    /// <summary>Test seam: a pause inside every mod state read (a slow disk, 44 large mods to hash), off the UI thread.</summary>
+    internal TimeSpan ModStateReadDelayForTests { get; set; }
+
+    /// <summary>Test seam: how many reads have been applied to the page.</summary>
+    internal int ModReadsApplied { get; private set; }
+
+    /// <summary>How long a read runs before it shows its toast ("Reading your mods…").</summary>
+    private static readonly TimeSpan ModReadToastAfter = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>
+    /// M10: reads mod state off the UI thread, then builds cards from that snapshot. One read at a time: a request while one runs is served
+    /// by the next read, which starts after it (so the returned task ends with state at least as new as the request). Every read that ends
+    /// is shown. 3.1.1 field bug (owner 2026-11-10, 44 installed mods): each refresh started its own read and only the newest was kept, so
+    /// while the start-up, the game choice and the catalog kept asking, every read (hashing every mod file) was dropped and the page showed
+    /// "0 mods", not even the BuiltIn card. A read longer than <see cref="ModReadToastAfter"/> is a bottom-right toast (no PLAY hold).
+    /// </summary>
+    internal Task RefreshModsAsync()
+    {        // the built-in card (and whatever is already known) is there at once, never an empty page while the first read runs
+        if (ModCards.Count == 0) { try { RefreshModCards(); } catch (Exception error) when (error is not OutOfMemoryException) { Log("mods: cards not built: " + ErrorChain(error)); } }
+        var pending = _modReadPending ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_modReadRunning) _ = ModReadLoopAsync();
+        return pending.Task;
     }
 
-    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official)
+    /// <summary>The running read's place: installations read so far and in all (0 of 0 before it reaches the receipts).</summary>
+    private (int Done, int Total) _modReadProgress;
+
+    /// <summary>The running read's toast, to report its progress to; null when the read is quick (no toast).</summary>
+    private Infinity.Core.Shell.JobContext? _modReadToast;
+
+    /// <summary>Owner 2026-11-10: the Mods page says the read is running, with its progress ("Reading your mods… (3 of 44)").</summary>
+    public string ModsReadingText => _modReadProgress.Total > 0
+        ? S.Format("mods.reading_progress", ("done", Math.Min(_modReadProgress.Done + 1, _modReadProgress.Total).ToString(CultureInfo.CurrentCulture)),
+            ("total", _modReadProgress.Total.ToString(CultureInfo.CurrentCulture)))
+        : S["jobs.mods_read"];
+    public bool ModsReadingHasProgress => _modReadProgress.Total > 0;
+    public bool ModsReadingIndeterminate => !ModsReadingHasProgress;
+    public double ModsReadingPercent => _modReadProgress.Total > 0 ? 100.0 * _modReadProgress.Done / _modReadProgress.Total : 0;
+
+    private void OnModReadProgress((int Done, int Total) step)
+    {
+        if (!_modReadRunning) return;
+        _modReadProgress = step;
+        _modReadToast?.Report(step.Total > 0 ? (double)step.Done / step.Total : null, ModsReadingText);
+        Changed(nameof(ModsReadingText)); Changed(nameof(ModsReadingHasProgress)); Changed(nameof(ModsReadingIndeterminate)); Changed(nameof(ModsReadingPercent));
+    }
+
+    private async Task ModReadLoopAsync()
+    {
+        _modReadRunning = true; _modReadProgress = (0, 0);
+        Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsReadingText)); Changed(nameof(ModsReadingHasProgress));
+        TaskCompletionSource? toastDone = null;
+        try
+        {
+            while (_modReadPending is { } batch)
+            {
+                _modReadPending = null;
+                var read = ReadAndApplyModsAsync();
+                if (toastDone is null && await Task.WhenAny(read, Task.Delay(ModReadToastAfter)) != read)
+                {
+                    toastDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var done = toastDone;
+                    StartBackgroundJob("mods-read", S["jobs.mods_read"], blocksPlay: false, context => { _modReadToast = context; return done.Task; });
+                }
+                try { await read; }
+                catch (Exception error) when (error is not OutOfMemoryException) { Log("mods: page not refreshed: " + ErrorChain(error)); }
+                batch.TrySetResult();
+            }
+        }
+        finally
+        {
+            _modReadRunning = false; _modReadToast = null; _modReadProgress = (0, 0);
+            toastDone?.TrySetResult();
+            Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsReadingText));
+        }
+    }
+
+    private async Task ReadAndApplyModsAsync()
+    {
+        var factory = ModManagerFactory();
+        var catalog = _manifestCatalog;
+        var delay = ModStateReadDelayForTests;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        IProgress<(int, int)> progress = new Progress<(int Done, int Total)>(OnModReadProgress); // posts to the UI thread
+        var (health, error, facts) = await Task.Run(() =>
+        {
+            // the test pause is spread over the installations, as a slow disk is
+            Action<int, int> step = delay > TimeSpan.Zero
+                ? (done, total) => { progress.Report((done, total)); if (done < total) Thread.Sleep(delay / Math.Max(total, 1)); }
+                : (done, total) => progress.Report((done, total));
+            if (delay > TimeSpan.Zero && factory is null) Thread.Sleep(delay);
+            return ReadModState(factory, catalog, step);
+        });
+        if (watch.ElapsedMilliseconds >= 1000)
+            Log("mods: state read in " + watch.ElapsedMilliseconds + " ms (" + health.Installed.Count + " installed, " + catalog.Count + " in the catalog)");
+        if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
+        _modHealth = health; _modStateError = error; _modFacts = facts;
+        ModReadsApplied++;
+        try
+        {
+            NoteDuplicateDiscordMod(); // OD-136: once, when Bullet4fun's Discord RPC is installed
+            RefreshModCards();
+            await RefreshExtraOptionsModsAsync();
+            if (_selectedMod is { HasOptions: true } && !_iniDirty) await LoadSelectedOptionsAsync();
+        }
+        finally { Changed(string.Empty); }
+    }
+
+    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official,
+        Action<int, int>? progress = null)
+    {
+        // never an exception out of the read: what cannot be read is the page's attention panel (Try again), and the cards still show
+        try { return ReadModStateUnguarded(factory, official, progress); }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error))
+        {
+            return (ModHealth.Empty, ManagedModFiles.Code(error), official.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray());
+        }
+    }
+
+    private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModStateUnguarded(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official,
+        Action<int, int>? progress)
     {
         // Owner 2026-10-28: the catalog's mods only; a mod installed earlier that the catalog no longer lists (OD-232: a retired format
         // too) still has its card from its receipt (below), to disable or uninstall
@@ -454,7 +618,7 @@ public sealed partial class ShellViewModel
         { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray()); }
         // OD-125/127: a receipt from when the catalog installed ExtraOptions as a mod no longer stands for anything (it is built in)
         try { manager.RetireBuiltInReceipt(); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
-        var health = manager.Inspect();
+        var health = manager.Inspect(progress);
         var facts = new List<ModCardFacts>();
         foreach (var listed in catalog)
         {

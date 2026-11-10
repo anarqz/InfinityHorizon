@@ -45,6 +45,65 @@
     "preserveOnDisable": true,
     "options": [
       {
+        "id": "global-enabled",
+        "section": "Global",
+        "key": "Enabled",
+        "label": {
+          "en": "Extra Options on",
+          "pt-BR": "Extra Options ativado"
+        },
+        "description": {
+          "en": "Turns every feature of the mod on or off, the mods folder's loader included.",
+          "pt-BR": "Liga ou desliga todas as funções do mod, incluindo o carregador da pasta de mods."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1",
+        "lockedValue": true,
+        "lockReason": {
+          "en": "Kept on by Infinity: Extra Options is part of Infinity (ExtraOptions.Infinity) and loads the game's mods.",
+          "pt-BR": "Mantido ligado pelo Infinity: o Extra Options faz parte do Infinity (ExtraOptions.Infinity) e carrega os mods do jogo."
+        }
+      },
+      {
+        "id": "frontend-hidelevelfasternotification",
+        "section": "Frontend",
+        "key": "HideLevelFasterNotification",
+        "label": {
+          "en": "Hide \"level faster\" banner",
+          "pt-BR": "Esconder o aviso \"suba de nível mais rápido\""
+        },
+        "description": {
+          "en": "Hides the blue \"Press Y to level faster\" banner before and after races and in Free Play. The Y action itself stays.",
+          "pt-BR": "Esconde o aviso azul \"Aperte Y para subir de nível mais rápido\" antes e depois das corridas e no Free Play. A ação do Y continua."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
+        "id": "frontend-hidedrivatardesignsbutton",
+        "section": "Frontend",
+        "key": "HideDrivatarDesignsButton",
+        "label": {
+          "en": "Hide Drivatar designs shortcut",
+          "pt-BR": "Esconder o atalho de designs dos Drivatars"
+        },
+        "description": {
+          "en": "Hides the Enable/Disable Drivatar Designs shortcut in the race pause menu.",
+          "pt-BR": "Esconde o atalho Ativar/Desativar designs dos Drivatars no menu de pausa da corrida."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
         "id": "frontend-skipintro",
         "section": "Frontend",
         "key": "SkipIntro",
@@ -55,6 +114,78 @@
         "description": {
           "en": "Starts straight at \"Press Start\". Applies at the next launch.",
           "pt-BR": "Abre direto no \"Press Start\". Vale a partir da próxima abertura do jogo."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
+        "id": "frontend-e3startscreen",
+        "section": "Frontend",
+        "key": "E3StartScreen",
+        "label": {
+          "en": "E3 start screen",
+          "pt-BR": "Tela inicial da E3"
+        },
+        "description": {
+          "en": "Uses the game's E3 start-screen layout and animations, with the normal sign-in. It does not turn on the E3 demo mode.",
+          "pt-BR": "Usa o layout e as animações da tela inicial da E3, com o login normal. Não liga o modo demonstração da E3."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": false,
+        "encoding": "0/1"
+      },
+      {
+        "id": "frontend-enablemarketplace",
+        "section": "Frontend",
+        "key": "EnableMarketplace",
+        "label": {
+          "en": "Marketplace tile",
+          "pt-BR": "Bloco Marketplace"
+        },
+        "description": {
+          "en": "Keeps the main menu's Marketplace tile and its action available offline.",
+          "pt-BR": "Mantém o bloco Marketplace do menu principal e a ação dele disponíveis offline."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
+        "id": "frontend-allrimscategory",
+        "section": "Frontend",
+        "key": "AllRimsCategory",
+        "label": {
+          "en": "All rims category",
+          "pt-BR": "Categoria com todas as rodas"
+        },
+        "description": {
+          "en": "Adds every aftermarket and factory rim to the rim-style categories; the original categories stay.",
+          "pt-BR": "Adiciona todas as rodas originais e de fábrica às categorias de rodas; as categorias originais continuam."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
+        "id": "frontend-jumptomanufacturer",
+        "section": "Frontend",
+        "key": "JumpToManufacturer",
+        "label": {
+          "en": "Jump to manufacturer",
+          "pt-BR": "Ir para a fabricante"
+        },
+        "description": {
+          "en": "View opens the manufacturer grid in every car selection menu; Wheel Styles moves to Y.",
+          "pt-BR": "O View abre a grade de fabricantes em todos os menus de escolha de carro; Estilos de roda passa para o Y."
         },
         "advanced": false,
         "apply": "next-launch",
@@ -86,6 +217,47 @@
         }
       },
       {
+        "id": "files-enablemediaoverrides",
+        "section": "Files",
+        "key": "EnableMediaOverrides",
+        "label": {
+          "en": "Loose files (mediaoverride)",
+          "pt-BR": "Arquivos soltos (mediaoverride)"
+        },
+        "description": {
+          "en": "Loads loose files next to the game (mediaoverride, then mediapc, then the original media). Restart the game after changing files.",
+          "pt-BR": "Carrega arquivos soltos ao lado do jogo (mediaoverride, depois mediapc, depois a mídia original). Reinicie o jogo depois de mudar arquivos."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1",
+        "lockedValue": true,
+        "lockReason": {
+          "en": "Kept on by Infinity: mods change game files only through media overrides.",
+          "pt-BR": "Mantido ligado pelo Infinity: os mods só mudam arquivos do jogo pelas substituições de mídia."
+        }
+      },
+      {
+        "id": "compatibility-disableparentallocks",
+        "section": "Compatibility",
+        "key": "DisableParentalLocks",
+        "label": {
+          "en": "Allow multiplayer and user-created content",
+          "pt-BR": "Permitir multijogador e conteúdo criado por usuários"
+        },
+        "description": {
+          "en": "Passes the game's local privilege checks for multiplayer and user-created content.",
+          "pt-BR": "Libera as verificações locais de privilégio para multijogador e conteúdo criado por usuários."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
         "id": "compatibility-generatemissingsavecommits",
         "section": "Compatibility",
         "key": "GenerateMissingSaveCommits",
@@ -107,6 +279,103 @@
           "en": "Kept off by Infinity: it would turn a half-written save revision into a valid one, which the cloud save line must never take.",
           "pt-BR": "Mantido desligado pelo Infinity: ele transformaria uma revisão de save gravada pela metade em uma válida, o que a linha de saves na nuvem nunca pode aceitar."
         }
+      },
+      {
+        "id": "camera-headlights",
+        "section": "Camera",
+        "key": "Headlights",
+        "label": {
+          "en": "Headlight hotkeys",
+          "pt-BR": "Atalhos dos faróis"
+        },
+        "description": {
+          "en": "Turns the headlights on and off while driving (Right Stick on a controller, F3 on the keyboard by default).",
+          "pt-BR": "Liga e desliga os faróis enquanto você dirige (analógico direito no controle, F3 no teclado por padrão)."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
+        "id": "mods-enabled",
+        "section": "Mods",
+        "key": "Enabled",
+        "label": {
+          "en": "Load mods",
+          "pt-BR": "Carregar mods"
+        },
+        "description": {
+          "en": "Loads the mods of mods\\Forza Motorsport 5 beside azimuth.exe; later lines of its loadorder.txt win. Off: no mod loads.",
+          "pt-BR": "Carrega os mods de mods\\Forza Motorsport 5 ao lado do azimuth.exe; as linhas mais abaixo do loadorder.txt dela prevalecem. Desligado: nenhum mod carrega."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1",
+        "lockedValue": true,
+        "lockReason": {
+          "en": "Kept on by Infinity: the launcher's mods and the ones you copied in load through it.",
+          "pt-BR": "Mantido ligado pelo Infinity: os mods do launcher e os que você copiou carregam por ele."
+        }
+      },
+      {
+        "id": "mods-databasecache",
+        "section": "Mods",
+        "key": "DatabaseCache",
+        "label": {
+          "en": "Mods database cache",
+          "pt-BR": "Cache do banco de dados dos mods"
+        },
+        "description": {
+          "en": "Reuses the merged game database while the game, the enabled mods, their order and files stay the same (kept in mods\\Cache\\fm5-db, rebuilt by itself after a change). Off: merged again at every start.",
+          "pt-BR": "Reaproveita o banco de dados do jogo já mesclado enquanto o jogo, os mods ativos, a ordem e os arquivos deles continuam iguais (fica em mods\\Cache\\fm5-db e é refeito sozinho após uma mudança). Desligado: mescla de novo a cada abertura."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
+      },
+      {
+        "id": "experiments-localdrivatarliveries",
+        "section": "Experiments",
+        "key": "LocalDrivatarLiveries",
+        "label": {
+          "en": "My designs on Drivatars (experimental)",
+          "pt-BR": "Meus designs nos Drivatars (experimental)"
+        },
+        "description": {
+          "en": "Puts matching designs from My Designs on FM5's Drivatars. Needs Drivatar Designs on in the HUD settings.",
+          "pt-BR": "Usa designs correspondentes de Meus Designs nos Drivatars do FM5. Precisa de Designs dos Drivatars ligado nas opções de HUD."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": false,
+        "encoding": "0/1"
+      },
+      {
+        "id": "experiments-maxdrivatarliveries",
+        "section": "Experiments",
+        "key": "MaxDrivatarLiveries",
+        "label": {
+          "en": "Drivatars with my designs (0-16)",
+          "pt-BR": "Drivatars com meus designs (0-16)"
+        },
+        "description": {
+          "en": "The most opponents of one lineup that get one of your designs, from 0 to 16.",
+          "pt-BR": "O máximo de adversários de um grid que recebem um dos seus designs, de 0 a 16."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16,
+        "step": 1,
+        "default": 6
       }
     ]
   }

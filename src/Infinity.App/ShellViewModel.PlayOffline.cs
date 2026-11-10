@@ -134,12 +134,12 @@ public sealed partial class ShellViewModel
     {
         if (!CanPlayOffline) return;
         // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
-        RefreshHook();
+        await RefreshHookAsync();
         if (!EnsureHookCurrentForPlay()) return;
         if (!CanPlayOffline || _install is not { } install || OfflinePlayProfile is not { } profile || ModManagerFactory() is not { } factory) return;
         _modLaunchFailure = null;
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
-        RefreshHook();
+        await RefreshHookAsync();
         if (_hook is not { Verified: true }) { Message = S["play.setup_needed"]; return; }
         _modOperation = true; _modProgress = S["mods.session_prepare"]; Busy = true;
         _play = new CancellationTokenSource(); Changed(string.Empty);
@@ -198,7 +198,10 @@ public sealed partial class ShellViewModel
         {
             _modOperation = true; Busy = true; _modProgress = S["mods.session_prepare"]; Changed(string.Empty);
             _offlineChild = null;
-            _play?.Dispose(); _play = null; _playTask = null; _modOperation = false; Busy = false;
+            _play?.Dispose(); _play = null; _playTask = null;
+            // the game wrote its saves meanwhile: scanned off the UI thread before the cards are rebuilt (the overlay is still up)
+            await PrimeLocalFactsQuietlyAsync();
+            _modOperation = false; Busy = false;
             try { await RefreshModsAsync(); } // local: the mods' state on disk
             finally { _offlineWrapUp = false; }
             Changed(string.Empty);
