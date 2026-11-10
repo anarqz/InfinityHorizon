@@ -42,8 +42,11 @@ public sealed partial class ShellViewModel
 
     public bool HasBusyElapsed => _busyState.ElapsedSeconds is not null;
 
-    /// <summary>A sign-in waiting on the network can still be cancelled from the overlay (it writes nothing); a write never can.</summary>
-    public bool CanCancelBusy => _signIn is not null && _busyState.IsBusy;
+    /// <summary>
+    /// A sign-in waiting on the network can still be cancelled from the overlay (it writes nothing); a write never can. Owner 2026-11-10
+    /// (3.1.1): so can a Play's "Joining queue…" once it asks the server for a place (Leave queue).
+    /// </summary>
+    public bool CanCancelBusy => _busyState.IsBusy && (_signIn is not null || _playOverlay is not null && CanLeaveQueue && !_busy);
 
     /// <summary>The label the overlay shows now, for the dispatcher watchdog's thread (a field read).</summary>
     internal string BusyActivity => _busyActivity;

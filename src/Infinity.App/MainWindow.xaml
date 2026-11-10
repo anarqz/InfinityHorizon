@@ -1982,31 +1982,7 @@
                 <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" TextAlignment="Center" FontWeight="Bold"
                            AutomationProperties.LiveSetting="Polite" />
               </StackPanel>
-              <Border Style="{StaticResource Card}" Background="#EE170B22" BorderBrush="#775A184D" Margin="0,2,0,0"
-                      Visibility="{Binding WaitingForAdmission, Converter={StaticResource Visible}}">
-                <StackPanel>
-                  <TextBlock Text="{Binding AdmissionTitle}" FontWeight="Bold" FontSize="22" TextWrapping="Wrap"
-                             AutomationProperties.LiveSetting="Polite" />
-                  <TextBlock Text="{Binding AdmissionDetail}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource InfinityMuted}" />
-                  <Grid Margin="0,18,0,12" Visibility="{Binding Queued, Converter={StaticResource Visible}}">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <StackPanel Margin="0,0,26,0">
-                      <TextBlock Text="{Binding S[queue.your_position]}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
-                      <TextBlock Text="{Binding QueueNumber}" FontSize="48" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
-                                 AutomationProperties.LiveSetting="Polite" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                      <TextBlock Text="{Binding QueueEstimate}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap" />
-                      <TextBlock Text="{Binding QueueAhead}" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,0" />
-                    </StackPanel>
-                  </Grid>
-                  <ProgressBar Height="3" IsIndeterminate="True" Margin="0,16,0,16" Foreground="{StaticResource InfinityAccent}"
-                               AutomationProperties.Name="{Binding AdmissionTitle}" />
-                  <TextBlock Text="{Binding S[queue.keep_open]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                  <Button Content="{Binding LeaveQueueLabel}" Click="OnLeaveQueue" HorizontalAlignment="Left" Margin="0,18,0,0"
-                          IsEnabled="{Binding CanLeaveQueue}" />
-                </StackPanel>
-              </Border>
+              <!-- owner 2026-11-10 (3.1.1): the queue is a modal over the whole window (QueueOverlay, below), no longer a card here -->
               <!-- games-5: the old page's "Use a save from this PC" link is gone (a save from this PC is one of START CAREER's choices and a
                    Profiles tool); only Quit game stays here while a game runs. -->
               <WrapPanel Margin="0,14,0,0" HorizontalAlignment="Center" Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
@@ -3043,6 +3019,37 @@
       <TextBlock Text="{Binding JobsMoreText}" Margin="0,6,4,0" HorizontalAlignment="Right" Foreground="{StaticResource InfinityMuted}"
                  Visibility="{Binding HasJobsMore, Converter={StaticResource Visible}}" />
     </StackPanel>
+    <!-- owner 2026-11-10 (3.1.1): the queue modal. Once the server says where the player is ("Joining queue…" before it), the queue shows
+         over the whole window like the busy overlay: nothing outside it takes a click or a key (MainWindow.ScreenLock), its own Leave queue
+         button does. Admitted, it gives way to "Joining game…" (the busy overlay). -->
+    <Border x:Name="QueueOverlay" Panel.ZIndex="97" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
+            Visibility="{Binding ShowQueueModal, Converter={StaticResource Visible}}" AutomationProperties.Name="{Binding AdmissionTitle}">
+      <Border Style="{StaticResource Card}" Background="#EE170B22" BorderBrush="#775A184D" HorizontalAlignment="Center" VerticalAlignment="Center"
+              MinWidth="420" MaxWidth="560">
+        <StackPanel>
+          <TextBlock Text="{Binding AdmissionTitle}" FontWeight="Bold" FontSize="22" TextWrapping="Wrap"
+                     AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{Binding AdmissionDetail}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource InfinityMuted}" />
+          <Grid Margin="0,18,0,12" Visibility="{Binding Queued, Converter={StaticResource Visible}}">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <StackPanel Margin="0,0,26,0">
+              <TextBlock Text="{Binding S[queue.your_position]}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+              <TextBlock Text="{Binding QueueNumber}" FontSize="48" FontWeight="Bold" Foreground="{StaticResource InfinityGold}"
+                         AutomationProperties.LiveSetting="Polite" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock Text="{Binding QueueEstimate}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding QueueAhead}" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,0" />
+            </StackPanel>
+          </Grid>
+          <ProgressBar Height="3" IsIndeterminate="True" Margin="0,16,0,16" Foreground="{StaticResource InfinityAccent}"
+                       AutomationProperties.Name="{Binding AdmissionTitle}" />
+          <TextBlock Text="{Binding S[queue.keep_open]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
+          <Button x:Name="QueueLeaveButton" Content="{Binding LeaveQueueLabel}" Click="OnLeaveQueue" HorizontalAlignment="Left" Margin="0,18,0,0"
+                  IsEnabled="{Binding CanLeaveQueue}" />
+        </StackPanel>
+      </Border>
+    </Border>
     <!-- owner 2026-11-08: every network or save action shows this modal overlay (spinner + what is happening); clicks and keys stop here.
          Review 3.1.1: above the ⋯ menus (95) and the file picker (96), so neither stays clickable under a lock or a load; only the mod
          operation's own progress screen (100) is above it. -->

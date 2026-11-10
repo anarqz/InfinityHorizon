@@ -240,7 +240,7 @@ public sealed partial class ShellViewModel
     {
         if (factory is null) return null;
         ModHealth health;
-        try { health = factory().Inspect(); }
+        try { health = factory().Inspect(progress: null, game); } // only FM5's own installations (owner 2026-11-10, 3.1.1)
         catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return null; }
         if (health.RecoveryHere || health.Problems.Count > 0 || health.Installed.Any(i => i.Problem is not null || i.Manifest is null)) return null;
         var mine = health.Installed.Where(i => i.Enabled && i.Manifest!.ModsGame == game && !i.Manifest.Retired).ToList();

@@ -287,7 +287,12 @@ public sealed partial class ShellViewModel
         {
             try { Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(_install.Root)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("extraoptions: " + e.Message); }
-            Install = AzimuthInstall.Detect(_install.Root); // re-reads the hook (RefreshHook) for the session's HookSha256
+            // re-reads the hook (RefreshHook) for the session's HookSha256. Owner 2026-11-10 (3.1.1): the same Azimuth folder, so its mods
+            // are not read again here (the Install setter's StartMods would read them all at PLAY)
+            SelectInstall(AzimuthInstall.Detect(_install.Root));
+            RefreshHook();
+            FillPlayBoard();
+            Changed(string.Empty);
             return true;
         }
         if (refresh.AllowsPlay) return true;

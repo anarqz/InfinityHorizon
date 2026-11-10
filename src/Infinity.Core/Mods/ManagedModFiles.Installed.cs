@@ -247,7 +247,10 @@ public sealed partial class ManagedModFiles
     /// written. Drift and settings issues are warnings; only an interrupted operation of this Azimuth
     /// folder throws (<see cref="ModErrors.Recovery"/>).
     /// </summary>
-    /// <param name="game">OD-233: the game launched; Hardcore refuses only that game's mods (null: every game's, as before).</param>
+    /// <param name="game">
+    /// OD-233: the game launched; Hardcore refuses only that game's mods, and only that game's enabled mods are prepared (null: every
+    /// game's, as before).
+    /// </param>
     public ModLaunchPreparation PrepareForLaunch(bool hardcore = false, string? game = null)
     {
         if (!Directory.Exists(BackupRoot) || !RecoveryRequiredHere && !Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Any()) return ModLaunchPreparation.None;
@@ -283,10 +286,14 @@ public sealed partial class ManagedModFiles
                 }
                 catch (Exception error) when (IsStateError(error)) { warnings.Add(id + ": unreadable " + Code(error)); continue; } // shown on Mods, never a Play blocker
                 if (!receipt.Enabled) continue;
+                // owner 2026-11-10 (3.1.1): a launch prepares only its own game's mods; another game's are neither read further nor written
+                if (game is not null && manifest.ModsGame != game) continue;
                 enabled.Add(manifest);
                 // OD-232: still on (what the game reads stays as installed), shown on Mods to be removed
                 if (manifest.Retired) warnings.Add(manifest.Id + ": retired (" + string.Join(", ", manifest.RetiredFeatures) + ")");
-                if (DriftOf(receipt).Count > 0) warnings.Add(manifest.Id + ": drift");
+                // owner 2026-11-10 (3.1.1, "remove the read mods when clicking on PLAY"): drift here is only a logged warning, so the kept
+                // hashes (path, length, write time) answer it; nothing a launch depends on is decided from it
+                if (DriftOf(receipt, cached: true).Count > 0) warnings.Add(manifest.Id + ": drift");
                 if (manifest.ConfigPath is not { } config || !File.Exists(Target("azimuth", config))) continue;
                 var settings = ReadSettings(manifest);
                 if (settings.Issues.Count > 0) warnings.Add(manifest.Id + ": settings");

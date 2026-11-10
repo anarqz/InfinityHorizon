@@ -19,8 +19,8 @@ public partial class MainWindow
     private bool _locked;
     private IInputElement? _focusBeforeLock;
 
-    /// <summary>The screen is locked: the centre overlay or a mod operation's lock is up.</summary>
-    internal static bool Locked(ShellViewModel vm) => vm.ShowBusyOverlay || vm.ModOperationBusy;
+    /// <summary>The screen is locked: the centre overlay, the queue modal (owner 2026-11-10, 3.1.1) or a mod operation's lock is up.</summary>
+    internal static bool Locked(ShellViewModel vm) => vm.ShowBusyOverlay || vm.ShowQueueModal || vm.ModOperationBusy;
 
     private void SetUpScreenLock()
     {
@@ -46,8 +46,14 @@ public partial class MainWindow
 
     private void OnLockProperty(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is null or "" or nameof(ShellViewModel.ShowBusyOverlay) or nameof(ShellViewModel.ModOperationBusy) or nameof(ShellViewModel.ModContentEnabled))
+        if (e.PropertyName is null or "" or nameof(ShellViewModel.ShowBusyOverlay) or nameof(ShellViewModel.ShowQueueModal) or nameof(ShellViewModel.ModOperationBusy) or nameof(ShellViewModel.ModContentEnabled))
+        {
+            var was = _locked;
             ApplyLock();
+            // still locked, another overlay now (the Play's overlay and the queue modal take turns): the focus goes onto the one shown
+            if (was && _locked && e.PropertyName is nameof(ShellViewModel.ShowBusyOverlay) or nameof(ShellViewModel.ShowQueueModal))
+                Dispatcher.BeginInvoke(MoveFocusOffContent, DispatcherPriority.Loaded);
+        }
     }
 
     private void ApplyLock()
@@ -75,8 +81,11 @@ public partial class MainWindow
     private void MoveFocusOffContent()
     {
         if (_lockVm is not { } vm || !Locked(vm)) return;
-        if (!ShellContent.IsKeyboardFocusWithin && Keyboard.FocusedElement is not null) return;
+        // (the focus on an overlay that just closed, "Joining queue…" giving way to the queue modal, moves on too)
+        if (!ShellContent.IsKeyboardFocusWithin && Keyboard.FocusedElement is not null and not UIElement { IsVisible: false }) return;
         if (vm.ShowBusyOverlay && BusyOverlay.IsVisible && BusyOverlay.Focus()) return;
+        // the queue modal: its Leave queue button (else the modal itself), never the content behind it
+        if (vm.ShowQueueModal && QueueOverlay.IsVisible && (QueueOverlay.IsKeyboardFocusWithin || QueueLeaveButton.Focus() || QueueOverlay.Focus())) return;
         if (ModProgressOverlay.IsVisible && ModProgressOverlay.Focus()) return;
         if (ShellContent.IsKeyboardFocusWithin) Keyboard.ClearFocus();
     }
