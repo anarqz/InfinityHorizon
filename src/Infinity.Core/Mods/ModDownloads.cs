@@ -6,7 +6,7 @@ namespace Infinity.Core.Mods;
 /// A refused mod operation. <see cref="Code"/> is a stable, mod-agnostic category the launcher maps
 /// to a localized message (mods.error.&lt;code&gt;); the message itself is for the log only.
 /// </summary>
-public sealed class ModException(string message, string code = ModErrors.Failed) : Exception(message)
+public class ModException(string message, string code = ModErrors.Failed, Exception? inner = null) : Exception(message, inner)
 {
     public string Code { get; } = code;
 }
@@ -46,6 +46,11 @@ public static class ModErrors
     public const string ExternalFiles = "external_files";
     /// <summary>A retired installation's game files (OD-232) are restored, and no game folder is chosen (Configure → Game folder).</summary>
     public const string GameFolder = "game_folder";
+    /// <summary>
+    /// OD-233: the mods folder still has ExtraOptions 0.4.4's flat layout (or its move to the per-game folders stopped,
+    /// <see cref="ExtraOptionsLayoutException"/>): mod changes and Play wait until it has moved.
+    /// </summary>
+    public const string Layout = "layout";
 }
 
 public sealed class ModSettingsChangedException() : IOException("settings changed outside the launcher");

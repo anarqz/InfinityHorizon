@@ -78,6 +78,9 @@ public sealed partial class ManagedModFiles
         if (receipt.Id != id || receipt.Files is null || receipt.ManifestHash is null) throw new ModException("invalid receipt", ModErrors.Recovery);
         ValidateGameRoot(receipt);
         foreach (var file in receipt.Files) _ = Target(file.Root, file.Path);
+        // OD-233: a receipt still naming the old flat layout waits for MigrateLayout (its files are where it says until their folder moves)
+        if (receipt.Files.Any(f => f.Root == "azimuth" && ExtraOptionsLayout.LegacyFolder(f.Path) is not null))
+            throw new ModException("the mods folder must move to the per-game layout first", ModErrors.Layout);
         // An enabled mod's file recorded as already there with the mod's own bytes (an earlier install the launcher lost track of,
         // such as a moved game folder) is the mod's: disabling and uninstalling remove it (its bytes stay in the backup).
         if (!receipt.Enabled || !receipt.Files.Any(f => !f.Preserve && f.Before is not null && f.Before == f.After)) return receipt;
@@ -152,7 +155,7 @@ public sealed partial class ManagedModFiles
         ArgumentNullException.ThrowIfNull(manifest); ArgumentNullException.ThrowIfNull(downloadHosts);
         if (!update) CheckProfile(manifest, hardcore);
         if (!manifest.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported);
-        if (!update && Held(manifest.Id) is { } held && held.ManifestHash == manifest.Digest)
+        if (!update && Held(manifest.Id) is { } held && HeldMatches(held, manifest))
         {
             // the files kept on this PC by its uninstall: nothing is downloaded (every object is checked against its digest as it is read)
             progress?.Report("verify");
@@ -248,6 +251,8 @@ public sealed partial class ManagedModFiles
         if (!manifest.SupportedForInstall)
             throw new ModException("runtime or dependencies require coordination", ModErrors.Unsupported);
         using var gate = Lock();
+        // OD-233: nothing new lands beside the old flat layout (its move would then stop at that folder)
+        if (ExtraOptionsLayout.NeedsMigration(_azimuth)) throw new ModException("the mods folder must move to the per-game layout first", ModErrors.Layout);
         var installed = ReadReceipt(manifest.Id);
         if (installed is not null && !update) throw new ModException("already managed; use enable or disable", installed.ManifestHash == manifest.Digest ? ModErrors.Failed : ModErrors.Unsupported);
         if (installed is not null && installed.ManifestHash == manifest.Digest) throw new ModException("this version is already installed");
@@ -472,7 +477,7 @@ public sealed partial class ManagedModFiles
         RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
         // OD-127 (owner 2026-10-28): an ExtraOptions mod's folder leaves with it, with what the mod wrote there itself (its own settings),
         // so nothing of it stays in mods\ to show as a manual mod
-        try { if (ExtraOptionsMods.FolderOf(SnapshotFor(receipt)) is { } folder) ExtraOptionsMods.DeleteFolder(_azimuth, folder); }
+        try { if (SnapshotFor(receipt) is var removed && ExtraOptionsMods.FolderOf(removed) is { } folder) ExtraOptionsMods.DeleteFolder(_azimuth, folder, removed.ModsGame); }
         catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException or InvalidDataException) { }
         ReconcileWineOverrides();
     }

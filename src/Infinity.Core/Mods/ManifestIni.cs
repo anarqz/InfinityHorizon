@@ -112,6 +112,22 @@ public sealed class ManifestIni
         }
     }
 
+    /// <summary>
+    /// OD-233: a reader that takes everything after <c>=</c> as the value (FM5's ExtraOptions reads through
+    /// <c>GetPrivateProfileString</c>, so <c>SkipIntro=0 ; note</c> is not 0) gets the manifest's options without a trailing comment.
+    /// Every other line, its comments included, stays as it is.
+    /// </summary>
+    public void DropInlineComments()
+    {
+        foreach (var option in Options(_manifest))
+            foreach (var index in Lines(option.GetProperty("section").GetString()!, option.GetProperty("key").GetString()!))
+            {
+                var line = _lines[index];
+                var comment = line.IndexOfAny([';', '#'], line.IndexOf('=') + 1);
+                if (comment >= 0) _lines[index] = line[..comment].TrimEnd();
+            }
+    }
+
     public void EnforceLocks()
     {
         foreach (var option in Options(_manifest))

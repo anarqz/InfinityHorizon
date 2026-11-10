@@ -124,50 +124,27 @@ public sealed partial class ShellViewModel
         await RefreshExtraOptionsModsAsync();
     }
 
-    private ParityExemptions? _parityExemptions;
-    private bool _parityFetching;
-    private string ParityCache => Path.Combine(_stateDirectory, "mod-parity");
-
-    /// <summary>OD-166: InfinityMods' parity exemptions as last read (network, else cache, else the built-in copy).</summary>
-    private ParityExemptions ParityExemptionsNow => _parityExemptions ??= ParityExemptions.CachedOrBuiltIn(ParityCache);
-
-    /// <summary>OD-166: fetches the parity exemptions (with the catalog); a failure keeps the cached or built-in copy and logs it.</summary>
-    private async Task RefreshParityExemptionsAsync()
-    {
-        if (_parityFetching || CatalogFetchForTests is not null) return; // tests with a fake catalog never reach the network
-        _parityFetching = true;
-        try
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var list = await ParityExemptions.LoadAsync(ModDownloads, ParityCache, timeout.Token, log: Log);
-            _parityExemptions = list;
-            Log("mods: parity exemptions (" + list.Source + "): " + (list.Mods.Count == 0 ? "none" : string.Join(", ", list.Mods.Select(m => m.Id))));
-        }
-        catch (Exception e) when (e is OperationCanceledException or IOException or UnauthorizedAccessException or InvalidOperationException)
-        { Log("mods: parity exemptions kept (" + e.GetType().Name + ")"); }
-        finally { _parityFetching = false; }
-    }
-
     /// <summary>
     /// OD-232: the folders kept first in <c>loadorder.txt</c>: installed mods with <see cref="ModManifest.LoadFirst"/>, and the catalog's
     /// load-first ids (a Common copied in by hand is still its id's folder).
     /// </summary>
-    private string[] LoadFirstFolders() =>
-        _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>().Where(m => m.LoadFirst && !m.Retired).Select(ExtraOptionsMods.FolderOf).OfType<string>()
-            .Concat(_manifestCatalog.Where(m => m.LoadFirst).Select(m => m.Id)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private string[] LoadFirstFolders(string game) =>
+        _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>().Where(m => m.LoadFirst && !m.Retired && m.ModsGame == game).Select(ExtraOptionsMods.FolderOf).OfType<string>()
+            .Concat(_manifestCatalog.Where(m => m.LoadFirst && m.ModsGame == game).Select(m => m.Id)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    /// <summary>The <c>mods\</c> folders of the mods the launcher installed (on or off).</summary>
-    private HashSet<string> ManagedExtraOptionsFolders() =>
-        _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>()
+    /// <summary>The folders of the game's mods folder that hold mods the launcher installed (on or off).</summary>
+    private HashSet<string> ManagedExtraOptionsFolders(string game = ModManifest.DefaultGame) =>
+        _modHealth.Installed.Select(i => i.Manifest).OfType<ModManifest>().Where(m => m.ModsGame == game)
             .Select(ExtraOptionsMods.FolderOf).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The <c>mods\</c> folders Hardcore keeps: installed, enabled catalog mods that change nothing for other players. A folder
-    /// copied by hand, or a catalog mod that affects multiplayer, plays only outside Hardcore.
+    /// The folders of the game's mods folder that Hardcore keeps: installed, enabled catalog mods that change nothing for other players
+    /// (OD-233: a mod is either both modes, its manifest cosmetic, or Noob only). A folder copied by hand, or a catalog mod that affects
+    /// multiplayer, plays only in Noob.
     /// </summary>
-    private HashSet<string> HardcoreSafeFolders() =>
+    private HashSet<string> HardcoreSafeFolders(string game = ModManifest.DefaultGame) =>
         _modFacts.Select(f => f.Installed is { Enabled: true, Problem: null } installed ? installed.Manifest ?? f.Manifest : null)
-            .Where(m => m is not null && !ModMultiplayer.AffectsMultiplayer(m))
+            .Where(m => m is not null && m.ModsGame == game && !ModMultiplayer.AffectsMultiplayer(m))
             .Select(m => ExtraOptionsMods.FolderOf(m!)).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -177,42 +154,122 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<IModSetSource?> ExtraOptionsModSetAsync(AzimuthInstall install, DateTime launchUtc)
     {
-        if (!CurrentGame.FullFeatures) return VanillaModSet.Instance;
-        var cosmetic = HardcoreSafeFolders(); var exempt = ParityExemptionsNow;
+        // OD-233: each game's ExtraOptions loads its own mods folder (FM5's loader is new in 0.6.0)
+        var game = CurrentGame.Id;
+        if (!ExtraOptionsLayout.HasModsFolder(game)) return VanillaModSet.Instance;
+        // FM5: the state read for this launch (PrepareExtraOptionsMods), as fresh as the folders it just arranged
+        var cosmetic = game == "fm5" && _fm5LaunchState is { } fm5 ? fm5.BothModes : HardcoreSafeFolders(game);
         try
         {
-            var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, exempt));
+            var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, game));
             Log("mods: lobby set planned from ExtraOptions: " + (plan.Count == 0 ? "none" : string.Join(", ", plan.Select(p => p.Entry.Id + " " + p.Entry.Version))));
-            return new ExtraOptionsModSetSource(install.Root, plan, launchUtc);
+            return new ExtraOptionsModSetSource(install.Root, plan, launchUtc, game);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModSetException)
         {
             Log("mods: lobby set not planned (" + e.GetType().Name + ")");
             bool anyEnabled;
-            try { anyEnabled = ExtraOptionsMods.Scan(install.Root).Any(m => m.Enabled); }
+            try { anyEnabled = ExtraOptionsMods.Scan(install.Root, game).Any(m => m.Enabled); }
             catch (Exception scan) when (scan is IOException or UnauthorizedAccessException or InvalidDataException) { anyEnabled = true; }
             return anyEnabled ? null : VanillaModSet.Instance;
         }
     }
 
+    /// <summary>OD-233: the launcher's FM5 mods as read for one launch: their folders (enabled by receipt), and those for both modes.</summary>
+    private sealed record Fm5LaunchState(HashSet<string> Managed, HashSet<string> BothModes);
+
+    /// <summary>The state <see cref="PrepareExtraOptionsMods"/> read for the current FM5 launch; null when it could not be read.</summary>
+    private Fm5LaunchState? _fm5LaunchState;
+
     /// <summary>
-    /// Before a launch: <c>loadorder.txt</c> puts every mod after its dependencies; Hardcore online plays only with
-    /// <see cref="HardcoreSafeFolders"/>, and any other launch gets back what it held.
+    /// FM5's installed mods read fresh from their receipts (never the page's cached state, which may be stale or not loaded yet); null when
+    /// any of it could not be read, so nothing is turned off on a guess.
     /// </summary>
-    private void PrepareExtraOptionsMods(AzimuthInstall install, bool hardcore)
+    private Fm5LaunchState? ReadFm5LaunchState(string game)
+    {
+        if (ModManagerFactory() is not { } factory) return null;
+        ModHealth health;
+        try { health = factory().Inspect(); }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return null; }
+        if (health.RecoveryHere || health.Problems.Count > 0 || health.Installed.Any(i => i.Problem is not null || i.Manifest is null)) return null;
+        var mine = health.Installed.Where(i => i.Enabled && i.Manifest!.ModsGame == game && !i.Manifest.Retired).ToList();
+        HashSet<string> Folders(IEnumerable<ModInstallation> list) => list.Select(i => ExtraOptionsMods.FolderOf(i.Manifest!)).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new(Folders(mine), Folders(mine.Where(i => !ModMultiplayer.AffectsMultiplayer(i.Manifest!))));
+    }
+
+    /// <summary>
+    /// Before a launch, after <see cref="PrepareModsLayout"/>: the game's <c>loadorder.txt</c> puts every mod after its dependencies (and
+    /// OD-232's load-first mods on top); Hardcore plays only with <see cref="HardcoreSafeFolders"/>, and any other launch gets back what it
+    /// held. FM5's folder is launcher-managed, catalog only (OD-233, <see cref="ExtraOptionsMods.KeepCatalogOnly"/>): Noob plays the
+    /// launcher's enabled mods, Hardcore only those for both modes (FH2's rule); a folder the launcher turned off goes back on once allowed.
+    /// </summary>
+    private void PrepareExtraOptionsMods(AzimuthInstall install, bool hardcore, string game = ModManifest.DefaultGame)
     {
         try
         {
-            // OD-166: parity-exempt mods play in every mode, Hardcore included
-            var allowed = HardcoreSafeFolders();
-            var exempt = ExtraOptionsModSetSource.ExemptFolders(install.Root, ParityExemptionsNow);
-            if (exempt.Count > 0) Log("mods: parity-exempt (" + ParityExemptionsNow.Source + "): " + string.Join(", ", exempt.Select(e => e.ModId)));
-            allowed.UnionWith(exempt.Select(e => e.Folder));
-            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, allowed,
-                         Path.Combine(_stateDirectory, HardcoreHeldFile), LoadFirstFolders()))
+            if (game == "fm5")
+            {
+                foreach (var note in ExtraOptionsMods.ArrangeLoadOrder(install.Root, LoadFirstFolders(game), game)) Log(note);
+                _fm5LaunchState = ReadFm5LaunchState(game);
+                if (_fm5LaunchState is not { } state) { Log("extraoptions mods: FM5 mod state unreadable; nothing turned off"); return; }
+                foreach (var note in ExtraOptionsMods.KeepCatalogOnly(install.Root, hardcore ? state.BothModes : state.Managed,
+                             Path.Combine(_stateDirectory, "extraoptions-fm5-unmanaged-held.json"), game))
+                    Log(note);
+                return;
+            }
+            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, HardcoreSafeFolders(game),
+                         Path.Combine(_stateDirectory, HardcoreHeldFile), LoadFirstFolders(game), game))
                 Log(note);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModException)
         { Log("extraoptions mods: launch preparation skipped (" + e.GetType().Name + ")"); }
+    }
+    /// <summary>Why the move to the per-game mods folders stopped (OD-233), for Play; null once it is done.</summary>
+    private string? _modsLayoutFailure;
+
+    /// <summary>
+    /// OD-233, before every launch (any game) and when the mods are first read: the old flat <c>mods\</c> moves to the per-game folders
+    /// (<see cref="ManagedModFiles.MigrateLayout"/>). A folder's game is its installed manifest's, else its catalog entry's, else FH2's. A stop
+    /// (a conflict, a link, a refused move) is shown with its reason and blocks Play until it is resolved; nothing is lost either way.
+    /// </summary>
+    /// <returns>False when the move stopped: the launch must not start (the reason is in <see cref="_modsLayoutFailure"/>).</returns>
+    private bool PrepareModsLayout(AzimuthInstall install)
+    {
+        if (ModManagerFactory() is not { } factory) return true;
+        var catalog = _manifestCatalog.ToDictionary(m => m.Id, m => m.ModsGame, StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var manager = factory();
+            if (!manager.LayoutMigrationPending) { SetModsLayoutFailure(null); return true; }
+            var result = manager.MigrateLayout(folder => catalog.TryGetValue(folder, out var game) ? game : null, Path.Combine(_stateDirectory, "mods-layout"));
+            foreach (var note in result.Notes) Log(note);
+            SetModsLayoutFailure(null);
+            return true;
+        }
+        catch (ExtraOptionsLayoutException error)
+        {
+            Log("mods layout: stopped at " + error.Folder + " (" + error.Reason + "): " + error.Message);
+            SetModsLayoutFailure(S.Format("mods.layout." + error.Reason, ("folder", error.Folder)));
+            return false;
+        }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error))
+        {
+            Log("mods layout: not moved: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "") + ": " + error.Message);
+            // the real cause: an interrupted operation to recover, the game running, or the state error's own text
+            SetModsLayoutFailure(error switch
+            {
+                ModException { Code: ModErrors.GameRunning } => S["mods.layout.game_running"],
+                ModException { Code: ModErrors.Recovery } => S["mods.play_blocked"],
+                _ => ModErrorText(error),
+            });
+            return false;
+        }
+    }
+
+    private void SetModsLayoutFailure(string? text)
+    {
+        if (_modsLayoutFailure == text) return;
+        _modsLayoutFailure = text;
+        Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice)); Changed(nameof(CanPlay));
     }
 }

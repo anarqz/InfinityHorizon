@@ -10,11 +10,11 @@ public sealed record ExtraOptionsModImport(string Id, string Name, string? Versi
 
 /// <summary>
 /// "Add from URL" and a local ZIP (OD-232): an archive holding one ExtraOptions mod, its <c>mod.json</c> (format 1, a valid id) at
-/// the archive's top or inside one top folder, is placed at <c>&lt;Azimuth&gt;\mods\&lt;id&gt;\</c> exactly as a mod copied there by
+/// the archive's top or inside one top folder, is placed at <c>&lt;Azimuth&gt;\mods\&lt;game folder&gt;\&lt;id&gt;\</c> (OD-233) exactly as a mod copied there by
 /// hand (no receipt: the manual-mods list shows it, and the loader enables it at the next start). Only the mod's folder is written
 /// (entries outside it are ignored), only with the game closed, and only plain files: a link, an absolute path or <c>..</c> refuses the
 /// archive. Everything is extracted to a staging folder beside the target first, then moved in one step; an existing folder of the
-/// same id is moved to <c>mods\.replaced\</c>, never deleted. A folder of a mod the launcher installed is never replaced.
+/// same id is moved to the game folder's <c>.replaced\</c>, never deleted. A folder of a mod the launcher installed is never replaced.
 /// </summary>
 public sealed partial class ManagedModFiles
 {
@@ -27,11 +27,11 @@ public sealed partial class ManagedModFiles
     private const string ModJson = "mod.json";
 
     /// <summary>Downloads a ZIP from a player-supplied HTTPS address (any host, at most five HTTPS redirects) and imports it.</summary>
-    public async Task<ExtraOptionsModImport> ImportFromUrlAsync(HttpClient http, Uri url, IProgress<string>? progress, CancellationToken cancellation)
+    public async Task<ExtraOptionsModImport> ImportFromUrlAsync(HttpClient http, Uri url, IProgress<string>? progress, CancellationToken cancellation, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(http); ArgumentNullException.ThrowIfNull(url);
         CheckGame();
-        var root = ImportRoot();
+        var root = ImportRoot(game);
         RemoveImportLeftovers(root);
         var archive = Path.Combine(root, "." + Guid.NewGuid().ToString("N") + DownloadSuffix);
         try
@@ -63,7 +63,7 @@ public sealed partial class ManagedModFiles
             catch (HttpIOException) { throw new ModException("mod download interrupted", ModErrors.UrlDownload); }
             catch (OperationCanceledException) { throw new ModException("mod download timed out", ModErrors.UrlDownload); }
             progress?.Report("verify");
-            return await Task.Run(() => ImportArchive(archive), cancellation).ConfigureAwait(false);
+            return await Task.Run(() => ImportArchive(archive, game), cancellation).ConfigureAwait(false);
         }
         finally { BestEffort(() => { if (File.Exists(archive)) RemoveFile(archive); }); }
     }
@@ -73,27 +73,27 @@ public sealed partial class ManagedModFiles
     private const string ImportSuffix = ".import";
 
     /// <summary>Imports a local ZIP (see the type's remarks). The archive itself is only read.</summary>
-    public ExtraOptionsModImport ImportArchive(string archivePath)
+    public ExtraOptionsModImport ImportArchive(string archivePath, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(archivePath);
         // An unsupported compression method (LZMA, BZip2, AES) or corrupt data surfaces only when an entry is opened or read.
-        try { return Import(archivePath); }
+        try { return Import(archivePath, game); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException)
         { throw new ModException("unreadable ZIP archive: " + error.GetType().Name, ModErrors.Archive); }
     }
 
-    /// <summary><c>&lt;Azimuth&gt;\mods</c>, created when missing; a linked one is refused.</summary>
-    private string ImportRoot()
+    /// <summary>The game's <c>&lt;Azimuth&gt;\mods\&lt;game folder&gt;</c> (OD-233), created when missing; a linked one is refused.</summary>
+    private string ImportRoot(string game)
     {
-        var root = Safe(_azimuth, ExtraOptionsMods.ModsFolder);
+        var root = Safe(_azimuth, ExtraOptionsMods.ModsFolder + "/" + ExtraOptionsLayout.GameFolder(game));
         Directory.CreateDirectory(root);
         return root;
     }
 
-    private ExtraOptionsModImport Import(string archivePath)
+    private ExtraOptionsModImport Import(string archivePath, string game)
     {
         CheckGame();
-        var root = ImportRoot();
+        var root = ImportRoot(game);
         using var zip = ZipFile.OpenRead(archivePath);
         if (zip.Entries.Count > MaxImportEntries) throw new ModException("too many archive entries", ModErrors.Archive);
         // Keyed without letter case: two entries one Windows folder would merge are refused, never resolved by order.
@@ -135,9 +135,10 @@ public sealed partial class ManagedModFiles
                 if (names.Contains(path[..slash])) throw new ModException("archive holds a file and a folder of the same name: " + path[..slash], ModErrors.Archive);
 
         using var gate = Lock();
+        if (ExtraOptionsLayout.NeedsMigration(_azimuth)) throw new ModException("the mods folder must move to the per-game layout first", ModErrors.Layout);
         // A catalog mod's folder is the launcher's (its receipt restores it): never replaced behind it. A receipt that cannot be read
         // still claims its folder (OD-232: the folder is the id).
-        var claimed = InstalledSnapshots(out var unreadable).Select(ExtraOptionsMods.FolderOf).OfType<string>().Concat(unreadable);
+        var claimed = InstalledSnapshots(out var unreadable).Where(m => m.ModsGame == game).Select(ExtraOptionsMods.FolderOf).OfType<string>().Concat(unreadable);
         if (claimed.Any(f => string.Equals(f, id, StringComparison.OrdinalIgnoreCase)))
             throw new ModException("a mod the launcher installed has this id", ModErrors.Conflict);
         var target = Safe(root, id);

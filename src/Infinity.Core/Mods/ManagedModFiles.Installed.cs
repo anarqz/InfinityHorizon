@@ -133,7 +133,9 @@ public sealed partial class ManagedModFiles
                 if (installed.Any(m => m.Id == conflict.GetString() && Receipt(m) is { Enabled: true })) throw new ModException("conflicting mod enabled", ModErrors.Conflict);
         if (manifest.Document.TryGetProperty("incompatibleFiles", out var files))
             foreach (var file in files.EnumerateArray())
-                if (File.Exists(Target(file.GetProperty("root").GetString()!, file.GetProperty("path").GetString()!))) throw new ModException("incompatible unmanaged file present", ModErrors.Conflict);
+                if (file.GetProperty("root").GetString()! is var root
+                    && File.Exists(Target(root, root == "azimuth" ? ExtraOptionsLayout.CanonicalDestination(file.GetProperty("path").GetString()!, manifest.ModsGame) : file.GetProperty("path").GetString()!)))
+                    throw new ModException("incompatible unmanaged file present", ModErrors.Conflict);
         foreach (var other in installed.Where(m => m.Id != manifest.Id && Receipt(m) is { Enabled: true }))
             if (other.Document.TryGetProperty("conflicts", out var reverse) && reverse.EnumerateArray().Any(c => c.GetString() == manifest.Id))
                 throw new ModException("an enabled mod conflicts with this mod", ModErrors.Conflict);
@@ -176,21 +178,22 @@ public sealed partial class ManagedModFiles
         return [.. manifests];
     }
 
-    /// <summary>OD-232: the <c>mods\</c> folders of the installed mods that load first (<see cref="ModManifest.LoadFirst"/>).</summary>
-    public IReadOnlyList<string> LoadFirstFolders() => InstalledManifests().Where(m => m.LoadFirst && !m.Retired)
+    /// <summary>OD-232: the mod folders of the game's installed mods that load first (<see cref="ModManifest.LoadFirst"/>).</summary>
+    public IReadOnlyList<string> LoadFirstFolders(string game = ModManifest.DefaultGame) => InstalledManifests().Where(m => m.LoadFirst && !m.Retired && m.ModsGame == game)
         .Select(ExtraOptionsMods.FolderOf).OfType<string>().ToArray();
 
     /// <summary>
-    /// OD-232, after an install, update or enable: the load-first mods back at the top of <c>loadorder.txt</c> (game closed: the caller
-    /// holds the lock). Only when one is installed; a file that cannot be arranged now is arranged again before the next launch.
+    /// OD-232, after an install, update or enable: the load-first mods back at the top of their game's <c>loadorder.txt</c> (game closed:
+    /// the caller holds the lock). Only when one is installed; a file that cannot be arranged now is arranged again before the next launch.
     /// </summary>
     private void KeepLoadFirstOnTop()
     {
-        try
-        {
-            if (LoadFirstFolders() is { Count: > 0 } first) ExtraOptionsMods.ArrangeLoadOrder(_azimuth, first);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ModException) { }
+        foreach (var game in new[] { "fh2", "fm5" })
+            try
+            {
+                if (LoadFirstFolders(game) is { Count: > 0 } first) ExtraOptionsMods.ArrangeLoadOrder(_azimuth, first, game);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ModException) { }
     }
 
     public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))));
@@ -234,7 +237,8 @@ public sealed partial class ManagedModFiles
     /// written. Drift and settings issues are warnings; only an interrupted operation of this Azimuth
     /// folder throws (<see cref="ModErrors.Recovery"/>).
     /// </summary>
-    public ModLaunchPreparation PrepareForLaunch(bool hardcore = false)
+    /// <param name="game">OD-233: the game launched; Hardcore refuses only that game's mods (null: every game's, as before).</param>
+    public ModLaunchPreparation PrepareForLaunch(bool hardcore = false, string? game = null)
     {
         if (!Directory.Exists(BackupRoot) || !RecoveryRequiredHere && !Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Any()) return ModLaunchPreparation.None;
         if (RecoveryRequiredHere) throw new ModException("interrupted mod operation needs recovery", ModErrors.Recovery);
@@ -247,7 +251,8 @@ public sealed partial class ManagedModFiles
                 try
                 {
                     var receipt = ReadReceipt(Path.GetFileName(path)[..^".receipt.json".Length]);
-                    if (receipt is { Enabled: true } && SnapshotFor(receipt) is var manifest && ModMultiplayer.AffectsMultiplayer(manifest)) refused.Add(manifest);
+                    if (receipt is { Enabled: true } && SnapshotFor(receipt) is var manifest && ModMultiplayer.AffectsMultiplayer(manifest)
+                        && (game is null || manifest.ModsGame == game)) refused.Add(manifest);
                 }
                 catch (Exception error) when (IsStateError(error)) { }
             }
@@ -281,7 +286,7 @@ public sealed partial class ManagedModFiles
                 Execute(new(manifest.Id + ".receipt.json", receipt, [new("azimuth", config, settings.SourceHash, Store(after))]), null);
             }
         }
-        var multiplayer = enabled.Where(ModMultiplayer.AffectsMultiplayer).ToArray();
+        var multiplayer = enabled.Where(m => ModMultiplayer.AffectsMultiplayer(m) && (game is null || m.ModsGame == game)).ToArray();
         var retired = enabled.Where(ModLaunchPreparation.BlocksOnline).ToArray();
         if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))
             return new(enabled.SelectMany(m => m.WineDllOverrides.Select(w => w.Module)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings)

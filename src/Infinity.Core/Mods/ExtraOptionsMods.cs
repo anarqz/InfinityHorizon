@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Infinity.Core.Mods;
 
-/// <summary>One folder of <c>&lt;Azimuth&gt;\mods</c> as ExtraOptions' loader sees it (OD-126).</summary>
+/// <summary>One folder of a game's mods folder (<c>&lt;Azimuth&gt;\mods\&lt;game folder&gt;</c>, OD-233) as ExtraOptions' loader sees it (OD-126).</summary>
 /// <param name="Folder">The folder name, as <c>loadorder.txt</c> lists it.</param>
 /// <param name="Id">The manifest id, or the folder name without a manifest (ExtraOptions' identity rule).</param>
 /// <param name="Order">Position in load order (later = higher priority); unlisted folders follow, alphabetically.</param>
@@ -13,38 +13,52 @@ namespace Infinity.Core.Mods;
 public sealed record ExtraOptionsMod(string Folder, string Id, string Name, string? Version, IReadOnlyList<string> Dependencies,
     bool Enabled, int Order, bool Listed, bool HasMedia, bool HasDatabase, bool HasStrings, int Plugins, string? ManifestError);
 
-/// <summary>What the last game run's <c>FH2_ExtraOptions.log</c> said about one mod.</summary>
+/// <summary>What the last game run's log (<c>FH2_ExtraOptions.log</c>, <c>FM5_ExtraOptions.log</c>) said about one mod.</summary>
 public enum ExtraOptionsModState { Unknown, Loaded, Pending, Failed }
 
 public sealed record ExtraOptionsModStatus(ExtraOptionsModState State, IReadOnlyList<string> Messages);
 
 /// <summary>
 /// OD-126: the launcher manages mods in ExtraOptions' own format, so a mod copied by hand and one from the catalog look the
-/// same. The rules are ExtraOptions 0.4.4's (<c>features/addons.c</c>, <c>tools/MODS.md</c>): every folder of
-/// <c>&lt;Azimuth&gt;\mods</c> but dot folders and links is a mod; <c>loadorder.txt</c> (UTF-8, one folder per line, later =
-/// higher priority) enables a listed folder and disables one written <c># folder</c>; a folder it does not list is appended,
-/// enabled, when the game starts. Change the file only while the game is closed: ExtraOptions rewrites it at start.
+/// same. The rules are ExtraOptions 0.6.0's (<c>shared/addons.c</c>, <c>shared/addon_layout.h</c>, <c>docs/MODS.md</c>): each game has
+/// its own folder (<c>&lt;Azimuth&gt;\mods\Forza Horizon 2</c>, <c>…\Forza Motorsport 5</c>, <see cref="ExtraOptionsLayout"/>; <c>mods\Cache</c>
+/// is the loader's own); every folder in it but dot folders and links is a mod; its <c>loadorder.txt</c> (UTF-8, one folder per line,
+/// later = higher priority) enables a listed folder and disables one written <c># folder</c>; a folder it does not list is appended,
+/// enabled, when the game starts. Change the file only while the game is closed: ExtraOptions rewrites it at start. Every method takes the
+/// game (the server's id, FH2 when none is given).
 /// </summary>
 public static class ExtraOptionsMods
 {
     public const string ModsFolder = "mods";
     public const string LoadOrderFile = "loadorder.txt";
     public const string LogFile = "FH2_ExtraOptions.log";
+    public const string Fm5LogFile = "FM5_ExtraOptions.log";
     private const int MaxLoadOrder = 64 * 1024, MaxManifest = 1024 * 1024, MaxLog = 8 * 1024 * 1024;
 
-    public static string ModsDirectory(string azimuthRoot) => Path.Combine(azimuthRoot, ModsFolder);
+    /// <summary><c>&lt;Azimuth&gt;\mods</c>: the game folders and <c>Cache</c> (and, before OD-233's move, the flat layout).</summary>
+    public static string ModsRoot(string azimuthRoot) => Path.Combine(azimuthRoot, ModsFolder);
 
-    /// <summary>Every mod folder, in ExtraOptions' load order. No mods folder: none.</summary>
-    public static IReadOnlyList<ExtraOptionsMod> Scan(string azimuthRoot)
+    /// <summary>The game's mods folder, <c>&lt;Azimuth&gt;\mods\&lt;game folder&gt;</c> (OD-233).</summary>
+    public static string ModsDirectory(string azimuthRoot, string game = ModManifest.DefaultGame) =>
+        Path.Combine(azimuthRoot, ModsFolder, ExtraOptionsLayout.GameFolder(game));
+
+    /// <summary>The Azimuth-relative prefix of a game's mod folder: <c>mods/&lt;game folder&gt;/&lt;folder&gt;/</c>.</summary>
+    public static string FolderPrefix(string game, string folder) => ModsFolder + "/" + ExtraOptionsLayout.GameFolder(game) + "/" + folder + "/";
+
+    /// <summary>The log the game's ExtraOptions writes beside <c>azimuth.exe</c> at every start.</summary>
+    public static string LogFileFor(string game) => game == "fm5" ? Fm5LogFile : LogFile;
+
+    /// <summary>Every mod folder of the game, in ExtraOptions' load order. No mods folder: none.</summary>
+    public static IReadOnlyList<ExtraOptionsMod> Scan(string azimuthRoot, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
-        var mods = ModsDirectory(azimuthRoot);
+        var mods = ModsDirectory(azimuthRoot, game);
         if (!Directory.Exists(mods)) return [];
         var folders = new DirectoryInfo(mods).EnumerateDirectories()
             .Where(d => !d.Name.StartsWith('.') && !d.Attributes.HasFlag(FileAttributes.ReparsePoint))
             .Select(d => d.Name).Order(StringComparer.OrdinalIgnoreCase).ToList();
         var order = new List<(string Folder, bool Enabled, bool Listed)>();
-        foreach (var line in ReadLoadOrder(azimuthRoot).Lines)
+        foreach (var line in ReadLoadOrder(azimuthRoot, game).Lines)
         {
             if (Entry(line) is not { } entry) continue;
             var folder = folders.FirstOrDefault(f => f.Equals(entry.Folder, StringComparison.OrdinalIgnoreCase));
@@ -59,12 +73,12 @@ public static class ExtraOptionsMods
     /// Enables (<c>folder</c>) or disables (<c># folder</c>) a mod in <c>loadorder.txt</c>, keeping every other line, comment,
     /// the BOM and the line endings; an unlisted folder gets a line at the end. True when the file changed.
     /// </summary>
-    public static bool SetEnabled(string azimuthRoot, string folder, bool enabled)
+    public static bool SetEnabled(string azimuthRoot, string folder, bool enabled, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         if (string.IsNullOrWhiteSpace(folder) || folder.IndexOfAny(['/', '\\', '\r', '\n']) >= 0 || folder.StartsWith('.'))
             throw new ArgumentException("not a mod folder name", nameof(folder));
-        var file = ReadLoadOrder(azimuthRoot);
+        var file = ReadLoadOrder(azimuthRoot, game);
         var wanted = enabled ? folder : "# " + folder;
         var at = file.Lines.FindIndex(l => Entry(l) is { } e && e.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase));
         if (at >= 0)
@@ -77,7 +91,7 @@ public static class ExtraOptionsMods
             if (file.Lines.Count > 0 && file.Lines[^1].Length == 0) file.Lines.RemoveAt(file.Lines.Count - 1);
             file.Lines.Add(wanted);
         }
-        WriteLoadOrder(azimuthRoot, file);
+        WriteLoadOrder(azimuthRoot, file, game);
         return true;
     }
 
@@ -86,12 +100,12 @@ public static class ExtraOptionsMods
     /// deletes, or what an uninstalled catalog mod still left in its own folder. Game closed (the caller's check). A linked folder,
     /// or anything linked inside it, is refused, so only the folder's own files go, through the one safe delete.
     /// </summary>
-    public static void DeleteFolder(string azimuthRoot, string folder)
+    public static void DeleteFolder(string azimuthRoot, string folder, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         if (string.IsNullOrWhiteSpace(folder) || folder.IndexOfAny(['/', '\\', '\r', '\n', ':']) >= 0 || folder.StartsWith('.'))
             throw new ArgumentException("not a mod folder name", nameof(folder));
-        var directory = new DirectoryInfo(Path.Combine(ModsDirectory(azimuthRoot), folder));
+        var directory = new DirectoryInfo(Path.Combine(ModsDirectory(azimuthRoot, game), folder));
         if (directory.Exists)
         {
             var everything = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 };
@@ -101,18 +115,23 @@ public static class ExtraOptionsMods
             foreach (var inner in directory.EnumerateDirectories("*", everything).OrderByDescending(d => d.FullName.Length).ToList()) inner.Delete();
             directory.Delete();
         }
-        var order = ReadLoadOrder(azimuthRoot);
-        if (order.Lines.RemoveAll(l => Entry(l) is { } e && e.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase)) > 0) WriteLoadOrder(azimuthRoot, order);
+        var order = ReadLoadOrder(azimuthRoot, game);
+        if (order.Lines.RemoveAll(l => Entry(l) is { } e && e.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase)) > 0) WriteLoadOrder(azimuthRoot, order, game);
     }
 
     /// <summary>
-    /// The last game run's verdict per mod (keyed by id and by folder), from the <c>MODS:</c> and <c>PLUGINS:</c> lines of
-    /// <c>FH2_ExtraOptions.log</c> beside <c>azimuth.exe</c> (ExtraOptions recreates it every start). No log: empty.
+    /// The last game run's verdict per mod (keyed by id and by folder), from the <c>MODS:</c> and <c>PLUGINS:</c> lines of the game's log
+    /// beside <c>azimuth.exe</c> (<see cref="LogFileFor"/>; ExtraOptions recreates it every start). No log: empty.
+    /// <para>
+    /// The lines are ExtraOptions 0.6.0's: <c>MODS: &lt;id or folder&gt;: &lt;message&gt;</c> (<c>shared/addons.c</c> <c>report</c>) and
+    /// <c>PLUGINS: &lt;…&gt;\mods\&lt;game folder&gt;\&lt;folder&gt;\plugins\&lt;dll&gt; | &lt;result&gt;</c> (<c>shared/plugins.c</c> <c>log_plugin</c>); a
+    /// path of the old flat layout (<c>…\mods\&lt;folder&gt;\…</c>, an older log) still names its folder.
+    /// </para>
     /// </summary>
-    public static IReadOnlyDictionary<string, ExtraOptionsModStatus> ReadStatus(string azimuthRoot, IReadOnlyList<ExtraOptionsMod> mods)
+    public static IReadOnlyDictionary<string, ExtraOptionsModStatus> ReadStatus(string azimuthRoot, IReadOnlyList<ExtraOptionsMod> mods, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
-        var log = Path.Combine(azimuthRoot, LogFile);
+        var log = Path.Combine(azimuthRoot, LogFileFor(game));
         var found = new Dictionary<string, (ExtraOptionsModState State, List<string> Messages)>(StringComparer.OrdinalIgnoreCase);
         string[] lines;
         try
@@ -136,13 +155,21 @@ public static class ExtraOptionsMods
             }
             else if (line.StartsWith("PLUGINS: ", StringComparison.Ordinal) && line.IndexOf(" | ", StringComparison.Ordinal) is var bar and > 9)
             {
-                // PLUGINS: <...>\mods\<folder>\plugins[\<dll>] | <result>
+                // PLUGINS: <...>\mods\<game folder>\<folder>\plugins[\<dll>] | <result> (0.6.0); <...>\mods\<folder>\... before it
                 var path = line[9..bar].Replace('/', '\\');
-                var mark = path.LastIndexOf("\\" + ModsFolder + "\\", StringComparison.OrdinalIgnoreCase);
-                if (mark < 0) continue;
-                var tail = path[(mark + ModsFolder.Length + 2)..];
+                var gameMark = "\\" + ModsFolder + "\\" + ExtraOptionsLayout.GameFolder(game) + "\\";
+                var mark = path.LastIndexOf(gameMark, StringComparison.OrdinalIgnoreCase);
+                string tail;
+                if (mark >= 0) tail = path[(mark + gameMark.Length)..];
+                else
+                {
+                    mark = path.LastIndexOf("\\" + ModsFolder + "\\", StringComparison.OrdinalIgnoreCase);
+                    if (mark < 0) continue;
+                    tail = path[(mark + ModsFolder.Length + 2)..];
+                }
                 var slash = tail.IndexOf('\\');
                 key = slash > 0 ? tail[..slash] : tail;
+                if (key.Length == 0 || ExtraOptionsLayout.Reserved(key)) continue; // another game's plugin, or the loader's own folder
                 message = "plugin " + Path.GetFileName(path) + ": " + line[(bar + 3)..];
             }
             if (key is null || message is null) continue;
@@ -171,19 +198,19 @@ public static class ExtraOptionsMods
     /// </summary>
     /// <param name="first">The mods kept at the top of the load order (<see cref="ModManifest.LoadFirst"/>), by id or folder.</param>
     public static IReadOnlyList<string> PrepareForLaunch(string azimuthRoot, bool hardcore, IReadOnlySet<string> allowedInHardcore, string stateFile,
-        IEnumerable<string>? first = null)
+        IEnumerable<string>? first = null, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(allowedInHardcore);
         ArgumentNullException.ThrowIfNull(stateFile);
-        var notes = new List<string>(ArrangeLoadOrder(azimuthRoot, first));
+        var notes = new List<string>(ArrangeLoadOrder(azimuthRoot, first, game));
         var held = ReadHeld(stateFile);
-        var mods = Scan(azimuthRoot);
+        var mods = Scan(azimuthRoot, game);
         if (hardcore)
         {
             foreach (var mod in mods.Where(m => m.Enabled && !allowedInHardcore.Contains(m.Folder)))
             {
-                SetEnabled(azimuthRoot, mod.Folder, false);
+                SetEnabled(azimuthRoot, mod.Folder, false, game);
                 if (!held.Contains(mod.Folder, StringComparer.OrdinalIgnoreCase)) held.Add(mod.Folder);
                 notes.Add("extraoptions mods: " + mod.Folder + " off for Hardcore");
             }
@@ -194,7 +221,7 @@ public static class ExtraOptionsMods
         {
             if (mods.FirstOrDefault(m => m.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase)) is { Enabled: false } mod)
             {
-                SetEnabled(azimuthRoot, mod.Folder, true);
+                SetEnabled(azimuthRoot, mod.Folder, true, game);
                 notes.Add("extraoptions mods: " + mod.Folder + " on again after Hardcore");
             }
         }
@@ -204,20 +231,60 @@ public static class ExtraOptionsMods
     }
 
     /// <summary>
-    /// The <c>mods\</c> folder a catalog manifest installs (every <c>azimuth</c> file under <c>mods/&lt;folder&gt;/</c>), or null
-    /// for a mod that is not an ExtraOptions mod folder.
+    /// OD-233, FM5 before a launch (game closed, after <see cref="ArrangeLoadOrder"/>): its mods folder is launcher-managed, catalog only.
+    /// Every enabled folder not in <paramref name="allowed"/> (Noob: the launcher's installed mods; Hardcore: those of them for both modes)
+    /// is turned off (<c># folder</c>) and remembered in <paramref name="heldFile"/>; a folder the launcher turned off goes back on once it
+    /// is allowed (it became managed, or the launch is Noob again). Only what the launcher itself turned off is remembered: a folder the
+    /// player turned off stays theirs, and a remembered one that is gone or that the player turned on by hand is forgotten. Returns one log
+    /// line per change.
+    /// </summary>
+    public static IReadOnlyList<string> KeepCatalogOnly(string azimuthRoot, IReadOnlySet<string> allowed, string heldFile, string game)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(allowed);
+        ArgumentNullException.ThrowIfNull(heldFile);
+        var notes = new List<string>();
+        var mods = Scan(azimuthRoot, game);
+        var held = ReadHeld(heldFile);
+        var kept = new List<string>();
+        foreach (var folder in held)
+        {
+            var mod = mods.FirstOrDefault(m => m.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase));
+            if (mod is null || mod.Enabled) continue; // gone, or the player turned it on: no longer the launcher's hold
+            if (allowed.Contains(mod.Folder))
+            {
+                SetEnabled(azimuthRoot, mod.Folder, true, game);
+                notes.Add("extraoptions mods: " + mod.Folder + " on again (" + game + ")");
+            }
+            else kept.Add(mod.Folder);
+        }
+        foreach (var mod in mods.Where(m => m.Enabled && !allowed.Contains(m.Folder)))
+        {
+            SetEnabled(azimuthRoot, mod.Folder, false, game);
+            if (!kept.Contains(mod.Folder, StringComparer.OrdinalIgnoreCase)) kept.Add(mod.Folder);
+            notes.Add("extraoptions mods: " + mod.Folder + " off (" + game + " plays the launcher's mods only)");
+        }
+        if (kept.Count > 0 || held.Count > 0) WriteHeld(heldFile, kept, empty: true);
+        return notes;
+    }
+
+    /// <summary>
+    /// The folder a catalog manifest installs in its game's mods folder (every <c>azimuth</c> file under
+    /// <c>mods/&lt;game folder&gt;/&lt;folder&gt;/</c>, OD-233), or null for a mod that is not an ExtraOptions mod folder. Its game is
+    /// <see cref="ModManifest.ModsGame"/>.
     /// </summary>
     public static string? FolderOf(ModManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        var folders = manifest.Files.Where(f => f.Root == "azimuth").Select(f => ModsSubfolder(f.Destination)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var folders = manifest.Files.Where(f => f.Root == "azimuth").Select(f => ModsSubfolder(f.Destination, manifest.ModsGame)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         return folders.Count == 1 ? folders[0] : null;
     }
 
     /// <summary>
-    /// Before a catalog mod is installed or updated (OD-126, OD-232): an ExtraOptions mod lives only in <c>mods/&lt;id&gt;/</c>, and
-    /// its own <c>mod.json</c> agrees with the Infinity manifest (id, version, dependencies), since ExtraOptions loads by the one
-    /// and the launcher installs by the other. <paramref name="read"/> returns a package file's verified bytes by destination.
+    /// Before a catalog mod is installed or updated (OD-126, OD-232): an ExtraOptions mod lives only in its game's
+    /// <c>mods/&lt;game folder&gt;/&lt;id&gt;/</c> (OD-233), and its own <c>mod.json</c> agrees with the Infinity manifest (id, version,
+    /// dependencies), since ExtraOptions loads by the one and the launcher installs by the other. <paramref name="read"/> returns a package
+    /// file's verified bytes by destination.
     /// </summary>
     public static void CheckPackage(ModManifest manifest, Func<string, byte[]?> read)
     {
@@ -231,7 +298,7 @@ public static class ExtraOptionsMods
             throw new ModException("the ExtraOptions mod folder must be the mod's id", ModErrors.Unsupported);
         var dependencies = manifest.Dependencies.Select(d => d.Id).Where(d => d != ManagedModFiles.BuiltInExtraOptions)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var file = azimuth.FirstOrDefault(f => f.Destination.Equals(ModsFolder + "/" + folder + "/mod.json", StringComparison.OrdinalIgnoreCase))
+        var file = azimuth.FirstOrDefault(f => f.Destination.Equals(FolderPrefix(manifest.ModsGame, folder) + "mod.json", StringComparison.OrdinalIgnoreCase))
             ?? throw new ModException("an ExtraOptions mod needs its mod.json", ModErrors.Unsupported);
         var bytes = read(file.Destination) ?? throw new ModException("the mod's mod.json is missing from the package", ModErrors.Unsupported);
         string? id = null, version = null; var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -268,12 +335,12 @@ public static class ExtraOptionsMods
     /// dependencies still go before dependents. A second run changes nothing.
     /// </para>
     /// </summary>
-    public static IReadOnlyList<string> ArrangeLoadOrder(string azimuthRoot, IEnumerable<string>? first = null)
+    public static IReadOnlyList<string> ArrangeLoadOrder(string azimuthRoot, IEnumerable<string>? first = null, string game = ModManifest.DefaultGame)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
-        var mods = Scan(azimuthRoot);
+        var mods = Scan(azimuthRoot, game);
         if (mods.Count == 0) return [];
-        var file = ReadLoadOrder(azimuthRoot);
+        var file = ReadLoadOrder(azimuthRoot, game);
         var notes = new List<string>();
         var changed = false;
         if (file.Lines.Count > 0 && file.Lines[^1].Length == 0) file.Lines.RemoveAt(file.Lines.Count - 1);
@@ -331,16 +398,17 @@ public static class ExtraOptionsMods
             }
             if (!moved) break;
         }
-        if (changed) WriteLoadOrder(azimuthRoot, file);
+        if (changed) WriteLoadOrder(azimuthRoot, file, game);
         return notes;
     }
 
-    /// <summary>The <c>&lt;folder&gt;</c> of a <c>mods/&lt;folder&gt;/…</c> destination, or null.</summary>
-    private static string? ModsSubfolder(string destination)
+    /// <summary>The <c>&lt;folder&gt;</c> of a <c>mods/&lt;game folder&gt;/&lt;folder&gt;/…</c> destination of the game, or null.</summary>
+    private static string? ModsSubfolder(string destination, string game)
     {
         var path = destination.Replace('\\', '/');
-        if (!path.StartsWith(ModsFolder + "/", StringComparison.OrdinalIgnoreCase)) return null;
-        var rest = path[(ModsFolder.Length + 1)..];
+        var prefix = ModsFolder + "/" + ExtraOptionsLayout.GameFolder(game) + "/";
+        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+        var rest = path[prefix.Length..];
         var slash = rest.IndexOf('/');
         return slash > 0 ? rest[..slash] : null;
     }
@@ -424,9 +492,9 @@ public static class ExtraOptionsMods
 
     private sealed record LoadOrder(List<string> Lines, bool Bom, string NewLine);
 
-    private static LoadOrder ReadLoadOrder(string azimuthRoot)
+    private static LoadOrder ReadLoadOrder(string azimuthRoot, string game)
     {
-        var path = Path.Combine(ModsDirectory(azimuthRoot), LoadOrderFile);
+        var path = Path.Combine(ModsDirectory(azimuthRoot, game), LoadOrderFile);
         if (!File.Exists(path)) return new([], false, "\r\n");
         var bytes = File.ReadAllBytes(path);
         if (bytes.Length > MaxLoadOrder) throw new InvalidDataException("loadorder.txt is larger than ExtraOptions reads (64 KiB)");
@@ -436,9 +504,9 @@ public static class ExtraOptionsMods
         return new([.. text.Replace("\r\n", "\n").Split('\n')], bom, newLine);
     }
 
-    private static void WriteLoadOrder(string azimuthRoot, LoadOrder file)
+    private static void WriteLoadOrder(string azimuthRoot, LoadOrder file, string game)
     {
-        var directory = ModsDirectory(azimuthRoot);
+        var directory = ModsDirectory(azimuthRoot, game);
         Directory.CreateDirectory(directory);
         var lines = file.Lines;
         var text = string.Join(file.NewLine, lines) + (lines.Count > 0 && lines[^1].Length > 0 ? file.NewLine : "");

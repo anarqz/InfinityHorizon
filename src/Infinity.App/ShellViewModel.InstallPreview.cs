@@ -19,8 +19,13 @@ public sealed partial class ShellViewModel
 
     public bool SelectedModInstallPreview => _selectedMod is { Installed: false } card && _installPreviewDigest == card.Manifest.Digest;
 
-    /// <summary>The folder <paramref name="mod"/> installs into: its own ExtraOptions folder (OD-232), <c>&lt;Azimuth&gt;\mods\&lt;id&gt;</c>.</summary>
-    private string FolderFor(ModManifest mod) => _install?.Root is { } azimuth ? System.IO.Path.Combine(ExtraOptionsMods.ModsDirectory(azimuth), mod.Id) : "";
+    /// <summary>
+    /// The folder <paramref name="mod"/> installs into: its own ExtraOptions folder (OD-232) in its game's mods folder (OD-233),
+    /// <c>&lt;Azimuth&gt;\mods\&lt;game folder&gt;\&lt;id&gt;</c>, whichever layout its catalog entry was written for (the same folder the install
+    /// and the move to the per-game layout use, <see cref="ModManifest.ModsGame"/>).
+    /// </summary>
+    private string FolderFor(ModManifest mod) => _install?.Root is { } azimuth
+        ? System.IO.Path.Combine(ExtraOptionsMods.ModsDirectory(azimuth, mod.ModsGame), ExtraOptionsMods.FolderOf(mod) ?? mod.Id) : "";
 
     /// <summary>
     /// The existing files <paramref name="mod"/> would replace (a copy placed by hand; not its own installed ones, so an update counts

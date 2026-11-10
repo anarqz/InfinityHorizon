@@ -5,7 +5,8 @@ using System.Text.Json;
 namespace Infinity.Core.Mods;
 
 /// <summary>
-/// OD-232: a mod the launcher installs is an ExtraOptions mod: every file under <c>&lt;Azimuth&gt;\mods\&lt;id&gt;\</c>, its own
+/// OD-232: a mod the launcher installs is an ExtraOptions mod: every file under <c>&lt;Azimuth&gt;\mods\&lt;game folder&gt;\&lt;id&gt;\</c>
+/// (OD-233; <c>mods/&lt;id&gt;/</c> destinations of the old flat layout are read as their game's, <see cref="ModsGame"/>), its own
 /// <c>mod.json</c> among them (plugins included), from a pinned download or the player's own files (OD-117). Every other format
 /// (the Infinity native runtime, game-folder and media-override files, whole-database replacement, startup SQL, the
 /// <c>extraOptionsAddon</c> conversion, Infinity's own custom mods) is refused from a catalog like any invalid manifest; an
@@ -36,8 +37,17 @@ public sealed class ModManifest
     /// <summary>Legacy parked copies (adoption.parkedFiles): mapped binary destination to its parked Azimuth-relative path.</summary>
     public IReadOnlyDictionary<string, string> ParkedFiles { get; }
     public ModMultiplayer? Multiplayer { get; }
-    public string? ConfigPath => Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
-        ? config.GetProperty("path").GetString() : null;
+    /// <summary>The mod's settings file, Azimuth-relative; a path of the old flat layout is read as its game's (OD-233, as <see cref="Files"/>).</summary>
+    public string? ConfigPath { get; }
+
+    /// <summary>
+    /// OD-233: the game whose mods folder (<c>mods\&lt;game folder&gt;</c>, <see cref="ExtraOptionsLayout"/>) the mod installs into: its one
+    /// game, or, for a mod that declares several, the one its destinations name. Destinations written for the old flat layout
+    /// (<c>mods/&lt;id&gt;/…</c>, every catalog entry before OD-233) are read as that game's folder (<see cref="ExtraOptionsLayout.CanonicalDestination"/>):
+    /// <see cref="Files"/> and <see cref="ConfigPath"/> always carry the per-game path, so an installation and an update see the same files
+    /// whichever form the catalog used. <see cref="Digest"/> stays the digest of the manifest's own bytes.
+    /// </summary>
+    public string ModsGame { get; }
 
     /// <summary>
     /// OD-232: what an installed manifest uses that this launcher no longer supports (the manifest field, or <c>infinity-native</c>,
@@ -98,9 +108,14 @@ public sealed class ModManifest
         foreach (var field in new[] { "databaseMigrations", "runtimeOutputs" })
             if (Document.GetProperty(field) is var list && (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 0)) Retire(field);
         if (Document.TryGetProperty("payload", out _)) Retire("custom");
+        Games = Document.TryGetProperty("games", out var games) ? ParseGames(games) : [DefaultGame];
+        ModsGame = ModsGameOf(Document, Games, IsBuiltIn);
         // OD-232: an ExtraOptions mod lives only in its own folder; ExtraOptions.Infinity's options file sits beside azimuth.exe.
-        var folder = ExtraOptionsMods.ModsFolder + "/" + Id + "/";
+        // OD-233: that folder is in its game's mods folder; an old flat-layout path is read as it.
+        var folder = ExtraOptionsMods.FolderPrefix(ModsGame, Id);
         ExternalSources = ExternalSourcesOf(Document);
+        ConfigPath = Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } configNode && configNode.GetProperty("path").GetString() is { } rawConfig
+            ? ExtraOptionsLayout.CanonicalDestination(rawConfig, ModsGame) : null;
         if (ConfigPath is { } configPath)
         {
             ValidatePath(configPath);
@@ -142,7 +157,9 @@ public sealed class ModManifest
         foreach (var root in new[] { "game", "azimuth" })
             foreach (var file in Document.GetProperty("files").GetProperty(root).EnumerateArray())
             {
-                var item = new ManifestFile(root, file.GetProperty("source").GetString()!, file.GetProperty("destination").GetString()!,
+                var destination = file.GetProperty("destination").GetString()!;
+                if (root == "azimuth") destination = ExtraOptionsLayout.CanonicalDestination(destination, ModsGame);
+                var item = new ManifestFile(root, file.GetProperty("source").GetString()!, destination,
                     file.GetProperty("sha256").GetString()!, file.GetProperty("bytes").GetInt64(),
                     file.GetProperty("role").GetString()!, file.GetProperty("mode").GetString()!,
                     file.TryGetProperty("package", out var package) ? package.GetString()! : "primary");
@@ -178,7 +195,6 @@ public sealed class ModManifest
         if (Dependencies.Count > 64 || Dependencies.Select(d => d.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Dependencies.Count
             || Dependencies.Any(d => d.Id.Equals(Id, StringComparison.OrdinalIgnoreCase) || !Known(d.Id) || d.Versions.Count == 0
                 || d.Versions.Any(string.IsNullOrWhiteSpace))) throw new ModException("invalid dependencies");
-        Games = Document.TryGetProperty("games", out var games) ? ParseGames(games) : [DefaultGame];
         Multiplayer = ModMultiplayer.Parse(Document, legacyCustom);
         if (Document.TryGetProperty("conflicts", out var conflicts) && conflicts.EnumerateArray().Any(c => !Known(c.GetString())))
             throw new ModException("invalid conflicts");
@@ -223,7 +239,8 @@ public sealed class ModManifest
         if (Document.TryGetProperty("adoption", out var adoption) && adoption.TryGetProperty("parkedFiles", out var parkedFiles))
             foreach (var item in parkedFiles.EnumerateArray())
             {
-                var path = item.GetProperty("path").GetString()!; var destination = item.GetProperty("destination").GetString()!;
+                var path = item.GetProperty("path").GetString()!;
+                var destination = ExtraOptionsLayout.CanonicalDestination(item.GetProperty("destination").GetString()!, ModsGame);
                 ValidatePath(path);
                 if (parked.Count >= 16 || !Files.Any(f => f.Root == "azimuth" && f.Role == "binary" && f.Destination == destination) || !parked.TryAdd(destination, path))
                     throw new ModException("parked legacy files must name a mapped azimuth binary");
@@ -333,29 +350,32 @@ public sealed class ModManifest
         if (ReferenceEquals(this, other) || other is not null && Digest == other.Digest) return true;
         if (other is null) return false;
         // A string a writer cannot re-encode (a lone surrogate escape) is never "the same": the bytes decide, conservatively.
-        try { return Canonical(Document).AsSpan().SequenceEqual(Canonical(other.Document)); }
+        try { return ModsGame == other.ModsGame && Canonical(Document, ModsGame).AsSpan().SequenceEqual(Canonical(other.Document, other.ModsGame)); }
         catch (InvalidOperationException) { return false; }
         catch (ArgumentException) { return false; }
     }
 
-    private static byte[] Canonical(JsonElement element)
+    /// <summary>OD-233: paths (<c>destination</c>, <c>path</c>) compare in their per-game form, so a catalog that moved to it is no update.</summary>
+    private static byte[] Canonical(JsonElement element, string game)
     {
         using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer)) Write(writer, element);
+        using (var writer = new Utf8JsonWriter(buffer)) Write(writer, element, null);
         return buffer.ToArray();
 
-        static void Write(Utf8JsonWriter writer, JsonElement value)
+        void Write(Utf8JsonWriter writer, JsonElement value, string? name)
         {
             switch (value.ValueKind)
             {
                 case JsonValueKind.Object:
                     writer.WriteStartObject();
-                    foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { writer.WritePropertyName(property.Name); Write(writer, property.Value); }
+                    foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { writer.WritePropertyName(property.Name); Write(writer, property.Value, property.Name); }
                     writer.WriteEndObject(); break;
                 case JsonValueKind.Array:
                     writer.WriteStartArray();
-                    foreach (var item in value.EnumerateArray()) Write(writer, item);
+                    foreach (var item in value.EnumerateArray()) Write(writer, item, null);
                     writer.WriteEndArray(); break;
+                case JsonValueKind.String when name is "destination" or "path":
+                    writer.WriteStringValue(ExtraOptionsLayout.CanonicalDestination(value.GetString()!, game)); break;
                 case JsonValueKind.String: writer.WriteStringValue(value.GetString()); break;
                 // Numbers keep their exact text (20.0 and 20 are different settings defaults to a reviewer).
                 default: value.WriteTo(writer); break;
@@ -364,6 +384,24 @@ public sealed class ModManifest
     }
     public string Text(string field, string locale) => Document.GetProperty(field).TryGetProperty(locale, out var text)
         ? text.GetString()! : Document.GetProperty(field).GetProperty("en").GetString()!;
+    /// <summary>
+    /// OD-233: a mod's files sit in one game's mods folder: its one game, or, declaring several, the game folder its destinations name (an
+    /// old flat-layout path names none). A built-in card installs nothing (its first game).
+    /// </summary>
+    private static string ModsGameOf(JsonElement document, IReadOnlyList<string> games, bool builtIn)
+    {
+        if (games.Count == 1 || builtIn) return games[0];
+        var named = new HashSet<string>(StringComparer.Ordinal);
+        if (document.TryGetProperty("files", out var files) && files.ValueKind == JsonValueKind.Object
+            && files.TryGetProperty("azimuth", out var azimuth) && azimuth.ValueKind == JsonValueKind.Array)
+            foreach (var file in azimuth.EnumerateArray())
+                if (file.ValueKind == JsonValueKind.Object && file.TryGetProperty("destination", out var destination) && destination.ValueKind == JsonValueKind.String
+                    && destination.GetString()!.Split('/') is [ExtraOptionsMods.ModsFolder, var folder, _, ..] && ExtraOptionsLayout.GameOfFolder(folder) is { } game)
+                    named.Add(game);
+        if (named.Count == 1 && games.Contains(named.First(), StringComparer.Ordinal)) return named.First();
+        throw new ModException("a mod for several games installs into one game's mods folder, named by its destinations", ModErrors.Unsupported);
+    }
+
     private static string[] ParseGames(JsonElement games)
     {
         if (games.ValueKind != JsonValueKind.Array) throw new ModException("invalid games");
