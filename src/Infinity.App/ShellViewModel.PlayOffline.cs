@@ -31,7 +31,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>The offline Play's own requirements: no account, session or online service involved.</summary>
     public bool CanPlayOffline => Ready && !PlaysOnline && _install is not null && OfflinePlayProfile is not null && !Playing && !_busy && CrashIdle
-        && GameConfigurationReady && !ModPlayBlocked && OperatingSystem.IsWindows();
+        && GameConfigurationReady && !ModPlayBlocked && !JobsBlockPlay && OperatingSystem.IsWindows();
 
     /// <summary>The local profile an offline Play plays: the chosen local one, or the cached copy of the chosen account profile.</summary>
     private LocalProfile? OfflinePlayProfile => _chosenLocal ?? LocalProfiles.Read().FirstOrDefault(p => p.Game == _gate.Game && p.Cloud?.ProfileId == _gate.ProfileKey);
@@ -145,6 +145,8 @@ public sealed partial class ShellViewModel
         _play = new CancellationTokenSource(); Changed(string.Empty);
         try
         {
+            // OD-233: the per-game mods folders before anything reads the mods, off the UI thread (a stop says why and blocks Play)
+            if (!await PrepareModsLayoutAsync(receiptsOnly: false, background: false)) { Message = PrepareAzimuthFailed; return; }
             IReadOnlyList<string> overrides = [];
             var prepared = ModLaunchPreparation.None;
             var fullFeatures = CurrentGame.FullFeatures;

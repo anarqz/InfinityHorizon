@@ -102,11 +102,8 @@ public sealed partial class ShellViewModel
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<ExternalSetProgress>(p =>
-            {
-                _modProgress = S.Format("modset.progress", ("mod", names.GetValueOrDefault(p.ModId) ?? p.ModId),
-                    ("n", (p.Index + 1).ToString(CultureInfo.CurrentCulture)), ("total", p.Total.ToString(CultureInfo.CurrentCulture)));
-                Changed(nameof(ModProgress));
-            });
+                ModStep(S.Format("modset.progress", ("mod", names.GetValueOrDefault(p.ModId) ?? p.ModId),
+                    ("n", (p.Index + 1).ToString(CultureInfo.CurrentCulture)), ("total", p.Total.ToString(CultureInfo.CurrentCulture)))));
             var manager = await Task.Run(factory);
             try { results = await Task.Run(() => manager.InstallExternalSet(mods, picked, progress, CancellationToken.None, hardcore)); }
             catch (ModException error) when (error.Code == ModErrors.ExternalFiles)
@@ -117,7 +114,7 @@ public sealed partial class ShellViewModel
                 throw;
             }
             foreach (var result in results.Where(r => r.Outcome is ExternalSetOutcome.Installed or ExternalSetOutcome.Updated)) RecordModSource(result.Mod.Id);
-        }, S["mods.action_done"]);
+        }, S["mods.action_done"], label: S.Format("mods.lock.set", ("set", hint), ("count", mods.Count.ToString(CultureInfo.CurrentCulture))));
         if (unusable is not null) { Message = unusable; return; }
         if (results.Count == 0) return; // refused as a whole; RunModOperationAsync said why
         Log("mods: set " + hint + ": " + string.Join(", ", results.Select(r => r.Mod.Id + " " + r.Outcome + (r.Reason is { } why ? " (" + why + ")" : ""))));
@@ -160,6 +157,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         if (!ModsIdle || !card.CanUninstall || ModRecoveryRequired || ModManagerFactory() is not { } factory) return Task.CompletedTask;
-        return RunModOperationAsync(() => Task.Run(() => factory().Uninstall(card.Manifest.Id)), S["mods.uninstalled"]);
+        return RunModOperationAsync(() => Task.Run(() => factory().Uninstall(card.Manifest.Id)), S["mods.uninstalled"],
+            label: S.Format("mods.lock.uninstall", ("mod", ModName(card.Manifest))));
     }
 }

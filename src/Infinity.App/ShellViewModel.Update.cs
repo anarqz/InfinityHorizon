@@ -107,7 +107,7 @@ public sealed partial class ShellViewModel
             var releaseTask = DiscoverLauncherReleaseAsync(bound.Token);
             await Task.WhenAll(infoTask, releaseTask);
             if (_updateRecoveryBlocked) return;
-            var decision = _updater.Evaluate(Version, await infoTask, _gate.Game);
+            var decision = UpdateDecisionForTests is { } fake ? fake(await infoTask) : _updater.Evaluate(Version, await infoTask, _gate.Game);
             (_launcherUpdatePhase, _updateTarget) = (decision.Phase, decision.TargetVersion);
         }
         catch (Exception error) when (UpdateFailure(error))
@@ -140,6 +140,9 @@ public sealed partial class ShellViewModel
         catch (Exception error) when (UpdateFailure(error))
         { Log("update: release discovery unavailable: " + ErrorChain(error)); return false; }
     }
+
+    /// <summary>Tests only: the release-floor decision for a synthetic /launcher/v1/info (no signed GitHub release in a check).</summary>
+    internal Func<ServerInfo, UpdateDecision>? UpdateDecisionForTests { get; set; }
 
     /// <summary>Tests only: replaces the GitHub discovery (returns the discovered version, or throws as a failed read).</summary>
     internal Func<CancellationToken, Task<string?>>? DiscoveryForTests { get; set; }

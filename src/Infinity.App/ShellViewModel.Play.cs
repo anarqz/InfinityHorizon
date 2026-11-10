@@ -33,8 +33,8 @@ public sealed partial class ShellViewModel
     private bool PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
     {
         if (install is null) return true;
-        // OD-233: the old flat mods folder moves to the per-game folders first (any game: the move is the whole folder's); a stop blocks Play
-        if (!PrepareModsLayout(install)) return false;
+        // OD-233: the old flat mods folder has already moved to the per-game folders: both launches (PlayAsync, PlayOfflineAsync) await
+        // PrepareModsLayoutAsync, off the UI thread, before they read any mod; a stop there ended the launch with its reason
         // OD-206: a game without FH2's features only needs naming, and without that the launch stops: Azimuth would start the game named before
         if (!CurrentGame.FullFeatures)
         {
@@ -117,17 +117,11 @@ public sealed partial class ShellViewModel
     public AzimuthInstall? Install
     {
         get => _install;
+        // the synchronous form, for the callers that read the hook right after (a hook install, T30's replace before Play, a folder
+        // chosen by hand); the searches use SetInstallAsync
         set
         {
-            if (value != _install)
-            {
-                ClearIntegrity();
-                _install = value;
-                _contentLocationLoaded = false;
-                // OD-206: the games on offer are this folder's
-                if (OfflineMode) FillOfflineGames();
-                else if (_session is { } session) FillServerGames(session.Info.Games ?? []);
-            }
+            SelectInstall(value);
             if (value is not null)
             {
                 SwitchCaches(value.Root, online: null);
@@ -139,13 +133,44 @@ public sealed partial class ShellViewModel
         }
     }
 
+    /// <summary>
+    /// Owner 2026-11-10 ("never looks frozen"): <see cref="Install"/> with its slow parts off the UI thread: the mode caches' recovery
+    /// (a process list and folder moves) and the hook's read (hashes, signatures). The mods start (<see cref="StartMods"/>) runs its move
+    /// and reads in the background as before. For the searches (start-up, Setup's search, Check again), which await it.
+    /// </summary>
+    private async Task SetInstallAsync(AzimuthInstall? value)
+    {
+        SelectInstall(value);
+        if (value is not null)
+        {
+            await SwitchCachesAsync(value.Root, online: null);
+            if (_install != value) return; // another folder was chosen meanwhile: its own run finishes the work
+            StartMods();
+        }
+        await RefreshHookAsync();
+        if (_install != value) return;
+        FillPlayBoard(); // owner 2026-11-08: PLAY's buttons say when Azimuth is missing
+        Changed(string.Empty);
+    }
+
+    private void SelectInstall(AzimuthInstall? value)
+    {
+        if (value == _install) return;
+        ClearIntegrity();
+        _install = value;
+        _contentLocationLoaded = false;
+        // OD-206: the games on offer are this folder's
+        if (OfflineMode) FillOfflineGames();
+        else if (_session is { } session) FillServerGames(session.Info.Games ?? []);
+    }
+
     public string InstallLabel => _install is null
         ? S["games.missing"] + " " + S["games.missing_hint"]
         : $"Azimuth {_install.Version ?? "?"} · " + (_install.HookVersion is { } hook ? S.Format("supervisor.hook", ("version", hook)) : S["supervisor.hook_unknown"]);
 
     public bool Playing => _play is not null;
 
-    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked;
+    public bool CanPlay => Ready && !HasDeletionPending && _install is not null && _session is not null && !Playing && !_busy && CrashIdle && GameConfigurationReady && IntegrityCanStart && LauncherUpdateAllowsPlay && OnlineServiceAllowsPlay && !ModPlayBlocked && !JobsBlockPlay;
 
     public string? PlayStatus => _playStatus;
 
@@ -155,6 +180,8 @@ public sealed partial class ShellViewModel
     {
         // OD-118: without an account (or with a profile not on it) Play is the offline launch.
         RefreshChosenLocal(); // OD-118: an upload since it was chosen makes it play online
+        // owner 2026-11-10: a cloud save going up (or another should_block_play job) holds every launch, online and offline, and says so
+        if (!Playing && PlayHeldByJobs is { } held) { Message = held; return; }
         if (!PlaysOnline) { await PlayOfflineAsync(); return; }
         _modLaunchFailure = null;
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
@@ -180,7 +207,7 @@ public sealed partial class ShellViewModel
         // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
         // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
         // OD-233: the per-game mods folders before anything reads the mods (a stop says why and blocks Play)
-        if (_install is { } layoutInstall && !PrepareModsLayout(layoutInstall)) { Message = PrepareAzimuthFailed; return; }
+        if (!await PrepareModsLayoutAsync(receiptsOnly: false, background: false)) { Message = PrepareAzimuthFailed; return; }
         ModLaunchPreparation mods;
         try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
         catch (ModHardcoreException error)
@@ -233,7 +260,7 @@ public sealed partial class ShellViewModel
         // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
         if (!PrepareAzimuth(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
         var modSet = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
-        if (modSet is null) { Message = S["mods.online_unverified"]; await RefreshModsAsync(); return; }
+        if (modSet is null) { Message = ModSetRefusal; await RefreshModsAsync(); return; }
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
         using var onlineActivity = new OnlineActivity();
         StartOverlayStatusFeed(_session); // CR-L40 §1.3: the guide's server status and avatar
@@ -288,16 +315,19 @@ public sealed partial class ShellViewModel
         }
         finally
         {
+            // owner 2026-11-10: the end of a session never holds the UI thread (folder moves, hashes and the save scan on workers)
             if (caches)
             {
-                SwitchCaches(_install.Root, online: false);
+                await SwitchCachesAsync(_install.Root, online: false);
             }
             Changed(nameof(ProfileRows));
             _play.Dispose();
             _play = null;
+            FinishSaveUploadJob(); // the session (and its post-game upload) is over: the upload toast ends with it
             SavesChanged(); // a session uploads: the cached cloud revisions of this game are read again when next shown
             _waitingForAdmission = _queued = _leavingQueue = false;
-            RefreshHook();
+            await RefreshHookAsync();
+            await PrimeLocalFactsQuietlyAsync();
             _commands = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
@@ -314,16 +344,24 @@ public sealed partial class ShellViewModel
     /// found). Only with no azimuth.exe running: a running game would be reading the caches. A
     /// failure is logged and play goes on; the next start's recovery finishes the switch.
     /// </summary>
-    private bool SwitchCaches(string root, bool? online)
+    private bool SwitchCaches(string root, bool? online) => SwitchCachesFor(root, online, CurrentGame);
+
+    /// <summary>Owner 2026-11-10: <see cref="SwitchCaches"/> on a worker (a process list and folder moves), for a session's end.</summary>
+    private Task<bool> SwitchCachesAsync(string root, bool? online)
     {
-        if (System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0)
+        var game = CurrentGame;
+        return Task.Run(() => SwitchCachesFor(root, online, game));
+    }
+
+    private bool SwitchCachesFor(string root, bool? online, GameDefinition game)
+    {
+        if (AzimuthRunning())
         {
             Log("mode caches: azimuth.exe is running, left as they are");
             return false;
         }
         try
         {
-            var game = CurrentGame;
             switch (online)
             {
                 case true:

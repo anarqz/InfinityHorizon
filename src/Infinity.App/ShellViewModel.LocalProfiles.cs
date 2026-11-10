@@ -126,7 +126,7 @@ public sealed partial class ShellViewModel
     {
         if (_install is null || ParseXuid(target) is not { } xuid) return false;
         SaveProfile? azimuth;
-        try { azimuth = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid)).FirstOrDefault(s => s.IsOffline); }
+        try { azimuth = SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid)).FirstOrDefault(s => s.IsOffline); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Azimuth career not read: " + e.Message); return false; }
         if (azimuth is null) { Log("saves: no Azimuth career to adopt"); return false; }
         _saveTarget = target;

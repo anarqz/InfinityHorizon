@@ -200,7 +200,7 @@ public sealed partial class ShellViewModel
             _searching = false;
         }
         foreach (var note in notes) Log(note);
-        Install = found;
+        await SetInstallAsync(found); // its caches and hook read off the UI thread too
         Log(found is null ? "setup: no Azimuth found" : $"setup: Azimuth {found.Version ?? "?"} at {found.Root} ({SetupStatus})");
         if (InShell && openSetupWhenNeeded && SetupStatus != AzimuthStatus.Ready)
         {
@@ -294,29 +294,54 @@ public sealed partial class ShellViewModel
     internal void RefreshHook()
     {
         RefreshAzimuthFirstRun();
-        _hookPackageError = null;
+        ApplyHook(ReadHook(_install?.Root, DevServer, DevHookKey));
+    }
+
+    /// <summary>
+    /// Owner 2026-11-10: <see cref="RefreshHook"/> with the package and the installed hook read (and hashed, signature-checked) off the UI
+    /// thread; the result is applied on it. For the refreshes that need no answer at once (a game session's end).
+    /// </summary>
+    internal async Task RefreshHookAsync()
+    {
+        RefreshAzimuthFirstRun();
+        var root = _install?.Root; var dev = DevServer; var key = DevHookKey;
+        var read = await Task.Run(() => ReadHook(root, dev, key)).ConfigureAwait(true);
+        if (_install?.Root == root) ApplyHook(read);
+    }
+
+    private sealed record HookRead(HookPackage? Package, string? PackageError, InstalledHook? Installed, string? InstalledError);
+
+    /// <summary>The package next to the launcher and the installed hook (file reads and hashes: any thread).</summary>
+    private static HookRead ReadHook(string? root, bool devServer, byte[]? devKey)
+    {
+        HookPackage? package = null; string? packageError = null; InstalledHook? installed = null; string? installedError = null;
         try
         {
-            var custom = DevServer ? Environment.GetEnvironmentVariable("FI_HOOK_PACKAGE") : null;
+            var custom = devServer ? Environment.GetEnvironmentVariable("FI_HOOK_PACKAGE") : null;
             var folder = custom ?? Path.Combine(AppContext.BaseDirectory, "hook");
-            _hookPackage = HookInstaller.LoadPackage(folder, DevHookKey);
+            package = HookInstaller.LoadPackage(folder, devKey);
         }
-        catch (Exception e) when (e is HookException or IOException or UnauthorizedAccessException)
-        {
-            _hookPackage = null;
-            _hookPackageError = e.Message;
-            Log("hook: package refused: " + e.Message);
-        }
+        catch (Exception e) when (e is HookException or IOException or UnauthorizedAccessException) { packageError = e.Message; }
         try
         {
-            _hook = _install is null ? null : HookInstaller.Inspect(_install.Root, DevHookKey);
+            installed = root is null ? null : HookInstaller.Inspect(root, devKey);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // unreadable is not verified: never Ready on a failed check
-            _hook = _install is null ? null : new InstalledHook(HookKind.Unknown, null, null, HookSigner.None);
-            Log("hook: " + e.Message);
+            installed = new InstalledHook(HookKind.Unknown, null, null, HookSigner.None);
+            installedError = e.Message;
         }
+        return new HookRead(package, packageError, installed, installedError);
+    }
+
+    private void ApplyHook(HookRead read)
+    {
+        _hookPackage = read.Package;
+        _hookPackageError = read.PackageError;
+        if (read.PackageError is { } refused) Log("hook: package refused: " + refused);
+        _hook = read.Installed;
+        if (read.InstalledError is { } unreadable) Log("hook: " + unreadable);
         Changed(nameof(ShowBuildOriginWarning));
         // every check, once per change: what is next to the launcher, what is installed, and the decision
         var line = $"hook: check: devServer={DevServer} devKey={(DevHookKey is null ? "none" : "set")} " +

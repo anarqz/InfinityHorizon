@@ -102,8 +102,12 @@ public sealed partial class ShellViewModel
     {
         if (kind == PlayButtonKind.NotOffered) return (false, null);
         if (kind is PlayButtonKind.CreateProfile or PlayButtonKind.Resolve) return (!_busy && !Playing, Playing ? S["play.session_active"] : null);
+        // owner 2026-11-10: no play at all while a cloud save is going up ("Uploading cloud save…"), any profile, any game
+        if (kind == PlayButtonKind.Play && UploadingAny) return (false, S["jobs.play_uploading"]);
         if (Playing) return (false, S["play.session_active"]);
         if (_install is null) return (false, S["play.setup_needed"]);
+        // owner 2026-11-10: a background job marked should_block_play (the mods move, ...) holds PLAY and says which
+        if (PlayHeldByJobs is { } held) return (false, held);
         return (!_busy, null);
     }
 
@@ -126,6 +130,7 @@ public sealed partial class ShellViewModel
         switch (button.Kind)
         {
             case PlayButtonKind.Play when button.Row is { } row:
+                if (PlayHeldByJobs is { } held) { Message = held; break; }
                 _startRow = null;
                 ChooseProfile(row.Profile);
                 Log($"play: {button.Mode} {CurrentGame.Id} chosen on PLAY");

@@ -98,8 +98,13 @@ public static class ExtraOptionsLayout
     /// <c>loadorder.txt</c> stays until every folder has moved, so the next run continues exactly there; a run on the per-game layout
     /// changes nothing.
     /// </para>
+    /// <para>
+    /// <paramref name="include"/>, when given, limits the run to the folders it accepts (the ones whose game is already known); the others
+    /// stay, and so does the root <c>loadorder.txt</c>, until a run without a limit (or one that accepts every remaining folder) moves them.
+    /// </para>
     /// </summary>
-    public static ExtraOptionsLayoutResult Migrate(string azimuthRoot, Func<string, string> gameOf, string? backupDirectory = null, Func<bool>? gameRunning = null)
+    public static ExtraOptionsLayoutResult Migrate(string azimuthRoot, Func<string, string> gameOf, string? backupDirectory = null, Func<bool>? gameRunning = null,
+        Func<string, bool>? include = null)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(gameOf);
@@ -110,7 +115,9 @@ public static class ExtraOptionsLayout
             throw new ExtraOptionsLayoutException("linked", ExtraOptionsMods.ModsFolder, "the mods folder is a link");
         var legacyOrder = Path.Combine(root, ExtraOptionsMods.LoadOrderFile);
         var folders = rootInfo.EnumerateDirectories().Where(d => !Reserved(d.Name)).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase).ToList();
-        if (folders.Count == 0 && !File.Exists(legacyOrder)) return ExtraOptionsLayoutResult.Nothing;
+        // a folder left out waits (and with it the root loadorder.txt, which is split only once every folder has moved)
+        var waiting = include is null ? 0 : folders.RemoveAll(d => !include(d.Name));
+        if (folders.Count == 0 && (waiting > 0 || !File.Exists(legacyOrder))) return ExtraOptionsLayoutResult.Nothing;
 
         // Preflight: nothing moves unless every folder can.
         foreach (var game in new[] { "fh2", "fm5" })
@@ -131,7 +138,7 @@ public static class ExtraOptionsLayout
             plan.Add((folder, game, target));
         }
         List<string>? lines = null; var bom = false; var newLine = "\r\n";
-        if (File.Exists(legacyOrder))
+        if (waiting == 0 && File.Exists(legacyOrder))
         {
             if ((File.GetAttributes(legacyOrder) & FileAttributes.ReparsePoint) != 0)
                 throw new ExtraOptionsLayoutException("linked", ExtraOptionsMods.LoadOrderFile, "loadorder.txt is a link");

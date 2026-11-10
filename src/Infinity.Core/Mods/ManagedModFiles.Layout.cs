@@ -34,9 +34,20 @@ public sealed partial class ManagedModFiles
     /// conflict, a refused move, a crash between the steps), it continues; on the per-game layout it changes nothing.
     /// </summary>
     /// <param name="backupDirectory">Where a copy of the old <c>mods\loadorder.txt</c> is kept (the launcher's state).</param>
-    public ExtraOptionsLayoutResult MigrateLayout(Func<string, string?>? catalogGame = null, string? backupDirectory = null)
+    /// <param name="receiptsOnly">
+    /// Without the catalog (not loaded yet, or unreachable): only the folders whose game the receipts decide move, with their receipts
+    /// (and dot folders, always FH2's). That is exactly what a run with the catalog does for them, since a receipt's game comes before
+    /// the catalog's answer; a folder copied by hand waits, with the root <c>loadorder.txt</c>, for the next run with the catalog (or
+    /// before Play). With nothing copied by hand the whole move completes.
+    /// </param>
+    public ExtraOptionsLayoutResult MigrateLayout(Func<string, string?>? catalogGame = null, string? backupDirectory = null, bool receiptsOnly = false)
     {
         using var gate = Lock();
+        return MigrateLayoutLocked(catalogGame, backupDirectory, receiptsOnly);
+    }
+
+    private ExtraOptionsLayoutResult MigrateLayoutLocked(Func<string, string?>? catalogGame, string? backupDirectory, bool receiptsOnly)
+    {
         // Read raw: ReadReceipt refuses a receipt of the old layout, which is exactly what this rewrites.
         var receipts = new List<(string Path, ManagedModReceipt Receipt, string Game)>();
         var managed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -64,7 +75,8 @@ public sealed partial class ManagedModFiles
             : catalogGame?.Invoke(folder) is "fm5" ? "fm5" : ModManifest.DefaultGame;
 
         ExtraOptionsLayoutResult result; ExceptionDispatchInfo? failure = null;
-        try { result = ExtraOptionsLayout.Migrate(_azimuth, GameOf, backupDirectory, _gameRunning); }
+        Func<string, bool>? include = receiptsOnly ? folder => folder.StartsWith('.') || managed.ContainsKey(folder) : null;
+        try { result = ExtraOptionsLayout.Migrate(_azimuth, GameOf, backupDirectory, _gameRunning, include); }
         catch (ExtraOptionsLayoutException error) { failure = ExceptionDispatchInfo.Capture(error); result = ExtraOptionsLayoutResult.Nothing; }
 
         // A receipt follows its folder only once the folder has left mods\ (a stop before its move keeps both where they were).

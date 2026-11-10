@@ -44,7 +44,7 @@ public sealed partial class ShellViewModel
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: local profiles not read for a Hardcore source: " + e.GetType().Name); }
             try
             {
-                var saves = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame));
+                var saves = SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame));
                 save = folders.Select(f => saves.FirstOrDefault(s => s.Folder == f)).OfType<SaveProfile>().FirstOrDefault();
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Hardcore career not read: " + e.GetType().Name); }
@@ -72,7 +72,7 @@ public sealed partial class ShellViewModel
         if (_install is null) return set;
         try
         {
-            foreach (var save in AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)))
+            foreach (var save in SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)))
                 if (save.Xuid is { } xuid) set.Add(xuid.ToString(CultureInfo.InvariantCulture));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: this PC's saves not listed for the board: " + e.GetType().Name); }

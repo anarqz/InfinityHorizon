@@ -137,8 +137,27 @@ public sealed partial class ShellViewModel
     }
     public bool HasManifestCatalog => _catalogLoaded;
     public bool ModOperationBusy => _modOperation;
-    public bool ModContentEnabled => !_modOperation;
+    public bool ModContentEnabled => !ModOperationBusy;
     public string ModProgress => _modProgress;
+    /// <summary>
+    /// The Mods page's own progress dialog, only when the window's overlay is not up: a mod operation runs under the screen lock
+    /// (<see cref="RunModOperationAsync"/>, which shows the progress), so one operation never shows two indicators.
+    /// </summary>
+    public bool ShowModProgressOverlay => ModOperationBusy && !ShowBusyOverlay;
+
+    /// <summary>What the running mod operation is doing now: the Mods dialog's text, and the screen lock's under its label.</summary>
+    private void ModStep(string text)
+    {
+        _modProgress = text;
+        Changed(nameof(ModProgress));
+        if (_modOperation && _lockDepth > 0 && _modLockLabel is { } what) BusyStep(what + "\n" + text);
+    }
+
+    /// <summary>The running mod operation's screen-lock label ("Installing …"), or null.</summary>
+    private string? _modLockLabel;
+
+    /// <summary>A mod's name for the lock labels.</summary>
+    private string ModName(ModManifest mod) => mod.Text("name", S.Locale);
     private bool CatalogExpired => _catalog?.Expired(DateTimeOffset.UtcNow) == true;
     public string ModCatalogStatus => _catalogFailure ?? (!_catalogLoaded ? S[_catalogLoading ? "mods.progress.catalog" : "mods.catalog_unloaded"]
         : CatalogExpired ? S["mods.catalog_expired"] : DevelopmentMods ? S["mods.catalog_dev"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"]
@@ -151,19 +170,78 @@ public sealed partial class ShellViewModel
     public bool ModRecoveryRequired => _modHealth.RecoveryHere || _modHealth.RecoveryElsewhere;
     /// <summary>The only mod state that stops ordinary Play: an interrupted change of this Azimuth folder, always shown with its recovery.</summary>
     public bool ModPlayBlocked => _install is not null && _modHealth.BlocksPlay;
-    public bool ShowModRecovery => ModsIdle && (ModRecoveryRequired || _modHealth.Problems.Count > 0 || _modHealth.Installed.Any(i => i.Problem is not null)
-        || _modStateError is not null || HasModRelink);
+    // Every panel the Mods page shows has an enabled action that addresses what it says (checked state by state by the harness):
+    // - "Interrupted mod operation": an interrupted operation (Recover, Resolve) or a record whose own content is broken (Resolve
+    //   archives it, ModInstallation.ResolveClears, the check Resolve itself runs);
+    // - "Mods need attention": a read that failed for now, unreadable mod state, a record of another game folder, a moved installation
+    //   (Try again, always; Relink and Open Setup where they apply); intact records are never archived;
+    // - "Moving mods to per-game folders": the old flat layout (OD-233), never an unreadable record (Move mods now).
+    public bool ShowModRecovery => ModsIdle && (ModRecoveryRequired || UnreadableMods.Length > 0);
     public bool CanRecoverMods => ModsIdle && ModRecoveryRequired;
-    public bool CanResolveMods => ModsIdle && (ModRecoveryRequired || _modHealth.Installed.Any(i => i.Problem is not null));
+    public bool CanResolveMods => ModsIdle && (ModRecoveryRequired || UnreadableMods.Length > 0);
     public bool HasModRelink => _modHealth.RelinkCandidates.Count > 0 || _modHealth.GameRelink;
+    public bool ShowModAttention => ModsIdle && (_modHealth.Problems.Count > 0 || _modStateError is not null || RetryMods.Length > 0
+        || WaitingForGameFolderMods.Length > 0 || HasModRelink);
+    /// <summary>"Try again" re-reads the mod state; shown with every attention state (a failed read may clear by itself).</summary>
+    public bool CanRetryMods => ModsIdle;
+    /// <summary>A record of a game folder that is not the selected one: Setup's game folder (or the game it belongs to) serves it.</summary>
+    public bool ShowModsOpenSetup => InShell && WaitingForGameFolderMods.Length > 0;
+    /// <summary>Installed mods whose record Resolve archives (files untouched): named by their manifest, else the catalog's entry, else their id.</summary>
+    private string[] UnreadableMods => ProblemNames(i => i.ResolveClears);
+    /// <summary>Installed mods whose record could not be read for now (a file open elsewhere, access refused): read again, never archived.</summary>
+    private string[] RetryMods => ProblemNames(i => i.Retry);
+    /// <summary>Records of a game folder that is not chosen (or not the selected one): Setup's game folder, not Resolve, serves them.</summary>
+    private string[] WaitingForGameFolderMods => ProblemNames(i => i.Problem == ModErrors.Relink && !_modHealth.GameRelink);
+    private string[] ProblemNames(Func<ModInstallation, bool> which) => _modHealth.Installed.Where(i => i.Problem is not null && which(i))
+        .Select(i => (i.NamedBy ?? _manifestCatalog.FirstOrDefault(m => m.Id == i.Id))?.Text("name", S.Locale) ?? i.Id).ToArray();
     public string ModRecoveryText => string.Join("\n", new[]
     {
         _modHealth.RecoveryHere ? S["mods.recovery_here"] : null,
         _modHealth.RecoveryElsewhere ? S["mods.recovery_elsewhere"] : null,
-        _modHealth.Problems.Count > 0 || _modHealth.Installed.Any(i => i.Problem is not null) ? S["mods.recovery_problems"] : null,
-        _modStateError is not null ? S["mods.state_unreadable"] : null,
+        UnreadableMods is { Length: > 0 } unreadable ? S.Format("mods.recovery_problems_named", ("mods", string.Join(", ", unreadable))) : null,
+    }.OfType<string>());
+    public string ModAttentionText => string.Join("\n", new[]
+    {
+        RetryMods is { Length: > 0 } retry ? S.Format("mods.attention_retry", ("mods", string.Join(", ", retry))) : null,
+        _modHealth.Problems.Count > 0 || _modStateError is not null ? S["mods.attention_state"] : null,
+        WaitingForGameFolderMods is { Length: > 0 } waiting ? S.Format("mods.attention_game_folder", ("mods", string.Join(", ", waiting))) : null,
         HasModRelink ? S["mods.relink_hint"] : null,
     }.OfType<string>());
+
+    /// <summary>"Try again": the mod state read again (a file that was open elsewhere, a refused read); nothing is changed.</summary>
+    public async Task RetryModStateAsync()
+    {
+        if (!ModsIdle) { Message = S[ModsWaitReason]; return; }
+        await RefreshModsAsync();
+        Message = S[ShowModAttention ? "mods.retry_still" : "mods.retry_done"];
+    }
+
+    /// <summary>
+    /// OD-233: the mods folder still has the old flat layout (or its move stopped): Mods says so, with the reason of a stop, and offers the
+    /// move (the one Play runs first). Not while the catalog that names a hand-copied folder's game is still loading.
+    /// </summary>
+    public bool ShowModsLayout => ModsIdle && _install is not null && (_modsLayoutFailure is not null
+        || _modHealth.Installed.Any(i => i.Problem == ModErrors.Layout) || _modHealth.LayoutPending && !_catalogLoading);
+    public string ModsLayoutText => _modsLayoutFailure is { } stopped ? S["mods.layout_pending"] + "\n" + stopped : S["mods.layout_pending"];
+
+    /// <summary>"Move mods now": the move to the per-game folders, as Play runs it (with the catalog's games when it is loaded).</summary>
+    public async Task MoveModsLayoutAsync()
+    {
+        if (_install is null) return;
+        bool? moved = null;
+        // a Lock (the player asked for it); the move runs inside it with no indicator of its own
+        await RunModOperationAsync(async () => moved = await PrepareModsLayoutAsync(receiptsOnly: false, background: false, inline: true),
+            S["mods.layout_moved"], label: S["jobs.mods_layout"]);
+        if (moved == false && _modsLayoutFailure is { } stopped) { Message = stopped; Changed(string.Empty); }
+    }
+
+    /// <summary>After Recover: the move an interrupted operation held back (OD-233) runs now, as at startup.</summary>
+    private async Task AfterModRecoveryAsync()
+    {
+        if (_install is null || !ModsIdle || GameRunning()) return;
+        await PrepareModsLayoutAsync(receiptsOnly: !_catalogLoaded, background: true);
+        await RefreshModsAsync();
+    }
     /// <summary>OD-112 follow-up: the selected profile is Hardcore, which allows no mod that affects multiplayer.</summary>
     private bool ProfileHardcore => LobbyProfile?.Mode == "hardcore";
     /// <summary>Enabled mods a Hardcore profile refuses (<see cref="ModMultiplayer.AffectsMultiplayer"/>, the lobby-set rule), by name.</summary>
@@ -214,7 +292,7 @@ public sealed partial class ShellViewModel
     public async Task OpenDevelopmentModsAsync(string? azimuth)
     {
         if (!DevelopmentMods || !ModsIdle) return;
-        if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
+        if (azimuth is not null) await SetInstallAsync(await Task.Run(() => Infinity.Core.Process.AzimuthInstall.Detect(azimuth)));
         else await FindAzimuthAsync(null, openSetupWhenNeeded: false);
         _onMods = true; _onSetup = false; _onBugReport = false; _onNews = false;
         Changed(string.Empty);
@@ -231,10 +309,10 @@ public sealed partial class ShellViewModel
         var loaded = false;
         await RunModOperationAsync(async () =>
         {
-            _modProgress = S["mods.progress.catalog"]; Changed(nameof(ModProgress));
+            ModStep(S["mods.progress.catalog"]);
             await FetchCatalogAsync();
             loaded = true;
-        }, S["mods.catalog_loaded"]);
+        }, S["mods.catalog_loaded"], label: S["jobs.catalog"]);
         if (!loaded)
         {
             _catalogFailure = CatalogFailureText;
@@ -254,9 +332,13 @@ public sealed partial class ShellViewModel
             if (!DevelopmentMods && !_catalogLoaded && await Task.Run(() => OfficialModCatalog.LoadCached(address, CatalogCache)) is { } cached && address == CatalogUri)
             {
                 ApplyCatalog(cached);
+                // OD-233: the cached signed catalog names a hand-copied folder's game as well as the fresh one does
+                if (_install is not null && !Playing && ModsIdle && !GameRunning()) await PrepareModsLayoutAsync(receiptsOnly: false, background: true);
                 await RefreshModsAsync(); // OD-115: the cached catalog's requirements decide Play while the network fetch runs
             }
-            await FetchCatalogAsync();
+            // owner 2026-11-10: "Users should not get blocked from interacting with the launcher while the mod catalog is loading": a
+            // background toast (no PLAY hold); a failure also stays in it with Retry
+            await RunJobOrThrowAsync("mod-catalog", S["jobs.catalog"], Infinity.Core.Shell.JobPresentation.Background, blocksPlay: false, _ => FetchCatalogAsync());
         }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)
         {
@@ -266,7 +348,7 @@ public sealed partial class ShellViewModel
         }
         finally { _catalogLoading = false; Changed(string.Empty); }
         // OD-233: with the catalog, an unmanaged folder's game is known: the per-game move runs now (receipts decide first)
-        if (_install is { } install && _catalogLoaded && !Playing && !GameRunning()) PrepareModsLayout(install);
+        if (_install is not null && _catalogLoaded && !Playing && !GameRunning()) await PrepareModsLayoutAsync(receiptsOnly: false, background: true);
         await RefreshModsAsync();
     }
 
@@ -447,7 +529,7 @@ public sealed partial class ShellViewModel
             var compatible = _install is not null && mod.Document.GetProperty("compatibility").GetProperty("azimuthVersions").EnumerateArray().Any(v => v.GetString() == _install.Version);
             string status, badge, action; bool canAct; ModManifest? dependency = null;
             if (_modHealth.RecoveryHere) { status = S["mods.recovery_needed"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
-            else if (installed?.Problem is not null) { status = S["mods.recovery_problems"]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
+            else if (installed?.Problem is not null) { status = S[installed.Problem switch { ModErrors.Layout => "mods.layout_pending", ModErrors.Relink => "mods.card_other_folder", _ when installed.ResolveClears => "mods.recovery_problems", _ => "mods.card_retry" }]; badge = S["mods.badge_attention"]; action = S["mods.install"]; canAct = false; }
             else if (installed is not null && mod.Retired)
             {
                 // OD-232: a retired format (game-folder files, a native or data mod, a custom mod): disable or remove only, never
@@ -582,11 +664,14 @@ public sealed partial class ShellViewModel
         var factory = ModManagerFactory()!;
         var hosts = CatalogHosts;
         var hardcore = ProfileHardcore;
+        var adopt = !current.Installed && current.Action == S["mods.adopt"];
+        var what = S.Format(adopt ? "mods.lock.adopt" : !current.Installed ? "mods.lock.install" : current.Enabled ? "mods.lock.disable" : "mods.lock.enable",
+            ("mod", ModName(mod)));
         await RunModOperationAsync(async () =>
         {
-            var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
+            var progress = new Progress<string>(stage => ModStep(S["mods.progress." + stage]));
             var manager = await Task.Run(factory);
-            if (!current.Installed && current.Action == S["mods.adopt"]) await Task.Run(() => manager.Adopt(mod, hardcore));
+            if (adopt) await Task.Run(() => manager.Adopt(mod, hardcore));
             else if (!current.Installed)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -594,7 +679,7 @@ public sealed partial class ShellViewModel
                 RecordModSource(mod.Id);
             }
             else await Task.Run(() => manager.SetEnabled(mod, !current.Enabled, progress, hardcore));
-        }, S["mods.action_done"]);
+        }, S["mods.action_done"], label: what);
     }
 
     /// <summary>This catalog's download host rule (OD-116: any HTTPS host, every download pinned); nothing without a catalog.</summary>
@@ -607,52 +692,77 @@ public sealed partial class ShellViewModel
         var factory = ModManagerFactory()!; var hosts = CatalogHosts; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
         {
-            var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
+            var progress = new Progress<string>(stage => ModStep(S["mods.progress." + stage]));
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             var manager = await Task.Run(factory);
             await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
             RecordModSource(next.Id);
-        }, S["mods.updated"]);
+        }, S["mods.updated"], label: S.Format("mods.lock.update", ("mod", ModName(next))));
     }
 
-    private Task SelectedModOperation(Action<ManagedModFiles, ModManifest> operation, string done)
+    private Task SelectedModOperation(Action<ManagedModFiles, ModManifest> operation, string done, string labelKey)
     {
         if (_selectedMod is not { } selected || ModManagerFactory() is not { } factory) return Task.CompletedTask;
-        return RunModOperationAsync(() => Task.Run(() => operation(factory(), selected.Manifest)), done);
+        return RunModOperationAsync(() => Task.Run(() => operation(factory(), selected.Manifest)), done,
+            label: S.Format(labelKey, ("mod", ModName(selected.Manifest))));
     }
 
-    public Task AcceptModFilesAsync() => SelectedModOperation((m, mod) => m.AcceptCurrentFiles(mod), S["mods.accepted"]);
-    public Task DisableModKeepingFilesAsync() => SelectedModOperation((m, mod) => m.DisableKeepingCurrentFiles(mod), S["mods.disabled_kept"]);
-    public Task RepairModSettingsAsync() => SelectedModOperation((m, mod) => m.RepairSettings(mod), S["mods.repaired"]);
-    public Task UninstallModAsync() => SelectedModOperation((m, mod) => m.Uninstall(mod.Id), S["mods.uninstalled"]);
-    public Task PurgeModAsync() => SelectedModOperation((m, mod) => m.Purge(mod.Id), S["mods.purged"]);
+    public Task AcceptModFilesAsync() => SelectedModOperation((m, mod) => m.AcceptCurrentFiles(mod), S["mods.accepted"], "mods.lock.accept");
+    public Task DisableModKeepingFilesAsync() => SelectedModOperation((m, mod) => m.DisableKeepingCurrentFiles(mod), S["mods.disabled_kept"], "mods.lock.disable_keep");
+    public Task RepairModSettingsAsync() => SelectedModOperation((m, mod) => m.RepairSettings(mod), S["mods.repaired"], "mods.lock.repair");
+    public Task UninstallModAsync() => SelectedModOperation((m, mod) => m.Uninstall(mod.Id), S["mods.uninstalled"], "mods.lock.uninstall");
+    public Task PurgeModAsync() => SelectedModOperation((m, mod) => m.Purge(mod.Id), S["mods.purged"], "mods.lock.purge");
 
-    private Task ManagerOperation(Action<ManagedModFiles> operation, string done) =>
-        ModManagerFactory() is { } factory ? RunModOperationAsync(() => Task.Run(() => operation(factory())), done) : Task.CompletedTask;
+    private Task ManagerOperation(Action<ManagedModFiles> operation, string done, string label) =>
+        ModManagerFactory() is { } factory ? RunModOperationAsync(() => Task.Run(() => operation(factory())), done, label: label) : Task.CompletedTask;
 
-    public Task RecoverModsAsync() => ManagerOperation(m => m.Recover(), S["mods.recovered"]);
-    public Task ResolveModRecoveryAsync() => ManagerOperation(m => m.ResolveRecovery(), S["mods.resolved"]);
+    public async Task RecoverModsAsync() { await ManagerOperation(m => m.Recover(), S["mods.recovered"], S["mods.lock.recover"]); await AfterModRecoveryAsync(); }
+    // Resolve changes no mod file, so no move follows it: a pending move keeps its own panel and "Move mods now"
+    public Task ResolveModRecoveryAsync() => ManagerOperation(m => m.ResolveRecovery(), S["mods.resolved"], S["mods.lock.resolve"]);
     public Task RelinkModsAsync() => ManagerOperation(m =>
     {
         foreach (var folder in m.RelinkCandidates().Take(1)) m.Relink(folder);
         if (m.GameRelinkCandidates().Count > 0) m.RelinkGame();
-    }, S["mods.relinked"]);
+    }, S["mods.relinked"], S["mods.lock.relink"]);
 
     /// <summary>Retention at startup (M5): in the background, only while nothing else runs; a refusal is only logged.</summary>
     private async Task MaintainModsAsync()
     {
         if (ModManagerFactory() is not { } factory || !ModsIdle || GameRunning()) return;
-        try { await Task.Run(() => factory().Prune(DateTimeOffset.UtcNow)); }
+        try
+        {
+            // owner 2026-11-10: retention is a background toast (no PLAY hold)
+            await RunJobOrThrowAsync("mods-retention", S["jobs.retention"], Infinity.Core.Shell.JobPresentation.Background, blocksPlay: false,
+                _ => Task.Run(() => factory().Prune(DateTimeOffset.UtcNow)));
+        }
         catch (Exception error) when (ManagedModFiles.IsStateError(error)) { Log("mods: retention skipped: " + ManagedModFiles.Code(error)); }
     }
 
-    private async Task RunModOperationAsync(Func<Task> operation, string done, bool preserveOptionsOnFailure = false)
+    /// <summary>Why a mod operation cannot run now (<see cref="ModsIdle"/> is false), as an i18n key.</summary>
+    private string ModsWaitReason => Playing ? "mods.wait.playing" : LauncherUpdateBusy ? "mods.wait.update" : IntegrityChecking ? "mods.wait.integrity" : _modOperation ? "mods.wait.busy" : "mods.wait.launcher";
+
+    /// <summary>
+    /// Every mod change the player asks for (install, install all, enable/disable, update, uninstall, recover, resolve, relink, settings,
+    /// "Move mods now"…): owner 2026-11-10, "SOME loads must lock the screen, for example, enabling/disabling 40 mods at once with INSTALL
+    /// ALL". A Lock job of <see cref="Jobs"/>: the window's overlay with <paramref name="label"/> (what), its "keep the launcher open"
+    /// line (why) and the operation's steps (<see cref="ModStep"/>), open before the first await; refused with its reason while
+    /// something else runs (<see cref="ModsWaitReason"/>).
+    /// </summary>
+    private async Task RunModOperationAsync(Func<Task> operation, string done, bool preserveOptionsOnFailure = false, string? label = null)
     {
-        if (!ModsIdle) return;
+        if (!ModsIdle) { Message = S[ModsWaitReason]; return; } // never a silent no-op: the player learns what it waits for
+        // the short per-game move (OD-233), when one runs, finishes first (its toast shows it meanwhile)
+        if (_layoutGate.CurrentCount == 0) { await _layoutGate.WaitAsync(); _layoutGate.Release(); }
+        if (!ModsIdle) { Message = S[ModsWaitReason]; return; }
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
-        _modOperation = true; _modProgress = S["mods.progress.prepare"]; Busy = true;
+        var what = label ?? S["mods.lock.working"];
+        _modOperation = true; _modLockLabel = what; _modProgress = S["mods.progress.prepare"]; Busy = true;
         var succeeded = false;
-        try { await operation(); Message = done; succeeded = true; }
+        try
+        {
+            await RunJobOrThrowAsync("mods-operation", what, Infinity.Core.Shell.JobPresentation.Lock, blocksPlay: true, _ => operation());
+            Message = done; succeeded = true;
+        }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is HttpRequestException or OperationCanceledException)
         {
             Log("mods: operation failed: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : ""));
@@ -660,7 +770,7 @@ public sealed partial class ShellViewModel
         }
         finally
         {
-            _modOperation = false; Busy = false;
+            _modOperation = false; _modLockLabel = null; Busy = false;
             if (succeeded && preserveOptionsOnFailure) _iniDirty = false; // a saved draft reloads from the file; a failed one stays
             await RefreshModsAsync();
             Changed(string.Empty);

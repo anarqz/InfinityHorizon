@@ -308,8 +308,9 @@ public sealed partial class ShellViewModel
     {
         SaveCards.Clear();
         if (OfflineMode || _session?.Me?.Players is null) { ChangedSaves(); return; }
-        RefreshGameRunning();
-        EnsureOriginalQuietly();
+        // owner 2026-11-10: no process list or folder copy on the UI thread here; both come from the last off-thread scan
+        _gameRunning = SavesForceRunning || Playing || _azimuthRunning;
+        KeepOriginalInBackground();
         foreach (var (slot, mode) in new[] { (SaveSlot.Hardcore, "hardcore"), (SaveSlot.Noob, "noob") })
         {
             var rows = ProfileRows.Where(r => r.Card?.Player.Mode == mode).ToList();
@@ -556,8 +557,8 @@ public sealed partial class ShellViewModel
         {
             try
             {
-                if (AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
-                    content = CurrentGame.CloudSaves ? CurrentGame.Saves.Bundle.ContentDigest(newest) : "local";
+                if (NewestSealedOf(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
+                    content = CurrentGame.CloudSaves ? ContentDigestOf(CurrentGame, newest) : "local";
             }
             catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { content = "unreadable"; }
             if (CurrentGame.CloudSaves && CloudSaveClient() is { } client && client.Saves.State(xuid) is { } state)
@@ -621,7 +622,7 @@ public sealed partial class ShellViewModel
     private SaveProfile? LocalSaveOf(string xuid)
     {
         if (SavesRootNow is not { } root || !ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var x)) return null;
-        try { return AzimuthSaves.List(root).FirstOrDefault(s => s.Xuid == x); }
+        try { return SavesList(root).FirstOrDefault(s => s.Xuid == x); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
@@ -629,7 +630,7 @@ public sealed partial class ShellViewModel
     private SaveProfile? AzimuthSave()
     {
         if (SavesRootNow is not { } root) return null;
-        try { return AzimuthSaves.List(root).FirstOrDefault(s => s.IsOffline); }
+        try { return SavesList(root).FirstOrDefault(s => s.IsOffline); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
@@ -649,16 +650,13 @@ public sealed partial class ShellViewModel
         })));
     }
 
-    /// <summary>§7.2: the title's saves as first found, once (a failure is logged; the next action tries again and stops if it fails).</summary>
-    private void EnsureOriginalQuietly()
+    /// <summary>§7.2: the title's saves as first found, once per folder and game, on a worker (owner 2026-11-10: the cards never wait for the copy).</summary>
+    private void KeepOriginalInBackground()
     {
-        if (SavesRootNow is not { } root) return;
-        try
-        {
-            if (History().EnsureOriginal(root, DateTime.UtcNow) is { } original)
-                Log($"saves: history original of {CurrentGame.Id}/{CurrentGame.TitleKey} kept ({original.Entry.Files.Count} files)");
-        }
-        catch (Exception e) when (e is HistoryException or IOException or UnauthorizedAccessException) { Log("saves: history original not kept: " + e.Message); }
+        if (SavesRootNow is not { } savesRoot || _install?.Root is not { } root || !_originalKept.Add(root + "|" + CurrentGame.Id)) return;
+        var history = History();
+        var game = CurrentGame;
+        _ = Task.Run(() => KeepOriginal(history, savesRoot, game));
     }
 
     /// <summary>
@@ -965,8 +963,8 @@ public sealed partial class ShellViewModel
             string? content = null;
             try
             {
-                if (AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
-                    content = SaveReconcile.NormalizeDigest(CurrentGame.Saves.Bundle.ContentDigest(newest));
+                if (NewestSealedOf(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
+                    content = SaveReconcile.NormalizeDigest(ContentDigestOf(CurrentGame, newest));
             }
             catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { }
             if (content is not null) _keptThisPc[(CurrentGame.Id, xuid)] = new KeptThisPc((ulong)revision, content);

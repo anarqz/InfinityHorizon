@@ -60,7 +60,11 @@ public sealed class VanillaModSet : IModSetSource
 }
 
 /// <summary>A mod set that the contract would refuse (MATCHMAKING_API.md §2.7).</summary>
-public sealed class ModSetException(string message) : Exception(message);
+public sealed class ModSetException(string message) : Exception(message)
+{
+    /// <summary>When the set has more than <see cref="MatchmakingLimits.ModsMax"/> entries: how many it has (else 0).</summary>
+    public int TooMany { get; init; }
+}
 
 /// <summary>Checking and comparing mod sets (MODDED_LOBBIES.md §2; MATCHMAKING_API.md §2.7).</summary>
 public static class ModSets
@@ -73,11 +77,15 @@ public static class ModSets
     /// </summary>
     public static bool Modded(IModSetSource? source) => source is not null && source.Planned.Count > 0;
 
-    /// <summary>The set as the contract takes it (≤ 32, valid ids, versions and fingerprints, unique, sorted), or <see cref="ModSetException"/>.</summary>
+    /// <summary>
+    /// The set as the contract takes it (≤ <see cref="MatchmakingLimits.ModsMax"/>, valid ids, versions and fingerprints, unique, sorted),
+    /// or <see cref="ModSetException"/> (<see cref="ModSetException.TooMany"/> set when it is only too large).
+    /// </summary>
     public static IReadOnlyList<ModEntry> Checked(IReadOnlyList<ModEntry> mods)
     {
         ArgumentNullException.ThrowIfNull(mods);
-        if (mods.Count > MatchmakingLimits.ModsMax) throw new ModSetException("more than 32 multiplayer mods");
+        if (mods.Count > MatchmakingLimits.ModsMax)
+            throw new ModSetException("more than " + MatchmakingLimits.ModsMax + " multiplayer mods") { TooMany = mods.Count };
         for (var i = 0; i < mods.Count; i++)
         {
             var mod = mods[i];

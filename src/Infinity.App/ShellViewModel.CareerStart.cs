@@ -296,7 +296,7 @@ public sealed partial class ShellViewModel
     private bool HasAzimuthSaves()
     {
         if (_install is null || !CurrentGame.FullFeatures) return false;
-        try { return AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)).Count > 0; }
+        try { return SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)).Count > 0; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
