@@ -1,11 +1,11 @@
---- a/adapters/azimuth.c
-+++ b/adapters/azimuth.c
-@@ -10,6 +10,13 @@
+--- a/shared/adapters/azimuth.c
++++ b/shared/adapters/azimuth.c
+@@ -15,6 +15,13 @@
  #endif
  
  #define FH2_TITLE_ID 0x1a96545bu
-+/* ExtraOptions.Infinity (OD-206): these titles reach the Infinity hook and nothing else here. Upstream's
-+   FH2_ENABLE_FM5 (features/fm5.c, which forces OfflineVIP) stays off. */
++/* ExtraOptions.Infinity (OD-206): these titles reach the Infinity hook and nothing else here when
++   upstream's FH2_ENABLE_FM5 (fm5/fm5.c) is off; with it on, patch 0004 starts the hook from FM5's branch. */
 +static const unsigned fi_hook_titles[] = {0x7b35d917u};
 +static int fi_hook_title(unsigned title) {
 +    for (unsigned i = 0; i < ARRAY_COUNT(fi_hook_titles); ++i) if (fi_hook_titles[i] == title) return 1;
@@ -14,7 +14,7 @@
  
  typedef struct {
      AzimuthBuild build;
-@@ -140,7 +147,7 @@ static unsigned package_title(const void *package) {
+@@ -145,7 +152,7 @@
  }
  
  static int supported_title(unsigned title) {
@@ -23,7 +23,7 @@
  #ifdef FH2_ENABLE_FM5
      if (title == FM5_TITLE_ID) return 1;
  #endif
-@@ -232,7 +239,15 @@ static void *on_map_game(void *output, const void *folder, const void *package,
+@@ -249,7 +256,15 @@
                  notify_refusal();
          } else
  #endif

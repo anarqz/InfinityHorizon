@@ -4,7 +4,7 @@
    and its events), GPL-3.0-or-later. See LICENSE and NOTICE.md.
 
    Headlights and roof of the players' cars in online free roam, next to ExtraOptions (the
-   supported build, FI_EO_NAME in infinity.h: the player's 0.2.98, or the 0.4.4 inside
+   supported build, FI_EO_NAME in infinity.h: the player's 0.2.98, or the 0.6.0 inside
    ExtraOptions.Infinity; it is what changes them on a car: right stick click, hold 3 s) and
    without touching any byte of it. carstate.c carries the states through the world's relay;
    this file finds them on the cars and shows the others' on theirs.
