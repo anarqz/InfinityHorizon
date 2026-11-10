@@ -168,7 +168,7 @@ public sealed partial class ShellViewModel
     private bool ProfileHardcore => LobbyProfile?.Mode == "hardcore";
     /// <summary>Enabled mods a Hardcore profile refuses (<see cref="ModMultiplayer.AffectsMultiplayer"/>, the lobby-set rule), by name.</summary>
     private IReadOnlyList<string> HardcoreRefusedMods => !ProfileHardcore ? [] : _modHealth.Installed
-        .Where(i => i.Enabled && i.Manifest is { } m && ModMultiplayer.AffectsMultiplayer(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
+        .Where(i => i.Enabled && i.Manifest is { } m && ModMultiplayer.AffectsMultiplayer(m) && m.ModsGame == CurrentGame.Id).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
     private string HardcoreRefusal(IEnumerable<string> names) => S.Format("mods.hardcore_refused", ("mods", string.Join(", ", names)));
     /// <summary>OD-232: enabled installations of a retired format an online launch refuses (<see cref="ModLaunchPreparation.BlocksOnline"/>), by name.</summary>
     private IReadOnlyList<string> RetiredOnlineMods => !PlaysOnline ? [] : _modHealth.Installed
@@ -177,7 +177,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
     // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it never blocks Play).
-    public string? ModPlayNotice => _install is null ? null : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
+    public string? ModPlayNotice => _install is null ? null : _modsLayoutFailure is { } layout ? layout : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
         : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
         : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
         : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
@@ -248,7 +248,6 @@ public sealed partial class ShellViewModel
     {
         if (_catalogLoading) return;
         _catalogLoading = true;
-        _ = RefreshParityExemptionsAsync(); // OD-166: InfinityMods' parity exemptions, beside its catalog
         try
         {
             var address = CatalogUri;
@@ -266,6 +265,8 @@ public sealed partial class ShellViewModel
             if (!_catalogLoaded) _ = RetryCatalogOnceAsync(); // T1f: a first-start fetch failure (seen under Proton) gets one more try
         }
         finally { _catalogLoading = false; Changed(string.Empty); }
+        // OD-233: with the catalog, an unmanaged folder's game is known: the per-game move runs now (receipts decide first)
+        if (_install is { } install && _catalogLoaded && !Playing && !GameRunning()) PrepareModsLayout(install);
         await RefreshModsAsync();
     }
 

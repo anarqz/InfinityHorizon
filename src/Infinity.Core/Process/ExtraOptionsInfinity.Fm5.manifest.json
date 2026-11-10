@@ -3,7 +3,7 @@
   "kind": "mod",
   "builtIn": true,
   "id": "extraoptions",
-  "version": "0.4.4",
+  "version": "0.6.0",
   "games": [
     "fm5"
   ],
@@ -61,6 +61,52 @@
         "type": "boolean",
         "default": true,
         "encoding": "0/1"
+      },
+      {
+        "id": "content-offlinevip",
+        "section": "Content",
+        "key": "OfflineVIP",
+        "label": {
+          "en": "VIP status",
+          "pt-BR": "Status VIP"
+        },
+        "description": {
+          "en": "The profile's VIP status and its perks.",
+          "pt-BR": "O status VIP do perfil e suas vantagens."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": false,
+        "encoding": "0/1",
+        "lockedValue": false,
+        "lockReason": {
+          "en": "Kept off by Infinity: online perks come from Infinity Supporter and the server's economy.",
+          "pt-BR": "Mantido desligado pelo Infinity: as vantagens online vêm do Infinity Supporter e da economia do servidor."
+        }
+      },
+      {
+        "id": "compatibility-generatemissingsavecommits",
+        "section": "Compatibility",
+        "key": "GenerateMissingSaveCommits",
+        "label": {
+          "en": "Rebuild missing save markers",
+          "pt-BR": "Recriar marcadores de save que faltam"
+        },
+        "description": {
+          "en": "Creates missing Azimuth save commit markers from the saved files before the game loads its saves.",
+          "pt-BR": "Cria, antes de o jogo carregar os saves, os marcadores de commit do save do Azimuth que faltam a partir dos arquivos salvos."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": false,
+        "encoding": "0/1",
+        "lockedValue": false,
+        "lockReason": {
+          "en": "Kept off by Infinity: it would turn a half-written save revision into a valid one, which the cloud save line must never take.",
+          "pt-BR": "Mantido desligado pelo Infinity: ele transformaria uma revisão de save gravada pela metade em uma válida, o que a linha de saves na nuvem nunca pode aceitar."
+        }
       }
     ]
   }

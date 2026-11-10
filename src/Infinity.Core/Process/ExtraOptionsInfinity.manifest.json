@@ -3,7 +3,7 @@
   "kind": "mod",
   "builtIn": true,
   "id": "extraoptions",
-  "version": "0.4.4",
+  "version": "0.6.0",
   "name": {
     "en": "Extra Options",
     "pt-BR": "Extra Options"
@@ -165,6 +165,24 @@
         "encoding": "0/1"
       },
       {
+        "id": "frontend-showplaygroundevents",
+        "section": "Frontend",
+        "key": "ShowPlaygroundEvents",
+        "label": {
+          "en": "Show Playground events",
+          "pt-BR": "Mostrar eventos Playground"
+        },
+        "description": {
+          "en": "With the game's own Show All Events on, lists the Playground events too. Championship copies and the other map's events stay hidden.",
+          "pt-BR": "Com a opção Mostrar Todos os Eventos do próprio jogo ligada, lista também os eventos Playground. Cópias de campeonatos e eventos do outro mapa continuam ocultos."
+        },
+        "advanced": false,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": false,
+        "encoding": "0/1"
+      },
+      {
         "id": "frontend-getincarfrompausemenu",
         "section": "Frontend",
         "key": "GetInCarFromPauseMenu",
@@ -309,24 +327,6 @@
         "encoding": "0/1"
       },
       {
-        "id": "profile-customgamerpic",
-        "section": "Profile",
-        "key": "CustomGamerpic",
-        "label": {
-          "en": "Custom gamerpic",
-          "pt-BR": "Foto de perfil personalizada"
-        },
-        "description": {
-          "en": "Uses Gamerpic.png from the game folder as your picture (up to 2048x2048, 16 MB; square PNG recommended).",
-          "pt-BR": "Usa o Gamerpic.png da pasta do jogo como sua foto (até 2048x2048 e 16 MB; PNG quadrado recomendado)."
-        },
-        "advanced": false,
-        "apply": "next-launch",
-        "type": "boolean",
-        "default": true,
-        "encoding": "0/1"
-      },
-      {
         "id": "compatibility-disableparentallocks",
         "section": "Compatibility",
         "key": "DisableParentalLocks",
@@ -345,26 +345,26 @@
         "encoding": "0/1"
       },
       {
-        "id": "compatibility-disableazimuthsavechecksums",
+        "id": "compatibility-generatemissingsavecommits",
         "section": "Compatibility",
-        "key": "DisableAzimuthSaveChecksums",
+        "key": "GenerateMissingSaveCommits",
         "label": {
-          "en": "Skip Azimuth's save checks",
-          "pt-BR": "Pular as verificações de save do Azimuth"
+          "en": "Rebuild missing save markers",
+          "pt-BR": "Recriar marcadores de save que faltam"
         },
         "description": {
-          "en": "Skips Azimuth's save hash and size checks and rebuilds missing save markers at startup. Makes adding liveries to a save easier.",
-          "pt-BR": "Pula as checagens de hash e tamanho do save do Azimuth e recria marcadores de save que faltam ao abrir. Facilita adicionar pinturas ao save."
+          "en": "Creates missing Azimuth save commit markers from the saved files at startup.",
+          "pt-BR": "Cria, ao abrir o jogo, os marcadores de commit do save do Azimuth que faltam a partir dos arquivos salvos."
         },
         "advanced": true,
         "apply": "next-launch",
         "type": "boolean",
-        "default": true,
+        "default": false,
         "encoding": "0/1",
         "lockedValue": false,
         "lockReason": {
-          "en": "Kept off by Infinity: rebuilding save commit markers conflicts with sealed cloud-save revisions.",
-          "pt-BR": "Mantido desligado pelo Infinity: reconstruir os marcadores de commit do save conflita com as revisões seladas do save na nuvem."
+          "en": "Kept off by Infinity: it would turn a half-written save revision into a valid one, which the cloud save line must never take.",
+          "pt-BR": "Mantido desligado pelo Infinity: ele transformaria uma revisão de save gravada pela metade em uma válida, o que a linha de saves na nuvem nunca pode aceitar."
         }
       },
       {
@@ -389,6 +389,24 @@
           "en": "Kept on by Infinity: mods change game files only through media overrides.",
           "pt-BR": "Mantido ligado pelo Infinity: os mods só mudam arquivos do jogo pelas substituições de mídia."
         }
+      },
+      {
+        "id": "mods-databasecache",
+        "section": "Mods",
+        "key": "DatabaseCache",
+        "label": {
+          "en": "Mods database cache",
+          "pt-BR": "Cache do banco de dados dos mods"
+        },
+        "description": {
+          "en": "Reuses the merged game database while the game, the enabled mods, their order and files stay the same (kept in mods\\Cache, rebuilt by itself after a change). Off: merged again at every start.",
+          "pt-BR": "Reaproveita o banco de dados do jogo já mesclado enquanto o jogo, os mods ativos, a ordem e os arquivos deles continuam iguais (fica em mods\\Cache e é refeito sozinho após uma mudança). Desligado: mescla de novo a cada abertura."
+        },
+        "advanced": true,
+        "apply": "next-launch",
+        "type": "boolean",
+        "default": true,
+        "encoding": "0/1"
       }
     ]
   }

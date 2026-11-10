@@ -33,9 +33,16 @@ public sealed partial class ShellViewModel
     private bool PrepareAzimuth(AzimuthInstall? install, bool hardcore = false)
     {
         if (install is null) return true;
+        // OD-233: the old flat mods folder moves to the per-game folders first (any game: the move is the whole folder's); a stop blocks Play
+        if (!PrepareModsLayout(install)) return false;
         // OD-206: a game without FH2's features only needs naming, and without that the launch stops: Azimuth would start the game named before
         if (!CurrentGame.FullFeatures)
         {
+            // OD-233: FM5's ExtraOptions 0.6.0 loads mods (catalog only) and reads its own ini with the server's locks
+            if (ExtraOptionsLayout.HasModsFolder(CurrentGame.Id)) PrepareExtraOptionsMods(install, hardcore, CurrentGame.Id);
+            try { Log("extraoptions: " + ExtraOptionsInfinity.EnforceLocks(install.Root, CurrentGame)); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or Infinity.Core.Mods.ModException)
+            { Log("extraoptions: locks not written (" + e.GetType().Name + ")"); }
             try
             {
                 Log("azimuth: " + AzimuthTitles.EnsureTitle(install.Root, CurrentGame, ContentLocation?.PackageRoot));
@@ -52,6 +59,10 @@ public sealed partial class ShellViewModel
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("azimuth: title not written (" + e.GetType().Name + ")"); }
         try { Log("extraoptions: " + ExtraOptionsInfinity.EnsureIni(install.Root)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { Log("extraoptions: ini not written (" + e.GetType().Name + ")"); }
+        // OD-233: the server's settings (GenerateMissingSaveCommits, OfflineVIP, UnlockDLC) written off before every launch, as patch 0002 forces them
+        try { Log("extraoptions: " + ExtraOptionsInfinity.EnforceLocks(install.Root, GameDefinition.Fh2)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or Infinity.Core.Mods.ModException)
+        { Log("extraoptions: locks not written (" + e.GetType().Name + ")"); }
         // owner 2026-10-29: the online tabs on (once, they were Infinity's lock), the Treasure Map held off for Hardcore
         try
         {
@@ -67,7 +78,7 @@ public sealed partial class ShellViewModel
         return true;
     }
 
-    private string PrepareAzimuthFailed => S[CurrentGame.FullFeatures ? "extraoptions.treasure_map_hold_failed" : "play.setup_needed"];
+    private string PrepareAzimuthFailed => _modsLayoutFailure ?? S[CurrentGame.FullFeatures ? "extraoptions.treasure_map_hold_failed" : "play.setup_needed"];
 
     private string? _playStatus;
     private string? _hookLine;
@@ -168,6 +179,8 @@ public sealed partial class ShellViewModel
         var startingSession = _session;
         // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
         // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
+        // OD-233: the per-game mods folders before anything reads the mods (a stop says why and blocks Play)
+        if (_install is { } layoutInstall && !PrepareModsLayout(layoutInstall)) { Message = PrepareAzimuthFailed; return; }
         ModLaunchPreparation mods;
         try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
         catch (ModHardcoreException error)

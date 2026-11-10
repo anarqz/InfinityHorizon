@@ -164,7 +164,7 @@ public sealed partial class ManagedModFiles
         {
             var id = Path.GetFileName(path)[..^".receipt.json".Length];
             try { _ = SnapshotFor(ReadReceipt(id)!); }
-            catch (ModException error) when (error.Code == ModErrors.Relink) { } // intact record of a moved folder: relink, never archive
+            catch (ModException error) when (error.Code is ModErrors.Relink or ModErrors.Layout) { } // intact record of a moved folder, or of the old layout (OD-233): relink or move, never archive
             catch (Exception error) when (error is JsonException || error is ModException { Code: ModErrors.Recovery } || error is NullReferenceException)
             {
                 File.Move(path, Path.Combine(BackupRoot, "corrupt-" + Guid.NewGuid().ToString("N") + ".json"));
@@ -333,6 +333,9 @@ public sealed partial class ManagedModFiles
         if (receipts.Count == 0 || receipts.Select(r => r.Item2.AzimuthRoot).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1) return null;
         var old = receipts[0].Item2.AzimuthRoot;
         if (old is null || Directory.Exists(old) || !string.Equals(Identity(old), Path.GetFileName(folder), StringComparison.OrdinalIgnoreCase)) return null;
+        // OD-233: an installation recorded in the old flat layout whose folders here have already moved to their game's folder (the move
+        // ran before the relink) is checked, and relinked, where its files now are, as MigrateLayout would have rewritten it.
+        receipts = [.. receipts.Select(r => (r.Item1, FollowsItsFolder(r.Item2, SnapshotGame(folder, r.Item2), _azimuth) ?? r.Item2))];
         foreach (var (_, receipt) in receipts)
             foreach (var file in receipt.Files.Where(f => !f.Preserve))
             {

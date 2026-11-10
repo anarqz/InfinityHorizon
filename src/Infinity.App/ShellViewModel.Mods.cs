@@ -59,6 +59,9 @@ public sealed partial class ShellViewModel
     /// <summary>When an Azimuth folder is found: state in the background, and once per run the catalog (news tag) and retention.</summary>
     private void StartMods()
     {
+        // OD-233: the per-game mods folders before the Mods page reads them, once the catalog can name an unmanaged folder's game (else
+        // after the catalog loads, or before Play); a stop is shown on Play and retried at the next launch
+        if (_install is { } install && _catalogLoaded && !GameRunning()) PrepareModsLayout(install);
         _ = RefreshModsAsync();
         if (_modsStarted) { EnsureModCatalog(); return; } // T1f: a game folder found or changed in the shell loads it too
         _modsStarted = true;
@@ -121,12 +124,14 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync(bool hardcore = false)
     {
-        if (!CurrentGame.FullFeatures || ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
+        // OD-233: FM5 has its own mods (locks, Wine overrides, Hardcore's refusal), each launch only its own game's
+        if (!Infinity.Core.Mods.ExtraOptionsLayout.HasModsFolder(CurrentGame.Id) || ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
+        var game = CurrentGame.Id;
         ModLaunchPreparation prepared;
         for (var attempt = 0; ; attempt++)
         {
             // Startup retention may hold the bucket lock for a moment: wait for it rather than refuse the launch.
-            try { prepared = await Task.Run(() => factory().PrepareForLaunch(hardcore)); break; }
+            try { prepared = await Task.Run(() => factory().PrepareForLaunch(hardcore, game)); break; }
             catch (ModException error) when (error.Code == ModErrors.Busy && attempt < 20) { await Task.Delay(250); }
         }
         foreach (var warning in prepared.Warnings) Log("mods: " + warning);

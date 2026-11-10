@@ -7,14 +7,16 @@ namespace Infinity.Core.Process;
 /// OD-125: the hook is ExtraOptions.Infinity, the <c>winmm.dll</c> beside <c>azimuth.exe</c>. ExtraOptions refuses to run
 /// without <c>FH2_ExtraOptions.ini</c> beside it, so the launcher writes ExtraOptions.Infinity's own
 /// (<c>native/extraoptions-infinity/FH2_ExtraOptions.ini</c>, embedded) when there is none. A file the player already has
-/// is kept: the settings the Infinity server decides are forced off by ExtraOptions.Infinity itself (patch 0002).
+/// is kept: the settings the Infinity server decides are forced off by ExtraOptions.Infinity itself (patch 0002, 0004 for FM5), and the
+/// launcher writes them off too before every launch (<see cref="EnforceLocks"/>). OD-233: every ini the launcher writes passes
+/// ExtraOptions 0.6.0's own parser rules (<see cref="ExtraOptionsIniRules"/>), since an invalid one turns every feature off.
 /// </summary>
 public static class ExtraOptionsInfinity
 {
     public const string IniFile = "FH2_ExtraOptions.ini";
 
     /// <summary>The upstream ExtraOptions release ExtraOptions.Infinity is built from (<c>native/extraoptions</c>, MOD_VERSION).</summary>
-    public const string ExtraOptionsVersion = "0.4.4";
+    public const string ExtraOptionsVersion = "0.6.0";
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ModManifest> Manifests = new();
 
@@ -74,9 +76,45 @@ public static class ExtraOptionsInfinity
         var current = File.Exists(path) || game.ExtraOptionsSeedResource is not null ? (File.Exists(path) ? File.ReadAllBytes(path) : null) : ManifestIni.Defaults(ManifestFor(game));
         if (current is null || ModManifest.Hash(current) != settings.SourceHash) throw new ModSettingsChangedException();
         settings.EnforceLocks();
+        if (!InlineComments(game)) settings.DropInlineComments();
+        var bytes = settings.ToBytes();
+        if (ExtraOptionsIniRules.Problem(game, bytes) is { } problem)
+            throw new ModException("the settings file would not be valid for ExtraOptions " + ExtraOptionsVersion + ": " + problem, ModErrors.Settings);
         var temporary = path + ".fi-new";
-        File.WriteAllBytes(temporary, settings.ToBytes());
+        File.WriteAllBytes(temporary, bytes);
         File.Move(temporary, path, overwrite: true);
+    }
+
+    /// <summary>FH2's parser ends a value at <c>;</c> or <c>#</c>; FM5's <c>GetPrivateProfileString</c> keeps them in it.</summary>
+    private static bool InlineComments(GameDefinition game) => game.Id != "fm5";
+
+    /// <summary>
+    /// OD-233, before every launch (game closed): the game's locked settings (the server's: <c>GenerateMissingSaveCommits</c>,
+    /// <c>OfflineVIP</c>, <c>UnlockDLC</c>, and the switches Infinity keeps on) are written into its ini, which ExtraOptions.Infinity forces
+    /// anyway (patches 0002, 0004), so the file says what runs. A game that seeds no ini (FM5) gets one with its manifest's settings and
+    /// those locks. The player's other lines, comments and choices stay; nothing is written when nothing changes, and never a file
+    /// ExtraOptions would refuse (<see cref="ModException"/>). Returns what happened, for the log.
+    /// </summary>
+    public static string EnforceLocks(string azimuthRoot, GameDefinition game)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(game);
+        var path = Path.Combine(azimuthRoot, game.ExtraOptionsIni);
+        var exists = File.Exists(path);
+        if (!exists && game.ExtraOptionsSeedResource is not null) return "no ini to lock";
+        var source = exists ? File.ReadAllBytes(path) : ManifestIni.Defaults(ManifestFor(game));
+        var settings = new ManifestIni(ManifestFor(game), source);
+        settings.EnforceLocks();
+        if (!InlineComments(game)) settings.DropInlineComments();
+        var bytes = settings.ToBytes();
+        var invalid = ExtraOptionsIniRules.Problem(game, source);
+        if (exists && bytes.AsSpan().SequenceEqual(source)) return invalid is null ? "locks kept" : "locks kept; the ini is not valid for ExtraOptions: " + invalid;
+        if (ExtraOptionsIniRules.Problem(game, bytes) is { } problem)
+            throw new ModException("the settings file would not be valid for ExtraOptions " + ExtraOptionsVersion + ": " + problem, ModErrors.Settings);
+        var temporary = path + ".fi-new";
+        File.WriteAllBytes(temporary, bytes);
+        File.Move(temporary, path, overwrite: true);
+        return exists ? "locks written" : "ini written with the locks";
     }
     /// <summary>The pause menu's online tabs (owner 2026-10-29): on by default, no longer locked off by Infinity.</summary>
     public static readonly IReadOnlyList<string> OnlineTabs =

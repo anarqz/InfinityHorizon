@@ -33,10 +33,26 @@ public sealed partial class ManagedModFiles
         Atomic(HeldPath(manifest.Id), JsonSerializer.SerializeToUtf8Bytes(new HeldMod(manifest.Id, manifest.Digest, objects)));
     }
 
+    /// <summary>
+    /// The held files are this manifest's: the same digest, or (OD-233: a catalog rewritten for the per-game folders gives every entry a new
+    /// digest) the same content as the manifest they were held for (<see cref="ModManifest.SameContent"/>), whose snapshot is kept.
+    /// </summary>
+    internal bool HeldMatches(HeldMod held, ModManifest manifest)
+    {
+        if (held.ManifestHash == manifest.Digest) return true;
+        try
+        {
+            var path = Safe(BackupRoot, "manifests/" + held.ManifestHash + ".json");
+            return File.Exists(path) && File.ReadAllBytes(path) is var bytes && ModManifest.Hash(bytes) == held.ManifestHash
+                && ModManifest.Installed(bytes).SameContent(manifest);
+        }
+        catch (Exception error) when (IsStateError(error)) { return false; }
+    }
+
     /// <summary>The verified files of <paramref name="manifest"/> from the held copy, or null when it is not held in full.</summary>
     private Dictionary<ManifestFile, Func<byte[]>>? FromHeld(ModManifest manifest)
     {
-        if (Held(manifest.Id) is not { } held || held.ManifestHash != manifest.Digest) return null;
+        if (Held(manifest.Id) is not { } held || !HeldMatches(held, manifest)) return null;
         return manifest.Files.ToDictionary(f => f, f => (Func<byte[]>)(() => ObjectBytes(f.Hash)));
     }
 
