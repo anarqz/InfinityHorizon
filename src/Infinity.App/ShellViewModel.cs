@@ -413,7 +413,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _nav.Root(); // SAVE_MANAGER_UX §3: another game opens the save manager at its root
         FillProfiles();
         // W11: the Mods page follows the game: its cards, ExtraOptions card and settings are read again for the one now chosen
-        _selectedMod = null; _ini = null; _iniDirty = false; ModOptions.Clear();
+        _selectedMod = null; _ini = null; _iniDirty = false; ModOptions.Clear(); _modConfirm = null;
         if (!CanOpenMods) _onMods = false;
         _ = RefreshModsAsync();
         Changed(nameof(CanOpenMods));

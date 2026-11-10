@@ -1,0 +1,161 @@
+--- a/fh2/offline_events.c
++++ b/fh2/offline_events.c
+@@ -510,6 +510,19 @@
+     return ((unsigned char (*)(void *, unsigned char))(image + 0xa2c920))(manager, 1);
+ }
+ 
++/* An online free-roam session, by the game's own test: the network manager's session
++ * (+0xd0) is set and +0xa8 is clear (0x899261 hides the speed-trap tutorial with it).
++ * in_network_session() reads the race connectivity (0xa2c920: +0x38 == 1) and counts a
++ * missing manager as networked, so it cannot tell an online session while entities load. */
++static int in_online_session(void) {
++    unsigned char *manager;
++    void *session;
++    unsigned flag;
++    return memory_read_pointer(image + 0x34d6348, (void **)&manager) && manager &&
++           memory_read_pointer(manager + 0xd0, &session) && session &&
++           memory_read(manager + 0xa8, &flag, sizeof(flag)) && flag == 0;
++}
++
+ static void clear_selected_options(void) {
+     if (selected_options) {
+         ((Action)(image + 0x97def0))(selected_options);
+@@ -694,7 +707,12 @@
+ }
+ 
+ /* The call-site thunk passes the native route descriptor (RDI) as argument 3.
+- * The native constructor copies the supplied string into its own registry value. */
++ * The native constructor copies the supplied string into its own registry value.
++ * In an online session a vanilla route keeps its native gate (online_route_activations or
++ * online_island_route_activations), so every native FeatureEnabled/FeatureDisabled request
++ * reaches it, as before 0.6.0. Supplemental routes always take their private gate, which
++ * refresh_route_gates keeps hidden online. */
++static int route_native_logged = -1;
+ static void *route_feature(void *out, const GameString *original, const unsigned char *route) {
+     unsigned id = *(const unsigned *)(route + 0x0c);
+     int island = *(const unsigned *)(route + 0x14) == 0x225;
+@@ -721,9 +739,15 @@
+             log_append_value("EVENTS: supplemental race activation registered; route", (int)id);
+         gate->applied = -1;
+     }
++    int native = !gate || (!gate->supplemental && in_online_session());
++    if (gate && route_native_logged != native) {
++        route_native_logged = native;
++        log_append(native ? "EVENTS: online session; route activations keep the native gates.\r\n"
++                          : "EVENTS: offline; route activations take Show All Events gates.\r\n");
++    }
+     InterlockedIncrement(&route_generation);
+     ReleaseSRWLockExclusive(&route_gate_lock);
+-    GameString name = gate ? borrowed_string(gate->feature) : *original;
++    GameString name = native ? *original : borrowed_string(gate->feature);
+     return ((void *(*)(void *, const GameString *))(image + 0x30bda0))(out, &name);
+ }
+ 
+@@ -738,6 +762,44 @@
+     ((void (*)(const GameString *, unsigned char))(image + 0x899010))(name, value);
+ }
+ 
++/* The two sites above (0x8991b0, the offline feature state) always send 0. The online
++ * free-roam feature state (0x8bb0b0) enables the gates through its own copy of the
++ * sender, 0x8ba180, at 0x8bb755/0x8bb7af: online and Mainland/Storm Island available.
++ * The event (0x865690 -> 0x864680 at 0x86577c/0x8657c3) and Storm Island intro
++ * (0x8a4390 -> 0x8a3a80 at 0x8a441d/0x8a446b) feature states disable them. Record all of
++ * them, so a private gate built offline follows the online requests after joining. */
++typedef void (*SendFeature)(void *, const GameString *, unsigned char);
++
++static void record_route_feature(const GameString *name, unsigned char value) {
++    const char *text = name->capacity < 16 ? name->storage.text : name->storage.pointer;
++    int group = -1;
++    if (name->length == sizeof("online_route_activations") - 1 &&
++        memory_equal(text, "online_route_activations", name->length))
++        group = 0;
++    else if (name->length == sizeof("online_island_route_activations") - 1 &&
++             memory_equal(text, "online_island_route_activations", name->length))
++        group = 1;
++    if (group >= 0 && native_routes[group] != (value != 0)) {
++        native_routes[group] = value != 0;
++        last_enabled = -1;
++    }
++}
++
++static void online_route_feature(void *owner, const GameString *name, unsigned char value) {
++    record_route_feature(name, value);
++    ((SendFeature)(image + 0x8ba180))(owner, name, value);
++}
++
++static void event_route_feature(void *owner, const GameString *name, unsigned char value) {
++    record_route_feature(name, value);
++    ((SendFeature)(image + 0x864680))(owner, name, value);
++}
++
++static void island_route_feature(void *owner, const GameString *name, unsigned char value) {
++    record_route_feature(name, value);
++    ((SendFeature)(image + 0x8a3a80))(owner, name, value);
++}
++
+ static int mark_routes(RouteGate *head, const char *sql, int playground) {
+     void *rows = query_database(sql);
+     if (!rows) return 0;
+@@ -853,7 +915,7 @@
+     /* Restore the native gates when leaving free roam. Use the event context
+        rather than the simulation pause state so the world map keeps its markers. */
+     int value = enabled() && autodrive_game_event_context() == 2;
+-    int network = value && in_network_session(), map = -1, campaign = -1;
++    int network = value && (in_network_session() || in_online_session()), map = -1, campaign = -1;
+     unsigned stage = 0;
+     /* After the profile and world are ready, use the native stage reader.
+      * It returns stage 4 when a completed save has no iestate record. */
+@@ -867,7 +929,7 @@
+     last_enabled = -1;
+ }
+ 
+-PatchDefinition offline_events_hook_patches[42];
++PatchDefinition offline_events_hook_patches[51];
+ static unsigned char originals[ARRAY_COUNT(offline_events_hook_patches)][15];
+ static unsigned char targets[ARRAY_COUNT(offline_events_hook_patches)][15];
+ static const unsigned char *accepted[ARRAY_COUNT(offline_events_hook_patches)][2];
+@@ -904,6 +966,15 @@
+         {0x7d7ee8, 0x615b90, 0x816514, 0, "offline_events_apply_grid"},
+         {0x899335, 0x899010, 0x816f04, 0, "offline_events_mainland_points"},
+         {0x899378, 0x899010, 0x816f04, 0, "offline_events_island_points"},
++        {0x8ba781, 0, 0, (uintptr_t)online_route_feature, "offline_events_online_points_thunk"},
++        {0x8bb755, 0x8ba180, 0x8ba781, 0, "offline_events_online_mainland_points"},
++        {0x8bb7af, 0x8ba180, 0x8ba781, 0, "offline_events_online_island_points"},
++        {0x8baff1, 0, 0, (uintptr_t)event_route_feature, "offline_events_event_points_thunk"},
++        {0x86577c, 0x864680, 0x8baff1, 0, "offline_events_event_mainland_points"},
++        {0x8657c3, 0x864680, 0x8baff1, 0, "offline_events_event_island_points"},
++        {0x8a3d21, 0, 0, (uintptr_t)island_route_feature, "offline_events_island_story_points_thunk"},
++        {0x8a441d, 0x8a3a80, 0x8a3d21, 0, "offline_events_island_story_mainland_points"},
++        {0x8a446b, 0x8a3a80, 0x8a3d21, 0, "offline_events_island_story_island_points"},
+         {0x7d83a4, 0, 0, (uintptr_t)build_event_options, "offline_events_metadata_thunk"},
+         {0x7d7ec8, 0x7c8510, 0x7d83a4, 0, "offline_events_metadata"},
+         {0x626c64, 0, 0, (uintptr_t)has_offline_rewards, "offline_events_rewards_thunk"},
+--- a/fh2/offline_events.h
++++ b/fh2/offline_events.h
+@@ -1,7 +1,7 @@
+ #ifndef FH2_OFFLINE_EVENTS_H
+ #define FH2_OFFLINE_EVENTS_H
+ #include "shared/extra_options.h"
+-extern PatchDefinition offline_events_hook_patches[42];
++extern PatchDefinition offline_events_hook_patches[51];
+ size_t offline_results_xaml(const char *text,size_t length,char *out,size_t capacity);
+ void offline_events_prepare_hooks(unsigned char *image);
+ void offline_events_tick(void);
+--- a/fh2/patch_engine.c
++++ b/fh2/patch_engine.c
+@@ -140,6 +140,15 @@
+     &offline_events_hook_patches[39],
+     &offline_events_hook_patches[40],
+     &offline_events_hook_patches[41],
++    &offline_events_hook_patches[42],
++    &offline_events_hook_patches[43],
++    &offline_events_hook_patches[44],
++    &offline_events_hook_patches[45],
++    &offline_events_hook_patches[46],
++    &offline_events_hook_patches[47],
++    &offline_events_hook_patches[48],
++    &offline_events_hook_patches[49],
++    &offline_events_hook_patches[50],
+                                                           &addon_strings_hook_patches[0],
+                                                           &video_redirect_hook_patch,
+                                                           &addon_strings_hook_patches[1],

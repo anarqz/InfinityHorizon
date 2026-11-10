@@ -355,7 +355,8 @@ public sealed partial class ShellViewModel
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
             _playModSet = null;
-            RefreshMods();
+            // Owner 2026-11-10: a full mod read only at start, before Play and on Refresh; the cards only redraw for the session's end
+            RefreshModCards();
             Changed(string.Empty);
             if (ReferenceEquals(_session, startingSession) && ReferenceEquals(_install, startingInstall))
                 await RefreshIntegrityAutomaticallyAsync();

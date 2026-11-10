@@ -52,8 +52,9 @@ public sealed partial class ShellViewModel
         if (!CanOpenMods) return;
         LeaveAccount(); _onMods = true; _onSetup = false; _onBugReport = false; _onNews = false;
         Changed(string.Empty);
-        // the read started at launch may still run: the page shows its progress and fills when it ends (owner 2026-11-10)
-        _ = GuardAsync("open Mods", () => _catalogLoaded ? RefreshModsAsync() : LoadModCatalogQuietlyAsync());
+        // the read started at launch may still run: the page shows its progress and fills when it ends (owner 2026-11-10). Build #3: opening
+        // the page never reads every mod again; only a page that no read has filled yet asks for one (↻ reads on request)
+        _ = GuardAsync("open Mods", () => !_catalogLoaded ? LoadModCatalogQuietlyAsync() : EnsureModsReadAsync());
     }
     public void OpenHome() { LeaveAccount(); _onMods = false; _onSetup = false; _onBugReport = false; _onNews = false; _onProfiles = false; FillPlayBoard(); Changed(string.Empty); }
 
@@ -123,7 +124,8 @@ public sealed partial class ShellViewModel
             foreach (var option in edits) ini.Set(option.Id, option.Text, option.Culture);
             if (selected.BuiltIn && root is not null) Infinity.Core.Process.ExtraOptionsInfinity.SaveSettings(root, ini, game);
             else factory().SaveSettings(selected.Manifest, ini);
-        }), S["mods.options_saved"], preserveOptionsOnFailure: true, label: S.Format("mods.lock.settings", ("mod", ModName(selected.Manifest))));
+        }), S["mods.options_saved"], preserveOptionsOnFailure: true, label: S.Format("mods.lock.settings", ("mod", ModName(selected.Manifest))),
+            only: selected.BuiltIn ? [] : [selected.Manifest.Id]); // the built-in options change no managed mod: the cards are rebuilt only
     }
     public async Task RevertIniAsync()
     {

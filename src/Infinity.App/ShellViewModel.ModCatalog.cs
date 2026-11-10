@@ -88,7 +88,8 @@ public sealed partial class ShellViewModel
     public bool SelectedModCanUninstall => ModsIdle && _selectedMod is { CanUninstall: true } && !ModRecoveryRequired;
     public bool SelectedModCanPurge => ModsIdle && _selectedMod is { Held: true, Installed: false } && !ModRecoveryRequired;
     public bool SelectedModUpdate => _selectedMod is { UpdateAvailable: true, Retired: false };
-    public bool CanConfirmModUpdate => ModsIdle && _selectedMod is { UpdateAvailable: true, CanAct: true };
+    public bool CanConfirmModUpdate => ModsIdle && _selectedMod is { UpdateAvailable: true, CanAct: true } selected
+        && (selected.Next is not { IsExternal: false } next || PreviewKnown(next));
 
     /// <summary>
     /// A card's click: its options (an installed mod with settings, the BuiltIn options card) or its information. Owner 2026-11-10
@@ -98,12 +99,9 @@ public sealed partial class ShellViewModel
     public async Task SelectModAsync(ModCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
-        // the latest state first when nothing else is reading or changing it (a busy launcher keeps the cards it has)
-        if (card.HasOptions && !_showModOptions && !_iniDirty && ModsIdle)
-        {
-            await RefreshModsAsync();
-            card = ModCards.FirstOrDefault(current => current.Manifest.Id == card.Manifest.Id) ?? card;
-        }
+        // owner 2026-11-10 (build #3): opening a card reads nothing but its options file; the cards are the last read's (the start's, Play's,
+        // ↻, or the one-mod read after an operation), so a click never reads every mod again
+        card = ModCards.FirstOrDefault(current => current.Manifest.Id == card.Manifest.Id) ?? card;
         _selectedMod = card; _externalMod = null; // the set-up pane gives way to the chosen card
         _showModInfo = !card.HasOptions;
         _showModOptions = card.HasOptions;
@@ -119,6 +117,8 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         _selectedMod = card; _showModInfo = true; _showModOptions = false; _externalMod = null;
+        // Alex (1.0.11): the information pane of a mod not installed says where it goes and what it replaces, with its Install
+        if (!card.Installed && !card.Manifest.IsExternal && card.Action != S["mods.adopt"]) { _installPreviewDigest = card.Manifest.Digest; _previewReplaced = null; }
         Changed(string.Empty);
     }
 
@@ -506,7 +506,7 @@ public sealed partial class ShellViewModel
     {        // the built-in card (and whatever is already known) is there at once, never an empty page while the first read runs
         if (ModCards.Count == 0) { try { RefreshModCards(); } catch (Exception error) when (error is not OutOfMemoryException) { Log("mods: cards not built: " + ErrorChain(error)); } }
         var pending = _modReadPending ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_modReadRunning) _ = ModReadLoopAsync();
+        if (!_modReadRunning) _modReadLoop = ModReadLoopAsync();
         return pending.Task;
     }
 
@@ -609,7 +609,7 @@ public sealed partial class ShellViewModel
         ModReadsForTests.Add((watch.Elapsed, hashed, catalog.Count));
         if (ModReadsForTests.Count > 64) ModReadsForTests.RemoveAt(0);
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
-        _modHealth = health; _modStateError = error; _modFacts = facts;
+        _modHealth = health; _modStateError = error; _modFacts = facts; _modFactsCatalog = catalog;
         ModReadsApplied++;
         // 3.1.1 field bug: a read that began before the catalog arrived ("0 in the catalog") is read again with it, so its cards appear
         if (!ReferenceEquals(catalog, _manifestCatalog)) _modReadPending ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -656,34 +656,36 @@ public sealed partial class ShellViewModel
         var health = manager.Inspect(progress);
         phase("installations read (" + health.Installed.Count + ")");
         var facts = new List<ModCardFacts>();
-        foreach (var listed in catalog)
-        {
-            var installed = health.Installed.FirstOrDefault(i => i.Id == listed.Id);
-            // OD-116: a catalog entry rebuilds its manifest, so the reviewed manifest a 1.0.9 installed has other bytes for the same
-            // content; the installed one stands for it (no update to review, receipts and settings stay bound to it).
-            var manifest = installed?.Manifest is { } same && same.SameContent(listed) ? same : listed;
-            if (installed?.Manifest is { } current && current.Digest != manifest.Digest)
-            {
-                facts.Add(new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest));
-                continue;
-            }
-            var adopt = false; var held = false;
-            if (installed is null) try { adopt = manager.CanAdopt(manifest); held = manager.Held(manifest.Id) is not null; } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
-            facts.Add(new(manifest, installed, adopt, installed?.Problem ?? Blocker(() =>
-            {
-                if (installed is { Enabled: true }) manager.CheckDependents(manifest.Id);
-                else if (installed is null || installed.Drift.Count == 0) manager.CheckDependencies(manifest);
-            }), null) { Held = held });
-        }
+        foreach (var listed in catalog) facts.Add(ListedFact(manager, listed, health.Installed.FirstOrDefault(i => i.Id == listed.Id)));
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
-            facts.Add(new(installed.Manifest!, installed, false, Blocker(() =>
-            {
-                if (installed.Enabled) manager.CheckDependents(installed.Id);
-                else if (!installed.Manifest!.Retired) manager.CheckDependencies(installed.Manifest!); // OD-232: a retired one is never enabled
-            }), null));
+            facts.Add(UnlistedFact(manager, installed));
         phase("cards (" + facts.Count + ")");
         return (health, null, facts);
     }
+
+    /// <summary>What one catalog entry's card needs (the full read and the one-mod read after an operation decide it the same way).</summary>
+    private static ModCardFacts ListedFact(ManagedModFiles manager, ModManifest listed, ModInstallation? installed)
+    {
+        // OD-116: a catalog entry rebuilds its manifest, so the reviewed manifest a 1.0.9 installed has other bytes for the same
+        // content; the installed one stands for it (no update to review, receipts and settings stay bound to it).
+        var manifest = installed?.Manifest is { } same && same.SameContent(listed) ? same : listed;
+        if (installed?.Manifest is { } current && current.Digest != manifest.Digest)
+            return new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest);
+        var adopt = false; var held = false;
+        if (installed is null) try { adopt = manager.CanAdopt(manifest); held = manager.Held(manifest.Id) is not null; } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
+        return new(manifest, installed, adopt, installed?.Problem ?? Blocker(() =>
+        {
+            if (installed is { Enabled: true }) manager.CheckDependents(manifest.Id);
+            else if (installed is null || installed.Drift.Count == 0) manager.CheckDependencies(manifest);
+        }), null) { Held = held };
+    }
+
+    /// <summary>An installed mod the catalog no longer lists: its card from its receipt, to disable or uninstall.</summary>
+    private static ModCardFacts UnlistedFact(ManagedModFiles manager, ModInstallation installed) => new(installed.Manifest!, installed, false, Blocker(() =>
+    {
+        if (installed.Enabled) manager.CheckDependents(installed.Id);
+        else if (!installed.Manifest!.Retired) manager.CheckDependencies(installed.Manifest!); // OD-232: a retired one is never enabled
+    }), null);
 
     /// <summary>Names of the enabled mods that depend on <paramref name="id"/> (T5d).</summary>
     private List<string> DependentNames(string id) => _modHealth.Installed
@@ -852,15 +854,25 @@ public sealed partial class ShellViewModel
     public async Task ActOnModAsync(ModCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
-        if (!ModsIdle || _install is null) return;
-        await RefreshModsAsync();
+        if (!ModsIdle || _install is null) { if (_install is not null) Message = S[ModsWaitReason]; return; }
+        // owner 2026-11-10 (3.1.1 build #3): the card's button acts on the state the page shows (the operation checks the files again under
+        // its lock); no read of every mod first, and no side pane
         var current = ModCards.FirstOrDefault(c => c.Manifest.Digest == card.Manifest.Digest);
         if (current is not { CanAct: true }) return;
-        // T5d: a card waiting for a dependency installs (or enables) that dependency, through its own preview.
+        // T5d: a card waiting for a dependency installs (or enables) that dependency first, as that card's own button does.
         if (current.Dependency is { } needed && ModCards.FirstOrDefault(c => c.Manifest.Id == needed.Id) is { } first) { await ActOnModAsync(first); return; }
-        if (current.UpdateAvailable) { ShowModInformation(current); return; } // reviewed first, in the information pane
+        if (_installConfirmedDigest != current.Manifest.Digest) _previewReplaced = null; // what is there now, never an earlier preview's
+        if (current.UpdateAvailable)
+        {
+            // M5: the reviewed change first, in the small confirmation (a player's-files mod: its own set-up pane, after the review)
+            if (current.Next is { IsExternal: true }) { ShowModInformation(current); return; }
+            if (current.Next is { } next) await ReplacedByAsync(next);
+            OpenModConfirm(current, update: true); return;
+        }
         if (!current.Installed && current.Manifest.IsExternal) { await OpenExternalSetupAsync(current); return; }
-        if (NeedsInstallPreview(current)) { ShowInstallPreview(current); return; } // Alex (1.0.11): where it goes and what it replaces, first
+        // Alex (1.0.11): an install that replaces files already there names them first (the small confirmation); otherwise it installs
+        if (NeedsInstallPreview(current) && (await ReplacedByAsync(current.Manifest)).Count > 0) { OpenModConfirm(current, update: false); return; }
+        if (!ModsIdle) { Message = S[ModsWaitReason]; return; }
         var mod = current.Manifest;
         var factory = ModManagerFactory()!;
         var hosts = CatalogHosts;
@@ -880,15 +892,19 @@ public sealed partial class ShellViewModel
                 RecordModSource(mod.Id);
             }
             else await Task.Run(() => manager.SetEnabled(mod, !current.Enabled, progress, hardcore));
-        }, S["mods.action_done"], label: what);
+        }, S["mods.action_done"], label: what, only: [mod.Id]);
     }
 
     /// <summary>This catalog's download host rule (OD-116: any HTTPS host, every download pinned); nothing without a catalog.</summary>
     private Func<string, bool> CatalogHosts => _catalog?.AllowsHost ?? (_ => false);
 
-    public Task ConfirmModUpdateAsync()
+    public Task ConfirmModUpdateAsync() => _selectedMod is { } selected ? UpdateModAsync(selected) : Task.CompletedTask;
+
+    /// <summary>The reviewed update of <paramref name="card"/> (the information pane's or the small confirmation's button).</summary>
+    private Task UpdateModAsync(ModCard card)
     {
-        if (_selectedMod is not { UpdateAvailable: true, CanAct: true, Next: { } next } card) return Task.CompletedTask;
+        if (ModCards.FirstOrDefault(c => c.Manifest.Id == card.Manifest.Id) is { } latest) card = latest;
+        if (card is not { UpdateAvailable: true, CanAct: true, Next: { } next }) return Task.CompletedTask;
         if (next.IsExternal) return OpenExternalSetupAsync(card, update: true); // after its review; only files whose pins changed are asked for again
         var factory = ModManagerFactory()!; var hosts = CatalogHosts; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
@@ -898,14 +914,14 @@ public sealed partial class ShellViewModel
             var manager = await Task.Run(factory);
             await manager.InstallAsync(ModDownloads, next, hosts, timeout.Token, progress, update: true, hardcore: hardcore);
             RecordModSource(next.Id);
-        }, S["mods.updated"], label: S.Format("mods.lock.update", ("mod", ModName(next))));
+        }, S["mods.updated"], label: S.Format("mods.lock.update", ("mod", ModName(next))), only: [next.Id]);
     }
 
     private Task SelectedModOperation(Action<ManagedModFiles, ModManifest> operation, string done, string labelKey)
     {
         if (_selectedMod is not { } selected || ModManagerFactory() is not { } factory) return Task.CompletedTask;
         return RunModOperationAsync(() => Task.Run(() => operation(factory(), selected.Manifest)), done,
-            label: S.Format(labelKey, ("mod", ModName(selected.Manifest))));
+            label: S.Format(labelKey, ("mod", ModName(selected.Manifest))), only: [selected.Manifest.Id]);
     }
 
     public Task AcceptModFilesAsync() => SelectedModOperation((m, mod) => m.AcceptCurrentFiles(mod), S["mods.accepted"], "mods.lock.accept");
@@ -948,8 +964,13 @@ public sealed partial class ShellViewModel
     /// ALL". A Lock job of <see cref="Jobs"/>: the window's overlay with <paramref name="label"/> (what), its "keep the launcher open"
     /// line (why) and the operation's steps (<see cref="ModStep"/>), open before the first await; refused with its reason while
     /// something else runs (<see cref="ModsWaitReason"/>).
+    /// Owner 2026-11-10 (build #3, "every action I take, install, enable, disable, makes a new read of all mods"): an operation on one mod
+    /// names it in <paramref name="only"/>, and afterwards only that mod (and the cards its dependencies tie to it) is read again
+    /// (<see cref="RefreshModEntriesAsync"/>); bulk operations (a set, Recover, Resolve, Relink, the layout move, the catalog) leave it null
+    /// and read every mod once.
     /// </summary>
-    private async Task RunModOperationAsync(Func<Task> operation, string done, bool preserveOptionsOnFailure = false, string? label = null)
+    private async Task RunModOperationAsync(Func<Task> operation, string done, bool preserveOptionsOnFailure = false, string? label = null,
+        IReadOnlyCollection<string>? only = null)
     {
         if (!ModsIdle) { Message = S[ModsWaitReason]; return; } // never a silent no-op: the player learns what it waits for
         // the short per-game move (OD-233), when one runs, finishes first (its toast shows it meanwhile)
@@ -973,7 +994,8 @@ public sealed partial class ShellViewModel
         {
             _modOperation = false; _modLockLabel = null; Busy = false;
             if (succeeded && preserveOptionsOnFailure) _iniDirty = false; // a saved draft reloads from the file; a failed one stays
-            await RefreshModsAsync();
+            if (only is not null) await RefreshModEntriesAsync(only);
+            else await RefreshModsAsync();
             Changed(string.Empty);
         }
     }
