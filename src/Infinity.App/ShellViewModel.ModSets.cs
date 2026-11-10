@@ -159,6 +159,6 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(card);
         if (!ModsIdle || !card.CanUninstall || ModRecoveryRequired || ModManagerFactory() is not { } factory) return Task.CompletedTask;
         return RunModOperationAsync(() => Task.Run(() => factory().Uninstall(card.Manifest.Id)), S["mods.uninstalled"],
-            label: S.Format("mods.lock.uninstall", ("mod", ModName(card.Manifest))));
+            label: S.Format("mods.lock.uninstall", ("mod", ModName(card.Manifest))), only: [card.Manifest.Id]);
     }
 }

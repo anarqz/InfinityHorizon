@@ -202,7 +202,8 @@ public sealed partial class ShellViewModel
             // the game wrote its saves meanwhile: scanned off the UI thread before the cards are rebuilt (the overlay is still up)
             try { await PrimeLocalFactsQuietlyAsync(); }
             finally { _modOperation = false; Busy = false; } // the overlay closes whatever the scan did
-            try { await RefreshModsAsync(); } // local: the mods' state on disk
+            // Owner 2026-11-10: a full mod read only at start, before Play and on Refresh; the cards only redraw for the session's end
+            try { RefreshModCards(); }
             finally { _offlineWrapUp = false; }
             Changed(string.Empty);
         }

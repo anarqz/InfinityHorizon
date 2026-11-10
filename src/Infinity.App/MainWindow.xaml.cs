@@ -659,7 +659,8 @@ public partial class MainWindow : Window
     private async void OnSelectedModOptions(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) await _vm.GuardAsync("open the options", () => _vm.SelectModAsync(card)); }
     private void OnCloseModPanel(object sender, RoutedEventArgs e) => _vm.CloseModPanel();
     private void OnClearModSearch(object sender, RoutedEventArgs e) => _vm.ModSearch = "";
-    private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
+    // owner 2026-11-10 (build #3): the card's own button does its action (never the side pane); a failure is logged and said
+    private async void OnActOnMod(object sender, RoutedEventArgs e) { var card = (ModCard)((FrameworkElement)sender).DataContext; await _vm.GuardAsync("act on a mod", () => _vm.ActOnModAsync(card)); }
     private async void OnToggleExtraOptionsMod(object sender, RoutedEventArgs e) => await _vm.ToggleExtraOptionsModAsync((ExtraOptionsModItem)((FrameworkElement)sender).DataContext);
     private async void OnDeleteExtraOptionsMod(object sender, RoutedEventArgs e) => await _vm.DeleteExtraOptionsModAsync((ExtraOptionsModItem)((FrameworkElement)sender).DataContext);
     private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
@@ -669,6 +670,19 @@ public partial class MainWindow : Window
     private async void OnRetryModState(object sender, RoutedEventArgs e) => await _vm.RetryModStateAsync();
     private void OnOpenSetupForMods(object sender, RoutedEventArgs e) => _vm.OpenSetup();
     private async void OnConfirmModUpdate(object sender, RoutedEventArgs e) => await _vm.ConfirmModUpdateAsync();
+    // owner 2026-11-10 (build #3): a card's Install or Update confirmed over the page
+    private async void OnConfirmModCard(object sender, RoutedEventArgs e) => await _vm.GuardAsync("confirm a mod", _vm.ConfirmModCardAsync);
+    private void OnCancelModConfirm(object sender, RoutedEventArgs e) => _vm.CancelModConfirm();
+    private void OnModConfirmKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true; _vm.CancelModConfirm();
+    }
+    /// <summary>The confirmation opened: the keyboard and the controller land on Cancel (a second press never installs by accident).</summary>
+    private void OnModConfirmVisible(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => ModConfirmCancelButton.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
     private async void OnAcceptModFiles(object sender, RoutedEventArgs e) => await _vm.AcceptModFilesAsync();
     private async void OnDisableModKeeping(object sender, RoutedEventArgs e) => await _vm.DisableModKeepingFilesAsync();
     private async void OnRepairModSettings(object sender, RoutedEventArgs e) => await _vm.RepairModSettingsAsync();

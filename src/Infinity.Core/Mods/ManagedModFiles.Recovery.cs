@@ -78,6 +78,7 @@ public sealed partial class ManagedModFiles
                 for (var i = 0; i < receipts.Length; i++)
                 {
                     progress?.Invoke(i, receipts.Length);
+                    Interlocked.Increment(ref _installationsInspected); InstallationsRead++;
                     installed.Add(Inspect(Path.GetFileName(receipts[i])[..^".receipt.json".Length]));
                 }
                 progress?.Invoke(receipts.Length, receipts.Length);
@@ -92,6 +93,52 @@ public sealed partial class ManagedModFiles
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
         return new(here, elsewhere, installed, relink, problems) { GameRelink = gameRelink.Count > 0, LayoutPending = layout };
     }
+
+    /// <summary>
+    /// Owner 2026-11-10 (3.1.1 build #3, "every action I take, install, enable, disable, makes a new read of all mods"): after one mod's
+    /// operation the Mods page reads only that installation again. <paramref name="previous"/> (the last full <see cref="Inspect()"/>) keeps
+    /// every other installation; each of <paramref name="ids"/> is read again as <see cref="Inspect()"/> reads it (replaced in place, added
+    /// when newly installed, dropped when its receipt is gone), and the bucket's recovery and layout flags are read again (no hashing).
+    /// The game-folder relink candidates (which hash every receipt's game files) stay as the full read found them. Writes nothing.
+    /// </summary>
+    public ModHealth InspectSome(ModHealth previous, IEnumerable<string> ids)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(ids);
+        var problems = new List<string>(previous.Problems);
+        var installed = previous.Installed.ToList();
+        var here = previous.RecoveryHere; var elsewhere = previous.RecoveryElsewhere;
+        try
+        {
+            here = RecoveryRequiredHere;
+            elsewhere = PendingFolders().Any(folder => !string.Equals(folder, BackupRoot, StringComparison.OrdinalIgnoreCase));
+            foreach (var id in ids.Distinct(StringComparer.Ordinal))
+            {
+                var at = installed.FindIndex(i => i.Id == id);
+                var exists = Directory.Exists(BackupRoot) && File.Exists(ReceiptPath(id));
+                Interlocked.Increment(ref _installationsInspected); InstallationsRead++;
+                if (!exists) { if (at >= 0) installed.RemoveAt(at); continue; }
+                var read = Inspect(id);
+                if (at >= 0) installed[at] = read; else installed.Add(read);
+            }
+        }
+        catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
+        var relink = previous.RelinkCandidates;
+        try { relink = installed.Count > 0 ? [] : previous.Installed.Count == 0 ? previous.RelinkCandidates : RelinkCandidates(); }
+        catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
+        var layout = previous.LayoutPending;
+        try { layout = LayoutMigrationPending; }
+        catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
+        return new(here, elsewhere, installed, relink, problems.Distinct(StringComparer.Ordinal).ToArray()) { GameRelink = previous.GameRelink, LayoutPending = layout };
+    }
+
+    private static long _installationsInspected;
+
+    /// <summary>How many installations this manager's reads inspected (<see cref="Inspect()"/> and <see cref="InspectSome"/>): checks.</summary>
+    public int InstallationsRead { get; private set; }
+
+    /// <summary>How many installations the page's reads inspected so far in this process (<see cref="Inspect()"/> and <see cref="InspectSome"/>): checks.</summary>
+    public static long InstallationsInspected => Interlocked.Read(ref _installationsInspected);
 
     /// <summary>M9 for the game folder: receipts recorded for a game folder that no longer exists whose game files all match, as recorded, in the selected one.</summary>
     public IReadOnlyList<string> GameRelinkCandidates() => GameRelinkCandidates(fresh: false);

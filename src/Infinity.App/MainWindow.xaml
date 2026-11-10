@@ -2872,6 +2872,28 @@
         </StackPanel>
       </Border>
     </Border>
+    <!-- Owner 2026-11-10 (build #3): a card's Install or Update that must be seen first (files it replaces, a reviewed update) asks here, over
+         the page, never in the side pane. The same opaque backdrop as the progress dialog (T2b/T4b: no composited dim under Wine). -->
+    <Border x:Name="ModConfirmOverlay" Background="#FF0E0B16" Panel.ZIndex="99"
+            Visibility="{Binding ShowModConfirm, Converter={StaticResource Visible}}"
+            Focusable="True" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle" KeyDown="OnModConfirmKey"
+            IsVisibleChanged="OnModConfirmVisible">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"
+              CornerRadius="18" Padding="32,26" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel>
+          <TextBlock Text="{Binding ModConfirmTitle}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding ModConfirmText}" Margin="0,12,0,0" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite" />
+          <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0" Visibility="{Binding ModConfirmHasFiles, Converter={StaticResource Visible}}">
+            <TextBlock Text="{Binding ModConfirmFiles}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+          </ScrollViewer>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button x:Name="ModConfirmCancelButton" Content="{Binding S[mods.confirm_cancel]}" Click="OnCancelModConfirm" Padding="14,7" Margin="0,0,10,0" IsCancel="True" />
+            <Button x:Name="ModConfirmButton" Content="{Binding ModConfirmLabel}" Click="OnConfirmModCard" IsEnabled="{Binding CanConfirmModCard}"
+                    Style="{StaticResource AccentButtonStyle}" Padding="14,7" AutomationProperties.Name="{Binding ModConfirmLabel}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Border>
     <!-- Owner 2026-11-08 (image 7): the Profiles page's ⋯ menus (a profile card's and each game row's) float over the page, by their button
          (bottom-right aligned, above it near the bottom, inside the window). Drawn in the window (no WPF Popup: a Popup window froze under
          Proton); an outside click, Esc or an item closes it; arrows and Tab cycle its items. -->
