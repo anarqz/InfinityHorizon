@@ -158,7 +158,7 @@ public sealed partial class ShellViewModel
             });
             // OD-232: an enabled retired mod is refused only online; offline it plays as installed, with the warning
             foreach (var warning in prepared.Warnings) Log("mods: " + warning);
-            if (!PrepareAzimuth(install)) { Message = PrepareAzimuthFailed; return; }
+            if (!await PrepareAzimuthAsync(install)) { Message = PrepareAzimuthFailed; return; }
             var environment = OfflineLaunchEnvironment(profile, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
@@ -200,8 +200,8 @@ public sealed partial class ShellViewModel
             _offlineChild = null;
             _play?.Dispose(); _play = null; _playTask = null;
             // the game wrote its saves meanwhile: scanned off the UI thread before the cards are rebuilt (the overlay is still up)
-            await PrimeLocalFactsQuietlyAsync();
-            _modOperation = false; Busy = false;
+            try { await PrimeLocalFactsQuietlyAsync(); }
+            finally { _modOperation = false; Busy = false; } // the overlay closes whatever the scan did
             try { await RefreshModsAsync(); } // local: the mods' state on disk
             finally { _offlineWrapUp = false; }
             Changed(string.Empty);

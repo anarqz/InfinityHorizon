@@ -86,6 +86,7 @@ public sealed partial class ShellViewModel
         _onlineStarted = false;
         _onlineStatus = null;
         _onlineViewing = _onlineSupport = false;
+        _startupStopped = null; // a stopped start never resumes a session under a player who chose offline or signed out
         KeepOfflineUpdatePhase(); // T1c: a failed or pending /info never holds the offline launcher at the update gate
         Changed(string.Empty);
     }
@@ -128,45 +129,100 @@ public sealed partial class ShellViewModel
             return;
         }
         await VerifyBuildOriginAsync();
-        // Owner 2026-11-10, "1. Opened launcher": one centre overlay from the first request to the main pane, its label the current step
-        // (StartupFlow's order: status, release floor, this PC's games, sign-in, profile data). A closed service or a forced update ends
-        // the start on its own screen; a failed sign-in ends on the welcome screen with its reason (ResumeSessionAsync says it).
-        var facts = new StartupFacts();
-        using (var startup = Loading(S["startup.checking_services"]))
-        {
-            for (var step = StartupFlow.Next(facts); !StartupFlow.IsFinal(step); step = StartupFlow.Next(facts))
-            {
-                StartupTrace?.Add(step.ToString());
-                switch (step)
-                {
-                    case StartupStep.CheckServices:
-                        startup.Step(S["startup.checking_services"]);
-                        await CheckOnlineStatusAsync(manual: false);
-                        facts = facts with { ServicesOpen = OnlineServiceAllowsPlay };
-                        break;
-                    case StartupStep.CheckLauncherVersion:
-                        startup.Step(S["startup.checking_version"]);
-                        await CheckLauncherUpdatesAsync();
-                        facts = facts with { LauncherAllowed = LauncherUpdateAllowsPlay };
-                        break;
-                    case StartupStep.FindGames:
-                        startup.Step(S["startup.finding_games"]);
-                        await FindGamesAsync(azimuth);
-                        facts = facts with { GamesFound = true };
-                        break;
-                    case StartupStep.SignIn:
-                    case StartupStep.LoadProfile:
-                        startup.Step(S["startup.signing_in"]);
-                        await ResumeSessionAsync(); // EnterAsync loads the profile data under its own steps
-                        facts = facts with { SignedIn = _session is not null, ProfileLoaded = _session is not null };
-                        break;
-                }
-            }
-            StartupTrace?.Add(StartupFlow.Next(facts).ToString());
-        }
-        // the half screen or the forced update ended the start: this PC's games are still found (Play offline from there needs them)
-        if (!facts.GamesFound) await FindGamesAsync(azimuth);
+        await RunStartupFlowAsync(azimuth, new StartupFacts());
         AskAzimuthFirstWhenMissing();
+    }
+
+    /// <summary>
+    /// A resumed start stopped at a closed service or a forced update (<see cref="StartupFlow.IsStop"/>): what it knew, and the Azimuth
+    /// folder it was given. When that screen clears (the status reads open, the floor allows this launcher) the start continues from
+    /// there to the sign-in (<see cref="ContinueStoppedStartup"/>). Null otherwise.
+    /// </summary>
+    private (string? Azimuth, StartupFacts Facts)? _startupStopped;
+    private bool _startupRunning;
+
+    /// <summary>Test seam: the continuation of a stopped start, while it runs or once it ran.</summary>
+    internal Task? StartupContinuation { get; private set; }
+
+    /// <summary>
+    /// Owner 2026-11-10, "1. Opened launcher": one centre overlay from the first request to the main pane, its label the current step
+    /// (StartupFlow's order: status, release floor, this PC's games, sign-in, profile data). A closed service or a forced update stops
+    /// the start on its own screen, and the welcome screen offers SIGN IN meanwhile (never "Signing in…" forever); the start continues
+    /// when that screen clears. A floor that could not be read is not a forced update: the start signs in, Play waits for the floor and
+    /// the banner says so with a retry. A failed sign-in ends on the welcome screen with its reason (ResumeSessionAsync says it).
+    /// </summary>
+    private async Task RunStartupFlowAsync(string? azimuth, StartupFacts facts)
+    {
+        _startupRunning = true;
+        _startupStopped = null;
+        try
+        {
+            using (var startup = Loading(S["startup.checking_services"]))
+            {
+                for (var step = StartupFlow.Next(facts); !StartupFlow.IsFinal(step); step = StartupFlow.Next(facts))
+                {
+                    StartupTrace?.Add(step.ToString());
+                    switch (step)
+                    {
+                        case StartupStep.CheckServices:
+                            startup.Step(S["startup.checking_services"]);
+                            await CheckOnlineStatusAsync(manual: false);
+                            facts = facts with { ServicesOpen = OnlineServiceAllowsPlay };
+                            break;
+                        case StartupStep.CheckLauncherVersion:
+                            startup.Step(S["startup.checking_version"]);
+                            await CheckLauncherUpdatesAsync();
+                            // the floor's read may also have found the service paused meanwhile: that is the closed screen, not the floor's
+                            facts = facts with { ServicesOpen = OnlineServiceAllowsPlay, LauncherAllowed = LauncherUpdateAllowsPlay, LauncherFloorUnknown = LauncherFloorUnread };
+                            if (LauncherFloorUnread) Log("startup: the release floor could not be read; signing in, Play waits for the floor");
+                            break;
+                        case StartupStep.FindGames:
+                            startup.Step(S["startup.finding_games"]);
+                            await FindGamesAsync(azimuth);
+                            facts = facts with { GamesFound = true };
+                            break;
+                        case StartupStep.SignIn:
+                        case StartupStep.LoadProfile:
+                            startup.Step(S["startup.signing_in"]);
+                            await ResumeSessionAsync(); // EnterAsync loads the profile data under its own steps
+                            facts = facts with { SignedIn = _session is not null, ProfileLoaded = _session is not null };
+                            break;
+                    }
+                }
+                StartupTrace?.Add(StartupFlow.Next(facts).ToString());
+            }
+            // signed in while the floor was unknown: the sign-in itself just read /launcher/v1/info, so its floor decides (no request)
+            if (_session is { } signedIn && LauncherFloorUnread) AdoptSignInFloor(signedIn.Info);
+            // the half screen or the forced update ended the start: this PC's games are still found (Play offline from there needs them)
+            if (!facts.GamesFound) { await FindGamesAsync(azimuth); facts = facts with { GamesFound = true }; }
+            if (StartupFlow.Next(facts) is var final && StartupFlow.IsStop(final) && _onlineEngaged && _session is null)
+            {
+                _startupStopped = (azimuth, facts);
+                Log("startup: stopped at " + final + "; the kept session signs in when it clears (SIGN IN is offered meanwhile)");
+            }
+        }
+        finally
+        {
+            _startupRunning = false;
+            // whatever ended the start, the welcome screen never stays on "Signing in…": SIGN IN, Play offline and the server change show
+            if (_resuming) { _resuming = false; Changed(nameof(Resuming)); }
+        }
+    }
+
+    /// <summary>
+    /// The screen a stopped start ended on cleared ("Check again" read the service open, the update retry passed): the start continues
+    /// from there (the floor, this PC's games, the kept session's sign-in, the profile data) under the centre overlay. Called after every
+    /// status and floor read; nothing happens unless a start is stopped and its stop no longer holds.
+    /// </summary>
+    private void ContinueStoppedStartup()
+    {
+        if (_startupStopped is not { } stopped || _startupRunning || !_onlineEngaged || _session is not null || _busy || InShell) return;
+        if (StartupFlow.Reopened(stopped.Facts, OnlineServiceAllowsPlay, LauncherUpdateAllowsPlay, LauncherFloorUnread) is not { } facts) return;
+        _startupStopped = null;
+        Log("startup: " + StartupFlow.Next(stopped.Facts) + " cleared; the start continues");
+        _resuming = StartsOnline;
+        Changed(nameof(Resuming));
+        StartupContinuation = GuardAsync("continue the start", () => RunStartupFlowAsync(stopped.Azimuth, facts));
     }
 
     /// <summary>Test seam: the startup steps, in order (<see cref="StartupFlow"/>).</summary>

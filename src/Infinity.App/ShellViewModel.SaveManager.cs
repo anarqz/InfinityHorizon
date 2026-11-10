@@ -365,7 +365,7 @@ public sealed partial class ShellViewModel
     /// <summary>The open ⋯ menu, floating (null: none).</summary>
     public FloatingMenuView? OpenMenu { get; private set; }
 
-    public bool ShowFloatingMenu => OpenMenu is not null && _menu.OpenKey is not null && ShowSavesHome;
+    public bool ShowFloatingMenu => OpenMenu is not null && _menu.OpenKey is not null && ShowSavesHome && !_busyState.IsBusy;
 
     public bool FloatingMenuIsCard => OpenMenu?.Owner is SaveCard;
 
@@ -747,6 +747,7 @@ public sealed partial class ShellViewModel
     public void ToggleSavesMenu(SaveCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
+        if (_busyState.IsBusy) return; // review 3.1.1: no menu opens under a lock or a load
         var id = card.Row?.Card?.Player.ProfileId;
         if (id is not null) _menu.Toggle(id); else _menu.Close();
         FillSaveCards();
@@ -756,6 +757,7 @@ public sealed partial class ShellViewModel
     public void ToggleGameRowMenu(ProfileGameRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
+        if (_busyState.IsBusy) return;
         _menu.Toggle(row.MenuKey);
         FillSaveCards();
     }
@@ -1207,6 +1209,15 @@ public sealed partial class ShellViewModel
                     Done(S["sm.restored_original"]);
                     return;
                 }
+                // review 3.1.1: a profile's save is copied as it is now (a fresh scan under this overlay), never the comparison's cached one
+                var local = plan.Local;
+                if (local is not null && plan.Entry is null && plan.Cloud is null)
+                {
+                    local = (await FreshSavesListAsync(root)).FirstOrDefault(s => string.Equals(s.Folder, plan.Local!.Folder, StringComparison.OrdinalIgnoreCase));
+                    if (local is null) { Log("saves: copy stopped: " + plan.Local!.Folder + " has no sealed save any more"); Message = S["sm.block.NoSource"]; return; }
+                    if (local.Revision.Number != plan.Local!.Revision.Number)
+                        Log($"saves: copy source {local.Folder} moved on since the comparison (r{plan.Local.Revision.Number} -> r{local.Revision.Number}); its newest is copied");
+                }
                 if (!await ArchiveFirstAsync(plan.Entry is not null || plan.Cloud is not null ? "restore" : "copy", AzimuthFolder, "sm.reason.copy",
                     [("from", plan.FromName), ("to", "Azimuth")], fromWord, "azimuth")) return;
                 if (plan.Cloud is { } rev && plan.CloudXuid is { } xuid)
@@ -1219,7 +1230,7 @@ public sealed partial class ShellViewModel
                 }
                 else
                 {
-                    var source = plan.Local ?? (plan.Entry is { } entry ? await Task.Run(() => LocalHistory.NewestSave(entry)) : null);
+                    var source = local ?? (plan.Entry is { } entry ? await Task.Run(() => LocalHistory.NewestSave(entry)) : null);
                     if (source is null) { Message = S["sm.block.NoSource"]; return; }
                     var result = await Task.Run(() => AzimuthSaves.Clone(root, source, AzimuthSaves.OfflineXuid, DateTime.UtcNow));
                     Log($"saves: copy {fromWord} → Azimuth r{result.Number}");

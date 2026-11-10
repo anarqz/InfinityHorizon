@@ -70,7 +70,33 @@ public sealed partial class ManagedModFiles
     private IEnumerable<string> PendingFolders() => !Directory.Exists(_bucket) ? [] : Directory.EnumerateDirectories(_bucket)
         .Where(folder => File.Exists(Path.Combine(folder, "pending.json")) || File.Exists(Path.Combine(folder, "database-session.json")));
 
+    /// <summary>
+    /// 3.1.1 field bug (owner 2026-11-10, 45 installed mods, a 61 s read): the Mods page's read asked every card's dependency checks, each
+    /// of which read every receipt and manifest snapshot again and re-hashed every dependency's files (O(n²) reads, n full hashes). A
+    /// manager made for one display read sets this: each receipt and the installed manifests are read once, and "verified" uses the kept
+    /// hashes (<see cref="CachedCurrent"/>). Such a manager decides nothing: every change refuses it (<see cref="Lock"/>), and every
+    /// operation builds its own manager, which reads and hashes everything again.
+    /// </summary>
+    public bool ForDisplay { get; set; }
+    private readonly Dictionary<string, (ManagedModReceipt? Receipt, Exception? Error)> _displayReceipts = new(StringComparer.Ordinal);
+    private ModManifest[]? _displaySnapshots;
+    private IReadOnlyList<string>? _displayUnreadable;
+    private readonly Dictionary<string, bool> _displayVerified = new(StringComparer.Ordinal);
+
     private ManagedModReceipt? ReadReceipt(string id)
+    {
+        if (!ForDisplay) return ReadReceiptNow(id);
+        if (!_displayReceipts.TryGetValue(id, out var known))
+        {
+            try { known = (ReadReceiptNow(id), null); }
+            catch (Exception error) when (IsStateError(error)) { known = (null, error); }
+            _displayReceipts[id] = known;
+        }
+        if (known.Error is { } failed) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failed);
+        return known.Receipt;
+    }
+
+    private ManagedModReceipt? ReadReceiptNow(string id)
     {
         var path = ReceiptPath(id);
         if (!File.Exists(path)) return null;
@@ -121,7 +147,16 @@ public sealed partial class ManagedModFiles
     /// <summary>The receipt for an id regardless of manifest version (null when not installed).</summary>
     public ManagedModReceipt? ReceiptFor(string id) => ReadReceipt(id);
 
-    public bool Verified(ModManifest manifest) => !RecoveryRequiredHere && Receipt(manifest) is not null && Drift(manifest).Count == 0;
+    public bool Verified(ModManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (!ForDisplay) return !RecoveryRequiredHere && Receipt(manifest) is not null && Drift(manifest).Count == 0;
+        // a display read: once per manifest, from the kept hashes (it only decides what a card says)
+        if (_displayVerified.TryGetValue(manifest.Digest, out var known)) return known;
+        var verified = !RecoveryRequiredHere && Receipt(manifest) is { } receipt && DriftOf(receipt, cached: true).Count == 0;
+        _displayVerified[manifest.Digest] = verified;
+        return verified;
+    }
 
     /// <summary>Managed files that differ from the receipt's expected state.</summary>
     public IReadOnlyList<ModDrift> Drift(ModManifest manifest)
@@ -691,6 +726,7 @@ public sealed partial class ManagedModFiles
 
     private FileStream Lock(bool allowRecovery = false)
     {
+        if (ForDisplay) throw new InvalidOperationException("a display read never changes mods: build a manager for the operation");
         CheckGame(); RejectLinks(BackupRoot);
         Directory.CreateDirectory(BackupRoot);
         FileStream gate;

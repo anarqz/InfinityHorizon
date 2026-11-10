@@ -23,8 +23,13 @@ public enum StartupStep
 }
 
 /// <summary>What the start knows so far; null is "not read yet".</summary>
+/// <param name="LauncherFloorUnknown">
+/// The release floor could not be read (<c>/launcher/v1/info</c> failed): not a forced update. AUTO_UPDATE.md: a backend policy failure
+/// keeps Play restricted until the policy is readable, while account operations (the sign-in) stay available; the launcher says so
+/// with a retry.
+/// </param>
 public sealed record StartupFacts(bool? ServicesOpen = null, bool? LauncherAllowed = null, bool GamesFound = false, bool? SignedIn = null,
-    bool ProfileLoaded = false);
+    bool ProfileLoaded = false, bool LauncherFloorUnknown = false);
 
 /// <summary>
 /// Owner 2026-11-10, the startup order of a launcher that resumes its online session: the service status, then the release floor
@@ -40,7 +45,8 @@ public static class StartupFlow
         if (facts.ServicesOpen is null) return StartupStep.CheckServices;
         if (facts.ServicesOpen == false) return StartupStep.ServicesClosed;
         if (facts.LauncherAllowed is null) return StartupStep.CheckLauncherVersion;
-        if (facts.LauncherAllowed == false) return StartupStep.ForcedUpdate;
+        // an unreadable floor is no verdict: the start goes on to the sign-in, Play waits for a readable floor (never silently)
+        if (facts.LauncherAllowed == false && !facts.LauncherFloorUnknown) return StartupStep.ForcedUpdate;
         if (!facts.GamesFound) return StartupStep.FindGames;
         if (facts.SignedIn is null) return StartupStep.SignIn;
         if (facts.SignedIn == false) return StartupStep.Shell; // the welcome screen, with the reason
@@ -49,4 +55,28 @@ public static class StartupFlow
 
     /// <summary>A step that ends the start (nothing more is read).</summary>
     public static bool IsFinal(StartupStep step) => step is StartupStep.ServicesClosed or StartupStep.ForcedUpdate or StartupStep.Shell;
+
+    /// <summary>
+    /// A final step that only stops the start (a closed service, a forced update): the start resumes from it when that screen clears
+    /// (<see cref="Reopened"/>), so a later "Check again" that succeeds signs the kept session in instead of leaving the welcome screen
+    /// on "Signing in…".
+    /// </summary>
+    public static bool IsStop(StartupStep step) => step is StartupStep.ServicesClosed or StartupStep.ForcedUpdate;
+
+    /// <summary>
+    /// The facts a stopped start continues from once its screen cleared: an open service is read again for the floor, a floor that now
+    /// allows this launcher goes on to this PC's games and the sign-in. Null when the stop still holds.
+    /// </summary>
+    /// <param name="floorUnknown">The last floor read failed (no verdict): a forced update no longer holds, the start signs in.</param>
+    public static StartupFacts? Reopened(StartupFacts stopped, bool servicesOpen, bool launcherAllowed, bool floorUnknown = false)
+    {
+        ArgumentNullException.ThrowIfNull(stopped);
+        return Next(stopped) switch
+        {
+            StartupStep.ServicesClosed when servicesOpen => stopped with { ServicesOpen = true, LauncherAllowed = null, LauncherFloorUnknown = false },
+            StartupStep.ForcedUpdate when servicesOpen && (launcherAllowed || floorUnknown) =>
+                stopped with { LauncherAllowed = launcherAllowed, LauncherFloorUnknown = !launcherAllowed && floorUnknown },
+            _ => null,
+        };
+    }
 }

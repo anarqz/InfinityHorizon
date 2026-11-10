@@ -28,7 +28,8 @@ public sealed partial class ShellViewModel
     private IReadOnlyList<Profile> NoobCandidates => NoobStart.Candidates(Profiles, CurrentGameId ?? "");
 
     /// <summary>What this PC knows of <paramref name="hardcore"/>: its local save (and which), its cloud revision from <c>/me</c>.</summary>
-    private (HardcoreSourceFacts Facts, SaveProfile? Save) HardcoreFacts(Profile hardcore)
+    /// <param name="fresh">This PC's saves read fresh for a copy (<see cref="FreshSavesListAsync"/>); null reads the cards' last scan.</param>
+    private (HardcoreSourceFacts Facts, SaveProfile? Save) HardcoreFacts(Profile hardcore, IReadOnlyList<SaveProfile>? fresh = null)
     {
         SaveProfile? save = null;
         if (_install is not null)
@@ -44,7 +45,7 @@ public sealed partial class ShellViewModel
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: local profiles not read for a Hardcore source: " + e.GetType().Name); }
             try
             {
-                var saves = SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame));
+                var saves = fresh ?? SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame));
                 save = folders.Select(f => saves.FirstOrDefault(s => s.Folder == f)).OfType<SaveProfile>().FirstOrDefault();
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: Hardcore career not read: " + e.GetType().Name); }
@@ -141,9 +142,20 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>The form's pre-check: the plan for <paramref name="source"/>; null (with the reason shown and logged) when it cannot start.</summary>
-    private NoobStartPlan? NoobPlanBeforeCreate(Profile source, string noobName)
+    private async Task<NoobStartPlan?> NoobPlanBeforeCreateAsync(Profile source, string noobName)
     {
-        var (facts, _) = HardcoreFacts(source);
+        // review 3.1.1: decided from this PC's saves as they are now (a fresh scan under the overlay), never the form's cached read
+        IReadOnlyList<SaveProfile>? fresh = null;
+        if (_install is not null)
+        {
+            try
+            {
+                using (Loading(S.Format("busy.copying_from", ("mode", BusyMode("hardcore")))))
+                    fresh = await FreshSavesListAsync(AzimuthSaves.SavesRoot(_install.Root, CurrentGame));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { Log("saves: Hardcore career not read before creating: " + e.GetType().Name); }
+        }
+        var (facts, _) = HardcoreFacts(source, fresh);
         var plan = NoobStart.Plan(CurrentGame, facts, NoobCloudReachable);
         if (plan.Possible) return plan;
         Log($"saves: Noob from Hardcore refused before creating ({plan.TextKey}, local={facts.LocalSave}, cloud=r{facts.CloudRevision ?? 0})");
@@ -190,10 +202,18 @@ public sealed partial class ShellViewModel
             return false;
         }
         if (Playing || System.Diagnostics.Process.GetProcessesByName("azimuth").Length > 0) { Failed(S["saves.game_running"], "the game is running"); return false; }
-        var (facts, save) = HardcoreFacts(source);
+        var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
+        // review 3.1.1: the Hardcore career's save as it is now (a fresh scan under this overlay), never the form's cached one
+        IReadOnlyList<SaveProfile> fresh;
+        try { fresh = await FreshSavesListAsync(root); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException)
+        {
+            Failed(S["saves.read_failed"] + " (" + e.Message + ")", "fresh scan " + e.GetType().Name);
+            return false;
+        }
+        var (facts, save) = HardcoreFacts(source, fresh);
         var plan = NoobStart.Plan(CurrentGame, facts, NoobCloudReachable);
         if (!plan.Possible) { Failed(NoobPlanText(plan, facts, name), plan.TextKey); return false; }
-        var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         var targetFolder = CloudSaveFiles.ProfileDir(root, targetXuid);
         // §7.1: what the Noob's folder holds goes to History first; a failed copy there stops here (ArchiveFirst says so)
         if (!await ArchiveFirstAsync("copy", targetFolder, "sm.reason.copy", [("from", "HARDCORE · " + hardcoreName), ("to", "NOOB · " + name)], "hardcore", "noob"))

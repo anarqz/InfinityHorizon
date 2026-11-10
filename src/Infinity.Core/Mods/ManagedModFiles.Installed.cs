@@ -162,6 +162,14 @@ public sealed partial class ManagedModFiles
 
     private ModManifest[] InstalledSnapshots(out IReadOnlyList<string> unreadable)
     {
+        if (ForDisplay && _displaySnapshots is { } known) { unreadable = _displayUnreadable ?? []; return known; }
+        var read = InstalledSnapshotsNow(out unreadable);
+        if (ForDisplay) { _displaySnapshots = read; _displayUnreadable = unreadable; }
+        return read;
+    }
+
+    private ModManifest[] InstalledSnapshotsNow(out IReadOnlyList<string> unreadable)
+    {
         var skipped = new List<string>(); unreadable = skipped;
         if (!Directory.Exists(BackupRoot)) return [];
         var manifests = new List<ModManifest>();

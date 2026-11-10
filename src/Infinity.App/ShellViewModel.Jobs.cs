@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Collections.ObjectModel;
 using System.Globalization;
-using System.Runtime.ExceptionServices;
 using Infinity.Core.Shell;
 
 namespace Infinity.App;
@@ -110,20 +109,11 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// <paramref name="work"/> as a job; its failure stays in the toast (Retry), and is also thrown here so the caller's own handling
-    /// (a retry, a message) still runs. A second start with the same key joins the running one.
+    /// (a retry, a message) still runs. A second start with the same key joins the running one, and sees its real outcome: the shared
+    /// job's failure is thrown to every caller (<see cref="JobRunner.RunOrThrowAsync"/>), a timeout (OperationCanceledException) included.
     /// </summary>
-    private async Task RunJobOrThrowAsync(string key, string label, JobPresentation presentation, bool blocksPlay, Func<JobContext, Task> work)
-    {
-        Exception? failure = null;
-        var job = Jobs.Start(new JobSpec(key, label, presentation, blocksPlay, async context =>
-        {
-            // every failure is the caller's too, a timeout (OperationCanceledException) included: never a silent success
-            try { await work(context); }
-            catch (Exception error) { failure = error; throw; }
-        }));
-        await job.Completion;
-        if (failure is not null) ExceptionDispatchInfo.Throw(failure);
-    }
+    private Task RunJobOrThrowAsync(string key, string label, JobPresentation presentation, bool blocksPlay, Func<JobContext, Task> work) =>
+        Jobs.RunOrThrowAsync(new JobSpec(key, label, presentation, blocksPlay, work));
 
     /// <summary>A Background job whose failure only shows in its toast (with Retry).</summary>
     internal Job StartBackgroundJob(string key, string label, bool blocksPlay, Func<JobContext, Task> work, bool cancellable = false) =>

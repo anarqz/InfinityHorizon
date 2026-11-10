@@ -70,6 +70,23 @@ public sealed class Job : IDisposable
     /// <summary>The running (or the last) attempt: awaiting it awaits the job, joined starts included. It never throws.</summary>
     public Task Completion { get; private set; } = Task.CompletedTask;
 
+    /// <summary>
+    /// The running (or the last) attempt's outcome, as soon as its work ended (before a finished toast's linger): what every caller that
+    /// started or joined it observes, the shared job's failure included. It never throws.
+    /// </summary>
+    public Task<JobState> Finished => _finished.Task;
+    private TaskCompletionSource<JobState> _finished = Settled(JobState.Succeeded);
+
+    /// <summary>What the last attempt failed with (null when it did not fail); a joiner rethrows it (<see cref="JobRunner.RunOrThrowAsync"/>).</summary>
+    public Exception? Failure { get; private set; }
+
+    private static TaskCompletionSource<JobState> Settled(JobState state)
+    {
+        var done = new TaskCompletionSource<JobState>(TaskCreationOptions.RunContinuationsAsynchronously);
+        done.SetResult(state);
+        return done;
+    }
+
     public bool Running => State == JobState.Running;
 
     internal void SetProgress(double? fraction, string? text)
@@ -89,16 +106,21 @@ public sealed class Job : IDisposable
     {
         _cancel?.Dispose();
         _cancel = new CancellationTokenSource();
-        State = JobState.Running; Error = null; Progress = null; ProgressText = null; Label = Spec.Label;
+        State = JobState.Running; Error = null; Failure = null; Progress = null; ProgressText = null; Label = Spec.Label;
+        _finished = new TaskCompletionSource<JobState>(TaskCreationOptions.RunContinuationsAsynchronously);
         return _cancel.Token;
     }
 
-    internal void End(JobState state, string? error)
+    internal void End(JobState state, string? error, Exception? failure = null)
     {
         State = state;
         Error = error;
+        Failure = failure;
         Progress = state == JobState.Succeeded ? 1 : Progress;
+        _finished.TrySetResult(state);
     }
+
+    internal void Settle() => _finished.TrySetResult(JobState.Failed);
 
     internal void Attach(Task completion) => Completion = completion;
 
@@ -179,6 +201,27 @@ public sealed class JobRunner(Func<JobPresentation, string, IDisposable> overlay
         return job.State == JobState.Succeeded;
     }
 
+    /// <summary>
+    /// Starts <paramref name="spec"/> (or joins the running job with its key) and awaits its attempt's end: a failure is rethrown here as
+    /// it happened, a cancel is an <see cref="OperationCanceledException"/>. A joiner observes the shared job's real outcome (never a
+    /// silent success for a job that failed); the failure also stays in its toast with Retry.
+    /// </summary>
+    public async Task RunOrThrowAsync(JobSpec spec)
+    {
+        var job = Start(spec);
+        var state = await job.Finished.ConfigureAwait(true);
+        switch (state)
+        {
+            case JobState.Failed when job.Failure is { } failure:
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+                break;
+            case JobState.Failed:
+                throw new JobFailedException(job.Error ?? "the job failed");
+            case JobState.Cancelled:
+                throw new OperationCanceledException("the job was cancelled");
+        }
+    }
+
     internal Task Restart(Job job)
     {
         if (job.Running) return job.Completion;
@@ -194,7 +237,21 @@ public sealed class JobRunner(Func<JobPresentation, string, IDisposable> overlay
         if (_jobs.Remove(job)) Raise();
     }
 
-    internal void Raise() => Changed?.Invoke();
+    /// <summary>
+    /// The subscribers' turn. 3.1.1 (a "Reading your mods… 45 of 45" toast that never closed): a subscriber that throws must never stop a
+    /// job's own lifecycle (its end, its toast's removal), so its error is described (logged by the shell) and the job goes on.
+    /// </summary>
+    internal void Raise()
+    {
+        try { Changed?.Invoke(); }
+        catch (Exception error) when (error is not OutOfMemoryException) { _ = _describe(error); }
+    }
+
+    private void RaiseEnded(Job job)
+    {
+        try { Ended?.Invoke(job); }
+        catch (Exception error) when (error is not OutOfMemoryException) { _ = _describe(error); }
+    }
 
     private async Task RunAsync(Job job)
     {
@@ -213,15 +270,16 @@ public sealed class JobRunner(Func<JobPresentation, string, IDisposable> overlay
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            job.End(JobState.Failed, _describe(error));
+            job.End(JobState.Failed, _describe(error), error);
         }
         finally
         {
+            job.Settle(); // a fatal error left it unanswered: its waiters still end
             scope?.Dispose();
             job.Dispose(); // this attempt's cancellation; a Retry makes a new one
         }
         Raise();
-        Ended?.Invoke(job);
+        RaiseEnded(job);
         if (job.State is JobState.Succeeded or JobState.Cancelled)
         {
             if (job.Spec.Presentation == JobPresentation.Background && DoneLinger > TimeSpan.Zero)

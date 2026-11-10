@@ -703,12 +703,19 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            if (_onlinePause is not null) Message = OnlineServiceMessage;
-            // owner 2026-11-10: what the action changed on disk is scanned off the UI thread before the overlay closes, so the
-            // rebuilt cards behind it (SettleAfterBusy) never hash saves on the UI thread
-            await PrimeLocalFactsQuietlyAsync();
-            ExitBusy();
-            Busy = false;
+            try
+            {
+                if (_onlinePause is not null) Message = OnlineServiceMessage;
+                // owner 2026-11-10: what the action changed on disk is scanned off the UI thread before the overlay closes, so the
+                // rebuilt cards behind it (SettleAfterBusy) never hash saves on the UI thread
+                await PrimeLocalFactsQuietlyAsync();
+            }
+            finally
+            {
+                // the overlay closes whatever the scan did (review 3.1.1: a scan that threw left it up forever)
+                ExitBusy();
+                Busy = false;
+            }
         }
     }
 

@@ -91,7 +91,7 @@ public sealed class SaveScanCache(TimeProvider? clock = null)
             // a revision that is gone (pruned, moved away) keeps no digest
             if (key.StartsWith("digest|", StringComparison.Ordinal) && !Directory.Exists(entry.Folder)) { lock (_gate) _entries.Remove(key); continue; }
             try { Memo(key, entry.Folder, entry.Compute, force: true); }
-            catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or DecoderFallbackException) { }
+            catch (Exception e) when (!IsFatal(e)) { }
         }
         foreach (var (root, kind, digest) in roots)
         {
@@ -105,14 +105,18 @@ public sealed class SaveScanCache(TimeProvider? clock = null)
                     if (NewestSealed(dir) is { } newest && digest is not null && kind is not null)
                     {
                         try { Digest(newest, kind, digest); }
-                        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or DecoderFallbackException) { }
+                        catch (Exception e) when (!IsFatal(e)) { }
                     }
                 }
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            // a SaveException (a folder whose revision counter is exhausted) or any other non-fatal error is the later read's to report:
+            // the scan runs under an action's overlay, which must always close (review 3.1.1)
+            catch (Exception e) when (!IsFatal(e)) { }
         }
         return Computations != before;
     }
+
+    private static bool IsFatal(Exception e) => e is OutOfMemoryException or StackOverflowException or AccessViolationException;
 
     private object? Memo(string key, string folder, Func<object?> compute, bool force = false)
     {

@@ -548,20 +548,32 @@ public sealed partial class ShellViewModel
                 {
                     toastDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     var done = toastDone;
-                    StartBackgroundJob("mods-read", S["jobs.mods_read"], blocksPlay: false, context => { _modReadToast = context; return done.Task; });
+                    // the toast's work starts a moment later: it takes the progress only while this loop still runs (a read that ended meanwhile
+                    // never leaves a finished toast as the progress target), and ends with the loop, whatever ends it
+                    StartBackgroundJob("mods-read", S["jobs.mods_read"], blocksPlay: false, context =>
+                    {
+                        if (!done.Task.IsCompleted && _modReadRunning) _modReadToast = context;
+                        return done.Task;
+                    });
                 }
                 try { await read; }
                 catch (Exception error) when (error is not OutOfMemoryException) { Log("mods: page not refreshed: " + ErrorChain(error)); }
-                batch.TrySetResult();
+                finally { batch.TrySetResult(); }
             }
         }
         finally
         {
+            // every end (done, failed, superseded by nothing left to read): the toast and the page's progress card go away
             _modReadRunning = false; _modReadToast = null; _modReadProgress = (0, 0);
             toastDone?.TrySetResult();
             Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsReadingText));
+            Changed(nameof(ModsReadingHasProgress)); Changed(nameof(ModsReadingIndeterminate)); Changed(nameof(ModsReadingPercent));
         }
     }
+
+    /// <summary>Where the page's kept file hashes are persisted between launches (3.1.1: the first read of 45 large mods took 61 s).</summary>
+    private string KeptHashesFile => Path.Combine(ModHome, "mods-hash-cache.json");
+    private bool _keptHashesLoaded;
 
     private async Task ReadAndApplyModsAsync()
     {
@@ -569,21 +581,38 @@ public sealed partial class ShellViewModel
         var catalog = _manifestCatalog;
         var delay = ModStateReadDelayForTests;
         var watch = System.Diagnostics.Stopwatch.StartNew();
+        var keptFile = KeptHashesFile;
+        var loadKept = !_keptHashesLoaded && factory is not null;
+        _keptHashesLoaded |= loadKept;
+        var hashedBefore = ManagedModFiles.KeptHashesComputed;
         IProgress<(int, int)> progress = new Progress<(int Done, int Total)>(OnModReadProgress); // posts to the UI thread
-        var (health, error, facts) = await Task.Run(() =>
+        var (health, error, facts, phases) = await Task.Run(() =>
         {
+            var phases = new System.Text.StringBuilder();
+            var phase = System.Diagnostics.Stopwatch.StartNew();
+            void Phase(string name) { phases.Append(name).Append(' ').Append(phase.ElapsedMilliseconds).Append(" ms, "); phase.Restart(); }
+            if (loadKept) { var loaded = ManagedModFiles.LoadKeptHashes(keptFile); Phase("kept hashes loaded (" + loaded + ")"); }
             // the test pause is spread over the installations, as a slow disk is
             Action<int, int> step = delay > TimeSpan.Zero
                 ? (done, total) => { progress.Report((done, total)); if (done < total) Thread.Sleep(delay / Math.Max(total, 1)); }
                 : (done, total) => progress.Report((done, total));
             if (delay > TimeSpan.Zero && factory is null) Thread.Sleep(delay);
-            return ReadModState(factory, catalog, step);
+            var read = ReadModState(factory, catalog, step, Phase);
+            if (factory is not null) { var saved = ManagedModFiles.SaveKeptHashes(keptFile); Phase(saved ? "kept hashes saved" : "kept hashes unchanged"); }
+            return (read.Health, read.Error, read.Facts, phases.ToString());
         });
+        var hashed = ManagedModFiles.KeptHashesComputed - hashedBefore;
+        // owner 2026-11-10: a slow read says where its time went (phases), so the next one can be made faster
         if (watch.ElapsedMilliseconds >= 1000)
-            Log("mods: state read in " + watch.ElapsedMilliseconds + " ms (" + health.Installed.Count + " installed, " + catalog.Count + " in the catalog)");
+            Log("mods: state read in " + watch.ElapsedMilliseconds + " ms (" + health.Installed.Count + " installed, " + catalog.Count + " in the catalog, "
+                + hashed + " files hashed; " + phases.TrimEnd(' ', ',') + ")");
+        ModReadsForTests.Add((watch.Elapsed, hashed, catalog.Count));
+        if (ModReadsForTests.Count > 64) ModReadsForTests.RemoveAt(0);
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
         _modHealth = health; _modStateError = error; _modFacts = facts;
         ModReadsApplied++;
+        // 3.1.1 field bug: a read that began before the catalog arrived ("0 in the catalog") is read again with it, so its cards appear
+        if (!ReferenceEquals(catalog, _manifestCatalog)) _modReadPending ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             NoteDuplicateDiscordMod(); // OD-136: once, when Bullet4fun's Discord RPC is installed
@@ -594,11 +623,14 @@ public sealed partial class ShellViewModel
         finally { Changed(string.Empty); }
     }
 
+    /// <summary>Test seam: every applied read's duration, files hashed (not answered from the kept hashes) and catalog size, in order.</summary>
+    internal List<(TimeSpan Took, long Hashed, int Catalog)> ModReadsForTests { get; } = [];
+
     private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official,
-        Action<int, int>? progress = null)
+        Action<int, int>? progress = null, Action<string>? phase = null)
     {
         // never an exception out of the read: what cannot be read is the page's attention panel (Try again), and the cards still show
-        try { return ReadModStateUnguarded(factory, official, progress); }
+        try { return ReadModStateUnguarded(factory, official, progress, phase ?? (_ => { })); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
         {
             return (ModHealth.Empty, ManagedModFiles.Code(error), official.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray());
@@ -606,7 +638,7 @@ public sealed partial class ShellViewModel
     }
 
     private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModStateUnguarded(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official,
-        Action<int, int>? progress)
+        Action<int, int>? progress, Action<string> phase)
     {
         // Owner 2026-10-28: the catalog's mods only; a mod installed earlier that the catalog no longer lists (OD-232: a retired format
         // too) still has its card from its receipt (below), to disable or uninstall
@@ -618,7 +650,11 @@ public sealed partial class ShellViewModel
         { return (ModHealth.Empty, ManagedModFiles.Code(error), catalog.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray()); }
         // OD-125/127: a receipt from when the catalog installed ExtraOptions as a mod no longer stands for anything (it is built in)
         try { manager.RetireBuiltInReceipt(); } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
+        phase("manager");
+        // 3.1.1 (45 mods, 61 s): from here this manager only reads for the cards: each receipt once, kept hashes, nothing written
+        manager.ForDisplay = true;
         var health = manager.Inspect(progress);
+        phase("installations read (" + health.Installed.Count + ")");
         var facts = new List<ModCardFacts>();
         foreach (var listed in catalog)
         {
@@ -645,6 +681,7 @@ public sealed partial class ShellViewModel
                 if (installed.Enabled) manager.CheckDependents(installed.Id);
                 else if (!installed.Manifest!.Retired) manager.CheckDependencies(installed.Manifest!); // OD-232: a retired one is never enabled
             }), null));
+        phase("cards (" + facts.Count + ")");
         return (health, null, facts);
     }
 

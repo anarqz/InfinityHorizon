@@ -97,6 +97,8 @@ public sealed partial class ShellViewModel
         if (shown != _busyShown)
         {
             _busyShown = shown;
+            // review 3.1.1: an open ⋯ menu closes under a lock or a load (it floats above the page; its items would act on a busy launcher)
+            if (shown && _menu.OpenKey is not null) CloseMenu();
             if (shown) StartBusyTimer();
             else { _busyTimer?.Stop(); BusyTrace?.Add("idle"); }
         }

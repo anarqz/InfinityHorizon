@@ -58,9 +58,7 @@ public sealed partial class ShellViewModel
     /// Owner 2026-11-10: the FM5 folders OD-233's catalog-only rule held off (<see cref="ExtraOptionsMods.Fm5CatalogOnlyHeldFile"/>) come
     /// back on, once, game closed; then the hold is gone. Every server state the launcher keeps is read (the rule wrote the active one).
     /// </summary>
-    private List<string> RestoreFm5CatalogOnlyHold(AzimuthInstall install) => RestoreFm5CatalogOnlyHold(install.Root, [_stateDirectory, ModHome]);
-
-    /// <summary>No view-model state: runs on any thread; returns the log lines.</summary>
+    /// <remarks>No view-model state: runs on any thread; returns the log lines.</remarks>
     private static List<string> RestoreFm5CatalogOnlyHold(string azimuthRoot, IEnumerable<string> stateDirectories)
     {
         var notes = new List<string>();
@@ -237,9 +235,10 @@ public sealed partial class ShellViewModel
     /// FM5's installed mods read fresh from their receipts (never the page's cached state, which may be stale or not loaded yet); null when
     /// any of it could not be read, so nothing is turned off on a guess.
     /// </summary>
-    private Fm5LaunchState? ReadFm5LaunchState(string game)
+    /// <remarks>No view-model state (its factory is taken on the UI thread): runs on a worker.</remarks>
+    private static Fm5LaunchState? ReadFm5LaunchState(Func<ManagedModFiles>? factory, string game)
     {
-        if (ModManagerFactory() is not { } factory) return null;
+        if (factory is null) return null;
         ModHealth health;
         try { health = factory().Inspect(); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return null; }
@@ -255,25 +254,47 @@ public sealed partial class ShellViewModel
     /// held. Owner 2026-11-10: FM5 follows the same rule (hand-copied mods play in Noob, Hardcore turns them off), its Hardcore set read
     /// fresh from the receipts; the folders OD-233's former catalog-only rule held off come back first (<see cref="RestoreFm5CatalogOnlyHold"/>).
     /// </summary>
-    private void PrepareExtraOptionsMods(AzimuthInstall install, bool hardcore, string game = ModManifest.DefaultGame)
+    private async Task PrepareExtraOptionsModsAsync(AzimuthInstall install, bool hardcore, string game = ModManifest.DefaultGame)
     {
+        var inputs = ExtraOptionsLaunchInputsFor(game);
+        _fm5LaunchState = await Task.Run(() => PrepareExtraOptionsMods(install, hardcore, inputs));
+    }
+
+    /// <summary>What <see cref="PrepareExtraOptionsMods(AzimuthInstall, bool, ExtraOptionsLaunchInputs)"/> needs of the view model, read on the UI thread.</summary>
+    private sealed record ExtraOptionsLaunchInputs(string Game, HashSet<string> Allowed, string[] LoadFirst, string HeldFile, string[] StateDirectories,
+        Func<ManagedModFiles>? Factory);
+
+    private ExtraOptionsLaunchInputs ExtraOptionsLaunchInputsFor(string game) => new(game, HardcoreSafeFolders(game), LoadFirstFolders(game),
+        Path.Combine(_stateDirectory, HardcoreHeldFileFor(game)), [_stateDirectory, ModHome], game == "fm5" ? ModManagerFactory() : null);
+
+    /// <summary>Tests only: the managed thread the last launch preparation's file work ran on (review 3.1.1: never the dispatcher's).</summary>
+    internal int LaunchPreparationThreadForTests { get; private set; }
+
+    /// <summary>
+    /// The file work of the launch preparation (FM5's held folders, its receipts read, the load order): no view-model state but
+    /// <paramref name="inputs"/> and the log, so it runs on a worker (review 3.1.1: never on the dispatcher). Returns FM5's state read.
+    /// </summary>
+    private Fm5LaunchState? PrepareExtraOptionsMods(AzimuthInstall install, bool hardcore, ExtraOptionsLaunchInputs inputs)
+    {
+        LaunchPreparationThreadForTests = Environment.CurrentManagedThreadId;
+        Fm5LaunchState? fm5 = null;
         try
         {
-            var allowed = HardcoreSafeFolders(game);
-            if (game == "fm5")
+            var allowed = inputs.Allowed;
+            if (inputs.Game == "fm5")
             {
-                foreach (var note in RestoreFm5CatalogOnlyHold(install)) Log(note);
-                _fm5LaunchState = ReadFm5LaunchState(game);
+                foreach (var note in RestoreFm5CatalogOnlyHold(install.Root, inputs.StateDirectories)) Log(note);
+                fm5 = ReadFm5LaunchState(inputs.Factory, inputs.Game);
                 // unreadable receipts: Hardcore keeps only what the page last read as safe (never more), Noob changes nothing
-                if (_fm5LaunchState is { } state) allowed = state.BothModes;
+                if (fm5 is { } state) allowed = state.BothModes;
                 else Log("extraoptions mods: FM5 mod state unreadable; Hardcore keeps the mods last read as safe");
             }
-            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, allowed,
-                         Path.Combine(_stateDirectory, HardcoreHeldFileFor(game)), LoadFirstFolders(game), game))
+            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, allowed, inputs.HeldFile, inputs.LoadFirst, inputs.Game))
                 Log(note);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModException)
         { Log("extraoptions mods: launch preparation skipped (" + e.GetType().Name + ")"); }
+        return fm5;
     }
     /// <summary>Why the move to the per-game mods folders stopped (OD-233), for Play; null once it is done.</summary>
     private string? _modsLayoutFailure;
@@ -313,35 +334,51 @@ public sealed partial class ShellViewModel
     private async Task<bool> PrepareModsLayoutAsync(bool receiptsOnly, bool background, bool inline = false)
     {
         if (ModManagerFactory() is not { } factory) return true;
+        var backup = LayoutBackup;
+        // the cheap check (and the inline move) one at a time with a running move
         await _layoutGate.WaitAsync();
         try
         {
-            var backup = LayoutBackup;
             if (await Task.Run(() => NothingToMove(factory)) is { } nothing) return ApplyLayoutRun(nothing, background);
             if (inline)
             {
                 var catalog = LayoutCatalog();
                 return ApplyLayoutRun(await Task.Run(() => MoveModsLayout(factory, catalog, backup, receiptsOnly)), background);
             }
-            var moved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var job = Jobs.Start(new JobSpec(ModsLayoutJob, S["jobs.mods_layout"], background ? JobPresentation.Background : JobPresentation.Lock,
-                ShouldBlockPlay: true, async _ =>
-                {
-                    // also a toast's Retry: the catalog as it is then, and the Mods page read again after it
-                    var catalog = LayoutCatalog();
-                    var ok = ApplyLayoutRun(await Task.Run(() => MoveModsLayout(factory, catalog, backup, receiptsOnly)), background);
-                    if (!moved.TrySetResult(ok)) await RefreshModsAsync();
-                    // a toast keeps a stop with its reason and Retry; a lock ends, and the launch that ran it says why
-                    if (!ok && background) throw new JobFailedException(_modsLayoutFailure ?? S["jobs.failed"]);
-                }));
-            await Task.WhenAny(moved.Task, job.Completion);
-            if (moved.Task.IsCompleted) return moved.Task.Result;
-            // the job ended before the move answered (an unexpected error): never a silent pass, Play and Mods say so
-            SetModsLayoutFailure(job.Error ?? S["jobs.failed"]);
-            return false;
         }
         finally { _layoutGate.Release(); }
+        // the move itself is the job; every attempt (the first, a joiner's, a toast's Retry) runs it under the same gate, and every caller,
+        // a joiner of a running move included, gets that attempt's real outcome (Job.Finished), never its own guess
+        var attempts = 0;
+        var job = Jobs.Start(new JobSpec(ModsLayoutJob, S["jobs.mods_layout"], background ? JobPresentation.Background : JobPresentation.Lock,
+            ShouldBlockPlay: true, async _ =>
+            {
+                bool ok;
+                await _layoutGate.WaitAsync();
+                try
+                {
+                    // also a toast's Retry: the catalog as it is then
+                    var catalog = LayoutCatalog();
+                    var delay = LayoutMoveDelayForTests;
+                    ok = ApplyLayoutRun(await Task.Run(async () =>
+                    {
+                        if (delay > TimeSpan.Zero) await Task.Delay(delay);
+                        return MoveModsLayout(factory, catalog, backup, receiptsOnly);
+                    }), background);
+                }
+                finally { _layoutGate.Release(); }
+                if (++attempts > 1) await RefreshModsAsync(); // a Retry: the Mods page read again after it
+                // a stop is the job's failure: a toast keeps it with its reason and Retry, a lock ends and the launch that ran it says why
+                if (!ok) throw new JobFailedException(_modsLayoutFailure ?? S["jobs.failed"]);
+            }));
+        if (await job.Finished == JobState.Succeeded) return true;
+        // the move stopped (its reason is set), or ended on an unexpected error: never a silent pass, Play and Mods say so
+        if (_modsLayoutFailure is null) SetModsLayoutFailure(job.Error ?? S["jobs.failed"]);
+        return false;
     }
+
+    /// <summary>Tests only: how long each attempt of the move waits (off the dispatcher) before it runs, so a check can join or retry it.</summary>
+    internal TimeSpan LayoutMoveDelayForTests { get; set; }
 
     /// <summary>The cheap check first (no lock, no toast): the per-game layout already, or the error reading it; null when a move is due.</summary>
     private static LayoutRun? NothingToMove(Func<ManagedModFiles> factory)
