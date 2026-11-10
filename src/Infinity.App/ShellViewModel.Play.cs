@@ -201,9 +201,25 @@ public sealed partial class ShellViewModel
         // owner 2026-11-10: a cloud save going up (or another should_block_play job) holds every launch, online and offline, and says so
         if (!Playing && PlayHeldByJobs is { } held) { Message = held; return; }
         if (!PlaysOnline) { await PlayOfflineAsync(); return; }
+        if (Playing) { Message = S["supervisor.already"]; return; }
         _modLaunchFailure = null;
         if (!OnlineServiceAllowsPlay) { OpenOnlineStatus(); Message = OnlineServiceMessage; return; }
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
+        // owner 2026-11-10 (3.1.1, "absolutely no feedback"): "Joining queue…" from the click until the server says where the player is;
+        // the queue modal and "Joining game…" follow (Render). Whatever ends the attempt (a refusal, a cancel, the session's end) closes them.
+        ShowPlayOverlay(S["play.joining_queue"]);
+        try { await PlayOnlineAsync(); }
+        finally { EndPlayProgress(); }
+    }
+
+    /// <summary>A launch stopped because the state changed while it was prepared: never silently (owner 2026-11-10).</summary>
+    private void PlayStopped()
+    {
+        if (Message is null || Message.Length == 0) Message = PlayHeldByJobs ?? S["play.stopped"];
+    }
+
+    private async Task PlayOnlineAsync()
+    {
         await RefreshHookAsync(); // the hook as it is now, not as it was when the screen last looked (read on a worker)
         // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
         if (!Playing && !EnsureHookCurrentForPlay()) return;
@@ -220,8 +236,10 @@ public sealed partial class ShellViewModel
         // CR-S52: the first Play of a Hardcore profile whose cloud line is still empty asks how it starts (scratch or a checked career)
         if (_session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game) is { } chosen
             && await OfferSeedBeforePlayAsync(chosen)) return;
-        if (_session is null || !CanPlay) return;
+        if (_session is null || !CanPlay) { PlayStopped(); return; }
         var startingSession = _session;
+        // owner 2026-11-10 (3.1.1): the mod state already read for this game (a read only when none was, under this overlay, no toast)
+        await EnsureModStateForLaunchAsync();
         // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
         // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
         // OD-233: the per-game mods folders before anything reads the mods (a stop says why and blocks Play)
@@ -232,13 +250,13 @@ public sealed partial class ShellViewModel
         {
             // OD-112 follow-up: refused before anything is written; the Mods page offers Disable.
             Message = HardcoreRefusal(error.Mods.Select(m => m.Text("name", S.Locale)));
-            await RefreshModsAsync(); return;
+            RefreshModCards(); return;
         }
         catch (ModException error) when (error.Code == ModErrors.Recovery)
-        { Message = S["mods.play_blocked"]; await RefreshModsAsync(); return; }
+        { Message = S["mods.play_blocked"]; RefreshModCards(); return; }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
         {
-            if (_modHealth.AnyEnabled) { Message = ModLaunchFailed("launch preparation", error); await RefreshModsAsync(); return; }
+            if (_modHealth.AnyEnabled) { Message = ModLaunchFailed("launch preparation", error); RefreshModCards(); return; }
             Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : "") + ": " + error.Message);
             mods = ModLaunchPreparation.None;
         }
@@ -248,23 +266,24 @@ public sealed partial class ShellViewModel
         {
             Log("mods: online refused, retired mods enabled: " + string.Join(", ", retired.Select(m => m.Id)));
             Message = RetiredOnlineRefusal(retired.Select(m => m.Text("name", S.Locale)));
-            await RefreshModsAsync(); return;
+            RefreshModCards(); return;
         }
-        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) { PlayStopped(); return; }
         var startingInstall = _install;
         var startingGame = _gate.Game;
-        if (!await RefreshOnlineServiceForPlayAsync()) return;
-        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) return;
-        if (!await RefreshLauncherPolicyAsync()) return;
-        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
+        if (!await RefreshOnlineServiceForPlayAsync()) { PlayStopped(); return; }
+        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) { PlayStopped(); return; }
+        if (!await RefreshLauncherPolicyAsync()) { Message = LauncherUpdateStatus; PlayStopped(); return; }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) { PlayStopped(); return; }
         var futureSessionId = Guid.CreateVersion7().ToString();
         // OD-113: only a profile with the check (IntegrityApplies) is checked, silently; any other declares no car database.
         var (integrityProceed, integrity) = await IntegrityForPlayAsync(futureSessionId);
         if (!integrityProceed || !ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
-            || !CanPlay) return;
+            || !CanPlay) { PlayStopped(); return; }
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game);
         if (profile is null)
         {
+            PlayStopped();
             return;
         }
         // OD-206: a game without the integrity check still declares its car database: the gate compares it with the hook's
@@ -277,10 +296,10 @@ public sealed partial class ShellViewModel
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
         if (!await PrepareAzimuthAsync(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
-        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) return;
+        if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) { PlayStopped(); return; }
         var modSet = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
-        if (modSet is null) { Message = ModSetRefusal; await RefreshModsAsync(); return; }
-        if (!ReferenceEquals(_session, startingSession) || !CanPlay) return;
+        if (modSet is null) { Message = ModSetRefusal; RefreshModCards(); return; }
+        if (!ReferenceEquals(_session, startingSession) || !CanPlay) { PlayStopped(); return; }
         using var onlineActivity = new OnlineActivity();
         StartOverlayStatusFeed(_session); // CR-L40 §1.3: the guide's server status and avatar
         var config = new SupervisorConfig(profile.Game, profile.Xuid, _install, Version, Environment.ProcessPath ?? "infinity.exe", keys, policy, _stateDirectory)
@@ -313,7 +332,7 @@ public sealed partial class ShellViewModel
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
         _waitingForAdmission = true;
-        _queued = _leavingQueue = false;
+        _queued = _leavingQueue = _queueShown = false;
         _queuePlace = null;
         _admissionTitle = _admissionDetail = null;
         _hookLine = null;
@@ -470,6 +489,8 @@ public sealed partial class ShellViewModel
                 SetStatus(Message);
                 break;
             case SupervisorEvent.RequestingAdmission:
+                // owner 2026-11-10 (3.1.1): "Joining queue…" until the server says where the player is (a retry keeps the queue modal)
+                if (!_queueShown) ShowPlayOverlay(S["play.joining_queue"]);
                 _waitingForAdmission = true;
                 _queued = false;
                 _admissionTitle = S["queue.requesting"];
@@ -477,6 +498,9 @@ public sealed partial class ShellViewModel
                 SetStatus(_admissionTitle);
                 break;
             case SupervisorEvent.Queued q:
+                // the queue modal (blocking the screen like the overlay; Leave queue still works) in place of "Joining queue…"
+                _queueShown = true;
+                HidePlayOverlay();
                 _waitingForAdmission = _queued = true;
                 _queuePlace = q.Place;
                 _admissionTitle = S["queue.waiting_title"];
@@ -484,6 +508,8 @@ public sealed partial class ShellViewModel
                 SetStatus(_admissionDetail);
                 break;
             case SupervisorEvent.AdmissionRetry retry:
+                _queueShown = true; // the server's answer (full, maintenance, rate limited) shows on the queue modal, with Leave queue
+                HidePlayOverlay();
                 _waitingForAdmission = true;
                 _queued = false;
                 _admissionTitle = S[retry.Code == Infinity.Core.Api.ErrorCodes.ServiceMaintenance ? "queue.maintenance_title"
@@ -496,6 +522,9 @@ public sealed partial class ShellViewModel
                 SetStatus(_admissionDetail);
                 break;
             case SupervisorEvent.Admitted:
+                // the queue modal gives way to "Joining game…" until the game has started (the hook reports in, or is waited for)
+                _queueShown = false;
+                ShowPlayOverlay(S["play.joining_game"]);
                 _waitingForAdmission = _queued = false;
                 SetStatus(S["queue.admitted_toast"]);
                 break;
@@ -503,17 +532,21 @@ public sealed partial class ShellViewModel
                 SetStatus(S["supervisor.starting"]);
                 break;
             case SupervisorEvent.WaitingForHook w:
+                HidePlayOverlay(); // the game is open and running; the supervisor waits for its hook
                 SetStatus(S["supervisor.waiting_start"] + (w.SinceSeconds >= 15 ? " " + S["supervisor.press_start"] : string.Empty));
                 break;
             case SupervisorEvent.Handshake h:
+                HidePlayOverlay(); // the game started: its hook reported in
                 _hookLine = S.Format("supervisor.hook", ("version", h.HookVersion));
                 Changed(nameof(HookLine));
                 break;
             case SupervisorEvent.Refused r:
+                EndPlayProgress();
                 ConfigurationMessage(S.Format("supervisor.refused", ("reason", r.Reason)), error: true);
                 SetStatus(string.Empty);
                 break;
             case SupervisorEvent.Running:
+                HidePlayOverlay();
                 ClearRuntimeConfigurationIssue();
                 SetStatus(S["supervisor.running"]);
                 break;
@@ -525,24 +558,28 @@ public sealed partial class ShellViewModel
                 Changed(string.Empty);
                 break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.IdentityRefused }:
+                EndPlayProgress();
                 // B1: the hook closed the game before it read a save: no profile identity could be set (never Azimuth's own career)
                 Message = S["supervisor.identity_refused"];
                 SetStatus(Message);
                 _identityRefused = true;
                 break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
+                EndPlayProgress();
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));
                 break;
             case SupervisorEvent.CrashCaptured captured:
                 PresentCrash(captured.Incident);
                 break;
             case SupervisorEvent.Exited:
+                EndPlayProgress();
                 SetStatus(S["supervisor.closing"]);
                 break;
             case SupervisorEvent.Relaunching:
                 SetStatus(S["supervisor.relaunching"]);
                 break;
             case SupervisorEvent.Ended ended:
+                EndPlayProgress();
                 _waitingForAdmission = _queued = false;
                 if (ended.Reason is not "error") { ClearRuntimeConfigurationIssue(); ClearHookOfflineNotice(); }
                 var text = ended.Reason switch
@@ -562,6 +599,7 @@ public sealed partial class ShellViewModel
                 SetStatus(ended.Left || ended.Reason is "queue_cancelled" or "error" ? text : text + " " + S["supervisor.leave_failed"]);
                 break;
             case SupervisorEvent.HookOffline:
+                HidePlayOverlay();
                 // The hook closes its pipe whenever the game quits, a moment before the process exit: a real problem only
                 // while the game keeps running, so Ended takes the notice back instead of leaving Configure flagged.
                 ConfigurationMessage(S["supervisor.hook_offline"], error: true);

@@ -544,7 +544,8 @@ public sealed partial class ShellViewModel
             {
                 _modReadPending = null;
                 var read = ReadAndApplyModsAsync();
-                if (toastDone is null && await Task.WhenAny(read, Task.Delay(ModReadToastAfter)) != read)
+                // owner 2026-11-10 (3.1.1): a launch's own read is under the Play's overlay, never a "Reading your mods…" toast
+                if (toastDone is null && await Task.WhenAny(read, Task.Delay(ModReadToastAfter)) != read && !_modReadQuiet)
                 {
                     toastDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     var done = toastDone;
@@ -579,6 +580,8 @@ public sealed partial class ShellViewModel
     {
         var factory = ModManagerFactory();
         var catalog = _manifestCatalog;
+        var game = CurrentGame.Id;
+        var stampKey = ModStateStampKey;
         var delay = ModStateReadDelayForTests;
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var keptFile = KeptHashesFile;
@@ -586,21 +589,34 @@ public sealed partial class ShellViewModel
         _keptHashesLoaded |= loadKept;
         var hashedBefore = ManagedModFiles.KeptHashesComputed;
         IProgress<(int, int)> progress = new Progress<(int Done, int Total)>(OnModReadProgress); // posts to the UI thread
-        var (health, error, facts, phases) = await Task.Run(() =>
+        var (health, error, facts, phases, stamp) = await Task.Run(() =>
         {
             var phases = new System.Text.StringBuilder();
             var phase = System.Diagnostics.Stopwatch.StartNew();
             void Phase(string name) { phases.Append(name).Append(' ').Append(phase.ElapsedMilliseconds).Append(" ms, "); phase.Restart(); }
             if (loadKept) { var loaded = ManagedModFiles.LoadKeptHashes(keptFile); Phase("kept hashes loaded (" + loaded + ")"); }
+            // the stamp before the read: a change made while it reads makes the kept state stale (read again when this game comes back)
+            var stamp = ModStateStamp(factory, stampKey);
             // the test pause is spread over the installations, as a slow disk is
             Action<int, int> step = delay > TimeSpan.Zero
                 ? (done, total) => { progress.Report((done, total)); if (done < total) Thread.Sleep(delay / Math.Max(total, 1)); }
                 : (done, total) => progress.Report((done, total));
             if (delay > TimeSpan.Zero && factory is null) Thread.Sleep(delay);
-            var read = ReadModState(factory, catalog, step, Phase);
+            // owner 2026-11-10 (3.1.1): only the chosen game's mods (its receipts, catalog entries and folder)
+            var read = ReadModState(factory, catalog, step, Phase, game);
             if (factory is not null) { var saved = ManagedModFiles.SaveKeptHashes(keptFile); Phase(saved ? "kept hashes saved" : "kept hashes unchanged"); }
-            return (read.Health, read.Error, read.Facts, phases.ToString());
+            return (read.Health, read.Error, read.Facts, phases.ToString(), stamp);
         });
+        // kept for this game: switching back to it shows this state without reading again while nothing changed (ModStateStamp)
+        if (error is null) _modStateByGame[game] = new(health, facts, catalog, stamp);
+        else _modStateByGame.Remove(game);
+        if (CurrentGame.Id != game)
+        {
+            // another game was chosen while this one was read: its own read (or kept state) fills the page; this one is only kept
+            Log("mods: " + game + " state read in " + watch.ElapsedMilliseconds + " ms, kept (another game is chosen)");
+            if (!_modStateByGame.ContainsKey(CurrentGame.Id)) _modReadPending ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return;
+        }
         var hashed = ManagedModFiles.KeptHashesComputed - hashedBefore;
         // owner 2026-11-10: a slow read says where its time went (phases), so the next one can be made faster
         if (watch.ElapsedMilliseconds >= 1000)
@@ -609,7 +625,7 @@ public sealed partial class ShellViewModel
         ModReadsForTests.Add((watch.Elapsed, hashed, catalog.Count));
         if (ModReadsForTests.Count > 64) ModReadsForTests.RemoveAt(0);
         if (error is not null && error != _modStateError) Log("mods: state could not be read: " + error);
-        _modHealth = health; _modStateError = error; _modFacts = facts; _modFactsCatalog = catalog;
+        _modHealth = health; _modStateError = error; _modFacts = facts; _modFactsCatalog = catalog; _modStateGame = game;
         ModReadsApplied++;
         // 3.1.1 field bug: a read that began before the catalog arrived ("0 in the catalog") is read again with it, so its cards appear
         if (!ReferenceEquals(catalog, _manifestCatalog)) _modReadPending ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -626,19 +642,24 @@ public sealed partial class ShellViewModel
     /// <summary>Test seam: every applied read's duration, files hashed (not answered from the kept hashes) and catalog size, in order.</summary>
     internal List<(TimeSpan Took, long Hashed, int Catalog)> ModReadsForTests { get; } = [];
 
+    /// <param name="game">
+    /// Owner 2026-11-10 (3.1.1, "changing games should only read the mods from that game folder"): only this game's installations and
+    /// catalog entries are read; null reads every game (the harness and the checks).
+    /// </param>
     private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModState(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official,
-        Action<int, int>? progress = null, Action<string>? phase = null)
+        Action<int, int>? progress = null, Action<string>? phase = null, string? game = null)
     {
+        var listed = game is null ? official : official.Where(m => m.IsForGame(game)).ToArray();
         // never an exception out of the read: what cannot be read is the page's attention panel (Try again), and the cards still show
-        try { return ReadModStateUnguarded(factory, official, progress, phase ?? (_ => { })); }
+        try { return ReadModStateUnguarded(factory, listed, progress, phase ?? (_ => { }), game); }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
         {
-            return (ModHealth.Empty, ManagedModFiles.Code(error), official.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray());
+            return (ModHealth.Empty, ManagedModFiles.Code(error), listed.Select(m => new ModCardFacts(m, null, false, ManagedModFiles.Code(error), null)).ToArray());
         }
     }
 
     private static (ModHealth Health, string? Error, IReadOnlyList<ModCardFacts> Facts) ReadModStateUnguarded(Func<ManagedModFiles>? factory, IReadOnlyList<ModManifest> official,
-        Action<int, int>? progress, Action<string> phase)
+        Action<int, int>? progress, Action<string> phase, string? game)
     {
         // Owner 2026-10-28: the catalog's mods only; a mod installed earlier that the catalog no longer lists (OD-232: a retired format
         // too) still has its card from its receipt (below), to disable or uninstall
@@ -653,7 +674,7 @@ public sealed partial class ShellViewModel
         phase("manager");
         // 3.1.1 (45 mods, 61 s): from here this manager only reads for the cards: each receipt once, kept hashes, nothing written
         manager.ForDisplay = true;
-        var health = manager.Inspect(progress);
+        var health = manager.Inspect(progress, game);
         phase("installations read (" + health.Installed.Count + ")");
         var facts = new List<ModCardFacts>();
         foreach (var listed in catalog) facts.Add(ListedFact(manager, listed, health.Installed.FirstOrDefault(i => i.Id == listed.Id)));

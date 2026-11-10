@@ -415,7 +415,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         // W11: the Mods page follows the game: its cards, ExtraOptions card and settings are read again for the one now chosen
         _selectedMod = null; _ini = null; _iniDirty = false; ModOptions.Clear(); _modConfirm = null;
         if (!CanOpenMods) _onMods = false;
-        _ = RefreshModsAsync();
+        // owner 2026-11-10 (3.1.1): only the chosen game's mods are read, and not again when its last read is still current
+        _ = GuardAsync("show the game's mods", ShowModStateForGameAsync);
         Changed(nameof(CanOpenMods));
     }
 

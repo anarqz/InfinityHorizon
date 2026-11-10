@@ -133,10 +133,18 @@ public sealed partial class ShellViewModel
     public async Task PlayOfflineAsync()
     {
         if (!CanPlayOffline) return;
+        // owner 2026-11-10 (3.1.1): "Starting the game…" over the screen from the click until the game has started; every stop closes it
+        ShowPlayOverlay(S["play.starting_offline"]);
+        try { await PlayOfflineCoreAsync(); }
+        finally { EndPlayProgress(); }
+    }
+
+    private async Task PlayOfflineCoreAsync()
+    {
         // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
         await RefreshHookAsync();
         if (!EnsureHookCurrentForPlay()) return;
-        if (!CanPlayOffline || _install is not { } install || OfflinePlayProfile is not { } profile || ModManagerFactory() is not { } factory) return;
+        if (!CanPlayOffline || _install is not { } install || OfflinePlayProfile is not { } profile || ModManagerFactory() is not { } factory) { PlayStopped(); return; }
         _modLaunchFailure = null;
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         await RefreshHookAsync();
@@ -147,13 +155,16 @@ public sealed partial class ShellViewModel
         {
             // OD-233: the per-game mods folders before anything reads the mods, off the UI thread (a stop says why and blocks Play)
             if (!await PrepareModsLayoutAsync(receiptsOnly: false, background: false)) { Message = PrepareAzimuthFailed; return; }
+            // the mod state already read for this game (read now, without a toast, only when none was)
+            await EnsureModStateForLaunchAsync();
             IReadOnlyList<string> overrides = [];
             var prepared = ModLaunchPreparation.None;
             var fullFeatures = CurrentGame.FullFeatures;
+            var launchGame = CurrentGame.Id;
             await Task.Run(() =>
             {
                 if (!fullFeatures) return; // OD-206: this game has no mods
-                prepared = factory().PrepareForLaunch(); // locks enforced, Wine overrides reconciled (paired with their removal)
+                prepared = factory().PrepareForLaunch(game: launchGame); // this game's mods only: locks enforced, Wine overrides reconciled (paired with their removal)
                 overrides = prepared.DllOverrides;
             });
             // OD-232: an enabled retired mod is refused only online; offline it plays as installed, with the warning
@@ -180,6 +191,7 @@ public sealed partial class ShellViewModel
             }
             _offlineChild = child; _offlineQuitting = false;
             _modOperation = false; Busy = false; SetStatus(S["offline.playing_offline_status"]);
+            HidePlayOverlay(); // the game started
             if (profile.Hardcore) Message = S["offline.hardcore_offline"]; // OD-120: offline progress stays here, online continues from the cloud
             var wait = child.WaitForExitAsync(); _playTask = wait;
             var code = await wait;
@@ -196,6 +208,7 @@ public sealed partial class ShellViewModel
         { Message = ModLaunchFailed("offline session", error); }
         finally
         {
+            EndPlayProgress(); // a refusal or failure before the game started closes it too (its reason is in Message)
             _modOperation = true; Busy = true; _modProgress = S["mods.session_prepare"]; Changed(string.Empty);
             _offlineChild = null;
             _play?.Dispose(); _play = null; _playTask = null;

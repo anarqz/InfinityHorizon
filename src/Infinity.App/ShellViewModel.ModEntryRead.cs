@@ -53,8 +53,11 @@ public sealed partial class ShellViewModel
         while (_modReadRunning && _modReadLoop is { } running) await running;
         var factory = ModManagerFactory();
         var catalog = _manifestCatalog;
-        if (factory is null || ModReadsApplied == 0 || _modStateError is not null || !ReferenceEquals(_modFactsCatalog, catalog)) { await RefreshModsAsync(); return; }
+        var game = CurrentGame.Id;
+        if (factory is null || ModReadsApplied == 0 || _modStateError is not null || !ReferenceEquals(_modFactsCatalog, catalog) || _modStateGame != game)
+        { await RefreshModsAsync(); return; }
         var previous = _modHealth; var oldFacts = _modFacts; var appliedBefore = ModReadsApplied;
+        var stampKey = ModStateStampKey; string stamp = "";
         var decide = TiedIds(changed, catalog, previous);
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var hashedBefore = ManagedModFiles.KeptHashesComputed; var inspectedBefore = ManagedModFiles.InstallationsInspected;
@@ -63,6 +66,7 @@ public sealed partial class ShellViewModel
         {
             read = await Task.Run<(ModHealth, IReadOnlyList<ModCardFacts>)?>(() =>
             {
+                stamp = ModStateStamp(factory, stampKey);
                 ManagedModFiles manager;
                 try { manager = factory(); }
                 catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return null; }
@@ -98,7 +102,9 @@ public sealed partial class ShellViewModel
         // sees the state after its change)
         if (_modReadRunning) { if (_modReadLoop is { } newer) await newer; return; }
         if (ModReadsApplied != appliedBefore) return; // one already landed after this read began
+        if (CurrentGame.Id != game) { _modStateByGame.Remove(game); return; } // another game meanwhile: this one is read again when it comes back
         _modHealth = state.Health; _modFacts = state.Facts;
+        _modStateByGame[game] = new(state.Health, state.Facts, catalog, stamp);
         try
         {
             NoteDuplicateDiscordMod();

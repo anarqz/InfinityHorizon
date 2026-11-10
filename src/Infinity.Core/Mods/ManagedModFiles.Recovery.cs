@@ -60,13 +60,21 @@ public sealed partial class ManagedModFiles
     public ModHealth Inspect() => Inspect(progress: null);
 
     /// <param name="progress">Called before each installation is read: (done, total), for the Mods page's "Reading your mods… (3 of 44)".</param>
-    public ModHealth Inspect(Action<int, int>? progress)
+    public ModHealth Inspect(Action<int, int>? progress) => Inspect(progress, game: null);
+
+    /// <param name="progress">As <see cref="Inspect(Action{int, int}?)"/>.</param>
+    /// <param name="game">
+    /// Owner 2026-11-10 (3.1.1, "changing games should only read the mods from that game folder"): only the installations whose manifest
+    /// snapshot declares this game (<see cref="ModManifest.IsForGame"/>) are read (drift, settings); another game's receipt is skipped once its
+    /// snapshot names its game. A record that cannot be read at all is kept (its game is unknown, it needs attention). Null: every game.
+    /// </param>
+    public ModHealth Inspect(Action<int, int>? progress, string? game)
     {
         var problems = new List<string>();
         var installed = new List<ModInstallation>();
-        var elsewhere = false; var here = false;
-        IReadOnlyList<string> gameRelink = [];
-        try { gameRelink = GameRelinkCandidates(); }
+        var elsewhere = false; var here = false; var anyReceipt = false;
+        List<string> gameRelink = [];
+        try { gameRelink = GameRelinkCandidates(fresh: false, game); }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
         try
         {
@@ -75,18 +83,20 @@ public sealed partial class ManagedModFiles
             if (Directory.Exists(BackupRoot))
             {
                 var receipts = Directory.GetFiles(BackupRoot, "*.receipt.json");
+                anyReceipt = receipts.Length > 0;
                 for (var i = 0; i < receipts.Length; i++)
                 {
                     progress?.Invoke(i, receipts.Length);
+                    if (Inspect(Path.GetFileName(receipts[i])[..^".receipt.json".Length], game) is not { } read) continue;
                     Interlocked.Increment(ref _installationsInspected); InstallationsRead++;
-                    installed.Add(Inspect(Path.GetFileName(receipts[i])[..^".receipt.json".Length]));
+                    installed.Add(read);
                 }
                 progress?.Invoke(receipts.Length, receipts.Length);
             }
         }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
         IReadOnlyList<string> relink = [];
-        try { relink = installed.Count == 0 ? RelinkCandidates() : []; }
+        try { relink = !anyReceipt ? RelinkCandidates() : []; }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
         var layout = false;
         try { layout = LayoutMigrationPending; }
@@ -147,7 +157,8 @@ public sealed partial class ManagedModFiles
     /// Every game file hashed now (<see cref="Current"/>): <see cref="RelinkGame"/>'s decision, which rewrites receipts. The page's read
     /// (<see cref="Inspect()"/>) uses the kept hashes (<see cref="CachedCurrent"/>), which only decide what is shown.
     /// </param>
-    private List<string> GameRelinkCandidates(bool fresh)
+    /// <param name="game">Only the receipts whose manifest snapshot names this game (the Mods page's per-game read); null: every receipt.</param>
+    private List<string> GameRelinkCandidates(bool fresh, string? game = null)
     {
         if (_game is null || !Directory.Exists(BackupRoot)) return [];
         Func<string, string?> current = fresh ? Current : CachedCurrent;
@@ -161,6 +172,7 @@ public sealed partial class ManagedModFiles
             catch (JsonException) { continue; }
             if (receipt?.Files is null || receipt.GameRoot is not { } old || string.Equals(old, _game, StringComparison.OrdinalIgnoreCase) || Directory.Exists(old)
                 || !string.Equals(receipt.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)) continue;
+            if (game is not null && SnapshotOf(receipt with { Id = Path.GetFileName(path)[..^".receipt.json".Length] }) is { } other && !other.IsForGame(game)) continue;
             if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => current(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
                 result.Add(receipt.Id);
         }
@@ -188,7 +200,17 @@ public sealed partial class ManagedModFiles
     public const string UnreadableSettings = "unreadable";
 
     /// <summary>One installation as the Mods page and <see cref="ResolveRecovery"/> both read it (one check, so Resolve clears what it shows).</summary>
-    private ModInstallation Inspect(string id)
+    private ModInstallation Inspect(string id) => Inspect(id, game: null)!;
+
+    /// <summary>A receipt's manifest snapshot (its games), or null when it cannot be read.</summary>
+    private ModManifest? SnapshotOf(ManagedModReceipt receipt)
+    {
+        try { return SnapshotFor(receipt); }
+        catch (Exception error) when (IsStateError(error)) { return null; }
+    }
+
+    /// <returns>Null when <paramref name="game"/> is given and the installation's manifest names another game (nothing more is read).</returns>
+    private ModInstallation? Inspect(string id, string? game)
     {
         ManagedModReceipt receipt; ModManifest manifest;
         try
@@ -196,7 +218,13 @@ public sealed partial class ManagedModFiles
             receipt = ReadReceipt(id) ?? throw new ModException("receipt vanished", ModErrors.Recovery);
             manifest = SnapshotFor(receipt);
         }
-        catch (Exception error) when (IsStateError(error)) { return Problem(id, error, RecordContentError(error)); }
+        catch (Exception error) when (IsStateError(error))
+        {
+            // a record that cannot be read: kept on the game its readable snapshot names (unknown: on every game's page)
+            if (game is not null && ReadableSnapshot(id) is { } named && !named.IsForGame(game)) return null;
+            return Problem(id, error, RecordContentError(error));
+        }
+        if (game is not null && !manifest.IsForGame(game)) return null;
         try
         {
             // the record is intact from here: what fails now is the player's files or the disk, never a reason to archive it

@@ -323,7 +323,7 @@ public partial class MainWindow : Window
     /// <summary>The busy overlay's Cancel: only a sign-in waiting on the network (it writes nothing).</summary>
     private void OnBusyCancel(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ShellViewModel { CanCancelBusy: true } vm) vm.CancelSignIn();
+        if (DataContext is ShellViewModel { CanCancelBusy: true } vm) vm.CancelBusy(); // a sign-in, or a Play still asking for its place
     }
 
     private void OnBusyKey(object sender, System.Windows.Input.KeyEventArgs e)
@@ -332,6 +332,8 @@ public partial class MainWindow : Window
         // Owner 2026-11-10: a mod operation's lock too (the content is no longer disabled, so Tab and Enter must stop here).
         if (DataContext is not ShellViewModel vm || !Locked(vm) || e.Key == System.Windows.Input.Key.System) return;
         if (vm.ShowBusyOverlay && vm.CanCancelBusy && BusyOverlay.IsKeyboardFocusWithin && (e.Key == System.Windows.Input.Key.Enter || e.Key == System.Windows.Input.Key.Space)) return;
+        // owner 2026-11-10 (3.1.1): the queue modal's own button takes Enter/Space (and Tab stays inside it)
+        if (vm.ShowQueueModal && !vm.ShowBusyOverlay && QueueOverlay.IsKeyboardFocusWithin && e.Key is System.Windows.Input.Key.Enter or System.Windows.Input.Key.Space or System.Windows.Input.Key.Tab) return;
         e.Handled = true;
     }
 
