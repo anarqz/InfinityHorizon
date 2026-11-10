@@ -48,14 +48,15 @@ public sealed partial class ShellViewModel
     /// <summary>The buttons and tiles, rebuilt from <see cref="ProfileRows"/> (no request): every /me, game and gate change.</summary>
     private void FillPlayBoard()
     {
+        using var span = Span();
         FillGameCards();
-        PlayButtons.Clear();
         var game = CurrentGame;
         var cards = ProfileRows.Where(r => r.Card is not null).Select(r => r.Card!).ToList();
         IReadOnlyList<PlaySlot> slots = cards.Count > 0 || (!OfflineMode && _session?.Me?.Players is not null)
             ? PlayBoard.Build(cards, game, card => ProfileRows.FirstOrDefault(r => ReferenceEquals(r.Card, card)) is { } row && SaveChips.NeedsResolve(ChipOf(row)))
             : PlayBoard.BuildPlain(ProfileRows.Select(r => r.Profile.Mode).ToHashSet(StringComparer.Ordinal), game);
-        foreach (var slot in slots) PlayButtons.Add(ButtonOf(slot));
+        // owner 2026-11-10: in place (a button that did not change keeps its drawing)
+        ListSync.Sync(PlayButtons, [.. slots.Select(ButtonOf)], (a, b) => SameProfileRow(a.Row, b.Row) && (a with { Row = b.Row }).Equals(b), (a, b) => a.Mode == b.Mode);
         Changed(nameof(ShowPlayStart));
         Changed(nameof(PlayTitle));
     }

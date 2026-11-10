@@ -33,24 +33,26 @@ public sealed partial class ManagedModFiles
     /// An existing installation matching the manifest exactly: every binary live with its hash, or
     /// (legacy launchers, <c>adoption.parkedFiles</c>) every binary parked with its hash and absent live.
     /// </summary>
-    public bool CanAdopt(ModManifest manifest) => AdoptionState(manifest) is not null;
+    public bool CanAdopt(ModManifest manifest) => AdoptionState(manifest, cached: true) is not null;
 
-    private bool? AdoptionState(ModManifest manifest)
+    /// <param name="cached">The page's read (<see cref="CachedCurrent"/>); <see cref="Adopt"/> itself hashes every file again.</param>
+    private bool? AdoptionState(ModManifest manifest, bool cached = false)
     {
         if (!manifest.SupportedForInstall || !manifest.Files.All(f => f.Root == "azimuth") || !manifest.Files.Any(f => f.Role == "binary")
             || ReadReceipt(manifest.Id) is not null) return null;
         var mapped = manifest.Files.Where(f => f.Mode != "seed").ToArray();
         // Adoption records no original; a mapping that replaces one cannot be adopted without losing it.
         if (mapped.Any(f => f.Mode == "replace")) return null;
-        if (mapped.All(f => Current(Target(f.Root, f.Destination)) == f.Hash)) return true;
+        Func<string, string?> current = cached ? CachedCurrent : Current;
+        if (mapped.All(f => current(Target(f.Root, f.Destination)) == f.Hash)) return true;
         var parked = manifest.ParkedFiles;
         if (parked.Count == 0) return null;
         foreach (var file in mapped)
         {
-            var live = Current(Target(file.Root, file.Destination));
+            var live = current(Target(file.Root, file.Destination));
             if (file.Role == "binary")
             {
-                if (live is not null || !parked.TryGetValue(file.Destination, out var path) || Current(Parked(path)) != file.Hash) return null;
+                if (live is not null || !parked.TryGetValue(file.Destination, out var path) || current(Parked(path)) != file.Hash) return null;
             }
             else if (live is not null && live != file.Hash) return null;
         }

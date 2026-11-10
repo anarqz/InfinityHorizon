@@ -22,7 +22,14 @@ public sealed class SaveScanCache(TimeProvider? clock = null)
     private long _epoch;
     private long _computations;
 
-    private sealed record Entry(string Stamp, object? Value, long CheckedAt, long Epoch);
+    private sealed record Entry(string Stamp, object? Value, long CheckedAt, long Epoch, string Folder, Func<object?> Compute);
+
+    /// <summary>
+    /// Owner 2026-11-10 (the window never freezes): an answer already checked in the current epoch is used without listing its folder
+    /// again; only <see cref="Invalidate"/> or <see cref="Prime"/> (which re-checks every known answer on its worker) makes it look again.
+    /// The shell sets it: its UI thread then never lists a saves tree after the off-thread scan. False keeps <see cref="Fresh"/>'s rule.
+    /// </summary>
+    public bool TrustWithinEpoch { get; init; }
 
     /// <summary>
     /// For this long after a stamp was checked the answer is used without listing the folder again. Zero by default: every read lists
@@ -76,6 +83,16 @@ public sealed class SaveScanCache(TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(roots);
         var before = Computations;
+        // every answer known so far is checked again (its folder listed here, on the caller's worker), so a trusted one never goes stale
+        KeyValuePair<string, Entry>[] known;
+        lock (_gate) known = [.. _entries];
+        foreach (var (key, entry) in known)
+        {
+            // a revision that is gone (pruned, moved away) keeps no digest
+            if (key.StartsWith("digest|", StringComparison.Ordinal) && !Directory.Exists(entry.Folder)) { lock (_gate) _entries.Remove(key); continue; }
+            try { Memo(key, entry.Folder, entry.Compute, force: true); }
+            catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or DecoderFallbackException) { }
+        }
         foreach (var (root, kind, digest) in roots)
         {
             try
@@ -97,13 +114,13 @@ public sealed class SaveScanCache(TimeProvider? clock = null)
         return Computations != before;
     }
 
-    private object? Memo(string key, string folder, Func<object?> compute)
+    private object? Memo(string key, string folder, Func<object?> compute, bool force = false)
     {
         var now = _clock.GetTimestamp();
         var epoch = Interlocked.Read(ref _epoch);
         Entry? known;
         lock (_gate) _entries.TryGetValue(key, out known);
-        if (known is not null && known.Epoch == epoch && _clock.GetElapsedTime(known.CheckedAt, now) < Fresh) return known.Value;
+        if (!force && known is not null && known.Epoch == epoch && (TrustWithinEpoch || _clock.GetElapsedTime(known.CheckedAt, now) < Fresh)) return known.Value;
         var stamp = Stamp(folder);
         if (known is not null && known.Stamp == stamp)
         {
@@ -112,7 +129,7 @@ public sealed class SaveScanCache(TimeProvider? clock = null)
         }
         var value = compute(); // an exception is not cached: the next read tries again
         Interlocked.Increment(ref _computations);
-        lock (_gate) _entries[key] = new Entry(stamp, value, now, epoch);
+        lock (_gate) _entries[key] = new Entry(stamp, value, now, epoch, folder, compute);
         return value;
     }
 

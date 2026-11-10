@@ -168,6 +168,7 @@ public sealed partial class ManagedModFiles
     /// </summary>
     internal static void RemoveFile(string path)
     {
+        ForgetHash(path);
         if (!File.Exists(path) && new FileInfo(path).LinkTarget is null) return;
         var staging = Path.Combine(Path.GetDirectoryName(path)!, "." + Guid.NewGuid().ToString("N") + ".fi-delete.tmp");
         using (new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
@@ -185,7 +186,45 @@ public sealed partial class ManagedModFiles
     internal static readonly AsyncLocal<Action<string>?> RemoveFileObserver = new();
     private static Action<string>? RemoveFileHook => RemoveFileObserver.Value;
 
+    /// <summary>The file's SHA-256 read now (every check before a change, Repair, Accept, the operations' own drift checks).</summary>
     private static string? Current(string path) => File.Exists(path) ? ModManifest.Hash(File.ReadAllBytes(path)) : null;
+
+    /// <summary>
+    /// 3.1.1 (owner 2026-11-10): the mod state read (the Mods page, <see cref="Inspect()"/>) hashed every managed file at every read, seconds
+    /// for 44 large mods. Its hashes are kept for the launcher's lifetime by (full path, length, last write UTC); a file whose size or time
+    /// changed is read again, and the launcher's own writes and deletes (<see cref="Atomic"/>, <see cref="RemoveFile"/>) forget their path.
+    /// Only reads that decide nothing use it; every change still re-hashes (<see cref="Current"/>).
+    /// </summary>
+    private static string? CachedCurrent(string path)
+    {
+        var file = new FileInfo(path);
+        if (!file.Exists) return null;
+        var key = HashCacheKey(path);
+        var (length, written) = (file.Length, file.LastWriteTimeUtc);
+        if (HashCache.TryGetValue(key, out var known) && known.Length == length && known.Written == written) return known.Hash;
+        var hash = ModManifest.Hash(File.ReadAllBytes(path));
+        file.Refresh();
+        // changed while it was read: not kept (the next read hashes it again)
+        if (file.Exists && file.Length == length && file.LastWriteTimeUtc == written)
+        {
+            if (HashCache.Count > 200_000) HashCache.Clear();
+            HashCache[key] = (length, written, hash);
+        }
+        return hash;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, DateTime Written, string Hash)> HashCache = new(StringComparer.Ordinal);
+
+    private static string HashCacheKey(string path) => Path.GetFullPath(path).ToUpperInvariant();
+
+    /// <summary>The launcher wrote or removed <paramref name="path"/>: its kept hash is gone.</summary>
+    private static void ForgetHash(string path) { try { HashCache.TryRemove(HashCacheKey(path), out _); } catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { } }
+
+    /// <summary>Tests only: every kept hash forgotten.</summary>
+    internal static void ClearHashCache() => HashCache.Clear();
+
+    /// <summary>Tests only: how many hashes are kept.</summary>
+    internal static int HashCacheCount => HashCache.Count;
 
     private string Store(byte[] bytes)
     {
@@ -222,9 +261,10 @@ public sealed partial class ManagedModFiles
             FaultPoint?.Invoke("write:" + Path.GetFileName(path));
             using (var stream = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             { stream.Write(bytes); stream.Flush(true); }
+            ForgetHash(path);
             File.Move(staging, path, overwrite: true);
         }
-        finally { if (File.Exists(staging)) RemoveFile(staging); }
+        finally { ForgetHash(path); if (File.Exists(staging)) RemoveFile(staging); }
     }
 
     /// <summary>True for a crash leftover of <see cref="Atomic"/> or <see cref="RemoveFile"/>: <c>name.&lt;32 hex&gt;.tmp</c> or <c>.&lt;32 hex&gt;.fi-delete.tmp</c>.</summary>

@@ -18,6 +18,9 @@ public partial class App : Application
         {
             RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
         }
+        // Owner 2026-11-10 (the window never freezes): the save scans hash large files on workers; a blocking full collection would
+        // stop the window's thread too. This mode keeps the full collections concurrent (ephemeral ones stay short) unless memory runs low.
+        System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
         // A fault in one action never takes the launcher (and the play session it supervises) down:
         // it is written to launcher.log and the shell keeps running.
         DispatcherUnhandledException += OnDispatcherUnhandled;
@@ -55,6 +58,10 @@ public partial class App : Application
                 return;
             }
         }
+        // owner 2026-11-10 (the first frame): the splash on its own thread at once, before the main window is built; it closes when the
+        // main window drew its first frame (MainWindow), or at the latest when the launcher ends
+        StartSplash.Show(Infinity.App.MainWindow.LocaleOf(e.Args));
+        Exit += (_, _) => StartSplash.Close();
         base.OnStartup(e);
     }
 

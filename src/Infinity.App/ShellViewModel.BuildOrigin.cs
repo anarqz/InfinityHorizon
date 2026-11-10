@@ -20,8 +20,10 @@ public sealed partial class ShellViewModel
         var launcher = Environment.ProcessPath;
         _launcherOfficial = await Task.Run(() => ReleaseSignature.IsOfficialFile(launcher));
         _buildOriginChecked = true;
-        LoadOverlayPackage();
-        RefreshHook();
+        // owner 2026-11-10: the overlay's and the hook's hashes and signatures on workers too (the start's 316 ms stall before
+        // "overlay: package signed" in 3.1.1)
+        await LoadOverlayPackageAsync();
+        await RefreshHookAsync();
         Changed(nameof(ShowBuildOriginWarning));
     }
 }

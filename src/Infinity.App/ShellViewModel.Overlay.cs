@@ -25,38 +25,43 @@ public sealed partial class ShellViewModel
     /// <c>FI_OVERLAY_PACKAGE</c> against a development server), only when its signature verifies
     /// like the hook's (OD-47): the release key, or the development key on a development server.
     /// </summary>
-    private OverlayPackage? LoadOverlayPackage()
+    private OverlayPackage? LoadOverlayPackage() => ApplyOverlay(ReadOverlay(DevServer, DevHookKey));
+
+    /// <summary>Owner 2026-11-10 (the window never freezes): the overlay's hash and signature check on a worker, applied here.</summary>
+    private async Task<OverlayPackage?> LoadOverlayPackageAsync()
     {
-        _overlayOfficial = false;
+        var dev = DevServer; var key = DevHookKey;
+        return ApplyOverlay(await Task.Run(() => ReadOverlay(dev, key)).ConfigureAwait(true));
+    }
+
+    private sealed record OverlayRead(OverlayPackage? Package, bool Official, string Line);
+
+    /// <summary>The overlay package next to the launcher, read, hashed and signature-checked (file reads: any thread).</summary>
+    private static OverlayRead ReadOverlay(bool devServer, byte[]? devKey)
+    {
         try
         {
-            var folder = (DevServer ? Environment.GetEnvironmentVariable("FI_OVERLAY_PACKAGE") : null) ?? Path.Combine(AppContext.BaseDirectory, "overlay");
+            var folder = (devServer ? Environment.GetEnvironmentVariable("FI_OVERLAY_PACKAGE") : null) ?? Path.Combine(AppContext.BaseDirectory, "overlay");
             var dll = Path.Combine(folder, OverlayFile);
             if (!File.Exists(dll) || !File.Exists(dll + ".sig") || new FileInfo(dll).Length > HookInstaller.MaxHookBytes)
-            {
-                Log("overlay: no signed package next to the launcher");
-                return null;
-            }
+                return new(null, false, "overlay: no signed package next to the launcher");
             var sha = SHA256.HashData(File.ReadAllBytes(dll));
-            var signer = HookInstaller.SignerOf(Convert.ToHexStringLower(sha), File.ReadAllBytes(dll + ".sig"), DevHookKey);
-            _overlayOfficial = signer == HookSigner.Official;
-            if (signer == HookSigner.None)
-            {
-                Log("overlay: the package's signature does not verify; not loaded");
-                return null;
-            }
-            Log($"overlay: package signed ({signer})");
-            return new OverlayPackage(Path.GetFullPath(dll), sha);
+            var signer = HookInstaller.SignerOf(Convert.ToHexStringLower(sha), File.ReadAllBytes(dll + ".sig"), devKey);
+            if (signer == HookSigner.None) return new(null, false, "overlay: the package's signature does not verify; not loaded");
+            return new(new OverlayPackage(Path.GetFullPath(dll), sha), signer == HookSigner.Official, $"overlay: package signed ({signer})");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Log("overlay: " + e.Message);
-            return null;
+            return new(null, false, "overlay: " + e.Message);
         }
-        finally
-        {
-            Changed(nameof(ShowBuildOriginWarning));
-        }
+    }
+
+    private OverlayPackage? ApplyOverlay(OverlayRead read)
+    {
+        _overlayOfficial = read.Official;
+        Log(read.Line);
+        Changed(nameof(ShowBuildOriginWarning));
+        return read.Package;
     }
 
     /// <summary>The overlay's Worlds tab against this server's matchmaking (OD-54), with the session's game ticket.</summary>

@@ -11,6 +11,8 @@ namespace Infinity.App;
 /// <summary>One folder of <c>&lt;Azimuth&gt;\mods</c> on the Mods page (OD-126): what it holds and what the last game run said.</summary>
 public sealed record ExtraOptionsModItem(string Folder, string Name, string Details, string Status, bool Attention, bool Enabled, bool CanToggle)
 {
+    /// <summary>The game whose mods folder holds it (OD-233): a toggle or delete acts there, whatever game is chosen meanwhile.</summary>
+    public string Game { get; init; } = ModManifest.DefaultGame;
     public string Toggle { get; init; } = "";
     /// <summary>Owner 2026-10-28: a manual mod, once off, can be deleted from the mods folder (asked twice).</summary>
     public bool CanDelete { get; init; }
@@ -19,30 +21,65 @@ public sealed record ExtraOptionsModItem(string Folder, string Name, string Deta
 
 public sealed partial class ShellViewModel
 {
-    /// <summary>Remembers the mods a Hardcore launch switched off, to switch them back on at the next other launch.</summary>
+    /// <summary>Remembers the mods a Hardcore launch switched off, to switch them back on at the next other launch (one file per game).</summary>
     private const string HardcoreHeldFile = "extraoptions-hardcore-held.json";
+
+    private static string HardcoreHeldFileFor(string game) => game == ModManifest.DefaultGame ? HardcoreHeldFile : "extraoptions-hardcore-held-" + game + ".json";
 
     public ObservableCollection<ExtraOptionsModItem> ExtraOptionsModItems { get; } = [];
     public bool HasExtraOptionsMods => ExtraOptionsModItems.Count > 0;
-    public string ExtraOptionsModsFolder => _install is null ? "" : S.Format("eomods.folder", ("path", ExtraOptionsMods.ModsDirectory(_install.Root)));
+    public string ExtraOptionsModsFolder => _install is null || !ExtraOptionsLayout.HasModsFolder(CurrentGame.Id) ? ""
+        : S.Format("eomods.folder", ("path", ExtraOptionsMods.ModsDirectory(_install.Root, CurrentGame.Id)));
     public string ExtraOptionsModsHint => S[ProfileHardcore ? "eomods.hint_hardcore" : "eomods.hint"];
 
-    /// <summary>Reads <c>mods\</c>, <c>loadorder.txt</c> and the last <c>FH2_ExtraOptions.log</c> off the UI thread.</summary>
+    /// <summary>
+    /// Reads the chosen game's mods folder (<c>mods\&lt;game folder&gt;</c>, OD-233), its <c>loadorder.txt</c> and the last
+    /// <c>FH2_ExtraOptions.log</c> / <c>FM5_ExtraOptions.log</c> off the UI thread. Owner 2026-11-10: FM5 lists its hand-copied mods as FH2 does.
+    /// </summary>
     private async Task RefreshExtraOptionsModsAsync()
     {
-        // W11: the mods folder and its load order are FH2's; a game without mods of its own lists none
-        if (_install is not { } install || !CurrentGame.FullFeatures) { ExtraOptionsModItems.Clear(); Changed(nameof(HasExtraOptionsMods)); return; }
+        var game = CurrentGame.Id;
+        if (_install is not { } install || !ExtraOptionsLayout.HasModsFolder(game)) { ExtraOptionsModItems.Clear(); Changed(nameof(HasExtraOptionsMods)); return; }
         IReadOnlyList<ExtraOptionsMod> mods; IReadOnlyDictionary<string, ExtraOptionsModStatus> status;
-        try { (mods, status) = await Task.Run(() => { var m = ExtraOptionsMods.Scan(install.Root); return (m, ExtraOptionsMods.ReadStatus(install.Root, m)); }); }
+        try { (mods, status) = await Task.Run(() => { var m = ExtraOptionsMods.Scan(install.Root, game); return (m, ExtraOptionsMods.ReadStatus(install.Root, m, game)); }); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         { Log("extraoptions mods: not read (" + e.GetType().Name + ")"); mods = []; status = new Dictionary<string, ExtraOptionsModStatus>(); }
+        if (CurrentGame.Id != game) return; // another game was chosen meanwhile: its own refresh fills the list
         ExtraOptionsModItems.Clear();
         // Owner 2026-10-28: the launcher's own mods have their cards; this list is what was put there by hand (or added from a ZIP)
-        var managed = ManagedExtraOptionsFolders();
+        var managed = ManagedExtraOptionsFolders(game);
         // a folder ExtraOptions loads nothing from (what an uninstalled mod's own settings leave behind) is no mod: not listed
         foreach (var mod in mods.Where(m => !managed.Contains(m.Folder) && (m.HasMedia || m.HasDatabase || m.HasStrings || m.Plugins > 0 || m.ManifestError is not null)))
-            ExtraOptionsModItems.Add(Item(mod, mods, status));
+            ExtraOptionsModItems.Add(Item(mod, mods, status) with { Game = game });
         Changed(nameof(HasExtraOptionsMods)); Changed(nameof(ExtraOptionsModsFolder)); Changed(nameof(ExtraOptionsModsHint));
+    }
+
+    /// <summary>
+    /// Owner 2026-11-10: the FM5 folders OD-233's catalog-only rule held off (<see cref="ExtraOptionsMods.Fm5CatalogOnlyHeldFile"/>) come
+    /// back on, once, game closed; then the hold is gone. Every server state the launcher keeps is read (the rule wrote the active one).
+    /// </summary>
+    private List<string> RestoreFm5CatalogOnlyHold(AzimuthInstall install) => RestoreFm5CatalogOnlyHold(install.Root, [_stateDirectory, ModHome]);
+
+    /// <summary>No view-model state: runs on any thread; returns the log lines.</summary>
+    private static List<string> RestoreFm5CatalogOnlyHold(string azimuthRoot, IEnumerable<string> stateDirectories)
+    {
+        var notes = new List<string>();
+        foreach (var held in stateDirectories.Distinct(StringComparer.OrdinalIgnoreCase).Select(d => Path.Combine(d, ExtraOptionsMods.Fm5CatalogOnlyHeldFile)))
+        {
+            if (!File.Exists(held)) continue;
+            try { notes.AddRange(ExtraOptionsMods.RestoreCatalogOnlyHold(azimuthRoot, held, "fm5")); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+            { notes.Add("extraoptions mods: FM5 held folders not restored yet (" + e.GetType().Name + "); retried at the next start or launch"); }
+        }
+        return notes;
+    }
+
+    /// <summary>The restore above, off the UI thread and only with the game closed (ExtraOptions rewrites <c>loadorder.txt</c> at start).</summary>
+    private async Task RestoreFm5CatalogOnlyHoldAsync()
+    {
+        if (_install is not { } install) return;
+        string[] states = [_stateDirectory, ModHome];
+        foreach (var note in await Task.Run(() => GameRunning() ? [] : RestoreFm5CatalogOnlyHold(install.Root, states))) Log(note);
     }
 
     private ExtraOptionsModItem Item(ExtraOptionsMod mod, IReadOnlyList<ExtraOptionsMod> all, IReadOnlyDictionary<string, ExtraOptionsModStatus> status)
@@ -100,7 +137,7 @@ public sealed partial class ShellViewModel
         if (GameRunning()) { Message = S["mods.close_game"]; await RefreshExtraOptionsModsAsync(); return; }
         try
         {
-            await Task.Run(() => ExtraOptionsMods.DeleteFolder(install.Root, item.Folder));
+            await Task.Run(() => ExtraOptionsMods.DeleteFolder(install.Root, item.Folder, item.Game));
             Log("extraoptions mods: " + item.Folder + " deleted");
             Message = S["eomods.deleted"];
         }
@@ -116,7 +153,7 @@ public sealed partial class ShellViewModel
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         try
         {
-            await Task.Run(() => ExtraOptionsMods.SetEnabled(install.Root, item.Folder, !item.Enabled));
+            await Task.Run(() => ExtraOptionsMods.SetEnabled(install.Root, item.Folder, !item.Enabled, item.Game));
             Log("extraoptions mods: " + item.Folder + (item.Enabled ? " off" : " on"));
             Message = S[item.Enabled ? "eomods.now_off" : "eomods.now_on"];
         }
@@ -190,8 +227,8 @@ public sealed partial class ShellViewModel
             ("max", MatchmakingLimits.ModsMax.ToString(System.Globalization.CultureInfo.CurrentCulture)))
         : S["mods.online_unverified"];
 
-    /// <summary>OD-233: the launcher's FM5 mods as read for one launch: their folders (enabled by receipt), and those for both modes.</summary>
-    private sealed record Fm5LaunchState(HashSet<string> Managed, HashSet<string> BothModes);
+    /// <summary>OD-233: the launcher's FM5 mods as read for one launch: the enabled catalog folders for both modes (what Hardcore keeps).</summary>
+    private sealed record Fm5LaunchState(HashSet<string> BothModes);
 
     /// <summary>The state <see cref="PrepareExtraOptionsMods"/> read for the current FM5 launch; null when it could not be read.</summary>
     private Fm5LaunchState? _fm5LaunchState;
@@ -209,31 +246,30 @@ public sealed partial class ShellViewModel
         if (health.RecoveryHere || health.Problems.Count > 0 || health.Installed.Any(i => i.Problem is not null || i.Manifest is null)) return null;
         var mine = health.Installed.Where(i => i.Enabled && i.Manifest!.ModsGame == game && !i.Manifest.Retired).ToList();
         HashSet<string> Folders(IEnumerable<ModInstallation> list) => list.Select(i => ExtraOptionsMods.FolderOf(i.Manifest!)).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return new(Folders(mine), Folders(mine.Where(i => !ModMultiplayer.AffectsMultiplayer(i.Manifest!))));
+        return new(Folders(mine.Where(i => !ModMultiplayer.AffectsMultiplayer(i.Manifest!))));
     }
 
     /// <summary>
     /// Before a launch, after <see cref="PrepareModsLayoutAsync"/>: the game's <c>loadorder.txt</c> puts every mod after its dependencies (and
     /// OD-232's load-first mods on top); Hardcore plays only with <see cref="HardcoreSafeFolders"/>, and any other launch gets back what it
-    /// held. FM5's folder is launcher-managed, catalog only (OD-233, <see cref="ExtraOptionsMods.KeepCatalogOnly"/>): Noob plays the
-    /// launcher's enabled mods, Hardcore only those for both modes (FH2's rule); a folder the launcher turned off goes back on once allowed.
+    /// held. Owner 2026-11-10: FM5 follows the same rule (hand-copied mods play in Noob, Hardcore turns them off), its Hardcore set read
+    /// fresh from the receipts; the folders OD-233's former catalog-only rule held off come back first (<see cref="RestoreFm5CatalogOnlyHold"/>).
     /// </summary>
     private void PrepareExtraOptionsMods(AzimuthInstall install, bool hardcore, string game = ModManifest.DefaultGame)
     {
         try
         {
+            var allowed = HardcoreSafeFolders(game);
             if (game == "fm5")
             {
-                foreach (var note in ExtraOptionsMods.ArrangeLoadOrder(install.Root, LoadFirstFolders(game), game)) Log(note);
+                foreach (var note in RestoreFm5CatalogOnlyHold(install)) Log(note);
                 _fm5LaunchState = ReadFm5LaunchState(game);
-                if (_fm5LaunchState is not { } state) { Log("extraoptions mods: FM5 mod state unreadable; nothing turned off"); return; }
-                foreach (var note in ExtraOptionsMods.KeepCatalogOnly(install.Root, hardcore ? state.BothModes : state.Managed,
-                             Path.Combine(_stateDirectory, "extraoptions-fm5-unmanaged-held.json"), game))
-                    Log(note);
-                return;
+                // unreadable receipts: Hardcore keeps only what the page last read as safe (never more), Noob changes nothing
+                if (_fm5LaunchState is { } state) allowed = state.BothModes;
+                else Log("extraoptions mods: FM5 mod state unreadable; Hardcore keeps the mods last read as safe");
             }
-            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, HardcoreSafeFolders(game),
-                         Path.Combine(_stateDirectory, HardcoreHeldFile), LoadFirstFolders(game), game))
+            foreach (var note in ExtraOptionsMods.PrepareForLaunch(install.Root, hardcore, allowed,
+                         Path.Combine(_stateDirectory, HardcoreHeldFileFor(game)), LoadFirstFolders(game), game))
                 Log(note);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModException)

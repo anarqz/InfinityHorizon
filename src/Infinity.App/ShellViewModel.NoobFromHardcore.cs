@@ -132,6 +132,7 @@ public sealed partial class ShellViewModel
 
     private void ChangedNoobSeedForm()
     {
+        using var span = Span();
         Changed(nameof(ShowNoobSeedOption));
         Changed(nameof(NewNoobFromHardcore));
         Changed(nameof(NewNoobSource));
@@ -195,7 +196,7 @@ public sealed partial class ShellViewModel
         var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
         var targetFolder = CloudSaveFiles.ProfileDir(root, targetXuid);
         // §7.1: what the Noob's folder holds goes to History first; a failed copy there stops here (ArchiveFirst says so)
-        if (!ArchiveFirst("copy", targetFolder, "sm.reason.copy", [("from", "HARDCORE · " + hardcoreName), ("to", "NOOB · " + name)], "hardcore", "noob"))
+        if (!await ArchiveFirstAsync("copy", targetFolder, "sm.reason.copy", [("from", "HARDCORE · " + hardcoreName), ("to", "NOOB · " + name)], "hardcore", "noob"))
         {
             Log("saves: Noob from Hardcore stopped: History not written");
             return false;

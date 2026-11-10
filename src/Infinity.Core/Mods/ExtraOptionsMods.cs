@@ -231,40 +231,36 @@ public static class ExtraOptionsMods
     }
 
     /// <summary>
-    /// OD-233, FM5 before a launch (game closed, after <see cref="ArrangeLoadOrder"/>): its mods folder is launcher-managed, catalog only.
-    /// Every enabled folder not in <paramref name="allowed"/> (Noob: the launcher's installed mods; Hardcore: those of them for both modes)
-    /// is turned off (<c># folder</c>) and remembered in <paramref name="heldFile"/>; a folder the launcher turned off goes back on once it
-    /// is allowed (it became managed, or the launch is Noob again). Only what the launcher itself turned off is remembered: a folder the
-    /// player turned off stays theirs, and a remembered one that is gone or that the player turned on by hand is forgotten. Returns one log
-    /// line per change.
+    /// The state file in which OD-233's first FM5 rule ("catalog only", retired by the owner on 2026-11-10) remembered the hand-copied
+    /// folders it turned off before a launch. <see cref="RestoreCatalogOnlyHold"/> gives them back once, then removes it.
     /// </summary>
-    public static IReadOnlyList<string> KeepCatalogOnly(string azimuthRoot, IReadOnlySet<string> allowed, string heldFile, string game)
+    public const string Fm5CatalogOnlyHeldFile = "extraoptions-fm5-unmanaged-held.json";
+
+    /// <summary>
+    /// Owner 2026-11-10: FM5 takes hand-copied mods like FH2 (Noob plays them, Hardcore turns them off through <see cref="PrepareForLaunch"/>),
+    /// so no folder stays off for being outside the catalog. Game closed: every folder <paramref name="heldFile"/> names that is still there
+    /// and still off is turned on again (<c>loadorder.txt</c>), then the file goes (so this runs once). A file that cannot be read is kept
+    /// (nothing is guessed) and said in the notes. Returns one log line per change.
+    /// </summary>
+    public static IReadOnlyList<string> RestoreCatalogOnlyHold(string azimuthRoot, string heldFile, string game)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
-        ArgumentNullException.ThrowIfNull(allowed);
         ArgumentNullException.ThrowIfNull(heldFile);
+        if (!File.Exists(heldFile)) return [];
+        List<string> held;
+        try { held = JsonSerializer.Deserialize<List<string>>(File.ReadAllBytes(heldFile)) ?? []; }
+        catch (JsonException) { return ["extraoptions mods: " + Path.GetFileName(heldFile) + " is not readable; kept, nothing changed"]; }
         var notes = new List<string>();
         var mods = Scan(azimuthRoot, game);
-        var held = ReadHeld(heldFile);
-        var kept = new List<string>();
-        foreach (var folder in held)
+        foreach (var folder in held.Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var mod = mods.FirstOrDefault(m => m.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase));
-            if (mod is null || mod.Enabled) continue; // gone, or the player turned it on: no longer the launcher's hold
-            if (allowed.Contains(mod.Folder))
-            {
-                SetEnabled(azimuthRoot, mod.Folder, true, game);
-                notes.Add("extraoptions mods: " + mod.Folder + " on again (" + game + ")");
-            }
-            else kept.Add(mod.Folder);
+            // gone, or the player turned it on since: nothing to give back
+            if (mods.FirstOrDefault(m => m.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase)) is not { Enabled: false } mod) continue;
+            SetEnabled(azimuthRoot, mod.Folder, true, game);
+            notes.Add("extraoptions mods: " + mod.Folder + " on again (" + game + " takes hand-copied mods)");
         }
-        foreach (var mod in mods.Where(m => m.Enabled && !allowed.Contains(m.Folder)))
-        {
-            SetEnabled(azimuthRoot, mod.Folder, false, game);
-            if (!kept.Contains(mod.Folder, StringComparer.OrdinalIgnoreCase)) kept.Add(mod.Folder);
-            notes.Add("extraoptions mods: " + mod.Folder + " off (" + game + " plays the launcher's mods only)");
-        }
-        if (kept.Count > 0 || held.Count > 0) WriteHeld(heldFile, kept, empty: true);
+        ManagedModFiles.RemoveFile(heldFile);
+        notes.Add("extraoptions mods: the " + game + " catalog-only hold is retired (" + held.Count + " folder(s) recorded)");
         return notes;
     }
 

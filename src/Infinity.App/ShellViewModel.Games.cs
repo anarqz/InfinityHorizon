@@ -77,14 +77,15 @@ public sealed partial class ShellViewModel
     /// </summary>
     private void FillGameCards()
     {
-        GameCards.Clear();
+        using var span = Span();
+        var cards = new List<GameCard>();
         var served = OfflineMode || _session is null ? null : _session.Info.Games ?? [];
         foreach (var tile in PlayTiles.Build(Games, served))
         {
             var definition = tile.Game;
             var game = tile.Info;
             var art = ArtOf(definition);
-            GameCards.Add(new GameCard(game, art?.Name ?? definition.Name, definition.ShortName, definition.TileTagline,
+            cards.Add(new GameCard(game, art?.Name ?? definition.Name, definition.ShortName, definition.TileTagline,
                 TileBrush(definition.TileAccent, 0xFF), TileBrush(definition.TileAccent, 0x2E), game.Id == _gate.Game)
             {
                 Cover = art?.Image,
@@ -97,7 +98,12 @@ public sealed partial class ShellViewModel
                 },
             });
         }
+        // owner 2026-11-10: in place (a tile that did not change keeps its drawing)
+        ListSync.Sync(GameCards, cards, SameGameCard, (a, b) => a.Info.Id == b.Info.Id);
     }
+
+    private static bool SameGameCard(GameCard a, GameCard b) => ReferenceEquals(a, b)
+        || SameBrush(a.Accent, b.Accent) && SameBrush(a.Soft, b.Soft) && (a with { Accent = b.Accent, Soft = b.Soft }).Equals(b);
 
     /// <summary>A tile's art from this PC (owner 2026-11-08: covers from the user's own game files): the cover (null: the styled tile) and the ini's name.</summary>
     private sealed record TileArt(ImageSource? Image, string? Name);

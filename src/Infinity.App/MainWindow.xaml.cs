@@ -16,11 +16,12 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        // owner 2026-11-10: the start splash (App.OnStartup) closes once this window drew its first frame (it is on screen then: no gap);
+        // first, so every path (the harness's too) closes it
+        ContentRendered += (_, _) => StartSplash.Close();
         InitializeComponent();
         var cli = Environment.GetCommandLineArgs();
-        var localeAt = Array.IndexOf(cli, "--locale");
-        var locale = localeAt >= 0 && localeAt + 1 < cli.Length && cli[localeAt + 1] is "en" or "pt-BR"
-            ? cli[localeAt + 1] : Strings.LocaleFor(CultureInfo.CurrentUICulture);
+        var locale = LocaleOf(cli);
         var strings = Strings.Load(Path.Combine(AppContext.BaseDirectory, "i18n"), locale)
             .With(Path.Combine(AppContext.BaseDirectory, "i18n-win"));
         var arguments = cli.Skip(1).ToList();
@@ -60,6 +61,7 @@ public partial class MainWindow : Window
         Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
         PreviewKeyDown += OnBusyKey; // owner 2026-11-08: while the busy overlay is up no key reaches the page (Esc never cancels a write)
         PreviewMouseUp += OnBusyMouse;
+        SetUpScreenLock(); // owner 2026-11-10: the lock blocks clicks and keys without greying the content
         KeyDown += OnSavesBackKey; // SAVE_MANAGER_UX §3: Esc goes back (a focused control that uses Esc handles it first)
         MouseUp += OnSavesMouseBack;
         var handled = false;
@@ -95,6 +97,14 @@ public partial class MainWindow : Window
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate();
         };
+    }
+
+    /// <summary>The window's locale: <c>--locale en|pt-BR</c>, else the system's UI language (the start splash uses the same).</summary>
+    internal static string LocaleOf(IReadOnlyList<string> cli)
+    {
+        var localeAt = cli.ToList().IndexOf("--locale");
+        return localeAt >= 0 && localeAt + 1 < cli.Count && cli[localeAt + 1] is "en" or "pt-BR"
+            ? cli[localeAt + 1] : Strings.LocaleFor(CultureInfo.CurrentUICulture);
     }
 
     /// <summary>The launcher's state root (each server's own folder below it, <see cref="ServerConfig.StateDirectory"/>).</summary>
@@ -322,15 +332,16 @@ public partial class MainWindow : Window
 
     private void OnBusyKey(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        // Alt+F4 and the system keys stay the window's; every other key stops at the overlay (the Cancel button takes Enter/Space)
-        if (DataContext is not ShellViewModel { ShowBusyOverlay: true } vm || e.Key == System.Windows.Input.Key.System) return;
-        if (vm.CanCancelBusy && BusyOverlay.IsKeyboardFocusWithin && (e.Key == System.Windows.Input.Key.Enter || e.Key == System.Windows.Input.Key.Space)) return;
+        // Alt+F4 and the system keys stay the window's; every other key stops at the overlay (the Cancel button takes Enter/Space).
+        // Owner 2026-11-10: a mod operation's lock too (the content is no longer disabled, so Tab and Enter must stop here).
+        if (DataContext is not ShellViewModel vm || !Locked(vm) || e.Key == System.Windows.Input.Key.System) return;
+        if (vm.ShowBusyOverlay && vm.CanCancelBusy && BusyOverlay.IsKeyboardFocusWithin && (e.Key == System.Windows.Input.Key.Enter || e.Key == System.Windows.Input.Key.Space)) return;
         e.Handled = true;
     }
 
     private void OnBusyMouse(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (DataContext is ShellViewModel { ShowBusyOverlay: true } && e.ChangedButton is System.Windows.Input.MouseButton.XButton1 or System.Windows.Input.MouseButton.XButton2)
+        if (DataContext is ShellViewModel vm && Locked(vm) && e.ChangedButton is System.Windows.Input.MouseButton.XButton1 or System.Windows.Input.MouseButton.XButton2)
             e.Handled = true;
     }
 
@@ -643,11 +654,13 @@ public partial class MainWindow : Window
     }
 
     private async void OnLoadModCatalog(object sender, RoutedEventArgs e) => await _vm.LoadModCatalogAsync();
-    private void OnSelectMod(object sender, RoutedEventArgs e) => _vm.SelectMod((ModCard)((FrameworkElement)sender).DataContext);
+    // owner 2026-11-10: a card's click is awaited, and a failure is logged and said (never lost in a fire-and-forget task)
+    private async void OnSelectMod(object sender, RoutedEventArgs e) { var card = (ModCard)((FrameworkElement)sender).DataContext; await _vm.GuardAsync("open a mod", () => _vm.SelectModAsync(card)); }
+    private void OnSelectModsGame(object sender, RoutedEventArgs e) => _vm.SelectModsGame((GameCard)((FrameworkElement)sender).DataContext);
     private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
     private async void OnInstallModSet(object sender, RoutedEventArgs e) => await _vm.InstallSetAsync((ModSetCard)((FrameworkElement)sender).DataContext);
     private async void OnUninstallModCard(object sender, RoutedEventArgs e) => await _vm.UninstallModCardAsync((ModCard)((FrameworkElement)sender).DataContext);
-    private void OnSelectedModOptions(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) _vm.SelectMod(card); }
+    private async void OnSelectedModOptions(object sender, RoutedEventArgs e) { if (_vm.SelectedMod is { } card) await _vm.GuardAsync("open the options", () => _vm.SelectModAsync(card)); }
     private void OnCloseModPanel(object sender, RoutedEventArgs e) => _vm.CloseModPanel();
     private void OnClearModSearch(object sender, RoutedEventArgs e) => _vm.ModSearch = "";
     private async void OnActOnMod(object sender, RoutedEventArgs e) => await _vm.ActOnModAsync((ModCard)((FrameworkElement)sender).DataContext);
