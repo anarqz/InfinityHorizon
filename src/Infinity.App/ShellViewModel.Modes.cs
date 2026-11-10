@@ -216,7 +216,7 @@ public sealed partial class ShellViewModel
             (step, detail) =>
             {
                 if (step is SaveStep.Uploaded) ForgetKeptThisPc(game, xuid); // the kept save is in the cloud: the choice is spent
-                _ui.Post(_ => RenderSave(step, detail), null);
+                _ui.Post(_ => { TrackSaveUpload(game, xuid, step); RenderSave(step, detail); }, null);
             })
         {
             ResolveConflict = AskSaveConflictAsync,

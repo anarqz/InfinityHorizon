@@ -198,7 +198,7 @@ public sealed partial class ShellViewModel
             {
                 var manager = await Task.Run(ModManagerFactory()!);
                 failed = await Task.Run(() => manager.VerifyStoredExternal(mod, null, CancellationToken.None));
-            }, S["external.recheck_ok"]);
+            }, S["external.recheck_ok"], label: S.Format("mods.lock.check_files", ("mod", ModName(mod))));
             if (failed.Count == 0) { if (Message == S["external.recheck_ok"]) CloseExternalSetup(); return; }
             foreach (var row in ExternalRows.Where(r => failed.Any(f => f.SourceId == r.Source.Id)))
             {
@@ -213,11 +213,11 @@ public sealed partial class ShellViewModel
         var update = ExternalInstalled; var hardcore = ProfileHardcore;
         await RunModOperationAsync(async () =>
         {
-            var progress = new Progress<string>(stage => { _modProgress = S["mods.progress." + stage]; Changed(nameof(ModProgress)); });
+            var progress = new Progress<string>(stage => ModStep(S["mods.progress." + stage]));
             var manager = await Task.Run(ModManagerFactory()!);
             await Task.Run(() => manager.InstallExternal(mod, progress, update, hardcore));
             RecordModSource(mod.Id);
-        }, S[update ? "mods.updated" : "mods.action_done"]);
+        }, S[update ? "mods.updated" : "mods.action_done"], label: S.Format(update ? "mods.lock.update" : "mods.lock.install", ("mod", ModName(mod))));
         if (_modHealth.Installed.Any(i => i.Id == mod.Id && i.Manifest?.SameContent(mod) == true)) CloseExternalSetup();
     }
 

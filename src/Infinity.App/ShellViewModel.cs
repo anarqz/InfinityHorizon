@@ -213,7 +213,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         private set
         {
             _busy = value;
-            Changed(string.Empty);
+            // owner 2026-11-10: the action ended: what it covered is rebuilt now (its cards were drawn while busy)
+            if (!value && CanSettle) SettleAfterBusy();
+            else Changed(string.Empty);
         }
     }
 
@@ -481,6 +483,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         // Stay signed in: every rotated refresh token is saved before the next request can use it.
         session.Tokens.Changed += refresh => KeepSession(session, refresh);
         ForgetRemote(); // owner 2026-11-08: a sign-in (or another account) reads everything once again
+        // owner 2026-11-10: the profile data loads under the centre overlay, step by step; the main pane shows only when it is all in
+        using var loading = Loading(S["startup.loading_profile"]);
         var me = await session.RefreshMeAsync(cancellation);
         KeepSession(session, session.Tokens.RefreshToken);
         RememberLaunchMode(LaunchModeStore.Online); // OD-118 (G2): the next start resumes this session
@@ -498,6 +502,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Gate = _gate.SignIn(session.Email ?? (me.Profiles.Count > 0 ? ProfileName.Plain(me.Profiles[0].Gamertag) : me.AccountId[..8]), OpenPlayGame());
         _onProfiles = false;
         ResetContentLocation();
+        // owner 2026-11-10: careers and this PC's cloud-save state of every game, scanned off the UI thread before the cards are drawn
+        loading.Step(S["startup.loading_careers"]);
+        await PrimeLocalFactsQuietlyAsync();
         FillProfiles();
         if (session.Deletion is not null)
         {
@@ -509,8 +516,13 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _ = RefreshDiscordAsync(); // CR-S63: the account's Discord handle on its profile rows (after sign-in only, OD-118)
         RestartShellStatus(now: true); // CR-L40: the connected server's figures in the sidebar, then every 30 s
         StartFriendsPoll(); // owner 2026-11-08: the header's friends counts and dot, from the presence poll (never a click)
-        await RefreshIntegrityAutomaticallyAsync();
+        // owner 2026-11-10: the game-file check is a background toast (PLAY's own path waits for it when it applies)
+        if (IntegrityApplies) StartBackgroundJob("integrity", S["jobs.integrity"], blocksPlay: false, _ => RefreshIntegrityAutomaticallyAsync());
+        else _ = RefreshIntegrityAutomaticallyAsync();
+        loading.Step(S["startup.loading_profiles"]);
         await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
+        loading.Step(S["startup.loading_friends"]);
+        await WaitForFriendsAsync(TimeSpan.FromSeconds(10));
     }
 
     private void KeepSession(AccountSession session, Secret refresh)
@@ -550,6 +562,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         {
             Log($"auth: saved session refused: {e.Code}");
             if (e.Code is ErrorCodes.AuthRefreshInvalid or ErrorCodes.AuthRefreshReused or ErrorCodes.AccountsBanned) SessionStore.Delete(_stateDirectory);
+            // owner 2026-11-10: never a silent fall back to the welcome screen: it says why
+            if (_onlinePause is null) Message = S.Format("startup.resume_failed", ("reason", Describe(e)));
         }
         catch (TrustChangedException change)
         {
@@ -559,6 +573,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             or InvalidDataException)
         {
             Log($"auth: saved session not resumed: {e.GetType().Name}");
+            if (_onlinePause is null) Message = S.Format("startup.resume_failed", ("reason", e is OperationCanceledException ? S["startup.resume_timeout"] : Describe(e)));
         }
         finally
         {
@@ -679,6 +694,9 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         finally
         {
             if (_onlinePause is not null) Message = OnlineServiceMessage;
+            // owner 2026-11-10: what the action changed on disk is scanned off the UI thread before the overlay closes, so the
+            // rebuilt cards behind it (SettleAfterBusy) never hash saves on the UI thread
+            await PrimeLocalFactsQuietlyAsync();
             ExitBusy();
             Busy = false;
         }
@@ -710,6 +728,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        StopUiWatchdog();
         StopFriendsPoll();
         _newsClient?.Dispose();
         if (_pickerHttp.IsValueCreated) _pickerHttp.Value.Dispose();

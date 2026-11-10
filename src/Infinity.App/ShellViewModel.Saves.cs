@@ -66,7 +66,7 @@ public sealed partial class ShellViewModel
         IReadOnlyList<SaveProfile> saves;
         try
         {
-            saves = AzimuthSaves.List(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid));
+            saves = SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame), AzimuthSaves.FolderFor(xuid));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

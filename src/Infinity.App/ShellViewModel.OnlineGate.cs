@@ -113,18 +113,69 @@ public sealed partial class ShellViewModel
         if (online) ResumeOnline();
         // A run that chose Play offline opens offline at once, before any check, so a SIGN IN click meanwhile is never undone.
         else if (StartsOffline) PlayOffline();
-        // T1c: the status first; the update check after it (it reads /launcher/v1/info only when engaged and the service is open).
-        if (online) await CheckOnlineStatusAsync(manual: false);
-        var onlineCheck = Task.CompletedTask;
-        var updateCheck = ProbeServerAsync();
-        _ = LoadNewsAsync(); // OD-119: GitHub only, signed out and offline too (the last good copy first)
+        // OD-119: GitHub only, signed out and offline too (the last good copy first): a background toast (owner 2026-11-10)
+        StartBackgroundJob("news", S["jobs.news"], blocksPlay: false, _ => LoadNewsAsync());
+        if (!online)
+        {
+            // OD-118: no Infinity request; GitHub's release list beside the local folder search, as before
+            var updateCheck = ProbeServerAsync();
+            await VerifyBuildOriginAsync();
+            await FindGamesAsync(azimuth);
+            // Owner 2026-10-27: Azimuth before sign-in; none found, its setup is the first screen (local only, nothing sent: OD-118).
+            AskAzimuthFirstWhenMissing();
+            await updateCheck;
+            await RefreshIntegrityAutomaticallyAsync();
+            return;
+        }
         await VerifyBuildOriginAsync();
-        if (azimuth is not null) Install = Infinity.Core.Process.AzimuthInstall.Detect(azimuth);
-        else await FindAzimuthAsync(null, openSetupWhenNeeded: OpenSetupOnStart);
-        // Owner 2026-10-27: Azimuth before sign-in; none found, its setup is the first screen (local only, nothing sent: OD-118).
+        // Owner 2026-11-10, "1. Opened launcher": one centre overlay from the first request to the main pane, its label the current step
+        // (StartupFlow's order: status, release floor, this PC's games, sign-in, profile data). A closed service or a forced update ends
+        // the start on its own screen; a failed sign-in ends on the welcome screen with its reason (ResumeSessionAsync says it).
+        var facts = new StartupFacts();
+        using (var startup = Loading(S["startup.checking_services"]))
+        {
+            for (var step = StartupFlow.Next(facts); !StartupFlow.IsFinal(step); step = StartupFlow.Next(facts))
+            {
+                StartupTrace?.Add(step.ToString());
+                switch (step)
+                {
+                    case StartupStep.CheckServices:
+                        startup.Step(S["startup.checking_services"]);
+                        await CheckOnlineStatusAsync(manual: false);
+                        facts = facts with { ServicesOpen = OnlineServiceAllowsPlay };
+                        break;
+                    case StartupStep.CheckLauncherVersion:
+                        startup.Step(S["startup.checking_version"]);
+                        await CheckLauncherUpdatesAsync();
+                        facts = facts with { LauncherAllowed = LauncherUpdateAllowsPlay };
+                        break;
+                    case StartupStep.FindGames:
+                        startup.Step(S["startup.finding_games"]);
+                        await FindGamesAsync(azimuth);
+                        facts = facts with { GamesFound = true };
+                        break;
+                    case StartupStep.SignIn:
+                    case StartupStep.LoadProfile:
+                        startup.Step(S["startup.signing_in"]);
+                        await ResumeSessionAsync(); // EnterAsync loads the profile data under its own steps
+                        facts = facts with { SignedIn = _session is not null, ProfileLoaded = _session is not null };
+                        break;
+                }
+            }
+            StartupTrace?.Add(StartupFlow.Next(facts).ToString());
+        }
+        // the half screen or the forced update ended the start: this PC's games are still found (Play offline from there needs them)
+        if (!facts.GamesFound) await FindGamesAsync(azimuth);
         AskAzimuthFirstWhenMissing();
-        await Task.WhenAll(updateCheck, onlineCheck);
-        if (online) await ResumeSessionAsync();
-        await RefreshIntegrityAutomaticallyAsync();
+    }
+
+    /// <summary>Test seam: the startup steps, in order (<see cref="StartupFlow"/>).</summary>
+    internal List<string>? StartupTrace { get; set; }
+
+    /// <summary>The Azimuth folder: the one named (<c>--azimuth</c>), else the search; both read folders off the UI thread.</summary>
+    private async Task FindGamesAsync(string? azimuth)
+    {
+        if (azimuth is not null) await SetInstallAsync(await Task.Run(() => Infinity.Core.Process.AzimuthInstall.Detect(azimuth)));
+        else await FindAzimuthAsync(null, openSetupWhenNeeded: OpenSetupOnStart);
     }
 }

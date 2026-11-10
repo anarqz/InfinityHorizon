@@ -127,5 +127,5 @@ public static class MatchmakingLimits
     public const string RelayGrantPrefix = "fi-relay-grant-v1\n";
 
     /// <summary>Entries of a mod set (OD-112, §2.7).</summary>
-    public const int ModsMax = 32;
+    public const int ModsMax = 100;
 }

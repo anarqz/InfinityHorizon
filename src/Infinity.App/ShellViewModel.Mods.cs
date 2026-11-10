@@ -59,13 +59,21 @@ public sealed partial class ShellViewModel
     /// <summary>When an Azimuth folder is found: state in the background, and once per run the catalog (news tag) and retention.</summary>
     private void StartMods()
     {
-        // OD-233: the per-game mods folders before the Mods page reads them, once the catalog can name an unmanaged folder's game (else
-        // after the catalog loads, or before Play); a stop is shown on Play and retried at the next launch
-        if (_install is { } install && _catalogLoaded && !GameRunning()) PrepareModsLayout(install);
-        _ = RefreshModsAsync();
-        if (_modsStarted) { EnsureModCatalog(); return; } // T1f: a game folder found or changed in the shell loads it too
+        // OD-233: the per-game mods folders before the Mods page first reads them. The receipts decide their own folders' games, so those
+        // move now even without the catalog (an installed mod is never shown as an unreadable record of the old layout); a folder copied
+        // by hand waits for the catalog to name its game (after it loads, or before Play). A stop is shown on Play and Mods, and retried.
+        var first = !_modsStarted;
         _modsStarted = true;
-        _ = StartModsOnceAsync();
+        _ = StartModsAsync(first);
+    }
+
+    private async Task StartModsAsync(bool first)
+    {
+        // the process list off the UI thread too (owner 2026-11-10: the launcher never looks frozen)
+        if (_install is not null && !await Task.Run(GameRunning)) await PrepareModsLayoutAsync(receiptsOnly: !_catalogLoaded, background: true);
+        await RefreshModsAsync();
+        if (!first) { EnsureModCatalog(); return; } // T1f: a game folder found or changed in the shell loads it too
+        await StartModsOnceAsync();
     }
 
     private async Task StartModsOnceAsync()
@@ -108,7 +116,7 @@ public sealed partial class ShellViewModel
             foreach (var option in edits) ini.Set(option.Id, option.Text, option.Culture);
             if (selected.BuiltIn && root is not null) Infinity.Core.Process.ExtraOptionsInfinity.SaveSettings(root, ini, game);
             else factory().SaveSettings(selected.Manifest, ini);
-        }), S["mods.options_saved"], preserveOptionsOnFailure: true);
+        }), S["mods.options_saved"], preserveOptionsOnFailure: true, label: S.Format("mods.lock.settings", ("mod", ModName(selected.Manifest))));
     }
     public async Task RevertIniAsync() { await LoadSelectedOptionsAsync(); Changed(string.Empty); }
     public void RevertIni() => _ = RevertIniAsync();

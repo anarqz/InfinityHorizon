@@ -97,11 +97,27 @@ public sealed partial class ShellViewModel
         StopFriendsPoll();
         if (_session is not { } session) return;
         var stop = _friendsPoll = new CancellationTokenSource();
-        var poller = new FriendsPoller(c => FetchFriendsAsync(session, c), list =>
+        // owner 2026-11-10: the main pane opens with the friends list already read: the start waits for the first answer (or failure)
+        var first = _friendsFirstRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var poller = new FriendsPoller(async c =>
+        {
+            try { return await FetchFriendsAsync(session, c); }
+            catch { first.TrySetResult(); throw; }
+        }, list =>
         {
             if (ReferenceEquals(_session, session) && !stop.IsCancellationRequested) ShowFriends(list);
+            first.TrySetResult();
         }, log: Log);
         _ = poller.RunAsync(stop.Token);
+    }
+
+    private TaskCompletionSource? _friendsFirstRead;
+
+    /// <summary>The first friends read of this sign-in has answered (or failed, or <paramref name="wait"/> passed).</summary>
+    private async Task WaitForFriendsAsync(TimeSpan wait)
+    {
+        if (_friendsFirstRead?.Task is not { IsCompleted: false } first) return;
+        await Task.WhenAny(first, Task.Delay(wait));
     }
 
     private void StopFriendsPoll()
@@ -206,24 +222,42 @@ public sealed partial class ShellViewModel
         if (!CanAddFriend || _session is not { } session) return;
         var name = _friendAddName.Trim();
         var game = CurrentGame.Id;
-        await Run(S["busy.friends_add"], async () =>
+        // owner 2026-11-10: a background job (toast), never the screen lock; the same name twice joins the running request
+        FriendAddName = string.Empty;
+        await FriendJob("friend-add|" + game + "|" + name.ToUpperInvariant(), S.Format("jobs.friend_add", ("name", name)), async () =>
         {
             try
             {
                 var added = await session.Tokens.WithAccessAsync(access => session.Api.AddFriendAsync(access, game, name, CancellationToken.None), CancellationToken.None);
                 Log($"friends: add answered {added.State}");
                 _friendsStatus = S.Format(added.State == "friends" ? "friends.added_friends" : "friends.added_requested", ("name", name));
-                FriendAddName = string.Empty;
             }
             catch (ApiException e) when (Infinity.Core.Online.OnlinePause.From(e) is null)
             {
                 Log($"friends: add refused (HTTP {(int)e.Status} {e.Code})");
                 _friendsStatus = FriendRefusalText(e, name);
                 ChangedFriends();
-                return;
+                throw new Infinity.Core.Shell.JobFailedException(_friendsStatus, e);
             }
             await ReloadFriendsAfterWriteAsync(session);
         });
+    }
+
+    /// <summary>
+    /// Owner 2026-11-10: "Adding or remove friends also lock the screen, that's another thing that should be taken to a background job with
+    /// the toast." A friends write as a Background job (no PLAY hold), deduplicated per friend; a failure stays in its toast with Retry, and
+    /// the list is read again when it ends.
+    /// </summary>
+    private async Task FriendJob(string key, string label, Func<Task> work)
+    {
+        var job = StartBackgroundJob(key, label, blocksPlay: false, async _ =>
+        {
+            try { await work(); }
+            catch (Exception e) when (e is not Infinity.Core.Shell.JobFailedException and not OperationCanceledException and not OutOfMemoryException)
+            { throw new Infinity.Core.Shell.JobFailedException(S["friends.failed"], e); }
+        });
+        await job.Completion;
+        ChangedFriends();
     }
 
     private string FriendRefusalText(ApiException e, string? name = null) => PlayerActions.FriendRefusal(e) switch
@@ -243,9 +277,9 @@ public sealed partial class ShellViewModel
     private async Task AnswerFriendRequestAsync(FriendRequestCard request, bool accept)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (_session is not { } session || _busy) return;
-        var key = Guid.CreateVersion7().ToString();
-        await Run(S[accept ? "busy.friends_accept" : "busy.friends_decline"], async () =>
+        if (_session is not { } session) return;
+        var key = Guid.CreateVersion7().ToString(); // one key for this answer and its Retry: the server replays it
+        await FriendJob("friend-answer|" + request.Id, S.Format(accept ? "jobs.friend_accept" : "jobs.friend_decline", ("name", request.Name)), async () =>
         {
             try
             {
@@ -259,7 +293,7 @@ public sealed partial class ShellViewModel
                 Log($"friends: request answer refused (HTTP {(int)e.Status} {e.Code})");
                 _friendsStatus = FriendRefusalText(e, request.Name);
                 ChangedFriends();
-                return;
+                throw new Infinity.Core.Shell.JobFailedException(_friendsStatus, e);
             }
             await ReloadFriendsAfterWriteAsync(session);
         });
@@ -269,8 +303,8 @@ public sealed partial class ShellViewModel
     public async Task DeclineFriendInviteAsync(FriendCard friend)
     {
         ArgumentNullException.ThrowIfNull(friend);
-        if (_session is not { } session || _busy || friend.InviteId is not { } invite) return;
-        await Run(S["busy.friends_decline"], async () =>
+        if (_session is not { } session || friend.InviteId is not { } invite) return;
+        await FriendJob("invite-decline|" + invite, S.Format("jobs.friend_decline_invite", ("name", friend.Name)), async () =>
         {
             try
             {
@@ -283,7 +317,7 @@ public sealed partial class ShellViewModel
                 Log($"friends: invite decline refused (HTTP {(int)e.Status} {e.Code})");
                 _friendsStatus = FriendRefusalText(e, friend.Name);
                 ChangedFriends();
-                return;
+                throw new Infinity.Core.Shell.JobFailedException(_friendsStatus, e);
             }
             await ReloadFriendsAfterWriteAsync(session);
         });

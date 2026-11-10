@@ -9,6 +9,17 @@ public sealed record ModInstallation(string Id, ModManifest? Manifest, ManagedMo
     IReadOnlyList<ManifestIniIssue> SettingsIssues, string? Problem)
 {
     public bool Enabled => Receipt?.Enabled == true;
+    /// <summary>
+    /// A <see cref="Problem"/> of the record's own content (a receipt that is not JSON or not a receipt of this id, a missing or damaged
+    /// manifest snapshot): <see cref="ManagedModFiles.ResolveRecovery"/> archives it, files untouched. Never for an intact record:
+    /// <see cref="ModErrors.Layout"/> (the move to the per-game folders), <see cref="ModErrors.Relink"/> (another game or Azimuth folder:
+    /// relink or choose it) or a read that failed for now (<see cref="Retry"/>).
+    /// </summary>
+    public bool ResolveClears { get; init; }
+    /// <summary>A <see cref="Problem"/> that is a failed read (a file open elsewhere, access refused, a link): read again, never archived.</summary>
+    public bool Retry => Problem is not null && !ResolveClears && Problem is not (ModErrors.Layout or ModErrors.Relink);
+    /// <summary>The installed manifest as far as it can still be read, only to name a mod whose record has a <see cref="Problem"/>.</summary>
+    public ModManifest? NamedBy { get; init; }
 }
 
 /// <summary>
@@ -21,6 +32,8 @@ public sealed record ModHealth(bool RecoveryHere, bool RecoveryElsewhere, IReadO
 {
     /// <summary>Receipts recorded for a game folder that moved to the selected one (<see cref="ManagedModFiles.RelinkGame"/>).</summary>
     public bool GameRelink { get; init; }
+    /// <summary>OD-233: the mods folder (or a receipt) still has the old flat layout; the move runs before Play and from Mods.</summary>
+    public bool LayoutPending { get; init; }
     public static ModHealth Empty { get; } = new(false, false, [], [], []);
     public bool BlocksPlay => RecoveryHere;
     public bool AnyEnabled => Installed.Any(i => i.Enabled);
@@ -49,6 +62,9 @@ public sealed partial class ManagedModFiles
         var problems = new List<string>();
         var installed = new List<ModInstallation>();
         var elsewhere = false; var here = false;
+        IReadOnlyList<string> gameRelink = [];
+        try { gameRelink = GameRelinkCandidates(); }
+        catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
         try
         {
             here = RecoveryRequiredHere;
@@ -61,10 +77,10 @@ public sealed partial class ManagedModFiles
         IReadOnlyList<string> relink = [];
         try { relink = installed.Count == 0 ? RelinkCandidates() : []; }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
-        var gameRelink = false;
-        try { gameRelink = GameRelinkCandidates().Count > 0; }
+        var layout = false;
+        try { layout = LayoutMigrationPending; }
         catch (Exception error) when (IsStateError(error)) { problems.Add(Code(error)); }
-        return new(here, elsewhere, installed, relink, problems) { GameRelink = gameRelink };
+        return new(here, elsewhere, installed, relink, problems) { GameRelink = gameRelink.Count > 0, LayoutPending = layout };
     }
 
     /// <summary>M9 for the game folder: receipts recorded for a game folder that no longer exists whose game files all match, as recorded, in the selected one.</summary>
@@ -75,8 +91,11 @@ public sealed partial class ManagedModFiles
         foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json"))
         {
             RejectLinks(path);
-            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path));
-            if (receipt?.GameRoot is not { } old || string.Equals(old, _game, StringComparison.OrdinalIgnoreCase) || Directory.Exists(old)
+            // an unreadable receipt is that installation's own problem (Inspect, Resolve), never a stop for the others
+            ManagedModReceipt? receipt;
+            try { receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(path)); }
+            catch (JsonException) { continue; }
+            if (receipt?.Files is null || receipt.GameRoot is not { } old || string.Equals(old, _game, StringComparison.OrdinalIgnoreCase) || Directory.Exists(old)
                 || !string.Equals(receipt.AzimuthRoot, _azimuth, StringComparison.OrdinalIgnoreCase)) continue;
             if (receipt.Files.Where(f => f.Root == "game" && !f.Preserve).All(f => Current(Resolve(_game, f.Path)) == (receipt.Enabled ? f.After : f.Before)))
                 result.Add(receipt.Id);
@@ -97,18 +116,57 @@ public sealed partial class ManagedModFiles
         ReconcileWineOverrides();
     }
 
+    /// <summary>
+    /// The settings issue of a mod settings file that cannot be read as settings (larger than read, refused, open elsewhere): a warning
+    /// on its card like any other settings issue, never a problem of the installation record.
+    /// </summary>
+    public const string UnreadableSettings = "unreadable";
+
+    /// <summary>One installation as the Mods page and <see cref="ResolveRecovery"/> both read it (one check, so Resolve clears what it shows).</summary>
     private ModInstallation Inspect(string id)
+    {
+        ManagedModReceipt receipt; ModManifest manifest;
+        try
+        {
+            receipt = ReadReceipt(id) ?? throw new ModException("receipt vanished", ModErrors.Recovery);
+            manifest = SnapshotFor(receipt);
+        }
+        catch (Exception error) when (IsStateError(error)) { return Problem(id, error, RecordContentError(error)); }
+        try
+        {
+            // the record is intact from here: what fails now is the player's files or the disk, never a reason to archive it
+            var drift = DriftOf(receipt);
+            IReadOnlyList<ManifestIniIssue> issues = [];
+            if (manifest.ConfigPath is { } config && File.Exists(Target("azimuth", config)))
+            {
+                try { issues = ReadSettings(manifest).Issues; }
+                catch (Exception error) when (IsStateError(error)) { issues = [new ManifestIniIssue("", UnreadableSettings)]; }
+            }
+            return new(id, manifest, receipt, drift, issues, null);
+        }
+        catch (Exception error) when (IsStateError(error)) { return Problem(id, error, content: false); }
+    }
+
+    private ModInstallation Problem(string id, Exception error, bool content) =>
+        new(id, null, null, [], [], Code(error)) { ResolveClears = content, NamedBy = ReadableSnapshot(id) };
+
+    /// <summary>
+    /// The record's own content is broken (<see cref="ModInstallation.ResolveClears"/>): not JSON, not a receipt of this id (no files or
+    /// manifest hash, another id), its manifest snapshot missing or damaged. Never a failed read (IO, access, a link), the old layout
+    /// (<see cref="ModErrors.Layout"/>) or another game or Azimuth folder (<see cref="ModErrors.Relink"/>).
+    /// </summary>
+    private static bool RecordContentError(Exception error) =>
+        error is JsonException or NullReferenceException or KeyNotFoundException or FormatException or ModException { Code: ModErrors.Recovery };
+
+    /// <summary>The manifest snapshot a receipt names, read without any of <see cref="ReadReceipt"/>'s checks; null when there is none.</summary>
+    private ModManifest? ReadableSnapshot(string id)
     {
         try
         {
-            var receipt = ReadReceipt(id) ?? throw new ModException("receipt vanished", ModErrors.Recovery);
-            var manifest = SnapshotFor(receipt);
-            var drift = DriftOf(receipt);
-            IReadOnlyList<ManifestIniIssue> issues = [];
-            if (manifest.ConfigPath is { } config && File.Exists(Target("azimuth", config))) issues = ReadSettings(manifest).Issues;
-            return new(id, manifest, receipt, drift, issues, null);
+            var receipt = JsonSerializer.Deserialize<ManagedModReceipt>(File.ReadAllBytes(ReceiptPath(id)));
+            return receipt?.ManifestHash is null ? null : SnapshotFor(receipt with { Id = id });
         }
-        catch (Exception error) when (IsStateError(error)) { return new(id, null, null, [], [], Code(error)); }
+        catch (Exception error) when (IsStateError(error)) { return null; }
     }
 
     public static bool IsStateError(Exception error) => error is ModException or IOException or UnauthorizedAccessException or JsonException
@@ -160,15 +218,15 @@ public sealed partial class ManagedModFiles
             }
         }
         if (!Directory.Exists(BackupRoot)) return;
+        // The very check the Mods page shows (Inspect): a record whose own content is broken is archived, nothing else. An intact record
+        // (the old layout, another game or Azimuth folder, a read that failed for now) is never touched: the move, the relink, the game
+        // folder or "Try again" serves it. No mod file changes here.
         foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
         {
             var id = Path.GetFileName(path)[..^".receipt.json".Length];
-            try { _ = SnapshotFor(ReadReceipt(id)!); }
-            catch (ModException error) when (error.Code is ModErrors.Relink or ModErrors.Layout) { } // intact record of a moved folder, or of the old layout (OD-233): relink or move, never archive
-            catch (Exception error) when (error is JsonException || error is ModException { Code: ModErrors.Recovery } || error is NullReferenceException)
-            {
-                File.Move(path, Path.Combine(BackupRoot, "corrupt-" + Guid.NewGuid().ToString("N") + ".json"));
-            }
+            if (Inspect(id) is not { Problem: not null, ResolveClears: true }) continue;
+            RejectLinks(path);
+            if (File.Exists(path)) File.Move(path, Path.Combine(BackupRoot, "corrupt-" + Guid.NewGuid().ToString("N") + ".json"));
         }
     }
 

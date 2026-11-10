@@ -4,6 +4,7 @@ using System.IO;
 using Infinity.Core.Matchmaking;
 using Infinity.Core.Mods;
 using Infinity.Core.Process;
+using Infinity.Core.Shell;
 
 namespace Infinity.App;
 
@@ -159,6 +160,7 @@ public sealed partial class ShellViewModel
         if (!ExtraOptionsLayout.HasModsFolder(game)) return VanillaModSet.Instance;
         // FM5: the state read for this launch (PrepareExtraOptionsMods), as fresh as the folders it just arranged
         var cosmetic = game == "fm5" && _fm5LaunchState is { } fm5 ? fm5.BothModes : HardcoreSafeFolders(game);
+        _modSetTooMany = 0;
         try
         {
             var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, game));
@@ -167,13 +169,26 @@ public sealed partial class ShellViewModel
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModSetException)
         {
-            Log("mods: lobby set not planned (" + e.GetType().Name + ")");
+            Log("mods: lobby set not planned (" + e.GetType().Name + (e is ModSetException { TooMany: > 0 } large ? ": " + large.TooMany + " multiplayer mods" : "") + ")");
+            if (e is ModSetException { TooMany: > 0 } tooMany) { _modSetTooMany = tooMany.TooMany; return null; } // all of them enabled: never vanilla
             bool anyEnabled;
             try { anyEnabled = ExtraOptionsMods.Scan(install.Root, game).Any(m => m.Enabled); }
             catch (Exception scan) when (scan is IOException or UnauthorizedAccessException or InvalidDataException) { anyEnabled = true; }
             return anyEnabled ? null : VanillaModSet.Instance;
         }
     }
+
+    /// <summary>How many multiplayer mods the last planned lobby set had when it was refused only for its size (else 0).</summary>
+    private int _modSetTooMany;
+
+    /// <summary>
+    /// Why Play stops when <see cref="ExtraOptionsModSetAsync"/> returned null: too many multiplayer mods for one lobby set
+    /// (<see cref="MatchmakingLimits.ModsMax"/>), else files that could not be read or don't match.
+    /// </summary>
+    private string ModSetRefusal => _modSetTooMany > 0
+        ? S.Format("mods.online_too_many", ("count", _modSetTooMany.ToString(System.Globalization.CultureInfo.CurrentCulture)),
+            ("max", MatchmakingLimits.ModsMax.ToString(System.Globalization.CultureInfo.CurrentCulture)))
+        : S["mods.online_unverified"];
 
     /// <summary>OD-233: the launcher's FM5 mods as read for one launch: their folders (enabled by receipt), and those for both modes.</summary>
     private sealed record Fm5LaunchState(HashSet<string> Managed, HashSet<string> BothModes);
@@ -198,7 +213,7 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>
-    /// Before a launch, after <see cref="PrepareModsLayout"/>: the game's <c>loadorder.txt</c> puts every mod after its dependencies (and
+    /// Before a launch, after <see cref="PrepareModsLayoutAsync"/>: the game's <c>loadorder.txt</c> puts every mod after its dependencies (and
     /// OD-232's load-first mods on top); Hardcore plays only with <see cref="HardcoreSafeFolders"/>, and any other launch gets back what it
     /// held. FM5's folder is launcher-managed, catalog only (OD-233, <see cref="ExtraOptionsMods.KeepCatalogOnly"/>): Noob plays the
     /// launcher's enabled mods, Hardcore only those for both modes (FH2's rule); a folder the launcher turned off goes back on once allowed.
@@ -232,37 +247,114 @@ public sealed partial class ShellViewModel
     /// (<see cref="ManagedModFiles.MigrateLayout"/>). A folder's game is its installed manifest's, else its catalog entry's, else FH2's. A stop
     /// (a conflict, a link, a refused move) is shown with its reason and blocks Play until it is resolved; nothing is lost either way.
     /// </summary>
-    /// <returns>False when the move stopped: the launch must not start (the reason is in <see cref="_modsLayoutFailure"/>).</returns>
-    private bool PrepareModsLayout(AzimuthInstall install)
+    /// <summary>Where every run keeps its copy of the old <c>mods\loadorder.txt</c>: the launcher's state, never the mods bucket.</summary>
+    private string LayoutBackup => Path.Combine(_stateDirectory, "mods-layout");
+
+    private Dictionary<string, string> LayoutCatalog() => _manifestCatalog.ToDictionary(m => m.Id, m => m.ModsGame, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>One run of the move at a time; a mod operation waits for a running one (<see cref="RunModOperationAsync"/>).</summary>
+    private readonly SemaphoreSlim _layoutGate = new(1, 1);
+
+    /// <summary>The job key of the move (its toast, its PLAY hold).</summary>
+    internal const string ModsLayoutJob = "mods-layout";
+
+    /// <summary>
+    /// The one place the per-game move runs (start-up, the catalog, Recover, "Move mods now", both launches): one run at a time, its file
+    /// work off the dispatcher (<see cref="Task.Run(Action)"/>). Nothing to move (the usual case) shows nothing; a real move is a job of
+    /// <see cref="Jobs"/> that holds PLAY (should_block_play, owner 2026-11-10): a bottom-right toast when <paramref name="background"/>
+    /// (a stop stays in it with the reason and Retry, and on Mods and Play), else the screen lock (a launch's own run), or no indicator of
+    /// its own when <paramref name="inline"/> (already inside a mod operation's lock: "Move mods now").
+    /// </summary>
+    /// <param name="receiptsOnly">
+    /// Without the catalog: only the folders the receipts name move (<see cref="ManagedModFiles.MigrateLayout"/>), so no installed mod is
+    /// ever read as an unreadable record of the old layout; a folder copied by hand waits for the catalog (or Play).
+    /// </param>
+    /// <param name="background">
+    /// Not asked for by the player: the bucket lock held for a moment (start-up retention, another launcher) defers the run instead of
+    /// leaving "another launcher is changing mods" on Play; the next run (the catalog, Play) moves them.
+    /// </param>
+    /// <returns>False when the move stopped: a launch must not start (the reason is in <see cref="_modsLayoutFailure"/>).</returns>
+    private async Task<bool> PrepareModsLayoutAsync(bool receiptsOnly, bool background, bool inline = false)
     {
         if (ModManagerFactory() is not { } factory) return true;
-        var catalog = _manifestCatalog.ToDictionary(m => m.Id, m => m.ModsGame, StringComparer.OrdinalIgnoreCase);
+        await _layoutGate.WaitAsync();
+        try
+        {
+            var backup = LayoutBackup;
+            if (await Task.Run(() => NothingToMove(factory)) is { } nothing) return ApplyLayoutRun(nothing, background);
+            if (inline)
+            {
+                var catalog = LayoutCatalog();
+                return ApplyLayoutRun(await Task.Run(() => MoveModsLayout(factory, catalog, backup, receiptsOnly)), background);
+            }
+            var moved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var job = Jobs.Start(new JobSpec(ModsLayoutJob, S["jobs.mods_layout"], background ? JobPresentation.Background : JobPresentation.Lock,
+                ShouldBlockPlay: true, async _ =>
+                {
+                    // also a toast's Retry: the catalog as it is then, and the Mods page read again after it
+                    var catalog = LayoutCatalog();
+                    var ok = ApplyLayoutRun(await Task.Run(() => MoveModsLayout(factory, catalog, backup, receiptsOnly)), background);
+                    if (!moved.TrySetResult(ok)) await RefreshModsAsync();
+                    // a toast keeps a stop with its reason and Retry; a lock ends, and the launch that ran it says why
+                    if (!ok && background) throw new JobFailedException(_modsLayoutFailure ?? S["jobs.failed"]);
+                }));
+            await Task.WhenAny(moved.Task, job.Completion);
+            if (moved.Task.IsCompleted) return moved.Task.Result;
+            // the job ended before the move answered (an unexpected error): never a silent pass, Play and Mods say so
+            SetModsLayoutFailure(job.Error ?? S["jobs.failed"]);
+            return false;
+        }
+        finally { _layoutGate.Release(); }
+    }
+
+    /// <summary>The cheap check first (no lock, no toast): the per-game layout already, or the error reading it; null when a move is due.</summary>
+    private static LayoutRun? NothingToMove(Func<ManagedModFiles> factory)
+    {
+        try { return factory().LayoutMigrationPending ? null : new([], null); }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return new([], error); }
+    }
+
+    /// <summary>What one run of the move did: its log lines, and the error it stopped with (null: done, or nothing to move).</summary>
+    private sealed record LayoutRun(IReadOnlyList<string> Notes, Exception? Error);
+
+    /// <summary>The move itself; no view-model state, so it runs on any thread.</summary>
+    private static LayoutRun MoveModsLayout(Func<ManagedModFiles>? factory, Dictionary<string, string> catalog, string backup, bool receiptsOnly)
+    {
+        if (factory is null) return new([], null);
         try
         {
             var manager = factory();
-            if (!manager.LayoutMigrationPending) { SetModsLayoutFailure(null); return true; }
-            var result = manager.MigrateLayout(folder => catalog.TryGetValue(folder, out var game) ? game : null, Path.Combine(_stateDirectory, "mods-layout"));
-            foreach (var note in result.Notes) Log(note);
-            SetModsLayoutFailure(null);
-            return true;
+            if (!manager.LayoutMigrationPending) return new([], null);
+            return new(manager.MigrateLayout(folder => catalog.TryGetValue(folder, out var game) ? game : null, backup, receiptsOnly).Notes, null);
         }
-        catch (ExtraOptionsLayoutException error)
+        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return new([], error); }
+    }
+
+    private bool ApplyLayoutRun(LayoutRun run, bool background)
+    {
+        foreach (var note in run.Notes) Log(note);
+        switch (run.Error)
         {
-            Log("mods layout: stopped at " + error.Folder + " (" + error.Reason + "): " + error.Message);
-            SetModsLayoutFailure(S.Format("mods.layout." + error.Reason, ("folder", error.Folder)));
-            return false;
-        }
-        catch (Exception error) when (ManagedModFiles.IsStateError(error))
-        {
-            Log("mods layout: not moved: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "") + ": " + error.Message);
-            // the real cause: an interrupted operation to recover, the game running, or the state error's own text
-            SetModsLayoutFailure(error switch
-            {
-                ModException { Code: ModErrors.GameRunning } => S["mods.layout.game_running"],
-                ModException { Code: ModErrors.Recovery } => S["mods.play_blocked"],
-                _ => ModErrorText(error),
-            });
-            return false;
+            case null:
+                SetModsLayoutFailure(null);
+                return true;
+            case ExtraOptionsLayoutException error:
+                Log("mods layout: stopped at " + error.Folder + " (" + error.Reason + "): " + error.Message);
+                SetModsLayoutFailure(S.Format("mods.layout." + error.Reason, ("folder", error.Folder)));
+                return false;
+            case ModException { Code: ModErrors.Busy } when background:
+                Log("mods layout: deferred (busy)");
+                return true;
+            case var error:
+                Log("mods layout: not moved: " + error.GetType().Name + (error is ModException mod ? " " + mod.Code : "") + ": " + error.Message);
+                // the real cause: an interrupted operation to recover, the game running, or the state error's own text
+                SetModsLayoutFailure(error switch
+                {
+                    ModException { Code: ModErrors.GameRunning } => S["mods.layout.game_running"],
+                    ModException { Code: ModErrors.Recovery } => S["mods.play_blocked"],
+                    _ => ModErrorText(error),
+                });
+                return false;
         }
     }
 

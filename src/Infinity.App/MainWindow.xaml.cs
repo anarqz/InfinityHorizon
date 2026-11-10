@@ -66,6 +66,10 @@ public partial class MainWindow : Window
         ConfigureHarness(cli, vm, ref handled);
         if (handled) return;
         vm.ServerChangeRestartRequested += () => Dispatcher.BeginInvoke(RestartOnServerChoice);
+        // owner 2026-11-10: a stall of the window's thread is logged (launcher.log), and this PC's saves are looked at again off the UI
+        // thread when the window comes back to the front (the game or the player may have changed them meanwhile)
+        vm.StartUiWatchdog(Dispatcher);
+        Activated += async (_, _) => await vm.RefreshLocalFactsQuietlyAsync();
         // One launcher per state folder (launcher.lock).
         _ = vm.AcquireInstanceLockAsync();
         ContentRendered += async (_, _) => await vm.ConfirmUpdatedStartupAsync(cli);
@@ -103,7 +107,12 @@ public partial class MainWindow : Window
 
     partial void ConfigureHarness(string[] args, ShellViewModel vm, ref bool handled);
 
-    private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesAsync();
+    private async void OnCheckLauncherUpdates(object sender, RoutedEventArgs e) => await _vm.CheckLauncherUpdatesInBackgroundAsync();
+
+    // owner 2026-11-10: the bottom-right job toasts
+    private void OnRetryJob(object sender, RoutedEventArgs e) => _vm.RetryJob((JobToast)((FrameworkElement)sender).DataContext);
+    private void OnDismissJob(object sender, RoutedEventArgs e) => _vm.DismissJob((JobToast)((FrameworkElement)sender).DataContext);
+    private void OnCancelJob(object sender, RoutedEventArgs e) => _vm.CancelJob((JobToast)((FrameworkElement)sender).DataContext);
     private async void OnCheckOnlineStatus(object sender, RoutedEventArgs e) => await _vm.CheckOnlineStatusAsync();
     private void OnOnlineSupport(object sender, RoutedEventArgs e) => _vm.OpenOnlineSupport();
     private async void OnConfirmInstall(object sender, RoutedEventArgs e) => await _vm.ConfirmInstallAsync();
@@ -647,6 +656,9 @@ public partial class MainWindow : Window
     private async void OnRecoverMods(object sender, RoutedEventArgs e) => await _vm.RecoverModsAsync();
     private async void OnResolveMods(object sender, RoutedEventArgs e) => await _vm.ResolveModRecoveryAsync();
     private async void OnRelinkMods(object sender, RoutedEventArgs e) => await _vm.RelinkModsAsync();
+    private async void OnMoveModsLayout(object sender, RoutedEventArgs e) => await _vm.MoveModsLayoutAsync();
+    private async void OnRetryModState(object sender, RoutedEventArgs e) => await _vm.RetryModStateAsync();
+    private void OnOpenSetupForMods(object sender, RoutedEventArgs e) => _vm.OpenSetup();
     private async void OnConfirmModUpdate(object sender, RoutedEventArgs e) => await _vm.ConfirmModUpdateAsync();
     private async void OnAcceptModFiles(object sender, RoutedEventArgs e) => await _vm.AcceptModFilesAsync();
     private async void OnDisableModKeeping(object sender, RoutedEventArgs e) => await _vm.DisableModKeepingFilesAsync();
