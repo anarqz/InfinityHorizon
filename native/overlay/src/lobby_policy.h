@@ -68,7 +68,7 @@ inline JoinModesGate JoinModesGateOf(const MyWorld &m, const LobbyJoinModesFrame
     return InviteGateOf(m) == InviteGate::Allowed ? JoinModesGate::Allowed : JoinModesGate::ReadOnly;
 }
 
-// The choice after the current one, among the offered ones (Everyone, Hardcore only, Noob only, then Everyone again; FM5 skips
+// The choice after the current one, among the offered ones (Everyone, Hardcore only, Azimuth only, then Everyone again; FM5 skips
 // Hardcore). The current one when nothing else is offered.
 inline uint8_t NextJoinModes(const LobbyJoinModesFrame &j) {
     for (uint8_t step = 1; step <= kJoinModesMax + 1; ++step) {

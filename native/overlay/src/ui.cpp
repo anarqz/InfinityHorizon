@@ -12,7 +12,7 @@
 //   settings fill the second column beside the guide. Transient toasts remain available.
 // - The guide's bottom block (CR-L40 §1.3), just above the controller hints: the avatar (the
 //   launcher's 0x1A image in a circle, the initials without one) and the gamertag, then the server's
-//   host and its status lines (Online 12/50 · Lobbies 3, Hardcore 5 (210) · Noob 7 (340); profiles
+//   host and its status lines (Online 12/50 · Lobbies 3, Hardcore 5 (210) · Azimuth 7 (340); profiles
 //   in parentheses), "Status unavailable" until the launcher's 0x19 says otherwise. The header
 //   avatar is the same texture. The tab content ends above the block.
 //
@@ -679,7 +679,7 @@ std::vector<std::string> StatusLines(const ServerStatus &st) {
             if (profiles) out += " (" + std::to_string(registered) + ")";
             return out;
         };
-        lines.push_back(mode("Hardcore", st.hardcore, st.profiles_hardcore) + " · " + mode("Noob", st.noob, st.profiles_noob));
+        lines.push_back(mode("Hardcore", st.hardcore, st.profiles_hardcore) + " · " + mode("Azimuth", st.noob, st.profiles_noob));
     }
     return lines;
 }

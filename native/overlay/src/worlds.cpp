@@ -8,7 +8,7 @@
 // - A private official lobby (MyWorld.is_private) is the Private Lobby: its players with Report, Friends, Mute and the voice
 //   volume, Leave lobby (A12, OD-196) and Invite friends, enabled for the current lobby leader only (lobby_policy.h InviteGateOf;
 //   it asks the launcher to open the FRIENDS sidebar to invite, friends.cpp, INVITE_UX). Any other official lobby is the Official Lobby (OD-192): the same pane without Invite.
-// - OD-210 (CR-S101, W14): the Private Lobby also shows "Who can join" (Everyone, Hardcore only, Noob only; FM5: no Hardcore) from
+// - OD-210 (CR-S101, W14): the Private Lobby also shows "Who can join" (Everyone, Hardcore only, Azimuth only; FM5: no Hardcore) from
 //   the launcher's 0x28; the current leader's A moves it to the next choice (0x29, PUT …/modes), everyone else reads it. It applies to
 //   new joins only: nobody already here is removed (kicking stays the leader's).
 // - Players host no lobby (OD-208): every lobby here is an official one (MyWorld role 1, hosting, is retired).
@@ -18,7 +18,7 @@
 //   their details in the second column beside the guide: their volume (1-100), mute, friend and report. Player names only, never
 //   their XUIDs (OD-61).
 // - Modded players (OD-181): a gear beside a player's name says they use mods (0x1E RosterMods), and their details list them.
-// - Hardcore + Noob (OD-141): a lobby open to both modes carries the "Hardcore + Noob" badge in its header.
+// - Hardcore + Azimuth (OD-141, OD-239): a lobby open to both modes carries the "Hardcore + Azimuth" badge in its header.
 #include "overlay.h"
 
 #include <algorithm>
@@ -110,7 +110,7 @@ const char *VoiceLabel(uint8_t mode) {
 }
 
 // OD-141: the badge of a lobby open to both modes (the same words in both languages)
-constexpr const char *kAnyModeBadge = "Hardcore + Noob";
+constexpr const char *kAnyModeBadge = "Hardcore + Azimuth";
 
 // ---------------------------------------------------------------- requests
 void Act(uint8_t action, const MemberRow &member, uint8_t reason) {
@@ -139,7 +139,7 @@ void InviteFriends(const MyWorld &m) {
 // OD-210 (W14): the words of a "Who can join" choice
 const char *JoinModesLabel(uint8_t modes) {
     return modes == kJoinHardcoreOnly ? T("Who can join: Hardcore only", "Quem pode entrar: só Hardcore")
-           : modes == kJoinNoobOnly   ? T("Who can join: Noob only", "Quem pode entrar: só Noob")
+           : modes == kJoinNoobOnly   ? T("Who can join: Azimuth only", "Quem pode entrar: só Azimuth")
                                       : T("Who can join: Everyone", "Quem pode entrar: todos");
 }
 
