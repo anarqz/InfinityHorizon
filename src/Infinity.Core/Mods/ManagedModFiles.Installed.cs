@@ -7,7 +7,10 @@ namespace Infinity.Core.Mods;
 public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, IReadOnlyList<string> Warnings)
 {
     public static ModLaunchPreparation None { get; } = new([], []);
-    /// <summary>Enabled mods that affect multiplayer (<see cref="ModMultiplayer.AffectsMultiplayer"/>): what a Hardcore launch refuses.</summary>
+    /// <summary>
+    /// Enabled mods that affect multiplayer (<see cref="ModMultiplayer.AffectsMultiplayer"/>, the declared set's). A Hardcore launch turns off
+    /// those not for both modes first (<see cref="ManagedModFiles.HoldForHardcore"/>; a car pack is one of these and is kept).
+    /// </summary>
     public IReadOnlyList<ModManifest> MultiplayerMods { get; init; } = [];
     /// <summary>
     /// OD-232: enabled installations of a retired format whose multiplayer impact is not declared cosmetic (no metadata counts as not
@@ -19,12 +22,6 @@ public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, IR
     /// <summary>See <see cref="RetiredOnlineMods"/>: a retired installation that blocks online play while enabled.</summary>
     public static bool BlocksOnline(ModManifest manifest) =>
         (manifest ?? throw new ArgumentNullException(nameof(manifest))).Retired && manifest.Multiplayer is not { Impact: "cosmetic" };
-}
-
-/// <summary>A Hardcore launch with enabled mods that affect multiplayer; nothing was changed.</summary>
-public sealed class ModHardcoreException(IReadOnlyList<ModManifest> mods) : Exception("Hardcore profiles cannot use mods that affect multiplayer")
-{
-    public IReadOnlyList<ModManifest> Mods { get; } = mods;
 }
 
 public sealed partial class ManagedModFiles
@@ -120,7 +117,7 @@ public sealed partial class ManagedModFiles
             var target = installed.SingleOrDefault(m => m.Id == id) ?? throw new ModException("required dependency is not managed", ModErrors.Dependency);
             // OD-232: an installation in a retired format satisfies nothing; it is only there to be removed
             if (target.Retired || !dependency.GetProperty("versions").EnumerateArray().Any(v => v.GetString() == target.Version)
-                || Receipt(target) is not { Enabled: true } || !Verified(target)) throw new ModException("required dependency is disabled or incompatible", ModErrors.Dependency);
+                || Receipt(target) is not { Enabled: true } || !VerifiedOnce(target)) throw new ModException("required dependency is disabled or incompatible", ModErrors.Dependency);
             CheckDependencies(target, visiting);
             if (dependency.TryGetProperty("settings", out var settings) && settings.GetArrayLength() > 0)
             {
@@ -163,6 +160,8 @@ public sealed partial class ManagedModFiles
     private ModManifest[] InstalledSnapshots(out IReadOnlyList<string> unreadable)
     {
         if (ForDisplay && _displaySnapshots is { } known) { unreadable = _displayUnreadable ?? []; return known; }
+        // SetEnabledAll: the installed set cannot change while it holds the lock (it only enables and disables), so it is read once
+        if (_bulk is { } bulk) { unreadable = bulk.Unreadable; return bulk.Snapshots; }
         var read = InstalledSnapshotsNow(out unreadable);
         if (ForDisplay) { _displaySnapshots = read; _displayUnreadable = unreadable; }
         return read;
@@ -255,22 +254,8 @@ public sealed partial class ManagedModFiles
     {
         if (!Directory.Exists(BackupRoot) || !RecoveryRequiredHere && !Directory.EnumerateFiles(BackupRoot, "*.receipt.json").Any()) return ModLaunchPreparation.None;
         if (RecoveryRequiredHere) throw new ModException("interrupted mod operation needs recovery", ModErrors.Recovery);
-        if (hardcore)
-        {
-            // OD-112 follow-up: refused before anything is written; the files stay exactly as they are.
-            var refused = new List<ModManifest>();
-            foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
-            {
-                try
-                {
-                    var receipt = ReadReceipt(Path.GetFileName(path)[..^".receipt.json".Length]);
-                    if (receipt is { Enabled: true } && SnapshotFor(receipt) is var manifest && ModMultiplayer.AffectsMultiplayer(manifest)
-                        && (game is null || manifest.ModsGame == game)) refused.Add(manifest);
-                }
-                catch (Exception error) when (IsStateError(error)) { }
-            }
-            if (refused.Count > 0) throw new ModHardcoreException(refused);
-        }
+        // Alex 2026-11-10: a Hardcore launch is never refused for its mods; HoldForHardcore turned off what Hardcore does not keep first
+        _ = hardcore;
         var warnings = new List<string>();
         var enabled = new List<ModManifest>();
         using (var gate = Lock(allowRecovery: true))

@@ -298,10 +298,32 @@ public sealed partial class ShellViewModel
     }
     /// <summary>OD-112 follow-up: the selected profile is Hardcore, which allows no mod that affects multiplayer.</summary>
     private bool ProfileHardcore => LobbyProfile?.Mode == "hardcore";
-    /// <summary>Enabled mods a Hardcore profile refuses (<see cref="ModMultiplayer.AffectsMultiplayer"/>, the lobby-set rule), by name.</summary>
-    private IReadOnlyList<string> HardcoreRefusedMods => !ProfileHardcore ? [] : _modHealth.Installed
-        .Where(i => i.Enabled && i.Manifest is { } m && ModMultiplayer.AffectsMultiplayer(m) && m.ModsGame == CurrentGame.Id).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
-    private string HardcoreRefusal(IEnumerable<string> names) => S.Format("mods.hardcore_refused", ("mods", string.Join(", ", names)));
+    /// <summary>
+    /// Alex 2026-11-10 ("PLAY HARDCORE must never refuse because of mods"): how many of the chosen game's enabled mods a Hardcore launch
+    /// turns off for its session (the launcher's for Noob only, <see cref="AllowedInHardcore"/>, and the hand-copied ones); the next Noob
+    /// launch turns them back on. Shown as one line on PLAY, never a blocker.
+    /// </summary>
+    private int HardcoreTurnsOff => !ProfileHardcore ? 0
+        : _modHealth.Installed.Count(i => i.Enabled && i.Problem is null && i.Manifest is { } m && !AllowedInHardcore(m) && m.ModsGame == CurrentGame.Id)
+          + ExtraOptionsModItems.Count(i => i.Enabled && i.Game == CurrentGame.Id);
+
+    /// <summary>The catalog's Hardcore rule by id (<see cref="ModMultiplayer.HardcorePolicy"/>), rebuilt when the catalog changes.</summary>
+    private IReadOnlyDictionary<string, bool> HardcoreCatalog
+    {
+        get
+        {
+            if (!ReferenceEquals(_hardcoreCatalogFor, _manifestCatalog)) { _hardcoreCatalog = ModMultiplayer.HardcorePolicy(_manifestCatalog); _hardcoreCatalogFor = _manifestCatalog; }
+            return _hardcoreCatalog;
+        }
+    }
+    private IReadOnlyDictionary<string, bool> _hardcoreCatalog = new Dictionary<string, bool>();
+    private IReadOnlyList<ModManifest>? _hardcoreCatalogFor;
+
+    /// <summary>
+    /// Alex 2026-11-10 ("Car Packs mods from InfinityCatalog = Can be used in Hardcore"): a Hardcore profile keeps the mods for both modes
+    /// (<see cref="ModMultiplayer.AllowedInHardcore"/>: the catalog entry's <c>modes</c>, else OD-233's cosmetic rule).
+    /// </summary>
+    private bool AllowedInHardcore(ModManifest manifest) => ModMultiplayer.AllowedInHardcore(manifest, HardcoreCatalog);
     /// <summary>OD-232: enabled installations of a retired format an online launch refuses (<see cref="ModLaunchPreparation.BlocksOnline"/>), by name.</summary>
     private IReadOnlyList<string> RetiredOnlineMods => !PlaysOnline ? [] : _modHealth.Installed
         .Where(i => i.Enabled && i.Manifest is { } m && ModLaunchPreparation.BlocksOnline(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
@@ -312,7 +334,7 @@ public sealed partial class ShellViewModel
     public string? ModPlayNotice => _install is null ? null : _modsLayoutFailure is { } layout ? layout : _modLaunchFailure is { } failure ? failure : ModPlayBlocked ? S["mods.play_blocked"]
         : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
         : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
-        : HardcoreRefusedMods is { Count: > 0 } refused ? HardcoreRefusal(refused)
+        : HardcoreTurnsOff is var off and > 0 ? S.Format("mods.hardcore_turn_off", ("count", off.ToString(CultureInfo.CurrentCulture)))
         : RetiredOnlineMods is { Count: > 0 } retired ? RetiredOnlineRefusal(retired)
         : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
@@ -337,7 +359,8 @@ public sealed partial class ShellViewModel
         var azimuth = _install.Root; var game = ContentLocation?.Mount;
         var state = ModHome;
         var cache = DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null;
-        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache);
+        var hardcore = HardcoreCatalog; // the catalog's Hardcore rule, read here (the factory runs on workers)
+        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache) { HardcoreCatalog = hardcore };
     }
 
     /// <summary>Constructs the manager; only for code already off the UI thread or the harness.</summary>
@@ -814,7 +837,7 @@ public sealed partial class ShellViewModel
                 else { status = ModErrorText(fact.Blocker); badge = S["mods.badge_attention"]; }
             }
             if (!mod.SupportedForInstall && installed is null) { status = S["mods.review_blocked"]; badge = S["mods.badge_review"]; canAct = false; }
-            if (ProfileHardcore && ModMultiplayer.AffectsMultiplayer(fact.Next ?? mod) && installed?.Problem is null)
+            if (ProfileHardcore && !AllowedInHardcore(fact.Next ?? mod) && installed?.Problem is null)
             {
                 // Hardcore: unavailable on this profile; an enabled one keeps its Disable action and its files.
                 status = S["mods.hardcore_unavailable"]; badge = S["mods.badge_attention"];

@@ -134,20 +134,21 @@ public sealed partial class ShellViewModel
     {
         if (!CanPlayOffline) return;
         // owner 2026-11-10 (3.1.1): "Starting the game…" over the screen from the click until the game has started; every stop closes it
-        ShowPlayOverlay(S["play.starting_offline"]);
-        try { await PlayOfflineCoreAsync(); }
-        finally { EndPlayProgress(); }
+        // hotfix 3.1.2: the attempt can be cancelled from its overlay (after PlayCancelAfter), up to the game's spawn
+        await RunPlayAttemptAsync(S["play.starting_offline"], PlayOfflineCoreAsync);
     }
 
-    private async Task PlayOfflineCoreAsync()
+    private async Task PlayOfflineCoreAsync(CancellationToken cancelled)
     {
         // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
         await RefreshHookAsync();
+        if (cancelled.IsCancellationRequested) return;
         if (!EnsureHookCurrentForPlay()) return;
         if (!CanPlayOffline || _install is not { } install || OfflinePlayProfile is not { } profile || ModManagerFactory() is not { } factory) { PlayStopped(); return; }
         _modLaunchFailure = null;
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         await RefreshHookAsync();
+        if (cancelled.IsCancellationRequested) return;
         if (_hook is not { Verified: true }) { Message = S["play.setup_needed"]; return; }
         _modOperation = true; _modProgress = S["mods.session_prepare"]; Busy = true;
         _play = new CancellationTokenSource(); Changed(string.Empty);
@@ -161,15 +162,22 @@ public sealed partial class ShellViewModel
             var prepared = ModLaunchPreparation.None;
             var fullFeatures = CurrentGame.FullFeatures;
             var launchGame = CurrentGame.Id;
+            var held = ManagedHardcoreHeldFile(launchGame);
+            var hold = ModHoldResult.None;
             await Task.Run(() =>
             {
                 if (!fullFeatures) return; // OD-206: this game has no mods
-                prepared = factory().PrepareForLaunch(game: launchGame); // this game's mods only: locks enforced, Wine overrides reconciled (paired with their removal)
+                var manager = factory();
+                hold = manager.HoldForHardcore(launchGame, hardcore: false, held); // what a Hardcore launch turned off comes back
+                prepared = manager.PrepareForLaunch(game: launchGame); // this game's mods only: locks enforced, Wine overrides reconciled (paired with their removal)
                 overrides = prepared.DllOverrides;
-            });
+            }, CancellationToken.None);
             // OD-232: an enabled retired mod is refused only online; offline it plays as installed, with the warning
+            foreach (var note in hold.Notes) Log(note);
+            if (hold.Changed.Count > 0) await RefreshModEntriesAsync(hold.Changed);
             foreach (var warning in prepared.Warnings) Log("mods: " + warning);
             if (!await PrepareAzimuthAsync(install)) { Message = PrepareAzimuthFailed; return; }
+            if (cancelled.IsCancellationRequested) return; // cancelled from the overlay: the game is never started
             var environment = OfflineLaunchEnvironment(profile, overrides);
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
@@ -189,11 +197,11 @@ public sealed partial class ShellViewModel
                 _ = overlay.RunAsync(child.Pid, child.Exited, TimeSpan.FromMinutes(5), _play.Token);
                 _ = ReadOfflineOverlayAsync(overlay.Incoming, _play.Token);
             }
-            _offlineChild = child; _offlineQuitting = false;
+            _offlineChild = child; _offlineQuitting = false; _playLaunched = true;
             _modOperation = false; Busy = false; SetStatus(S["offline.playing_offline_status"]);
             HidePlayOverlay(); // the game started
             if (profile.Hardcore) Message = S["offline.hardcore_offline"]; // OD-120: offline progress stays here, online continues from the cloud
-            var wait = child.WaitForExitAsync(); _playTask = wait;
+            var wait = child.WaitForExitAsync(CancellationToken.None); _playTask = wait;
             var code = await wait;
             _offlineChild = null;
             // OD-118: an offline game ends here: no save sync, upload, integrity or session step follows, only local mod cleanup,

@@ -6,25 +6,21 @@ namespace Infinity.Core.Matchmaking;
 // OD-112 (docs/launcher/MODDED_LOBBIES.md §2-§3): the session's mod set on joins, the roster's mods and the player details pane.
 public sealed partial class WorldsBridge
 {
-    /// <summary>The session's lobby mod set (OD-112); the default is vanilla. Joining waits for it to be ready.</summary>
+    /// <summary>The session's declared mod set (OD-112, OD-181: shown to other players only); the default is vanilla.</summary>
     public IModSetSource ModSet { get; init; } = VanillaModSet.Instance;
 
     /// <summary>
-    /// The set to send (null: vanilla, left out of the body), or the <c>worlds.*</c> key of why nothing may be sent now. OD-181
-    /// (CR-L48): every player declares the set its game loads, so a modded session (the gate's <c>modded</c>, a non-empty plan)
-    /// never sends an empty set: one whose ready set came out empty joins nothing (the server would answer 400
-    /// <c>{field: "mods"}</c>).
+    /// The set to send (null: vanilla, left out of the body). Alex 2026-11-10 (T-1110-NOMODMATCH): "The only thing we'll hold now, is show to
+    /// other users which mods they're using, and that's it": mods never decide who joins whom, so nothing here ever refuses a join, a host,
+    /// a request, an invite or free roam (the refusal is always null). The set is what ExtraOptions reported loaded once it answered, else
+    /// the launch's planned set; a modded session (the gate's <c>modded</c>, a non-empty plan) always declares a non-empty set, as the server
+    /// reads it (400 <c>{field: "mods"}</c> otherwise).
     /// </summary>
     private (IReadOnlyList<ModEntry>? Mods, string? Refusal) WireMods()
     {
         var state = ModSet.State;
-        return state.Phase switch
-        {
-            ModSetPhase.Ready when state.Mods.Count == 0 && ModSets.Modded(ModSet) => (null, "worlds.mods_failed"),
-            ModSetPhase.Ready => (state.Mods.Count == 0 ? null : state.Mods, null),
-            ModSetPhase.NotReady => (null, "worlds.mods_not_ready"),
-            _ => (null, "worlds.mods_failed"),
-        };
+        if (state.Phase == ModSetPhase.Ready && state.Mods.Count > 0) return (state.Mods, null);
+        return (ModSet.Planned.Count > 0 ? ModSet.Planned : null, null);
     }
 
     /// <summary>

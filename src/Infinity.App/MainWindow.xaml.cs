@@ -655,6 +655,8 @@ public partial class MainWindow : Window
     // owner 2026-11-10: a card's click is awaited, and a failure is logged and said (never lost in a fire-and-forget task)
     private async void OnSelectMod(object sender, RoutedEventArgs e) { var card = (ModCard)((FrameworkElement)sender).DataContext; await _vm.GuardAsync("open a mod", () => _vm.SelectModAsync(card)); }
     private void OnSelectModsGame(object sender, RoutedEventArgs e) => _vm.SelectModsGame((GameCard)((FrameworkElement)sender).DataContext);
+    private void OnEnableAllMods(object sender, RoutedEventArgs e) => _vm.AskToggleAllMods(enable: true);
+    private void OnDisableAllMods(object sender, RoutedEventArgs e) => _vm.AskToggleAllMods(enable: false);
     private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
     private async void OnInstallModSet(object sender, RoutedEventArgs e) => await _vm.InstallSetAsync((ModSetCard)((FrameworkElement)sender).DataContext);
     private async void OnUninstallModCard(object sender, RoutedEventArgs e) => await _vm.UninstallModCardAsync((ModCard)((FrameworkElement)sender).DataContext);

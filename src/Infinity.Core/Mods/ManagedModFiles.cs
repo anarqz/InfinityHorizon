@@ -43,6 +43,15 @@ public sealed partial class ManagedModFiles
     /// <summary>Wine/Proton DLL load-order overrides; tests substitute a recorder.</summary>
     internal IModWineOverrides WineOverrides { get; set; } = SystemWineOverrides.Instance;
 
+    /// <summary>
+    /// The catalog's Hardcore rule by id (<see cref="ModMultiplayer.HardcorePolicy"/>), so an installed pack whose snapshot predates its
+    /// entry's <c>modes</c> is kept in Hardcore like a fresh install; null: each manifest's own declaration.
+    /// </summary>
+    public IReadOnlyDictionary<string, bool>? HardcoreCatalog { get; init; }
+
+    /// <summary>A Hardcore profile keeps this mod (<see cref="ModMultiplayer.AllowedInHardcore"/> with <see cref="HardcoreCatalog"/>).</summary>
+    public bool AllowedInHardcore(ModManifest manifest) => ModMultiplayer.AllowedInHardcore(manifest, HardcoreCatalog);
+
     public ManagedModFiles(string azimuth, string? game, string stateDirectory, Func<bool> gameRunning, string? packageCache = null, IReadOnlyList<string>? launcherRoots = null)
     {
         _azimuth = Path.TrimEndingDirectorySeparator(Path.GetFullPath(azimuth));
@@ -170,10 +179,10 @@ public sealed partial class ManagedModFiles
         .Select(f => (File: f, Actual: cached ? CachedCurrent(Target(f.Root, f.Path)) : Current(Target(f.Root, f.Path)), Expected: receipt.Enabled ? f.After : f.Before))
         .Where(x => x.Actual != x.Expected).Select(x => new ModDrift(x.File.Root, x.File.Path, x.Expected, x.Actual)).ToList();
 
-    /// <summary>OD-112 follow-up: on a Hardcore profile no mod that affects multiplayer may become enabled.</summary>
-    private static void CheckProfile(ModManifest manifest, bool hardcore)
+    /// <summary>OD-112 follow-up: on a Hardcore profile only a mod for both modes may become enabled (<see cref="AllowedInHardcore"/>).</summary>
+    private void CheckProfile(ModManifest manifest, bool hardcore)
     {
-        if (hardcore && ModMultiplayer.AffectsMultiplayer(manifest))
+        if (hardcore && !AllowedInHardcore(manifest))
             throw new ModException("Hardcore profiles cannot enable mods that affect multiplayer", ModErrors.Hardcore);
     }
 
@@ -420,12 +429,23 @@ public sealed partial class ManagedModFiles
     public void SetEnabled(ModManifest manifest, bool enabled, IProgress<string>? progress = null, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(manifest);
+        using var gate = Lock();
+        if (!SetEnabledLocked(manifest, enabled, progress, hardcore)) return;
+        ReconcileWineOverrides();
+        if (enabled) KeepLoadFirstOnTop();
+    }
+
+    /// <summary>
+    /// <see cref="SetEnabled"/>'s change of one mod, the caller holding the lock (one mod, or <see cref="SetEnabledAll"/>'s many); the
+    /// caller reconciles the Wine overrides and the load-first mods afterwards. False when the mod already was in that state.
+    /// </summary>
+    private bool SetEnabledLocked(ModManifest manifest, bool enabled, IProgress<string>? progress, bool hardcore)
+    {
         if (enabled) CheckProfile(manifest, hardcore); // disabling is always allowed
         // OD-232: a retired format is only disabled or removed, never enabled again
         if (enabled && manifest.Retired) throw new ModException("this mod's format is no longer supported", ModErrors.Retired);
-        using var gate = Lock();
         var receipt = Receipt(manifest) ?? throw new ModException("mod has no installation receipt");
-        if (receipt.Enabled == enabled) return;
+        if (receipt.Enabled == enabled) return false;
         if (enabled) CheckDependencies(manifest); else CheckDependents(manifest.Id);
         var drift = DriftOf(receipt);
         if (!enabled && drift.Count > 0) throw new ModException("files changed outside the launcher", ModErrors.Drift);
@@ -440,8 +460,7 @@ public sealed partial class ManagedModFiles
         }
         Execute(new(manifest.Id + ".receipt.json", receipt with { Enabled = enabled }, changes), progress);
         if (!enabled) RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
-        ReconcileWineOverrides();
-        if (enabled) KeepLoadFirstOnTop();
+        return true;
     }
 
     /// <summary>H3 "accept current files": the files now on disk become what the receipt expects. No game file is written.</summary>

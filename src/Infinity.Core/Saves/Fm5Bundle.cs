@@ -37,7 +37,7 @@ public sealed record Fm5Container(string Name, ulong Label, IReadOnlyList<SaveFi
 /// newest sealed revision of each sibling container its garage names.
 /// <para>
 /// Layout (little endian): <c>"FM5SAVE1"</c>, <c>u32</c> container count (1 to 401); per container <c>u16</c> name length, name (first
-/// <c>User</c>, never the XUID; then sibling names strictly ascending by byte), <c>u64</c> label, <c>u8</c> file count (exactly its kind's), then
+/// <c>User</c>, never the XUID; then sibling names strictly ascending by byte), <c>u64</c> label, <c>u8</c> file count (exactly its kind's; a profile without its TransactionLogFile omits that entry), then
 /// per file in its kind's order <c>u16</c> name length, name, <c>u32</c> raw size, <c>u32</c> stored size, <c>u8</c> method (0 stored, 2 the
 /// hook's LZ), stored bytes. <see cref="Pack"/> writes method 2 where smaller, else stored, deterministically, as <c>fm5::pack</c>.
 /// </para>
@@ -70,6 +70,22 @@ public static class Fm5Bundle
     private static ReadOnlySpan<byte> Png => [0x89, (byte)'P', (byte)'N', (byte)'G', (byte)'\r', (byte)'\n', 0x1a, (byte)'\n'];
 
     public static IReadOnlyList<string> FilesUser { get; } = ["commit", "data/PlayerDatabase", "data/ProfileData", "data/TransactionLogFile", "data/VersionFlags"];
+
+    /// <summary>
+    /// Owner 2026-11-10 (T-1110-FM5TLF, "add whatever they send us; FM5 is still experimental"): FM5 writes profile revisions without a
+    /// TransactionLogFile (<c>blobs 3</c>: PlayerDatabase, ProfileData, VersionFlags). It is the only optional file: a profile container
+    /// holds <see cref="FilesUser"/>, or <see cref="FilesUserWithoutLog"/> (the entry omitted, never invented; file count 4); every other
+    /// file stays required, in the same order, with the same size windows and hashes.
+    /// </summary>
+    public const string OptionalUserFile = "data/TransactionLogFile";
+
+    /// <summary><see cref="FilesUser"/> without <see cref="OptionalUserFile"/>.</summary>
+    public static IReadOnlyList<string> FilesUserWithoutLog { get; } = ["commit", "data/PlayerDatabase", "data/ProfileData", "data/VersionFlags"];
+
+    /// <summary>The files a container of <paramref name="kind"/> with <paramref name="count"/> files holds, in bundle order; null when no shape has that count.</summary>
+    public static IReadOnlyList<string>? FilesOf(Fm5Kind kind, int count) =>
+        FilesOf(kind) is var all && all.Count == count ? all
+        : kind == Fm5Kind.User && count == FilesUserWithoutLog.Count ? FilesUserWithoutLog : null;
     public static IReadOnlyList<string> FilesLivery { get; } = ["commit", "data/C_livery", "data/header"];
     public static IReadOnlyList<string> FilesThumbnail { get; } = ["commit", "data/bigThumb.png", "data/smallThumb.png"];
 
@@ -154,8 +170,8 @@ public static class Fm5Bundle
                     throw new BundleException(BundleFault.InvalidContainer, Shown(raw), "invalid save container " + Shown(raw));
             }
             var label = BinaryPrimitives.ReadUInt64LittleEndian(Take(8).Span);
-            var files = FilesOf(kind);
-            if (Take(1).Span[0] != files.Count) throw new BundleException(BundleFault.InvalidFileCount, null, "invalid file count");
+            // its kind's files; a profile may omit only its TransactionLogFile (T-1110-FM5TLF)
+            var files = FilesOf(kind, Take(1).Span[0]) ?? throw new BundleException(BundleFault.InvalidFileCount, null, "invalid file count");
             var entries = new List<Entry>(files.Count);
             foreach (var want in files)
             {

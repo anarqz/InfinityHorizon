@@ -207,9 +207,8 @@ public sealed partial class ShellViewModel
         if (!LauncherUpdateAllowsPlay) { _updateSupport = false; Message = LauncherUpdateStatus; Changed(string.Empty); return; }
         // owner 2026-11-10 (3.1.1, "absolutely no feedback"): "Joining queue…" from the click until the server says where the player is;
         // the queue modal and "Joining game…" follow (Render). Whatever ends the attempt (a refusal, a cancel, the session's end) closes them.
-        ShowPlayOverlay(S["play.joining_queue"]);
-        try { await PlayOnlineAsync(); }
-        finally { EndPlayProgress(); }
+        // Hotfix 3.1.2: the attempt can be cancelled from its overlay (after PlayCancelAfter) and steps aside for any prompt
+        await RunPlayAttemptAsync(S["play.joining_queue"], PlayOnlineAsync);
     }
 
     /// <summary>A launch stopped because the state changed while it was prepared: never silently (owner 2026-11-10).</summary>
@@ -218,9 +217,10 @@ public sealed partial class ShellViewModel
         if (Message is null || Message.Length == 0) Message = PlayHeldByJobs ?? S["play.stopped"];
     }
 
-    private async Task PlayOnlineAsync()
+    private async Task PlayOnlineAsync(CancellationToken cancelled)
     {
         await RefreshHookAsync(); // the hook as it is now, not as it was when the screen last looked (read on a worker)
+        if (cancelled.IsCancellationRequested) return; // hotfix 3.1.2: cancelled from the overlay (its reason is already shown)
         // T30: a signed hook whose bytes are not the package's is replaced first (game closed), or Play is refused
         if (!Playing && !EnsureHookCurrentForPlay()) return;
         if (!GameConfigurationReady && !Playing)
@@ -236,22 +236,21 @@ public sealed partial class ShellViewModel
         // CR-S52: the first Play of a Hardcore profile whose cloud line is still empty asks how it starts (scratch or a checked career)
         if (_session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game) is { } chosen
             && await OfferSeedBeforePlayAsync(chosen)) return;
+        if (cancelled.IsCancellationRequested) return;
         if (_session is null || !CanPlay) { PlayStopped(); return; }
         var startingSession = _session;
         // owner 2026-11-10 (3.1.1): the mod state already read for this game (a read only when none was, under this overlay, no toast)
         await EnsureModStateForLaunchAsync();
+        if (cancelled.IsCancellationRequested) return;
         // §1.1: mod state never blocks ordinary Play by itself. Locks and Wine overrides are applied off the UI
         // thread; an unreadable state is logged and shown, and only stops a launch that has enabled mods to prepare.
         // OD-233: the per-game mods folders before anything reads the mods (a stop says why and blocks Play)
-        if (!await PrepareModsLayoutAsync(receiptsOnly: false, background: false)) { Message = PrepareAzimuthFailed; return; }
+        if (!await PrepareModsLayoutAsync(receiptsOnly: false, background: false)) { if (!cancelled.IsCancellationRequested) Message = PrepareAzimuthFailed; return; }
+        if (cancelled.IsCancellationRequested) return;
         ModLaunchPreparation mods;
+        // Alex 2026-11-10: Hardcore turns off what it does not keep (never a refusal); the next Noob launch gives it back. It runs here,
+        // under the Play's overlay and its lock (hotfix 3.1.2), and a stop below still says "play: not started: <reason>"
         try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
-        catch (ModHardcoreException error)
-        {
-            // OD-112 follow-up: refused before anything is written; the Mods page offers Disable.
-            Message = HardcoreRefusal(error.Mods.Select(m => m.Text("name", S.Locale)));
-            RefreshModCards(); return;
-        }
         catch (ModException error) when (error.Code == ModErrors.Recovery)
         { Message = S["mods.play_blocked"]; RefreshModCards(); return; }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
@@ -262,6 +261,7 @@ public sealed partial class ShellViewModel
         }
         // OD-232: an enabled mod in a retired format still changes the game (half a media override, a loader DLL), so it never goes
         // online as vanilla: refused until it is disabled or removed on Mods (offline it stays a warning).
+        if (cancelled.IsCancellationRequested) return;
         if (mods.RetiredOnlineMods is { Count: > 0 } retired)
         {
             Log("mods: online refused, retired mods enabled: " + string.Join(", ", retired.Select(m => m.Id)));
@@ -272,12 +272,16 @@ public sealed partial class ShellViewModel
         var startingInstall = _install;
         var startingGame = _gate.Game;
         if (!await RefreshOnlineServiceForPlayAsync()) { PlayStopped(); return; }
+        if (cancelled.IsCancellationRequested) return;
         if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) { PlayStopped(); return; }
+        if (cancelled.IsCancellationRequested) return;
         if (!await RefreshLauncherPolicyAsync()) { Message = LauncherUpdateStatus; PlayStopped(); return; }
+        if (cancelled.IsCancellationRequested) return;
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) { PlayStopped(); return; }
         var futureSessionId = Guid.CreateVersion7().ToString();
         // OD-113: only a profile with the check (IntegrityApplies) is checked, silently; any other declares no car database.
         var (integrityProceed, integrity) = await IntegrityForPlayAsync(futureSessionId);
+        if (cancelled.IsCancellationRequested) return;
         if (!integrityProceed || !ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame
             || !CanPlay) { PlayStopped(); return; }
         var profile = _session.Me?.Profiles.FirstOrDefault(p => p.ProfileId == _gate.ProfileKey && p.Game == _gate.Game);
@@ -288,6 +292,7 @@ public sealed partial class ShellViewModel
         }
         // OD-206: a game without the integrity check still declares its car database: the gate compares it with the hook's
         var carDb = integrity?.CarDbSha256 ?? (CurrentGame.FullFeatures ? string.Empty : await CarDatabaseDigestAsync(CurrentGame));
+        if (cancelled.IsCancellationRequested) return;
         var development = DevServer;
         var (keys, policy) = _config.Production
             ? (Infinity.Core.Auth.ProductionDeployment.LaunchKeys(), TicketPolicy.Default with { Production = true })
@@ -295,10 +300,11 @@ public sealed partial class ShellViewModel
             : _config.Custom ? (TicketKeys.FromTrust(_session.Info.Trust!), TicketPolicy.ForCustom)
             : TicketKeys.Trust(development, Environment.GetEnvironmentVariable(TicketKeys.DevTicketKeyEnv));
         // the load order first (Hardcore turns its mods off there), then the lobby set from what ExtraOptions will load
-        if (!await PrepareAzimuthAsync(_install, ProfileHardcore)) { Message = PrepareAzimuthFailed; return; }
+        if (!await PrepareAzimuthAsync(_install, ProfileHardcore)) { if (!cancelled.IsCancellationRequested) Message = PrepareAzimuthFailed; return; }
+        if (cancelled.IsCancellationRequested) return;
         if (!ReferenceEquals(_session, startingSession) || !ReferenceEquals(_install, startingInstall) || _gate.Game != startingGame || !CanPlay) { PlayStopped(); return; }
-        var modSet = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow);
-        if (modSet is null) { Message = ModSetRefusal; RefreshModCards(); return; }
+        var modSet = await ExtraOptionsModSetAsync(_install, DateTime.UtcNow); // display only: never stops Play (T-1110-NOMODMATCH)
+        if (cancelled.IsCancellationRequested) return;
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) { PlayStopped(); return; }
         using var onlineActivity = new OnlineActivity();
         StartOverlayStatusFeed(_session); // CR-L40 §1.3: the guide's server status and avatar
@@ -329,8 +335,12 @@ public sealed partial class ShellViewModel
                 if (!ReferenceEquals(_integrity, integrity)) throw new InvalidDataException("Content check changed");
             },
         };
+        // hotfix 3.1.2: the overlay package was read meanwhile; a cancel then still stops before the supervisor (the feed it started is the
+        // one every launch starts and ends with the next)
+        if (cancelled.IsCancellationRequested) return;
         _commands = Channel.CreateUnbounded<SupervisorCommand>();
         _play = new CancellationTokenSource();
+        _playSpawned = false;
         _waitingForAdmission = true;
         _queued = _leavingQueue = _queueShown = false;
         _queuePlace = null;
@@ -348,7 +358,8 @@ public sealed partial class ShellViewModel
         _playModSet = modSet;
         try
         {
-            _playTask = Task.Run(() => supervisor.RunAsync(_play.Token));
+            _playLaunched = true; // hotfix 3.1.2: from here the supervisor's events say how the attempt ends
+            _playTask = Task.Run(() => supervisor.RunAsync(_play.Token), CancellationToken.None);
             await _playTask;
         }
         finally
@@ -482,11 +493,9 @@ public sealed partial class ShellViewModel
         switch (e)
         {
             case SupervisorEvent.ModsFailed failed:
-                // no modded matchmaking for this launch (ExtraOptions loaded none of the planned mods); the game itself goes on
-                Log("mods: lobby mod set failed (" + failed.Reason + ")");
-                Message = S["mods.online_failed"];
-                _modLaunchFailure = Message; Changed(nameof(ModPlayNotice)); Changed(nameof(ShowModPlayNotice));
-                SetStatus(Message);
+                // T-1110-NOMODMATCH: ExtraOptions confirmed none of the planned mods; the session still declares its planned set (display
+                // only) and joins as before, so nothing is said to the player and nothing is held
+                Log("mods: ExtraOptions confirmed none of the planned mods (" + failed.Reason + "); the planned set stays declared");
                 break;
             case SupervisorEvent.RequestingAdmission:
                 // owner 2026-11-10 (3.1.1): "Joining queue…" until the server says where the player is (a retry keeps the queue modal)
@@ -529,6 +538,7 @@ public sealed partial class ShellViewModel
                 SetStatus(S["queue.admitted_toast"]);
                 break;
             case SupervisorEvent.Spawned:
+                _playSpawned = true; // hotfix 3.1.2: from here a cancel closes the game (Close the game), never leaves it unsupervised
                 SetStatus(S["supervisor.starting"]);
                 break;
             case SupervisorEvent.WaitingForHook w:

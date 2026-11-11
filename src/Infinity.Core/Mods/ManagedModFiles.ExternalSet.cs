@@ -25,6 +25,8 @@ public sealed record ExternalSetResult(ModManifest Mod, ExternalSetOutcome Outco
 {
     public int Missing { get; init; }
     public int Different { get; init; }
+    /// <summary>Hotfix 3.1.2: the first expected file (its path inside the pack) the pick lacks or holds with other bytes, for the report.</summary>
+    public string? FirstMissing { get; init; }
     public bool Succeeded => Outcome is ExternalSetOutcome.Installed or ExternalSetOutcome.Updated or ExternalSetOutcome.UpToDate;
 }
 
@@ -115,16 +117,17 @@ public sealed partial class ManagedModFiles
                 return new(mod, ExternalSetOutcome.Failed, "dependency:" + failed.Mod.Id);
             if (ExternalFilesNotStored(mod).Count > 0)
             {
-                int missing = 0, different = 0, fromSource = 0; var ok = true;
+                int missing = 0, different = 0, fromSource = 0; var ok = true; string? firstMissing = null;
                 using (var gate = Lock())
                     foreach (var sourceId in mod.ExternalSources.Select(s => s.Id))
                     {
                         var check = Check(mod, sourceId, picked, source, null, cancellation);
                         missing += check.Missing; different += check.Different; fromSource += check.FromSource;
                         ok &= check.Files.Count > 0 && check.Found == check.Files.Count;
+                        firstMissing ??= check.Files.FirstOrDefault(f => f.State != ExternalFileState.Ok)?.File.Path;
                     }
-                if (fromSource == 0) return new(mod, ExternalSetOutcome.NotFound);
-                if (!ok) return new(mod, ExternalSetOutcome.Failed, "files") { Missing = missing, Different = different };
+                if (fromSource == 0) return new(mod, ExternalSetOutcome.NotFound) { FirstMissing = firstMissing };
+                if (!ok) return new(mod, ExternalSetOutcome.Failed, "files") { Missing = missing, Different = different, FirstMissing = firstMissing };
             }
             var update = receipt is not null;
             InstallExternal(mod, null, update, hardcore);

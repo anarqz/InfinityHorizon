@@ -542,8 +542,7 @@ public sealed partial class WorldsBridge
         // T-1108-R: a PUBLIC official world is joined straight away (OD-190 "Join friend", POST /mm/v1/join {worldId}); only a
         // private one takes requests (CR-S102: POST …/requests to a public official world is 409 {reason: "official"})
         if (JoinsDirectly(playing)) return await JoinFriendFromSidebarAsync(action, playing, name, cancellation).ConfigureAwait(false);
-        var (mods, refusal) = WireMods();
-        if (refusal is not null) return new UiFrame.FriendsResult(action.Kind, UiFriendsResult.Refused, Clip(_text(refusal), UiFrame.MaxFriendMessage));
+        var (mods, _) = WireMods(); // display only (T-1110-NOMODMATCH): mods never refuse a request to join
         var answer = await _mm.RequestAsync(playing.WorldId!, mods, cancellation).ConfigureAwait(false);
         if (answer.Ok)
         {
