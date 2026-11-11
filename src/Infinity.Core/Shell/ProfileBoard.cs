@@ -35,18 +35,16 @@ public enum CareerProgressKind
 
     /// <summary>Level, credits, cars and play time as the server has them.</summary>
     Progress,
+
+    /// <summary>OD-239: an Azimuth career plays the player's own Azimuth save; the server keeps no progress of it (<c>progress</c> absent).</summary>
+    AzimuthSave,
 }
 
 /// <summary>The server facts the board reads beside <c>/me</c>.</summary>
 /// <param name="HardcoreFromProfile"><c>ServerInfo.saves.hardcoreFromProfile</c> (SAVES_API.md §4.10, OD-214).</param>
 /// <param name="HardcoreKeepsCloud">A Hardcore profile of this account keeps a cloud line on this server (OD-52).</param>
-/// <param name="AzimuthSaves">This PC has an Azimuth save of the game a Noob career may start from (OD-41).</param>
 /// <param name="SeedPendingXuids">Profiles whose career of the game holds an accepted seed waiting for its first Play on this PC (a pending <c>seed_from_profile</c>): they count as started, never as empty (review M1).</param>
-/// <param name="LocalSaveXuids">Noob profiles whose own folder on this PC holds a sealed save of the game (copied from a Hardcore career, a
-/// picked save, or played offline) while the cloud has none yet: started, and their first Play uploads it (fix 2026-11-08).</param>
-/// <param name="NoobFromHardcore">The account's Hardcore career of the game has a save a Noob career can start from (<see cref="NoobStart"/>).</param>
-public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, bool AzimuthSaves = false, IReadOnlySet<string>? SeedPendingXuids = null,
-    IReadOnlySet<string>? LocalSaveXuids = null, bool NoobFromHardcore = false);
+public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, IReadOnlySet<string>? SeedPendingXuids = null);
 
 /// <summary>
 /// One profile on the Profiles page of the chosen game: the <see cref="Player"/>, its career of the game (<see cref="Career"/> and, joined by
@@ -64,7 +62,7 @@ public sealed record BoardCard(Player Player, Career? Career, Profile? CareerRow
     /// <summary>A card that opens the Start panel.</summary>
     public bool Startable => State is CareerState.None or CareerState.Empty && Offers.Any;
 
-    public CareerProgressKind ProgressKind => ProfileBoard.ProgressKind(Career);
+    public CareerProgressKind ProgressKind => Player.Mode == "hardcore" ? ProfileBoard.ProgressKind(Career) : CareerProgressKind.AzimuthSave;
 
     /// <summary>An accepted seed waits for this career's first Play on this PC (review M1): started, not empty.</summary>
     public bool SeedPending { get; init; }
@@ -95,8 +93,7 @@ public static class ProfileBoard
             var career = player.Careers.FirstOrDefault(c => c.Game == game.Id);
             var row = career is null ? null : me.Profiles.FirstOrDefault(p => p.ProfileId == career.CareerId);
             var seedPending = flags.SeedPendingXuids?.Contains(player.Xuid) == true && career is not null && row is not null;
-            var localSave = flags.LocalSaveXuids?.Contains(player.Xuid) == true && row is not null;
-            var state = StateOf(player, career, game, seedPending, localSave);
+            var state = StateOf(player, career, game, seedPending);
             var offers = state is CareerState.None or CareerState.Empty
                 ? CareerStart.Offers(player.Mode, game, flags, ProfileSeed.Sources(me.Profiles, game.Id, player.Xuid))
                 : CareerOffers.Nothing;
@@ -107,11 +104,11 @@ public static class ProfileBoard
 
     /// <summary>Where <paramref name="player"/>'s career of <paramref name="game"/> stands.</summary>
     /// <remarks>
-    /// <paramref name="localSave"/>: the profile's own folder on this PC holds a save. For a Noob career that is a start (a Noob line takes
-    /// any save, B2; its first Play uploads it), so it is never shown as empty "starts fresh" (fix 2026-11-08). A Hardcore career is not
-    /// started by a local save (OD-60: it starts from the beginning or through the §4.10 check).
+    /// OD-239: an Azimuth career (wire mode <c>noob</c>) that exists is always started: it plays the player's own Azimuth save, so there is
+    /// nothing to start it from and no cloud revision or <c>progress</c> to wait for. A Hardcore career is not started by a local save
+    /// (OD-60: it starts from the beginning or through the §4.10 check).
     /// </remarks>
-    public static CareerState StateOf(Player player, Career? career, GameDefinition game, bool seedPending = false, bool localSave = false)
+    public static CareerState StateOf(Player player, Career? career, GameDefinition game, bool seedPending = false)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(game);
@@ -119,9 +116,9 @@ public static class ProfileBoard
         {
             return player.Mode == "hardcore" && !game.HardcoreCareers ? CareerState.NotOffered : CareerState.None;
         }
-        var startedHere = localSave && player.Mode != "hardcore";
-        // §6.7: on a game with cloud saves, a career nothing started (no revision, no sync, never played) is not started in the UI
-        return game.FullFeatures && !seedPending && !startedHere && career is { Cloud: null, Progress: null, LastPlayedAt: null } ? CareerState.Empty : CareerState.Started;
+        if (player.Mode != "hardcore") return CareerState.Started;
+        // §6.7: on a game with cloud saves, a Hardcore career nothing started (no revision, no sync, never played) is not started in the UI
+        return game.FullFeatures && !seedPending && career is { Cloud: null, Progress: null, LastPlayedAt: null } ? CareerState.Empty : CareerState.Started;
     }
 
     /// <summary>What the progress line of <paramref name="career"/> says.</summary>

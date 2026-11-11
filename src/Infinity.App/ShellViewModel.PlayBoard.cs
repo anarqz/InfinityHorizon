@@ -43,7 +43,7 @@ public sealed partial class ShellViewModel
     public bool CanUsePlayButtons => Idle && !Playing;
 
     /// <summary>The inline start of PLAY (the Start choices for the card of <see cref="_startRow"/>).</summary>
-    public bool ShowPlayStart => _startRow is not null && ShowHome && !ShowFileStart;
+    public bool ShowPlayStart => _startRow is not null && ShowHome;
 
     /// <summary>The buttons and tiles, rebuilt from <see cref="ProfileRows"/> (no request): every /me, game and gate change.</summary>
     private void FillPlayBoard()

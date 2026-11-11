@@ -15,10 +15,7 @@ public sealed record CareerOffers(bool Fresh, bool FromExisting, IReadOnlyList<P
 {
     public static CareerOffers Nothing { get; } = new(false, false, []);
 
-    /// <summary>A Noob card: "From my HARDCORE profile" (the account's Hardcore career of the game has a save, <see cref="NoobStart"/>).</summary>
-    public bool FromHardcore { get; init; }
-
-    public bool Any => Fresh || FromExisting || FromHardcore;
+    public bool Any => Fresh || FromExisting;
 }
 
 /// <summary>How <c>POST /players/{xuid}/careers</c> ended for the launcher (CAREERS.md §3, §6.12; plan §5).</summary>
@@ -58,8 +55,8 @@ public static class CareerStart
     /// <summary>
     /// The Start card of a <paramref name="mode"/> profile in <paramref name="game"/>. Hardcore: none when the game allows no Hardcore career
     /// (§6.2); Fresh always; "from an existing profile" only on a game with cloud saves, while the server allows it and the profile keeps a
-    /// cloud line (<see cref="ProfileSeed.Offered"/>, §4.10, OD-214) and the account has another profile's career of the game. Noob: Fresh;
-    /// "from a save on this PC" on a game with cloud saves only when an Azimuth install with a readable save of the game exists (OD-41, review L1). FM5 Noob: Fresh only (no cloud saves).
+    /// cloud line (<see cref="ProfileSeed.Offered"/>, §4.10, OD-214) and the account has another profile's career of the game. Azimuth (wire
+    /// mode <c>noob</c>, OD-239): Fresh only, which plays the player's own Azimuth save; it never starts from a cloud career or a copied save.
     /// </summary>
     public static CareerOffers Offers(string mode, GameDefinition game, BoardFlags flags, IReadOnlyList<Profile> sources)
     {
@@ -73,10 +70,7 @@ public static class CareerStart
             var seeded = game.FullFeatures && ProfileSeed.Offered(flags.HardcoreFromProfile, flags.HardcoreKeepsCloud) && sameGame.Count > 0;
             return new CareerOffers(true, seeded, seeded ? sameGame : []);
         }
-        // review L1: the flow runs the OD-41 local picker only, so it is offered only with a readable Azimuth save of the game on this PC
-        var copy = game.FullFeatures && flags.AzimuthSaves;
-        // owner 2026-10-28 / fix 2026-11-08: a Noob starts from the account's Hardcore career of the same game (no check), when it has a save
-        return new CareerOffers(true, copy, game.FullFeatures ? sameGame : []) { FromHardcore = flags.NoobFromHardcore };
+        return new CareerOffers(true, false, []);
     }
 
     /// <summary>Reads a refusal of <c>POST /players/{xuid}/careers</c>; null error = 201.</summary>

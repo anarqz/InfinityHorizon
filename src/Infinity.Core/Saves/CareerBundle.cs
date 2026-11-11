@@ -139,7 +139,7 @@ public sealed class Fm5CareerBundle(SaveLayout layout) : ICareerBundle
     {
         var key = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(database));
         if (_references.TryGetValue(key, out var known)) return known;
-        var names = SaveImport.ReferencedSiblings(database, _layout);
+        var names = SaveReferences.ReferencedSiblings(database, _layout);
         if (_references.Count >= 32) _references.Clear();
         _references[key] = names;
         return names;

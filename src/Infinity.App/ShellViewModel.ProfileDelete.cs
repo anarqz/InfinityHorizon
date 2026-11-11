@@ -78,7 +78,6 @@ public sealed partial class ShellViewModel
         {
             return;
         }
-        CancelConvert();
         _deleting = profile;
         _deleteAllGames = false;
         _deleteKey = NewDeleteKey(); // kept for every retry of this deletion after a lost answer

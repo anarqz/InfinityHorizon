@@ -65,14 +65,14 @@ public sealed record ServerStatus(uint Online, uint? Capacity, uint? Hardcore, u
 
     private static uint? Narrow(ulong? value) => value is { } v ? Narrow(v) : null;
 
-    /// <summary><c>Online 12/50 · Hardcore 5 (210) · Noob 7 (340) · Lobbies 3</c>; figures the server did not send are left out.</summary>
+    /// <summary><c>Online 12/50 · Hardcore 5 (210) · Azimuth 7 (340) · Lobbies 3</c> (OD-239: the <c>noob</c> figures say Azimuth); figures the server did not send are left out.</summary>
     public string Line()
     {
         var parts = new List<string> { "Online " + Online + (Capacity is { } cap ? "/" + cap : "") };
         if (Hardcore is { } hardcore) parts.Add("Hardcore " + hardcore + (ProfilesHardcore is { } p ? " (" + p + ")" : ""));
         else if (ProfilesHardcore is { } onlyHardcore) parts.Add("Hardcore (" + onlyHardcore + ")");
-        if (Noob is { } noob) parts.Add("Noob " + noob + (ProfilesNoob is { } p ? " (" + p + ")" : ""));
-        else if (ProfilesNoob is { } onlyNoob) parts.Add("Noob (" + onlyNoob + ")");
+        if (Noob is { } noob) parts.Add("Azimuth " + noob + (ProfilesNoob is { } p ? " (" + p + ")" : ""));
+        else if (ProfilesNoob is { } onlyNoob) parts.Add("Azimuth (" + onlyNoob + ")");
         if (Lobbies is { } lobbies) parts.Add("Lobbies " + lobbies);
         return string.Join(" · ", parts);
     }

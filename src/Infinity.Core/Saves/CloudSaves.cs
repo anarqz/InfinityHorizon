@@ -100,17 +100,34 @@ public sealed record CloudSaveLine(SaveLease Lease, SaveHead Head)
     /// <summary>
     /// The line of a gate admission, or null when the gate gave none (<c>lease</c> and <c>save</c> only
     /// for a profile the server keeps, GATE_API.md §2, CR-S51; the client never decides it from the tier,
-    /// OD-140): then the session plays without cloud saves and nothing is uploaded or downloaded.
+    /// OD-140): then the session plays without cloud saves and nothing is uploaded or downloaded. OD-239: an Azimuth career (wire mode
+    /// <c>noob</c>) never has a line; a lease the gate still hands one is ignored, so nothing of it is downloaded or uploaded.
     /// </summary>
     public static CloudSaveLine? FromGate(GateActive active)
     {
         ArgumentNullException.ThrowIfNull(active);
-        if (active.Lease is not { } lease || active.Save is not { ValueKind: JsonValueKind.Object } save)
+        if (active.Lease is not { } lease || active.Save is not { ValueKind: JsonValueKind.Object } save || TicketMode(active) == "noob")
         {
             return null;
         }
         var head = save.Deserialize<SaveHead>(ApiClient.Json) ?? throw new JsonException("save is not a SaveHead");
         return new CloudSaveLine(new SaveLease(active.SessionId, lease), head);
+    }
+
+    /// <summary>The launch ticket's <c>mode</c> claim (<c>hardcore</c> or <c>noob</c>), null when the claims carry none or do not read.</summary>
+    public static string? TicketMode(GateActive active)
+    {
+        ArgumentNullException.ThrowIfNull(active);
+        try
+        {
+            var claims = Convert.FromBase64String(active.LaunchTicket.Claims);
+            using var json = JsonDocument.Parse(claims);
+            return json.RootElement.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String ? mode.GetString() : null;
+        }
+        catch (Exception e) when (e is FormatException or JsonException or InvalidOperationException or NullReferenceException)
+        {
+            return null;
+        }
     }
 }
 

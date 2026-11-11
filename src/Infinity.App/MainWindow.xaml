@@ -1185,6 +1185,17 @@
                 <StackPanel Visibility="{Binding ShowSavesHome, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding S[nav.profiles]}" Style="{StaticResource PageTitle}" FontSize="26" Margin="9,0,9,4" />
                   <TextBlock Text="{Binding SavesSubtitle}" Style="{StaticResource SmSub}" Margin="9,0,9,18" />
+                  <!-- OD-239 items 6-7: while the account still has an old Noob cloud line (read-only), its one-time export -->
+                  <Border Style="{StaticResource SmNote}" Margin="9,0,9,16" Visibility="{Binding ShowOldNoobBanner, Converter={StaticResource Visible}}">
+                    <DockPanel>
+                      <Button DockPanel.Dock="Right" Content="{Binding S[export.open]}" Style="{StaticResource SmButton}" Margin="12,0,0,0" VerticalAlignment="Center"
+                              Click="OnOpenOldNoobExport" IsEnabled="{Binding Idle}" />
+                      <StackPanel>
+                        <TextBlock Text="{Binding S[export.banner_title]}" FontWeight="Bold" FontSize="15" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding OldNoobBannerText}" Style="{StaticResource SmHint}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </DockPanel>
+                  </Border>
                   <StackPanel Margin="9,0,9,16" Visibility="{Binding SavesEmpty, Converter={StaticResource Visible}}">
                     <TextBlock Text="{Binding S[sm.empty_title]}" FontSize="18" FontWeight="Bold" />
                     <TextBlock Text="{Binding S[sm.empty_body]}" Style="{StaticResource SmHint}" Margin="0,4,0,0" />
@@ -1334,14 +1345,6 @@
                       <TextBlock Text="{Binding S[seed.warning]}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
                       <ListBox Margin="0,8,0,0" ItemsSource="{Binding SeedSources}" SelectedItem="{Binding NewSeedSource}" MaxHeight="160"
                                ScrollViewer.HorizontalScrollBarVisibility="Disabled" Visibility="{Binding NewSeedFromProfile, Converter={StaticResource Visible}}" />
-                    </StackPanel>
-                  </Border>
-                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowNoobSeedOption, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <CheckBox Content="{Binding S[seed.noob_option]}" IsChecked="{Binding NewNoobFromHardcore}" FontWeight="Bold" />
-                      <ListBox Margin="0,8,0,0" ItemsSource="{Binding NoobSources}" SelectedItem="{Binding NewNoobSource}" MaxHeight="160"
-                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" Visibility="{Binding NewNoobFromHardcore, Converter={StaticResource Visible}}" />
-                      <TextBlock Text="{Binding NoobSeedPlanText}" Style="{StaticResource SmHint}" Margin="0,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                   </Border>
                   <WrapPanel Margin="0,18,0,0">
@@ -1510,11 +1513,6 @@
                           <DataTrigger Binding="{Binding HistoryAzimuthOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Azimuth}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Azimuth}" /></DataTrigger>
                         </Style.Triggers></Style></Button.Style>
                       </Button>
-                      <Button Content="{Binding S[sm.noob]}" Tag="Noob" Click="OnHistorySlot" Margin="0,0,6,6" FontWeight="SemiBold">
-                        <Button.Style><Style TargetType="Button" BasedOn="{StaticResource SmButton}"><Style.Triggers>
-                          <DataTrigger Binding="{Binding HistoryNoobOn}" Value="True"><Setter Property="BorderBrush" Value="{x:Static local:SlotBrushes.Noob}" /><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger>
-                        </Style.Triggers></Style></Button.Style>
-                      </Button>
                     </WrapPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding S[sm.history_empty]}" Style="{StaticResource SmHint}" Visibility="{Binding HistoryEmpty, Converter={StaticResource Visible}}" />
                     <ItemsControl ItemsSource="{Binding HistoryRows}" Focusable="False">
@@ -1591,14 +1589,6 @@
                         <TextBlock Text="{Binding S[sm.help.pc]}" Foreground="{x:Static local:SlotBrushes.Azimuth}" FontSize="12" HorizontalAlignment="Center" />
                       </StackPanel>
                     </Grid>
-                    <TextBlock Text="⇄" FontSize="22" Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" Margin="16,0" />
-                    <Grid Width="124" Height="124">
-                      <Ellipse Fill="{x:Static local:SlotBrushes.NoobSoft}" Stroke="{x:Static local:SlotBrushes.Noob}" StrokeThickness="2" />
-                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding S[sm.noob]}" Foreground="{x:Static local:SlotBrushes.Noob}" FontWeight="Black" FontSize="12" HorizontalAlignment="Center" />
-                        <TextBlock Text="{Binding S[sm.help.cloud]}" Foreground="{x:Static local:SlotBrushes.Noob}" FontSize="12" HorizontalAlignment="Center" />
-                      </StackPanel>
-                    </Grid>
                   </StackPanel>
                   <TextBlock Text="{Binding S[sm.faq1_q]}" FontWeight="Bold" FontSize="15" Margin="0,8,0,4" />
                   <TextBlock Text="{Binding S[sm.faq1_a]}" Style="{StaticResource SmHint}" FontSize="14" />
@@ -1611,6 +1601,39 @@
                   <WrapPanel Margin="0,20,0,0">
                     <Button Content="{Binding S[sm.open_manage]}" Style="{StaticResource SmButton}" Margin="0,0,10,8" Click="OnOpenManageSaves" IsEnabled="{Binding Idle}" />
                     <Button Content="{Binding S[sm.restore_original]}" Style="{StaticResource SmButton}" Margin="0,0,10,8" Click="OnRestoreOriginal" IsEnabled="{Binding Idle}" />
+                  </WrapPanel>
+                </StackPanel>
+
+                <!-- ============ EXPORT (OD-239 items 6-7): the old Noob cloud save to a file, and the old local folder ============ -->
+                <StackPanel MaxWidth="660" Visibility="{Binding ShowSavesExport, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[export.title]}" Style="{StaticResource SmH1}" />
+                  <TextBlock Text="{Binding S[export.sub]}" Style="{StaticResource SmSub}" TextWrapping="Wrap" />
+                  <Border Style="{StaticResource SmCard}" Padding="18,16" Margin="0,0,0,12">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[export.cloud_title]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding ExportLineText}" Style="{StaticResource SmHint}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding S[export.cloud_hint]}" Style="{StaticResource SmHint}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                      <WrapPanel Margin="0,12,0,0">
+                        <Button Content="{Binding S[export.pick]}" Background="{x:Static local:SlotBrushes.Noob}" Style="{StaticResource SmPrimary}"
+                                Click="OnPickOldNoobExport" IsEnabled="{Binding CanExportOldNoob}" />
+                      </WrapPanel>
+                      <TextBlock Text="{Binding ExportDoneText}" FontSize="13" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{x:Static local:SlotBrushes.Noob}"
+                                 Visibility="{Binding HasExportDone, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Border>
+                  <Border Style="{StaticResource SmCard}" Padding="18,16">
+                    <StackPanel>
+                      <TextBlock Text="{Binding S[export.folder_title]}" FontWeight="Bold" FontSize="15" />
+                      <TextBlock Text="{Binding OldNoobFolderText}" Style="{StaticResource SmHint}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding S[export.folder_hint]}" Style="{StaticResource SmHint}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                      <WrapPanel Margin="0,12,0,0">
+                        <Button Content="{Binding S[export.open_folder]}" Style="{StaticResource SmButton}" Click="OnOpenOldNoobFolder"
+                                IsEnabled="{Binding OldNoobFolderExists}" />
+                      </WrapPanel>
+                    </StackPanel>
+                  </Border>
+                  <WrapPanel Margin="0,16,0,0">
+                    <Button Content="{Binding S[sm.back_to_saves]}" Style="{StaticResource SmButton}" Click="OnSavesHome" />
                   </WrapPanel>
                 </StackPanel>
 
@@ -1668,9 +1691,6 @@
                           </StackPanel>
                       </StackPanel>
                       <StackPanel Grid.Column="1" MaxWidth="280" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
-                        <Button Content="{Binding DataContext.S[detail.convert], RelativeSource={RelativeSource AncestorType=Window}}"
-                                Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
-                                Click="OnConvertProfile" Visibility="{Binding CanConvert, Converter={StaticResource Visible}}" />
                         <!-- CR-S61: an account profile can be deleted from the cloud (a typed confirmation below). -->
                         <Button Content="{Binding DataContext.S[profiles.delete], RelativeSource={RelativeSource AncestorType=Window}}"
                                 Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
@@ -1727,39 +1747,11 @@
                     <RadioButton Content="{Binding S[signin.form_noob]}" IsChecked="{Binding NewNoob}" GroupName="NewMode" FontWeight="Bold" IsEnabled="{Binding CanChooseNoob}" />
                     <TextBlock Text="{Binding NoobHint}" FontSize="11" Margin="30,2,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
-                  <!-- Owner 2026-10-28: a Noob profile may start from one of the player's Hardcore careers on this PC (a copy; no check). -->
-                  <Border Margin="30,10,0,0" Padding="12,10" CornerRadius="8" Background="{StaticResource InfinitySurfaceHigh}"
-                          Visibility="{Binding ShowNoobSeedOption, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <CheckBox Content="{Binding S[seed.noob_option]}" IsChecked="{Binding NewNoobFromHardcore}" FontWeight="Bold" />
-                      <ListBox Margin="0,8,0,0" ItemsSource="{Binding NoobSources}" SelectedItem="{Binding NewNoobSource}" MaxHeight="160"
-                               ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="{Binding S[seed.source_label]}"
-                               Visibility="{Binding NewNoobFromHardcore, Converter={StaticResource Visible}}" />
-                      <TextBlock Text="{Binding NoobSeedPlanText}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
-                    </StackPanel>
-                  </Border>
                   <TextBlock Text="{Binding FreeNoobHint}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
                              Visibility="{Binding ShowFreeNoobHint, Converter={StaticResource Visible}}" />
                 <!-- OD-118: offline creation is Noob; Hardcore is created signed in. -->
                 <TextBlock Text="{Binding S[offline.create_noob]}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}"
                            Visibility="{Binding OfflineMode, Converter={StaticResource Visible}}" />
-                </StackPanel>
-              </Border>
-              <!-- OD-52: Hardcore → Noob, what is deleted for good, then the confirmation. -->
-              <Border Margin="0,16,0,0" Padding="18,16" CornerRadius="12" Background="{StaticResource InfinityDangerSurface}"
-                      BorderBrush="{StaticResource InfinityDangerBorder}" BorderThickness="1"
-                      Visibility="{Binding ShowConvert, Converter={StaticResource Visible}}">
-                <StackPanel>
-                  <TextBlock Text="{Binding ConvertTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding S[modes.convert_body]}" Margin="0,6,0,6" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding ConvertDeletes}" Margin="8,0,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}" />
-                  <TextBlock Text="{Binding ConvertKeeps}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
-                  <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                    <Button Content="{Binding S[modes.convert_confirm]}" Click="OnConfirmConvert" IsEnabled="{Binding Idle}"
-                            BorderBrush="{StaticResource InfinityDangerBorder}" />
-                    <Button Content="{Binding S[modes.convert_cancel]}" Margin="10,0,0,0" Click="OnCancelConvert"
-                            Style="{StaticResource AccentButtonStyle}" />
-                  </StackPanel>
                 </StackPanel>
               </Border>
               <!-- CR-S61: delete an account profile from the cloud, at once and for good; the player types its name to confirm. -->
@@ -1941,17 +1933,12 @@
                       <TextBlock Text="{Binding StartFromProfileHint}" Style="{StaticResource SmHint}" FontSize="14" />
                     </StackPanel>
                   </Button>
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromPc" IsEnabled="{Binding StartFromPcEnabled}">
+                  <!-- B2 (OD-239): shown on a HARDCORE card only, disabled with its reason; an Azimuth card starts fresh only -->
+                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromPc" IsEnabled="False"
+                          Visibility="{Binding ShowStartFromPc, Converter={StaticResource Visible}}">
                     <StackPanel>
                       <TextBlock Text="{Binding S[sm.start.from_pc]}" FontWeight="Bold" FontSize="15" />
                       <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <!-- NOOB_FROM_FILE (owner 2026-11-08): a Noob career from a save folder on this PC; the in-launcher picker, then the confirmation below -->
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromFile" IsEnabled="{Binding StartFromFileEnabled}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[save_file.option]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFromFileHint}" Style="{StaticResource SmHint}" FontSize="14" />
                     </StackPanel>
                   </Button>
                   <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
@@ -1965,17 +1952,6 @@
                     <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnClosePlayStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
                     <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
                             Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
-                  </WrapPanel>
-                </StackPanel>
-                <!-- NOOB_FROM_FILE: the checked save, confirmed before anything is created or written; Play follows the copy -->
-                <StackPanel Visibility="{Binding ShowFileStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Center">
-                  <TextBlock Text="{Binding FileStartTitle}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding FileStartBody}" Style="{StaticResource SmSub}" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding FileStartWarning}" FontSize="13" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
-                             Visibility="{Binding HasFileStartWarning, Converter={StaticResource Visible}}" />
-                  <WrapPanel Margin="0,12,0,0">
-                    <Button Content="{Binding S[save_file.confirm]}" Click="OnConfirmFileStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" IsEnabled="{Binding Idle}" />
-                    <Button Content="{Binding S[save_file.cancel]}" Click="OnCancelFileStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
                   </WrapPanel>
                 </StackPanel>
                 <Button Content="{Binding S[play.manage_profiles]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Margin="0,14,0,0" Click="OnNavProfiles" />

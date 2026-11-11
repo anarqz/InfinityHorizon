@@ -7,11 +7,11 @@ using Infinity.Core.Saves;
 namespace Infinity.App;
 
 /// <summary>
-/// Which profiles keep data on the servers (the cloud save, the profile sync, the universe) is the
-/// server's cloud lines (CR-S51, OD-128); the tier is only a badge (CR-S69). OD-60: a Hardcore profile starts empty, and the game seeds it
-/// on the first launch (the opening race again, the starter car picked in the game); its first
-/// cloud revision is that career, uploaded at exit. A Noob one starts from the player's offline
-/// save (OD-41). Every account creates either; Hardcore → Noob is one-way.
+/// <summary>
+/// Which profiles keep data on the servers is the server's (CR-S51, OD-128); the tier is only a badge (CR-S69). OD-60: a Hardcore profile
+/// starts empty, and the game seeds it on the first launch (the opening race again, the starter car picked in the game); its first cloud
+/// revision is that career, uploaded at exit. OD-239: an Azimuth profile (wire mode <c>noob</c>) plays the player's own Azimuth save and
+/// has no cloud save at all: nothing of it is downloaded, uploaded or analysed.
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -19,7 +19,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// Signed in to an account: Hardcore can be chosen on every tier (owner 2026-10-27 "Follow the server's flags"); whether it keeps
-    /// a cloud line is the server's (CR-S51 <see cref="CloudLines"/>), the admission decides.
+    /// a cloud line is the server's (CR-S51), the admission decides.
     /// </summary>
     public bool CanChooseHardcore
     {
@@ -29,7 +29,7 @@ public sealed partial class ShellViewModel
         get { var can = _session?.Me is not null && CurrentGame.FullFeatures && CurrentGame.HardcoreCareers && !HasLiveProfile("hardcore"); InspectCanChooseHardcore(ref can); return can; }
     }
 
-    /// <summary>OD-214 / CAREERS.md §2: a new Noob profile only while the account has no live one (it gets a career of this game instead).</summary>
+    /// <summary>OD-214 / CAREERS.md §2: a new Azimuth profile only while the account has no live one (it gets a career of this game instead).</summary>
     public bool CanChooseNoob => !HasLiveProfile("noob");
 
     /// <summary>The new-profile form: offline always; signed in only while a mode has no live profile the game allows.</summary>
@@ -41,7 +41,7 @@ public sealed partial class ShellViewModel
 
     partial void InspectCanChooseHardcore(ref bool can);
 
-    /// <summary>CR-S69: the account's badge (and which of the server's cloud lines is its), never a gate.</summary>
+    /// <summary>CR-S69: the account's badge (and which of the server's Hardcore cloud lines is its), never a gate.</summary>
     private bool IsSupporter => _session?.Me?.Access.Tier == "vip";
 
     /// <summary>CR-S51: this server keeps a new Hardcore profile of this account in the cloud (absent policy = OD-52, a Supporter's).</summary>
@@ -49,14 +49,10 @@ public sealed partial class ShellViewModel
 
     public string HardcoreHint => S[HardcoreKeepsCloud ? "modes.hardcore_hint" : "modes.hardcore_hint_local"];
 
-    /// <summary>CR-S66 (OD-128): this server keeps a Noob profile of this account in the cloud, saved without the checks (absent policy: none).</summary>
-    public bool NoobKeepsCloud => IsSupporter ? _cloudLines?.NoobVip ?? false : _cloudLines?.NoobFree ?? false;
+    /// <summary>OD-239: an Azimuth profile plays the player's own Azimuth save; there is no cloud wording to choose.</summary>
+    public string NoobHint => S["modes.noob_hint"];
 
-    public string NoobHint => S[NoobKeepsCloud ? "modes.noob_hint_cloud" : "modes.noob_hint"];
-
-    public string FreeNoobHint => S[NoobKeepsCloud ? "modes.free_noob_cloud" : "modes.free_noob"];
-
-    public string ConvertKeeps => S[NoobKeepsCloud ? "modes.convert_keeps_cloud" : "modes.convert_keeps"];
+    public string FreeNoobHint => S["modes.free_noob"];
 
     public bool NewHardcore
     {
@@ -68,7 +64,6 @@ public sealed partial class ShellViewModel
             Changed(nameof(NewNoob));
             Changed(nameof(AzimuthNameWarning));
             ChangedSeedForm(); // CR-S52: "Start from one of my profiles" is a Hardcore option
-            ChangedNoobSeedForm(); // owner 2026-10-28: and "Start from one of my Hardcore profiles" a Noob one
         }
     }
 
@@ -76,107 +71,6 @@ public sealed partial class ShellViewModel
     {
         get => !NewHardcore;
         set => NewHardcore = !value;
-    }
-
-    private Profile? _converting;
-    private ModeChangeConfirm? _convertDetails;
-    private string? _convertKey;
-
-    /// <summary>The Hardcore → Noob warning is open (step 1 answered).</summary>
-    public bool ShowConvert => _converting is not null && _convertDetails is not null;
-
-    public string ConvertTitle => _converting is null ? string.Empty : S.Format("modes.convert_title", ("name", ProfileName.Plain(_converting.Gamertag)));
-
-    /// <summary>What the change deletes for good, one line per kind the server counted.</summary>
-    public string ConvertDeletes
-    {
-        get
-        {
-            if (_convertDetails is null)
-            {
-                return string.Empty;
-            }
-            var lines = _convertDetails.Deletes.Where(d => d.Value > 0)
-                .Select(d => "• " + d.Value.ToString("N0", CultureInfo.CurrentCulture) + " " + KindLabel(d.Key));
-            var text = string.Join(Environment.NewLine, lines);
-            return text.Length == 0 ? S["modes.convert_nothing"] : text;
-        }
-    }
-
-    private string KindLabel(string kind) => kind switch
-    {
-        "scores" => S["modes.kind_scores"],
-        "ghosts" => S["modes.kind_ghosts"],
-        "xp" => S["modes.kind_xp"],
-        "drivatars" => S["modes.kind_drivatars"],
-        "onlineProfile" => S["modes.kind_online_profile"],
-        "inbox" => S["modes.kind_inbox"],
-        "saveRevisions" => S["modes.kind_save_revisions"],
-        _ => kind,
-    };
-
-    /// <summary>Hardcore → Noob, step 1: ask the server what it would delete (nothing is written).</summary>
-    public async Task AskConvertAsync(Profile profile)
-    {
-        ArgumentNullException.ThrowIfNull(profile);
-        if (_session is null || profile.Mode != "hardcore" || Playing)
-        {
-            return;
-        }
-        await Run(S["busy.reading"], async () =>
-        {
-            var details = await _session.AskNoobAsync(profile.Xuid, game: profile.Game);
-            if (details is null)
-            {
-                await _session.RefreshMeAsync();
-                FillProfiles();
-                return;
-            }
-            CancelDeleteProfile(); // one confirmation at a time (CR-S61)
-            _converting = profile;
-            _convertDetails = details;
-            _convertKey = Guid.CreateVersion7().ToString(); // reused on every retry of the confirmation
-            ChangedConvert();
-        });
-    }
-
-    /// <summary>Hardcore → Noob, step 2: the player confirmed. The newest cloud save must be on the PC first.</summary>
-    public async Task ConfirmConvertAsync()
-    {
-        if (_session is null || _converting is not { } profile || _convertDetails is not { } details || _convertKey is not { } key)
-        {
-            return;
-        }
-        await Run(S["busy.converting"], async () =>
-        {
-            SavesChanged(); // owner 2026-11-08: this write changes the cloud revisions, read again when next shown
-            if (details.SaveRevision > 0 && !await DownloadNewestAsync(profile))
-            {
-                // the cloud save would be gone for good: it comes to this PC first (SAVES_API.md §4)
-                Message = S["modes.convert_needs_download"];
-                return;
-            }
-            await _session.ConfirmNoobAsync(profile.Xuid, key, game: profile.Game);
-            CancelConvert();
-            await _session.RefreshMeAsync();
-            FillProfiles();
-            Message = S.Format(NoobKeepsCloud ? "modes.converted_cloud" : "modes.converted", ("name", ProfileName.Plain(profile.Gamertag)));
-        });
-    }
-
-    public void CancelConvert()
-    {
-        _converting = null;
-        _convertDetails = null;
-        _convertKey = null;
-        ChangedConvert();
-    }
-
-    private void ChangedConvert()
-    {
-        Changed(nameof(ShowConvert));
-        Changed(nameof(ConvertTitle));
-        Changed(nameof(ConvertDeletes));
     }
 
     private readonly Dictionary<(string Game, string? Query), (CloudSaves Saves, SavesApiClient Api)> _saveClients = [];
@@ -204,10 +98,13 @@ public sealed partial class ShellViewModel
         return client;
     }
 
-    /// <summary>OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says).</summary>
+    /// <summary>
+    /// OD-52 / OD-60: the cloud save around a Play (only a profile with a cloud line does anything; the admission says). OD-239: none for an
+    /// Azimuth profile, whatever the gate answers.
+    /// </summary>
     private SessionSaves? SessionSavesFor(Profile profile)
     {
-        if (!CurrentGame.CloudSaves || _install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
+        if (profile.Mode != "hardcore" || !CurrentGame.CloudSaves || _install is null || _session is not { } session || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
         {
             return null;
         }
@@ -364,47 +261,14 @@ public sealed partial class ShellViewModel
         if (step is SaveStep.SeedRefused or SaveStep.RestoreRefused or SaveStep.RestoreUndoFailed or SaveStep.FreshStartHeld) Message = text;
     }
 
-    /// <summary>Hardcore → Noob: the line's newest cloud revision onto this PC first (no lease needed to read).</summary>
-    private async Task<bool> DownloadNewestAsync(Profile profile)
-    {
-        if (_install is null || _session is null || CloudSaveClient() is not { } client || !ulong.TryParse(profile.Xuid, out var xuid))
-        {
-            return false;
-        }
-        var access = await _session.Tokens.AccessAsync();
-        var (head, failure) = await client.Saves.HeadAsync(access, xuid);
-        if (head is null || failure is not null)
-        {
-            return false;
-        }
-        var root = AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
-        if (head.IsCloudExpired())
-        {
-            RenderSave(SaveStep.CloudExpired, null); // retention: nothing to bring down; this PC's save is the one kept
-            return true;
-        }
-        var decision = client.Saves.Decide(root, xuid, head);
-        switch (decision.Decision)
-        {
-            case SyncDecision.InSync or SyncDecision.Empty:
-                return true;
-            case SyncDecision.Download or SyncDecision.FastForward:
-                var outcome = await client.Saves.InstallHeadAsync(access, root, xuid, head, decision.LocalContent, "before-noob");
-                return outcome.Failure is null;
-            default:
-                return false; // this PC is ahead or both moved: never delete progress on a guess
-        }
-    }
-
     /// <summary>What a profile row says under its gamertag: its mode, and what that means now.</summary>
     public string ModeLine(Profile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
         if (profile.Mode != "hardcore")
         {
-            // CR-S66: a Noob line is saved at once (no checks); without one, what this server does for Noob
-            return "NOOB · " + (profile.CloudLine == true ? S["modes.noob_cloud"]
-                : profile.CloudLine is null && NoobKeepsCloud ? S["modes.noob_cloud"] : S["profiles.local_saves"]);
+            // OD-239: an Azimuth profile plays the player's own Azimuth save, never a cloud line (whatever an older server says)
+            return S["sm.noob"] + " · " + S["modes.noob_own_save"];
         }
         // CR-S51: the server says whether this profile keeps a cloud line; without it (an older server), what this server's
         // cloud lines say for the account (CR-S69: never a Supporter-only wording)
@@ -422,9 +286,6 @@ public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = f
 
     public bool Hardcore => Profile.Mode == "hardcore";
 
-    /// <summary>OD-207 #8 / CAREERS.md §6.8: a launcher that knows careers never changes a mode; an older server's rows keep the link.</summary>
-    public bool CanConvert => Hardcore && Card is null;
-
     /// <summary>CR-S61: "Delete from the cloud" is offered on account profiles only (an older server's: the profile is its one career).</summary>
     public bool CanDeleteFromCloud => OnAccount && Card is null;
 
@@ -434,8 +295,8 @@ public sealed record ProfileRow(Profile Profile, string Line, bool OnAccount = f
     /// <summary>CR-S98: "Delete profile" (every game) on every account profile of a server that lists them.</summary>
     public bool CanDeleteWholeProfile => OnAccount && Card is not null;
 
-    /// <summary>W12: "Download to this PC" on a started career the cloud holds a revision of (a game with cloud saves).</summary>
-    public bool CanDownload => OnAccount && Card is { State: CareerState.Started, Career.Cloud.Revision: > 0 };
+    /// <summary>W12: "Download to this PC" on a started Hardcore career the cloud holds a revision of (OD-239: never an Azimuth one).</summary>
+    public bool CanDownload => OnAccount && Hardcore && Card is { State: CareerState.Started, Career.Cloud.Revision: > 0 };
 
     /// <summary>The career link's words, with the game's title.</summary>
     public string DeleteCareerLabel { get; init; } = string.Empty;

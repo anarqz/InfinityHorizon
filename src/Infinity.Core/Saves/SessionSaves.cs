@@ -181,6 +181,8 @@ public sealed class SessionSaves
     {
         ArgumentNullException.ThrowIfNull(active);
         _line = CloudSaveLine.FromGate(active);
+        // OD-239: an Azimuth career plays the player's own Azimuth save, untouched: nothing of it is read, restored or sent
+        if (CloudSaveLine.TicketMode(active) == "noob") return;
         if (_line is null)
         {
             // OD-133: a lapsed line still never plays a refused restore: the owed undo is paid from the backup (no head to fall back on)
@@ -816,17 +818,5 @@ public sealed class SessionSaves
         }
     }
 
-    private static bool IsHardcore(GateActive active)
-    {
-        try
-        {
-            var claims = Convert.FromBase64String(active.LaunchTicket.Claims);
-            using var json = System.Text.Json.JsonDocument.Parse(claims);
-            return json.RootElement.TryGetProperty("mode", out var mode) && mode.GetString() == "hardcore";
-        }
-        catch (Exception e) when (e is FormatException or System.Text.Json.JsonException or InvalidOperationException)
-        {
-            return false;
-        }
-    }
+    private static bool IsHardcore(GateActive active) => CloudSaveLine.TicketMode(active) == "hardcore";
 }
