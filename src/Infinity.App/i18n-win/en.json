@@ -1631,5 +1631,6 @@
   "sm.create_azimuth_sub": "You pick it once. It is the name leaderboards, speed traps and liveries show when PLAY AZIMUTH plays this PC's Azimuth save.",
   "play.azimuth_pick_name": "Pick your Azimuth gamertag once, then PLAY AZIMUTH plays this PC's Azimuth save.",
   "play.azimuth_own_name": "Plays this PC's Azimuth save as {name}.",
-  "profiles.azimuth_identity_made": "Your Azimuth gamertag is {name}. PLAY AZIMUTH plays this PC's Azimuth save under it."
+  "profiles.azimuth_identity_made": "Your Azimuth gamertag is {name}. PLAY AZIMUTH plays this PC's Azimuth save under it.",
+  "profiles.azimuth_identity_exists": "Your account already has its Azimuth gamertag, so no second one is made. PLAY AZIMUTH plays this PC's Azimuth save under it."
 }

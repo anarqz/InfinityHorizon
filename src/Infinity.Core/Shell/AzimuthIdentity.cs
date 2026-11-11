@@ -59,6 +59,29 @@ public static class AzimuthIdentity
     }
 
     /// <summary>
+    /// Whether the account already has its Azimuth identity for <paramref name="game"/>: on a CR-S98 server any live <c>noob</c> player (the
+    /// identity is the account's, whatever game its careers are of); before CR-S98 a live <c>noob</c> row of the game. With one, a local
+    /// Azimuth profile is never uploaded (it becomes the identity on this PC), so the server never holds a second <c>noob</c> profile.
+    /// </summary>
+    public static bool Exists(Me me, string game)
+    {
+        ArgumentNullException.ThrowIfNull(me);
+        return me.Players is not null ? Of(me) is not null : OfRows(me.Profiles.Where(p => p.Game == game)) is not null;
+    }
+
+    /// <summary>
+    /// The identity's <c>profiles[]</c> row of <paramref name="game"/> (its career there), null without an identity or without that career yet
+    /// (PLAY AZIMUTH makes it). This PC's copy of that row is the one local entry of the identity.
+    /// </summary>
+    public static Profile? RowOf(Me me, string game)
+    {
+        ArgumentNullException.ThrowIfNull(me);
+        if (me.Players is null) return OfRows(me.Profiles.Where(p => p.Game == game));
+        if (Of(me)?.Careers.FirstOrDefault(c => c.Game == game) is not { } career) return null;
+        return me.Profiles.FirstOrDefault(p => p.ProfileId == career.CareerId && p.Game == game);
+    }
+
+    /// <summary>
     /// Offline (no account): this PC's one local Azimuth identity of <paramref name="game"/>, among its local <c>noob</c> profiles. The cached
     /// copy of the identity of the last sign-in (<paramref name="lastIdentityXuid"/>, its account XUID) comes first, so offline plays under the
     /// same gamertag as online; then any copy of an account profile the account still lists; then the oldest created; then the id. Null when

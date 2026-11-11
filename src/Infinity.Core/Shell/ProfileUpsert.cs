@@ -36,6 +36,11 @@ public sealed record ProfileUpsertPlan(string AccountId, IReadOnlyList<LocalProf
     /// </summary>
     public IReadOnlyList<LocalProfile> Recovered { get; init; } = [];
 
+    /// <summary>
+    /// OD-240: the local Azimuth profile this refresh made the account's Azimuth identity on this PC (never uploaded: the account had one).
+    /// </summary>
+    public IReadOnlyList<LocalProfile> Adopted { get; init; } = [];
+
     public bool MustChoose => Uploadable.Count > Room;
 
     /// <summary>
@@ -68,11 +73,20 @@ public static class ProfileUpsert
         ArgumentNullException.ThrowIfNull(api); ArgumentNullException.ThrowIfNull(store);
         var me = await api.MeAsync(access, cancellation).ConfigureAwait(false);
         var localOnly = store.Read().Where(p => p.Game == game && p.LocalOnly).Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-        var all = store.RefreshFromAccount(me, game, saveFolderExists);
+        var adopted = new HashSet<string>(StringComparer.Ordinal);
+        var all = store.RefreshFromAccount(me, game, saveFolderExists, adopted);
         var account = all.Where(p => p.Game == game && p.OnAccount(me.AccountId)).ToArray();
-        var uploadable = all.Where(p => p.Game == game && p.LocalOnly).ToArray();
+        // OD-240: one Azimuth identity per account. With one, no local Azimuth profile is uploaded (it became the identity on this PC);
+        // without one, only the oldest local Azimuth profile may become it. Hardcore ones upload as before.
+        var azimuth = AzimuthIdentity.Exists(me, game) ? null
+            : all.Where(p => p.Game == game && p.LocalOnly && !p.Hardcore).OrderBy(p => p.CreatedAt, StringComparer.Ordinal).ThenBy(p => p.Id, StringComparer.Ordinal).FirstOrDefault();
+        var uploadable = all.Where(p => p.Game == game && p.LocalOnly && (p.Hardcore || p.Id == azimuth?.Id)).ToArray();
         var room = Math.Max(0, LocalProfileStore.MaxProfiles - me.Profiles.Count(p => p.Game == game));
-        return new(me.AccountId, account, uploadable, room) { Recovered = account.Where(p => localOnly.Contains(p.Id)).ToArray() };
+        return new(me.AccountId, account, uploadable, room)
+        {
+            Recovered = account.Where(p => localOnly.Contains(p.Id) && !adopted.Contains(p.Id)).ToArray(),
+            Adopted = account.Where(p => adopted.Contains(p.Id)).ToArray(),
+        };
     }
 
     /// <summary>

@@ -73,6 +73,8 @@ public sealed partial class ShellViewModel
             var plan = await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
             // An earlier registration the server stored but whose answer was lost: linked by this refresh, continued like any other.
             var registered = plan.Recovered.ToList();
+            // OD-240: a local Azimuth profile on an account that has its identity is never uploaded; it simply became the identity here
+            foreach (var adopted in plan.Adopted) Log($"profiles: local Azimuth profile {adopted.Id} is the account's Azimuth identity on this PC (not uploaded)");
             IReadOnlyList<ProfileUpsertResult> automatic = [];
             // W12 (handoff §10): a server that knows careers lists the cloud's profiles only: no automatic upload, no upload panel
             var cloudOnly = session.Me?.Players is not null;
@@ -125,6 +127,7 @@ public sealed partial class ShellViewModel
         row.Result = code switch
         {
             ErrorCodes.AccountsNameUnavailable => S["upsert.name_taken"],
+            ErrorCodes.AccountsProfileLimit when !row.Profile.Hardcore => S["profiles.azimuth_identity_exists"],
             ErrorCodes.AccountsProfileLimit => S["upsert.limit_kept"],
             _ => ProfileErrorText(code),
         };

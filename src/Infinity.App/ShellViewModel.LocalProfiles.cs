@@ -66,6 +66,8 @@ public sealed partial class ShellViewModel
         var seedSource = hardcore && NewSeedFromProfile ? NewSeedSource?.Profile : null;
         if (hardcore && NewSeedFromProfile && seedSource is null) { Message = S["seed.pick_source"]; return; }
 
+        // OD-240: one Azimuth identity per account: signed in with one, no second Azimuth profile is made (here or on the server)
+        if (!hardcore && SignedIn && _session?.Me is { } me && AzimuthIdentity.Exists(me, game)) { Message = S["profiles.azimuth_identity_exists"]; return; }
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow, SignedIn ? _session?.Me?.AccountId : null); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
@@ -82,6 +84,14 @@ public sealed partial class ShellViewModel
                 var plan = await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
                 var result = (await ProfileUpsert.UploadAsync(api, access, LocalProfiles, plan, [created.Id], CancellationToken.None)).SingleOrDefault();
                 await session.RefreshMeAsync();
+                // OD-240: PROFILE_LIMIT on an Azimuth create means the account already has its identity (made on another PC meanwhile): said
+                // plainly, never retried under another name; the refresh makes this PC's profile that identity (no second one on the server).
+                if (!hardcore && result is null or { Uploaded: false, ErrorCode: ErrorCodes.AccountsProfileLimit })
+                {
+                    await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
+                    Message = S["profiles.azimuth_identity_exists"];
+                    return;
+                }
                 Message = result is { Uploaded: false, ErrorCode: { } code } ? ProfileErrorText(code)
                     : S.Format(hardcore ? "modes.created_hardcore" : "profiles.azimuth_identity_made", ("name", result?.Profile.DisplayName ?? created.Name));
                 // OD-120: a name taken meanwhile (or no room) opens the panel, which asks for a new name or keeps it on this PC.
