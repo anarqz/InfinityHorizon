@@ -451,6 +451,10 @@ public partial class MainWindow : Window
 
     private void OnRestoreOriginal(object sender, RoutedEventArgs e) => _vm.OpenRestoreOriginal();
     private async void OnConfirmCopy(object sender, RoutedEventArgs e) => await _vm.ConfirmCopyAsync();
+    private async void OnUseOtherSave(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SavePickRow row) await _vm.UseOtherSaveAsync(row);
+    }
     private async void OnHistorySlot(object sender, RoutedEventArgs e)
     {
         if (Enum.TryParse<Infinity.Core.Shell.SaveSlot>(((FrameworkElement)sender).Tag as string, out var slot)) await _vm.ShowHistorySlotAsync(slot);

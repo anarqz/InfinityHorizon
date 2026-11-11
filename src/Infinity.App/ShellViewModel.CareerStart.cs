@@ -258,17 +258,17 @@ public sealed partial class ShellViewModel
                 CareerProgressKind.NoSyncYet => S["careers.no_sync"],
                 CareerProgressKind.NewCareer => S["careers.new"],
                 CareerProgressKind.AzimuthSave => S["careers.azimuth_save"],
-                _ => ProgressText(card.Career!.Progress!),
+                _ => ProgressText(card.Career!.Progress!, Infinity.Core.Process.GameDefinition.ById(card.Career.Game) ?? CurrentGame),
             },
         };
         // §6.10: until the owner's cleanup, an account may hold more than one profile of a mode; each is listed and says so
         return mode + " · " + state + (card.Duplicate ? " · " + S["careers.duplicate"] : string.Empty);
     }
 
-    private string ProgressText(CareerProgress progress)
+    private string ProgressText(CareerProgress progress, Infinity.Core.Process.GameDefinition game)
     {
         var parts = new List<string>();
-        if (progress.Level is { } level) parts.Add(S.Format("careers.level", ("level", level.ToString(CultureInfo.CurrentCulture))));
+        if (game.ShownLevel(progress.Level) is { } level) parts.Add(S.Format("careers.level", ("level", level.ToString(CultureInfo.CurrentCulture))));
         if (progress.Credits is { } credits) parts.Add(S.Format("careers.credits", ("credits", credits.ToString("N0", CultureInfo.CurrentCulture))));
         if (progress.Cars is { } cars) parts.Add(S.Format("careers.cars", ("cars", cars.ToString(CultureInfo.CurrentCulture))));
         if (progress.PlaySeconds is { } seconds) parts.Add(S.Format("careers.hours", ("hours", (seconds / 3600).ToString(CultureInfo.CurrentCulture))));

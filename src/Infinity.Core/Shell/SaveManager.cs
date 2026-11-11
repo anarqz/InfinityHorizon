@@ -22,6 +22,9 @@ public enum SavesScreen
     /// <summary>Compare → (Check) → Confirm of one copy.</summary>
     Copy,
 
+    /// <summary>Owner 2026-11-11: "Use another save on this PC…", every save container of the game on this PC to pick the new Azimuth save from.</summary>
+    Pick,
+
     /// <summary>One slot's timeline: this PC's history entries and the cloud's revisions.</summary>
     History,
 

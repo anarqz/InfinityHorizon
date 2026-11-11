@@ -205,7 +205,7 @@ public sealed partial class ShellViewModel
     public bool CanKeepCloudSave => _saveConflict?.CanKeepCloud == true;
 
     public string SaveConflictCloudText => _saveConflict is not { } c ? string.Empty : SaveSideText(
-        SaveSummary.LevelText(S, c.Cloud.Summary), c.Cloud.Summary?.Credits is { } credits ? (int?)credits : null,
+        SaveSummary.LevelText(S, c.Cloud.Summary, CurrentGame), c.Cloud.Summary?.Credits is { } credits ? (int?)credits : null,
         DateTime.TryParse(c.Cloud.CommittedAt, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var when) ? when : null);
 
     // This PC's side has no level: ProfileData's Level is not the driver level (CR-S81); only the server derives it.

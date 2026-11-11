@@ -171,16 +171,18 @@ public static class ProfileTools
     public const string Rename = "rename";
     public const string DeleteCareer = "delete-career";
     public const string DeleteProfile = "delete-profile";
-    /// <summary>An AZIMUTH row: the HARDCORE profile's save of the game onto this PC's Azimuth save (backed up first).</summary>
-    public const string CopyFromHardcore = "copy-from-hardcore";
+    /// <summary>
+    /// An AZIMUTH row (owner 2026-11-11): "Use another save on this PC…", the picker of every save container of the game on this PC (old Noob
+    /// folders, HARDCORE folders, unknown ones, the launcher's backups); the pick becomes the Azimuth save after a verified backup.
+    /// </summary>
+    public const string UseOtherSave = "use-other-save";
     /// <summary>An AZIMUTH row: Azimuth's original save of the game back (what is there backed up first).</summary>
     public const string RestoreOriginal = "restore-original";
-    /// <summary>An AZIMUTH row, one per old Noob save of the game (<c>old-copy:&lt;key&gt;</c>): copy it into the Azimuth save after a backup.</summary>
+    /// <summary>An AZIMUTH row, one per old Noob cloud save of the game (<c>old-copy:&lt;key&gt;</c>): download it, back up, copy it into the Azimuth save.</summary>
     public const string OldCopy = "old-copy";
     /// <summary>An AZIMUTH row, an old Noob cloud save (<c>old-export:&lt;key&gt;</c>): export it to a file.</summary>
     public const string OldExport = "old-export";
-    /// <summary>An AZIMUTH row, an old Noob folder on this PC (<c>old-folder:&lt;key&gt;</c>): open it in Explorer.</summary>
-    public const string OldFolder = "old-folder";
+
 
     /// <summary>The profile card's tools, in the menu's order.</summary>
     public static IReadOnlyList<string> ProfileLevel { get; } = [DeleteProfile, Rename, HelpSensei];
@@ -189,7 +191,7 @@ public static class ProfileTools
     public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, History, Resolve, Download, DeleteCareer];
 
     /// <summary>An AZIMUTH game row's tools, in the menu's order (the old-save ones once per old save of the game).</summary>
-    public static IReadOnlyList<string> AzimuthLevel { get; } = [CopyFromHardcore, History, RestoreOriginal, OldCopy, OldExport, OldFolder];
+    public static IReadOnlyList<string> AzimuthLevel { get; } = [UseOtherSave, History, RestoreOriginal, OldCopy, OldExport];
 
     /// <summary>The profile card's menu (whether each is enabled is the page's).</summary>
     /// <param name="canRename">The server allows this profile a rename now (a name change notice): otherwise Rename is not listed.</param>
@@ -219,27 +221,21 @@ public static class ProfileTools
     }
 
     /// <summary>
-    /// One AZIMUTH game row's menu, in order: Copy from HARDCORE (only while the account has a HARDCORE profile that can have a career of the
-    /// game), History, Restore Azimuth's original, then for each old Noob save of the game its copy and its export (a cloud one) or its
-    /// folder (one on this PC). Whether each is enabled is the page's (the game running, nothing to copy, no original recorded).
+    /// One AZIMUTH game row's menu, in order: Use another save on this PC…, History, Restore Azimuth's original, then for each old Noob cloud
+    /// save of the game its copy and its export to a file. Whether each is enabled is the page's (the game running, no original recorded).
     /// </summary>
-    /// <param name="hardcoreCareers">The account has a HARDCORE profile and the game allows HARDCORE careers.</param>
-    /// <param name="oldSaves">The old Noob saves of the row's game: their keys and whether each is a cloud one.</param>
-    public static IReadOnlyList<string> AzimuthMenu(bool hardcoreCareers, IReadOnlyList<(string Key, bool Cloud)> oldSaves)
+    /// <param name="oldCloudSaves">The keys of the game's old Noob cloud saves.</param>
+    public static IReadOnlyList<string> AzimuthMenu(IReadOnlyList<string> oldCloudSaves)
     {
-        ArgumentNullException.ThrowIfNull(oldSaves);
-        var list = new List<string>();
-        if (hardcoreCareers) list.Add(CopyFromHardcore);
-        list.Add(History);
-        list.Add(RestoreOriginal);
-        foreach (var (key, cloud) in oldSaves)
+        ArgumentNullException.ThrowIfNull(oldCloudSaves);
+        var list = new List<string> { UseOtherSave, History, RestoreOriginal };
+        foreach (var key in oldCloudSaves)
         {
             list.Add(OldCopy + ":" + key);
-            list.Add((cloud ? OldExport : OldFolder) + ":" + key);
+            list.Add(OldExport + ":" + key);
         }
         return list;
     }
-
     /// <summary>The tool of an AZIMUTH menu id (<c>old-copy:&lt;key&gt;</c> is <see cref="OldCopy"/>) and its old save's key (null for the others).</summary>
     public static (string Tool, string? Key) Split(string id)
     {

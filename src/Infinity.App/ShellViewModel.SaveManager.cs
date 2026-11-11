@@ -211,6 +211,7 @@ public sealed partial class ShellViewModel
     public bool ShowSavesStart => ShowSaveManager && SavesCurrent == SavesScreen.Start;
     public bool ShowSavesResolve => ShowSaveManager && SavesCurrent == SavesScreen.Resolve;
     public bool ShowSavesCopy => ShowSaveManager && SavesCurrent == SavesScreen.Copy;
+    public bool ShowSavesPick => ShowSaveManager && SavesCurrent == SavesScreen.Pick;
     public bool ShowSavesHistory => ShowSaveManager && SavesCurrent == SavesScreen.History;
     public bool ShowSavesDelete => ShowSaveManager && SavesCurrent == SavesScreen.Delete;
     public bool ShowSavesHelp => ShowSaveManager && SavesCurrent == SavesScreen.Help;
@@ -488,29 +489,25 @@ public sealed partial class ShellViewModel
     private List<MenuAction> AzimuthMenuOf(GameDefinition game)
     {
         var running = _gameRunning;
-        var hc = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
         var old = OldSaveRows.Where(r => r.Save.Game == game.Id).ToList();
         string? blocked = game.Id == _gate.Game ? null
             : !Games.Any(g => g.Id == game.Id) ? S["play.tile_not_in_install"]
             : Playing ? S["play.session_active"] : null;
         var history = SafeHistory();
         var list = new List<MenuAction>();
-        foreach (var id in ProfileTools.AzimuthMenu(hc is not null && game.HardcoreCareers, [.. old.Select(r => (r.Save.Key, r.CanExport))]))
+        foreach (var id in ProfileTools.AzimuthMenu([.. old.Select(r => r.Save.Key)]))
         {
             var (tool, key) = ProfileTools.Split(id);
             var row = key is null ? null : old.First(r => r.Save.Key == key);
             var action = tool switch
             {
-                ProfileTools.CopyFromHardcore => LocalSaveOf(hc!.Profile.Xuid) is not null
-                    ? new MenuAction(id, S.Format("sm.menu.copy_from_hc", ("name", hc.Gamertag)), !running, running ? S["sm.block.GameRunning"] : null)
-                    : new MenuAction(id, S.Format("sm.menu.copy_from_hc", ("name", hc.Gamertag)), false, S["sm.block.NoSource"]),
+                ProfileTools.UseOtherSave => new MenuAction(id, S["sm.menu.use_other_save"], !running, running ? S["sm.block.GameRunning"] : null),
                 ProfileTools.History => new MenuAction(id, S["sm.menu.history"], true),
                 ProfileTools.RestoreOriginal => running ? new MenuAction(id, S["sm.restore_original"], false, S["sm.block.GameRunning"])
                     : history?.HasOriginal == true ? new MenuAction(id, S["sm.restore_original"], true)
                     : new MenuAction(id, S["sm.restore_original"], false, S.Format("sm.restore_original_none", ("game", game.Name))),
                 ProfileTools.OldCopy => new MenuAction(id, S.Format("export.menu_copy", ("name", row!.Save.Gamertag)), !running, running ? S["sm.block.GameRunning"] : null),
-                ProfileTools.OldExport => new MenuAction(id, S.Format("export.menu_export", ("name", row!.Save.Gamertag)), CanExportOldNoob),
-                _ => new MenuAction(id, S.Format("export.menu_folder", ("name", row!.Save.Gamertag)), true),
+                _ => new MenuAction(id, S.Format("export.menu_export", ("name", row!.Save.Gamertag)), CanExportOldNoob),
             };
             list.Add(blocked is not null ? action with { Enabled = false, Reason = blocked } : action);
         }
@@ -588,7 +585,7 @@ public sealed partial class ShellViewModel
         if (facts.HasCareerData && facts.Card!.Career!.Progress is { } p)
         {
             var at = facts.Card.Career.Cloud?.SavedAt ?? p.SyncedAt;
-            return RowFields(p.Level?.ToString("N0", SavesCulture), p.Credits, at is null ? S["sm.row.cloud"] : S.Format("sm.modified", ("when", When(at))));
+            return RowFields(facts.Game.ShownLevel(p.Level)?.ToString("N0", SavesCulture), p.Credits, at is null ? S["sm.row.cloud"] : S.Format("sm.modified", ("when", When(at))));
         }
         if (local is not null)
             return RowFields(null, local.Credits, S.Format(facts.Game.CloudSaves ? "sm.row.local_when" : "sm.modified", ("when", When(local.LastPlayedUtc))));
@@ -923,9 +920,8 @@ public sealed partial class ShellViewModel
         var old = key is null ? null : OldSaveRows.FirstOrDefault(r => r.Save.Key == key && r.Save.Game == CurrentGame.Id);
         switch (tool)
         {
-            case ProfileTools.CopyFromHardcore:
-                if (ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore") is { } hc) OpenCopyFromProfile(SaveSlot.Hardcore, hc);
-                else FillSaveCards();
+            case ProfileTools.UseOtherSave:
+                await OpenOtherSaveAsync();
                 break;
             case ProfileTools.History:
                 await OpenHistoryAsync(SaveSlot.Azimuth);
@@ -938,9 +934,6 @@ public sealed partial class ShellViewModel
                 break;
             case ProfileTools.OldExport when old is not null:
                 ExportOldSave(old);
-                break;
-            case ProfileTools.OldFolder when old is not null:
-                OpenOldSaveFolder(old);
                 break;
             default:
                 FillSaveCards(); // the old save went away meanwhile
@@ -1023,7 +1016,7 @@ public sealed partial class ShellViewModel
         string N(long? v) => v is { } x ? x.ToString("N0", c) : S["sm.unknown"];
         ResolveCloud = new CompareSide(S["sm.side.cloud"], S[_resolvePick == ResolvePick.Cloud ? "sm.newer" : "sm.older"], _resolvePick == ResolvePick.Cloud,
         [
-            new(S["sm.kv.level"], N(p?.Level)), new(S["sm.kv.credits"], N(p?.Credits)), new(S["sm.kv.cars"], N(p?.Cars)),
+            new(S["sm.kv.level"], N(CurrentGame.ShownLevel(p?.Level))), new(S["sm.kv.credits"], N(p?.Credits)), new(S["sm.kv.cars"], N(p?.Cars)),
             new(S["sm.kv.play"], p?.PlaySeconds is { } s ? S.Format("sm.stats_hours", ("hours", (s / 3600).ToString(c))) : S["sm.unknown"]),
             new(S["sm.kv.modified"], When(card.Career?.Cloud?.SavedAt)),
             new(S["sm.kv.revision"], card.Career?.Cloud?.Revision.ToString(c) ?? S["sm.unknown"]),
@@ -1134,7 +1127,7 @@ public sealed partial class ShellViewModel
         var fromLines = new List<CompareLine>();
         if (plan.Cloud is { } rev)
         {
-            fromLines.Add(new(S["sm.kv.level"], rev.Summary.ShownLevel()?.ToString("N0", c) ?? S["sm.unknown"]));
+            fromLines.Add(new(S["sm.kv.level"], rev.Summary.ShownLevel(CurrentGame)?.ToString("N0", c) ?? S["sm.unknown"]));
             fromLines.Add(new(S["sm.kv.credits"], rev.Summary.Credits?.ToString("N0", c) ?? S["sm.unknown"], Up: rev.Summary.Credits > az?.Credits));
             fromLines.Add(new(S["sm.kv.modified"], When(rev.CommittedAt)));
             fromLines.Add(new(S["sm.kv.revision"], rev.Revision.ToString(c)));
@@ -1378,7 +1371,7 @@ public sealed partial class ShellViewModel
         var at = DateTimeOffset.TryParse(rev.CommittedAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var w) ? w : DateTimeOffset.MinValue;
         var c = SavesCulture;
         var parts = new List<string>();
-        if (rev.Summary.ShownLevel() is { } level) parts.Add(S.Format("sm.stats_level", ("level", level.ToString("N0", c))));
+        if (rev.Summary.ShownLevel(CurrentGame) is { } level) parts.Add(S.Format("sm.stats_level", ("level", level.ToString("N0", c))));
         if (rev.Summary.Credits is { } cr) parts.Add(S.Format("sm.stats_credits", ("credits", cr.ToString("N0", c))));
         var kind = KindText(rev.Kind) + "  ·  " + S.Format("sm.revision_n", ("n", rev.Revision.ToString(c)))
             + (rev.DeviceLabel is { Length: > 0 } device ? "  ·  " + device : string.Empty);
@@ -1525,7 +1518,8 @@ public sealed partial class ShellViewModel
         {
             nameof(SavesCurrent), nameof(ShowSaveManager), nameof(ShowPlainProfiles), nameof(ShowSavesHome), nameof(ShowSavesCreate), nameof(ShowSavesStart),
             nameof(ShowFloatingMenu),
-            nameof(ShowSavesResolve), nameof(ShowSavesCopy), nameof(ShowSavesHistory), nameof(ShowSavesDelete),
+            nameof(ShowSavesResolve), nameof(ShowSavesCopy), nameof(ShowSavesPick), nameof(PickTitle), nameof(PickSub), nameof(PickEmpty), nameof(CanUseOtherSave),
+            nameof(ShowSavesHistory), nameof(ShowSavesDelete),
             nameof(ShowSavesHelp), nameof(ShowSavesDone), nameof(ShowHelpLink), nameof(SavesCanGoBack), nameof(SavesTrail), nameof(SavesTrailLast),
             nameof(SavesSubtitle), nameof(ShowGameRunningNote), nameof(GameRunningText),
             nameof(CreateTitle), nameof(CreateSub), nameof(CreateAccent), nameof(ResolveCloud), nameof(ResolvePc), nameof(ResolveTitle), nameof(ResolveHardcore),
