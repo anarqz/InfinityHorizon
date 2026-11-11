@@ -161,45 +161,4 @@ public sealed partial class ShellViewModel
 
     /// <summary>The game package folder (or Mount itself) for the integrity check and mods that write game files.</summary>
     public void ChooseContentWithPicker() => OpenPicker(new(S["integrity.choose_title"], true, false, ChooseContentFolderAsync) { Start = ContentLocation?.PackageRoot });
-
-    /// <summary>The diagnostic file: saved under its own name in the folder picked (never over another file).</summary>
-    public void SaveCrashReportWithPicker()
-    {
-        if (CopyableCrashReport() is not { } report) return;
-        OpenPicker(new(S["crash.save_report"], true, false, folder =>
-        {
-            try { File.WriteAllText(FreeFileName(folder, "infinity-crash-report.json"), report, new System.Text.UTF8Encoding(false)); CrashExportResult(true); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { CrashExportResult(false); }
-            return Task.CompletedTask;
-        }) { PickFolderLabel = S["picker.save_here"] });
-    }
-
-    /// <summary>The private crash dump, saved locally in the folder picked; a cancelled pick ends the export as before.</summary>
-    internal void SaveCrashDumpWithPicker()
-    {
-        if (BeginManualCrashDumpExport() is not { } operation) return;
-        OpenPicker(new(S["crash.save_dump"], true, false, async folder =>
-        {
-            bool? success = null;
-            try
-            {
-                if (!IsCurrentCrashExport(operation)) return;
-                success = false;
-                var bytes = await ReadCrashDumpForManualExportAsync(operation);
-                if (bytes is null) return;
-                await File.WriteAllBytesAsync(FreeFileName(folder, "infinity-private-crash.dmp"), bytes, operation.Stop.Token);
-                success = true;
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or OperationCanceledException) { success = false; }
-            finally { FinishManualCrashDumpExport(operation, success); }
-        }) { PickFolderLabel = S["picker.save_here"], OnCancel = () => FinishManualCrashDumpExport(operation, null) });
-    }
-
-    /// <summary>A free file name in <paramref name="folder"/>: <paramref name="name"/>, else "name (2).ext", "name (3).ext"… (an export never overwrites).</summary>
-    internal static string FreeFileName(string folder, string name)
-    {
-        var path = Path.Combine(folder, name);
-        for (var n = 2; File.Exists(path) && n < 1000; n++) path = Path.Combine(folder, $"{Path.GetFileNameWithoutExtension(name)} ({n}){Path.GetExtension(name)}");
-        return path;
-    }
 }

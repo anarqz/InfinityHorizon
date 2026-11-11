@@ -59,7 +59,7 @@ public sealed partial class ShellViewModel
     }
     public bool CanRetryLauncherUpdate => !LauncherUpdateBusy && !Playing;
     public bool CanCancelLauncherUpdate => _updateDownload is not null && _launcherUpdatePhase is UpdatePhase.Downloading or UpdatePhase.Verifying;
-    public bool CanApplyLauncherUpdate => _launcherUpdatePhase == UpdatePhase.Required && !LauncherUpdateBusy && !_updateRecoveryBlocked && !Playing && !IntegrityChecking && !_busy && CrashIdle;
+    public bool CanApplyLauncherUpdate => _launcherUpdatePhase == UpdatePhase.Required && !LauncherUpdateBusy && !_updateRecoveryBlocked && !Playing && !IntegrityChecking && !_busy;
     public string LauncherUpdateVersion => S.Format("updater.versions", ("current", Version), ("target", _updateTarget ?? "—"));
     public string LauncherUpdateStatus => _updateAwaitingCommit ? S["updater.applying"] : _updateFailureKey is { } failure ? S[failure]
         : LauncherFloorUnread ? S["updater.floor_unread"] : S["updater." + (_launcherUpdatePhase switch
@@ -326,7 +326,7 @@ public sealed partial class ShellViewModel
             acceptingProgress = false;
             prepared = plan;
             download.Token.ThrowIfCancellationRequested();
-            if (Playing || _busy || !CrashIdle) throw new InvalidOperationException("Launcher is busy");
+            if (Playing || _busy) throw new InvalidOperationException("Launcher is busy");
             var helper = Path.Combine(plan.StageRoot, "infinity-updater.exe");
             if (!ReleaseSignature.IsOfficialFile(helper)) throw new InvalidDataException("Updater signature");
             var transaction = Path.GetDirectoryName(plan.StageRoot)!;

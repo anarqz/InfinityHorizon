@@ -4,11 +4,16 @@ using System.Text.Json;
 
 namespace Infinity.Core.Diagnostics;
 
-/// <summary>Explicit clipboard/file export. A projection, never a serialization of private local context.</summary>
+/// <summary>
+/// One local crash as it goes into the "Get logs" zip (OD-241): a projection, never a serialization of the private local context
+/// (no account, session, world or player ids, names, paths or free text).
+/// </summary>
 public static class CrashSupportReport
 {
+    public const string InstantFormat = "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    public static string Create(CrashIncident incident, string? serverReportId = null)
+
+    public static string Create(CrashIncident incident)
     {
         ArgumentNullException.ThrowIfNull(incident);
         static string? Id(string? id) => Guid.TryParseExact(id, "D", out var parsed) && parsed != Guid.Empty ? id : null;
@@ -16,31 +21,44 @@ public static class CrashSupportReport
         {
             format = "infinity-crash-support-v1",
             localIncidentId = Id(incident.Id),
-            reportId = Id(serverReportId),
-            occurredAt = incident.OccurredAt.UtcDateTime.ToString(CrashSubmission.InstantFormat, CultureInfo.InvariantCulture),
-            build = CrashSubmission.Build(incident),
-            crash = CrashSubmission.Describe(incident),
+            occurredAt = incident.OccurredAt.UtcDateTime.ToString(InstantFormat, CultureInfo.InvariantCulture),
+            build = Build(incident),
+            crash = Describe(incident),
             localDumpAvailable = incident.Dump is not null,
             worldContextAvailable = incident.Context.World is not null,
             observedParticipantCount = Math.Min(incident.Context.World?.Participants.Count ?? 0, 12),
             attribution = "unknown",
         }, Json);
     }
-}
 
-/// <summary>Owner-configured Discord channel. Its actual private permissions must be set by moderators.</summary>
-public static class PrivateSupportLink
-{
-    public static Uri? Parse(string? configured)
+    private static object Build(CrashIncident incident) => new
     {
-        if (!Uri.TryCreate(configured, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Host is not ("discord.com" or "discord.gg")
-            || !uri.IsDefaultPort || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0) return null;
-        var parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (uri.Host == "discord.gg") return parts.Length == 1 && parts[0].Length is >= 2 and <= 64
-            && parts[0].All(c => char.IsAsciiLetterOrDigit(c) || c == '-') ? uri : null;
-        return parts.Length == 3 && parts[0] == "channels" && Snowflake(parts[1]) && Snowflake(parts[2]) ? uri : null;
+        game = incident.Game == "fh2" ? "fh2" : "unknown",
+        gameBuild = Version(incident.AzimuthVersion),
+        launcherVersion = Version(incident.LauncherVersion),
+        hookVersion = Version(incident.HookVersion),
+    };
+
+    private static object Describe(CrashIncident incident)
+    {
+        var module = incident.Dump?.FaultModule?.ToLowerInvariant() switch
+        {
+            "forza_durango_release_final.exe" => "game",
+            // OD-125: winmm.dll is ExtraOptions.Infinity (the hook and ExtraOptions in one module)
+            "azimuth-tls.dll" or "infinity.dll" or "winmm.dll" => "hook",
+            "infinity-overlay.dll" => "overlay",
+            _ => "unknown",
+        };
+        return new
+        {
+            kind = incident.Dump?.ExceptionCode is null ? "abnormal_exit" : "exception",
+            exitCode = incident.ExitCode,
+            exceptionCode = incident.Dump?.ExceptionCode,
+            faultModule = module,
+            faultOffset = module != "unknown" ? incident.Dump?.FaultModuleRva?.ToString("x16", CultureInfo.InvariantCulture) : null,
+        };
     }
 
-    private static bool Snowflake(string value) => value.Length is >= 1 and <= 20 && value.All(char.IsAsciiDigit)
-        && ulong.TryParse(value, out var id) && id != 0;
+    private static string Version(string? value) => value is { Length: >= 1 and <= 32 }
+        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or '+') ? value : "unknown";
 }
