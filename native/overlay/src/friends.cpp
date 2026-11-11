@@ -598,10 +598,10 @@ void DrawCard(ImDrawList *dl, const Layout &l, const FriendsStateFrame &st, floa
         y += 24 * s;
     };
     if (!age.empty()) field(T("Account age", "Idade da conta"), age);
-    for (const auto &p : fr->profiles) { // hardcore: {name} / noob: {name}
+    for (const auto &p : fr->profiles) { // hardcore: {name} / azimuth: {name} (OD-239: the noob mode byte is shown as Azimuth)
         std::string value = p.name;
         if (!p.game.empty()) value += " · " + p.game;
-        field(p.mode == 0 ? "hardcore" : "noob", value);
+        field(p.mode == 0 ? "hardcore" : "azimuth", value);
     }
     y += 6 * s;
     const std::vector<CardButton> buttons = ButtonsOf(st, *fr);
@@ -630,7 +630,7 @@ void DrawKeyboard(ImDrawList *dl, const Layout &l, float alpha) {
     TextAt(dl, f.tag, ImVec2(l.x + l.pad, y), kPinkU, T("ADD FRIEND", "ADICIONAR AMIGO"));
     y += 22 * s;
     dl->AddText(f.small, f.small->FontSize, ImVec2(l.x + l.pad, y), kTextDim,
-                T("A profile name, Hardcore or Noob. You become friends with the account.", "O nome de um perfil, Hardcore ou Noob. Você fica amigo da conta."), nullptr,
+                T("A profile name, Hardcore or Azimuth. You become friends with the account.", "O nome de um perfil, Hardcore ou Azimuth. Você fica amigo da conta."), nullptr,
                 l.w - 2 * l.pad);
     y += 40 * s;
     const ImVec2 fa(l.x + l.pad, y), fb(l.x + l.w - l.pad, y + 50 * s);
