@@ -7,7 +7,7 @@ using Infinity.Core.Saves;
 namespace Infinity.App;
 
 /// <summary>
-/// OD-239 items 6-7, OD-240 item 5: "Export to a file…" of an old Noob cloud line, from the Settings entry "Old Noob saves"
+/// OD-239 items 6-7, OD-240 item 5: "Export to a file…" of an old Noob cloud line, from its game's AZIMUTH row ⋯ on Profiles
 /// (ShellViewModel.OldSaves.cs). The launcher's own folder picker opens; the line's newest revision is downloaded (SAVES_API §4.2) and written
 /// to a new file in the folder picked, never into Azimuth's folder. Which lines exist is read from the cached <c>/me</c> only
 /// (<see cref="OldNoobExport.Lines"/>, no request).
@@ -20,7 +20,7 @@ public sealed partial class ShellViewModel
     /// <summary>The account's old Noob lines, from the last <c>/me</c>.</summary>
     private IReadOnlyList<OldNoobLine> OldNoobLines => OfflineMode ? [] : OldNoobExport.Lines(_session?.Me);
 
-    /// <summary>The line being exported: the one its Settings row picked (while <c>/me</c> still names it), else none.</summary>
+    /// <summary>The line being exported: the one its AZIMUTH row's ⋯ picked (while <c>/me</c> still names it), else none.</summary>
     private OldNoobLine? ExportLine => _exportPicked is { } picked
         ? OldNoobLines.FirstOrDefault(l => l.CareerId == picked.CareerId && l.Game == picked.Game) : null;
 
@@ -51,7 +51,7 @@ public sealed partial class ShellViewModel
         return list;
     }
 
-    /// <summary>The export into <paramref name="folder"/>, under the busy overlay; the result (or why not) stays under the Settings entry.</summary>
+    /// <summary>The export into <paramref name="folder"/>, under the busy overlay; the result (or why not) stays under the Profiles cards.</summary>
     internal async Task ExportOldNoobAsync(string folder)
     {
         if (ExportLine is not { } line || _session is not { } session) return;

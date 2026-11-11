@@ -10,7 +10,7 @@ using Infinity.Core.Shell;
 
 namespace Infinity.App;
 
-/// <summary>One old Noob save in Settings: what it is and where; a cloud one exports to a file, a folder on this PC opens in Explorer, both copy.</summary>
+/// <summary>One old Noob save, listed in its game's AZIMUTH row ⋯ on Profiles: a cloud one exports to a file, a folder on this PC opens in Explorer, both copy.</summary>
 public sealed record OldSaveRow(OldSave Save, string Title, string Line)
 {
     public bool CanExport => Save.Source == OldSaveSource.Cloud;
@@ -19,11 +19,12 @@ public sealed record OldSaveRow(OldSave Save, string Title, string Line)
 }
 
 /// <summary>
-/// OD-240 item 5: one quiet "Old Noob saves" entry in Settings, shown only while one exists: an old Noob cloud line (<c>cloud.exportOnly</c> on a
+/// OD-240 item 5, placed by the prototype (T-1111-AZIMUTH: everything about a save lives on its card): the old Noob saves are items of their
+/// game's AZIMUTH row ⋯ on Profiles, listed only while one exists: an old Noob cloud line (<c>cloud.exportOnly</c> on a
 /// Noob career of the cached <c>/me</c>) or a <c>User_&lt;XUID&gt;</c> folder on this PC of the account's Noob profiles or this PC's local ones
 /// (<see cref="OldSaves.Owners"/>; never a HARDCORE one). Each offers "Export to a file…" (a cloud line, ShellViewModel.OldNoobExport.cs) or "Copy
 /// into my Azimuth save" (<see cref="OldSaveMove"/>: the whole Azimuth save is backed up first, verified, and its path told; the old save is only
-/// read). No startup message, no Profiles row. This PC's folders are scanned on a worker; the cloud's lines come from the cached <c>/me</c> only.
+/// read). No startup message, no row of their own, nothing in Settings. This PC's folders are scanned on a worker; the cloud's lines come from the cached <c>/me</c> only.
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -35,10 +36,8 @@ public sealed partial class ShellViewModel
 
     public ObservableCollection<OldSaveRow> OldSaveRows { get; } = [];
 
-    /// <summary>The Settings entry shows only while an old Noob save exists.</summary>
-    public bool HasOldSaves => OldSaveRows.Count > 0;
 
-    /// <summary>The last copy's or export's result (with the backup's path or the file), kept under the list.</summary>
+    /// <summary>The last copy's or export's result (with the backup's path or the file), kept under the Profiles cards.</summary>
     public string OldSaveResultText => _oldSaveResult ?? string.Empty;
 
     public bool HasOldSaveResult => !string.IsNullOrEmpty(_oldSaveResult);
@@ -70,10 +69,10 @@ public sealed partial class ShellViewModel
         if (rows.Select(r => r.Save.Key + "|" + r.Line).SequenceEqual(OldSaveRows.Select(r => r.Save.Key + "|" + r.Line), StringComparer.Ordinal)) return;
         OldSaveRows.Clear();
         foreach (var row in rows) OldSaveRows.Add(row);
-        Changed(nameof(HasOldSaves));
+        if (ShowSaveManager && _nav.Current == SavesScreen.Home) FillSaveCards(); // the AZIMUTH rows' ⋯ list them
     }
 
-    /// <summary>This PC's old Noob folders of every game the install has, read on a worker; then the rows (Settings shows the entry while one exists).</summary>
+    /// <summary>This PC's old Noob folders of every game the install has, read on a worker; then the rows (the AZIMUTH rows' ⋯ list them while one exists).</summary>
     internal async Task RefreshOldSavesAsync()
     {
         if (_install is not { } install) { _oldLocal = []; FillOldSaveRows(); return; }
@@ -97,7 +96,7 @@ public sealed partial class ShellViewModel
         FillOldSaveRows();
     }
 
-    /// <summary>A cloud row's "Export to a file…": the launcher's folder picker for that line; the pick runs the export.</summary>
+    /// <summary>An old cloud save's "Export to a file…": the launcher's folder picker for that line; the pick runs the export.</summary>
     public void ExportOldSave(OldSaveRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
@@ -105,7 +104,7 @@ public sealed partial class ShellViewModel
         PickOldNoobExportFolder(line);
     }
 
-    /// <summary>A row of this PC's "Open the old folder": Explorer on it (nothing in it is changed).</summary>
+    /// <summary>An old folder on this PC's "Open the old folder": Explorer on it (nothing in it is changed).</summary>
     public void OpenOldSaveFolder(OldSaveRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
@@ -188,7 +187,7 @@ public sealed partial class ShellViewModel
         FillPlayBoard(); // PLAY AZIMUTH reads the Azimuth save again (the cached scan was invalidated)
     }
 
-    /// <summary>The result under the entry, and the status line.</summary>
+    /// <summary>The result under the Profiles cards, and the status line.</summary>
     private void SetOldSaveResult(string text)
     {
         Message = _oldSaveResult = text;

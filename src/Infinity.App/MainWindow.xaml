@@ -218,41 +218,6 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
     </DataTemplate>
-    <!-- OD-240: Settings' quiet "Old Noob saves" (an old Noob folder on this PC, an old Noob cloud line), shown only while one exists: "Copy into
-         my Azimuth save" (the Azimuth save is backed up first and its path told), a cloud one's "Export to a file…", a folder's "Open the old
-         folder". DataContext: the view model. -->
-    <DataTemplate x:Key="OldSavesList">
-      <StackPanel>
-        <TextBlock Text="{Binding S[export.old_title]}" FontSize="18" FontWeight="Bold" />
-        <TextBlock Text="{Binding S[export.old_sub]}" Style="{StaticResource SmHint}" Margin="0,4,0,10" TextWrapping="Wrap" />
-        <ItemsControl ItemsSource="{Binding OldSaveRows}" Focusable="False">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Style="{StaticResource SmCard}" Padding="16,12" Margin="0,0,0,8">
-                <DockPanel>
-                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <Button Content="{Binding DataContext.S[export.pick], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
-                            Margin="0,0,8,0" Click="OnExportOldSave" Visibility="{Binding CanExport, Converter={StaticResource Visible}}"
-                            IsEnabled="{Binding DataContext.CanExportOldNoob, RelativeSource={RelativeSource AncestorType=Window}}" />
-                    <Button Content="{Binding DataContext.S[export.open_folder], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
-                            Margin="0,0,8,0" Click="OnOpenOldSaveFolder" Visibility="{Binding CanOpenFolder, Converter={StaticResource Visible}}" />
-                    <Button Content="{Binding DataContext.S[export.copy], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
-                            Click="OnMoveOldSave" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
-                  </StackPanel>
-                  <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" Margin="0,2,0,0" />
-                  </StackPanel>
-                </DockPanel>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-        <Border Style="{StaticResource SmNote}" Margin="0,4,0,0" Visibility="{Binding HasOldSaveResult, Converter={StaticResource Visible}}">
-          <TextBlock Text="{Binding OldSaveResultText}" TextWrapping="Wrap" />
-        </Border>
-      </StackPanel>
-    </DataTemplate>
     <!-- OD-119: a news card (cover, title, date, summary, pinned, unread) of the NEWS page (owner 2026-11-08: news is never on PLAY). -->
     <DataTemplate x:Key="NewsCardTemplate">
       <Button Click="OnNewsCard" Margin="0,0,0,10" Background="{DynamicResource NewsCardSurface}" AutomationProperties.Name="{Binding Title}">
@@ -1192,9 +1157,9 @@
                     Margin="0,16,0,0" Padding="18,8" IsEnabled="{Binding Idle}" />
           </StackPanel>
 
-          <!-- SAVE_MANAGER_UX.md (OD-207) under OD-214: the save manager is the Profiles page of a signed-in player (cards per mode with the
-               chosen game's career, the Azimuth strip, Manage saves, History, Resolve, Copy, Delete, Help Sensei). ‹ Back + breadcrumb on
-               every non-root screen; Esc and the mouse's back button do the same (MainWindow.xaml.cs). -->
+          <!-- SAVE_MANAGER_UX.md (OD-207) under OD-214: the save manager is the Profiles page of a signed-in player (T-1111-AZIMUTH, the
+               prototype's two peer cards: HARDCORE and AZIMUTH, one row per game under each with its own ⋯; History, Resolve, Copy, Delete,
+               Help Sensei). ‹ Back + breadcrumb on every non-root screen; Esc and the mouse's back button do the same (MainWindow.xaml.cs). -->
           <Grid x:Name="SavesPage" Visibility="{Binding ShowSaveManager, Converter={StaticResource Visible}}">
             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <!-- head: ‹ Back, the breadcrumb, the game; none at the root (owner 2026-11-08, INVITE_UX C: no stray "Saves" above "Profiles") -->
@@ -1216,14 +1181,10 @@
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
               <Grid Margin="0,22,4,18" MaxWidth="1040">
 
-                <!-- ============ HOME: both profile cards, the Azimuth strip ============ -->
+                <!-- ============ HOME: both profile cards as peers, HARDCORE ("the vanilla way") and AZIMUTH ("the sandbox way") ============ -->
                 <StackPanel Visibility="{Binding ShowSavesHome, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding S[nav.profiles]}" Style="{StaticResource PageTitle}" FontSize="26" Margin="9,0,9,4" />
                   <TextBlock Text="{Binding SavesSubtitle}" Style="{StaticResource SmSub}" Margin="9,0,9,18" />
-                  <StackPanel Margin="9,0,9,16" Visibility="{Binding SavesEmpty, Converter={StaticResource Visible}}">
-                    <TextBlock Text="{Binding S[sm.empty_title]}" FontSize="18" FontWeight="Bold" />
-                    <TextBlock Text="{Binding S[sm.empty_body]}" Style="{StaticResource SmHint}" Margin="0,4,0,0" />
-                  </StackPanel>
                   <ItemsControl ItemsSource="{Binding SaveCards}" Focusable="False" IsEnabled="{Binding Idle}">
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
@@ -1244,7 +1205,7 @@
                               </Style>
                             </Border.Style>
                             <Grid>
-                              <!-- a profile of this mode -->
+                              <!-- the HARDCORE profile, or the AZIMUTH identity with this PC's Azimuth save: the same structure -->
                               <DockPanel Visibility="{Binding IsProfile, Converter={StaticResource Visible}}" LastChildFill="False">
                                 <DockPanel DockPanel.Dock="Top">
                                   <Button DockPanel.Dock="Right" Content="⋯" Style="{StaticResource SmButton}" Width="38" Height="36" Padding="0" FontSize="18"
@@ -1268,7 +1229,8 @@
                                     <TextBlock Text="{Binding Gamertag}" FontSize="22" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
                                   </StackPanel>
                                 </DockPanel>
-                                <!-- owner 2026-11-08 (PROFILES_ROWS): one row per catalog game, each with its career line, sync chip and career ⋯ -->
+                                <!-- owner 2026-11-08 (PROFILES_ROWS): one row per catalog game, the same fields on both cards (LV · CR · modified, or the
+                                     empty state), its chip and its own ⋯ (a HARDCORE career's tools, or this PC's Azimuth save's) -->
                                 <ItemsControl x:Name="ProfileGameRows" DockPanel.Dock="Top" ItemsSource="{Binding Games}" Margin="0,16,0,0" Focusable="False">
                                   <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -1288,8 +1250,10 @@
                                           <Button DockPanel.Dock="Right" Content="⋯" Style="{StaticResource SmButton}" Width="32" Height="30" Padding="0" FontSize="15"
                                                   VerticalAlignment="Center" Margin="8,0,0,0" Click="OnGameRowMenu" Visibility="{Binding HasMenu, Converter={StaticResource Visible}}"
                                                   AutomationProperties.Name="{Binding Name}" />
-                                          <!-- the game's sync chip: plain words, a green or amber dot -->
-                                          <Border DockPanel.Dock="Right" CornerRadius="12" Padding="8,3" Margin="8,0,0,0" Background="#0DFFFFFF" VerticalAlignment="Center"
+                                          <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                          <DockPanel>
+                                          <!-- the game's chip, beside its name (the fields below get the row's whole width): plain words, a green or amber dot -->
+                                          <Border DockPanel.Dock="Right" CornerRadius="10" Padding="8,2" Margin="8,0,0,0" Background="#0DFFFFFF" VerticalAlignment="Center"
                                                   MaxWidth="220" Visibility="{Binding HasChip, Converter={StaticResource Visible}}" ToolTip="{Binding ChipTip}">
                                             <StackPanel Orientation="Horizontal">
                                               <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Noob}"
@@ -1306,9 +1270,10 @@
                                               </TextBlock>
                                             </StackPanel>
                                           </Border>
-                                          <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                          </DockPanel>
+                                            <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"
+                                                       ToolTip="{Binding Line}" />
                                           </StackPanel>
                                         </DockPanel>
                                       </StackPanel>
@@ -1334,23 +1299,10 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <!-- the Azimuth strip: this PC's save of the chosen game's title -->
-                  <Grid Margin="9,12,9,0">
-                    <Rectangle RadiusX="14" RadiusY="14" Fill="{x:Static local:SlotBrushes.AzimuthSoft}" Stroke="#665AA8FF" StrokeThickness="1" StrokeDashArray="5 3" />
-                    <DockPanel Margin="18,14">
-                      <Border DockPanel.Dock="Left" Width="40" Height="40" CornerRadius="10" Background="{x:Static local:SlotBrushes.Azimuth}" VerticalAlignment="Center">
-                        <TextBlock Text="PC" Foreground="#FF03101F" FontWeight="Black" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                      </Border>
-                      <Button DockPanel.Dock="Right" Content="{Binding S[sm.manage]}" Style="{StaticResource SmButton}" VerticalAlignment="Center" Margin="12,0,0,0"
-                              Click="OnOpenManageSaves" IsEnabled="{Binding Idle}" />
-                      <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding S[sm.strip.title]}" FontWeight="Bold" />
-                        <!-- OD-240: the account's one Azimuth identity, shown, never chosen -->
-                        <TextBlock Text="{Binding AzimuthStripName}" Style="{StaticResource SmHint}" Visibility="{Binding HasAzimuthStripName, Converter={StaticResource Visible}}" />
-                        <TextBlock Text="{Binding AzimuthStripLine}" Style="{StaticResource SmHint}" />
-                      </StackPanel>
-                    </DockPanel>
-                  </Grid>
+                  <!-- the last old Noob save copy or export (an AZIMUTH row's ⋯): what happened, with the backup's path or the file -->
+                  <Border Style="{StaticResource SmNote}" Margin="9,14,9,0" Visibility="{Binding HasOldSaveResult, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding OldSaveResultText}" TextWrapping="Wrap" />
+                  </Border>
                   <Border Style="{StaticResource SmNote}" Margin="9,14,9,0" Visibility="{Binding ShowGameRunningNote, Converter={StaticResource Visible}}">
                     <TextBlock Text="{Binding GameRunningText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
                   </Border>
@@ -1446,49 +1398,6 @@
                   </UniformGrid>
                   <Border Style="{StaticResource SmNote}" Visibility="{Binding ResolveHardcore, Converter={StaticResource Visible}}">
                     <TextBlock Text="{Binding S[sm.resolve_hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                  </Border>
-                </StackPanel>
-
-                <!-- ============ MANAGE SAVES: the three slots ============ -->
-                <StackPanel Visibility="{Binding ShowSavesManage, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding S[sm.manage]}" Style="{StaticResource SmH1}" Margin="8,0,8,6" />
-                  <TextBlock Text="{Binding ManageSub}" Style="{StaticResource SmSub}" Margin="8,0,8,18" />
-                  <ItemsControl ItemsSource="{Binding SlotCards}" Focusable="False" IsEnabled="{Binding Idle}">
-                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="3" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate>
-                        <Border Style="{StaticResource SmCard}" Margin="8" Padding="18">
-                          <DockPanel LastChildFill="False">
-                            <Border DockPanel.Dock="Top" Height="3" CornerRadius="2" Background="{Binding Accent}" Margin="0,0,0,14" HorizontalAlignment="Left" Width="36" />
-                            <TextBlock DockPanel.Dock="Top" Text="{Binding Title}" Foreground="{Binding Accent}" Style="{StaticResource SmModeTag}" FontSize="12" TextWrapping="Wrap" />
-                            <TextBlock DockPanel.Dock="Top" Text="{Binding Headline}" FontSize="18" FontWeight="Bold" Margin="0,10,0,2" TextWrapping="Wrap" />
-                            <TextBlock DockPanel.Dock="Top" Text="{Binding Detail}" Style="{StaticResource SmHint}" />
-                            <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Actions}" Margin="0,14,0,0" Focusable="False">
-                              <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                  <Button Content="{Binding Label}" Style="{StaticResource SmButton}" Margin="0,0,0,8" HorizontalAlignment="Stretch" IsEnabled="{Binding Enabled}"
-                                          Click="OnSlotAction" Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}" ToolTip="{Binding Reason}" ToolTipService.ShowOnDisabled="True" />
-                                </DataTemplate>
-                              </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            <Button DockPanel.Dock="Top" Content="{Binding DataContext.S[sm.restore_original], RelativeSource={RelativeSource AncestorType=Window}}"
-                                    Style="{StaticResource SmButton}" HorizontalAlignment="Stretch" Click="OnRestoreOriginal" IsEnabled="{Binding CanRestoreOriginal}"
-                                    Visibility="{Binding IsAzimuth, Converter={StaticResource Visible}}" />
-                            <TextBlock DockPanel.Dock="Top" Text="{Binding RestoreOriginalNote}" Style="{StaticResource SmHint}" FontSize="12" Margin="0,6,0,0"
-                                       Visibility="{Binding IsAzimuth, Converter={StaticResource Visible}}" />
-                            <TextBlock DockPanel.Dock="Top" Text="{Binding Reasons}" Style="{StaticResource SmHint}" FontSize="12" Margin="0,10,0,0"
-                                       Visibility="{Binding HasReasons, Converter={StaticResource Visible}}" />
-                          </DockPanel>
-                        </Border>
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                  <Border Style="{StaticResource SmNote}" Margin="8,6,8,0" Visibility="{Binding HasManageServerNote, Converter={StaticResource Visible}}">
-                    <TextBlock Text="{Binding ManageServerNote}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                  </Border>
-                  <TextBlock Text="{Binding HistorySizeText}" Style="{StaticResource SmHint}" Margin="8,10,8,0" />
-                  <Border Style="{StaticResource SmNote}" Margin="8,14,8,0" Visibility="{Binding ShowGameRunningNote, Converter={StaticResource Visible}}">
-                    <TextBlock Text="{Binding GameRunningText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
                   </Border>
                 </StackPanel>
 
@@ -1626,7 +1535,6 @@
                   <TextBlock Text="{Binding S[sm.faq4_q]}" FontWeight="Bold" FontSize="15" Margin="0,16,0,4" />
                   <TextBlock Text="{Binding S[sm.faq4_a]}" Style="{StaticResource SmHint}" FontSize="14" />
                   <WrapPanel Margin="0,20,0,0">
-                    <Button Content="{Binding S[sm.open_manage]}" Style="{StaticResource SmButton}" Margin="0,0,10,8" Click="OnOpenManageSaves" IsEnabled="{Binding Idle}" />
                     <Button Content="{Binding S[sm.restore_original]}" Style="{StaticResource SmButton}" Margin="0,0,10,8" Click="OnRestoreOriginal" IsEnabled="{Binding Idle}" />
                   </WrapPanel>
                 </StackPanel>
@@ -2205,10 +2113,6 @@
                 </StackPanel>
               </Border>
 
-              <!-- OD-240: "Old Noob saves", only while one exists (no startup message, nothing on PLAY or Profiles) -->
-              <Border x:Name="OldNoobSavesCard" Style="{StaticResource Card}" Margin="0,18,0,0" Visibility="{Binding HasOldSaves, Converter={StaticResource Visible}}">
-                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource OldSavesList}" />
-              </Border>
             </StackPanel>
           </ScrollViewer>
 

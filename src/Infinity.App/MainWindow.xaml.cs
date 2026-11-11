@@ -226,21 +226,6 @@ public partial class MainWindow : Window
 
     private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
 
-    // OD-240: Settings' "Old Noob saves": copy one into the Azimuth save, export a cloud one, open a folder on this PC
-    private async void OnMoveOldSave(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) await _vm.MoveOldSaveAsync(row);
-    }
-
-    private void OnExportOldSave(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) _vm.ExportOldSave(row);
-    }
-
-    private void OnOpenOldSaveFolder(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) _vm.OpenOldSaveFolder(row);
-    }
 
     // Owner 2026-11-08: the FRIENDS sidebar (header toggle)
     private void OnToggleFriends(object sender, RoutedEventArgs e) => _vm.ToggleFriends();
@@ -461,13 +446,9 @@ public partial class MainWindow : Window
         if (element.Tag is ProfileGameRow row && element.DataContext is MenuAction action) await _vm.GameRowMenuAsync(row, action);
     }
     private void OnSavesCreate(object sender, RoutedEventArgs e) => _vm.OpenCreateProfile((SaveCard)((FrameworkElement)sender).DataContext);
-    private void OnOpenManageSaves(object sender, RoutedEventArgs e) => _vm.OpenManageSaves();
+
     private void OnOpenSavesHelp(object sender, RoutedEventArgs e) => _vm.OpenSavesHelp();
-    private async void OnSlotAction(object sender, RoutedEventArgs e)
-    {
-        var element = (FrameworkElement)sender;
-        if (element.Tag is SlotCard slot && element.DataContext is MenuAction action) await _vm.SlotActionAsync(slot, action);
-    }
+
     private void OnRestoreOriginal(object sender, RoutedEventArgs e) => _vm.OpenRestoreOriginal();
     private async void OnConfirmCopy(object sender, RoutedEventArgs e) => await _vm.ConfirmCopyAsync();
     private async void OnHistorySlot(object sender, RoutedEventArgs e)
