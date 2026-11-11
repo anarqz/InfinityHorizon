@@ -1316,106 +1316,24 @@ static int net_answer_without_profile(NetRequest *request) {
     return 1;
 }
 
-/* A launcher session without a cloud line (tier.c, OD-128; never by tier, OD-140): the universe's
-   services are answered here, never sent (the server keeps nothing of a profile without a line).
-   The first answer of each kind is logged. */
-static int net_answer_no_line(NetRequest *request) {
-    static unsigned logged[48];
-    static volatile LONG logged_count;
-    static SRWLOCK logged_lock = SRWLOCK_INIT;
-    static const unsigned char empty_reply[12] = {0};
-    /* OD-206: FM5's ticket holds no save line, yet its career goes through OnlineProfile to the server
-       (plan A2, M7): the gate is only for a game with the cloud line */
-    if (fi_tier_universe() || !fi_game_has(FI_FEATURE_CLOUD_LINE)) {
+/* Foreign XUIDs in a launcher session (tier.c fi_tier_foreign_route): another player's reads go to
+   the server, with or without a save line (OD-239 9); a write about them is answered here. The first
+   is logged, without the XUIDs. */
+static int net_answer_foreign(NetRequest *request) {
+    static volatile LONG logged;
+    unsigned long long own = azimuth_account_xuid_value();
+    if (!fi_launch_protocol() || !own ||
+        fi_tier_foreign_route(buffer_wide(&request->method), buffer_wide(&request->url), own) == FI_ROUTE_PASS) {
         return 0;
     }
-    const char *json = 0;
-    wchar_t what[96];
-    int route = fi_tier_no_line_route(buffer_wide(&request->url), buffer_wide(&request->request_headers), &json, what,
-                                      ARRAY_COUNT(what));
-    if (route == FI_ROUTE_PASS) {
-        return 0;
-    }
-    request->status = route == FI_ROUTE_UNAVAILABLE ? 503 : 200;
+    request->status = 503;
     buffer_free(&request->status_text);
     buffer_free(&request->response_headers);
     buffer_free(&request->response_body);
-    int ok = route == FI_ROUTE_UNAVAILABLE
-                 ? buffer_append_wide(&request->status_text, L"Service Unavailable") &&
-                       buffer_append_text(&request->response_body, "no cloud line")
-             : route == FI_ROUTE_EMPTY_XTSW
-                 ? buffer_append_wide(&request->status_text, L"OK") &&
-                       buffer_append_wide(&request->response_headers, L"Content-Type: bin/xtsw\r\n") &&
-                       buffer_append(&request->response_body, empty_reply, sizeof(empty_reply))
-                 : buffer_append_wide(&request->status_text, L"OK") &&
-                       buffer_append_wide(&request->response_headers, L"Content-Type: application/json\r\n") &&
-                       buffer_append_text(&request->response_body, json);
-    unsigned hash = 2166136261u;
-    for (const wchar_t *p = what; *p; ++p) {
-        hash = (hash ^ (unsigned)*p) * 16777619u;
-    }
-    int first = 1;
-    AcquireSRWLockExclusive(&logged_lock);
-    for (LONG i = 0; i < logged_count; ++i) {
-        first &= logged[i] != hash;
-    }
-    if (first && logged_count < (LONG)ARRAY_COUNT(logged)) {
-        logged[logged_count++] = hash;
-    } else {
-        first = 0;
-    }
-    ReleaseSRWLockExclusive(&logged_lock);
-    if (first) {
-        char line[200];
-        size_t n = 0;
-        static const char head[] = "NETWORK: no cloud line: ";
-        for (size_t i = 0; head[i]; ++i) line[n++] = head[i];
-        for (size_t i = 0; what[i] && n + 80 < sizeof(line); ++i) line[n++] = what[i] < 128 ? (char)what[i] : '?';
-        const char *tail = route == FI_ROUTE_UNAVAILABLE ? " answered here, unavailable (not sent: the server keeps "
-                                                           "none of it without a line).\r\n"
-                           : route == FI_ROUTE_EMPTY_XTSW ? " answered here as taken (not sent: no cloud copy).\r\n"
-                                                          : " answered here, empty (not sent: no cloud line).\r\n";
-        for (size_t i = 0; tail[i] && n + 1 < sizeof(line); ++i) line[n++] = tail[i];
-        line[n] = 0;
-        log_append(line);
-    }
-    return ok;
-}
-
-/* Foreign XUIDs in a launcher session (tier.c fi_tier_foreign_route): only the chosen profile
-   talks to the server. The first answer of each kind is logged, without the XUIDs. */
-static int net_answer_foreign(NetRequest *request) {
-    static volatile LONG logged_json, logged_unavailable;
-    unsigned long long own = azimuth_account_xuid_value();
-    if (!fi_launch_protocol() || !own) {
-        return 0;
-    }
-    enum { JSON_CAP = 256 }; /* an Offline presence or an empty list */
-    char *json = net_alloc(JSON_CAP);
-    if (!json) {
-        return 0;
-    }
-    int route = fi_tier_foreign_route(buffer_wide(&request->method), buffer_wide(&request->url), own,
-                                      !fi_tier_universe(), json, JSON_CAP);
-    int ok = 0;
-    if (route != FI_ROUTE_PASS) {
-        request->status = route == FI_ROUTE_JSON ? 200 : 503;
-        buffer_free(&request->status_text);
-        buffer_free(&request->response_headers);
-        buffer_free(&request->response_body);
-        ok = route == FI_ROUTE_JSON
-                 ? buffer_append_wide(&request->status_text, L"OK") &&
-                       buffer_append_wide(&request->response_headers, L"Content-Type: application/json\r\n") &&
-                       buffer_append_text(&request->response_body, json)
-                 : buffer_append_wide(&request->status_text, L"Service Unavailable") &&
-                       buffer_append_text(&request->response_body, "another player");
-        net_log_once(route == FI_ROUTE_JSON ? &logged_json : &logged_unavailable,
-                     route == FI_ROUTE_JSON ? "NETWORK: no cloud line: another player's presence answered here, "
-                                              "offline (not sent: only this profile talks to the server).\r\n"
-                                            : "NETWORK: a request about another player answered here, unavailable "
-                                              "(not sent: only this profile talks to the server).\r\n");
-    }
-    net_free(json);
+    int ok = buffer_append_wide(&request->status_text, L"Service Unavailable") &&
+             buffer_append_text(&request->response_body, "another player");
+    net_log_once(&logged, "NETWORK: a write about another player answered here, unavailable "
+                          "(not sent: only this profile writes to the server).\r\n");
     return ok;
 }
 
@@ -1653,7 +1571,7 @@ static DWORD WINAPI net_worker(void *parameter) {
     }
     int answered = !held_off && net_mode == NET_MODE_PROXY && !request->aborted &&
                    (net_answer_without_profile(request) || net_answer_foreign(request) || net_answer_livery(request) ||
-                    net_answer_no_line(request) || net_hold_progress(request) || net_answer_backoff(request) ||
+                    net_hold_progress(request) || net_answer_backoff(request) ||
                     net_forward_noted(request, &error));
     if (answered && net_mode == NET_MODE_PROXY && !request->aborted) {
         net_ticket_guard(request); /* T34: a found ticket only with the launcher's seat */

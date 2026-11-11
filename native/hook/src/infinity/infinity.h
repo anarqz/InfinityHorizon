@@ -463,27 +463,17 @@ void azimuth_expansions_after_eo(void);
    accounts file). */
 int azimuth_account_storm_island(void);
 
-/* tier.c: the cloud line gate (OD-128) and the account's tier, display text only (OD-140: the
-   "Infinity Racer" / "Infinity Supporter" badge; nothing routes or gates by it). */
+/* tier.c: the account's tier, display text only (OD-140: the "Infinity Racer" / "Infinity
+   Supporter" badge; nothing routes or gates by it). The ticket's save line routes nothing either
+   (OD-239 9, CR-S111): every game service goes to the server with or without it. */
 enum { FI_TIER_VIP, FI_TIER_FREE };
-enum { FI_ROUTE_PASS, FI_ROUTE_UNAVAILABLE, FI_ROUTE_EMPTY_XTSW, FI_ROUTE_JSON };
+enum { FI_ROUTE_PASS, FI_ROUTE_UNAVAILABLE };
 void fi_tier_set(int tier);
 int fi_tier(void);
-/* OD-128: in a launcher session the ticket's save line (CR-S51 `line`: 1 or 0) alone opens or shuts
-   the universe's services, whatever tier and mode; -1 (no ticket, the Beta protocol): open (OD-140). */
-void fi_tier_set_line(int line);
-int fi_tier_universe(void);
-/* Without a cloud line: FI_ROUTE_PASS (to the server), FI_ROUTE_UNAVAILABLE (503 here),
-   FI_ROUTE_EMPTY_XTSW (200, an empty bin/xtsw reply here) or FI_ROUTE_JSON (200, `*json` here);
-   `what` gets "Class.Method" or the host, for the log. */
-int fi_tier_no_line_route(const wchar_t *url, const wchar_t *headers, const char **json, wchar_t *what,
-                          size_t what_capacity);
 /* Foreign XUIDs (owner via the Mac, 2026-10-19, GAME_PLATFORM §3a): in a launcher session only
-   the chosen profile (`own`) talks to the server. A URL naming another XUID (xuid(N), xuid=N):
-   no cloud line (`no_line`) → userpresence GET sent (a friend's presence, OD-193), anything else 503 here;
-   with a line → reads sent, writes 503 here. FI_ROUTE_JSON fills `json` (capacity `json_cap`). */
-int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned long long own, int no_line, char *json,
-                          size_t json_cap);
+   the chosen profile (`own`) writes to the server. A URL naming another XUID (xuid(N), xuid=N):
+   reads sent (FI_ROUTE_PASS), writes 503 here (FI_ROUTE_UNAVAILABLE), with or without a save line. */
+int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned long long own);
 
 /* The ExtraOptions build headlight and roof sync supports: the player's ExtraOptions 0.2.98 (the
    TLS-helper hook on Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125/OD-127,
