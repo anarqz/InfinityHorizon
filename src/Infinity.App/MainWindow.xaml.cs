@@ -226,7 +226,7 @@ public partial class MainWindow : Window
 
     private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
 
-    // OD-239: the AZIMUTH profile's old saves: move one into the Azimuth save, or (a cloud one) export it; the launcher-open prompt
+    // OD-240: Settings' "Old Noob saves": copy one into the Azimuth save, export a cloud one, open a folder on this PC
     private async void OnMoveOldSave(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) await _vm.MoveOldSaveAsync(row);
@@ -237,13 +237,10 @@ public partial class MainWindow : Window
         if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) _vm.ExportOldSave(row);
     }
 
-    private void OnOldSavePromptGo(object sender, RoutedEventArgs e) => _vm.OldSavePromptGoToProfiles();
-
-    private void OnOldSavePromptDismiss(object sender, RoutedEventArgs e) => _vm.DismissOldSavePrompt();
-
-    private void OnPickOldNoobExport(object sender, RoutedEventArgs e) => _vm.PickOldNoobExportFolder();
-
-    private void OnOpenOldNoobFolder(object sender, RoutedEventArgs e) => _vm.OpenOldNoobFolder();
+    private void OnOpenOldSaveFolder(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) _vm.OpenOldSaveFolder(row);
+    }
 
     // Owner 2026-11-08: the FRIENDS sidebar (header toggle)
     private void OnToggleFriends(object sender, RoutedEventArgs e) => _vm.ToggleFriends();
