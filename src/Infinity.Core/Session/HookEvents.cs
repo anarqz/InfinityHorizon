@@ -72,11 +72,8 @@ public static class HookEvents
         return Overlay.OverlayNotices.Create(Overlay.UiLevel.Warn, text, strings);
     }
 
-    /// <summary>
-    /// A <see cref="Notice"/> detail as an overlay toast; null when it is not one. <paramref name="profileFolder"/> is the
-    /// session's own save folder (<see cref="ProfileFolder"/>), named by <c>launch.azimuth_save_refused</c>.
-    /// </summary>
-    public static Overlay.UiFrame.Toast? NoticeToast(string detail, Strings? strings = null, string? profileFolder = null)
+    /// <summary>A <see cref="Notice"/> detail as an overlay toast; null when it is not one.</summary>
+    public static Overlay.UiFrame.Toast? NoticeToast(string detail, Strings? strings = null)
     {
         if (detail is not { Length: > 2 } || detail[1] != '|' || detail[0] is < '0' or > '2') return null;
         var level = (byte)(detail[0] - '0');
@@ -85,22 +82,7 @@ public static class HookEvents
         // OD122-L4: the hook refused the start: it plays offline on the profile's offline identity (OD-239: an Azimuth one on Azimuth's save)
         if (text == "launch.ticket_refused") text = strings?[text] ?? "Online is off for this session: the game did not accept the launcher's session ticket. You play offline: an Azimuth profile on your Azimuth save, a Hardcore profile on its own save on this PC.";
         if (text == "launch.late") text = strings?[text] ?? "Online is off for this session: the game started before the launcher's session reached it. You play offline: an Azimuth profile on your Azimuth save, a Hardcore profile on its own save on this PC.";
-        // OD-239 8 (T-1111-AZIMUTH): the hook could not point an Azimuth session at Azimuth's save (game_patches.h
-        // fi_game_azimuth_save): the game saves to the profile's own folder this time, and the player is told so
-        if (text == "launch.azimuth_save_refused")
-            text = (strings?[text] ?? "Your Azimuth save couldn't be used. This session saves to {folder} instead; your Azimuth save is untouched.")
-                .Replace("{folder}", profileFolder ?? "User_<XUID>", StringComparison.Ordinal);
         if (text.Length == 0) return null;
         return Overlay.OverlayNotices.Create(level, text, strings);
     }
-
-    /// <summary>
-    /// <c>&lt;saves&gt;\player-1\User_&lt;XUID hex&gt;</c> of a session's profile (<paramref name="xuid"/> in decimal), the folder the game
-    /// opens when the Azimuth save rows were refused; null when the game or the XUID is unknown.
-    /// </summary>
-    public static string? ProfileFolder(string azimuthRoot, string game, string xuid) =>
-        Process.GameDefinition.ById(game) is { } definition
-        && ulong.TryParse(xuid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
-            ? Saves.CloudSaveFiles.ProfileDir(Saves.AzimuthSaves.SavesRoot(azimuthRoot, definition), value)
-            : null;
 }
