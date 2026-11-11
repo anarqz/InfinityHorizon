@@ -117,7 +117,7 @@ public sealed partial class ShellViewModel
     {
         var environment = new List<(string Name, string Value)> { (Launch.EnvLaunch, Launch.EnvOffline) };
         environment.Add((Launch.EnvLauncherExe, Environment.ProcessPath ?? "infinity.exe"));
-        environment.Add((EnvOfflineXuid, profile.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture)));
+        environment.Add((EnvOfflineXuid, profile.IdentityXuid.ToString(CultureInfo.InvariantCulture))); // the hook's identity; the folder is SaveXuid
         environment.Add((EnvOfflineGamertag, profile.Name));
         environment.Add((Launch.EnvOfflineMode, profile.Mode)); // OD-239: an Azimuth profile plays Azimuth's own save offline too
         if (WineHost.Detected)
@@ -183,7 +183,7 @@ public sealed partial class ShellViewModel
             if (GameRunning()) throw new ModException("another game started during preparation", ModErrors.GameRunning);
             // OD-118: the overlay comes too, named in the environment (no session pipe offline) and served on its own -ui pipe.
             using var uiPipe = OfflineOverlay(environment);
-            Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
+            Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.SaveXuid) + ")");
             // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
             if (WineHost.Detected) Log("play: wine " + WineHost.HookModule + " " + WineHost.EnsureNativeDllOverride(WineHost.HookModule, true));
             using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [AzimuthSetup.SkipLauncher], install.Root, environment, [.. OfflineOverlayNames, .. Launch.OfflineIdentityNames]));
