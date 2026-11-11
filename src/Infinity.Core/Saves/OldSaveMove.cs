@@ -1,0 +1,315 @@
+// Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Infinity.Core.Api;
+using Infinity.Core.Shell;
+
+namespace Infinity.Core.Saves;
+
+/// <summary>Where an old save of an AZIMUTH profile is.</summary>
+public enum OldSaveSource
+{
+    /// <summary>The profile's own <c>User_&lt;XUID&gt;</c> folder on this PC (what it played before the hook sent it to Azimuth's save).</summary>
+    ThisPc,
+
+    /// <summary>An old Noob cloud line (<c>/me</c> <c>cloud.exportOnly</c>, CR-S111), read-only until it is erased.</summary>
+    Cloud,
+}
+
+/// <summary>An AZIMUTH profile (wire mode <c>noob</c>) whose old saves are looked for: its XUID and the name shown.</summary>
+public sealed record OldSaveOwner(ulong Xuid, string Gamertag);
+
+/// <summary>
+/// One old save of an AZIMUTH profile (OD-239): <see cref="SavedAtUtc"/> is its newest revision's time (this PC: the newest sealed revision's
+/// commit; the cloud: <c>cloud.savedAt</c> of the cached <c>/me</c>), null when it does not read.
+/// </summary>
+public sealed record OldSave(OldSaveSource Source, string Game, ulong Xuid, string Gamertag, DateTime? SavedAtUtc, SaveProfile? Local = null, OldNoobLine? Line = null)
+{
+    /// <summary>A stable key of the row (source, game, XUID).</summary>
+    public string Key => string.Create(CultureInfo.InvariantCulture, $"{(Source == OldSaveSource.Cloud ? "cloud" : "pc")}:{Game}:{Xuid:X}");
+}
+
+/// <summary>
+/// OD-239: an AZIMUTH profile plays Azimuth's own save (<c>User_9000000000000</c>, the hook redirects the game there). What it played before
+/// stays where it was: the profile's own <c>User_&lt;XUID&gt;</c> folder on this PC and, for an account profile, the old Noob cloud line. This finds
+/// them, and decides the launcher-open prompt: shown when one of them is newer than that game's Azimuth save. Reads files only; the cloud's
+/// times come from the cached <c>/me</c> (no request).
+/// </summary>
+public static class OldSaves
+{
+    /// <summary>
+    /// The AZIMUTH profiles whose folders are looked at: the account's live ones (<c>players</c> and <c>profiles</c> of <paramref name="me"/>) and
+    /// this PC's (their <see cref="LocalProfile.OfflinePlayXuid"/>; signed in, only those not of another account). Never Azimuth's own player.
+    /// </summary>
+    public static IReadOnlyList<OldSaveOwner> Owners(Me? me, IEnumerable<LocalProfile> locals)
+    {
+        ArgumentNullException.ThrowIfNull(locals);
+        var owners = new Dictionary<ulong, string>();
+        foreach (var p in me?.Players ?? [])
+        {
+            if (p is { Mode: "noob", Status: "active" } && Parse(p.Xuid) is { } x) owners.TryAdd(x, ProfileName.Plain(p.Gamertag));
+        }
+        foreach (var p in me?.Profiles ?? [])
+        {
+            if (p is { Mode: "noob", Status: "active" } && Parse(p.Xuid) is { } x) owners.TryAdd(x, ProfileName.Plain(p.Gamertag));
+        }
+        foreach (var l in locals)
+        {
+            if (!l.Hardcore && (me is null || l.LocalOnly || l.OnAccount(me.AccountId))) owners.TryAdd(l.OfflinePlayXuid, l.DisplayName);
+        }
+        owners.Remove(AzimuthSaves.OfflineXuid);
+        return [.. owners.Select(o => new OldSaveOwner(o.Key, o.Value))];
+    }
+
+    /// <summary>Each owner's folder of <paramref name="game"/> on this PC that holds a sealed revision.</summary>
+    public static IReadOnlyList<OldSave> OnThisPc(string game, string savesRoot, IEnumerable<OldSaveOwner> owners)
+    {
+        ArgumentNullException.ThrowIfNull(game);
+        ArgumentNullException.ThrowIfNull(savesRoot);
+        ArgumentNullException.ThrowIfNull(owners);
+        var found = new List<OldSave>();
+        foreach (var owner in owners)
+        {
+            if (owner.Xuid == AzimuthSaves.OfflineXuid) continue;
+            LocalRevision? newest;
+            try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(savesRoot, owner.Xuid)); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { newest = null; }
+            if (newest is null) continue;
+            var at = RevisionTime(newest);
+            found.Add(new OldSave(OldSaveSource.ThisPc, game, owner.Xuid, owner.Gamertag, at,
+                new SaveProfile(AzimuthSaves.FolderFor(owner.Xuid), owner.Xuid, newest, at, AzimuthSaves.Credits(newest))));
+        }
+        return found;
+    }
+
+    /// <summary>The old Noob cloud lines (<see cref="OldNoobExport.Lines"/>) as old saves, their time from <c>cloud.savedAt</c>.</summary>
+    public static IReadOnlyList<OldSave> InTheCloud(IEnumerable<OldNoobLine> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        return [.. lines.Where(l => Parse(l.Xuid) is not null)
+            .Select(l => new OldSave(OldSaveSource.Cloud, l.Game, Parse(l.Xuid)!.Value, ProfileName.Plain(l.Gamertag), Time(l.SavedAt), Line: l))];
+    }
+
+    /// <summary>The time of Azimuth's own save of a game (<c>User_9000000000000</c>'s newest sealed revision), null when there is none.</summary>
+    public static DateTime? AzimuthNewest(string savesRoot)
+    {
+        ArgumentNullException.ThrowIfNull(savesRoot);
+        try
+        {
+            return AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(savesRoot, AzimuthSaves.OfflineXuid)) is { } newest ? RevisionTime(newest) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>A revision's time: when its commit file was written (what the save picker shows as "last played").</summary>
+    public static DateTime RevisionTime(LocalRevision revision)
+    {
+        ArgumentNullException.ThrowIfNull(revision);
+        return File.GetLastWriteTimeUtc(Path.Combine(revision.Path, "commit"));
+    }
+
+    /// <summary>
+    /// The launcher-open rule (OD-239): per game, the newest old save against that game's Azimuth save (<paramref name="azimuthNewest"/>, by
+    /// game id). True when one is newer, or when the game has no Azimuth save at all. An old save whose time does not read only counts against
+    /// a missing Azimuth save.
+    /// </summary>
+    public static bool AnyNewer(IEnumerable<OldSave> saves, Func<string, DateTime?> azimuthNewest)
+    {
+        ArgumentNullException.ThrowIfNull(saves);
+        ArgumentNullException.ThrowIfNull(azimuthNewest);
+        foreach (var game in saves.GroupBy(s => s.Game, StringComparer.Ordinal))
+        {
+            var newest = game.Max(s => s.SavedAtUtc ?? DateTime.MinValue);
+            if (azimuthNewest(game.Key) is not { } azimuth || newest > azimuth.ToUniversalTime()) return true;
+        }
+        return false;
+    }
+
+    private static ulong? Parse(string? xuid) => ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var x) ? x : null;
+
+    private static DateTime? Time(string? at) => DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t) ? t.UtcDateTime : null;
+}
+
+/// <summary>
+/// The launcher-open prompt's "Dismiss", per account (<c>old-save-prompt.json</c> in the launcher's state folder): once dismissed it is never
+/// shown again for that account on this PC. A missing or unreadable file is "never dismissed"; it is written whole through a temporary file.
+/// </summary>
+public sealed class OldSavePromptStore(string stateDirectory)
+{
+    public const string FileName = "old-save-prompt.json";
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    private sealed record Document(int SchemaVersion, List<string> Dismissed);
+
+    private string File_ => Path.Combine(stateDirectory, FileName);
+
+    public bool IsDismissed(string account)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        return Read().Contains(account, StringComparer.Ordinal);
+    }
+
+    public void Dismiss(string account)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        var list = Read();
+        if (list.Contains(account, StringComparer.Ordinal)) return;
+        list.Add(account);
+        Directory.CreateDirectory(stateDirectory);
+        var temp = File_ + ".tmp";
+        File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Document(1, list), Json));
+        File.Move(temp, File_, overwrite: true);
+    }
+
+    private List<string> Read()
+    {
+        try
+        {
+            if (!File.Exists(File_) || new FileInfo(File_).Length > 64 * 1024) return [];
+            return JsonSerializer.Deserialize<Document>(File.ReadAllBytes(File_), Json) is { SchemaVersion: 1, Dismissed: { } list } ? [.. list] : [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return []; }
+    }
+}
+
+/// <summary>How a move ended.</summary>
+public enum OldSaveMoveOutcome
+{
+    /// <summary>The old save is the newest revision of Azimuth's save; what it held is in <see cref="OldSaveMoveResult.BackupPath"/>.</summary>
+    Moved,
+
+    /// <summary>The game runs: nothing was requested or written.</summary>
+    GameRunning,
+
+    /// <summary>The old save holds no revision any more: nothing was written.</summary>
+    NoSave,
+
+    /// <summary>Azimuth's save could not be backed up (verified): nothing was written.</summary>
+    BackupFailed,
+
+    /// <summary>The download, its checks or the install failed (<see cref="OldSaveMoveResult.Code"/>); a backup made before it is named.</summary>
+    Failed,
+}
+
+/// <summary>What <see cref="OldSaveMove"/> did. <see cref="BackupPath"/>: the dated copy of the whole <c>User_9000000000000</c> folder, once made.</summary>
+public sealed record OldSaveMoveResult(OldSaveMoveOutcome Outcome, string? BackupPath = null, ulong? Revision = null, string? Code = null, string? Message = null);
+
+/// <summary>
+/// OD-239 "Move to my Azimuth save": an old save of an AZIMUTH profile becomes the newest revision of Azimuth's own save of its game.
+/// <list type="number">
+/// <item>Refused while the game runs (<paramref name="gameRunning"/>, asked again right before any write).</item>
+/// <item>A cloud save is first downloaded and verified (SAVES_API.md §4.2: <c>revisions?limit=1</c>, then its bundle).</item>
+/// <item>The WHOLE <c>User_9000000000000</c> folder (every revision folder, torn or not, and any other file) is copied into a dated entry of the
+/// launcher's history (<see cref="LocalHistory.Archive"/>, every file verified by hash), outside Azimuth's folder; its path is known and reported
+/// before anything is written. A failed copy writes nothing. (The install's own <c>fi-launcher-archive\…\shadowed-*</c> copies only the
+/// 16-hex revision folders.)</item>
+/// <item>Then the install: <see cref="AzimuthSaves.Clone"/> from this PC's folder, or the career bundle's install of the download.</item>
+/// </list>
+/// The source is only read: the old folder and the cloud line are never changed.
+/// </summary>
+public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<bool> gameRunning, Func<DateTime>? utcNow = null)
+{
+    /// <summary>The history entry's reason (en, pt-BR).</summary>
+    public static readonly HistoryReason Reason = new("Before moving an old save into the Azimuth save", "Antes de mover um save antigo para o save do Azimuth");
+
+    private readonly string _savesRoot = savesRoot ?? throw new ArgumentNullException(nameof(savesRoot));
+    private readonly LocalHistory _history = history ?? throw new ArgumentNullException(nameof(history));
+    private readonly Func<bool> _gameRunning = gameRunning ?? throw new ArgumentNullException(nameof(gameRunning));
+    private readonly Func<DateTime> _now = utcNow ?? (() => DateTime.UtcNow);
+
+    /// <summary>Azimuth's own save of this game: <c>&lt;saves&gt;\player-1\User_9000000000000</c>.</summary>
+    public string AzimuthFolder => CloudSaveFiles.ProfileDir(_savesRoot, AzimuthSaves.OfflineXuid);
+
+    /// <summary>
+    /// The dated backup of the whole Azimuth folder (an empty entry when there is none yet), verified; returns the folder holding the copy
+    /// (<c>&lt;history&gt;\&lt;yyyyMMddTHHmmssZ&gt;-copy-old-save-to-azimuth\saves</c>, laid out as <c>User_9000000000000</c>). Throws
+    /// <see cref="HistoryException"/> when it does not verify (nothing left behind).
+    /// </summary>
+    public string BackUp(HistoryProfile? profile = null)
+    {
+        var now = _now();
+        _history.EnsureOriginal(_savesRoot, now); // §7.2: the title's saves as first found, once
+        var item = _history.Archive("copy", AzimuthFolder, Reason, now, from: "old-save", to: "azimuth", profile, slug: "old save to azimuth");
+        return Path.Combine(item.Folder, LocalHistory.SavesDir);
+    }
+
+    /// <summary>
+    /// This PC's old folder of <paramref name="sourceXuid"/> (its newest sealed revision, read now) onto Azimuth's save. <paramref name="backedUp"/>
+    /// receives the backup's path before the install starts.
+    /// </summary>
+    public OldSaveMoveResult MoveFromThisPc(ulong sourceXuid, Action<string>? backedUp = null)
+    {
+        if (sourceXuid == AzimuthSaves.OfflineXuid) return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.SAME_FOLDER", Message: "the Azimuth save cannot be moved onto itself");
+        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning);
+        LocalRevision? newest;
+        try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, sourceXuid)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.READ_FAILED", Message: e.Message); }
+        if (newest is null) return new(OldSaveMoveOutcome.NoSave);
+        var (backup, why) = BackUpOrWhy(backedUp);
+        if (why is not null) return why;
+        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, backup);
+        try
+        {
+            var at = OldSaves.RevisionTime(newest);
+            var result = AzimuthSaves.Clone(_savesRoot, new SaveProfile(AzimuthSaves.FolderFor(sourceXuid), sourceXuid, newest, at, null), AzimuthSaves.OfflineXuid, _now());
+            return new(OldSaveMoveOutcome.Moved, backup, result.Number);
+        }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
+        {
+            return new(OldSaveMoveOutcome.Failed, backup, Code: "LOCAL.WRITE_FAILED", Message: e.Message);
+        }
+    }
+
+    /// <summary>
+    /// The old cloud line's newest revision onto Azimuth's save: downloaded and verified first (<paramref name="bundle"/>: the game's format),
+    /// then the backup (<paramref name="backedUp"/> receives its path), then the install. Network errors propagate (nothing written then).
+    /// </summary>
+    public async Task<OldSaveMoveResult> MoveFromCloudAsync(ISaveApi api, string access, OldNoobLine line, ICareerBundle bundle, Action<string>? backedUp = null,
+        CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        ArgumentNullException.ThrowIfNull(line);
+        ArgumentNullException.ThrowIfNull(bundle);
+        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning);
+        var page = await api.RevisionsAsync(access, line.Xuid, null, 1, cancellation).ConfigureAwait(false);
+        if (!page.Ok || page.Value is null)
+            return new(OldSaveMoveOutcome.Failed, Code: page.Error?.Code ?? "HTTP.EMPTY", Message: page.Error?.Message);
+        if (page.Value.Items is not [var newest, ..]) return new(OldSaveMoveOutcome.NoSave);
+        var download = await api.BundleAsync(access, line.Xuid, newest.Revision, cancellation).ConfigureAwait(false);
+        if (!download.Ok || download.Value is null)
+            return new(OldSaveMoveOutcome.Failed, Revision: newest.Revision, Code: download.Error?.Code ?? "HTTP.EMPTY", Message: download.Error?.Message);
+        var (valid, failure) = CloudSaves.VerifyDownload(download.Value, newest.Revision, newest.ContentSha256, bundle);
+        if (valid is null || failure is not null)
+            return new(OldSaveMoveOutcome.Failed, Revision: newest.Revision, Code: failure?.Code ?? "SAVES.INTEGRITY", Message: failure?.Message ?? "the bundle was not read");
+        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, Revision: newest.Revision);
+        var (backup, why) = BackUpOrWhy(backedUp);
+        if (why is not null) return why with { Revision = newest.Revision };
+        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, backup, newest.Revision);
+        try
+        {
+            var installed = bundle.Install(_savesRoot, AzimuthSaves.OfflineXuid, valid, valid.ContentSha256, Guid.CreateVersion7().ToString("N"), "before-old-save-move", null);
+            return new(OldSaveMoveOutcome.Moved, backup, installed.Number);
+        }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
+        {
+            return new(OldSaveMoveOutcome.Failed, backup, newest.Revision, "LOCAL.WRITE_FAILED", e.Message);
+        }
+    }
+
+    /// <summary>The backup's path (handed to <paramref name="backedUp"/> first), or why there is none.</summary>
+    private (string? Path, OldSaveMoveResult? Failure) BackUpOrWhy(Action<string>? backedUp)
+    {
+        try
+        {
+            var backup = BackUp();
+            backedUp?.Invoke(backup);
+            return (backup, null);
+        }
+        catch (Exception e) when (e is HistoryException or IOException or UnauthorizedAccessException)
+        {
+            return (null, new(OldSaveMoveOutcome.BackupFailed, Code: "LOCAL.BACKUP_FAILED", Message: e.Message));
+        }
+    }
+}

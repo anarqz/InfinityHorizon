@@ -97,6 +97,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Gate = _gate.PlayOffline(OpenPlayGame());
         ResetContentLocation();
         FillProfiles();
+        _ = RefreshOldSavesAsync(prompt: true); // OD-239: this PC's old Azimuth-profile saves, told once at open when newer
         EnsureModCatalog(); // T1f: offline, Play needs the (GitHub) catalog's requirements; never wait for Mods to be opened
         // OD-118 T1c: the profile last chosen offline is chosen again (top bar no longer says "no profile" after a restart).
         if (LaunchModeStore.ReadLastProfile(_stateDirectory) is { } last
@@ -459,6 +460,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ClearCrashScreen();
         _pending = null;
         CloseCareerRestore(); // OD-133
+        _oldSavePrompt = false; _oldSaveResult = null; // OD-239: the old saves' prompt and result belong to the account
         Games.Clear();
         Profiles.Clear();
         Gate = _gate.SignOut();
@@ -511,6 +513,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         else _ = RefreshIntegrityAutomaticallyAsync();
         loading.Step(S["startup.loading_profiles"]);
         await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
+        await RefreshOldSavesAsync(prompt: true); // OD-239: an old Azimuth-profile save newer than the Azimuth save is told once at open
         loading.Step(S["startup.loading_friends"]);
         await WaitForFriendsAsync(TimeSpan.FromSeconds(10));
     }
@@ -631,6 +634,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         using var span = Span();
         ChangedCareerStart();
         FillSaveCards(); // SAVE_MANAGER_UX §4: the cards follow every /me and game change
+        FillOldSaveRows(); // OD-239: the old saves' rows follow the same /me (this PC's from the last scan)
         Changed(nameof(ShowNewProfile));
         Changed(nameof(CanChooseNoob));
         Changed(nameof(NewNoob));

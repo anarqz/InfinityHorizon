@@ -11,7 +11,8 @@ namespace Infinity.App;
 
 /// <summary>
 /// OD-239 items 6-7: "Export my old Noob save". An AZIMUTH profile has no cloud save, but while the account still has an old Noob cloud line
-/// (read-only until its erase), the save home shows a banner and this screen: the line's newest revision is downloaded (SAVES_API §4.2) and
+/// (read-only until its erase), its row in Profiles (ShellViewModel.OldSaves.cs) offers "Move to my Azimuth save" and, as the fallback,
+/// "Export to a file…", which opens this screen: the line's newest revision is downloaded (SAVES_API §4.2) and
 /// written to a new file in a folder the player picks in the launcher's own picker, never into Azimuth's folder. The screen also shows the
 /// old local <c>User_&lt;XUID&gt;</c> folder of the profile (OD-120), which the launcher leaves untouched, so progress can be copied by hand.
 /// Which lines exist is read from the cached <c>/me</c> only (<see cref="OldNoobExport.Lines"/>, no request).
@@ -20,20 +21,16 @@ public sealed partial class ShellViewModel
 {
     private string? _exportLastFolder;
     private string? _exportedFile;
+    private OldNoobLine? _exportPicked;
 
     /// <summary>The account's old Noob lines, from the last <c>/me</c>.</summary>
     private IReadOnlyList<OldNoobLine> OldNoobLines => OfflineMode ? [] : OldNoobExport.Lines(_session?.Me);
 
-    /// <summary>The line the screen exports: the current game's, else the first one.</summary>
-    private OldNoobLine? ExportLine => OldNoobLines is [var first, ..] lines ? lines.FirstOrDefault(l => l.Game == CurrentGameId) ?? first : null;
-
-    /// <summary>The save home's banner while an old line exists.</summary>
-    public bool ShowOldNoobBanner => ShowSavesHome && ExportLine is not null;
+    /// <summary>The line the screen exports: the one its Profiles row opened (while <c>/me</c> still names it), else none.</summary>
+    private OldNoobLine? ExportLine => _exportPicked is { } picked
+        ? OldNoobLines.FirstOrDefault(l => l.CareerId == picked.CareerId && l.Game == picked.Game) : null;
 
     public bool ShowSavesExport => ShowSaveManager && SavesCurrent == SavesScreen.Export;
-
-    public string OldNoobBannerText => ExportLine is { } line
-        ? S.Format("export.banner", ("name", ProfileName.Plain(line.Gamertag)), ("game", GameName(line.Game))) : string.Empty;
 
     public string ExportLineText => ExportLine is { } line
         ? S.Format("export.line", ("name", ProfileName.Plain(line.Gamertag)), ("game", GameName(line.Game)),
@@ -57,9 +54,11 @@ public sealed partial class ShellViewModel
 
     public bool CanExportOldNoob => ExportLine is not null && Idle && _session is not null;
 
-    /// <summary>The banner's button: the export screen.</summary>
-    public void OpenOldNoobExport()
+    /// <summary>A cloud old save's "Export to a file…" in Profiles (the fallback of "Move to my Azimuth save"): the export screen of that line.</summary>
+    public void OpenOldNoobExport(OldNoobLine line)
     {
+        ArgumentNullException.ThrowIfNull(line);
+        _exportPicked = line;
         if (ExportLine is null) return;
         _exportedFile = null;
         SavesGo(SavesScreen.Export);
@@ -156,9 +155,7 @@ public sealed partial class ShellViewModel
 
     private void ChangedExport()
     {
-        Changed(nameof(ShowOldNoobBanner));
         Changed(nameof(ShowSavesExport));
-        Changed(nameof(OldNoobBannerText));
         Changed(nameof(ExportLineText));
         Changed(nameof(OldNoobFolderText));
         Changed(nameof(OldNoobFolderExists));
