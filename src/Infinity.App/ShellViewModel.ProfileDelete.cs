@@ -121,19 +121,40 @@ public sealed partial class ShellViewModel
         // the careers this deletion removes, read before /me changes (a profile's every game, or the one career)
         var rows = allGames ? session.Me!.Profiles.Where(p => p.Xuid == profile.Xuid).ToList() : [profile];
         var playerId = session.Me?.Players?.FirstOrDefault(p => p.Xuid == profile.Xuid)?.ProfileId ?? profile.ProfileId;
-        await Run(S[allGames ? "busy.deleting_profile" : "busy.deleting_career"], async () =>
+        var label = S[allGames ? "busy.deleting_profile" : "busy.deleting_career"];
+        await Run(label, async () =>
         {
             if (allGames) _remote.InvalidatePrefix(RemoteCache.Key("revisions")); else SavesChanged(profile.Game); // owner 2026-11-08: read again when next shown
-            ProfileDeletionOutcome outcome;
-            try
+            async Task<ProfileDeletionOutcome> Send(string idempotencyKey)
             {
-                outcome = allGames ? await session.DeletePlayerAsync(profile.Xuid, key) : await session.DeleteProfileAsync(profile.Xuid, key, game: profile.Game);
+                try
+                {
+                    return allGames ? await session.DeletePlayerAsync(profile.Xuid, idempotencyKey) : await session.DeleteProfileAsync(profile.Xuid, idempotencyKey, game: profile.Game);
+                }
+                catch (ApiException e) when ((int)e.Status is >= 400 and < 500)
+                {
+                    _deleteKey = NewDeleteKey(); // answered: the next press is a new request (a lost answer keeps the key)
+                    SetDeleteStatus(Describe(e)); // banned, OD-215 rate limits and the rest in the player's words
+                    throw;
+                }
             }
-            catch (ApiException e) when ((int)e.Status is >= 400 and < 500)
+            var outcome = await Send(key);
+            // the last session ended moments ago (its game ticket may be served up to the server's window, ~60 s): say when, wait under
+            // this overlay with its own label, then try once more on its own (a new request: the first was answered)
+            if (outcome.Result == ProfileDeletionResult.InUse && outcome.FinishingSeconds(DateTimeOffset.UtcNow) is { } seconds
+                && seconds <= DeleteFinishingMaxSeconds && ProfileDeletion.InUseGame(outcome) is null)
             {
-                _deleteKey = NewDeleteKey(); // answered: the next press is a new request (a lost answer keeps the key)
-                SetDeleteStatus(Describe(e)); // banned, OD-215 rate limits and the rest in the player's words
-                throw;
+                Log($"profiles: delete waits {seconds} s for the last session's ticket, then tries once more");
+                SetDeleteStatus(S.Format("profiles.delete_finishing", ("seconds", seconds.ToString(CultureInfo.CurrentCulture))));
+                for (var left = seconds; left > 0; left--)
+                {
+                    BusyStep(S.Format("busy.delete_finishing", ("seconds", left.ToString(CultureInfo.CurrentCulture))));
+                    await DeleteFinishingTick();
+                }
+                BusyStep(label);
+                _deleteKey = key = NewDeleteKey();
+                outcome = await Send(key);
+                DeleteRetried++;
             }
             Log(allGames ? $"profiles: delete profile {playerId} → {outcome.Result}"
                 : DeleteSpeaksCareers ? $"profiles: delete career {profile.Game} {profile.ProfileId} → {outcome.Result}"
@@ -191,6 +212,9 @@ public sealed partial class ShellViewModel
             // CR-S98 §6.5: a career in use in another game says which
             ProfileDeletionResult.InUse when ProfileDeletion.InUseGame(outcome) is { } game && game != CurrentGame.Id =>
                 S.Format("profiles.delete_in_use_game", ("game", GameTitle(game))),
+            // the last session is still finishing (details.ticketExpiresAt): say when, in seconds
+            ProfileDeletionResult.InUse when outcome.FinishingSeconds(DateTimeOffset.UtcNow) is { } seconds && seconds <= DeleteFinishingMaxSeconds =>
+                S.Format("profiles.delete_finishing", ("seconds", seconds.ToString(CultureInfo.CurrentCulture))),
             ProfileDeletionResult.InUse => minutes is null ? S["profiles.delete_in_use_now"] : S.Format("profiles.delete_in_use", ("minutes", minutes)),
             ProfileDeletionResult.DeletionPending => ErrorText(ErrorCodes.AccountsDeletionPending),
             ProfileDeletionResult.Banned => BannedText(outcome.Details),
@@ -199,6 +223,15 @@ public sealed partial class ShellViewModel
     }
 
     private static string NewDeleteKey() => Guid.CreateVersion7().ToString();
+
+    /// <summary>The longest wait for a finishing session the delete retries after on its own (the server's window is ~60 s).</summary>
+    private const int DeleteFinishingMaxSeconds = 120;
+
+    /// <summary>One second of that wait (the harness makes it instant).</summary>
+    internal Func<Task> DeleteFinishingTick { get; set; } = () => Task.Delay(TimeSpan.FromSeconds(1));
+
+    /// <summary>How many automatic retries a delete made (the harness reads it).</summary>
+    internal int DeleteRetried { get; private set; }
 
     /// <summary>The sync-state forget of <paramref name="game"/>'s careers on this server (CR-S98: per game; null without a saves service).</summary>
     private Func<ulong, bool>? ForgetSyncFor(string game)

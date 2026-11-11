@@ -30,6 +30,16 @@ public sealed record ProfileDeletionOutcome(ProfileDeletionResult Result, TimeSp
 
     /// <summary>Whole minutes to wait, at least 1; null when the server gave no time.</summary>
     public int? RetryMinutes => RetryAfter is { } wait && wait > TimeSpan.Zero ? Math.Max(1, (int)Math.Ceiling(wait.TotalMinutes)) : null;
+
+    /// <summary>
+    /// <c>SESSIONS.PROFILE_IN_USE</c> with <c>details.ticketExpiresAt</c> (ACCOUNTS.md §5, fi-db purge.rs <c>lock_idle_line_in</c>): the last
+    /// session has ended but its game ticket may still be served until then (at most the liveness window after the end); null otherwise.
+    /// </summary>
+    public DateTimeOffset? TicketExpiresAt { get; init; }
+
+    /// <summary>A session still finishing: whole seconds until <see cref="TicketExpiresAt"/> from <paramref name="now"/>, at least 1; null otherwise.</summary>
+    public int? FinishingSeconds(DateTimeOffset now) =>
+        TicketExpiresAt is { } at ? Math.Max(1, (int)Math.Ceiling((at - now).TotalSeconds)) : null;
 }
 
 /// <summary>What the PC kept after a profile was deleted from the cloud.</summary>
@@ -77,7 +87,10 @@ public static class ProfileDeletion
         {
             ErrorCodes.AccountsNotFound when error.Status == HttpStatusCode.NotFound => new(ProfileDeletionResult.Deleted),
             ErrorCodes.RequestRateLimited => new(ProfileDeletionResult.RateLimited, error.RetryAfter, error.Details),
-            ErrorCodes.SessionsProfileInUse => new(ProfileDeletionResult.InUse, error.RetryAfter ?? TicketWait(error.Details, now), error.Details),
+            ErrorCodes.SessionsProfileInUse => new(ProfileDeletionResult.InUse, error.RetryAfter ?? TicketWait(error.Details, now), error.Details)
+            {
+                TicketExpiresAt = TicketWait(error.Details, now) is { } wait ? now + wait : null,
+            },
             ErrorCodes.AccountsDeletionPending => new(ProfileDeletionResult.DeletionPending, null, error.Details),
             ErrorCodes.AccountsBanned => new(ProfileDeletionResult.Banned, null, error.Details),
             _ => null,
@@ -125,6 +138,8 @@ public static class ProfileDeletion
         if (ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var accountXuid)) xuids.Add(accountXuid);
         var local = store.Read().FirstOrDefault(p => p.Cloud is { } cloud && cloud.AccountId == accountId && cloud.ProfileId == profile.ProfileId);
         if (local is not null && !xuids.Contains(local.OfflineXuid)) xuids.Add(local.OfflineXuid);
+        // OD-239: an Azimuth profile plays Azimuth's own save; deleting a profile never moves User_9000000000000
+        xuids.Remove(AzimuthSaves.OfflineXuid);
         var archived = new List<string>();
         var kept = new List<string>();
         if (savesRoot is not null)
