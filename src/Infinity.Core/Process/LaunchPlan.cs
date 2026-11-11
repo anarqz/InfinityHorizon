@@ -22,11 +22,20 @@ public abstract record ExitDisposition
     /// </summary>
     public const uint IdentityRefusedExit = 0x4649_0005;
 
+    /// <summary>
+    /// OD-239 (T-1111-AZIMUTH): an Azimuth profile's offline start (Play offline, or an online start that fell back to the offline
+    /// identity) could not open Azimuth's own save (account.c ACCOUNT_EXIT_AZIMUTH_SAVE): the hook ended the game before it read a
+    /// save; nothing was written. Not a crash.
+    /// </summary>
+    public const uint AzimuthSaveRefusedExit = 0x4649_0006;
+
     public sealed record Normal : ExitDisposition;
 
     public sealed record Relaunch : ExitDisposition;
 
     public sealed record IdentityRefused : ExitDisposition;
+
+    public sealed record AzimuthSaveRefused : ExitDisposition;
 
     /// <summary>NTSTATUS-style failure (0xC0000005 …) or any other non-zero code.</summary>
     public sealed record Crashed(uint Code) : ExitDisposition;
@@ -36,6 +45,7 @@ public abstract record ExitDisposition
         0 or QuitForcedExit => new Normal(),
         ExitRelaunch => new Relaunch(),
         IdentityRefusedExit => new IdentityRefused(),
+        AzimuthSaveRefusedExit => new AzimuthSaveRefused(),
         _ => new Crashed(code),
     };
 }

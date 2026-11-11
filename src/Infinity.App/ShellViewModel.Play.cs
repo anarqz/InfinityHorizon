@@ -573,6 +573,13 @@ public sealed partial class ShellViewModel
                 SetStatus(Message);
                 _identityRefused = true;
                 break;
+            case SupervisorEvent.Exited { Disposition: ExitDisposition.AzimuthSaveRefused }:
+                EndPlayProgress();
+                // OD-239: an Azimuth start that fell back offline could not open Azimuth's own save: closed before it read a save
+                Message = S["supervisor.azimuth_save_refused"];
+                SetStatus(Message);
+                _identityRefused = true;
+                break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 EndPlayProgress();
                 SetStatus(S.Format("supervisor.crashed", ("code", $"0x{c.Code:x8}")));

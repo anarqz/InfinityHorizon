@@ -31,7 +31,7 @@ public sealed record SupervisorConfig(
     /// too: when the online identity cannot be set (ticket refused, handshake late or lost) the game plays offline on that save, never
     /// on Azimuth's own <c>User_9000000000000</c>. Null: the hook ends the game before it reads a save instead.
     /// </summary>
-    public (string Xuid, string Gamertag)? FallbackIdentity { get; init; }
+    public (string Xuid, string Gamertag, string Mode)? FallbackIdentity { get; init; }
     /// <summary>How often the profile's folder is read while the game runs: a fresh start's first save (CR-S51), checkpoints (OD122-L3).</summary>
     public TimeSpan SavesPoll { get; init; } = TimeSpan.FromSeconds(3);
     /// <summary>First hook supporting authenticated terminal post-handshake suspension.</summary>
@@ -397,6 +397,7 @@ public sealed class PlaySupervisor
         {
             env.Add((Launch.EnvOfflineXuid, fallback.Xuid));
             env.Add((Launch.EnvOfflineGamertag, fallback.Gamertag));
+            env.Add((Launch.EnvOfflineMode, fallback.Mode)); // OD-239: an Azimuth profile falls back onto Azimuth's own save
         }
         if (WineHost.Detected)
         {
@@ -413,7 +414,7 @@ public sealed class PlaySupervisor
         }
         // B1: an inherited FI_OFFLINE_* (Steam launch options, a shell) never names the identity: only FallbackIdentity does
         // Azimuth 1.0 opens its own launcher without arguments: --skip-launcher starts the added FH2 directly
-        var plan = new LaunchPlan(_config.Install.HostExe, [AzimuthSetup.SkipLauncher], _config.Install.Root, env, [Launch.EnvOfflineXuid, Launch.EnvOfflineGamertag]);
+        var plan = new LaunchPlan(_config.Install.HostExe, [AzimuthSetup.SkipLauncher], _config.Install.Root, env, Launch.OfflineIdentityNames);
         var crashContext = new CrashContext(_clock);
         var startedUtc = _clock.GetUtcNow();
         CrashDumpSnapshot? dumpSnapshot = null;
