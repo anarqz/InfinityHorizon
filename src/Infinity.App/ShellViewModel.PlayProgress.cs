@@ -2,6 +2,7 @@
 using System.IO;
 using Infinity.Core.Mods;
 using Infinity.Core.Shell;
+using Infinity.Core.Supervisor;
 
 namespace Infinity.App;
 
@@ -21,13 +22,109 @@ public sealed partial class ShellViewModel
     private bool _queueShown;
 
     /// <summary>The queue modal: shown over the whole window, which takes no click or key outside it (its own buttons still do).</summary>
-    public bool ShowQueueModal => _waitingForAdmission && _queueShown && _playOverlay is null;
+    public bool ShowQueueModal => _waitingForAdmission && _queueShown && _playOverlay is null && !AwaitingPlayer
+        && _playAttempt is { IsCancellationRequested: false };
+
+    // ------------------------------------------------------------------ hotfix 3.1.2: a Play never hides a question, never a dead end
+
+    /// <summary>
+    /// Hotfix 3.1.2 (players stuck under "Joining game…" with the cloud/PC save choice behind it): a screen is open that waits for the
+    /// player's answer. Every decision prompt the launcher has is named here, so a Play's overlay and its queue modal step aside for any
+    /// of them (<see cref="PlayStepsAside"/>): the save conflict (Resolve: cloud or this PC), the refused first save (OD-133), a restored
+    /// career waiting for the cloud and the restore itself, the career start (CR-S52 seed / scratch), a custom server's changed keys
+    /// (CR-L39), an Azimuth never opened, a mod confirmation and the sign-in form. A new prompt is added here, nowhere else.
+    /// </summary>
+    public bool AwaitingPlayer => ShowSaveConflict || ShowFreshStartRefused || ShowRestoreWaiting || ShowCareerRestore || ShowSeedPanel
+        || ShowTrustChange || ShowAzimuthFirstRun || ShowModConfirm || ShowSignIn;
+
+    /// <summary>
+    /// A Play is under way and a prompt waits for the player: the Play's overlay is hidden (its scope stays open with its label, so it
+    /// comes back as it was once the answer is given and the launch goes on) and the screen is not locked, so the prompt takes the mouse
+    /// and the keyboard. The queue modal is hidden the same way (<see cref="ShowQueueModal"/>).
+    /// </summary>
+    private bool PlayStepsAside => _playOverlay is not null && AwaitingPlayer;
+
+    /// <summary>When the Play's overlay opened (its Cancel shows <see cref="PlayCancelAfter"/> later).</summary>
+    private long _playOverlaySince;
+
+    /// <summary>Hotfix 3.1.2: the Play's overlay offers Cancel this long after it opened (a harness seam).</summary>
+    internal TimeSpan PlayCancelAfter { get; set; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>The Play's overlay has been up long enough to offer Cancel.</summary>
+    private bool PlayCancelReady => _playOverlay is not null && System.Diagnostics.Stopwatch.GetElapsedTime(_playOverlaySince) >= PlayCancelAfter;
+
+    /// <summary>The running Play attempt's own cancel (the preparation before the supervisor runs); null when none runs.</summary>
+    private CancellationTokenSource? _playAttempt;
+
+    /// <summary>The supervisor started the game process for the current attempt (a cancel then closes the game instead of leaving the gate).</summary>
+    private bool _playSpawned;
+
+    /// <summary>
+    /// One Play attempt (online or offline) under its overlay: the overlay opens with <paramref name="label"/>, and whatever ends the attempt
+    /// (the game started, a refusal, a cancel, the session's end, an exception) closes it. A cancelled attempt that is still unwinding
+    /// refuses a second Play until it has stopped.
+    /// </summary>
+    private async Task RunPlayAttemptAsync(string label, Func<CancellationToken, Task> attempt)
+    {
+        if (_playAttempt is { IsCancellationRequested: true }) { Message = S["play.cancelled"]; return; }
+        using var own = new CancellationTokenSource();
+        _playAttempt = own;
+        _playSpawned = _playLaunched = false;
+        ShowPlayOverlay(label);
+        try { await attempt(own.Token); }
+        finally
+        {
+            if (ReferenceEquals(_playAttempt, own)) _playAttempt = null;
+            EndPlayProgress();
+            if (!_playLaunched) PlayRefusedVisibly();
+        }
+    }
+
+    /// <summary>The attempt reached the supervisor (online) or started the game (offline): its own events say how it ended.</summary>
+    private bool _playLaunched;
+
+    /// <summary>
+    /// Hotfix 3.1.2 (PLAY HARDCORE clicked 14 times, "no feedback"): a Play that stopped before the game was launched always says why where
+    /// the player looks, PLAY's own status line under the buttons (not only the window's bottom line), and the launcher log has it. A
+    /// prompt that opened instead (the career start, a conflict) is its own answer.
+    /// </summary>
+    private void PlayRefusedVisibly()
+    {
+        if (AwaitingPlayer) return;
+        if (string.IsNullOrEmpty(Message)) PlayStopped();
+        Log("play: not started: " + Message);
+        SetStatus(Message!);
+    }
+
+    /// <summary>
+    /// Hotfix 3.1.2, the overlay's Cancel (shown <see cref="PlayCancelAfter"/> after it opened): the launch stops and the overlay closes at
+    /// once, with the reason. Before the supervisor runs, the preparation stops at its next step; while the gate is asked or the game is
+    /// prepared (its save, a prompt), the supervisor is cancelled and leaves the gate (as Leave queue); once the game process exists, it is
+    /// closed as "Close the game" does.
+    /// </summary>
+    internal void CancelPlay()
+    {
+        if (_playOverlay is null && !ShowQueueModal) return;
+        Log("play: cancelled by the player from the Play overlay" + (_playSpawned ? " (the game is closed)" : string.Empty));
+        try { _playAttempt?.Cancel(); }
+        catch (ObjectDisposedException) { } // already over
+        if (_play is not null && _offlineChild is null && _commands is not null)
+        {
+            if (_playSpawned) _commands.Writer.TryWrite(new SupervisorCommand.Quit());
+            else StopPlay();
+        }
+        EndPlayProgress();
+        Message = S["play.cancelled"];
+        SetStatus(Message);
+    }
 
     /// <summary>The Play's overlay with <paramref name="label"/> (opened, or its label changed).</summary>
     private void ShowPlayOverlay(string label)
     {
+        // hotfix 3.1.2: only for a Play attempt still going (a late supervisor event after a cancel never reopens it)
+        if (_playAttempt is not { IsCancellationRequested: false }) return;
         if (_playOverlay is { } open) open.Step(label);
-        else _playOverlay = Loading(label);
+        else { _playOverlay = Loading(label); _playOverlaySince = System.Diagnostics.Stopwatch.GetTimestamp(); }
         ChangedPlayProgress();
     }
 
@@ -49,15 +146,21 @@ public sealed partial class ShellViewModel
 
     private void ChangedPlayProgress()
     {
+        Changed(nameof(ShowBusyOverlay));
         Changed(nameof(ShowQueueModal));
         Changed(nameof(CanCancelBusy));
     }
 
-    /// <summary>The busy overlay's Cancel: a sign-in waiting on the network, or a Play still asking for its place (Leave queue).</summary>
+    /// <summary>
+    /// The busy overlay's Cancel: a sign-in waiting on the network, a Play still asking for its place (Leave queue), or (hotfix 3.1.2) any
+    /// Play whose overlay has been up for <see cref="PlayCancelAfter"/>.
+    /// </summary>
     public void CancelBusy()
     {
         if (_signIn is not null) { CancelSignIn(); return; }
-        if (_playOverlay is not null && CanLeaveQueue) LeaveQueue();
+        if (_playOverlay is null) return;
+        if (CanLeaveQueue) LeaveQueue();
+        else if (PlayCancelReady) CancelPlay();
     }
 
     // ------------------------------------------------------------------ the mods a launch needs (owner 2026-11-10, 3.1.1)

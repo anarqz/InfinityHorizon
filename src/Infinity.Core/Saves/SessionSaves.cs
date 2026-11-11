@@ -307,6 +307,9 @@ public sealed class SessionSaves
         var decision = _saves.Decide(_savesRoot, _xuid, head);
         if (decision.Failure is { } failure)
         {
+            // hotfix 3.1.2: why this PC's save does not read (the strict container check's own message: names and sizes, never bytes);
+            // the supervisor's error carries only the code
+            Note?.Invoke("save: this PC's newest save refused before Play: " + failure.Code + ": " + failure.Message);
             throw new SaveBlockedException(failure.Code, failure.Message);
         }
         // retention (SAVES_API.md §4.1, §5): the head's file is gone; nothing comes down (no download, fast-forward, keep-cloud or

@@ -75,6 +75,9 @@ public static class SaveImport
             if (foreign.Count > 0) return No("save_file.wrong_game", string.Join(", ", foreign));
             var missing = layout.RequiredFiles.Where(n => !names.Contains(n, StringComparer.Ordinal)).ToList();
             if (missing.Count > 0) return No("save_file.missing", string.Join(", ", missing));
+            // hotfix 3.1.2: the very check Play's cloud save makes on this revision (CloudSaves.LocalNewest → the bundle's strict reader), here
+            // first: a save that would stop every Play ("the revision has no TransactionLogFile") is refused now, with that reason
+            if (PlayableRefusal(newest, layout) is { } unplayable) return No("save_file.not_playable", unplayable);
 
             // fm5-save-format.md §1: the restore set is the User_ revision plus the containers its career rows name
             IReadOnlySet<string> referenced;
@@ -108,6 +111,8 @@ public static class SaveImport
                 var revisions = AzimuthSaves.RevisionFolders(entry);
                 if (revisions.Count == 0 || revisions.Any(r => AzimuthSaves.ReadRevision(r.Number, r.Path) is not { } rev || AzimuthSaves.Verify(rev).Count > 0))
                     return No("save_file.container_not_sealed", name);
+                // hotfix 3.1.2: and as Play reads it (its kind's exact files)
+                if (SiblingRefusal(entry, name, layout) is { } bad) return No("save_file.not_playable", name + ": " + bad);
                 siblings.Add(entry);
             }
             var found = siblings.Select(Path.GetFileName).ToHashSet(StringComparer.Ordinal);
@@ -118,6 +123,33 @@ public static class SaveImport
         {
             return No("save_file.unreadable", e.Message);
         }
+    }
+
+    /// <summary>
+    /// Hotfix 3.1.2: why Play's cloud save could not read <paramref name="revision"/> as the game's career (the bundle's strict reader:
+    /// FM5SAVE1 needs exactly the profile's four data files), or null. FH2's bundle reads any revision the layout accepts.
+    /// </summary>
+    public static string? PlayableRefusal(LocalRevision revision, SaveLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(revision);
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.Bundle is not Fm5CareerBundle) return null;
+        try { Fm5CareerBundle.ReadContainer(revision, Fm5Bundle.FilesUser); return null; }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { return e.Message; }
+    }
+
+    /// <summary>Hotfix 3.1.2: why Play could not read the sibling container at <paramref name="dir"/> (its newest sealed revision), or null.</summary>
+    public static string? SiblingRefusal(string dir, string name, SaveLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.Bundle is not Fm5CareerBundle || Fm5Bundle.KindOfSibling(name) is not { } kind) return null; // replays are never packed
+        try
+        {
+            if (AzimuthSaves.NewestSealed(dir) is not { } newest) return "no sealed revision";
+            Fm5CareerBundle.ReadContainer(newest, Fm5Bundle.FilesOf(kind));
+            return null;
+        }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { return e.Message; }
     }
 
     /// <summary>
@@ -225,12 +257,21 @@ public static class SaveImport
         var stamp = nowUtc.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
         var copied = new List<string>();
         var skipped = new List<string>();
+        var added = new List<string>(); // revisions this call put on top of an existing container (removed again on a failure)
         try
         {
             foreach (var sibling in source.Siblings)
             {
                 var name = Path.GetFileName(sibling);
                 var destination = Path.Combine(savesRoot, layout.PlayerDir, name);
+                if (Directory.Exists(destination) && SiblingRefusal(destination, name, layout) is not null)
+                {
+                    // hotfix 3.1.2: the container on this PC does not read as Play reads it (no sealed revision left, or not its kind's
+                    // files) while the save's own does: the save's newest revision goes on top of it (nothing on this PC is overwritten)
+                    added.Add(AddNewestRevision(savesRoot, sibling, destination, stamp));
+                    copied.Add(name);
+                    continue;
+                }
                 if (Directory.Exists(destination) || File.Exists(destination)) { skipped.Add(name); continue; }
                 CopyContainer(savesRoot, sibling, destination, stamp);
                 copied.Add(name);
@@ -240,14 +281,57 @@ public static class SaveImport
         }
         catch (Exception e) when (e is not SaveException { Landed: true })
         {
+            foreach (var revision in added)
+            {
+                try { Directory.Delete(revision, recursive: true); }
+                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            }
             foreach (var name in copied)
             {
-                try { Directory.Delete(Path.Combine(savesRoot, layout.PlayerDir, name), recursive: true); }
+                var dir = Path.Combine(savesRoot, layout.PlayerDir, name);
+                if (added.Any(a => a.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) continue; // it existed before
+                try { Directory.Delete(dir, recursive: true); }
                 catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
             }
             if (e is SaveException) throw;
             throw new SaveException(e.Message);
         }
+    }
+
+    /// <summary>
+    /// Hotfix 3.1.2: <paramref name="from"/>'s newest sealed revision copied (verified) as <paramref name="to"/>'s newest (its highest + 1),
+    /// staged on the saves volume first; returns the new revision's folder.
+    /// </summary>
+    private static string AddNewestRevision(string savesRoot, string from, string to, string stamp)
+    {
+        var source = AzimuthSaves.NewestSealed(from) ?? throw new SaveException(Path.GetFileName(from) + ": no sealed revision");
+        var existing = AzimuthSaves.RevisionFolders(to);
+        var number = existing.Count == 0 ? source.Number : existing[^1].Number + 1;
+        var label = number.ToString("x16", CultureInfo.InvariantCulture);
+        var staging = Path.Combine(savesRoot, AzimuthSaves.IncomingDir, $"{Path.GetFileName(from)}-{stamp}-{label}");
+        if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
+        var target = Path.Combine(to, "revisions", label);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(staging, "data"));
+            AzimuthSaves.CopyDurably(Path.Combine(source.Path, "commit"), Path.Combine(staging, "commit"));
+            foreach (var entry in source.Entries)
+                AzimuthSaves.CopyDurably(Path.Combine(source.Path, "data", entry.Name), Path.Combine(staging, "data", entry.Name));
+            var staged = AzimuthSaves.ReadRevision(number, staging) ?? throw new SaveException("the staged commit file does not parse");
+            if (AzimuthSaves.Verify(staged) is { Count: > 0 } || !staged.Entries.SequenceEqual(source.Entries))
+                throw new SaveException(Path.GetFileName(from) + ": the staged copy does not verify");
+            if (Directory.Exists(target)) throw new SaveException(Path.GetFileName(to) + ": revision " + label + " already exists");
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            Directory.Move(staging, target);
+        }
+        catch
+        {
+            try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); }
+            catch (IOException) { }
+            throw;
+        }
+        AzimuthSaves.TryDeleteEmpty(Path.Combine(savesRoot, AzimuthSaves.IncomingDir));
+        return target;
     }
 
     /// <summary>A sibling container (every revision, each verified against its commit) staged on the saves volume, then renamed into place.</summary>
@@ -290,6 +374,6 @@ public static class SaveImport
         "save_file.cloud_later", "save_file.refused", "save_file.failed", "save_file.done", "save_file.siblings_missing", "save_file.pick_title",
         "save_file.pick_this", "save_file.option", "save_file.hint", "save_file.hint_hardcore", "save_file.menu", "save_file.confirm_title",
         "save_file.confirm_body", "save_file.confirm", "save_file.cancel", "save_file.reason", "save_file.siblings", "busy.checking_save_file",
-        "busy.copying_save_file",
+        "busy.copying_save_file", "save_file.not_playable",
     ];
 }

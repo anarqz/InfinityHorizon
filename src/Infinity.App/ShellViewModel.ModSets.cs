@@ -125,6 +125,12 @@ public sealed partial class ShellViewModel
             ("current", results.Count(r => r.Outcome == ExternalSetOutcome.UpToDate).ToString(CultureInfo.CurrentCulture)),
             ("missing", results.Count(r => r.Outcome == ExternalSetOutcome.NotFound).ToString(CultureInfo.CurrentCulture)),
             ("failed", results.Count(r => r.Outcome == ExternalSetOutcome.Failed).ToString(CultureInfo.CurrentCulture)));
+        // hotfix 3.1.2: the packs that need a pack that did not install (the Common) were not tried; one clear message names that pack
+        // and why, instead of a failure per dependent
+        var blocking = results.Where(r => !r.Succeeded && results.Any(d => d.Reason == "dependency:" + r.Mod.Id)).ToList();
+        if (blocking.Count > 0)
+            Message = string.Join("\n", blocking.Select(b => S.Format("modset.dependency_blocked", ("line", SetResultLine(b, names)),
+                ("count", results.Count(d => d.Reason == "dependency:" + b.Mod.Id).ToString(CultureInfo.CurrentCulture)))));
         _expandedSets.Add(hint);
         RefreshModSetCards();
         Changed(string.Empty);
@@ -138,7 +144,11 @@ public sealed partial class ShellViewModel
             ExternalSetOutcome.Installed => S.Format("modset.result.installed", ("mod", name)),
             ExternalSetOutcome.Updated => S.Format("modset.result.updated", ("mod", name)),
             ExternalSetOutcome.UpToDate => S.Format("modset.result.up_to_date", ("mod", name)),
+            // hotfix 3.1.2: which file of the pack the picked folder lacks (its path inside the pack)
+            ExternalSetOutcome.NotFound when result.FirstMissing is { } file => S.Format("modset.result.not_found_file", ("mod", name), ("file", file)),
             ExternalSetOutcome.NotFound => S.Format("modset.result.not_found", ("mod", name)),
+            ExternalSetOutcome.Failed when result.Reason == "files" && result.FirstMissing is { } file =>
+                S.Format("modset.result.failed", ("mod", name), ("reason", SetFailureReason(result, names) + " " + S.Format("modset.reason.first_file", ("file", file)))),
             _ => S.Format("modset.result.failed", ("mod", name), ("reason", SetFailureReason(result, names))),
         };
     }

@@ -368,9 +368,8 @@ public sealed partial class WorldsBridge(IMatchmakingApi mm, Func<string, string
         if (GameReadiness.CurrentGeneration is not { } generation)
             return new(UiJoin.NotAllowed, _text("worlds.load_game"));
         var worldId = string.IsNullOrEmpty(request.WorldId) ? null : request.WorldId; // empty: a quick join
-        // OD-112: the session's set goes with every join; planned mods not confirmed yet never join as vanilla.
-        var (mods, modsRefusal) = WireMods();
-        if (modsRefusal is not null) return new(UiJoin.NotAllowed, _text(modsRefusal));
+        // the session's declared set goes with every join, for display only (T-1110-NOMODMATCH: mods never refuse a join)
+        var (mods, _) = WireMods();
         // OD-208: an official join is direct only, so neither nat nor relays is ever sent (WORLDS_OFFICIAL §3)
         try
         {

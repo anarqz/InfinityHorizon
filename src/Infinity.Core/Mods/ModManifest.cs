@@ -64,6 +64,30 @@ public sealed class ModManifest
     /// </summary>
     public bool LoadFirst { get; }
 
+    /// <summary>
+    /// The profile modes the manifest itself declares (<c>modes</c>: <c>["noob"]</c> or <c>["noob", "hardcore"]</c>; Noob takes any mod,
+    /// OD-233), or null when it declares none. Alex 2026-11-10 ("Car Packs mods from InfinityCatalog = Can be used in Hardcore"): a car pack
+    /// declares both modes while its multiplayer impact stays <c>gameplay</c>, so Hardcore keeps it and it still enters the lobby set.
+    /// A catalog entry's declaration stands for an installed copy of the same mod (<see cref="ModMultiplayer.AllowedInHardcore"/>).
+    /// </summary>
+    public IReadOnlyList<string>? Modes { get; }
+
+    /// <summary>
+    /// What this manifest says about Hardcore profiles: its <see cref="Modes"/> when it declares them, else OD-233's rule (both modes when
+    /// it changes nothing for other players, <see cref="ModMultiplayer.AffectsMultiplayer"/>; Noob only otherwise).
+    /// </summary>
+    public bool DeclaresHardcore => Modes is { } modes ? modes.Contains(HardcoreMode, StringComparer.Ordinal) : IsCarPack || !ModMultiplayer.AffectsMultiplayer(this);
+
+    /// <summary>
+    /// Until the catalog's car packs declare <see cref="Modes"/>: an official car pack (OD-231/OD-232, the ZephyrSkies packs and their Commons)
+    /// is a catalog mod made of the player's own files (<see cref="IsExternal"/>) that carries content only (database, strings, media: no
+    /// binary, no plugin, nothing executable). Alex 2026-11-10: such packs stay on in Hardcore.
+    /// </summary>
+    public bool IsCarPack => IsExternal && Files.Count > 0 && Files.All(f => f.Role != "binary" && !ExecutableExtension(f.Destination)
+        && !f.Destination.Contains("/plugins/", StringComparison.OrdinalIgnoreCase));
+
+    public const string NoobMode = "noob", HardcoreMode = "hardcore";
+
     /// <summary>A manifest from a catalog or a development file: anything that is not an ExtraOptions mod is refused (OD-232).</summary>
     public ModManifest(byte[] bytes) : this(bytes, installed: false) { }
 
@@ -252,6 +276,14 @@ public sealed class ModManifest
             if (loadOrder.ValueKind != JsonValueKind.String || loadOrder.GetString() != "first") throw new ModException("invalid load order");
             LoadFirst = true;
         }
+        // Noob takes any mod (OD-233), so a declaration always names it; "hardcore" adds Hardcore profiles. Anything else is refused.
+        if (Document.TryGetProperty("modes", out var modes))
+        {
+            var names = modes.ValueKind == JsonValueKind.Array ? modes.EnumerateArray().Select(m => m.ValueKind == JsonValueKind.String ? m.GetString()! : "").ToArray() : [];
+            if (names.Length is < 1 or > 2 || names.Distinct(StringComparer.Ordinal).Count() != names.Length || !names.Contains(NoobMode, StringComparer.Ordinal)
+                || names.Any(n => n is not (NoobMode or HardcoreMode))) throw new ModException("invalid modes");
+            Modes = Array.AsReadOnly(names);
+        }
         if (Document.TryGetProperty("incompatibleFiles", out var incompatible))
             foreach (var file in incompatible.EnumerateArray())
             {
@@ -355,20 +387,25 @@ public sealed class ModManifest
         catch (ArgumentException) { return false; }
     }
 
-    /// <summary>OD-233: paths (<c>destination</c>, <c>path</c>) compare in their per-game form, so a catalog that moved to it is no update.</summary>
+    /// <summary>
+    /// OD-233: paths (<c>destination</c>, <c>path</c>) compare in their per-game form, so a catalog that moved to it is no update. The top-level
+    /// <c>modes</c> is left out: it is the catalog's policy, not the mod's files (a pack installed before its entry declared both modes is the
+    /// same pack, and is never asked for again), and <see cref="ModMultiplayer.AllowedInHardcore"/> reads it from the catalog entry.
+    /// </summary>
     private static byte[] Canonical(JsonElement element, string game)
     {
         using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer)) Write(writer, element, null);
+        using (var writer = new Utf8JsonWriter(buffer)) Write(writer, element, null, root: true);
         return buffer.ToArray();
 
-        void Write(Utf8JsonWriter writer, JsonElement value, string? name)
+        void Write(Utf8JsonWriter writer, JsonElement value, string? name, bool root = false)
         {
             switch (value.ValueKind)
             {
                 case JsonValueKind.Object:
                     writer.WriteStartObject();
-                    foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { writer.WritePropertyName(property.Name); Write(writer, property.Value, property.Name); }
+                    foreach (var property in value.EnumerateObject().Where(p => !root || p.Name != "modes").OrderBy(p => p.Name, StringComparer.Ordinal))
+                    { writer.WritePropertyName(property.Name); Write(writer, property.Value, property.Name); }
                     writer.WriteEndObject(); break;
                 case JsonValueKind.Array:
                     writer.WriteStartArray();

@@ -29,8 +29,8 @@ public sealed partial class ShellViewModel
     /// <summary>Test seam: every rebuild of the screen after the overlay closed.</summary>
     internal int SettleCount { get; private set; }
 
-    /// <summary>The modal overlay is up.</summary>
-    public bool ShowBusyOverlay => _busyState.IsBusy;
+    /// <summary>The modal overlay is up. Hotfix 3.1.2: never over a prompt that waits for the player during a Play (<see cref="PlayStepsAside"/>).</summary>
+    public bool ShowBusyOverlay => _busyState.IsBusy && !PlayStepsAside;
 
     public string BusyLabel => _busyState.Label;
 
@@ -44,9 +44,10 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// A sign-in waiting on the network can still be cancelled from the overlay (it writes nothing); a write never can. Owner 2026-11-10
-    /// (3.1.1): so can a Play's "Joining queue…" once it asks the server for a place (Leave queue).
+    /// (3.1.1): so can a Play's "Joining queue…" once it asks the server for a place (Leave queue). Hotfix 3.1.2: and any Play's overlay
+    /// once it has been up for <see cref="PlayCancelAfter"/> (never a dead end).
     /// </summary>
-    public bool CanCancelBusy => _busyState.IsBusy && (_signIn is not null || _playOverlay is not null && CanLeaveQueue && !_busy);
+    public bool CanCancelBusy => ShowBusyOverlay && (_signIn is not null || _playOverlay is not null && !_busy && (CanLeaveQueue || PlayCancelReady));
 
     /// <summary>The label the overlay shows now, for the dispatcher watchdog's thread (a field read).</summary>
     internal string BusyActivity => _busyActivity;

@@ -124,35 +124,40 @@ public sealed partial class ShellViewModel
 
     /// <summary>The card whose Install or Update waits for the small confirmation, or null.</summary>
     public ModCard? ModConfirmCard => _modConfirm;
-    public bool ShowModConfirm => _modConfirm is not null && ShowMods && !ModOperationBusy;
+    // the same small confirmation asks before Enable all / Disable all (ShellViewModel.ModsToggleAll.cs)
+    public bool ShowModConfirm => (_modConfirm is not null || _toggleAllConfirm is not null) && ShowMods && !ModOperationBusy;
     public bool ModConfirmIsUpdate => _modConfirm is not null && _modConfirmUpdate;
     private ModManifest? ModConfirmTarget => _modConfirm is not { } card ? null : _modConfirmUpdate ? card.Next : card.Manifest;
-    public string ModConfirmTitle => _modConfirm is not { } card ? "" : S.Format(_modConfirmUpdate ? "mods.confirm_update_title" : "mods.confirm_install_title", ("mod", card.Name));
-    public string ModConfirmText => _modConfirm is not { } card || ModConfirmTarget is not { } target ? ""
+    public string ModConfirmTitle => _toggleAllConfirm is not null ? ToggleAllTitle
+        : _modConfirm is not { } card ? "" : S.Format(_modConfirmUpdate ? "mods.confirm_update_title" : "mods.confirm_install_title", ("mod", card.Name));
+    public string ModConfirmText => _toggleAllConfirm is not null ? ToggleAllText : _modConfirm is not { } card || ModConfirmTarget is not { } target ? ""
         : _modConfirmUpdate ? card.UpdateSummary + "\n" + PreviewTextFor(target) : PreviewTextFor(target);
-    public string ModConfirmFiles => ModConfirmTarget is { } target && PreviewKnown(target) && ReplacedBy(target) is { Count: > 0 } files ? FileList(files) : "";
+    public string ModConfirmFiles => _toggleAllConfirm is null && ModConfirmTarget is { } target && PreviewKnown(target) && ReplacedBy(target) is { Count: > 0 } files ? FileList(files) : "";
     public bool ModConfirmHasFiles => ModConfirmFiles.Length > 0;
-    public string ModConfirmLabel => ModConfirmTarget is not { } target ? "" : ReplacedBy(target).Count is var count and > 0
+    public string ModConfirmLabel => _toggleAllConfirm is not null ? ToggleAllLabel : ModConfirmTarget is not { } target ? "" : ReplacedBy(target).Count is var count and > 0
         ? Counted(_modConfirmUpdate ? "mods.update_replacing" : "mods.install_replacing", count) : S[_modConfirmUpdate ? "mods.confirm_update" : "mods.install"];
-    public bool CanConfirmModCard => _modConfirm is { CanAct: true } && ModsIdle && ModConfirmTarget is { } target && PreviewKnown(target);
+    public bool CanConfirmModCard => _toggleAllConfirm is { } enable ? (enable ? CanEnableAllMods : CanDisableAllMods)
+        : _modConfirm is { CanAct: true } && ModsIdle && ModConfirmTarget is { } target && PreviewKnown(target);
 
     private void OpenModConfirm(ModCard card, bool update)
     {
-        _modConfirm = card; _modConfirmUpdate = update;
+        _modConfirm = card; _modConfirmUpdate = update; _toggleAllConfirm = null;
         Changed(string.Empty);
     }
 
     public void CancelModConfirm()
     {
-        if (_modConfirm is null) return;
-        _modConfirm = null; _modConfirmUpdate = false;
+        if (_modConfirm is null && _toggleAllConfirm is null) return;
+        _modConfirm = null; _modConfirmUpdate = false; _toggleAllConfirm = null;
         Changed(string.Empty);
     }
 
-    /// <summary>The small confirmation's button: the install (or update) the player has now seen, on that card.</summary>
+    /// <summary>The small confirmation's button: the install (or update) the player has now seen, on that card (or Enable/Disable all).</summary>
     public async Task ConfirmModCardAsync()
     {
-        if (!CanConfirmModCard || _modConfirm is not { } card) return;
+        if (!CanConfirmModCard) return;
+        if (_toggleAllConfirm is not null) { await ConfirmToggleAllModsAsync(); return; }
+        if (_modConfirm is not { } card) return;
         var update = _modConfirmUpdate;
         _modConfirm = null; _modConfirmUpdate = false; Changed(string.Empty);
         if (update) { await UpdateModAsync(card); return; }

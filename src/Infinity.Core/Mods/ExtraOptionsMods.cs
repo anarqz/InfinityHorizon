@@ -96,6 +96,44 @@ public static class ExtraOptionsMods
     }
 
     /// <summary>
+    /// Alex 2026-11-10 ("a button for ENABLING / DISABLING ALL mods from a game (which should remove or add the `#` character on each
+    /// line)"): every mod folder of the game but <paramref name="except"/> gets its line enabled (<c>folder</c>) or disabled (<c># folder</c>)
+    /// in one read and one write of <c>loadorder.txt</c>. Each line keeps its place; comments, blank lines, the BOM and the line endings stay;
+    /// a folder without a line is already on, and when disabling gets <c># folder</c> at the end (so ExtraOptions does not enable it at
+    /// start). Game closed (the caller's check). Returns
+    /// how many lines changed.
+    /// </summary>
+    public static int SetAllEnabled(string azimuthRoot, bool enabled, IReadOnlySet<string> except, string game = ModManifest.DefaultGame)
+    {
+        ArgumentNullException.ThrowIfNull(azimuthRoot);
+        ArgumentNullException.ThrowIfNull(except);
+        var mods = Scan(azimuthRoot, game).Where(m => !except.Contains(m.Folder)).ToList();
+        if (mods.Count == 0) return 0;
+        var file = ReadLoadOrder(azimuthRoot, game);
+        var changed = 0;
+        foreach (var mod in mods)
+        {
+            var wanted = enabled ? mod.Folder : "# " + mod.Folder;
+            // the line Scan read the folder's state from (the first that names it)
+            var at = file.Lines.FindIndex(l => Entry(l) is { } e && e.Folder.Equals(mod.Folder, StringComparison.OrdinalIgnoreCase));
+            if (at >= 0)
+            {
+                if (Entry(file.Lines[at])!.Value.Enabled == enabled) continue;
+                file.Lines[at] = wanted;
+            }
+            else
+            {
+                if (enabled) continue; // an unlisted folder is already on (ExtraOptions appends it enabled)
+                if (file.Lines.Count > 0 && file.Lines[^1].Length == 0) file.Lines.RemoveAt(file.Lines.Count - 1);
+                file.Lines.Add(wanted);
+            }
+            changed++;
+        }
+        if (changed > 0) WriteLoadOrder(azimuthRoot, file, game);
+        return changed;
+    }
+
+    /// <summary>
     /// Owner 2026-10-28: removes one folder of <c>mods\</c> and its <c>loadorder.txt</c> line: a manually installed mod the player
     /// deletes, or what an uninstalled catalog mod still left in its own folder. Game closed (the caller's check). A linked folder,
     /// or anything linked inside it, is refused, so only the folder's own files go, through the one safe delete.
@@ -228,6 +266,16 @@ public static class ExtraOptionsMods
         // Emptied rather than deleted: mod code removes files only through ManagedModFiles' remove path.
         if (held.Count > 0) WriteHeld(stateFile, [], empty: true);
         return notes;
+    }
+
+    /// <summary>
+    /// "Enable all" / "Disable all" is the player's own choice for every folder: the folders a Hardcore launch held off
+    /// (<paramref name="stateFile"/>, <see cref="PrepareForLaunch"/>'s) are no longer given back at the next other launch. Emptied, as there.
+    /// </summary>
+    public static void ForgetHeld(string stateFile)
+    {
+        ArgumentNullException.ThrowIfNull(stateFile);
+        if (File.Exists(stateFile) && ReadHeld(stateFile).Count > 0) WriteHeld(stateFile, [], empty: true);
     }
 
     /// <summary>

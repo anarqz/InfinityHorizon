@@ -53,7 +53,45 @@ public partial class MainWindow
             // still locked, another overlay now (the Play's overlay and the queue modal take turns): the focus goes onto the one shown
             if (was && _locked && e.PropertyName is nameof(ShellViewModel.ShowBusyOverlay) or nameof(ShellViewModel.ShowQueueModal))
                 Dispatcher.BeginInvoke(MoveFocusOffContent, DispatcherPriority.Loaded);
+            // hotfix 3.1.2: a prompt that waits for the player just opened (the Play's overlay stepped aside): the keyboard goes onto it
+            if (_lockVm is { } vm)
+            {
+                var prompt = vm.AwaitingPlayer && !_locked;
+                if (prompt && !_promptOpen) Dispatcher.BeginInvoke(FocusOpenPrompt, DispatcherPriority.Loaded);
+                _promptOpen = prompt;
+            }
+            // the Play's overlay offers Cancel (hotfix 3.1.2): reachable by keyboard too
+            if (_lockVm is { ShowBusyOverlay: true, CanCancelBusy: true } && BusyOverlay.IsKeyboardFocused) BusyCancelButton.Focus();
         }
+        else if (e.PropertyName is nameof(ShellViewModel.CanCancelBusy) && _lockVm is { ShowBusyOverlay: true, CanCancelBusy: true } && BusyOverlay.IsKeyboardFocused)
+            Dispatcher.BeginInvoke(() => BusyCancelButton.Focus(), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>A prompt waiting for the player is open and the screen is not locked (the keyboard was moved onto it once).</summary>
+    private bool _promptOpen;
+
+    /// <summary>The prompts that wait for the player (<see cref="ShellViewModel.AwaitingPlayer"/>) with their own panel: the visible one, or null.</summary>
+    internal FrameworkElement? OpenPrompt() =>
+        new FrameworkElement[] { SaveConflictPrompt, FreshStartPrompt, RestoreWaitingPrompt, CareerRestorePrompt, SeedPrompt, TrustChangePrompt, AzimuthFirstRunOverlay, ModConfirmOverlay }
+            .FirstOrDefault(p => p.IsVisible);
+
+    /// <summary>Hotfix 3.1.2: the keyboard on the open prompt's first enabled button (its main choice), unless it is already inside it.</summary>
+    private void FocusOpenPrompt()
+    {
+        if (_lockVm is not { AwaitingPlayer: true } vm || Locked(vm) || OpenPrompt() is not { } prompt || prompt.IsKeyboardFocusWithin) return;
+        if (FirstButton(prompt) is { } button) button.Focus();
+    }
+
+    private static System.Windows.Controls.Button? FirstButton(DependencyObject root)
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is UIElement { IsVisible: false }) continue;
+            if (child is System.Windows.Controls.Button { IsEnabled: true, Focusable: true } button) return button;
+            if (FirstButton(child) is { } found) return found;
+        }
+        return null;
     }
 
     private void ApplyLock()
@@ -69,6 +107,8 @@ public partial class MainWindow
             // the overlay becomes visible with the bindings' update: the focus moves onto it once it is laid out
             Dispatcher.BeginInvoke(MoveFocusOffContent, DispatcherPriority.Loaded);
         }
+        // hotfix 3.1.2: unlocked for a prompt waiting for the player: the keyboard goes onto it, not back to the control behind it
+        else if (vm.AwaitingPlayer) { _focusBeforeLock = null; Dispatcher.BeginInvoke(FocusOpenPrompt, DispatcherPriority.Loaded); }
         else if (_focusBeforeLock is UIElement { IsVisible: true, Focusable: true } before)
         {
             _focusBeforeLock = null;

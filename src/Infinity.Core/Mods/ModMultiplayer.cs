@@ -38,9 +38,31 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
     /// </summary>
     public bool EntersLobbySet => Impact != "cosmetic";
 
-    /// <summary>See <see cref="EntersLobbySet"/>: a Hardcore profile refuses exactly these mods.</summary>
+    /// <summary>See <see cref="EntersLobbySet"/>: the mods of the lobby set (Hardcore's rule is <see cref="AllowedInHardcore"/>).</summary>
     public static bool AffectsMultiplayer(ModManifest manifest) =>
         (manifest ?? throw new ArgumentNullException(nameof(manifest))).Multiplayer is { EntersLobbySet: true };
+
+    /// <summary>
+    /// Whether a Hardcore profile keeps the mod (OD-233: both modes or Noob only). Alex 2026-11-10: "Car Packs mods from InfinityCatalog =
+    /// Can be used in Hardcore", declared by the manifest's <c>modes</c> (<see cref="ModManifest.DeclaresHardcore"/>), while the pack still
+    /// enters the lobby set (<see cref="AffectsMultiplayer"/> is about the lobby, this about the mode). <paramref name="catalog"/>
+    /// (<see cref="HardcorePolicy"/>): the catalog entry of the same id decides for an installed copy, whose snapshot may predate the
+    /// declaration (<c>modes</c> is no content, <see cref="ModManifest.SameContent"/>); a mod the catalog does not list keeps its own.
+    /// </summary>
+    public static bool AllowedInHardcore(ModManifest manifest, IReadOnlyDictionary<string, bool>? catalog = null)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return catalog is not null && catalog.TryGetValue(manifest.Id, out var listed) ? listed : manifest.DeclaresHardcore;
+    }
+
+    /// <summary>The catalog's Hardcore rule by mod id, for <see cref="AllowedInHardcore"/> (an immutable copy: safe off the UI thread).</summary>
+    public static IReadOnlyDictionary<string, bool> HardcorePolicy(IEnumerable<ModManifest> catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var policy = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var manifest in catalog) policy.TryAdd(manifest.Id, manifest.DeclaresHardcore);
+        return policy;
+    }
 
     private static bool Identifier(string? value) => value is { Length: > 0 and <= 64 }
         && value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');

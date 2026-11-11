@@ -105,6 +105,13 @@ public sealed partial class ShellViewModel
                 ModOptions.Add(new(option, _ini.Values[option.GetProperty("id").GetString()!], S.Locale,
                     () => { _iniDirty = true; Changed(nameof(IniDirty)); }));
         }
+        catch (Exception e) when (e is System.IO.DirectoryNotFoundException or System.IO.FileNotFoundException)
+        {
+            // hotfix 3.1.2: the mod's folder (or its settings file) is not on this PC: say so, never "the settings changed"
+            Log("mods: options not read (" + e.GetType().Name + ", " + selected.Manifest.Id + ": its folder or settings file is missing)");
+            _ini = null; ModOptions.Clear();
+            Message = S.Format("mods.options_missing", ("name", selected.Manifest.Text("name", S.Locale)));
+        }
         catch (Exception e) when (ManagedModFiles.IsStateError(e))
         { Log("mods: options not read (" + e.GetType().Name + (e is ModException mod ? " " + mod.Code : "") + ")"); _ini = null; Message = S["mods.settings_changed"]; }
         catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or ArgumentException or FormatException)
@@ -139,23 +146,40 @@ public sealed partial class ShellViewModel
         try { return processes.Length > 0; } finally { foreach (var process in processes) process.Dispose(); }
     }
 
+    /// <summary>The launcher's mods a Hardcore launch of <paramref name="game"/> turned off, to give back at the next Noob or offline launch.</summary>
+    private string ManagedHardcoreHeldFile(string game) => System.IO.Path.Combine(_stateDirectory, "managed-hardcore-held-" + game + ".json");
+
     /// <summary>
     /// Before every launch, off the UI thread (H4d, §1.3): locked settings enforced and Wine overrides
-    /// reconciled. Nothing installed: nothing read or written.
+    /// reconciled. Nothing installed: nothing read or written. Hardcore turns off what it does not keep first (HoldForHardcore).
     /// </summary>
     private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync(bool hardcore = false)
     {
         // OD-233: FM5 has its own mods (locks, Wine overrides, Hardcore's refusal), each launch only its own game's
         if (!Infinity.Core.Mods.ExtraOptionsLayout.HasModsFolder(CurrentGame.Id) || ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
         var game = CurrentGame.Id;
-        ModLaunchPreparation prepared;
+        var heldFile = ManagedHardcoreHeldFile(game);
+        ModLaunchPreparation prepared; var hold = ModHoldResult.None;
         for (var attempt = 0; ; attempt++)
         {
             // Startup retention may hold the bucket lock for a moment: wait for it rather than refuse the launch.
-            try { prepared = await Task.Run(() => factory().PrepareForLaunch(hardcore, game)); break; }
+            // Alex 2026-11-10: Hardcore turns off (and the next Noob launch gives back) what it does not keep, never a refusal
+            try
+            {
+                (hold, prepared) = await Task.Run(() =>
+                {
+                    var manager = factory();
+                    var held = manager.HoldForHardcore(game, hardcore, heldFile);
+                    return (held, manager.PrepareForLaunch(hardcore, game));
+                });
+                break;
+            }
             catch (ModException error) when (error.Code == ModErrors.Busy && attempt < 20) { await Task.Delay(250); }
         }
+        foreach (var note in hold.Notes) Log(note);
         foreach (var warning in prepared.Warnings) Log("mods: " + warning);
+        // only the mods it switched are read again (owner 2026-11-10: no full read at PLAY)
+        if (hold.Changed.Count > 0) await RefreshModEntriesAsync(hold.Changed);
         return prepared;
     }
 }

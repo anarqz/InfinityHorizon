@@ -86,6 +86,9 @@ public sealed class Fm5CareerBundle(SaveLayout layout) : ICareerBundle
         var commit = File.ReadAllBytes(Path.Combine(revision.Path, "commit"));
         var entries = AzimuthSaves.ParseCommit(new System.Text.UTF8Encoding(false, true).GetString(commit))
             ?? throw new SaveException("the revision's commit file does not parse any more");
+        // T-1110-FM5TLF: a profile revision without its TransactionLogFile reads as the profile's other files (the entry omitted)
+        if (names.Contains(Fm5Bundle.OptionalUserFile, StringComparer.Ordinal) && entries.All(e => e.Name != Fm5Bundle.OptionalUserFile[5..]))
+            names = Fm5Bundle.FilesUserWithoutLog;
         var want = names.Skip(1).Select(n => n[5..]).ToList();
         if (entries.FirstOrDefault(e => !want.Contains(e.Name, StringComparer.Ordinal)) is { } unknown) throw new SaveException(unknown.Name + " is not a save file of this container");
         if (want.FirstOrDefault(n => entries.All(e => e.Name != n)) is { } missing) throw new SaveException("the revision has no " + missing);

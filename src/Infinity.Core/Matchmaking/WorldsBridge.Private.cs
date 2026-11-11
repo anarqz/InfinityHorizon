@@ -274,7 +274,7 @@ public sealed partial class WorldsBridge
         {
             if (await AccessAsync(token).ConfigureAwait(false) is { Allowed: false })
                 return Decided(kind, OnlineOpen ? FreeRoamResult.None : FreeRoamResult.NotOnline, "no private lobby (online lobbies are not allowed now)");
-            if (WireMods().Refusal is { } mods) return PrivateRefused(kind, mods, $"mods: {mods}");
+            // T-1110-NOMODMATCH: mods never keep a session out of a private lobby (the declared set is display only)
             // OD-224: a new create never reuses an old private match: a private seat still held while the game is out of that match (its
             // lobby kind said so; Event 10 missed or its DELETE failed) ends first, so the server opens a fresh one
             if (HoldsLeftPrivateMatch)

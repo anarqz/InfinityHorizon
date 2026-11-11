@@ -731,7 +731,7 @@
           </Border>
           </ScrollViewer>
           <!-- Owner 2026-10-26: this PC and the cloud both moved on; the player picks (SAVES_API §4.4/§5). -->
-          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSaveConflict, Converter={StaticResource Visible}}">
+          <Grid x:Name="SaveConflictPrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSaveConflict, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
               <TextBlock Text="{Binding S[saves.conflict_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -743,7 +743,7 @@
               <WrapPanel>
                 <Button Content="{Binding S[saves.conflict_keep_cloud]}" Click="OnConflictKeepCloud" Style="{StaticResource AccentButtonStyle}" Padding="16,6" Margin="0,0,10,8"
                         Visibility="{Binding CanKeepCloudSave, Converter={StaticResource Visible}}" />
-                <Button Content="{Binding S[saves.conflict_keep_local]}" Click="OnConflictKeepLocal" Padding="16,6" Margin="0,0,10,8" />
+                <Button x:Name="ConflictKeepLocalButton" Content="{Binding S[saves.conflict_keep_local]}" Click="OnConflictKeepLocal" Padding="16,6" Margin="0,0,10,8" />
                 <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnConflictNotNow" Style="{StaticResource LinkButton}" Margin="0,0,0,8" />
               </WrapPanel>
               <TextBlock Text="{Binding S[saves.conflict_backup]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityFaint}" />
@@ -751,7 +751,7 @@
           </Border>
           </Grid>
           <!-- OD-133: the line's first save was refused as past its start: a new career only on the player's word (this one backed up first). -->
-          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowFreshStartRefused, Converter={StaticResource Visible}}">
+          <Grid x:Name="FreshStartPrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowFreshStartRefused, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
               <TextBlock Text="{Binding S[saves.fresh_refused_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
@@ -764,7 +764,7 @@
           </Border>
           </Grid>
           <!-- OD-133: a restored career still waiting for the cloud (the Play stopped), or an undo owed: the way out, nothing deleted. -->
-          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowRestoreWaiting, Converter={StaticResource Visible}}">
+          <Grid x:Name="RestoreWaitingPrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowRestoreWaiting, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
               <TextBlock Text="{Binding S[restore.blocked_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
@@ -780,7 +780,7 @@
           </Border>
           </Grid>
           <!-- OD-133: restore a career a fresh start moved aside: the list, then the confirmation (the server's dry run runs on confirm). -->
-          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowCareerRestore, Converter={StaticResource Visible}}">
+          <Grid x:Name="CareerRestorePrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowCareerRestore, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="540" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
               <TextBlock Text="{Binding S[restore.title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -819,7 +819,7 @@
           </Grid>
           <!-- CR-S52: a Hardcore line still empty starts from scratch or from one of the account's profiles, checked on the spot. The first
                Play's choice, then the server's dry run, shown before the player confirms (nothing is copied before an accepted check). -->
-          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSeedPanel, Converter={StaticResource Visible}}">
+          <Grid x:Name="SeedPrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowSeedPanel, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource SmCard}" Padding="26,22" Width="600" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
               <!-- SAVE_MANAGER_UX §3: ‹ Back and the breadcrumb here too (Back = Not now: nothing was copied) -->
@@ -904,7 +904,7 @@
           </Border>
           </Grid>
           <!-- CR-L39: a custom server's pinned keys changed; this covers every screen until the player answers. -->
-          <Grid Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowTrustChange, Converter={StaticResource Visible}}">
+          <Grid x:Name="TrustChangePrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowTrustChange, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="480" VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel>
               <TextBlock Text="{Binding S[server.keys_changed_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -2273,6 +2273,13 @@
                 </ItemsControl>
                 <TextBlock Text="{Binding ModsGameFolder}" ToolTip="{Binding ExtraOptionsModsFolder}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"
                            Foreground="{StaticResource InfinityMuted}" />
+                <!-- Alex 2026-11-10: every mod of the chosen game on or off (the # of each loadorder.txt line), after the small confirmation. -->
+                <WrapPanel Margin="0,8,0,0" Visibility="{Binding ShowToggleAllMods, Converter={StaticResource Visible}}">
+                  <Button Content="{Binding S[mods.enable_all]}" Click="OnEnableAllMods" IsEnabled="{Binding CanEnableAllMods}" Padding="10,6" Margin="0,0,8,0"
+                          AutomationProperties.Name="{Binding S[mods.enable_all]}" />
+                  <Button Content="{Binding S[mods.disable_all]}" Click="OnDisableAllMods" IsEnabled="{Binding CanDisableAllMods}" Padding="10,6"
+                          AutomationProperties.Name="{Binding S[mods.disable_all]}" />
+                </WrapPanel>
                 <!-- Owner 2026-11-10: the background read of the mods, while it runs, with its progress (the cards follow when it ends). -->
                 <Border Style="{StaticResource Card}" Padding="12,8" Margin="0,10,0,0" Visibility="{Binding ModsReading, Converter={StaticResource Visible}}">
                   <StackPanel>
@@ -3068,7 +3075,7 @@
                      Foreground="{StaticResource InfinityMuted}" />
           <TextBlock Text="{Binding BusyElapsed}" Margin="0,6,0,0" TextAlignment="Center" Foreground="{StaticResource InfinityMuted}"
                      Visibility="{Binding HasBusyElapsed, Converter={StaticResource Visible}}" />
-          <Button Content="{Binding S[signin.cancel]}" Margin="0,14,0,0" HorizontalAlignment="Center" Click="OnBusyCancel"
+          <Button x:Name="BusyCancelButton" Content="{Binding S[signin.cancel]}" Margin="0,14,0,0" HorizontalAlignment="Center" Click="OnBusyCancel"
                   Visibility="{Binding CanCancelBusy, Converter={StaticResource Visible}}" />
         </StackPanel>
       </Border>
