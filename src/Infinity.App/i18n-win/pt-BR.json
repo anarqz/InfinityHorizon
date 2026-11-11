@@ -1639,5 +1639,11 @@
   "oldsave.none_for_row": "Este perfil AZIMUTH não tem save antigo para mover neste jogo.",
   "sm.copy_source": "{mode} · {name} ({folder})",
   "profiles.delete_finishing": "Finalizando a sua última sessão, tente de novo em {seconds} s.",
-  "busy.delete_finishing": "Finalizando a sua última sessão: excluindo de novo em {seconds} s…"
+  "busy.delete_finishing": "Finalizando a sua última sessão: excluindo de novo em {seconds} s…",
+  "play.stats_azimuth": "Joga o save do Azimuth deste PC",
+  "play.stats_azimuth_why": "Joga o save do Azimuth deste PC ({why})",
+  "play.azimuth_why_no_install": "escolha a sua pasta do Azimuth para ver o progresso",
+  "play.azimuth_why_none": "ainda não há save deste jogo nela",
+  "play.azimuth_why_unreadable": "não foi possível ler o save",
+  "play.stats_modified": "salvo {when}"
 }
