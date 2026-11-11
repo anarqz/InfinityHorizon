@@ -27,7 +27,12 @@ public sealed record LocalRevision(ulong Number, string Path, IReadOnlyList<Comm
 /// <c>Level</c> is not the driver level (CR-S81), which only the server derives, from the XP.
 /// </summary>
 public sealed record SaveProfile(string Folder, ulong? Xuid, LocalRevision Revision, DateTime LastPlayedUtc, int? Credits)
-{
+{    /// <summary>OD-240 #6: ProfileData's total XP (<c>XP</c>, else <c>Main/XP</c> by path), null when it does not read.</summary>
+    public long? Xp { get; init; }
+
+    /// <summary>OD-240 #6: ProfileData's stored <c>Main/Level</c> (FM5's driver level; FH2's is band-relative and unused), null when it does not read.</summary>
+    public long? Level { get; init; }
+
     /// <summary>Azimuth's own offline profile (<c>User_9000000000000</c>), the one a player without an account has.</summary>
     public bool IsOffline => Xuid == AzimuthSaves.OfflineXuid;
 }
@@ -282,7 +287,8 @@ public static class AzimuthSaves
             }
             ulong? xuid = ulong.TryParse(folder.AsSpan(5), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var x) ? x : null;
             var played = File.GetLastWriteTimeUtc(Path.Combine(revision.Path, "commit"));
-            found.Add(new SaveProfile(folder, xuid, revision, played, Credits(revision)));
+            var (xp, level) = XpAndLevel(revision);
+            found.Add(new SaveProfile(folder, xuid, revision, played, Credits(revision)) { Xp = xp, Level = level });
         }
         return [.. found.OrderByDescending(p => p.LastPlayedUtc)];
     }
@@ -312,6 +318,16 @@ public static class AzimuthSaves
         return ProfileInt(profile, "Credits") ?? (Fm5Bundle.ProfilePathInt(profile, "Main/Credits") is { } credits and >= int.MinValue and <= int.MaxValue ? (int)credits : null);
     }
 
+    /// <summary>OD-240 #6: ProfileData's XP and stored level (each null when it does not read), for the AZIMUTH row's level.</summary>
+    public static (long? Xp, long? Level) XpAndLevel(LocalRevision revision)
+    {
+        ArgumentNullException.ThrowIfNull(revision);
+        if (!revision.Entries.Any(e => e.Name == "ProfileData")) return (null, null);
+        byte[] profile;
+        try { profile = File.ReadAllBytes(Path.Combine(revision.Path, "data", "ProfileData")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (null, null); }
+        return (ProfileInt(profile, "XP") ?? Fm5Bundle.ProfilePathInt(profile, "Main/XP"), Fm5Bundle.ProfilePathInt(profile, "Main/Level"));
+    }
     /// <summary>
     /// An int of ProfileData, found exactly once: u32 name length, the name, <c>" \0\0\0\0\x03\0\0\0"</c>,
     /// then the i32 (the Beta server's <c>profile_int</c>; the length keeps "Level" from matching

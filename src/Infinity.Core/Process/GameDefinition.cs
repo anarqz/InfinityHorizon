@@ -17,7 +17,15 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     public static readonly GameDefinition Fh2 = new("fh2", AzimuthTitles.Fh2Name, "1A96545B", ModeCaches.Fh2StashDir, ModeCaches.Fh2Caches,
         Path.Combine("media", "stripped", "gamedbRC.slt"), FullFeatures: true)
     {
-        TileAccent = "#FFFF4F8B", TileTagline = "Horizon", RaceScreens = [4, 5, 6, 7, 8, 18],    };
+        TileAccent = "#FFFF4F8B", TileTagline = "Horizon", RaceScreens = [4, 5, 6, 7, 8, 18],
+        // OD-240 #6: the level is the save's total XP through the game's own XP table, read from the player's install at run time
+        LocalLevel = new(Infinity.Core.Saves.LevelField.Xp, new(Path.Combine("Mount", "media", "GameTunableSettings.zip"), "PlayerXPLevels.xml")), };
+
+    /// <summary>
+    /// OD-240 #6: where this PC's save of the game gives its driver level (the AZIMUTH row and card, <see cref="Infinity.Core.Saves.LocalLevels"/>).
+    /// Null: not known, the row says so.
+    /// </summary>
+    public Infinity.Core.Saves.LocalLevelSource? LocalLevel { get; init; }
 
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
@@ -26,7 +34,8 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
         PrivateCreateActivity = Matchmaking.WorldActivities.Race, HasPoolWorlds = false, HardcoreCareers = false,
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
         ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,
-        CloudSaves = true, InviteAcceptScreens = [Fm5HoppersScreen], PrivateLobbyKind = Fm5PrivateLobbyKind, };
+        CloudSaves = true, InviteAcceptScreens = [Fm5HoppersScreen], PrivateLobbyKind = Fm5PrivateLobbyKind,
+        LocalLevel = new(Infinity.Core.Saves.LevelField.Level), }; // OD-240 #6: FM5 stores its level (Main/Level)
 
     /// <summary>
     /// OD-223 (T-1108-M): FM5's MULTIPLAYER hoppers screen, as the hook's top screen id reads it (game_profile.h "FM5 WATCH top screen

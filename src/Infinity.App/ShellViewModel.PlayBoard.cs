@@ -21,6 +21,8 @@ public sealed record PlayButtonCard(string Mode, PlayButtonKind Kind, string Mod
     public bool Enabled { get; init; }
     public bool HasGamertag => Gamertag.Length > 0;
     public bool HasStats => Stats.Length > 0;
+    /// <summary>OD-240 #6: why the AZIMUTH level is "—" (its tooltip), null otherwise.</summary>
+    public string? StatsTip { get; init; }
     public bool HasNote => Note.Length > 0;
     public string Initial => Gamertag.Length > 0 ? Gamertag[..1].ToUpperInvariant() : "+";
     public bool IsPlay => Kind == PlayButtonKind.Play;
@@ -91,21 +93,37 @@ public sealed partial class ShellViewModel
             : slot.Kind is PlayButtonKind.Play or PlayButtonKind.Resolve ? slot.Card is { } started ? PlayStats(started.Career) : S["play.stats_local"]
             : string.Empty;
         var (enabled, reason) = PlayButtonEnabled(slot.Kind);
-        return new PlayButtonCard(slot.Mode, slot.Kind, mode, title, gamertag, stats, reason ?? note) { Enabled = enabled, Row = row };
+        return new PlayButtonCard(slot.Mode, slot.Kind, mode, title, gamertag, stats, reason ?? note)
+        {
+            Enabled = enabled, Row = row, StatsTip = slot.Mode != "hardcore" && AzimuthPlayLevel().Why is { } why ? stats + "\n" + why : null,
+        };
     }
 
     /// <summary>
-    /// OD-239 BUG 3, azimuth5: the Azimuth button's line: the level of the identity's last sync with its age (the cached <c>/me</c>, as the
-    /// Profiles row), then <c>User_9000000000000</c> of the chosen game as the Save Manager reads it (the cached scan, no disk read on
-    /// navigation): "CR 15,858 · saved …"; when it cannot be read, "Plays this PC's Azimuth save" with why. Never "No progress yet".
+    /// OD-239 BUG 3, OD-240 #6: the Azimuth button's line, every value from this PC's Azimuth save of the chosen game as the Profiles row
+    /// reads it (the cached scan, no disk read on navigation): its level, then "CR 15,858 · saved …"; when the save cannot be read, "Plays
+    /// this PC's Azimuth save" with why. Never "No progress yet", never the server's progress.
     /// </summary>
-    private string AzimuthPlayStats() => AzimuthPlayLevel() + "  ·  " + AzimuthSaveStats();
+    private string AzimuthPlayStats() => AzimuthPlayLevel().Text + "  ·  " + AzimuthSaveStats();
 
-    /// <summary>azimuth5: the level of the identity's last sync with its age ("LV 15 · synced 2 days ago"), "LV —" without progress.</summary>
-    private string AzimuthPlayLevel() => AzimuthSyncedLevel(CurrentGame) is { } p
-        ? S.Format("play.stats_level_synced", ("level", p.Level.ToString("N0", SavesCulture)), ("ago", Ago(p.SyncedAt)))
-        : S["play.stats_level_none"];
-
+    /// <summary>
+    /// OD-240 #6: the level of this PC's Azimuth save of the chosen game, read locally as the Profiles row reads it ("LV —" and why when it
+    /// cannot be read, or there is no save), never the server's.
+    /// </summary>
+    private (string Text, string? Why) AzimuthPlayLevel()
+    {
+        SaveProfile? save = null;
+        if (SavesRootNow is { } root)
+        {
+            try { save = SavesList(root).FirstOrDefault(s => s.IsOffline); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { }
+        }
+        if (save is null) return (S["play.stats_level_none"], null);
+        var level = LocalLevels.Of(CurrentGame, save, _install?.Root);
+        return level.Shown is { } shown
+            ? (S.Format("play.stats_level", ("level", shown.ToString(SavesCulture))), null)
+            : (S["play.stats_level_none"], S.Format("sm.level_why", ("why", S[level.Why ?? LocalLevels.NotKnown])));
+    }
     private string AzimuthSaveStats()
     {
         if (SavesRootNow is not { } root) return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_no_install"]));

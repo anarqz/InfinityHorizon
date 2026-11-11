@@ -95,6 +95,10 @@ public sealed record ProfileGameRow(string ProfileId, string GameId, string Name
     public ImageSource? Cover { get; init; }
     public bool HasCover => Cover is not null;
     public bool HasCareerData { get; init; }
+    /// <summary>The fields line's tooltip: the line, and why a value is "—" when it is (an AZIMUTH level that cannot be read).</summary>
+    public string? LineTip { get; init; }
+
+    public string LineTipText => LineTip ?? Line;
     public string ChipText { get; init; } = string.Empty;
     /// <summary>The chip's full sentence (its tooltip); <see cref="ChipText"/> is the short form that fits the row.</summary>
     public string ChipTip { get; init; } = string.Empty;
@@ -434,10 +438,10 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// The AZIMUTH card's rows: per catalog game, this PC's <c>User_9000000000000</c> as the PLAY card reads it (the cached scan, no request,
-    /// no disk read past it): its credits and when it was modified; no save is the empty state in the same fields. Its level is the
-    /// server's, from the identity's last profile sync of the game in the cached <c>/me</c> (OD-239 #10; the curve stays server-side,
-    /// CR-S81), marked with that sync's age because it can differ from this PC's save after a copy or restore; "—" without progress. Each
-    /// row's ⋯ holds that save's tools (<see cref="AzimuthMenuOf"/>).
+    /// no disk read past it): its level, credits and when it was modified, every one from this PC's save (OD-240 #6): the level as the game's
+    /// <see cref="GameDefinition.LocalLevel"/> row says (a stored level, or the XP through the game's own XP table read from the player's
+    /// install, <see cref="LocalLevels"/>); "—" with the reason in the tooltip when it cannot be read, never a guess. No save is the empty
+    /// state in the same fields. Each row's ⋯ holds that save's tools (<see cref="AzimuthMenuOf"/>).
     /// </summary>
     private List<ProfileGameRow> AzimuthRowsOf()
     {
@@ -452,13 +456,16 @@ public sealed partial class ShellViewModel
                 var unreadable = false;
                 try { save = AzimuthSave(); }
                 catch (SaveException) { unreadable = true; }
+                // OD-240 #6: every AZIMUTH value is this PC's save's (the level too, through the game's own data), never the server's
+                var level = save is null ? null : LocalLevels.Of(game, save, _install?.Root);
                 var line = save is null
-                    ? RowFields(AzimuthLevel(game), null, S[unreadable ? "sm.row.az_unreadable" : _install is null ? "sm.row.az_no_install" : "sm.row.az_none"])
-                    : RowFields(AzimuthLevel(game), save.Credits, S.Format("sm.modified", ("when", When(save.LastPlayedUtc))));
+                    ? RowFields(null, null, S[unreadable ? "sm.row.az_unreadable" : _install is null ? "sm.row.az_no_install" : "sm.row.az_none"])
+                    : RowFields(level?.Shown?.ToString("N0", SavesCulture), save.Credits, S.Format("sm.modified", ("when", When(save.LastPlayedUtc))));
                 return new ProfileGameRow(AzimuthCardKey, game.Id, art?.Name ?? game.Name, game.ShortName,
                     TileBrush(game.TileAccent, 0xFF), TileBrush(game.TileAccent, 0x2E), line)
                 {
                     Azimuth = true,
+                    LineTip = level?.Why is { } why ? line + "\n" + S.Format("sm.level_why", ("why", S[why])) : line,
                     Cover = art?.Image,
                     HasCareerData = save is not null,
                     ChipText = S[save is null ? "sm.chip.az_none" : "sm.chip.az_pc"],
@@ -508,25 +515,6 @@ public sealed partial class ShellViewModel
             list.Add(blocked is not null ? action with { Enabled = false, Reason = blocked } : action);
         }
         return list;
-    }
-
-    /// <summary>
-    /// The AZIMUTH row's level: <c>players[].careers[].progress.level</c> of the identity's career of <paramref name="game"/> in the cached
-    /// <c>/me</c> (no request), with the sync's age ("15 · synced 2 days ago"), never presented as read from this PC's save; null without
-    /// progress (the row shows "—").
-    /// </summary>
-    private string? AzimuthLevel(GameDefinition game) => AzimuthSyncedLevel(game) is { } p
-        ? S.Format("sm.row.level_synced", ("level", p.Level.ToString("N0", SavesCulture)), ("ago", Ago(p.SyncedAt))) : null;
-
-    /// <summary>
-    /// The identity's career level of <paramref name="game"/> from its last profile sync (<c>players[].careers[].progress</c> of the cached
-    /// <c>/me</c>, OD-239 #10; no request) and that sync's time; null without progress. The Profiles row and PLAY's AZIMUTH card both show it,
-    /// marked with the sync's age, never as read from this PC's save.
-    /// </summary>
-    private (long Level, string? SyncedAt)? AzimuthSyncedLevel(GameDefinition game)
-    {
-        if (OfflineMode || _session?.Me is not { Players: not null } me || AzimuthIdentity.Of(me) is not { } player) return null;
-        return player.Careers.FirstOrDefault(c => c.Game == game.Id)?.Progress is { Level: { } level } progress ? (level, progress.SyncedAt) : null;
     }
 
     /// <summary>The row's fields, the same on both cards: "LV 15  ·  CR 15,858  ·  {last}", an unknown level or number shown "—".</summary>

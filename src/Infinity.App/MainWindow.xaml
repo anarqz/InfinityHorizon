@@ -1273,7 +1273,7 @@
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                           </DockPanel>
                                             <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"
-                                                       ToolTip="{Binding Line}" />
+                                                       ToolTip="{Binding LineTipText}" />
                                           </StackPanel>
                                         </DockPanel>
                                       </StackPanel>
@@ -1788,7 +1788,7 @@
                                                Visibility="{Binding HasGamertag, Converter={StaticResource Visible}}" />
                                   </StackPanel>
                                 </DockPanel>
-                                <TextBlock DockPanel.Dock="Top" Text="{Binding Stats}" Margin="0,14,0,0" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource InfinityText}"
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding Stats}" ToolTip="{Binding StatsTip}" Margin="0,14,0,0" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource InfinityText}"
                                            TextWrapping="Wrap" Visibility="{Binding HasStats, Converter={StaticResource Visible}}" />
                                 <TextBlock DockPanel.Dock="Top" Text="{Binding Note}" Margin="0,10,0,0" Style="{StaticResource SmHint}"
                                            Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
