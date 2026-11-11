@@ -27,6 +27,13 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
     /// </summary>
     public Infinity.Core.Saves.LocalLevelSource? LocalLevel { get; init; }
 
+    /// <summary>
+    /// T-1111-AZIMUTH (the LV finding): a level the server or a save stores, as the game shows it: plus the row's
+    /// <see cref="Infinity.Core.Saves.LocalLevelSource.ShownOffset"/> (FH2: the driver level is stored from 0, CR-S81, shown plus one;
+    /// FM5: shown as stored, the server keeps it as the game sends it). Null when unknown or negative.
+    /// </summary>
+    public long? ShownLevel(long? stored) => stored is { } s and >= 0 ? s + (LocalLevel?.ShownOffset ?? 0) : null;
+
     /// <summary>Which caches FM5 keeps per mode is not known yet, so none is switched.</summary>
     public static readonly GameDefinition Fm5 = new("fm5", "Forza Motorsport 5", "7B35D917", "data/fi-launcher/mode-cache-fm5", [],
         Path.Combine("media", "db", "gamedb.slt"), FullFeatures: false)
@@ -35,7 +42,7 @@ public sealed record GameDefinition(string Id, string Name, string TitleId, stri
         ExtraOptionsIni = "FM5_ExtraOptions.ini", ExtraOptionsManifestResource = "Infinity.Core.ExtraOptionsInfinity.Fm5.manifest.json",
         ExtraOptionsSeedResource = null, TileAccent = "#FF4FB3FF", TileTagline = "Motorsport", Saves = Infinity.Core.Saves.SaveLayout.Fm5,
         CloudSaves = true, InviteAcceptScreens = [Fm5HoppersScreen], PrivateLobbyKind = Fm5PrivateLobbyKind,
-        LocalLevel = new(Infinity.Core.Saves.LevelField.Level), }; // OD-240 #6: FM5 stores its level (Main/Level)
+        LocalLevel = new(Infinity.Core.Saves.LevelField.Level, ShownOffset: 0), }; // OD-240 #6: FM5 stores its level (Main/Level), shown as stored (T-1111 LV finding)
 
     /// <summary>
     /// OD-223 (T-1108-M): FM5's MULTIPLAYER hoppers screen, as the hook's top screen id reads it (game_profile.h "FM5 WATCH top screen

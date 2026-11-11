@@ -143,7 +143,7 @@ public sealed partial class ShellViewModel
         if (career?.Progress is not { } p) return S["play.stats_none"];
         var c = SavesCulture;
         var parts = new List<string>();
-        if (p.Level is { } level) parts.Add(S.Format("play.stats_level", ("level", level.ToString(c))));
+        if ((Infinity.Core.Process.GameDefinition.ById(career!.Game) ?? CurrentGame).ShownLevel(p.Level) is { } level) parts.Add(S.Format("play.stats_level", ("level", level.ToString(c))));
         if (p.Credits is { } credits) parts.Add(S.Format("play.stats_credits", ("credits", credits.ToString("N0", c))));
         if (p.PlaySeconds is { } seconds) parts.Add(S.Format("play.stats_hours", ("hours", (seconds / 3600).ToString(c))));
         return parts.Count == 0 ? S["play.stats_none"] : string.Join("  ·  ", parts);

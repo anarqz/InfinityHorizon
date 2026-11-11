@@ -8,8 +8,6 @@ namespace Infinity.Core.Saves;
 /// <summary>Where an old save of an AZIMUTH profile is.</summary>
 public enum OldSaveSource
 {
-    /// <summary>The profile's own <c>User_&lt;XUID&gt;</c> folder on this PC (what it played before the hook sent it to Azimuth's save).</summary>
-    ThisPc,
 
     /// <summary>An old Noob cloud line (<c>/me</c> <c>cloud.exportOnly</c>, CR-S111), read-only until it is erased.</summary>
     Cloud,
@@ -22,10 +20,10 @@ public sealed record OldSaveOwner(ulong Xuid, string Gamertag);
 /// One old save of an AZIMUTH profile (OD-239): <see cref="SavedAtUtc"/> is its newest revision's time (this PC: the newest sealed revision's
 /// commit; the cloud: <c>cloud.savedAt</c> of the cached <c>/me</c>), null when it does not read.
 /// </summary>
-public sealed record OldSave(OldSaveSource Source, string Game, ulong Xuid, string Gamertag, DateTime? SavedAtUtc, SaveProfile? Local = null, OldNoobLine? Line = null)
+public sealed record OldSave(OldSaveSource Source, string Game, ulong Xuid, string Gamertag, DateTime? SavedAtUtc, OldNoobLine? Line = null)
 {
     /// <summary>A stable key of the row (source, game, XUID).</summary>
-    public string Key => string.Create(CultureInfo.InvariantCulture, $"{(Source == OldSaveSource.Cloud ? "cloud" : "pc")}:{Game}:{Xuid:X}");
+    public string Key => string.Create(CultureInfo.InvariantCulture, $"cloud:{Game}:{Xuid:X}");
 }
 
 /// <summary>
@@ -89,27 +87,6 @@ public static class OldSaves
             if (!l.NotOnAccount) Add(Parse(l.Cloud?.Xuid), l.DisplayName); // and its account folder
         }
         return [.. owners.Select(o => new OldSaveOwner(o.Key, o.Value))];
-    }
-
-    /// <summary>Each owner's folder of <paramref name="game"/> on this PC that holds a sealed revision.</summary>
-    public static IReadOnlyList<OldSave> OnThisPc(string game, string savesRoot, IEnumerable<OldSaveOwner> owners, IReadOnlySet<ulong>? hardcore = null)
-    {
-        ArgumentNullException.ThrowIfNull(game);
-        ArgumentNullException.ThrowIfNull(savesRoot);
-        ArgumentNullException.ThrowIfNull(owners);
-        var found = new List<OldSave>();
-        foreach (var owner in owners)
-        {
-            if (owner.Xuid == AzimuthSaves.OfflineXuid || hardcore?.Contains(owner.Xuid) == true) continue;
-            LocalRevision? newest;
-            try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(savesRoot, owner.Xuid)); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { newest = null; }
-            if (newest is null) continue;
-            var at = RevisionTime(newest);
-            found.Add(new OldSave(OldSaveSource.ThisPc, game, owner.Xuid, owner.Gamertag, at,
-                new SaveProfile(AzimuthSaves.FolderFor(owner.Xuid), owner.Xuid, newest, at, AzimuthSaves.Credits(newest))));
-        }
-        return found;
     }
 
     /// <summary>The old Noob cloud lines (<see cref="OldNoobExport.Lines"/>) as old saves, their time from <c>cloud.savedAt</c>.</summary>
@@ -210,37 +187,75 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// (<c>&lt;history&gt;\&lt;yyyyMMddTHHmmssZ&gt;-copy-old-save-to-azimuth\saves</c>, one <c>&lt;container&gt;</c> folder each) and the
     /// container folders it holds. Throws <see cref="HistoryException"/> when it does not verify (nothing left behind).
     /// </summary>
-    public OldSaveBackup BackUp(IReadOnlyList<string> containers, HistoryProfile? profile = null, HistoryReason? reason = null)
+    public OldSaveBackup BackUp(IReadOnlyList<string> containers, HistoryProfile? profile = null, HistoryReason? reason = null, string slug = "old save to azimuth")
     {
         ArgumentNullException.ThrowIfNull(containers);
         var now = _now();
         _history.EnsureOriginal(_savesRoot, now); // §7.2: the title's saves as first found, once
-        var item = _history.ArchiveContainers("copy", PlayerDir, containers, reason ?? Reason, now, from: "old-save", to: "azimuth", profile, slug: "old save to azimuth");
+        var item = _history.ArchiveContainers("copy", PlayerDir, containers, reason ?? Reason, now, from: "old-save", to: "azimuth", profile, slug: slug);
         var saves = Path.Combine(item.Folder, LocalHistory.SavesDir);
         return new OldSaveBackup(saves, [.. containers.Select(c => Path.Combine(saves, c)).Where(Directory.Exists)]);
     }
 
+    /// <summary>The history entry's reason of <see cref="CopyFrom"/> (en, pt-BR).</summary>
+    public static readonly HistoryReason OtherSaveReason = new("Before using another save as the Azimuth save", "Antes de usar outro save como o save do Azimuth");
+
     /// <summary>
-    /// This PC's old folder of <paramref name="sourceXuid"/> (its newest sealed revision, read now) onto Azimuth's save. <paramref name="backedUp"/>
-    /// receives the backup's path before the install starts. The clone writes the <c>User_9000000000000</c> folder only (the old career's
-    /// siblings are already in this <c>player-1</c>), so that is what is backed up.
+    /// Owner 2026-11-11 ("put any save to be the new azimuth profile"): <paramref name="source"/> (<see cref="SaveSources.Scan"/>: a profile folder
+    /// of this PC, a history entry or an archived revision; a HARDCORE folder too, the player picked it by its name) becomes the newest revision
+    /// of Azimuth's save. Refused while the game runs (asked again right before any write). A profile folder gives its newest sealed revision as it
+    /// is now, a backup its own revision, verified. For a game whose career names sibling containers (<see cref="SaveLayout.References"/>, FM5's
+    /// liveries and thumbnails), each one kept with the source and not already beside the Azimuth save as the same revision is copied too.
+    /// First the verified backup of every container written (<c>User_9000000000000</c> and those siblings), its path handed to
+    /// <paramref name="backedUp"/>; then <see cref="AzimuthSaves.CloneRevision"/> of each. The source is only read.
     /// </summary>
-    public OldSaveMoveResult MoveFromThisPc(ulong sourceXuid, Action<string>? backedUp = null, HistoryProfile? profile = null, HistoryReason? reason = null)
+    public OldSaveMoveResult CopyFrom(SaveSource source, SaveLayout layout, Action<string>? backedUp = null, HistoryProfile? profile = null)
     {
-        if (sourceXuid == AzimuthSaves.OfflineXuid) return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.SAME_FOLDER", Message: "the Azimuth save cannot be copied onto itself");
-        if (NotAzimuth(sourceXuid)) return new(OldSaveMoveOutcome.NotAzimuth, Code: "LOCAL.NOT_AZIMUTH", Message: AzimuthSaves.FolderFor(sourceXuid) + " is a HARDCORE profile's");
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(layout);
         if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning);
-        LocalRevision? newest;
-        try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, sourceXuid)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.READ_FAILED", Message: e.Message); }
-        if (newest is null) return new(OldSaveMoveOutcome.NoSave);
-        var (backup, why) = BackUpOrWhy([AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)], backedUp, profile, reason);
+        var target = layout.UserFolder(AzimuthSaves.OfflineXuid);
+        LocalRevision? picked;
+        var siblings = new List<(string Name, LocalRevision Revision)>();
+        try
+        {
+            var path = source.Save.Revision.Path;
+            if (source.Kind == SaveSourceKind.Backup)
+                picked = AzimuthSaves.ReadRevision(source.Save.Revision.Number, path) is { } r && AzimuthSaves.Verify(r).Count == 0 ? r : null;
+            else
+            {
+                var folder = Path.GetDirectoryName(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(path)))!;
+                if (string.Equals(Path.GetFullPath(folder), Path.GetFullPath(AzimuthFolder), StringComparison.OrdinalIgnoreCase))
+                    return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.SAME_FOLDER", Message: "the Azimuth save cannot be copied onto itself");
+                picked = AzimuthSaves.NewestSealed(folder);
+            }
+            if (picked is null) return new(OldSaveMoveOutcome.NoSave);
+            if (layout.References is not null)
+            {
+                foreach (var name in SaveReferences.ReferencedSiblings(picked, layout).Order(StringComparer.Ordinal))
+                {
+                    if (layout.OptionalSiblingPrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal))) continue;
+                    var from = Path.Combine(source.SiblingsDir, name);
+                    var here = Path.Combine(PlayerDir, name);
+                    if (string.Equals(Path.GetFullPath(from), Path.GetFullPath(here), StringComparison.OrdinalIgnoreCase)) continue; // already beside the Azimuth save
+                    if (AzimuthSaves.NewestSealed(from) is not { } kept) continue; // not kept with the source: this PC's own one (if any) stays
+                    if (AzimuthSaves.NewestSealed(here) is { } there && SaveSources.CommitHash(there) == SaveSources.CommitHash(kept)) continue;
+                    siblings.Add((name, kept));
+                }
+            }
+        }
+        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
+        {
+            return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.READ_FAILED", Message: e.Message);
+        }
+        var (backup, why) = BackUpOrWhy([target, .. siblings.Select(s => s.Name)], backedUp, profile, OtherSaveReason, "other save to azimuth");
         if (why is not null) return why;
         if (_gameRunning()) return With(new(OldSaveMoveOutcome.GameRunning), backup);
         try
         {
-            var at = OldSaves.RevisionTime(newest);
-            var result = AzimuthSaves.Clone(_savesRoot, new SaveProfile(AzimuthSaves.FolderFor(sourceXuid), sourceXuid, newest, at, null), AzimuthSaves.OfflineXuid, _now());
+            var now = _now();
+            foreach (var (name, revision) in siblings) AzimuthSaves.CloneRevision(_savesRoot, revision, name, name, "picked", name, now);
+            var result = AzimuthSaves.CloneRevision(_savesRoot, picked, "the picked save", source.Save.Folder, "picked", target, now);
             return With(new(OldSaveMoveOutcome.Moved, Revision: result.Number), backup);
         }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
@@ -248,7 +263,6 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
             return With(new(OldSaveMoveOutcome.Failed, Code: "LOCAL.WRITE_FAILED", Message: e.Message), backup);
         }
     }
-
     private static OldSaveMoveResult With(OldSaveMoveResult result, OldSaveBackup? backup) =>
         backup is null ? result : result with { BackupPath = backup.Path, BackupFolders = backup.Folders };
 
@@ -292,11 +306,11 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     }
 
     /// <summary>The backup (its path handed to <paramref name="backedUp"/> first), or why there is none.</summary>
-    private (OldSaveBackup? Backup, OldSaveMoveResult? Failure) BackUpOrWhy(IReadOnlyList<string> containers, Action<string>? backedUp, HistoryProfile? profile, HistoryReason? reason)
+    private (OldSaveBackup? Backup, OldSaveMoveResult? Failure) BackUpOrWhy(IReadOnlyList<string> containers, Action<string>? backedUp, HistoryProfile? profile, HistoryReason? reason, string slug = "old save to azimuth")
     {
         try
         {
-            var backup = BackUp(containers, profile, reason);
+            var backup = BackUp(containers, profile, reason, slug);
             backedUp?.Invoke(backup.Path);
             return (backup, null);
         }

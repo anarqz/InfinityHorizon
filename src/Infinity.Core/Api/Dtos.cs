@@ -330,14 +330,14 @@ public sealed record GateLeave(
 /// </summary>
 public sealed record SaveSummary(long? Credits, long? Xp, long? Level, long? Cars)
 {
-    /// <summary>The driver level as the game shows it: <see cref="Level"/> plus one (a stored 14 is shown as 15); null when unknown.</summary>
-    public long? ShownLevel() => Level + 1;
+    /// <summary>The level as <paramref name="game"/> shows it (<see cref="Process.GameDefinition.ShownLevel"/>: FH2's stored 14 is shown 15); null when unknown.</summary>
+    public long? ShownLevel(Infinity.Core.Process.GameDefinition game) => (game ?? throw new ArgumentNullException(nameof(game))).ShownLevel(Level);
 
-    /// <summary>The player-facing "Level {level}" of <paramref name="summary"/>, or null when it has no level.</summary>
-    public static string? LevelText(Strings text, SaveSummary? summary)
+    /// <summary>The player-facing "Level {level}" of <paramref name="summary"/> in <paramref name="game"/>, or null when it has no level.</summary>
+    public static string? LevelText(Strings text, SaveSummary? summary, Infinity.Core.Process.GameDefinition game)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return summary?.ShownLevel() is { } level ? text.Format("saves.level", ("level", level.ToString(System.Globalization.CultureInfo.CurrentCulture))) : null;
+        return summary?.ShownLevel(game) is { } level ? text.Format("saves.level", ("level", level.ToString(System.Globalization.CultureInfo.CurrentCulture))) : null;
     }
 }
 
