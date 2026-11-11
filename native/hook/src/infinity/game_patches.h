@@ -29,8 +29,8 @@ static int game_patch_apply(unsigned char *at, const FiGamePatch *patch) {
 /* OD-239 8 (T-1111-AZIMUTH): launch.c, once an Azimuth session's ticket checked out and before the getters let the game read its
    identity (account.c account_wait holds them until azimuth_account_launch_done), so before the game builds its save container's
    name at profile load: the selected game's Azimuth save rows, all or nothing over their exact original bytes. A Hardcore
-   session (`azimuth` 0) writes nothing and logs nothing. On a refusal the game opens the container its identity names, and the
-   launcher is told (Event 6 "1|launch.azimuth_save_refused"), so the player sees it. */
+   session (`azimuth` 0) writes nothing and logs nothing. On a refusal (-1) the caller ends the game before it reads a save
+   (azimuth_account_azimuth_save_refused), online and offline alike. */
 int fi_game_azimuth_save(int azimuth) {
     const FiGameProfile *game = fi_game_profile();
     const FiGamePatch *rows = 0;
@@ -53,9 +53,8 @@ int fi_game_azimuth_save(int azimuth) {
             return 1;
         }
     }
-    /* never only the log: the launcher shows the player an overlay toast (HookEvents.NoticeToast fills in the folder); an
-       offline start has no launcher pipe, so account.c ends it instead (ACCOUNT_EXIT_AZIMUTH_SAVE) */
-    fi_launch_notice(FI_NOTICE_WARNING, "launch.azimuth_save_refused");
+    /* never only the log: the caller ends the game before it reads a save (account.c azimuth_account_azimuth_save_refused,
+       exit 0x46490006), which the launcher explains; an Azimuth session never plays another save (OD-239 #7) */
     return -1;
 }
 

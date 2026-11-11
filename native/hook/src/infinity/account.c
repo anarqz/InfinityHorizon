@@ -509,8 +509,8 @@ static void account_refuse(const char *why) {
 
 /* OD-239 (T-1111-AZIMUTH): the launcher names the profile's mode with every offline identity (FI_OFFLINE_MODE, `noob` or
    `hardcore`). An Azimuth (noob) profile plays Azimuth's own save container offline too, through the same rows as an online
-   Azimuth session (game_patches.h fi_game_azimuth_save, all or nothing); Hardcore writes nothing. This start has no launcher
-   pipe for a notice, so a refusal ends the game before it reads a save, with this exit code, which the launcher explains
+   Azimuth session (game_patches.h fi_game_azimuth_save, all or nothing); Hardcore writes nothing. A refusal, here or online
+   (launch.c), ends the game before it reads a save, with this exit code, which the launcher explains
    (LaunchPlan.cs ExitDisposition.AzimuthSaveRefused). */
 #define ACCOUNT_EXIT_AZIMUTH_SAVE 0x46490006u
 
@@ -526,13 +526,17 @@ static int account_offline_mode(void) {
     return text_equal_ignore_case(ascii, "noob") ? 1 : text_equal_ignore_case(ascii, "hardcore") ? 0 : -1;
 }
 
+void azimuth_account_azimuth_save_refused(void) {
+    log_append("ACCOUNT: REFUSED: an Azimuth profile could not open Azimuth's own save; the game is closed before it reads a "
+               "save.\r\n");
+    TerminateProcess(GetCurrentProcess(), ACCOUNT_EXIT_AZIMUTH_SAVE);
+    ExitProcess(ACCOUNT_EXIT_AZIMUTH_SAVE);
+}
+
 /* Before the game reads the offline identity: an Azimuth profile's save rows, or the game ends. */
 static void account_offline_azimuth_save(int azimuth) {
     if (fi_game_azimuth_save(azimuth) < 0) {
-        log_append("ACCOUNT: REFUSED: an Azimuth profile's offline start could not open Azimuth's own save; the game is closed "
-                   "before it reads a save.\r\n");
-        TerminateProcess(GetCurrentProcess(), ACCOUNT_EXIT_AZIMUTH_SAVE);
-        ExitProcess(ACCOUNT_EXIT_AZIMUTH_SAVE);
+        azimuth_account_azimuth_save_refused();
     }
 }
 

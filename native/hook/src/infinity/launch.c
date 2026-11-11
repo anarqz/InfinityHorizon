@@ -1977,7 +1977,9 @@ static int launch_go_online(const LaunchTicket *t) {
     /* OD-239 8 (T-1111-AZIMUTH): an Azimuth session (internal id noob) plays on Azimuth's own save container. Its rows go in
        here, after the state left WAITING (the game has not read its identity) and before azimuth_account_launch_done lets
        the game's getters return it, so before the game builds the container's name at profile load. Hardcore: nothing. */
-    fi_game_azimuth_save(noob);
+    if (fi_game_azimuth_save(noob) < 0) {
+        azimuth_account_azimuth_save_refused(); /* OD-239 #7: never on the old Noob User_<xuid>; the launcher says why */
+    }
     azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier ? FI_TIER_FREE : FI_TIER_VIP,
                                     noob, launch_claims.storm_island);
     /* OD-239 9 (CR-S111): the save line (the session token's; a launch ticket naming one is honoured too) only says

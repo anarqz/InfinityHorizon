@@ -8,7 +8,7 @@ public sealed partial class ShellViewModel
     /// <summary>Why the last launch could not prepare its mods (with the reason), shown on Play until the next attempt.</summary>
     private string? _modLaunchFailure;
 
-    private bool _identityRefused; // B1: the hook ended the game before it read a save (exit 0x46490005)
+    private string? _refusedText; // B1 / OD-239: the hook ended the game before it read a save (exit 0x46490005 or 0x46490006): why
 
     /// <summary>A failed mod preparation: logged with its message, shown on Play (never only the status line) and returned for <see cref="Message"/>.</summary>
     private string ModLaunchFailed(string where, Exception error)

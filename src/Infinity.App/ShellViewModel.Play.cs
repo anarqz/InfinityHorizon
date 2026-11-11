@@ -571,14 +571,15 @@ public sealed partial class ShellViewModel
                 // B1: the hook closed the game before it read a save: no profile identity could be set (never Azimuth's own career)
                 Message = S["supervisor.identity_refused"];
                 SetStatus(Message);
-                _identityRefused = true;
+                _refusedText = Message;
                 break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.AzimuthSaveRefused }:
                 EndPlayProgress();
-                // OD-239: an Azimuth start that fell back offline could not open Azimuth's own save: closed before it read a save
+                // OD-239 #7: an Azimuth session (online or its offline fallback) could not open Azimuth's own save: closed before it
+                // read a save, never on the old Noob folder
                 Message = S["supervisor.azimuth_save_refused"];
                 SetStatus(Message);
-                _identityRefused = true;
+                _refusedText = Message;
                 break;
             case SupervisorEvent.Exited { Disposition: ExitDisposition.Crashed c }:
                 EndPlayProgress();
@@ -607,11 +608,11 @@ public sealed partial class ShellViewModel
                     "relaunch_loop" => S["supervisor.relaunch_loop"],
                     "error" => _playStatus ?? S["supervisor.launch_refused"],
                     _ when ended.Reason.StartsWith("crashed", StringComparison.Ordinal) => _playStatus ?? S["status.ended"],
-                    // B1: the game ended because no profile identity could be set: that reason stays on the status line
-                    _ when _identityRefused => S["supervisor.identity_refused"],
+                    // B1 / OD-239: the game ended before it read a save: that reason stays on the status line
+                    _ when _refusedText is { } refused => refused,
                     _ => S["status.ended"],
                 };
-                _identityRefused = false;
+                _refusedText = null;
                 SetStatus(ended.Left || ended.Reason is "queue_cancelled" or "error" ? text : text + " " + S["supervisor.leave_failed"]);
                 break;
             case SupervisorEvent.HookOffline:
