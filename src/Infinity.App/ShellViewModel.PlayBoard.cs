@@ -9,8 +9,9 @@ using Infinity.Core.Shell;
 namespace Infinity.App;
 
 /// <summary>
-/// One of PLAY's two large buttons (owner 2026-11-08): the profile's career in the selected game ("LV 15 · CR 15,858 · 22h") above
-/// "PLAY HARDCORE" / "PLAY NOOB", or what the button does instead (start the career, create the profile, resolve, not offered).
+/// One of PLAY's two large buttons (owner 2026-11-08): HARDCORE's career in the selected game ("LV 15 · CR 15,858 · 22h") above "PLAY
+/// HARDCORE", or what the button does instead (start the career, create the profile, resolve, not offered); OD-240: AZIMUTH's identity and
+/// this PC's Azimuth save above "PLAY AZIMUTH".
 /// </summary>
 public sealed record PlayButtonCard(string Mode, PlayButtonKind Kind, string ModeLabel, string Title, string Gamertag, string Stats, string Note)
 {
@@ -54,9 +55,11 @@ public sealed partial class ShellViewModel
         FillGameCards();
         var game = CurrentGame;
         var cards = ProfileRows.Where(r => r.Card is not null).Select(r => r.Card!).ToList();
+        var azimuth = AzimuthRow();
         IReadOnlyList<PlaySlot> slots = cards.Count > 0 || (!OfflineMode && _session?.Me?.Players is not null)
-            ? PlayBoard.Build(cards, game, card => ProfileRows.FirstOrDefault(r => ReferenceEquals(r.Card, card)) is { } row && SaveChips.NeedsResolve(ChipOf(row)))
-            : PlayBoard.BuildPlain(ProfileRows.Select(r => r.Profile.Mode).ToHashSet(StringComparer.Ordinal), game);
+            ? PlayBoard.Build(cards, game, card => ProfileRows.FirstOrDefault(r => ReferenceEquals(r.Card, card)) is { } row && SaveChips.NeedsResolve(ChipOf(row)),
+                azimuth?.Card?.Player.ProfileId)
+            : PlayBoard.BuildPlain(ProfileRows.Where(r => r.Hardcore).Select(r => r.Profile.Mode).Concat(azimuth is null ? [] : ["noob"]).ToHashSet(StringComparer.Ordinal), game);
         // owner 2026-11-10: in place (a button that did not change keeps its drawing)
         ListSync.Sync(PlayButtons, [.. slots.Select(ButtonOf)], (a, b) => SameProfileRow(a.Row, b.Row) && (a with { Row = b.Row }).Equals(b), (a, b) => a.Mode == b.Mode);
         Changed(nameof(ShowPlayStart));
@@ -67,21 +70,25 @@ public sealed partial class ShellViewModel
     {
         var slotKind = slot.Mode == "hardcore" ? SaveSlot.Hardcore : SaveSlot.Noob;
         var mode = ModeWord(slotKind);
-        var row = slot.Card is { } card ? ProfileRows.FirstOrDefault(r => ReferenceEquals(r.Card, card))
+        // OD-240: AZIMUTH is the one identity (AzimuthRow), never another noob row
+        var row = slot.Mode != "hardcore" ? AzimuthRow()
+            : slot.Card is { } card ? ProfileRows.FirstOrDefault(r => ReferenceEquals(r.Card, card))
             : ProfileRows.FirstOrDefault(r => r.Profile.Mode == slot.Mode);
         var gamertag = slot.Card?.Player.Gamertag is { } tag ? ProfileName.Plain(tag) : row?.Gamertag ?? string.Empty;
         var (title, note) = slot.Kind switch
         {
             PlayButtonKind.Play => (S.Format("play.button_play", ("mode", mode)), string.Empty),
             PlayButtonKind.StartCareer => (S.Format("play.button_start", ("mode", mode)), S.Format("play.no_career", ("game", GameLabel))),
-            PlayButtonKind.CreateProfile => (S.Format("play.button_create", ("mode", mode)), S.Format(OfflineMode && slot.Mode == "hardcore" ? "play.create_hint_signin" : "play.create_hint", ("mode", mode))),
+            // OD-240: no AZIMUTH identity yet: PLAY AZIMUTH still plays, after the gamertag is picked once (offline: Azimuth's own name when valid)
+            PlayButtonKind.CreateProfile when slot.Mode != "hardcore" => (S.Format("play.button_play", ("mode", mode)),
+                OfflineMode && AzimuthOwnName() is { } own ? S.Format("play.azimuth_own_name", ("name", own)) : S["play.azimuth_pick_name"]),
+            PlayButtonKind.CreateProfile => (S.Format("play.button_create", ("mode", mode)), S.Format(OfflineMode ? "play.create_hint_signin" : "play.create_hint", ("mode", mode))),
             PlayButtonKind.Resolve => (S["play.button_resolve"], S["play.resolve_hint"]),
             _ => (S.Format("play.button_play", ("mode", mode)), S.Format("play.not_offered", ("mode", mode), ("game", GameLabel))),
         };
         // OD-239 BUG 3: an Azimuth button plays this PC's Azimuth save, so its line is that save's (read locally, cached), never the career's
-        var stats = slot.Kind is PlayButtonKind.Play or PlayButtonKind.Resolve
-            ? slot.Mode != "hardcore" ? AzimuthPlayStats()
-            : slot.Card is { } started ? PlayStats(started.Career) : S["play.stats_local"]
+        var stats = slot.Mode != "hardcore" ? AzimuthPlayStats()
+            : slot.Kind is PlayButtonKind.Play or PlayButtonKind.Resolve ? slot.Card is { } started ? PlayStats(started.Career) : S["play.stats_local"]
             : string.Empty;
         var (enabled, reason) = PlayButtonEnabled(slot.Kind);
         return new PlayButtonCard(slot.Mode, slot.Kind, mode, title, gamertag, stats, reason ?? note) { Enabled = enabled, Row = row };
@@ -152,6 +159,13 @@ public sealed partial class ShellViewModel
         Message = null;
         switch (button.Kind)
         {
+            case PlayButtonKind.Play when button.Mode != "hardcore" && button.Row is { } azimuth:
+                if (PlayHeldByJobs is { } heldAzimuth) { Message = heldAzimuth; break; }
+                await PlayAzimuthAsync(azimuth);
+                break;
+            case PlayButtonKind.CreateProfile when button.Mode != "hardcore":
+                await CreateAzimuthIdentityAsync();
+                break;
             case PlayButtonKind.Play when button.Row is { } row:
                 if (PlayHeldByJobs is { } held) { Message = held; break; }
                 _startRow = null;

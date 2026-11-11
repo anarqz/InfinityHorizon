@@ -33,7 +33,7 @@ public sealed partial class ShellViewModel
     /// <summary>
     /// The plain Profiles list as the window draws it (offline, or a server before CR-S98): <see cref="ProfileRows"/> is the data every
     /// path reads at once; this copy follows it a couple of rows per frame (a game switch replaces every row, ~30 ms of layout even while
-    /// the page is hidden).
+    /// the page is hidden). OD-240: HARDCORE rows only; AZIMUTH is one identity behind the scenes, never a row.
     /// </summary>
     public System.Collections.ObjectModel.ObservableCollection<ProfileRow> ProfileRowsShown { get; } = [];
 
@@ -42,7 +42,7 @@ public sealed partial class ShellViewModel
     private void ScheduleProfileRowsShown()
     {
         if (_profileRowsShownPending) return;
-        if (Later(SyncProfileRowsShown) is not { } later) { ListSync.Sync(ProfileRowsShown, [.. ProfileRows], SameProfileRow, SameProfileRowKey); return; }
+        if (Later(SyncProfileRowsShown) is not { } later) { ListSync.Sync(ProfileRowsShown, [.. ProfileRows.Where(r => r.Hardcore)], SameProfileRow, SameProfileRowKey); return; }
         _profileRowsShownPending = true;
         later();
     }
@@ -50,7 +50,7 @@ public sealed partial class ShellViewModel
     private void SyncProfileRowsShown()
     {
         _profileRowsShownPending = false;
-        ListSync.Sync(ProfileRowsShown, [.. ProfileRows], SameProfileRow, SameProfileRowKey, Later(ScheduleProfileRowsShown), budget: 2);
+        ListSync.Sync(ProfileRowsShown, [.. ProfileRows.Where(r => r.Hardcore)], SameProfileRow, SameProfileRowKey, Later(ScheduleProfileRowsShown), budget: 2);
     }
 
     /// <summary>A card stands for one mode's profile (or that mode's explainer).</summary>

@@ -59,8 +59,13 @@ public static class PlayBoard
     /// The button's kind for (profile exists × career state × mode allowed × sync needs the player). <paramref name="career"/> null with a
     /// profile: a row without career data (offline, or a server before CR-S98), which is its one started career.
     /// </summary>
+    /// <remarks>
+    /// OD-240: AZIMUTH is one identity per account and plays this PC's Azimuth save, so its button is PLAY AZIMUTH whenever the identity
+    /// exists (a game without its career yet gets one behind the scenes at the click); without one the player picks its gamertag once.
+    /// </remarks>
     public static PlayButtonKind Kind(GameDefinition game, string mode, bool profileExists, CareerState? career, bool needsResolve)
     {
+        if (mode != "hardcore") return profileExists ? PlayButtonKind.Play : PlayButtonKind.CreateProfile;
         if (!ModeAllowed(game, mode) || career == CareerState.NotOffered) return PlayButtonKind.NotOffered;
         if (!profileExists) return PlayButtonKind.CreateProfile;
         return career switch
@@ -71,25 +76,30 @@ public static class PlayBoard
     }
 
     /// <summary>
-    /// The card a mode's button stands for: until the owner's cleanup an account may hold two profiles of a mode (§6.10); the one with a
-    /// playable career of the game wins, then one that can start it, then the oldest.
+    /// The card a mode's button stands for. HARDCORE: until the owner's cleanup an account may hold two profiles of a mode (§6.10); the one
+    /// with a playable career of the game wins, then one that can start it, then the oldest. AZIMUTH (OD-240): the account's one identity,
+    /// <paramref name="azimuthProfileId"/> (<see cref="AzimuthIdentity.Of"/>), never another <c>noob</c> profile.
     /// </summary>
-    public static BoardCard? CardOf(IEnumerable<BoardCard> cards, string mode)
+    public static BoardCard? CardOf(IEnumerable<BoardCard> cards, string mode, string? azimuthProfileId = null)
     {
         ArgumentNullException.ThrowIfNull(cards);
         var ofMode = cards.Where(c => c.Player.Mode == mode).ToList();
+        if (mode != "hardcore") return ofMode.FirstOrDefault(c => c.Player.ProfileId == azimuthProfileId);
         return ofMode.FirstOrDefault(c => c.Playable) ?? ofMode.FirstOrDefault(c => c.Startable) ?? ofMode.FirstOrDefault();
     }
 
-    /// <summary>Both buttons for <paramref name="game"/> from the cards of <c>/me</c> (<paramref name="needsResolve"/>: the card's sync chip asks the player).</summary>
-    public static IReadOnlyList<PlaySlot> Build(IReadOnlyList<BoardCard> cards, GameDefinition game, Func<BoardCard, bool>? needsResolve = null)
+    /// <summary>
+    /// Both buttons for <paramref name="game"/> from the cards of <c>/me</c> (<paramref name="needsResolve"/>: the card's sync chip asks the
+    /// player; <paramref name="azimuthProfileId"/>: the account's Azimuth identity).
+    /// </summary>
+    public static IReadOnlyList<PlaySlot> Build(IReadOnlyList<BoardCard> cards, GameDefinition game, Func<BoardCard, bool>? needsResolve = null, string? azimuthProfileId = null)
     {
         ArgumentNullException.ThrowIfNull(cards);
         ArgumentNullException.ThrowIfNull(game);
         return Modes.Select(mode =>
         {
-            var card = CardOf(cards, mode);
-            var resolve = card is { State: CareerState.Started } && needsResolve?.Invoke(card) == true;
+            var card = CardOf(cards, mode, azimuthProfileId);
+            var resolve = mode == "hardcore" && card is { State: CareerState.Started } && needsResolve?.Invoke(card) == true;
             return new PlaySlot(mode, Kind(game, mode, card is not null, card?.State, resolve), card);
         }).ToList();
     }
@@ -147,9 +157,8 @@ public sealed class PlaySelection(string stateDirectory)
 /// <summary>
 /// Owner 2026-11-08 (PROFILES_ROWS): the Profiles page's two kinds of ⋯ menu. A profile card's ⋯ holds only the profile's own actions
 /// (<see cref="ProfileLevel"/>); each game row under it has its own ⋯ with that game's CAREER actions (<see cref="CareerLevel"/>), which open
-/// the existing screens with the row's game set. No tool plays or starts a career (OD-239: an AZIMUTH row's old "Start my HARDCORE profile
-/// from this" seeded from the stale export-only cloud line, not the Azimuth save it plays, so it is gone; a Hardcore career still starts from
-/// another profile on its own creation, CR-S52).
+/// the existing screens with the row's game set. No tool plays or starts a career (a Hardcore career still starts from another profile on its
+/// own creation, CR-S52). OD-240: only HARDCORE profiles have a card; AZIMUTH is one identity with nothing to manage, so no row of it exists.
 /// </summary>
 public static class ProfileTools
 {
@@ -185,18 +194,14 @@ public static class ProfileTools
     /// <param name="started">The profile has a started career of the row's game (its saves can be copied, resolved, downloaded).</param>
     /// <param name="canDownload">Its sync chip allows a download onto this PC (a game with cloud saves).</param>
     /// <param name="canDeleteCareer">A career of the game exists to delete.</param>
-    /// <param name="hardcore">
-    /// The row is a Hardcore career. OD-239: an Azimuth career has no cloud save, so it lists no History, Resolve or Download, and it starts
-    /// no other profile's career (its cloud line is export-only and stale); it can still copy to Azimuth.
-    /// </param>
-    public static IReadOnlyList<string> CareerMenu(bool started, bool canDownload, bool canDeleteCareer, bool hardcore = true)
+    public static IReadOnlyList<string> CareerMenu(bool started, bool canDownload, bool canDeleteCareer)
     {
         var list = new List<string>();
         if (started) list.Add(CopyTo);
-        if (hardcore) list.Add(History);
-        if (started && hardcore) list.Add(Resolve);
+        list.Add(History);
+        if (started) list.Add(Resolve);
         list.Add(ManageSaves);
-        if (started && canDownload && hardcore) list.Add(Download);
+        if (started && canDownload) list.Add(Download);
         if (canDeleteCareer) list.Add(DeleteCareer);
         return list;
     }
