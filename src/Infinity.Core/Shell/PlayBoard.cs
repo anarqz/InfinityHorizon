@@ -40,6 +40,14 @@ public static class PlayBoard
     /// <summary>The two buttons, left to right.</summary>
     public static IReadOnlyList<string> Modes { get; } = ["hardcore", "noob"];
 
+    /// <summary>
+    /// CR-S111 (OD-239): the string key of what a profile's save is, from its mode alone: an Azimuth profile plays the player's own
+    /// Azimuth save; a Hardcore one, free or Supporter, keeps a cloud save, unless the server says this profile has no line
+    /// (<c>Profile.cloudLine: false</c>).
+    /// </summary>
+    public static string SaveWordsKey(string mode, bool? cloudLine) =>
+        mode != "hardcore" ? "modes.noob_own_save" : cloudLine ?? true ? "modes.hardcore_cloud" : "modes.hardcore_local";
+
     /// <summary>The game has careers of <paramref name="mode"/> (catalog data).</summary>
     public static bool ModeAllowed(GameDefinition game, string mode)
     {

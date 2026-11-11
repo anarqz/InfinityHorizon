@@ -28,14 +28,11 @@ public sealed record ServerInfo(
     SavesPolicy? Saves = null);
 
 /// <summary>
-/// <c>GET /info</c> <c>saves</c> (CR-S51): which profiles keep a cloud line on this server; absent = OD-52. Explanatory only.
-/// <see cref="HardcoreFromProfile"/> (CR-S52, <c>FI_HARDCORE_FROM_PROFILE</c>): a new Hardcore line may start from another of the
-/// account's profiles, checked on the spot; absent (a server before CR-S52) = false.
+/// <c>GET /info</c> <c>saves</c>. <see cref="HardcoreFromProfile"/> (CR-S52, <c>FI_HARDCORE_FROM_PROFILE</c>): a new Hardcore line may
+/// start from another of the account's profiles, checked on the spot; absent (a server before CR-S52) = false. CR-S111 (OD-239)
+/// removed <c>saves.cloud</c>: every Hardcore career keeps a cloud line and an Azimuth one never has one.
 /// </summary>
-public sealed record SavesPolicy(CloudLines Cloud, bool HardcoreFromProfile = false);
-
-/// <summary>The server's <c>FI_CLOUD_SAVES</c> over Noob/Hardcore × free/Supporter.</summary>
-public sealed record CloudLines(bool NoobFree, bool HardcoreFree, bool NoobVip, bool HardcoreVip);
+public sealed record SavesPolicy(bool HardcoreFromProfile = false);
 
 /// <summary>
 /// <c>GET /info</c> <c>trust</c> (CR-S49): a custom server's Ed25519 public keys as <c>kid:hex</c> (64 lowercase hex), current
@@ -197,7 +194,11 @@ public sealed record Player(string ProfileId, string Gamertag, string Mode, stri
 /// <summary>One game's career of a <see cref="Player"/>; <see cref="CareerId"/> is the <c>ProfileId</c> of its <see cref="Profile"/>.</summary>
 public sealed record Career(string Game, string CareerId, string CreatedAt, string? LastPlayedAt, CareerCloud? Cloud, CareerProgress? Progress);
 
-public sealed record CareerCloud(long Revision, string SavedAt);
+/// <summary>
+/// A career's cloud head. <see cref="ExportOnly"/> (CR-S111, CAREERS.md §7): true on a career with no save line but an existing head
+/// (an old Noob line, FM5 too), which <c>SAVES_API.md §4.2</c> still serves for export until it is erased; absent on a live line.
+/// </summary>
+public sealed record CareerCloud(long Revision, string SavedAt, bool? ExportOnly = null);
 
 public sealed record CareerProgress(long? Level, long? Credits, long? Cars, long? PlaySeconds, string? SyncedAt);
 

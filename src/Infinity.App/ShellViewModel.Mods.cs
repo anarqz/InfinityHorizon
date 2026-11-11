@@ -39,7 +39,7 @@ public sealed partial class ShellViewModel
     private string? _iniManifest;
     public ObservableCollection<ManifestOptionItem> ModOptions { get; } = [];
     public bool OnMods => _onMods;
-    public bool ShowMods => (InShell || DevelopmentMods) && _onMods && !ShowPickSave;
+    public bool ShowMods => (InShell || DevelopmentMods) && _onMods;
     // OD-206 (W11): the page lists the mods that declare the chosen game (none declared: FH2) and that game's built-in options card
     public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy && CurrentGame.HasModsPage;
     public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null && _externalMod is null;

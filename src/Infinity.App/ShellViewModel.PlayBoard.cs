@@ -186,7 +186,7 @@ public sealed partial class ShellViewModel
         FillPlayBoard();
         if (!_playAfterStart) return;
         for (var waited = 0; _busy && waited < 150; waited++) await Task.Delay(200);
-        if (_startRow is not null || ShowSeedPanel || ShowPickSave) return; // still choosing, or another panel asks first
+        if (_startRow is not null || ShowSeedPanel) return; // still choosing, or another panel asks first
         _playAfterStart = false;
         if (!Ready || !ShowHome || Playing) return;
         Log($"play: career started on PLAY, playing {CurrentGame.Id}");

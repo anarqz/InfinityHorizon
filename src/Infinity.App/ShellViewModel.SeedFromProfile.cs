@@ -57,7 +57,7 @@ public sealed partial class ShellViewModel
     private bool ServerAllowsSeedFromProfile => _session?.Info.Saves?.HardcoreFromProfile ?? _hardcoreFromProfile;
 
     /// <summary>The offer's condition (<see cref="ProfileSeed.Offered"/>) for a new Hardcore profile: the server allows it and it keeps a cloud line.</summary>
-    public bool CanSeedFromProfile => CanChooseHardcore && ProfileSeed.Offered(ServerAllowsSeedFromProfile, HardcoreKeepsCloud);
+    public bool CanSeedFromProfile => CanChooseHardcore && ProfileSeed.Offered(ServerAllowsSeedFromProfile, cloudLine: true);
 
     /// <summary>The account's own profiles of the chosen game on the server (never one kept only on this PC), other than <paramref name="targetXuid"/>.</summary>
     private IReadOnlyList<SeedSourceRow> SourcesFor(string? targetXuid) =>
@@ -136,7 +136,7 @@ public sealed partial class ShellViewModel
     {
         if (_seedSkipOnce.Remove(profile.ProfileId)) return false; // "Start a new career" after an answer that decided nothing: this Play only
         if (profile.Mode != "hardcore" || _seedDeclined.Contains(profile.ProfileId) || _session is not { } session
-            || !ProfileSeed.Offered(ServerAllowsSeedFromProfile, profile.CloudLine ?? HardcoreKeepsCloud)
+            || !ProfileSeed.Offered(ServerAllowsSeedFromProfile, profile.CloudLine ?? true)
             || SourcesFor(profile.Xuid).Count == 0 || CloudSaveClient() is not { } client
             || !ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid))
         {

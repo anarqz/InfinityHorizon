@@ -54,7 +54,7 @@ public sealed partial class ShellViewModel
 
     // Pages and layout ------------------------------------------------------------------------------------------------
 
-    public bool ShowNews => _onNews && InShell && !ShowWelcome && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport && !ShowPickSave;
+    public bool ShowNews => _onNews && InShell && !ShowWelcome && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !ShowCrashReport;
     public bool ShowNewsList => ShowNews && _newsOpen is null;
     public bool ShowNewsDetail => ShowNews && _newsOpen is not null;
 

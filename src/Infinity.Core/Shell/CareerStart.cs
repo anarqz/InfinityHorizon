@@ -67,7 +67,7 @@ public static class CareerStart
         if (mode == "hardcore")
         {
             if (!game.HardcoreCareers) return CareerOffers.Nothing;
-            var seeded = game.FullFeatures && ProfileSeed.Offered(flags.HardcoreFromProfile, flags.HardcoreKeepsCloud) && sameGame.Count > 0;
+            var seeded = game.FullFeatures && ProfileSeed.Offered(flags.HardcoreFromProfile, cloudLine: true) && sameGame.Count > 0;
             return new CareerOffers(true, seeded, seeded ? sameGame : []);
         }
         return new CareerOffers(true, false, []);

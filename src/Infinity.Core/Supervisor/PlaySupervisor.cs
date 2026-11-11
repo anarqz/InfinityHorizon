@@ -805,10 +805,13 @@ public sealed class PlaySupervisor
                             if (overlay is not null) await overlay.SendFrameAsync(new Overlay.UiFrame.GameReadiness(worlds.GameReadiness.CurrentGeneration is not null), stop.Token).ConfigureAwait(false);
                         }
                         // OD-73: the hook's notices (Event 6) are overlay toasts, not pause-menu lines
-                        if (frame is Frame.Event { Kind: HookEvents.Notice } notice && overlay is not null
-                            && HookEvents.NoticeToast(notice.Detail, _config.Text) is { } noticeToast)
+                        // (and the launcher's own status line, so a session without the overlay still says it)
+                        if (frame is Frame.Event { Kind: HookEvents.Notice } notice
+                            && HookEvents.NoticeToast(notice.Detail, _config.Text, HookEvents.ProfileFolder(_config.Install.Root, _config.Game, _config.Xuid)) is { } noticeToast)
                         {
-                            await overlay.ToastAsync(noticeToast, stop.Token).ConfigureAwait(false);
+                            var noticeBody = noticeToast.Text.IndexOf('\n') is var cut and >= 0 ? noticeToast.Text[(cut + 1)..] : noticeToast.Text;
+                            _emit(new SupervisorEvent.NoticeSent(noticeToast.Level, noticeBody));
+                            if (overlay is not null) await overlay.ToastAsync(noticeToast, stop.Token).ConfigureAwait(false);
                         }
                         // OD-121: the server's idle countdown (Event 7 with evict_in) warns in the overlay
                         if (frame is Frame.Event { Kind: HookEvents.Activity } activity && overlay is not null && !suspended

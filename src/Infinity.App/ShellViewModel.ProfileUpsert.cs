@@ -181,24 +181,10 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>
-    /// What a registered profile's saves do: Noob continues its offline save online (the clone below); Hardcore starts online from
-    /// the server's seed (OD-60) and its local progress stays its offline progress, never uploaded or cloned.
+    /// What a registered profile's saves do: Hardcore starts online from the server's seed (OD-60) and its local progress stays its
+    /// offline progress, never uploaded or cloned; an Azimuth profile plays Azimuth's own save (OD-239), so nothing is copied.
     /// </summary>
-    private string SaveNote(LocalProfile profile) => profile.Hardcore ? " " + S["upsert.rule_hardcore"] : ContinueNoobSave(profile);
-
-    /// <summary>P1b through <see cref="ProfileUpsert.ContinueOfflineSave"/>: an uploaded Noob profile's offline save continues online.</summary>
-    private string ContinueNoobSave(LocalProfile profile)
-    {
-        if (_install is not { } install) return "";
-        var outcome = ProfileUpsert.ContinueOfflineSave(AzimuthSaves.SavesRoot(install.Root, CurrentGame), _stateDirectory, profile, DateTime.UtcNow);
-        Log("profiles: offline save of " + profile.Id + ": " + outcome);
-        return outcome switch
-        {
-            ProfileUpsert.SaveContinuation.Continued => " " + S["upsert.save_continues"],
-            ProfileUpsert.SaveContinuation.Kept => " " + S["upsert.save_kept"],
-            _ => "",
-        };
-    }
+    private string SaveNote(LocalProfile profile) => profile.Hardcore ? " " + S["upsert.rule_hardcore"] : "";
     /// <summary>The chosen profile's shown name follows a server rename (the selection itself is keyed by its row id, OD-120).</summary>
     private void RefreshChosenTag()
     {
@@ -217,7 +203,7 @@ public sealed partial class ShellViewModel
     private bool _renameBusy;
 
     /// <summary>The one-time notice: shown once the update panel is closed, for one renamed profile at a time.</summary>
-    public bool ShowRenameNotice => _renaming is not null && SignedIn && !ShowProfileUpsert && !ShowPickSave;
+    public bool ShowRenameNotice => _renaming is not null && SignedIn && !ShowProfileUpsert;
     public string RenameNoticeText => _renaming?.Cloud?.RenameNotice is { } notice
         ? S.Format("rename.notice", ("previous", notice.PreviousName), ("name", _renaming.DisplayName)) : "";
     public string RenameKeepLabel => _renaming is null ? "" : S.Format("rename.keep", ("name", _renaming.DisplayName));
