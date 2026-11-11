@@ -1130,7 +1130,7 @@
   "profiles.delete": "Delete from the cloud",
   "profiles.delete_title": "Delete {name} from the cloud?",
   "profiles.delete_body": "This erases everything the servers keep for {name}, at once and for good: its cloud saves and their history, its liveries and creations, scores, messages and the rest. There is no undo, and the name {name} becomes free for anyone to take.",
-  "profiles.delete_keeps": "The save on this PC is kept: it moves to the saves folder's fi-launcher-archive. Your account and your friends stay. You can delete up to 3 profiles an hour.",
+  "profiles.delete_keeps": "Nothing on this PC is deleted: this profile's own save folder ({folders}) moves to the saves folder's fi-launcher-archive, and a copy is kept in the launcher's history. Your account and your friends stay. You can delete up to 3 profiles an hour.",
   "profiles.delete_type": "Type {name} to confirm.",
   "profiles.delete_confirm": "Delete for good",
   "profiles.delete_cancel": "Keep the profile",
@@ -1645,5 +1645,10 @@
   "play.azimuth_why_no_install": "choose your Azimuth folder to see its progress",
   "play.azimuth_why_none": "it holds no save of this game yet",
   "play.azimuth_why_unreadable": "its save could not be read",
-  "play.stats_modified": "saved {when}"
+  "play.stats_modified": "saved {when}",
+  "profiles.delete_keeps_azimuth": "This PC's Azimuth save ({azimuth}) is kept, unchanged. Only {name}'s own old folder on this PC ({folders}), if there is one, moves to the saves folder's fi-launcher-archive, with a copy in the launcher's history. Your account and your friends stay. You can delete up to 3 profiles an hour.",
+  "profiles.delete_career_body_azimuth": "This erases what the servers keep for the {game} career of {name}, at once and for good: its old read-only cloud save if it still has one, scores, liveries and the rest. There is no undo.",
+  "profiles.delete_all_body_azimuth": "This erases {name} and every one of its careers from the cloud, at once and for good, in every game: any old read-only cloud save, liveries and creations, scores, messages and the rest. There is no undo, and the name {name} becomes free for anyone to take.",
+  "profiles.deleted_azimuth": "Deleted {name} from the cloud. This PC's Azimuth save is kept, unchanged; {name}'s old folder on this PC, if there was one, is archived.",
+  "profiles.deleted_not_archived_azimuth": "Deleted {name} from the cloud. This PC's Azimuth save is kept, unchanged. {name}'s old folder on this PC is in use and could not be archived now; it stays where it was."
 }

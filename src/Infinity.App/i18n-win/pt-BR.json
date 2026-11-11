@@ -1130,7 +1130,7 @@
   "profiles.delete": "Excluir da nuvem",
   "profiles.delete_title": "Excluir {name} da nuvem?",
   "profiles.delete_body": "Isso apaga tudo o que os servidores guardam de {name}, na hora e para sempre: os saves na nuvem e o histórico deles, as pinturas e criações, pontuações, mensagens e o resto. Não dá para desfazer, e o nome {name} fica livre para qualquer pessoa usar.",
-  "profiles.delete_keeps": "O save deste PC é mantido: ele vai para a pasta fi-launcher-archive, na pasta de saves. Sua conta e seus amigos continuam. Você pode excluir até 3 perfis por hora.",
+  "profiles.delete_keeps": "Nada neste PC é apagado: a pasta de save deste perfil ({folders}) vai para a fi-launcher-archive da pasta de saves, e uma cópia fica no histórico do launcher. A sua conta e os seus amigos ficam. Você pode excluir até 3 perfis por hora.",
   "profiles.delete_type": "Digite {name} para confirmar.",
   "profiles.delete_confirm": "Excluir para sempre",
   "profiles.delete_cancel": "Manter o perfil",
@@ -1645,5 +1645,10 @@
   "play.azimuth_why_no_install": "escolha a sua pasta do Azimuth para ver o progresso",
   "play.azimuth_why_none": "ainda não há save deste jogo nela",
   "play.azimuth_why_unreadable": "não foi possível ler o save",
-  "play.stats_modified": "salvo {when}"
+  "play.stats_modified": "salvo {when}",
+  "profiles.delete_keeps_azimuth": "O save do Azimuth deste PC ({azimuth}) fica, sem mudanças. Só a pasta antiga de {name} neste PC ({folders}), se existir, vai para a fi-launcher-archive da pasta de saves, com uma cópia no histórico do launcher. A sua conta e os seus amigos ficam. Você pode excluir até 3 perfis por hora.",
+  "profiles.delete_career_body_azimuth": "Isto apaga o que os servidores guardam da carreira de {game} de {name}, na hora e para sempre: o save antigo somente leitura na nuvem, se ainda existir, pontuações, pinturas e o resto. Não dá para desfazer.",
+  "profiles.delete_all_body_azimuth": "Isto apaga {name} e todas as suas carreiras da nuvem, na hora e para sempre, em todos os jogos: qualquer save antigo somente leitura na nuvem, pinturas e criações, pontuações, mensagens e o resto. Não dá para desfazer, e o nome {name} fica livre para qualquer pessoa usar.",
+  "profiles.deleted_azimuth": "{name} foi excluído da nuvem. O save do Azimuth deste PC fica, sem mudanças; a pasta antiga de {name} neste PC, se existia, foi arquivada.",
+  "profiles.deleted_not_archived_azimuth": "{name} foi excluído da nuvem. O save do Azimuth deste PC fica, sem mudanças. A pasta antiga de {name} neste PC está em uso e não pôde ser arquivada agora; ela fica onde estava."
 }

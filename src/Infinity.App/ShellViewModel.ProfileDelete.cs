@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
+using System.IO;
 using Infinity.Core.Api;
 using Infinity.Core.Saves;
 using Infinity.Core.Shell;
@@ -34,12 +35,44 @@ public sealed partial class ShellViewModel
         : !DeleteSpeaksCareers ? S.Format("profiles.delete_title", ("name", DeleteProfileName))
         : S.Format(_deleteAllGames ? "profiles.delete_all_title" : "profiles.delete_career_title", ("name", DeleteProfileName), ("game", DeleteGameLabel));
 
+    /// <summary>OD-239: an AZIMUTH (wire <c>noob</c>) profile or career: no cloud save of its own, and it plays Azimuth's own save.</summary>
+    private bool DeletingAzimuth => _deleting is { Mode: not "hardcore" };
+
     public string DeleteProfileBody => _deleting is null ? string.Empty
         : !DeleteSpeaksCareers ? S.Format("profiles.delete_body", ("name", DeleteProfileName))
-        : _deleteAllGames ? S.Format("profiles.delete_all_body", ("name", DeleteProfileName))
-        : S.Format("profiles.delete_career_body", ("name", DeleteProfileName), ("game", DeleteGameLabel)) + " "
+        : _deleteAllGames ? S.Format(DeletingAzimuth ? "profiles.delete_all_body_azimuth" : "profiles.delete_all_body", ("name", DeleteProfileName))
+        : S.Format(DeletingAzimuth ? "profiles.delete_career_body_azimuth" : "profiles.delete_career_body", ("name", DeleteProfileName), ("game", DeleteGameLabel)) + " "
             + S.Format(_session?.Me is { } me && ProfileDeletion.IsLastCareer(me, _deleting.Xuid, _deleting.Game) ? "profiles.delete_career_last" : "profiles.delete_career_keeps",
                 ("name", DeleteProfileName));
+
+    /// <summary>
+    /// What stays, as the code does it (<see cref="ProfileDeletion.CleanUp"/>, <see cref="ArchiveDeletedCareer"/>): the profile's own folders
+    /// on this PC (its XUID's and its local entry's offline one) move to <c>fi-launcher-archive</c>, a copy in the launcher's history; an
+    /// AZIMUTH profile's deletion never touches Azimuth's own save, which it says by name.
+    /// </summary>
+    public string DeleteProfileKeeps => _deleting is null ? string.Empty
+        : S.Format(DeletingAzimuth ? "profiles.delete_keeps_azimuth" : "profiles.delete_keeps", ("name", DeleteProfileName), ("folders", DeleteLocalFolders()),
+            ("azimuth", AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)));
+
+    private (Profile Profile, string Text)? _deleteFolders;
+
+    /// <summary>The folders the cleanup moves (read once per opened panel): the same list <see cref="ProfileDeletion.CleanUp"/> builds.</summary>
+    private string DeleteLocalFolders()
+    {
+        if (_deleting is not { } profile) return string.Empty;
+        if (_deleteFolders is { } cached && ReferenceEquals(cached.Profile, profile)) return cached.Text;
+        var xuids = new List<ulong>();
+        if (ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var account)) xuids.Add(account);
+        try
+        {
+            var accountId = _session?.Me?.AccountId;
+            xuids.AddRange(LocalProfiles.Read().Where(p => p.Cloud is { } c && c.AccountId == accountId && c.ProfileId == profile.ProfileId).Select(p => p.OfflineXuid));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        var text = string.Join(", ", xuids.Where(x => x != AzimuthSaves.OfflineXuid).Distinct().Select(AzimuthSaves.FolderFor));
+        _deleteFolders = (profile, text);
+        return text;
+    }
 
     /// <summary>A game's title as the server lists it (else the launcher's catalog, else its id).</summary>
     private string GameTitle(string game) => Games.FirstOrDefault(g => g.Id == game)?.Title ?? Infinity.Core.Process.GameDefinition.ById(game)?.Name ?? game.ToUpperInvariant();
@@ -189,12 +222,14 @@ public sealed partial class ShellViewModel
                 return all;
             });
             var name = ProfileName.Plain(profile.Gamertag);
+            var azimuthProfile = profile.Mode != "hardcore";
             CancelDeleteProfile();
             if (rows.Any(r => r.ProfileId == _gate.ProfileKey)) Gate = _gate with { ProfileTag = null, ProfileKey = null }; // pick another profile
             if (_chosenLocal is { } chosen && rows.Any(r => r.ProfileId == chosen.Cloud?.ProfileId)) _chosenLocal = null;
             try { await session.RefreshMeAsync(); }
             finally { FillProfiles(); }
-            Message = S.Format(fullyArchived ? "profiles.deleted" : "profiles.deleted_not_archived", ("name", name));
+            Message = S.Format(azimuthProfile ? fullyArchived ? "profiles.deleted_azimuth" : "profiles.deleted_not_archived_azimuth"
+                : fullyArchived ? "profiles.deleted" : "profiles.deleted_not_archived", ("name", name));
         });
     }
 
@@ -255,6 +290,7 @@ public sealed partial class ShellViewModel
         Changed(nameof(DeleteProfileName));
         Changed(nameof(DeleteProfileTitle));
         Changed(nameof(DeleteProfileBody));
+        Changed(nameof(DeleteProfileKeeps));
         Changed(nameof(DeleteProfileTypeHint));
         Changed(nameof(DeleteProfileTyped));
         Changed(nameof(DeleteProfileStatus));
