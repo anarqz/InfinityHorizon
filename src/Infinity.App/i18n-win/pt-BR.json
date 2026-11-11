@@ -1631,5 +1631,6 @@
   "sm.create_azimuth_sub": "Você escolhe uma vez só. É o nome que os placares, os radares e as pinturas mostram quando JOGAR AZIMUTH joga o save do Azimuth deste PC.",
   "play.azimuth_pick_name": "Escolha o seu gamertag do Azimuth uma vez, e JOGAR AZIMUTH joga o save do Azimuth deste PC.",
   "play.azimuth_own_name": "Joga o save do Azimuth deste PC como {name}.",
-  "profiles.azimuth_identity_made": "O seu gamertag do Azimuth é {name}. JOGAR AZIMUTH joga o save do Azimuth deste PC com ele."
+  "profiles.azimuth_identity_made": "O seu gamertag do Azimuth é {name}. JOGAR AZIMUTH joga o save do Azimuth deste PC com ele.",
+  "profiles.azimuth_identity_exists": "A sua conta já tem o seu gamertag do Azimuth, então nenhum segundo é criado. JOGAR AZIMUTH joga o save do Azimuth deste PC com ele."
 }

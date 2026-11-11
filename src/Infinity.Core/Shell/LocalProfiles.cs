@@ -186,8 +186,10 @@ public sealed class LocalProfileStore(string stateDirectory)
     /// (OD-120: the server's plain name, also the name they play offline); ones it no longer lists (deleted) are marked not on this
     /// account, never removed with their save; account profiles made on another PC are added as cached entries with their own
     /// offline XUID. Profiles of another account stay as they are, never this account's.
+    /// OD-240: when the account's Azimuth identity has its career of <paramref name="game"/>, this PC's oldest local-only Azimuth profile
+    /// becomes it (<see cref="AdoptAzimuthIdentity"/>); its ids go into <paramref name="adopted"/>.
     /// </summary>
-    public IReadOnlyList<LocalProfile> RefreshFromAccount(Me me, string game, Func<string, bool> saveFolderExists)
+    public IReadOnlyList<LocalProfile> RefreshFromAccount(Me me, string game, Func<string, bool> saveFolderExists, ICollection<string>? adopted = null)
     {
         ArgumentNullException.ThrowIfNull(me);
         var all = Load();
@@ -208,8 +210,38 @@ public sealed class LocalProfileStore(string stateDirectory)
             all.Add(new LocalProfile(Guid.NewGuid().ToString(), game, name, profile.Mode, Guid.NewGuid().ToString(), profile.CreatedAt,
                 FreeOfflineXuid(all, saveFolderExists), link));
         }
+        if (AdoptAzimuthIdentity(all, me, game, saveFolderExists) is { } id) adopted?.Add(id);
         Write(all);
         return all;
+    }
+
+    /// <summary>
+    /// OD-240: the account already has its Azimuth identity, so this PC's oldest local-only Azimuth (<c>noob</c>) profile of the game is never
+    /// uploaded: it becomes the identity here, as ONE entry. The local entry stays (its id, upload key, creation and offline XUID, which this
+    /// PC's own references and its old saves use) and takes the identity's account link and name; the cached copy of the identity GET /me
+    /// added is dropped. The offline XUID kept is the local one's, or the copy's when only the copy's folder holds anything. When both own
+    /// folders exist nothing is merged (an old save is never hidden): the local profile then stays a local entry that is never offered for
+    /// upload either. Returns the id of the entry that became the identity, null when none did.
+    /// </summary>
+    private static string? AdoptAzimuthIdentity(List<LocalProfile> all, Me me, string game, Func<string, bool> saveFolderExists)
+    {
+        if (AzimuthIdentity.RowOf(me, game) is not { } identity) return null;
+        var copy = all.FindIndex(l => l.Game == game && l.Cloud is { } c && c.AccountId == me.AccountId && c.ProfileId == identity.ProfileId);
+        var local = all.Where(l => l.Game == game && l.LocalOnly && l.Mode == "noob")
+            .OrderBy(l => l.CreatedAt, StringComparer.Ordinal).ThenBy(l => l.Id, StringComparer.Ordinal).FirstOrDefault();
+        if (copy < 0 || local is null) return null;
+        var cached = all[copy];
+        var localFolder = saveFolderExists(AzimuthSaves.FolderFor(local.OfflineXuid));
+        var copyFolder = saveFolderExists(AzimuthSaves.FolderFor(cached.OfflineXuid));
+        if (localFolder && copyFolder) return null;
+        var merged = local with
+        {
+            Name = cached.Name, Mode = cached.Mode, Cloud = cached.Cloud, NotOnAccount = false,
+            OfflineXuid = copyFolder ? cached.OfflineXuid : local.OfflineXuid,
+        };
+        all[all.IndexOf(local)] = merged;
+        all.RemoveAt(copy);
+        return merged.Id;
     }
 
     /// <summary>
