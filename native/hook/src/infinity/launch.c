@@ -1980,12 +1980,11 @@ static int launch_go_online(const LaunchTicket *t) {
     fi_game_azimuth_save(noob);
     azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier ? FI_TIER_FREE : FI_TIER_VIP,
                                     noob, launch_claims.storm_island);
-    /* OD-128 (kept by OD-140): the save line alone opens or shuts the universe's services, whatever
-       the tier and mode; it is the session token's (a launch ticket naming one is honoured too) */
+    /* OD-239 9 (CR-S111): the save line (the session token's; a launch ticket naming one is honoured too) only says
+       whether the profile has a cloud save; with or without it every game service goes to the server */
     const int line = launch_claims.line || launch_token_line(t->token, t->token_size);
-    fi_tier_set_line(line);
-    launch_log(line ? "save line: this profile's cloud data is kept; every game service goes to the server."
-                                  : "no save line: this profile keeps no cloud data; the universe's services are answered here.",
+    launch_log(line ? "save line: this profile has a cloud save; every game service goes to the server."
+                    : "no save line: this profile has no cloud save; every game service still goes to the server.",
                0, 0, "");
     launch_log(free_tier ? "online through the launcher's session (Infinity Racer, display only); token for " :
                            "online through the launcher's session (Infinity Supporter, display only); token for ",

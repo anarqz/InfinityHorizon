@@ -15,7 +15,7 @@ enum {
     /* the runtime.c list at the game's addresses: expansions, events, car state, overlay's game UI, mods,
        and what follows ExtraOptions' features */
     FI_FEATURE_GAME_MODULES = 1u << 0,
-    FI_FEATURE_CLOUD_LINE = 1u << 1, /* the save line gate, the profile sync hold, the Beta protocol's cloud */
+    FI_FEATURE_CLOUD_LINE = 1u << 1, /* the profile sync hold, the Beta protocol's cloud */
     FI_FEATURE_LIVERIES = 1u << 2,   /* livery routes and replies, Azimuth's livery compatibility */
     FI_FEATURE_FREE_ROAM = 1u << 3,  /* free roam's game patches, car meets, follow, Watch and parts captures */
     FI_FEATURES_ALL = (1u << 4) - 1u
