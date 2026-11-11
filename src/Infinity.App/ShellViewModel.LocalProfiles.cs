@@ -11,7 +11,7 @@ namespace Infinity.App;
 /// OD-118: profiles are created on this PC (the same screen, no cloud call) and kept in <see cref="LocalProfileStore"/>. Offline,
 /// the picker lists them; signed in, the account's profiles plus the local ones that are not uploaded yet (offline-only until the
 /// update panel uploads them). A row's <see cref="Profile"/> stands for the local profile: its id is the local id and its XUID the
-/// identity an offline session plays (<see cref="LocalProfile.OfflinePlayXuid"/>).
+/// identity an offline session plays (<see cref="LocalProfile.IdentityXuid"/>; its folder <see cref="LocalProfile.SaveXuid"/>).
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -33,7 +33,7 @@ public sealed partial class ShellViewModel
     /// <summary>The "new profiles are Noob" note is for signed-in players; offline has its own line (offline.create_noob).</summary>
     public bool ShowFreeNoobHint => !CanChooseHardcore && !OfflineMode;
 
-    private static Profile AsRow(LocalProfile local) => new(local.Id, local.Game, local.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture),
+    private static Profile AsRow(LocalProfile local) => new(local.Id, local.Game, local.SaveXuid.ToString(CultureInfo.InvariantCulture),
         local.DisplayName, local.Name, local.Mode, local.LocalOnly ? "local" : local.NotOnAccount ? "not_on_account" : "active", local.CreatedAt, null);
 
     /// <summary>The rows offline: every local profile of the game (account ones cached from earlier sign-ins included).</summary>
@@ -110,7 +110,7 @@ public sealed partial class ShellViewModel
         LocalProfile? local = null;
         try { local = LocalProfiles.Read().FirstOrDefault(p => p.Cloud?.ProfileId == profile.ProfileId && p.Game == profile.Game); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("play: local profiles not read for the fallback identity: " + e.GetType().Name); }
-        if (local is not null) return (local.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture), local.Name, profile.Mode);
+        if (local is not null) return (local.IdentityXuid.ToString(CultureInfo.InvariantCulture), local.Name, profile.Mode);
         var name = ProfileName.Playable(profile.Gamertag);
         return profile.Mode == "hardcore" || !ProfileName.IsValid(name) ? null : (profile.Xuid, name, profile.Mode);
     }

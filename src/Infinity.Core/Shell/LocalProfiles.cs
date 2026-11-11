@@ -31,10 +31,20 @@ public sealed record LocalProfile(string Id, string Game, string Name, string Mo
     public bool LocalOnly => Cloud is null;
 
     /// <summary>
-    /// The identity an OFFLINE session plays (P1/P4): a Noob profile that is on the account continues the account XUID's save
-    /// (cloned from its local save at upload); Hardcore, and every local-only profile, play its own local offline XUID.
+    /// The save folder this profile plays, everywhere the launcher picks "this profile's folder" (rows, cards, scans, the offline launch's
+    /// log): OD-239, an AZIMUTH (wire <c>noob</c>) profile plays Azimuth's own <c>User_9000000000000</c>, online and offline; a Hardcore one its
+    /// own local offline folder. An Azimuth profile's own old folders (<see cref="OfflineXuid"/>, its account XUID's) are only old saves
+    /// (<see cref="OldSaves"/>), never this.
     /// </summary>
-    public ulong OfflinePlayXuid => !Hardcore && Cloud is { } cloud && !NotOnAccount
+    public ulong SaveXuid => Hardcore ? OfflineXuid : AzimuthSaves.OfflineXuid;
+
+    /// <summary>
+    /// The identity the hook is told for an OFFLINE session (<c>FI_OFFLINE_XUID</c>, P1/P4), never a folder: the hook accepts only the CR-L36
+    /// range or a server-issued XUID (offline_identity.c), so Azimuth's own <c>0x9000000000000</c> is never passed; with
+    /// <c>FI_OFFLINE_MODE=noob</c> it plays <see cref="SaveXuid"/>. An Azimuth profile on the account is its account XUID; any other its own
+    /// local offline XUID.
+    /// </summary>
+    public ulong IdentityXuid => !Hardcore && Cloud is { } cloud && !NotOnAccount
         && ulong.TryParse(cloud.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) ? xuid : OfflineXuid;
 
     /// <summary>The name shown (OD-120: plain, never a cached legacy <c>#NNNNN</c>).</summary>

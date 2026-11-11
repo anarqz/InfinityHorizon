@@ -448,7 +448,7 @@ public sealed partial class ShellViewModel
                 var chip = card is null ? SaveChipKind.None : ChipOf(card);
                 var art = ArtOf(game);
                 // owner 2026-11-08 (image 7): no cloud progress but a save on this PC says what is known (its credits when readable)
-                var local = !facts.HasCareerData && card is not null && card.State != CareerState.NotOffered ? LocalSaveOf(card.Player.Xuid) : null;
+                var local = !facts.HasCareerData && card is not null && card.State != CareerState.NotOffered ? LocalSaveOf(PlayedFolderXuid(card.Player)) : null;
                 return new ProfileGameRow(profileId, game.Id, art?.Name ?? game.Name, game.ShortName,
                     TileBrush(game.TileAccent, 0xFF), TileBrush(game.TileAccent, 0x2E), GameRowLine(facts, local))
                 {
@@ -574,7 +574,8 @@ public sealed partial class ShellViewModel
         {
             try
             {
-                if (NewestSealedOf(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
+                // OD-239 item C: an Azimuth profile's folder is Azimuth's own save, never its old User_<XUID>
+                if (NewestSealedOf(CloudSaveFiles.ProfileDir(root, cloudSaves ? xuid : ulong.Parse(PlayedFolderXuid(card.Player), CultureInfo.InvariantCulture))) is { } newest)
                     content = cloudSaves ? ContentDigestOf(CurrentGame, newest) : "local";
             }
             catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { content = "unreadable"; }
@@ -635,6 +636,12 @@ public sealed partial class ShellViewModel
 
     private LocalHistory History() => new(_stateRoot, CurrentGame, Version);
 
+    /// <summary>
+    /// OD-239 item C: the folder a profile PLAYS (decimal XUID): an Azimuth (wire <c>noob</c>) profile plays Azimuth's own
+    /// <c>User_9000000000000</c>; a Hardcore one its own XUID's folder. Its own old folder is an old save only (ShellViewModel.OldSaves.cs).
+    /// </summary>
+    private static string PlayedFolderXuid(Player player) =>
+        player.Mode == "hardcore" ? player.Xuid : AzimuthSaves.OfflineXuid.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>The newest save of <paramref name="xuid"/>'s folder on this PC (any game layout Azimuth writes), or null.</summary>
     private SaveProfile? LocalSaveOf(string xuid)
