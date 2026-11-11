@@ -1,4 +1,6 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using Infinity.Core.Update;
+
 namespace Infinity.Core.Shell;
 
 /// <summary>The next thing a resumed online start does (owner 2026-11-10, "1. Opened launcher").</summary>
@@ -52,6 +54,15 @@ public static class StartupFlow
         if (facts.SignedIn == false) return StartupStep.Shell; // the welcome screen, with the reason
         return facts.ProfileLoaded ? StartupStep.Shell : StartupStep.LoadProfile;
     }
+
+    /// <summary>
+    /// The release floor's verdict for the start (T-1111-UPDATE-RESUME: after an auto-update the confirmation's own check was still in
+    /// flight, and its transient "checking" was read as the forced update). Null while a check runs or an update's commit is awaited, or
+    /// before any check settled: no verdict yet, the start waits and reads the floor again. Otherwise whether the settled phase allows
+    /// this launcher; only a settled phase that holds Play (a floor above this build) is the forced update.
+    /// </summary>
+    public static bool? LauncherVerdict(UpdatePhase phase, bool checkInFlight, bool commitAwaited, bool allowed) =>
+        checkInFlight || commitAwaited || phase == UpdatePhase.Checking ? null : allowed;
 
     /// <summary>A step that ends the start (nothing more is read).</summary>
     public static bool IsFinal(StartupStep step) => step is StartupStep.ServicesClosed or StartupStep.ForcedUpdate or StartupStep.Shell;
