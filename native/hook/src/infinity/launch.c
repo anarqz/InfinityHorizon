@@ -1974,6 +1974,10 @@ static int launch_go_online(const LaunchTicket *t) {
     /* the tier is display text only (OD-140, CR-S69: the Supporter badge) */
     int free_tier = text_equal_ignore_case(launch_claims.tier, "free");
     int noob = text_equal_ignore_case(launch_claims.mode, "noob");
+    /* OD-239 8 (T-1111-AZIMUTH): an Azimuth session (internal id noob) plays on Azimuth's own save container. Its rows go in
+       here, after the state left WAITING (the game has not read its identity) and before azimuth_account_launch_done lets
+       the game's getters return it, so before the game builds the container's name at profile load. Hardcore: nothing. */
+    fi_game_azimuth_save(noob);
     azimuth_account_launch_identity(launch_claims.xuid, launch_claims.gamertag, free_tier ? FI_TIER_FREE : FI_TIER_VIP,
                                     noob, launch_claims.storm_island);
     /* OD-128 (kept by OD-140): the save line alone opens or shuts the universe's services, whatever
