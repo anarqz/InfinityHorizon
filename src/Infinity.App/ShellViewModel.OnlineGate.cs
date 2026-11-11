@@ -128,7 +128,10 @@ public sealed partial class ShellViewModel
             await RefreshIntegrityAutomaticallyAsync();
             return;
         }
-        await VerifyBuildOriginAsync();
+        // T-1111-UPDATE-RESUME: the start owns the floor from here (an update confirmation's re-check stays out of it)
+        _startupRunning = true;
+        try { await VerifyBuildOriginAsync(); }
+        finally { _startupRunning = false; }
         await RunStartupFlowAsync(azimuth, new StartupFacts());
         AskAzimuthFirstWhenMissing();
     }
@@ -155,6 +158,7 @@ public sealed partial class ShellViewModel
     {
         _startupRunning = true;
         _startupStopped = null;
+        var floorRounds = 0;
         try
         {
             using (var startup = Loading(S["startup.checking_services"]))
@@ -171,9 +175,17 @@ public sealed partial class ShellViewModel
                             break;
                         case StartupStep.CheckLauncherVersion:
                             startup.Step(S["startup.checking_version"]);
-                            await CheckLauncherUpdatesAsync();
+                            // T-1111-UPDATE-RESUME: a check or an update's commit in flight is waited for, never read as the forced update
+                            var verdict = await ReadStartupFloorAsync();
+                            if (verdict is null && ++floorRounds >= 3)
+                            {
+                                // never loops: no verdict after three rounds is an unread floor (the start signs in, Play waits, the banner says so)
+                                Log("startup: the release floor never settled; signing in, Play waits for the floor");
+                                facts = facts with { ServicesOpen = OnlineServiceAllowsPlay, LauncherAllowed = false, LauncherFloorUnknown = true };
+                                break;
+                            }
                             // the floor's read may also have found the service paused meanwhile: that is the closed screen, not the floor's
-                            facts = facts with { ServicesOpen = OnlineServiceAllowsPlay, LauncherAllowed = LauncherUpdateAllowsPlay, LauncherFloorUnknown = LauncherFloorUnread };
+                            facts = facts with { ServicesOpen = OnlineServiceAllowsPlay, LauncherAllowed = verdict, LauncherFloorUnknown = LauncherFloorUnread };
                             if (LauncherFloorUnread) Log("startup: the release floor could not be read; signing in, Play waits for the floor");
                             break;
                         case StartupStep.FindGames:

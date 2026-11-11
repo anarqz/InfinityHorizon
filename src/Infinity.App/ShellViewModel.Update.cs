@@ -7,6 +7,7 @@ using System.Text.Json;
 using Infinity.Core.Api;
 using Infinity.Core.Auth;
 using Infinity.Core.Process;
+using Infinity.Core.Shell;
 using Infinity.Core.Update;
 
 namespace Infinity.App;
@@ -105,6 +106,8 @@ public sealed partial class ShellViewModel
         _updateFailureKey = null;
         _updateFloorUnread = false;
         _updateChecking = true; _launcherUpdatePhase = UpdatePhase.Checking; Changed(string.Empty);
+        var run = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _updateCheckRun = run.Task;
         _updater ??= new UpdateCoordinator(_stateDirectory) { Log = Log };
         try
         {
@@ -135,8 +138,61 @@ public sealed partial class ShellViewModel
             _launcherUpdatePhase = UpdatePhase.Unavailable; _updateFloorUnread = true;
             Log("update: check unavailable (" + error.GetType().Name + "); the release floor is unknown, Play waits for it");
         }
-        finally { _updateChecking = false; KeepOfflineUpdatePhase(); Changed(string.Empty); }
-        ContinueStoppedStartup(); // a start stopped at the forced update continues once the floor allows this launcher
+        finally
+        {
+            _updateChecking = false; KeepOfflineUpdatePhase(); Changed(string.Empty);
+            run.TrySetResult();
+            // every exit (the deferred GitHub-only read too): a stopped start continues once its screen cleared
+            ContinueStoppedStartup();
+        }
+    }
+
+    /// <summary>The check in flight, or the last one (completed): a start's floor step waits for it instead of reading "checking".</summary>
+    private Task _updateCheckRun = Task.CompletedTask;
+
+    /// <summary>Completes when the just-installed launcher's commit was awaited (<see cref="ConfirmUpdatedStartupAsync"/>).</summary>
+    private TaskCompletionSource? _updateCommitWait;
+
+    /// <summary>
+    /// T-1111-UPDATE-RESUME: a resumed online start reads the floor itself (after the status), so the update confirmation's re-check
+    /// stays out of it while that start runs, is about to run or is stopped (it continues through the floor step).
+    /// </summary>
+    private bool StartupOwnsFloor => _onlineEngaged && (_startupRunning || _startupStopped is not null);
+
+    /// <summary>
+    /// The start's floor step (T-1111-UPDATE-RESUME): an update's commit or a check already in flight (the confirmation's, a background
+    /// one) is waited for first, then the floor is read by this start, with the service status it already read. Returns the verdict
+    /// (<see cref="StartupFlow.LauncherVerdict"/>): null only when a new check or commit began meanwhile (the step runs again).
+    /// </summary>
+    private async Task<bool?> ReadStartupFloorAsync()
+    {
+        while (_updateAwaitingCommit && _updateCommitWait is { } commit) await commit.Task;
+        while (_updateChecking) await _updateCheckRun;
+        await CheckLauncherUpdatesAsync();
+        return StartupFlow.LauncherVerdict(_launcherUpdatePhase, _updateChecking, _updateAwaitingCommit, LauncherUpdateAllowsPlay);
+    }
+
+    /// <summary>The just-installed launcher's commit is being awaited: Play and the floor wait for it.</summary>
+    private void BeginAwaitingCommit()
+    {
+        _updateAwaitingCommit = true;
+        _updateCommitWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Changed(string.Empty);
+    }
+
+    /// <summary>
+    /// The commit was awaited (or failed into recovery): a waiting start's floor step goes on. The re-check after a commit runs only when
+    /// no online start owns the floor (<see cref="StartupOwnsFloor"/>): one that does reads it itself, after the service status.
+    /// </summary>
+    private async Task EndAwaitingCommitAsync(bool committed)
+    {
+        _updateAwaitingCommit = false;
+        _updateCommitWait?.TrySetResult();
+        _updateCommitWait = null;
+        Changed(string.Empty);
+        if (!committed) return;
+        if (_launcherUpdatePhase != UpdatePhase.Current && !StartupOwnsFloor) await CheckLauncherUpdatesAsync();
+        else ContinueStoppedStartup();
     }
 
     /// <summary>
@@ -355,7 +411,7 @@ public sealed partial class ShellViewModel
         try
         {
             if (nonce < 0 || transaction + 1 >= arguments.Length || nonce + 1 >= arguments.Length) throw new InvalidDataException("Incomplete update handoff");
-            _updateAwaitingCommit = true; Changed(string.Empty);
+            BeginAwaitingCommit();
             var planPath = arguments[transaction + 1];
             var plan = UpdateInstaller.ReadPlan(planPath);
             var verifier = new UpdatePackageVerifier();
@@ -363,11 +419,13 @@ public sealed partial class ShellViewModel
             if (Version != descriptor.Version) throw new InvalidDataException("Replacement version differs from release");
             await Task.Run(() => UpdateInstaller.AcknowledgeStartup(planPath, arguments[nonce + 1]), _updateStop.Token);
             await UpdateInstaller.WaitForCommitAsync(plan, TimeSpan.FromSeconds(40), _updateStop.Token);
-            _updateAwaitingCommit = false;
-            if (_launcherUpdatePhase != UpdatePhase.Current) await CheckLauncherUpdatesAsync();
+            await EndAwaitingCommitAsync(committed: true);
         }
         catch (Exception error) when (UpdateFailure(error))
-        { _updateAwaitingCommit = false; _updateRecoveryBlocked = true; _launcherUpdatePhase = UpdatePhase.RecoveryRequired; Changed(string.Empty); }
+        {
+            _updateRecoveryBlocked = true; _launcherUpdatePhase = UpdatePhase.RecoveryRequired;
+            await EndAwaitingCommitAsync(committed: false); // a start waiting at its floor step reads the recovery screen
+        }
         Changed(string.Empty);
     }
 
