@@ -508,6 +508,10 @@ public sealed partial class ShellViewModel
         {
             var action = id switch
             {
+                // OD-239 BUG A: a HARDCORE row copies its own save (named so); an AZIMUTH row only moves its own old save, through OldSaveMove
+                ProfileTools.CopyTo when slot != SaveSlot.Hardcore => OldSaveRowOf(card!.Player.Xuid, game.Id) is not null
+                    ? new MenuAction(id, S["oldsave.move"], !running, running ? S["sm.block.GameRunning"] : null)
+                    : new MenuAction(id, S["oldsave.move"], false, S["oldsave.none_for_row"]),
                 ProfileTools.CopyTo => LocalSaveOf(card!.Player.Xuid) is not null
                     ? new MenuAction(id, S["sm.menu.copy_azimuth"], !running, running ? S["sm.block.GameRunning"] : null)
                     : new MenuAction(id, S["sm.menu.copy_azimuth"], false, S["sm.block.NoSource"]),
@@ -630,6 +634,7 @@ public sealed partial class ShellViewModel
     private string? SavesRootNow => _install is null ? null : AzimuthSaves.SavesRoot(_install.Root, CurrentGame);
 
     private LocalHistory History() => new(_stateRoot, CurrentGame, Version);
+
 
     /// <summary>The newest save of <paramref name="xuid"/>'s folder on this PC (any game layout Azimuth writes), or null.</summary>
     private SaveProfile? LocalSaveOf(string xuid)
@@ -791,6 +796,11 @@ public sealed partial class ShellViewModel
         var slot = SlotOf(row);
         switch (action.Id)
         {
+            case ProfileTools.CopyTo when slot != SaveSlot.Hardcore:
+                // OD-239 BUG A: an AZIMUTH row's only copy is "Move to my Azimuth save" of its own old save (OldSaveMove), never the Save Manager's copy
+                if (OldSaveRowOf(row.Card!.Player.Xuid, gameRow.GameId) is { } old) await MoveOldSaveAsync(old);
+                else Message = S["oldsave.none_for_row"];
+                break;
             case ProfileTools.CopyTo:
                 OpenCopyFromProfile(slot, row);
                 break;
@@ -1076,10 +1086,15 @@ public sealed partial class ShellViewModel
     public string CopyBlockedText => _gameRunning ? GameRunningText : string.Empty;
     public bool ShowCopyBlocked => _gameRunning && _copy is not null;
 
+    /// <summary>
+    /// A HARDCORE profile's own save onto Azimuth's (as before OD-239), named by its mode, profile and folder in every label. Only a HARDCORE
+    /// row: an AZIMUTH profile's old save moves through <see cref="MoveOldSaveAsync"/> only.
+    /// </summary>
     private void OpenCopyFromProfile(SaveSlot slot, ProfileRow row)
     {
+        if (slot != SaveSlot.Hardcore || !row.Hardcore) return;
         if (LocalSaveOf(row.Profile.Xuid) is not { } local) { Message = S["sm.block.NoSource"]; return; }
-        OpenCopy(new CopyPlan(slot, ModeWord(slot) + " · " + row.Gamertag, local, null, null, null, false));
+        OpenCopy(new CopyPlan(slot, S.Format("sm.copy_source", ("mode", ModeWord(slot)), ("name", row.Gamertag), ("folder", local.Folder)), local, null, null, null, false));
     }
 
     private void OpenCopy(CopyPlan plan)

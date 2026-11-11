@@ -39,31 +39,62 @@ public sealed record OldSave(OldSaveSource Source, string Game, ulong Xuid, stri
 public static class OldSaves
 {
     /// <summary>
-    /// The AZIMUTH profiles whose folders are looked at: the account's live ones (<c>players</c> and <c>profiles</c> of <paramref name="me"/>) and
-    /// this PC's (their <see cref="LocalProfile.OfflinePlayXuid"/>; signed in, only those not of another account). Never Azimuth's own player.
+    /// Every XUID that is (or this PC or the account ever said is) a HARDCORE profile's: the account's Hardcore players and careers in any
+    /// status, and each Hardcore local profile's own offline XUID and account XUID (a stale cache included). Never an old-save source, whatever
+    /// else says so (OD-239 BUG A: a Hardcore save was moved into the Azimuth save).
     /// </summary>
-    public static IReadOnlyList<OldSaveOwner> Owners(Me? me, IEnumerable<LocalProfile> locals)
+    public static IReadOnlySet<ulong> HardcoreXuids(Me? me, IEnumerable<LocalProfile> locals)
     {
         ArgumentNullException.ThrowIfNull(locals);
-        var owners = new Dictionary<ulong, string>();
+        var hardcore = new HashSet<ulong>();
         foreach (var p in me?.Players ?? [])
         {
-            if (p is { Mode: "noob", Status: "active" } && Parse(p.Xuid) is { } x) owners.TryAdd(x, ProfileName.Plain(p.Gamertag));
+            if (p.Mode != "noob" && Parse(p.Xuid) is { } x) hardcore.Add(x);
         }
         foreach (var p in me?.Profiles ?? [])
         {
-            if (p is { Mode: "noob", Status: "active" } && Parse(p.Xuid) is { } x) owners.TryAdd(x, ProfileName.Plain(p.Gamertag));
+            if (p.Mode != "noob" && Parse(p.Xuid) is { } x) hardcore.Add(x);
         }
-        foreach (var l in locals)
+        foreach (var l in locals.Where(l => l.Mode != "noob"))
         {
-            if (!l.Hardcore && (me is null || l.LocalOnly || l.OnAccount(me.AccountId))) owners.TryAdd(l.OfflinePlayXuid, l.DisplayName);
+            hardcore.Add(l.OfflineXuid);
+            if (Parse(l.Cloud?.Xuid) is { } x) hardcore.Add(x);
         }
-        owners.Remove(AzimuthSaves.OfflineXuid);
+        return hardcore;
+    }
+
+    /// <summary>
+    /// The AZIMUTH profiles whose own old folders are looked at, decided by MODE only: the account's live Noob players and careers
+    /// (<c>players</c> and <c>profiles</c> of <paramref name="me"/>) and this PC's Noob local profiles (each one's own offline XUID and, on the
+    /// account, its account XUID; signed in, only those not of another account). Never a XUID in <see cref="HardcoreXuids"/> (of
+    /// <paramref name="me"/>, <paramref name="locals"/> and <paramref name="hardcore"/>), never Azimuth's own player.
+    /// </summary>
+    public static IReadOnlyList<OldSaveOwner> Owners(Me? me, IEnumerable<LocalProfile> locals, IReadOnlySet<ulong>? hardcore = null)
+    {
+        ArgumentNullException.ThrowIfNull(locals);
+        var all = locals.ToList();
+        var never = new HashSet<ulong>(HardcoreXuids(me, all)) { AzimuthSaves.OfflineXuid };
+        if (hardcore is not null) never.UnionWith(hardcore);
+        var owners = new Dictionary<ulong, string>();
+        void Add(ulong? xuid, string name) { if (xuid is { } x && !never.Contains(x)) owners.TryAdd(x, name); }
+        foreach (var p in me?.Players ?? [])
+        {
+            if (p is { Mode: "noob", Status: "active" }) Add(Parse(p.Xuid), ProfileName.Plain(p.Gamertag));
+        }
+        foreach (var p in me?.Profiles ?? [])
+        {
+            if (p is { Mode: "noob", Status: "active" }) Add(Parse(p.Xuid), ProfileName.Plain(p.Gamertag));
+        }
+        foreach (var l in all.Where(l => l.Mode == "noob" && (me is null || l.LocalOnly || l.OnAccount(me.AccountId))))
+        {
+            Add(l.OfflineXuid, l.DisplayName); // its own local folder (what it played before OD-239 sent it to Azimuth's save)
+            if (!l.NotOnAccount) Add(Parse(l.Cloud?.Xuid), l.DisplayName); // and its account folder
+        }
         return [.. owners.Select(o => new OldSaveOwner(o.Key, o.Value))];
     }
 
     /// <summary>Each owner's folder of <paramref name="game"/> on this PC that holds a sealed revision.</summary>
-    public static IReadOnlyList<OldSave> OnThisPc(string game, string savesRoot, IEnumerable<OldSaveOwner> owners)
+    public static IReadOnlyList<OldSave> OnThisPc(string game, string savesRoot, IEnumerable<OldSaveOwner> owners, IReadOnlySet<ulong>? hardcore = null)
     {
         ArgumentNullException.ThrowIfNull(game);
         ArgumentNullException.ThrowIfNull(savesRoot);
@@ -71,7 +102,7 @@ public static class OldSaves
         var found = new List<OldSave>();
         foreach (var owner in owners)
         {
-            if (owner.Xuid == AzimuthSaves.OfflineXuid) continue;
+            if (owner.Xuid == AzimuthSaves.OfflineXuid || hardcore?.Contains(owner.Xuid) == true) continue;
             LocalRevision? newest;
             try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(savesRoot, owner.Xuid)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { newest = null; }
@@ -84,10 +115,10 @@ public static class OldSaves
     }
 
     /// <summary>The old Noob cloud lines (<see cref="OldNoobExport.Lines"/>) as old saves, their time from <c>cloud.savedAt</c>.</summary>
-    public static IReadOnlyList<OldSave> InTheCloud(IEnumerable<OldNoobLine> lines)
+    public static IReadOnlyList<OldSave> InTheCloud(IEnumerable<OldNoobLine> lines, IReadOnlySet<ulong>? hardcore = null)
     {
         ArgumentNullException.ThrowIfNull(lines);
-        return [.. lines.Where(l => Parse(l.Xuid) is not null)
+        return [.. lines.Where(l => Parse(l.Xuid) is { } x && x != AzimuthSaves.OfflineXuid && hardcore?.Contains(x) != true)
             .Select(l => new OldSave(OldSaveSource.Cloud, l.Game, Parse(l.Xuid)!.Value, ProfileName.Plain(l.Gamertag), Time(l.SavedAt), Line: l))];
     }
 
@@ -191,6 +222,9 @@ public enum OldSaveMoveOutcome
 
     /// <summary>The download, its checks or the install failed (<see cref="OldSaveMoveResult.Code"/>); a backup made before it is named.</summary>
     Failed,
+
+    /// <summary>The source is not an AZIMUTH profile's (a HARDCORE profile's, or Azimuth's own): nothing was read or written.</summary>
+    NotAzimuth,
 }
 
 /// <summary>
@@ -221,7 +255,7 @@ public sealed record OldSaveBackup(string Path, IReadOnlyList<string> Folders);
 /// </list>
 /// The source is only read: the old folder and the cloud line are never changed.
 /// </summary>
-public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<bool> gameRunning, Func<DateTime>? utcNow = null)
+public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<bool> gameRunning, IReadOnlySet<ulong> hardcore, Func<DateTime>? utcNow = null)
 {
     /// <summary>The history entry's reason (en, pt-BR).</summary>
     public static readonly HistoryReason Reason = new("Before moving an old save into the Azimuth save", "Antes de mover um save antigo para o save do Azimuth");
@@ -230,6 +264,12 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     private readonly LocalHistory _history = history ?? throw new ArgumentNullException(nameof(history));
     private readonly Func<bool> _gameRunning = gameRunning ?? throw new ArgumentNullException(nameof(gameRunning));
     private readonly Func<DateTime> _now = utcNow ?? (() => DateTime.UtcNow);
+
+    /// <summary>OD-239 BUG A: every HARDCORE XUID (<see cref="OldSaves.HardcoreXuids"/>), refused as a source before anything is read.</summary>
+    private readonly IReadOnlySet<ulong> _hardcore = hardcore ?? throw new ArgumentNullException(nameof(hardcore));
+
+    /// <summary>Only an AZIMUTH profile's own old folder or line moves: never a HARDCORE one, never Azimuth's own save.</summary>
+    private bool NotAzimuth(ulong xuid) => xuid == AzimuthSaves.OfflineXuid || _hardcore.Contains(xuid);
 
     /// <summary>Azimuth's own save of this game: <c>&lt;saves&gt;\player-1\User_9000000000000</c>.</summary>
     public string AzimuthFolder => CloudSaveFiles.ProfileDir(_savesRoot, AzimuthSaves.OfflineXuid);
@@ -243,12 +283,12 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// (<c>&lt;history&gt;\&lt;yyyyMMddTHHmmssZ&gt;-copy-old-save-to-azimuth\saves</c>, one <c>&lt;container&gt;</c> folder each) and the
     /// container folders it holds. Throws <see cref="HistoryException"/> when it does not verify (nothing left behind).
     /// </summary>
-    public OldSaveBackup BackUp(IReadOnlyList<string> containers, HistoryProfile? profile = null)
+    public OldSaveBackup BackUp(IReadOnlyList<string> containers, HistoryProfile? profile = null, HistoryReason? reason = null)
     {
         ArgumentNullException.ThrowIfNull(containers);
         var now = _now();
         _history.EnsureOriginal(_savesRoot, now); // §7.2: the title's saves as first found, once
-        var item = _history.ArchiveContainers("copy", PlayerDir, containers, Reason, now, from: "old-save", to: "azimuth", profile, slug: "old save to azimuth");
+        var item = _history.ArchiveContainers("copy", PlayerDir, containers, reason ?? Reason, now, from: "old-save", to: "azimuth", profile, slug: "old save to azimuth");
         var saves = Path.Combine(item.Folder, LocalHistory.SavesDir);
         return new OldSaveBackup(saves, [.. containers.Select(c => Path.Combine(saves, c)).Where(Directory.Exists)]);
     }
@@ -258,15 +298,16 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// receives the backup's path before the install starts. The clone writes the <c>User_9000000000000</c> folder only (the old career's
     /// siblings are already in this <c>player-1</c>), so that is what is backed up.
     /// </summary>
-    public OldSaveMoveResult MoveFromThisPc(ulong sourceXuid, Action<string>? backedUp = null)
+    public OldSaveMoveResult MoveFromThisPc(ulong sourceXuid, Action<string>? backedUp = null, HistoryProfile? profile = null, HistoryReason? reason = null)
     {
         if (sourceXuid == AzimuthSaves.OfflineXuid) return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.SAME_FOLDER", Message: "the Azimuth save cannot be moved onto itself");
+        if (NotAzimuth(sourceXuid)) return new(OldSaveMoveOutcome.NotAzimuth, Code: "LOCAL.NOT_AZIMUTH", Message: AzimuthSaves.FolderFor(sourceXuid) + " is a HARDCORE profile's");
         if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning);
         LocalRevision? newest;
         try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, sourceXuid)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.READ_FAILED", Message: e.Message); }
         if (newest is null) return new(OldSaveMoveOutcome.NoSave);
-        var (backup, why) = BackUpOrWhy([AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)], backedUp);
+        var (backup, why) = BackUpOrWhy([AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)], backedUp, profile, reason);
         if (why is not null) return why;
         if (_gameRunning()) return With(new(OldSaveMoveOutcome.GameRunning), backup);
         try
@@ -289,11 +330,13 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// then the backup (<paramref name="backedUp"/> receives its path), then the install. Network errors propagate (nothing written then).
     /// </summary>
     public async Task<OldSaveMoveResult> MoveFromCloudAsync(ISaveApi api, string access, OldNoobLine line, ICareerBundle bundle, Action<string>? backedUp = null,
-        CancellationToken cancellation = default)
+        HistoryProfile? profile = null, HistoryReason? reason = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(api);
         ArgumentNullException.ThrowIfNull(line);
         ArgumentNullException.ThrowIfNull(bundle);
+        if (!ulong.TryParse(line.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var lineXuid) || NotAzimuth(lineXuid))
+            return new(OldSaveMoveOutcome.NotAzimuth, Code: "LOCAL.NOT_AZIMUTH", Message: "the cloud line " + line.Xuid + " is not an AZIMUTH profile's");
         if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning);
         var page = await api.RevisionsAsync(access, line.Xuid, null, 1, cancellation).ConfigureAwait(false);
         if (!page.Ok || page.Value is null)
@@ -307,7 +350,7 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
             return new(OldSaveMoveOutcome.Failed, Revision: newest.Revision, Code: failure?.Code ?? "SAVES.INTEGRITY", Message: failure?.Message ?? "the bundle was not read");
         if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, Revision: newest.Revision);
         // every container the game's bundle will write (FM5: the profile and each sibling it carries), backed up before the install
-        var (backup, why) = BackUpOrWhy(bundle.Containers(valid, AzimuthSaves.OfflineXuid), backedUp);
+        var (backup, why) = BackUpOrWhy(bundle.Containers(valid, AzimuthSaves.OfflineXuid), backedUp, profile, reason);
         if (why is not null) return why with { Revision = newest.Revision };
         if (_gameRunning()) return With(new(OldSaveMoveOutcome.GameRunning, Revision: newest.Revision), backup);
         try
@@ -322,11 +365,11 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     }
 
     /// <summary>The backup (its path handed to <paramref name="backedUp"/> first), or why there is none.</summary>
-    private (OldSaveBackup? Backup, OldSaveMoveResult? Failure) BackUpOrWhy(IReadOnlyList<string> containers, Action<string>? backedUp)
+    private (OldSaveBackup? Backup, OldSaveMoveResult? Failure) BackUpOrWhy(IReadOnlyList<string> containers, Action<string>? backedUp, HistoryProfile? profile, HistoryReason? reason)
     {
         try
         {
-            var backup = BackUp(containers);
+            var backup = BackUp(containers, profile, reason);
             backedUp?.Invoke(backup.Path);
             return (backup, null);
         }

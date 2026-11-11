@@ -43,12 +43,13 @@ public static class OldNoobExport
     /// <summary>
     /// The adapter (the one place that reads which old lines exist): <c>/me</c>, an active profile's career whose <c>cloud</c> is
     /// <c>exportOnly: true</c> (CR-S111, CAREERS.md §7: no save line, the old head kept until the erase) and names a revision. A live
-    /// Hardcore line has no <c>exportOnly</c> and is never offered.
+    /// Hardcore line has no <c>exportOnly</c> and is never offered: a career is read only when its profile's MODE is <c>noob</c> (OD-239 BUG A),
+    /// whatever its cloud says.
     /// </summary>
     public static IReadOnlyList<OldNoobLine> Lines(Me? me)
     {
         if (me?.Players is not { } players) return [];
-        return [.. players.Where(p => p.Status == "active")
+        return [.. players.Where(p => p is { Status: "active", Mode: "noob" })
             .SelectMany(p => p.Careers.Where(c => c.Cloud is { ExportOnly: true, Revision: > 0 })
                 .Select(c => new OldNoobLine(p.ProfileId, p.Gamertag, p.Xuid, c.Game, c.CareerId, c.Cloud!.Revision, c.Cloud.SavedAt)))];
     }
