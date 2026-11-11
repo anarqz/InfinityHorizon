@@ -95,11 +95,18 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>
-    /// OD-239 BUG 3: the Azimuth button's line, from <c>User_9000000000000</c> of the chosen game as the Save Manager reads it (the cached scan,
-    /// no disk read on navigation): "CR 15,858 · saved …"; when it cannot be read, "Plays this PC's Azimuth save" with why. Never "No progress
-    /// yet": the server keeps no progress of an Azimuth career.
+    /// OD-239 BUG 3, azimuth5: the Azimuth button's line: the level of the identity's last sync with its age (the cached <c>/me</c>, as the
+    /// Profiles row), then <c>User_9000000000000</c> of the chosen game as the Save Manager reads it (the cached scan, no disk read on
+    /// navigation): "CR 15,858 · saved …"; when it cannot be read, "Plays this PC's Azimuth save" with why. Never "No progress yet".
     /// </summary>
-    private string AzimuthPlayStats()
+    private string AzimuthPlayStats() => AzimuthPlayLevel() + "  ·  " + AzimuthSaveStats();
+
+    /// <summary>azimuth5: the level of the identity's last sync with its age ("LV 15 · synced 2 days ago"), "LV —" without progress.</summary>
+    private string AzimuthPlayLevel() => AzimuthSyncedLevel(CurrentGame) is { } p
+        ? S.Format("play.stats_level_synced", ("level", p.Level.ToString("N0", SavesCulture)), ("ago", Ago(p.SyncedAt)))
+        : S["play.stats_level_none"];
+
+    private string AzimuthSaveStats()
     {
         if (SavesRootNow is not { } root) return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_no_install"]));
         SaveProfile? save;

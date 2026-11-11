@@ -47,7 +47,7 @@ public sealed partial class ShellViewModel
 
     private static string OldSourceText(Infinity.Core.Strings s, OldSave save) => save.Source == OldSaveSource.Cloud
         ? s["export.source_cloud"]
-        : s.Format("export.source_pc", ("folder", AzimuthSaves.FolderFor(save.Xuid)));
+        : s["export.source_pc"];
 
     /// <summary>The account's old cloud lines of the games this Azimuth install has (cached <c>/me</c>, no request).</summary>
     private IReadOnlyList<OldSave> OldCloudSaves()
@@ -65,7 +65,7 @@ public sealed partial class ShellViewModel
             S.Format("export.old_row_title", ("name", s.Gamertag), ("game", GameName(s.Game))),
             s.Source == OldSaveSource.Cloud
                 ? S.Format("export.old_row_cloud", ("rev", s.Line!.Revision.ToString(c)), ("when", s.SavedAtUtc is { } w ? When(w) : S["sm.unknown"]))
-                : S.Format("export.old_row_pc", ("folder", s.Local!.Folder), ("when", s.SavedAtUtc is { } p ? When(p) : S["sm.unknown"])))).ToList();
+                : S.Format("export.old_row_pc", ("when", s.SavedAtUtc is { } p ? When(p) : S["sm.unknown"])))).ToList();
         if (rows.Select(r => r.Save.Key + "|" + r.Line).SequenceEqual(OldSaveRows.Select(r => r.Save.Key + "|" + r.Line), StringComparer.Ordinal)) return;
         OldSaveRows.Clear();
         foreach (var row in rows) OldSaveRows.Add(row);
@@ -110,7 +110,12 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(row);
         if (_install is not { } install || GameOf(row.Save.Game) is not { } game) { Message = S["play.setup_needed"]; return; }
         var folder = CloudSaveFiles.ProfileDir(AzimuthSaves.SavesRoot(install.Root, game), row.Save.Xuid);
-        if (!Directory.Exists(folder)) { Message = S.Format("export.folder_gone", ("folder", folder)); return; }
+        if (!Directory.Exists(folder))
+        {
+            Log("saves: old Noob folder gone: " + AzimuthSaves.FolderFor(row.Save.Xuid)); // the log keeps the id; the notice never names the folder
+            Message = S["export.folder_gone"];
+            return;
+        }
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true })?.Dispose(); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { Log("saves: Explorer not opened: " + e.GetType().Name); }
     }
@@ -168,11 +173,11 @@ public sealed partial class ShellViewModel
                 SetOldSaveResult(S["oldsave.failed_unreachable"]);
                 return;
             }
-            Log($"saves: old Noob save {save.Key} → Azimuth {result.Outcome} r{result.Revision} {result.Code}");
+            Log($"saves: old Noob save {save.Key} → Azimuth {OutcomeWord(result.Outcome)} r{result.Revision} {result.Code}");
             SetOldSaveResult(result.Outcome switch
             {
                 OldSaveMoveOutcome.Moved => S.Format("export.copied", ("name", save.Gamertag), ("source", source), ("game", GameName(game.Id)), ("backup", BackupText(result))),
-                OldSaveMoveOutcome.NotAzimuth => S.Format("oldsave.not_azimuth", ("folder", AzimuthSaves.FolderFor(save.Xuid))),
+                OldSaveMoveOutcome.NotAzimuth => S["oldsave.not_azimuth"],
                 OldSaveMoveOutcome.GameRunning when result.BackupPath is not null => S.Format("oldsave.stopped_running", ("backup", BackupText(result))),
                 OldSaveMoveOutcome.GameRunning => S["saves.game_running"],
                 OldSaveMoveOutcome.NoSave => S["oldsave.nothing"],
@@ -203,16 +208,17 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>
-    /// The backup as the result names it: its folder, and when it holds more than one container (FM5's liveries and thumbnails beside the
-    /// profile) the name of each folder in it.
+    /// The backup as the result names it: its folder (the launcher's history entry). The save folders inside it are named after XUIDs
+    /// (<c>User_&lt;hex&gt;</c>), so a notice never lists them; the log does.
     /// </summary>
     private string BackupText(OldSaveMoveResult result)
     {
-        var path = result.BackupPath ?? string.Empty;
-        return result.BackupFolders.Count > 1
-            ? S.Format("oldsave.backup_folders", ("path", path), ("folders", string.Join(", ", result.BackupFolders.Select(Path.GetFileName))))
-            : path;
+        if (result.BackupFolders.Count > 0) Log("saves: backup holds " + string.Join(", ", result.BackupFolders.Select(Path.GetFileName)));
+        return result.BackupPath ?? string.Empty;
     }
+
+    /// <summary>The outcome in the log's words: a "move" is a copy (the old save is only read), so it is logged as Copied.</summary>
+    private static string OutcomeWord(OldSaveMoveOutcome outcome) => outcome == OldSaveMoveOutcome.Moved ? "Copied" : outcome.ToString();
 
     /// <summary>The game runs: the launcher plays it, or azimuth.exe is up (the harness can force it).</summary>
     private bool MoveGameRunning() => SavesForceRunning || Playing || AzimuthRunning();

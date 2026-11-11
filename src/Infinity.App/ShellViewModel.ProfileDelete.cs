@@ -45,31 +45,12 @@ public sealed partial class ShellViewModel
     /// <summary>
     /// What stays, as the code does it (<see cref="ProfileDeletion.CleanUp"/>, <see cref="ArchiveDeletedCareer"/>): the profile's own folders
     /// on this PC (its XUID's and its local entry's offline one) move to <c>fi-launcher-archive</c>, a copy in the launcher's history; this PC's
-    /// Azimuth save (<c>User_9000000000000</c>) is never touched, which it says by name. OD-240: only a HARDCORE profile or career is deleted
+    /// Azimuth save is never touched, which it says (in words: a folder name carries a XUID, never shown). OD-240: only a HARDCORE profile or career is deleted
     /// here (AZIMUTH is one identity with nothing to delete).
     /// </summary>
     public string DeleteProfileKeeps => _deleting is null ? string.Empty
-        : S.Format("profiles.delete_keeps", ("name", DeleteProfileName), ("folders", DeleteLocalFolders()), ("azimuth", AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)));
+        : S.Format("profiles.delete_keeps", ("name", DeleteProfileName));
 
-    private (Profile Profile, string Text)? _deleteFolders;
-
-    /// <summary>The folders the cleanup moves (read once per opened panel): the same list <see cref="ProfileDeletion.CleanUp"/> builds.</summary>
-    private string DeleteLocalFolders()
-    {
-        if (_deleting is not { } profile) return string.Empty;
-        if (_deleteFolders is { } cached && ReferenceEquals(cached.Profile, profile)) return cached.Text;
-        var xuids = new List<ulong>();
-        if (ulong.TryParse(profile.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var account)) xuids.Add(account);
-        try
-        {
-            var accountId = _session?.Me?.AccountId;
-            xuids.AddRange(LocalProfiles.Read().Where(p => p.Cloud is { } c && c.AccountId == accountId && c.ProfileId == profile.ProfileId).Select(p => p.OfflineXuid));
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-        var text = string.Join(", ", xuids.Where(x => x != AzimuthSaves.OfflineXuid).Distinct().Select(AzimuthSaves.FolderFor));
-        _deleteFolders = (profile, text);
-        return text;
-    }
 
     /// <summary>A game's title as the server lists it (else the launcher's catalog, else its id).</summary>
     private string GameTitle(string game) => Games.FirstOrDefault(g => g.Id == game)?.Title ?? Infinity.Core.Process.GameDefinition.ById(game)?.Name ?? game.ToUpperInvariant();
