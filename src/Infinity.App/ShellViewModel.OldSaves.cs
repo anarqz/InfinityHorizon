@@ -10,56 +10,45 @@ using Infinity.Core.Shell;
 
 namespace Infinity.App;
 
-/// <summary>One old save in Profiles: what it is, and its actions ("Move to my Azimuth save"; a cloud one also "Export to a file…").</summary>
+/// <summary>One old Noob save in Settings: what it is and where; a cloud one exports to a file, a folder on this PC opens in Explorer, both copy.</summary>
 public sealed record OldSaveRow(OldSave Save, string Title, string Line)
 {
     public bool CanExport => Save.Source == OldSaveSource.Cloud;
+
+    public bool CanOpenFolder => Save.Source == OldSaveSource.ThisPc;
 }
 
 /// <summary>
-/// OD-239: an AZIMUTH profile plays Azimuth's own save. Its old saves (the profile's own <c>User_&lt;XUID&gt;</c> folder on this PC, and the
-/// account's old Noob cloud line) are listed in Profiles with "Move to my Azimuth save" (<see cref="OldSaveMove"/>: the whole Azimuth save is
-/// copied aside first, and its path told); a cloud one keeps "Export to a file…" as the fallback. When the launcher opens, a prompt says so if
-/// one of them is newer than that game's Azimuth save (<see cref="OldSaves.AnyNewer"/>), until the player dismisses it for the account
-/// (<see cref="OldSavePromptStore"/>). This PC's folders are scanned on a worker; the cloud's times come from the cached <c>/me</c> only.
+/// OD-240 item 5: one quiet "Old Noob saves" entry in Settings, shown only while one exists: an old Noob cloud line (<c>cloud.exportOnly</c> on a
+/// Noob career of the cached <c>/me</c>) or a <c>User_&lt;XUID&gt;</c> folder on this PC of the account's Noob profiles or this PC's local ones
+/// (<see cref="OldSaves.Owners"/>; never a HARDCORE one). Each offers "Export to a file…" (a cloud line, ShellViewModel.OldNoobExport.cs) or "Copy
+/// into my Azimuth save" (<see cref="OldSaveMove"/>: the whole Azimuth save is backed up first, verified, and its path told; the old save is only
+/// read). No startup message, no Profiles row. This PC's folders are scanned on a worker; the cloud's lines come from the cached <c>/me</c> only.
 /// </summary>
 public sealed partial class ShellViewModel
 {
     private IReadOnlyList<OldSave> _oldLocal = [];
-    /// <summary>OD-239 BUG A: the HARDCORE XUIDs of the last scan (<see cref="OldSaves.HardcoreXuids"/>): never a row, a prompt or a move.</summary>
+    /// <summary>OD-239 BUG A: the HARDCORE XUIDs of the last scan (<see cref="OldSaves.HardcoreXuids"/>): never a row or a copy.</summary>
     private IReadOnlySet<ulong> _oldHardcore = new HashSet<ulong>();
-    private bool _oldSavePrompt;
-    private string? _oldSavePromptCheckedFor;
     private string? _oldSaveResult;
     private int _oldSaveScan;
 
     public ObservableCollection<OldSaveRow> OldSaveRows { get; } = [];
 
+    /// <summary>The Settings entry shows only while an old Noob save exists.</summary>
     public bool HasOldSaves => OldSaveRows.Count > 0;
 
-    /// <summary>The last move's result (with the backup's path), kept under the list.</summary>
+    /// <summary>The last copy's or export's result (with the backup's path or the file), kept under the list.</summary>
     public string OldSaveResultText => _oldSaveResult ?? string.Empty;
 
     public bool HasOldSaveResult => !string.IsNullOrEmpty(_oldSaveResult);
 
-    public bool ShowOldSavePrompt => _oldSavePrompt && InShell;
+    /// <summary>Where an old save is, in the player's words (its folder on this PC, or its old cloud save).</summary>
+    private string OldSourceText(OldSave save) => OldSourceText(S, save);
 
-    public string OldSavePromptText => OldSaveRows.Select(r => r.Save).OrderByDescending(s => s.SavedAtUtc ?? DateTime.MinValue).FirstOrDefault() is { } newest
-        ? S.Format("oldsave.prompt_body", ("mode", S["sm.noob"]), ("name", newest.Gamertag), ("game", GameName(newest.Game)), ("source", OldSourceText(newest)))
-        : string.Empty;
-
-    /// <summary>Where an old save is, in the player's words (its folder on this PC, or its old Noob cloud save).</summary>
-    private string OldSourceText(OldSave save) => save.Source == OldSaveSource.Cloud
-        ? S["oldsave.source_cloud"]
-        : S.Format("oldsave.source_pc", ("folder", AzimuthSaves.FolderFor(save.Xuid)));
-
-    /// <summary>The AZIMUTH profile's old save of <paramref name="xuid"/> in <paramref name="game"/> (this PC's first, then the cloud's), or null.</summary>
-    private OldSaveRow? OldSaveRowOf(string xuid, string game) =>
-        OldSaveRows.Where(r => r.Save.Game == game && r.Save.Xuid.ToString(CultureInfo.InvariantCulture) == xuid)
-            .OrderBy(r => r.Save.Source == OldSaveSource.ThisPc ? 0 : 1).FirstOrDefault();
-
-    /// <summary>The account the prompt's "Dismiss" is kept for: the signed-in account, or this PC without one.</summary>
-    private string OldSaveAccount => _session?.Me?.AccountId ?? "this-pc";
+    private static string OldSourceText(Infinity.Core.Strings s, OldSave save) => save.Source == OldSaveSource.Cloud
+        ? s["export.source_cloud"]
+        : s.Format("export.source_pc", ("folder", AzimuthSaves.FolderFor(save.Xuid)));
 
     /// <summary>The account's old cloud lines of the games this Azimuth install has (cached <c>/me</c>, no request).</summary>
     private IReadOnlyList<OldSave> OldCloudSaves()
@@ -74,26 +63,21 @@ public sealed partial class ShellViewModel
     {
         var c = CultureInfo.CurrentCulture;
         var rows = _oldLocal.Concat(OldCloudSaves()).Select(s => new OldSaveRow(s,
-            S.Format("oldsave.row_title", ("mode", S["sm.noob"]), ("name", s.Gamertag), ("game", GameName(s.Game))),
+            S.Format("export.old_row_title", ("name", s.Gamertag), ("game", GameName(s.Game))),
             s.Source == OldSaveSource.Cloud
-                ? S.Format("oldsave.row_cloud", ("rev", s.Line!.Revision.ToString(c)), ("when", s.SavedAtUtc is { } w ? When(w) : S["sm.unknown"]))
-                : S.Format("oldsave.row_pc", ("folder", s.Local!.Folder), ("when", s.SavedAtUtc is { } p ? When(p) : S["sm.unknown"])))).ToList();
+                ? S.Format("export.old_row_cloud", ("rev", s.Line!.Revision.ToString(c)), ("when", s.SavedAtUtc is { } w ? When(w) : S["sm.unknown"]))
+                : S.Format("export.old_row_pc", ("folder", s.Local!.Folder), ("when", s.SavedAtUtc is { } p ? When(p) : S["sm.unknown"])))).ToList();
         if (rows.Select(r => r.Save.Key + "|" + r.Line).SequenceEqual(OldSaveRows.Select(r => r.Save.Key + "|" + r.Line), StringComparer.Ordinal)) return;
         OldSaveRows.Clear();
         foreach (var row in rows) OldSaveRows.Add(row);
         Changed(nameof(HasOldSaves));
-        Changed(nameof(OldSavePromptText));
     }
 
-    /// <summary>
-    /// This PC's old folders of every game the install has, read on a worker; then the rows. <paramref name="prompt"/> (launcher open): the
-    /// prompt is decided once per account and run, unless dismissed.
-    /// </summary>
-    internal async Task RefreshOldSavesAsync(bool prompt)
+    /// <summary>This PC's old Noob folders of every game the install has, read on a worker; then the rows (Settings shows the entry while one exists).</summary>
+    internal async Task RefreshOldSavesAsync()
     {
         if (_install is not { } install) { _oldLocal = []; FillOldSaveRows(); return; }
         var scan = ++_oldSaveScan;
-        var account = OldSaveAccount;
         IReadOnlyList<LocalProfile> locals;
         try { locals = LocalProfiles.Read(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { locals = []; }
@@ -101,60 +85,39 @@ public sealed partial class ShellViewModel
         var hardcore = OldSaves.HardcoreXuids(_session?.Me, locals);
         var owners = OldSaves.Owners(OfflineMode ? null : _session?.Me, locals, hardcore);
         var games = GameDefinition.Available(install.Root);
-        var (local, azimuth) = await Task.Run(() =>
+        var local = await Task.Run(() =>
         {
             var found = new List<OldSave>();
-            var newest = new Dictionary<string, DateTime?>(StringComparer.Ordinal);
-            foreach (var game in games)
-            {
-                var root = AzimuthSaves.SavesRoot(install.Root, game);
-                found.AddRange(OldSaves.OnThisPc(game.Id, root, owners, hardcore));
-                newest[game.Id] = OldSaves.AzimuthNewest(root);
-            }
-            return ((IReadOnlyList<OldSave>)found, newest);
+            foreach (var game in games) found.AddRange(OldSaves.OnThisPc(game.Id, AzimuthSaves.SavesRoot(install.Root, game), owners, hardcore));
+            return (IReadOnlyList<OldSave>)found;
         });
         if (scan != _oldSaveScan) return; // a newer scan answers
         _oldLocal = local;
         _oldHardcore = hardcore;
         FillOldSaveRows();
-        if (!prompt || _oldSavePromptCheckedFor == account) return;
-        _oldSavePromptCheckedFor = account;
-        var all = local.Concat(OldCloudSaves()).ToList();
-        var dismissed = await Task.Run(() => new OldSavePromptStore(_stateDirectory).IsDismissed(account));
-        _oldSavePrompt = !dismissed && OldSaves.AnyNewer(all, game => azimuth.GetValueOrDefault(game));
-        if (_oldSavePrompt) Log($"saves: an old AZIMUTH-profile save is newer than the Azimuth save ({string.Join(", ", all.Select(s => s.Key))}); asking the player");
-        Changed(nameof(ShowOldSavePrompt));
-        Changed(nameof(OldSavePromptText));
     }
 
-    /// <summary>The prompt's "Go to PROFILES": closes it (not dismissed: it asks again at the next open while one is newer).</summary>
-    public void OldSavePromptGoToProfiles()
-    {
-        _oldSavePrompt = false;
-        OpenProfiles();
-        if (ShowSaveManager) SavesHome();
-        Changed(nameof(ShowOldSavePrompt));
-    }
-
-    /// <summary>The prompt's "Dismiss": never shown again for this account on this PC.</summary>
-    public void DismissOldSavePrompt()
-    {
-        _oldSavePrompt = false;
-        try { new OldSavePromptStore(_stateDirectory).Dismiss(OldSaveAccount); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Log("saves: the prompt's dismissal was not kept: " + e.GetType().Name); }
-        Changed(nameof(ShowOldSavePrompt));
-    }
-
-    /// <summary>A cloud row's "Export to a file…": the export screen of that line.</summary>
+    /// <summary>A cloud row's "Export to a file…": the launcher's folder picker for that line; the pick runs the export.</summary>
     public void ExportOldSave(OldSaveRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
         if (row.Save.Line is not { } line) return;
-        OpenOldNoobExport(line);
+        PickOldNoobExportFolder(line);
+    }
+
+    /// <summary>A row of this PC's "Open the old folder": Explorer on it (nothing in it is changed).</summary>
+    public void OpenOldSaveFolder(OldSaveRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (_install is not { } install || GameOf(row.Save.Game) is not { } game) { Message = S["play.setup_needed"]; return; }
+        var folder = CloudSaveFiles.ProfileDir(AzimuthSaves.SavesRoot(install.Root, game), row.Save.Xuid);
+        if (!Directory.Exists(folder)) { Message = S.Format("export.folder_gone", ("folder", folder)); return; }
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true })?.Dispose(); }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { Log("saves: Explorer not opened: " + e.GetType().Name); }
     }
 
     /// <summary>
-    /// "Move to my Azimuth save": refused while the game runs; under the busy overlay, the whole Azimuth save of the row's game is copied aside
+    /// "Copy into my Azimuth save": refused while the game runs; under the busy overlay, the whole Azimuth save of the row's game is backed up
     /// (dated, verified), then the old save is installed onto it. The result names the backup's exact path; the source is never changed.
     /// </summary>
     internal async Task MoveOldSaveAsync(OldSaveRow row)
@@ -189,7 +152,7 @@ public sealed partial class ShellViewModel
             {
                 if (save.Source == OldSaveSource.ThisPc)
                 {
-                    result = await Task.Run(() => mover.MoveFromThisPc(save.Xuid, path => Log("saves: Azimuth save backed up before the move: " + path), profile, reason));
+                    result = await Task.Run(() => mover.MoveFromThisPc(save.Xuid, path => Log("saves: Azimuth save backed up before the copy: " + path), profile, reason));
                 }
                 else
                 {
@@ -197,20 +160,19 @@ public sealed partial class ShellViewModel
                     var api = new SavesApiClient(Http, savesOrigin!, ClientHeader, session.CareerGame(game.Id), game.Saves.Bundle);
                     var access = await session.Tokens.AccessAsync(CancellationToken.None);
                     result = await Task.Run(() => mover.MoveFromCloudAsync(api, access, save.Line!, game.Saves.Bundle,
-                        path => Log("saves: Azimuth save backed up before the move: " + path), profile, reason));
+                        path => Log("saves: Azimuth save backed up before the copy: " + path), profile, reason));
                 }
             }
             catch (Exception e) when (e is HttpRequestException or TaskCanceledException or ApiException)
             {
-                Log("saves: old save not moved: " + e.GetType().Name);
-                Message = _oldSaveResult = S["oldsave.failed_unreachable"];
-                Changed(nameof(OldSaveResultText)); Changed(nameof(HasOldSaveResult));
+                Log("saves: old save not copied: " + e.GetType().Name);
+                SetOldSaveResult(S["oldsave.failed_unreachable"]);
                 return;
             }
-            Log($"saves: old save {save.Key} → Azimuth {result.Outcome} r{result.Revision} {result.Code}");
-            _oldSaveResult = result.Outcome switch
+            Log($"saves: old Noob save {save.Key} → Azimuth {result.Outcome} r{result.Revision} {result.Code}");
+            SetOldSaveResult(result.Outcome switch
             {
-                OldSaveMoveOutcome.Moved => S.Format("oldsave.moved", ("mode", S["sm.noob"]), ("name", save.Gamertag), ("source", source), ("game", GameName(game.Id)), ("backup", BackupText(result))),
+                OldSaveMoveOutcome.Moved => S.Format("export.copied", ("name", save.Gamertag), ("source", source), ("game", GameName(game.Id)), ("backup", BackupText(result))),
                 OldSaveMoveOutcome.NotAzimuth => S.Format("oldsave.not_azimuth", ("folder", AzimuthSaves.FolderFor(save.Xuid))),
                 OldSaveMoveOutcome.GameRunning when result.BackupPath is not null => S.Format("oldsave.stopped_running", ("backup", BackupText(result))),
                 OldSaveMoveOutcome.GameRunning => S["saves.game_running"],
@@ -218,22 +180,27 @@ public sealed partial class ShellViewModel
                 OldSaveMoveOutcome.BackupFailed => S.Format("oldsave.backup_failed", ("reason", result.Message ?? result.Code ?? "?")),
                 _ when result.BackupPath is not null => S.Format("oldsave.failed", ("reason", result.Message ?? result.Code ?? "?"), ("backup", BackupText(result))),
                 _ => S.Format("oldsave.failed_nothing", ("reason", result.Code ?? result.Message ?? "?")),
-            };
-            Message = _oldSaveResult;
+            });
             if (result.Outcome == OldSaveMoveOutcome.Moved) _saveScan.Invalidate();
-            Changed(nameof(OldSaveResultText));
-            Changed(nameof(HasOldSaveResult));
         });
-        await RefreshOldSavesAsync(prompt: false);
+        await RefreshOldSavesAsync();
         FillSaveCards();
+        FillPlayBoard(); // PLAY AZIMUTH reads the Azimuth save again (the cached scan was invalidated)
     }
 
-    /// <summary>The history entry's reason in <paramref name="locale"/>: the real source (mode, profile, where it is).</summary>
+    /// <summary>The result under the entry, and the status line.</summary>
+    private void SetOldSaveResult(string text)
+    {
+        Message = _oldSaveResult = text;
+        Changed(nameof(OldSaveResultText));
+        Changed(nameof(HasOldSaveResult));
+    }
+
+    /// <summary>The history entry's reason in <paramref name="locale"/>: the real source (the old Noob profile, where it is).</summary>
     private string OldReason(string locale, OldSave save)
     {
         var s = StringsIn(locale);
-        var where = save.Source == OldSaveSource.Cloud ? s["oldsave.source_cloud"] : s.Format("oldsave.source_pc", ("folder", AzimuthSaves.FolderFor(save.Xuid)));
-        return s.Format("oldsave.reason", ("mode", s["sm.noob"]), ("name", save.Gamertag), ("source", where));
+        return s.Format("export.copy_reason", ("name", save.Gamertag), ("source", OldSourceText(s, save)));
     }
 
     /// <summary>

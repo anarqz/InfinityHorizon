@@ -218,12 +218,13 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
     </DataTemplate>
-    <!-- OD-239: the AZIMUTH profile's old saves (its old folder on this PC, the old cloud line): one row each, "Move to my Azimuth save" (the
-         Azimuth save is copied aside first and its path told), and a cloud one's "Export to a file…" fallback. DataContext: the view model. -->
+    <!-- OD-240: Settings' quiet "Old Noob saves" (an old Noob folder on this PC, an old Noob cloud line), shown only while one exists: "Copy into
+         my Azimuth save" (the Azimuth save is backed up first and its path told), a cloud one's "Export to a file…", a folder's "Open the old
+         folder". DataContext: the view model. -->
     <DataTemplate x:Key="OldSavesList">
-      <StackPanel Visibility="{Binding HasOldSaves, Converter={StaticResource Visible}}">
-        <TextBlock Text="{Binding S[oldsave.title]}" FontSize="18" FontWeight="Bold" />
-        <TextBlock Text="{Binding S[oldsave.sub]}" Style="{StaticResource SmHint}" Margin="0,4,0,10" TextWrapping="Wrap" />
+      <StackPanel>
+        <TextBlock Text="{Binding S[export.old_title]}" FontSize="18" FontWeight="Bold" />
+        <TextBlock Text="{Binding S[export.old_sub]}" Style="{StaticResource SmHint}" Margin="0,4,0,10" TextWrapping="Wrap" />
         <ItemsControl ItemsSource="{Binding OldSaveRows}" Focusable="False">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
@@ -232,8 +233,10 @@
                   <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
                     <Button Content="{Binding DataContext.S[export.pick], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
                             Margin="0,0,8,0" Click="OnExportOldSave" Visibility="{Binding CanExport, Converter={StaticResource Visible}}"
-                            IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
-                    <Button Content="{Binding DataContext.S[oldsave.move], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
+                            IsEnabled="{Binding DataContext.CanExportOldNoob, RelativeSource={RelativeSource AncestorType=Window}}" />
+                    <Button Content="{Binding DataContext.S[export.open_folder], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
+                            Margin="0,0,8,0" Click="OnOpenOldSaveFolder" Visibility="{Binding CanOpenFolder, Converter={StaticResource Visible}}" />
+                    <Button Content="{Binding DataContext.S[export.copy], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
                             Click="OnMoveOldSave" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
                   </StackPanel>
                   <StackPanel VerticalAlignment="Center">
@@ -795,19 +798,6 @@
             </StackPanel>
           </Border>
           </Grid>
-          <!-- OD-239: at launcher open, an old save of the AZIMUTH profile is newer than the Azimuth save: PROFILES moves it; Dismiss is kept per account. -->
-          <Grid x:Name="OldSavePrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowOldSavePrompt, Converter={StaticResource Visible}}">
-          <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
-            <StackPanel>
-              <TextBlock Text="{Binding S[oldsave.prompt_title]}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" TextWrapping="Wrap" />
-              <TextBlock Text="{Binding OldSavePromptText}" TextWrapping="Wrap" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14" />
-              <WrapPanel>
-                <Button Content="{Binding S[oldsave.prompt_go]}" Click="OnOldSavePromptGo" Style="{StaticResource AccentButtonStyle}" Padding="16,6" Margin="0,0,10,8" />
-                <Button Content="{Binding S[oldsave.prompt_dismiss]}" Click="OnOldSavePromptDismiss" Padding="16,6" Margin="0,0,0,8" />
-              </WrapPanel>
-            </StackPanel>
-          </Border>
-          </Grid>
           <!-- OD-133: a restored career still waiting for the cloud (the Play stopped), or an undo owed: the way out, nothing deleted. -->
           <Grid x:Name="RestoreWaitingPrompt" Panel.ZIndex="5" Background="{StaticResource InfinityBackground}" Visibility="{Binding ShowRestoreWaiting, Converter={StaticResource Visible}}">
           <Border Style="{StaticResource Card}" Padding="24,20" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -1355,6 +1345,8 @@
                               Click="OnOpenManageSaves" IsEnabled="{Binding Idle}" />
                       <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="{Binding S[sm.strip.title]}" FontWeight="Bold" />
+                        <!-- OD-240: the account's one Azimuth identity, shown, never chosen -->
+                        <TextBlock Text="{Binding AzimuthStripName}" Style="{StaticResource SmHint}" Visibility="{Binding HasAzimuthStripName, Converter={StaticResource Visible}}" />
                         <TextBlock Text="{Binding AzimuthStripLine}" Style="{StaticResource SmHint}" />
                       </StackPanel>
                     </DockPanel>
@@ -1362,14 +1354,13 @@
                   <Border Style="{StaticResource SmNote}" Margin="9,14,9,0" Visibility="{Binding ShowGameRunningNote, Converter={StaticResource Visible}}">
                     <TextBlock Text="{Binding GameRunningText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
                   </Border>
-                  <!-- OD-239: the AZIMUTH profile's old saves (this PC's old folder, the old cloud line): move one into the Azimuth save -->
-                  <ContentPresenter Margin="9,18,9,0" Content="{Binding}" ContentTemplate="{StaticResource OldSavesList}" />
+
                 </StackPanel>
 
                 <!-- ============ CREATE: a profile of a mode the account has none of ============ -->
                 <StackPanel MaxWidth="620" Visibility="{Binding ShowSavesCreate, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding CreateTitle}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding S[sm.create_sub]}" Style="{StaticResource SmSub}" />
+                  <TextBlock Text="{Binding CreateSub}" Style="{StaticResource SmSub}" />
                   <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" FontSize="16" Padding="10,8"
                            AutomationProperties.Name="{Binding CreateTitle}" />
                   <TextBlock Text="{Binding S[profiles.name_rule]}" FontSize="12" Margin="0,6,0,0" Foreground="{StaticResource InfinityFaint}" />
@@ -1640,39 +1631,6 @@
                   </WrapPanel>
                 </StackPanel>
 
-                <!-- ============ EXPORT (OD-239 items 6-7): the old Noob cloud save to a file, and the old local folder ============ -->
-                <StackPanel MaxWidth="660" Visibility="{Binding ShowSavesExport, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding S[export.title]}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding S[export.sub]}" Style="{StaticResource SmSub}" TextWrapping="Wrap" />
-                  <Border Style="{StaticResource SmCard}" Padding="18,16" Margin="0,0,0,12">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[export.cloud_title]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding ExportLineText}" Style="{StaticResource SmHint}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                      <TextBlock Text="{Binding S[export.cloud_hint]}" Style="{StaticResource SmHint}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                      <WrapPanel Margin="0,12,0,0">
-                        <Button Content="{Binding S[export.pick]}" Background="{x:Static local:SlotBrushes.Noob}" Style="{StaticResource SmPrimary}"
-                                Click="OnPickOldNoobExport" IsEnabled="{Binding CanExportOldNoob}" />
-                      </WrapPanel>
-                      <TextBlock Text="{Binding ExportDoneText}" FontSize="13" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{x:Static local:SlotBrushes.Noob}"
-                                 Visibility="{Binding HasExportDone, Converter={StaticResource Visible}}" />
-                    </StackPanel>
-                  </Border>
-                  <Border Style="{StaticResource SmCard}" Padding="18,16">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[export.folder_title]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding OldNoobFolderText}" Style="{StaticResource SmHint}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                      <TextBlock Text="{Binding S[export.folder_hint]}" Style="{StaticResource SmHint}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                      <WrapPanel Margin="0,12,0,0">
-                        <Button Content="{Binding S[export.open_folder]}" Style="{StaticResource SmButton}" Click="OnOpenOldNoobFolder"
-                                IsEnabled="{Binding OldNoobFolderExists}" />
-                      </WrapPanel>
-                    </StackPanel>
-                  </Border>
-                  <WrapPanel Margin="0,16,0,0">
-                    <Button Content="{Binding S[sm.back_to_saves]}" Style="{StaticResource SmButton}" Click="OnSavesHome" />
-                  </WrapPanel>
-                </StackPanel>
-
                 <!-- ============ DONE ============ -->
                 <StackPanel MaxWidth="620" Margin="0,60,0,0" Visibility="{Binding ShowSavesDone, Converter={StaticResource Visible}}">
                   <TextBlock Text="✓" FontSize="40" Foreground="{x:Static local:SlotBrushes.Noob}" HorizontalAlignment="Center" />
@@ -1750,8 +1708,7 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-              <!-- OD-239: the AZIMUTH profile's old saves on this PC, offline too -->
-              <ContentPresenter Margin="0,16,0,0" Content="{Binding}" ContentTemplate="{StaticResource OldSavesList}" />
+
               <Border Style="{StaticResource Card}" Margin="0,16,0,0" Visibility="{Binding ShowNewProfile, Converter={StaticResource Visible}}">
                 <StackPanel>
                   <TextBlock Text="{Binding S[profiles.new]}" Style="{StaticResource SectionTag}" FontSize="12" />
@@ -2246,6 +2203,11 @@
                     <CheckBox Content="{Binding S[presence.toggle_livery]}" IsChecked="{Binding PresenceLivery}" Margin="0,0,18,6" />
                   </WrapPanel>
                 </StackPanel>
+              </Border>
+
+              <!-- OD-240: "Old Noob saves", only while one exists (no startup message, nothing on PLAY or Profiles) -->
+              <Border x:Name="OldNoobSavesCard" Style="{StaticResource Card}" Margin="0,18,0,0" Visibility="{Binding HasOldSaves, Converter={StaticResource Visible}}">
+                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource OldSavesList}" />
               </Border>
             </StackPanel>
           </ScrollViewer>

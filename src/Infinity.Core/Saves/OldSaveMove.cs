@@ -1,7 +1,5 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Infinity.Core.Api;
 using Infinity.Core.Shell;
 
@@ -31,10 +29,10 @@ public sealed record OldSave(OldSaveSource Source, string Game, ulong Xuid, stri
 }
 
 /// <summary>
-/// OD-239: an AZIMUTH profile plays Azimuth's own save (<c>User_9000000000000</c>, the hook redirects the game there). What it played before
-/// stays where it was: the profile's own <c>User_&lt;XUID&gt;</c> folder on this PC and, for an account profile, the old Noob cloud line. This finds
-/// them, and decides the launcher-open prompt: shown when one of them is newer than that game's Azimuth save. Reads files only; the cloud's
-/// times come from the cached <c>/me</c> (no request).
+/// OD-239/OD-240: AZIMUTH plays Azimuth's own save (<c>User_9000000000000</c>, the hook redirects the game there). What a Noob profile played
+/// before stays where it was: its own <c>User_&lt;XUID&gt;</c> folder on this PC and, for an account profile, the old Noob cloud line. This finds
+/// them for the quiet "Old Noob saves" entry in Settings (shown only while one exists; never a startup message). Noob sources only, never a
+/// HARDCORE one. Reads files only; the cloud's times come from the cached <c>/me</c> (no request).
 /// </summary>
 public static class OldSaves
 {
@@ -122,17 +120,6 @@ public static class OldSaves
             .Select(l => new OldSave(OldSaveSource.Cloud, l.Game, Parse(l.Xuid)!.Value, ProfileName.Plain(l.Gamertag), Time(l.SavedAt), Line: l))];
     }
 
-    /// <summary>The time of Azimuth's own save of a game (<c>User_9000000000000</c>'s newest sealed revision), null when there is none.</summary>
-    public static DateTime? AzimuthNewest(string savesRoot)
-    {
-        ArgumentNullException.ThrowIfNull(savesRoot);
-        try
-        {
-            return AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(savesRoot, AzimuthSaves.OfflineXuid)) is { } newest ? RevisionTime(newest) : null;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
-    }
-
     /// <summary>A revision's time: when its commit file was written (what the save picker shows as "last played").</summary>
     public static DateTime RevisionTime(LocalRevision revision)
     {
@@ -140,69 +127,9 @@ public static class OldSaves
         return File.GetLastWriteTimeUtc(Path.Combine(revision.Path, "commit"));
     }
 
-    /// <summary>
-    /// The launcher-open rule (OD-239): per game, the newest old save against that game's Azimuth save (<paramref name="azimuthNewest"/>, by
-    /// game id). True when one is newer, or when the game has no Azimuth save at all. An old save whose time does not read only counts against
-    /// a missing Azimuth save.
-    /// </summary>
-    public static bool AnyNewer(IEnumerable<OldSave> saves, Func<string, DateTime?> azimuthNewest)
-    {
-        ArgumentNullException.ThrowIfNull(saves);
-        ArgumentNullException.ThrowIfNull(azimuthNewest);
-        foreach (var game in saves.GroupBy(s => s.Game, StringComparer.Ordinal))
-        {
-            var newest = game.Max(s => s.SavedAtUtc ?? DateTime.MinValue);
-            if (azimuthNewest(game.Key) is not { } azimuth || newest > azimuth.ToUniversalTime()) return true;
-        }
-        return false;
-    }
-
     private static ulong? Parse(string? xuid) => ulong.TryParse(xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var x) ? x : null;
 
     private static DateTime? Time(string? at) => DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t) ? t.UtcDateTime : null;
-}
-
-/// <summary>
-/// The launcher-open prompt's "Dismiss", per account (<c>old-save-prompt.json</c> in the launcher's state folder): once dismissed it is never
-/// shown again for that account on this PC. A missing or unreadable file is "never dismissed"; it is written whole through a temporary file.
-/// </summary>
-public sealed class OldSavePromptStore(string stateDirectory)
-{
-    public const string FileName = "old-save-prompt.json";
-
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-
-    private sealed record Document(int SchemaVersion, List<string> Dismissed);
-
-    private string File_ => Path.Combine(stateDirectory, FileName);
-
-    public bool IsDismissed(string account)
-    {
-        ArgumentNullException.ThrowIfNull(account);
-        return Read().Contains(account, StringComparer.Ordinal);
-    }
-
-    public void Dismiss(string account)
-    {
-        ArgumentNullException.ThrowIfNull(account);
-        var list = Read();
-        if (list.Contains(account, StringComparer.Ordinal)) return;
-        list.Add(account);
-        Directory.CreateDirectory(stateDirectory);
-        var temp = File_ + ".tmp";
-        File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Document(1, list), Json));
-        File.Move(temp, File_, overwrite: true);
-    }
-
-    private List<string> Read()
-    {
-        try
-        {
-            if (!File.Exists(File_) || new FileInfo(File_).Length > 64 * 1024) return [];
-            return JsonSerializer.Deserialize<Document>(File.ReadAllBytes(File_), Json) is { SchemaVersion: 1, Dismissed: { } list } ? [.. list] : [];
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return []; }
-    }
 }
 
 /// <summary>How a move ended.</summary>

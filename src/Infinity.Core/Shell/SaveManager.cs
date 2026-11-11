@@ -35,9 +35,6 @@ public enum SavesScreen
 
     /// <summary>A finished action: "Back to Saves".</summary>
     Done,
-
-    /// <summary>OD-239: "Export my old Noob save" (the AZIMUTH profile's old cloud line, to a file) and its old local folder.</summary>
-    Export,
 }
 
 /// <summary>
@@ -216,8 +213,8 @@ public enum ResolvePick
 }
 
 /// <summary>
-/// The save slots of a game (§1). <see cref="Noob"/> is the AZIMUTH profile's card on the save home (wire mode <c>noob</c>, OD-239); it has
-/// no slot of its own on Manage, Copy or History: that profile plays <see cref="Azimuth"/>, the player's own Azimuth save.
+/// The save slots of a game (§1). <see cref="Noob"/> is PLAY AZIMUTH's button colour (wire mode <c>noob</c>, OD-239); it has no card on the
+/// save home (OD-240) and no slot of its own on Manage, Copy or History: AZIMUTH plays <see cref="Azimuth"/>, the player's own Azimuth save.
 /// </summary>
 public enum SaveSlot
 {
