@@ -6,7 +6,7 @@ namespace Infinity.Core.Shell;
 /// <summary>The screens of the save manager (SAVE_MANAGER_UX.md §3, §4; the prototype's views).</summary>
 public enum SavesScreen
 {
-    /// <summary>The root: both profile cards of the chosen game and the Azimuth strip.</summary>
+    /// <summary>The root: the HARDCORE and AZIMUTH cards side by side, one row per game under each (the prototype's home).</summary>
     Home,
 
     /// <summary>A new profile (name, mode) for a mode the account has none of.</summary>
@@ -18,8 +18,6 @@ public enum SavesScreen
     /// <summary>Cloud vs this PC, side by side.</summary>
     Resolve,
 
-    /// <summary>The two slots (HARDCORE · Azimuth) with Copy to… and History (OD-239: the Azimuth profile plays Azimuth's own save).</summary>
-    Manage,
 
     /// <summary>Compare → (Check) → Confirm of one copy.</summary>
     Copy,
@@ -49,7 +47,7 @@ public sealed class SavesNav
 
     public bool CanGoBack => _stack.Count > 1;
 
-    /// <summary>Root first: the breadcrumb ("Saves › Manage saves › Copy").</summary>
+    /// <summary>Root first: the breadcrumb ("Saves › History › Copy").</summary>
     public IReadOnlyList<SavesScreen> Trail => _stack;
 
     /// <summary>Opens <paramref name="screen"/> on top; the same screen again is not stacked twice, and Home resets to the root.</summary>
@@ -214,7 +212,7 @@ public enum ResolvePick
 
 /// <summary>
 /// The save slots of a game (§1). <see cref="Noob"/> is PLAY AZIMUTH's button colour (wire mode <c>noob</c>, OD-239); it has no card on the
-/// save home (OD-240) and no slot of its own on Manage, Copy or History: AZIMUTH plays <see cref="Azimuth"/>, the player's own Azimuth save.
+/// save home other than the AZIMUTH card, which shows Azimuth's own save, and no slot of its own on Copy or History: AZIMUTH plays <see cref="Azimuth"/>, the player's own Azimuth save.
 /// </summary>
 public enum SaveSlot
 {
@@ -223,80 +221,6 @@ public enum SaveSlot
     Noob,
 }
 
-/// <summary>Why a "Copy to…" destination is not offered as a copy (each shown disabled with its reason, §2.10).</summary>
-public enum CopyBlock
-{
-    /// <summary>Offered: a copy (Compare → Check → Confirm).</summary>
-    None,
-
-
-    /// <summary>The game is running: Azimuth's save is not written now.</summary>
-    GameRunning,
-
-    /// <summary>This PC has no save of the source to copy.</summary>
-    NoSource,
-
-    /// <summary>The account has no profile of the destination's mode.</summary>
-    NoProfile,
-
-    /// <summary>A copy into an existing cloud career: no route yet (CAREERS §6.13, needs MACBOOK).</summary>
-    NeedsServer,
-
-    /// <summary>The game keeps no cloud saves (FM5 v1).</summary>
-    NoCloudSaves,
-
-    /// <summary>The game allows no HARDCORE career (FM5 until M11, §6.2).</summary>
-    NotOffered,
-
-    /// <summary>HARDCORE never starts from this PC's own Azimuth save (B2).</summary>
-    NoHardcoreFromLocal,
-}
-
-/// <summary>One destination of "Copy to…".</summary>
-public sealed record CopyTarget(SaveSlot To, CopyBlock Block)
-{
-    public bool Enabled => Block == CopyBlock.None;
-}
-
-/// <summary>What the slots hold on this PC and the account, for <see cref="CopyTargets.Of"/>.</summary>
-public sealed record SlotFacts(
-    bool HardcoreProfile,
-    bool HardcoreCareer,
-    bool HardcoreLocal,
-    bool AzimuthLocal,
-    bool GameRunning,
-    bool CloudSaves,
-    bool HardcoreCareers);
-
-/// <summary>
-/// "Copy to…" (§2.1): the destinations of a slot, the valid ones enabled. Only Azimuth (this PC) is written by a copy today; a cloud career
-/// that exists cannot be written by the launcher until the server's copy route exists (CAREERS §6.13), and a HARDCORE career never starts
-/// from this PC's own Azimuth save (B2). OD-239: there are two slots, HARDCORE and Azimuth.
-/// </summary>
-public static class CopyTargets
-{
-    public static IReadOnlyList<CopyTarget> Of(SaveSlot from, SlotFacts f)
-    {
-        ArgumentNullException.ThrowIfNull(f);
-        if (from == SaveSlot.Noob) throw new ArgumentOutOfRangeException(nameof(from), "the Azimuth profile has no slot of its own (OD-239)");
-        var to = from == SaveSlot.Hardcore ? SaveSlot.Azimuth : SaveSlot.Hardcore;
-        return [new CopyTarget(to, Block(to, f))];
-    }
-
-    private static CopyBlock Block(SaveSlot to, SlotFacts f)
-    {
-        if (to == SaveSlot.Azimuth)
-        {
-            if (f.GameRunning) return CopyBlock.GameRunning;
-            return f.HardcoreLocal ? CopyBlock.None : CopyBlock.NoSource;
-        }
-        if (!f.HardcoreProfile) return CopyBlock.NoProfile;
-        if (!f.HardcoreCareers) return CopyBlock.NotOffered;
-        if (!f.CloudSaves) return CopyBlock.NoCloudSaves;
-        if (f.HardcoreCareer) return CopyBlock.NeedsServer;
-        return CopyBlock.NoHardcoreFromLocal;
-    }
-}
 /// <summary>One line of the HARDCORE check's step list (§2.5).</summary>
 public enum CheckStepState
 {

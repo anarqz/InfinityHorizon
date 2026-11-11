@@ -155,14 +155,14 @@ public sealed class PlaySelection(string stateDirectory)
 }
 
 /// <summary>
-/// Owner 2026-11-08 (PROFILES_ROWS): the Profiles page's two kinds of ⋯ menu. A profile card's ⋯ holds only the profile's own actions
-/// (<see cref="ProfileLevel"/>); each game row under it has its own ⋯ with that game's CAREER actions (<see cref="CareerLevel"/>), which open
-/// the existing screens with the row's game set. No tool plays or starts a career (a Hardcore career still starts from another profile on its
-/// own creation, CR-S52). OD-240: only HARDCORE profiles have a card; AZIMUTH is one identity with nothing to manage, so no row of it exists.
+/// Owner 2026-11-08 (PROFILES_ROWS), T-1111-AZIMUTH (the prototype's two peer cards): the Profiles page's ⋯ menus. A card's ⋯ holds only the
+/// profile's own actions (<see cref="ProfileLevel"/>; the AZIMUTH card only Help Sensei, its one identity has nothing to rename or delete);
+/// each game row under the HARDCORE card has its own ⋯ with that game's CAREER actions (<see cref="CareerLevel"/>), and each row under the
+/// AZIMUTH card the tools of this PC's Azimuth save of that game (<see cref="AzimuthLevel"/>: what "Manage saves" held, plus the old Noob saves
+/// of OD-240 item 5). Every one opens the existing screen with the row's game set. No tool plays or starts a career.
 /// </summary>
 public static class ProfileTools
 {
-    public const string ManageSaves = "manage";
     public const string History = "history";
     public const string Resolve = "resolve";
     public const string CopyTo = "copy-azimuth";
@@ -171,12 +171,25 @@ public static class ProfileTools
     public const string Rename = "rename";
     public const string DeleteCareer = "delete-career";
     public const string DeleteProfile = "delete-profile";
+    /// <summary>An AZIMUTH row: the HARDCORE profile's save of the game onto this PC's Azimuth save (backed up first).</summary>
+    public const string CopyFromHardcore = "copy-from-hardcore";
+    /// <summary>An AZIMUTH row: Azimuth's original save of the game back (what is there backed up first).</summary>
+    public const string RestoreOriginal = "restore-original";
+    /// <summary>An AZIMUTH row, one per old Noob save of the game (<c>old-copy:&lt;key&gt;</c>): copy it into the Azimuth save after a backup.</summary>
+    public const string OldCopy = "old-copy";
+    /// <summary>An AZIMUTH row, an old Noob cloud save (<c>old-export:&lt;key&gt;</c>): export it to a file.</summary>
+    public const string OldExport = "old-export";
+    /// <summary>An AZIMUTH row, an old Noob folder on this PC (<c>old-folder:&lt;key&gt;</c>): open it in Explorer.</summary>
+    public const string OldFolder = "old-folder";
 
     /// <summary>The profile card's tools, in the menu's order.</summary>
     public static IReadOnlyList<string> ProfileLevel { get; } = [DeleteProfile, Rename, HelpSensei];
 
-    /// <summary>A game row's career tools, in the menu's order (owner 2026-11-08).</summary>
-    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, History, Resolve, ManageSaves, Download, DeleteCareer];
+    /// <summary>A HARDCORE game row's career tools, in the menu's order (owner 2026-11-08).</summary>
+    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, History, Resolve, Download, DeleteCareer];
+
+    /// <summary>An AZIMUTH game row's tools, in the menu's order (the old-save ones once per old save of the game).</summary>
+    public static IReadOnlyList<string> AzimuthLevel { get; } = [CopyFromHardcore, History, RestoreOriginal, OldCopy, OldExport, OldFolder];
 
     /// <summary>The profile card's menu (whether each is enabled is the page's).</summary>
     /// <param name="canRename">The server allows this profile a rename now (a name change notice): otherwise Rename is not listed.</param>
@@ -190,7 +203,7 @@ public static class ProfileTools
         return list;
     }
 
-    /// <summary>One game row's menu: the career tools that apply to it, in order (whether each is enabled is the page's).</summary>
+    /// <summary>One HARDCORE game row's menu: the career tools that apply to it, in order (whether each is enabled is the page's).</summary>
     /// <param name="started">The profile has a started career of the row's game (its saves can be copied, resolved, downloaded).</param>
     /// <param name="canDownload">Its sync chip allows a download onto this PC (a game with cloud saves).</param>
     /// <param name="canDeleteCareer">A career of the game exists to delete.</param>
@@ -200,13 +213,41 @@ public static class ProfileTools
         if (started) list.Add(CopyTo);
         list.Add(History);
         if (started) list.Add(Resolve);
-        list.Add(ManageSaves);
         if (started && canDownload) list.Add(Download);
         if (canDeleteCareer) list.Add(DeleteCareer);
         return list;
     }
-}
 
+    /// <summary>
+    /// One AZIMUTH game row's menu, in order: Copy from HARDCORE (only while the account has a HARDCORE profile that can have a career of the
+    /// game), History, Restore Azimuth's original, then for each old Noob save of the game its copy and its export (a cloud one) or its
+    /// folder (one on this PC). Whether each is enabled is the page's (the game running, nothing to copy, no original recorded).
+    /// </summary>
+    /// <param name="hardcoreCareers">The account has a HARDCORE profile and the game allows HARDCORE careers.</param>
+    /// <param name="oldSaves">The old Noob saves of the row's game: their keys and whether each is a cloud one.</param>
+    public static IReadOnlyList<string> AzimuthMenu(bool hardcoreCareers, IReadOnlyList<(string Key, bool Cloud)> oldSaves)
+    {
+        ArgumentNullException.ThrowIfNull(oldSaves);
+        var list = new List<string>();
+        if (hardcoreCareers) list.Add(CopyFromHardcore);
+        list.Add(History);
+        list.Add(RestoreOriginal);
+        foreach (var (key, cloud) in oldSaves)
+        {
+            list.Add(OldCopy + ":" + key);
+            list.Add((cloud ? OldExport : OldFolder) + ":" + key);
+        }
+        return list;
+    }
+
+    /// <summary>The tool of an AZIMUTH menu id (<c>old-copy:&lt;key&gt;</c> is <see cref="OldCopy"/>) and its old save's key (null for the others).</summary>
+    public static (string Tool, string? Key) Split(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        var at = id.IndexOf(':', StringComparison.Ordinal);
+        return at < 0 ? (id, null) : (id[..at], id[(at + 1)..]);
+    }
+}
 /// <summary>One game row of a profile card (owner 2026-11-08): the catalog game and the profile's career of it (null card: the profile is not on the board of that game).</summary>
 public sealed record ProfileGameFacts(GameDefinition Game, BoardCard? Card)
 {

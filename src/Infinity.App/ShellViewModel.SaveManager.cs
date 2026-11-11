@@ -42,21 +42,28 @@ public sealed record MenuAction(string Id, string Label, bool Enabled, string? R
     public bool HasReason => !string.IsNullOrEmpty(Reason);
 }
 
-/// <summary>A profile card of the save manager's home (SAVE_MANAGER_UX.md §4 "Saves (home)"), or the explainer of a missing mode.</summary>
+/// <summary>
+/// One of the two peer cards of the save manager's home (the prototype's "the vanilla way" and "the sandbox way"): the HARDCORE profile, or
+/// the AZIMUTH identity with this PC's Azimuth save of each game; without either, that mode's explainer.
+/// </summary>
 public sealed record SaveCard(SaveSlot Slot, string ModeLabel)
 {
+    /// <summary>The HARDCORE profile's row (null on the AZIMUTH card, whose identity is <see cref="Name"/>).</summary>
     public ProfileRow? Row { get; init; }
+    /// <summary>The AZIMUTH identity's gamertag (OD-240: shown, never chosen); null on the HARDCORE card.</summary>
+    public string? Name { get; init; }
     public Brush Accent => SlotBrushes.Accent(Slot);
     public Brush Soft => SlotBrushes.Soft(Slot);
-    public bool IsExplainer => Row is null;
-    public bool IsProfile => Row is not null;
-    public string Gamertag => Row?.Gamertag ?? string.Empty;
+    public bool IsAzimuth => Slot == SaveSlot.Azimuth;
+    public bool IsProfile => Row is not null || Name is not null;
+    public bool IsExplainer => !IsProfile;
+    public string Gamertag => Row?.Gamertag ?? Name ?? string.Empty;
     public string Initial => Gamertag.Length > 0 ? Gamertag[..1].ToUpperInvariant() : "?";
     public string Hint { get; init; } = string.Empty;
     public bool Selected { get; init; }
     /// <summary>The profile's own ⋯ (Delete profile, Rename when allowed, Help Sensei): no career action (owner 2026-11-08).</summary>
     public bool MenuOpen { get; init; }
-    public bool HasMenu => Row is not null && Menu.Count > 0;
+    public bool HasMenu => IsProfile && Menu.Count > 0;
     public IReadOnlyList<MenuAction> Menu { get; init; } = [];
     /// <summary>Owner 2026-11-08: one row per catalog game under the header, each with its career line, sync chip and career ⋯.</summary>
     public IReadOnlyList<ProfileGameRow> Games { get; init; } = [];
@@ -72,11 +79,15 @@ public sealed record SaveCard(SaveSlot Slot, string ModeLabel)
 }
 
 /// <summary>
-/// Owner 2026-11-08 (PROFILES_ROWS): one catalog game under a profile card: the cover (the Mount/Logo.png resolver, else the styled tile),
-/// the game's name, "LV 15 · CR 15,858 · 22h" or "No career data yet", that game's sync chip, and a ⋯ with its career actions.
+/// Owner 2026-11-08 (PROFILES_ROWS), T-1111-AZIMUTH: one catalog game under a card, the same fields on both cards: the cover (the
+/// Mount/Logo.png resolver, else the styled tile), the game's name, "LV 15 · CR 15,858 · modified Nov 4, 22:40" (an unknown field "—", no
+/// save or career a clear empty state in the same place), that game's chip, and a ⋯ with its tools (a HARDCORE career's, or this PC's Azimuth
+/// save's on the AZIMUTH card, <see cref="Azimuth"/>).
 /// </summary>
 public sealed record ProfileGameRow(string ProfileId, string GameId, string Name, string ShortCode, Brush Accent, Brush Soft, string Line)
 {
+    /// <summary>A row of the AZIMUTH card: its ⋯ holds this PC's Azimuth save tools of the game (<see cref="ProfileTools.AzimuthLevel"/>).</summary>
+    public bool Azimuth { get; init; }
     public ImageSource? Cover { get; init; }
     public bool HasCover => Cover is not null;
     public bool HasCareerData { get; init; }
@@ -91,19 +102,6 @@ public sealed record ProfileGameRow(string ProfileId, string GameId, string Name
     public IReadOnlyList<MenuAction> Menu { get; init; } = [];
     public bool HasMenu => Menu.Count > 0;
     internal string MenuKey => ProfileId + "|" + GameId;
-}
-
-/// <summary>One of the three slots of Manage saves.</summary>
-public sealed record SlotCard(SaveSlot Slot, string Title, string Headline, string Detail)
-{
-    public Brush Accent => SlotBrushes.Accent(Slot);
-    public Brush Soft => SlotBrushes.Soft(Slot);
-    public IReadOnlyList<MenuAction> Actions { get; init; } = [];
-    public string Reasons { get; init; } = string.Empty;
-    public bool HasReasons => !string.IsNullOrEmpty(Reasons);
-    public bool IsAzimuth => Slot == SaveSlot.Azimuth;
-    public bool CanRestoreOriginal { get; init; }
-    public string RestoreOriginalNote { get; init; } = string.Empty;
 }
 
 /// <summary>A line of the History timeline: a local entry or a cloud revision.</summary>
@@ -147,11 +145,13 @@ public sealed record CheckStepRow(string Text, CheckStepState State)
 }
 
 /// <summary>
-/// SAVE_MANAGER_UX.md (OD-207) as the Profiles page under OD-214, owner 2026-11-08 (PROFILES_ROWS): the HARDCORE profile is a card (mode,
-/// avatar, gamertag, a ⋯ of profile actions) with one row per catalog game under it (cover, name, level · credits · hours or "No career
-/// data yet", that game's chip, a ⋯ of its career actions); without one, its explainer. OD-240: AZIMUTH has no card (one identity, nothing to
-/// manage); the Azimuth strip names its gamertag and has a line per game on this PC. A row's action sets its game (PLAY's selection follows) and opens the existing screen. Every non-root screen has ‹ Back and a breadcrumb
-/// (Esc does the same). Copies write only Azimuth's save on this PC, each one archived first in the launcher's own history (§7); a copy into
+/// SAVE_MANAGER_UX.md (OD-207) as the Profiles page under OD-214, owner 2026-11-08 (PROFILES_ROWS), T-1111-AZIMUTH (the prototype's two
+/// peer cards): HARDCORE ("the vanilla way") and AZIMUTH ("the sandbox way") side by side, the same structure: mode, avatar, gamertag, a ⋯,
+/// then one row per catalog game with the same fields (level · credits · modified, or an empty state) and its own ⋯. HARDCORE's rows carry
+/// its career tools; AZIMUTH's (OD-240's one identity, nothing to create or delete) this PC's Azimuth save of each game, read locally, and
+/// what "Manage saves" and Settings' "Old Noob saves" held: Copy from HARDCORE, History, Restore Azimuth's original, the old Noob saves.
+/// A mode the account has none of is its explainer. A row's action sets its game (PLAY's selection follows) and opens the existing screen.
+/// Every non-root screen has ‹ Back and a breadcrumb (Esc does the same). Copies write only Azimuth's save on this PC, each one archived first in the launcher's own history (§7); a copy into
 /// a cloud career that exists, the server's per-revision reasons and Delete-from-history wait for the server (needs MACBOOK, see
 /// docs/launcher/batch-1107/ITEM10_DESIGN_GAPS.md).
 /// </summary>
@@ -177,7 +177,6 @@ public sealed partial class ShellViewModel
     internal bool SavesForceRunning { get; set; }
 
     public ObservableCollection<SaveCard> SaveCards { get; } = [];
-    public ObservableCollection<SlotCard> SlotCards { get; } = [];
     public ObservableCollection<HistoryRow> HistoryRows { get; } = [];
 
     private CultureInfo SavesCulture => CultureInfo.GetCultureInfo(S.Locale.StartsWith("pt", StringComparison.OrdinalIgnoreCase) ? "pt-BR" : "en-US");
@@ -203,7 +202,6 @@ public sealed partial class ShellViewModel
     public bool ShowSavesCreate => ShowSaveManager && SavesCurrent == SavesScreen.Create;
     public bool ShowSavesStart => ShowSaveManager && SavesCurrent == SavesScreen.Start;
     public bool ShowSavesResolve => ShowSaveManager && SavesCurrent == SavesScreen.Resolve;
-    public bool ShowSavesManage => ShowSaveManager && SavesCurrent == SavesScreen.Manage;
     public bool ShowSavesCopy => ShowSaveManager && SavesCurrent == SavesScreen.Copy;
     public bool ShowSavesHistory => ShowSaveManager && SavesCurrent == SavesScreen.History;
     public bool ShowSavesDelete => ShowSaveManager && SavesCurrent == SavesScreen.Delete;
@@ -214,7 +212,7 @@ public sealed partial class ShellViewModel
 
     private string ScreenTitle(SavesScreen screen) => S["sm.crumb." + screen.ToString().ToLowerInvariant()];
 
-    /// <summary>The breadcrumb before the current screen ("Saves › Manage saves › "), empty at the root.</summary>
+    /// <summary>The breadcrumb before the current screen ("FH2  ›  History  ›  "), empty at the root.</summary>
     public string SavesTrail
     {
         get
@@ -278,25 +276,11 @@ public sealed partial class ShellViewModel
 
     public void OpenSavesHelp() => SavesGo(SavesScreen.Help);
 
-    public void OpenManageSaves()
-    {
-        RefreshGameRunning();
-        FillSlotCards();
-        SavesGo(SavesScreen.Manage);
-    }
 
     // ------------------------------------------------------------------ home (§4)
 
     public string SavesSubtitle => S["sm.subtitle"];
 
-    public bool SavesEmpty => _session?.Me?.Players is { } players && !players.Any(p => p.Status == "active");
-
-    public string AzimuthStripLine { get; private set; } = string.Empty;
-
-    /// <summary>OD-240: "Plays under your Azimuth gamertag Nina" (the account's one identity, never a choice), empty without one.</summary>
-    public string AzimuthStripName { get; private set; } = string.Empty;
-
-    public bool HasAzimuthStripName => AzimuthStripName.Length > 0;
 
     public bool ShowGameRunningNote => _gameRunning && ShowSaveManager;
 
@@ -321,13 +305,14 @@ public sealed partial class ShellViewModel
         if (now == _gameRunning) return;
         _gameRunning = now;
         if (!notify) return;
-        if (On(SavesScreen.Manage)) FillSlotCards();
+        if (On(SavesScreen.Home)) FillSaveCards();
         ChangedSaves();
     }
 
     /// <summary>
-    /// The cards of the home, rebuilt from <see cref="ProfileRows"/>: the HARDCORE profile (missing: its explainer). OD-240: AZIMUTH is one
-    /// identity with nothing to create, choose or delete, so it has no card; the Azimuth strip below shows this PC's save it plays.
+    /// The two cards of the home, rebuilt from <see cref="ProfileRows"/> and this PC's last scan: the HARDCORE profile (missing: its
+    /// explainer), then AZIMUTH (OD-240: the account's one identity, nothing to create, choose or delete; missing: its explainer, which picks
+    /// the gamertag once) with this PC's Azimuth save of each game.
     /// </summary>
     private void FillSaveCards()
     {
@@ -340,12 +325,11 @@ public sealed partial class ShellViewModel
         var hardcore = ProfileRows.Where(r => r.Card?.Player.Mode == "hardcore").ToList();
         if (hardcore.Count == 0) cards.Add(HardcoreExplainer());
         foreach (var row in hardcore) cards.Add(CardOf(row));
+        cards.Add(AzimuthCard());
         // owner 2026-11-10: in place; a card that did not change keeps its drawing (re-adding the four cards was ~80 ms of layout, on any
         // page), and a game switch that changes them all draws one per frame
         _saveCardsWanted = cards;
         SyncSaveCards(cards);
-        AzimuthStripLine = StripLine();
-        AzimuthStripName = AzimuthIdentityName() is { } name ? S.Format("sm.strip.identity", ("name", name)) : string.Empty;
         // owner 2026-11-08 (image 7): the open ⋯ floats over the page; its owner (a card or a game row) and items come from the rebuilt cards
         OpenMenu = cards.Where(c => c.MenuOpen).Select(c => new FloatingMenuView(c, c.Menu)).Concat(
             cards.SelectMany(c => c.Games).Where(g => g.MenuOpen).Select(g => new FloatingMenuView(g, g.Menu))).FirstOrDefault();
@@ -416,6 +400,117 @@ public sealed partial class ShellViewModel
         };
     }
 
+    /// <summary>The AZIMUTH card's ⋯ owner key (it has no profile id of its own on this page).</summary>
+    private const string AzimuthCardKey = "azimuth";
+
+    /// <summary>
+    /// The AZIMUTH card (the prototype's "the sandbox way"), the HARDCORE card's peer: the identity's gamertag (OD-240, shown not chosen), a ⋯
+    /// with Help Sensei, and one row per catalog game with this PC's Azimuth save of it. Without an identity, its explainer, whose button
+    /// picks the gamertag once.
+    /// </summary>
+    private SaveCard AzimuthCard()
+    {
+        if (AzimuthIdentityName() is not { } name)
+            return new SaveCard(SaveSlot.Azimuth, ModeWord(SaveSlot.Azimuth))
+            {
+                ExplainTitle = S["sm.explain.az_title"],
+                ExplainBody = S["sm.explain.az_body"],
+                CreateLabel = S["sm.create_azimuth_title"],
+                CreateEnabled = true,
+            };
+        return new SaveCard(SaveSlot.Azimuth, ModeWord(SaveSlot.Azimuth))
+        {
+            Name = name,
+            Hint = S["sm.hint_azimuth"],
+            MenuOpen = _menu.IsOpen(AzimuthCardKey),
+            Menu = [new MenuAction(ProfileTools.HelpSensei, S["sm.help_link"], true)],
+            Games = AzimuthRowsOf(),
+        };
+    }
+
+    /// <summary>
+    /// The AZIMUTH card's rows: per catalog game, this PC's <c>User_9000000000000</c> as the PLAY card reads it (the cached scan, no request,
+    /// no disk read past it): its credits and when it was modified; no save is the empty state in the same fields. Its level is "—": the
+    /// driver level is the XP on the game's curve, which stays on the server (CR-S81; game-derived, never in the client). Each row's ⋯ holds
+    /// that save's tools (<see cref="AzimuthMenuOf"/>).
+    /// </summary>
+    private List<ProfileGameRow> AzimuthRowsOf()
+    {
+        using var span = Span();
+        var rows = new List<ProfileGameRow>();
+        foreach (var game in GameDefinition.All)
+        {
+            rows.Add(InGame(game, () =>
+            {
+                var art = ArtOf(game);
+                SaveProfile? save = null;
+                var unreadable = false;
+                try { save = AzimuthSave(); }
+                catch (SaveException) { unreadable = true; }
+                var line = save is null
+                    ? RowFields(null, null, S[unreadable ? "sm.row.az_unreadable" : _install is null ? "sm.row.az_no_install" : "sm.row.az_none"])
+                    : RowFields(null, save.Credits, S.Format("sm.modified", ("when", When(save.LastPlayedUtc))));
+                return new ProfileGameRow(AzimuthCardKey, game.Id, art?.Name ?? game.Name, game.ShortName,
+                    TileBrush(game.TileAccent, 0xFF), TileBrush(game.TileAccent, 0x2E), line)
+                {
+                    Azimuth = true,
+                    Cover = art?.Image,
+                    HasCareerData = save is not null,
+                    ChipText = S[save is null ? "sm.chip.az_none" : "sm.chip.az_pc"],
+                    ChipTip = S.Format("sm.chip.az_tip", ("folder", AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid))),
+                    ChipTone = ChipTone.Neutral,
+                    MenuOpen = _menu.IsOpen(AzimuthCardKey + "|" + game.Id),
+                    Menu = AzimuthMenuOf(game),
+                };
+            }));
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// An AZIMUTH row's ⋯ (what "Manage saves" and Settings' "Old Noob saves" held, now by the save they act on): Copy from HARDCORE (its
+    /// save of the game, onto this one after a verified backup), History, Restore Azimuth's original, and per old Noob save of the game its
+    /// copy (after a backup whose path is told) and its export (a cloud one) or its folder (one on this PC). Disabled with the reason when
+    /// it cannot run now (the game running, nothing to copy, no original recorded).
+    /// </summary>
+    private List<MenuAction> AzimuthMenuOf(GameDefinition game)
+    {
+        var running = _gameRunning;
+        var hc = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
+        var old = OldSaveRows.Where(r => r.Save.Game == game.Id).ToList();
+        string? blocked = game.Id == _gate.Game ? null
+            : !Games.Any(g => g.Id == game.Id) ? S["play.tile_not_in_install"]
+            : Playing ? S["play.session_active"] : null;
+        var history = SafeHistory();
+        var list = new List<MenuAction>();
+        foreach (var id in ProfileTools.AzimuthMenu(hc is not null && game.HardcoreCareers, [.. old.Select(r => (r.Save.Key, r.CanExport))]))
+        {
+            var (tool, key) = ProfileTools.Split(id);
+            var row = key is null ? null : old.First(r => r.Save.Key == key);
+            var action = tool switch
+            {
+                ProfileTools.CopyFromHardcore => LocalSaveOf(hc!.Profile.Xuid) is not null
+                    ? new MenuAction(id, S.Format("sm.menu.copy_from_hc", ("name", hc.Gamertag)), !running, running ? S["sm.block.GameRunning"] : null)
+                    : new MenuAction(id, S.Format("sm.menu.copy_from_hc", ("name", hc.Gamertag)), false, S["sm.block.NoSource"]),
+                ProfileTools.History => new MenuAction(id, S["sm.menu.history"], true),
+                ProfileTools.RestoreOriginal => running ? new MenuAction(id, S["sm.restore_original"], false, S["sm.block.GameRunning"])
+                    : history?.HasOriginal == true ? new MenuAction(id, S["sm.restore_original"], true)
+                    : new MenuAction(id, S["sm.restore_original"], false, S.Format("sm.restore_original_none", ("game", game.Name))),
+                ProfileTools.OldCopy => new MenuAction(id, S.Format("export.menu_copy", ("name", row!.Save.Gamertag)), !running, running ? S["sm.block.GameRunning"] : null),
+                ProfileTools.OldExport => new MenuAction(id, S.Format("export.menu_export", ("name", row!.Save.Gamertag)), CanExportOldNoob),
+                _ => new MenuAction(id, S.Format("export.menu_folder", ("name", row!.Save.Gamertag)), true),
+            };
+            list.Add(blocked is not null ? action with { Enabled = false, Reason = blocked } : action);
+        }
+        return list;
+    }
+
+    /// <summary>The row's fields, the same on both cards: "LV 15  ·  CR 15,858  ·  {last}", an unknown number shown "—".</summary>
+    private string RowFields(long? level, long? credits, string last) => S.Format("sm.row.fields",
+        ("level", level?.ToString("N0", SavesCulture) ?? S["sm.unknown"]),
+        ("credits", credits?.ToString("N0", SavesCulture) ?? S["sm.unknown"]),
+        ("last", last));
+
     /// <summary>The profile card's ⋯ (owner 2026-11-08): Delete profile (typed gamertag), Rename when the server allows it, Help Sensei.</summary>
     private List<MenuAction> ProfileMenuOf(ProfileRow row)
     {
@@ -470,20 +565,22 @@ public sealed partial class ShellViewModel
         return rows;
     }
 
-    /// <summary>"LV 15 · CR 15,858 · 22h", or "No career data yet" (a game without the mode's careers says so).</summary>
-    private string GameRowLine(ProfileGameFacts facts, SaveProfile? local = null) =>
-        facts.Card?.State == CareerState.NotOffered ? S.Format("sm.no_hardcore", ("game", facts.Game.Name))
-        : facts.HasCareerData ? PlayStats(facts.Card!.Career)
-        : local is not null ? LocalRowLine(facts.Game, local)
-        : S["sm.row.no_data"];
-
-    /// <summary>"Save on this PC · CR 15,858 · not uploaded yet" (a game without cloud saves: no upload part); no level, which only the server derives (CR-S81).</summary>
-    private string LocalRowLine(GameDefinition game, SaveProfile local)
+    /// <summary>
+    /// A HARDCORE row's fields (the AZIMUTH row's too, <see cref="RowFields"/>): the server's level and credits and when the cloud save was
+    /// made; a save on this PC not uploaded yet gives its credits and time (no level: only the server derives it, CR-S81); otherwise the
+    /// empty state in the same place ("no career data yet", or the game has no HARDCORE careers).
+    /// </summary>
+    private string GameRowLine(ProfileGameFacts facts, SaveProfile? local = null)
     {
-        var key = game.CloudSaves ? "sm.row.local" : "sm.row.local_cloudless";
-        return local.Credits is { } credits
-            ? S.Format(key + "_credits", ("credits", credits.ToString("N0", SavesCulture)))
-            : S[key];
+        if (facts.Card?.State == CareerState.NotOffered) return RowFields(null, null, S.Format("sm.no_hardcore", ("game", facts.Game.Name)));
+        if (facts.HasCareerData && facts.Card!.Career!.Progress is { } p)
+        {
+            var at = facts.Card.Career.Cloud?.SavedAt ?? p.SyncedAt;
+            return RowFields(p.Level, p.Credits, at is null ? S["sm.row.cloud"] : S.Format("sm.modified", ("when", When(at))));
+        }
+        if (local is not null)
+            return RowFields(null, local.Credits, S.Format(facts.Game.CloudSaves ? "sm.row.local_when" : "sm.modified", ("when", When(local.LastPlayedUtc))));
+        return RowFields(null, null, S["sm.row.no_data"]);
     }
 
     /// <summary>The chip's short words on a row (the full sentence is its tooltip, <see cref="ProfileGameRow.ChipTip"/>).</summary>
@@ -520,25 +617,12 @@ public sealed partial class ShellViewModel
                 ProfileTools.History => new MenuAction(id, S["sm.menu.history"], true),
                 ProfileTools.Resolve => SaveChips.NeedsResolve(chip)
                     ? new MenuAction(id, S["sm.resolve"], true) : new MenuAction(id, S["sm.resolve"], false, S["sm.menu.resolve_nothing"]),
-                ProfileTools.ManageSaves => new MenuAction(id, S["sm.manage"], true),
                 ProfileTools.Download => new MenuAction(id, S["sm.menu.download"], !running, running ? S["sm.block.GameRunning"] : null),
                 _ => new MenuAction(id, S.Format("sm.menu.delete_career", ("game", game.Name)), CanAskDeleteProfile, Danger: true),
             };
             list.Add(blocked is not null ? action with { Enabled = false, Reason = blocked } : action);
         }
         return list;
-    }
-
-    private string StatsOf(Career? career)
-    {
-        if (career?.Progress is not { } p) return S["sm.stats_none"];
-        var c = SavesCulture;
-        var parts = new List<string>();
-        if (p.Level is { } level) parts.Add(S.Format("sm.stats_level", ("level", level.ToString("N0", c))));
-        if (p.Credits is { } credits) parts.Add(S.Format("sm.stats_credits", ("credits", credits.ToString("N0", c))));
-        if (p.Cars is { } cars) parts.Add(S.Format("sm.stats_cars", ("cars", cars.ToString(c))));
-        if (p.PlaySeconds is { } seconds) parts.Add(S.Format("sm.stats_hours", ("hours", (seconds / 3600).ToString(c))));
-        return parts.Count == 0 ? S["sm.stats_none"] : string.Join("  ·  ", parts);
     }
 
     /// <summary>The chip of a card, from this PC's files and sync state only (no request).</summary>
@@ -653,29 +737,12 @@ public sealed partial class ShellViewModel
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    /// <summary>Azimuth's own player on this PC (<c>User_9000000000000</c>): what the game loads offline.</summary>
+    /// <summary>Azimuth's own player on this PC (<c>User_9000000000000</c>): the save PLAY AZIMUTH plays, online or offline.</summary>
     private SaveProfile? AzimuthSave()
     {
         if (SavesRootNow is not { } root) return null;
         try { return SavesList(root).FirstOrDefault(s => s.IsOffline); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
-    }
-
-    /// <summary>Owner 2026-11-08: the Azimuth strip, one line per catalog game present in this Azimuth install (its own player's save).</summary>
-    private string StripLine()
-    {
-        using var span = Span();
-        if (_install is null) return S["sm.strip.no_install"];
-        var present = GameDefinition.Available(_install.Root);
-        if (present.Count == 0) return S["sm.strip.no_games"];
-        return string.Join("\n", present.Select(game => InGame(game, () =>
-        {
-            var name = ArtOf(game)?.Name ?? game.Name;
-            if (AzimuthSave() is not { } save) return S.Format("sm.strip.none", ("game", name));
-            return name + "  ·  " + (save.Credits is { } credits
-                ? S.Format("sm.strip.line", ("credits", credits.ToString("N0", SavesCulture)), ("when", When(save.LastPlayedUtc)))
-                : S.Format("sm.strip.line_nocr", ("when", When(save.LastPlayedUtc))));
-        })));
     }
 
     /// <summary>§7.2: the title's saves as first found, once per folder and game, on a worker (owner 2026-11-10: the cards never wait for the copy).</summary>
@@ -741,7 +808,7 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(card);
         if (_busyState.IsBusy) return; // review 3.1.1: no menu opens under a lock or a load
-        var id = card.Row?.Card?.Player.ProfileId;
+        var id = card.IsAzimuth && card.IsProfile ? AzimuthCardKey : card.Row?.Card?.Player.ProfileId;
         if (id is not null) _menu.Toggle(id); else _menu.Close();
         FillSaveCards();
     }
@@ -755,13 +822,19 @@ public sealed partial class ShellViewModel
         FillSaveCards();
     }
 
-    /// <summary>The profile card's ⋯: profile-level actions only (owner 2026-11-08).</summary>
+    /// <summary>A card's ⋯: profile-level actions only (owner 2026-11-08); the AZIMUTH card's is Help Sensei alone.</summary>
     public void SavesMenu(SaveCard card, MenuAction action)
     {
         ArgumentNullException.ThrowIfNull(card);
         ArgumentNullException.ThrowIfNull(action);
-        if (card.Row is not { } row) return;
         if (!action.Enabled) { if (action.Reason is { } why) Message = why; return; }
+        if (card.Row is not { } row)
+        {
+            _menu.Close();
+            if (card.IsAzimuth && action.Id == ProfileTools.HelpSensei) OpenSavesHelp();
+            else FillSaveCards();
+            return;
+        }
         _menu.Close();
         switch (action.Id)
         {
@@ -800,6 +873,7 @@ public sealed partial class ShellViewModel
             Log($"saves: {gameRow.GameId} chosen from a Profiles row");
             Changed(string.Empty);
         }
+        if (gameRow.Azimuth) { await AzimuthRowMenuAsync(action); ChangedSaves(); return; }
         var row = ProfileRows.FirstOrDefault(r => r.Card?.Player.ProfileId == gameRow.ProfileId);
         if (row is null) { FillSaveCards(); return; }
         // OD-240: only a HARDCORE profile has rows (an AZIMUTH one is never offered here)
@@ -816,9 +890,6 @@ public sealed partial class ShellViewModel
             case ProfileTools.Resolve:
                 OpenResolve(row);
                 break;
-            case ProfileTools.ManageSaves:
-                OpenManageSaves();
-                break;
             case ProfileTools.Download:
                 await DownloadCareerAsync(row);
                 FillSaveCards();
@@ -830,13 +901,51 @@ public sealed partial class ShellViewModel
         ChangedSaves();
     }
 
-    /// <summary>The HARDCORE explainer's "Create a HARDCORE profile": the new-profile form.</summary>
+    /// <summary>
+    /// An AZIMUTH row's tool, its game already the current one: each opens the screen or runs the action that "Manage saves" and Settings'
+    /// "Old Noob saves" ran, unchanged (every write backs the Azimuth save up first, verified, and is refused while the game runs).
+    /// </summary>
+    private async Task AzimuthRowMenuAsync(MenuAction action)
+    {
+        var (tool, key) = ProfileTools.Split(action.Id);
+        var old = key is null ? null : OldSaveRows.FirstOrDefault(r => r.Save.Key == key && r.Save.Game == CurrentGame.Id);
+        switch (tool)
+        {
+            case ProfileTools.CopyFromHardcore:
+                if (ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore") is { } hc) OpenCopyFromProfile(SaveSlot.Hardcore, hc);
+                else FillSaveCards();
+                break;
+            case ProfileTools.History:
+                await OpenHistoryAsync(SaveSlot.Azimuth);
+                break;
+            case ProfileTools.RestoreOriginal:
+                await OpenRestoreOriginalAsync();
+                break;
+            case ProfileTools.OldCopy when old is not null:
+                await MoveOldSaveAsync(old);
+                break;
+            case ProfileTools.OldExport when old is not null:
+                ExportOldSave(old);
+                break;
+            case ProfileTools.OldFolder when old is not null:
+                OpenOldSaveFolder(old);
+                break;
+            default:
+                FillSaveCards(); // the old save went away meanwhile
+                break;
+        }
+    }
+
+    /// <summary>
+    /// An explainer's button: "Create a HARDCORE profile" opens the new-profile form; AZIMUTH's "Pick your Azimuth gamertag" the same form for
+    /// the account's one identity (OD-240: picked once).
+    /// </summary>
     public void OpenCreateProfile(SaveCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
-        if (!card.CreateEnabled || card.Slot != SaveSlot.Hardcore) return;
-        _createMode = "hardcore";
-        NewHardcore = true;
+        if (!card.CreateEnabled || !card.IsExplainer) return;
+        _createMode = card.IsAzimuth ? "noob" : "hardcore";
+        NewHardcore = !card.IsAzimuth;
         SavesGo(SavesScreen.Create);
     }
 
@@ -849,14 +958,6 @@ public sealed partial class ShellViewModel
     public string CreateSub => S[_createMode == "hardcore" ? "sm.create_sub" : "sm.create_azimuth_sub"];
 
     public Brush CreateAccent => SlotBrushes.Accent(_createMode == "hardcore" ? SaveSlot.Hardcore : SaveSlot.Noob);
-
-    private SlotFacts Facts()
-    {
-        var hc = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
-        return new SlotFacts(
-            hc is not null, hc?.Card?.CareerRow is not null, hc is not null && LocalSaveOf(hc.Profile.Xuid) is not null,
-            AzimuthSave() is not null, _gameRunning, CurrentGame.FullFeatures, CurrentGame.HardcoreCareers);
-    }
 
     // ------------------------------------------------------------------ Start (§2.6, OD-214)
 
@@ -980,111 +1081,13 @@ public sealed partial class ShellViewModel
 
     private static string ModeWordIn(ProfileRow row) => row.Hardcore ? "HARDCORE" : "AZIMUTH";
 
-    // ------------------------------------------------------------------ Manage saves (§4)
-
-    public string ManageSub => S.Format("sm.manage_sub", ("game", GameLabel));
-
-    /// <summary>"N entries · X MB": read on a worker when Manage saves fills (owner 2026-11-10: a getter never reads every entry.json).</summary>
-    public string HistorySizeText { get; private set; } = string.Empty;
-
-    private int _historySizeRead;
-
-    private async Task RefreshHistorySizeAsync()
-    {
-        var read = ++_historySizeRead;
-        LocalHistory history;
-        try { history = History(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
-        var size = await Task.Run(() =>
-        {
-            try
-            {
-                var items = history.List();
-                return ((int Count, long Bytes)?)(items.Count, items.Sum(i => i.Bytes));
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
-        });
-        if (read != _historySizeRead) return;
-        HistorySizeText = size is { } s ? S.Format("sm.history_size", ("count", s.Count.ToString(SavesCulture)), ("size", Size(s.Bytes))) : string.Empty;
-        Changed(nameof(HistorySizeText));
-    }
-
     private string Size(long bytes) => bytes >= 1 << 20 ? (bytes / 1048576.0).ToString("0.0", SavesCulture) + " MB"
         : bytes >= 1024 ? (bytes / 1024.0).ToString("0", SavesCulture) + " KB" : bytes.ToString(SavesCulture) + " B";
-
-    private void FillSlotCards()
-    {
-        using var span = Span();
-        SlotCards.Clear();
-        var facts = Facts();
-        var needsServer = false;
-        // OD-239: two slots; the AZIMUTH profile plays the Azimuth slot (the player's own save) and has no cloud slot
-        foreach (var slot in new[] { SaveSlot.Hardcore, SaveSlot.Azimuth })
-        {
-            var row = slot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
-            var title = slot == SaveSlot.Azimuth ? S["sm.slot.pc"] : S.Format("sm.slot.cloud", ("mode", ModeWord(slot)));
-            string headline, detail;
-            if (slot == SaveSlot.Azimuth)
-            {
-                var az = AzimuthSave();
-                headline = az is null ? S["sm.slot.no_save"] : az.Credits is { } cr ? S.Format("sm.stats_credits", ("credits", cr.ToString("N0", SavesCulture))) : S["sm.azimuth_name"];
-                detail = az is null ? S.Format("sm.strip.none", ("game", GameLabel)) : S.Format("sm.modified", ("when", When(az.LastPlayedUtc)));
-            }
-            else if (row is null) { headline = S["sm.slot.no_profile"]; detail = string.Empty; }
-            else if (row.Card?.CareerRow is null) { headline = row.Gamertag; detail = row.Card?.State == CareerState.NotOffered ? S.Format("sm.no_hardcore", ("game", GameLabel)) : S.Format("sm.no_career", ("game", GameLabel)); }
-            else
-            {
-                headline = row.Gamertag;
-                detail = StatsOf(row.Card.Career) + (LocalSaveOf(row.Profile.Xuid) is { } local ? "\n" + S.Format("sm.modified", ("when", When(local.LastPlayedUtc))) : "\n" + S["sm.slot.no_save"]);
-            }
-            var targets = CopyTargets.Of(slot, facts);
-            var actions = targets.Select(t => new MenuAction("copy:" + t.To,
-                S.Format("sm.copy_to", ("slot", t.To == SaveSlot.Azimuth ? S["sm.azimuth_short"] : ModeWord(t.To))),
-                t.Enabled, t.Enabled ? null : BlockText(t.Block))).ToList();
-            actions.Add(new MenuAction("history", S["sm.menu.history"], true));
-            // one page note says why copies into existing cloud careers are off (needs MACBOOK); the card lists only its other reasons
-            var reasons = string.Join("\n", targets.Where(t => !t.Enabled && t.Block != CopyBlock.NeedsServer)
-                .Select(t => "• " + S.Format("sm.block.line", ("target", t.To == SaveSlot.Azimuth ? S["sm.azimuth_short"] : ModeWord(t.To)), ("reason", BlockText(t.Block)))));
-            needsServer |= targets.Any(t => t.Block == CopyBlock.NeedsServer);
-            var history = SafeHistory();
-            SlotCards.Add(new SlotCard(slot, title, headline, detail)
-            {
-                Actions = actions,
-                Reasons = reasons,
-                CanRestoreOriginal = slot == SaveSlot.Azimuth && history?.HasOriginal == true && !_gameRunning,
-                RestoreOriginalNote = slot != SaveSlot.Azimuth ? string.Empty : _gameRunning ? S["sm.block.GameRunning"]
-                    : history?.HasOriginal == true ? S["sm.restore_original_hint"] : S.Format("sm.restore_original_none", ("game", GameLabel)),
-            });
-        }
-        ManageServerNote = needsServer ? S["sm.manage_server_note"] : string.Empty;
-        _ = RefreshHistorySizeAsync();
-        Changed(nameof(ManageServerNote));
-        Changed(nameof(HasManageServerNote));
-    }
-
-    public string ManageServerNote { get; private set; } = string.Empty;
-
-    public bool HasManageServerNote => !string.IsNullOrEmpty(ManageServerNote);
 
     private LocalHistory? SafeHistory()
     {
         try { return History(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
-    }
-
-    private string BlockText(CopyBlock block) => S.Format("sm.block." + block, ("game", GameLabel));
-
-    public async Task SlotActionAsync(SlotCard slot, MenuAction action)
-    {
-        ArgumentNullException.ThrowIfNull(slot);
-        ArgumentNullException.ThrowIfNull(action);
-        if (!action.Enabled) { if (action.Reason is { } why) Message = why; return; }
-        if (action.Id == "history") { await OpenHistoryAsync(slot.Slot); return; }
-        if (!Enum.TryParse<SaveSlot>(action.Id["copy:".Length..], out var to)) return;
-        if (CopyTargets.Of(slot.Slot, Facts()).FirstOrDefault(t => t.To == to) is not { Enabled: true }) return;
-        if (to != SaveSlot.Azimuth || slot.Slot != SaveSlot.Hardcore) return;
-        var row = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
-        if (row is not null) OpenCopyFromProfile(slot.Slot, row);
     }
 
     // ------------------------------------------------------------------ Copy (§2.1: Compare → Check → Confirm; only into Azimuth today)
@@ -1510,12 +1513,12 @@ public sealed partial class ShellViewModel
         {
             nameof(SavesCurrent), nameof(ShowSaveManager), nameof(ShowPlainProfiles), nameof(ShowSavesHome), nameof(ShowSavesCreate), nameof(ShowSavesStart),
             nameof(ShowFloatingMenu),
-            nameof(ShowSavesResolve), nameof(ShowSavesManage), nameof(ShowSavesCopy), nameof(ShowSavesHistory), nameof(ShowSavesDelete),
+            nameof(ShowSavesResolve), nameof(ShowSavesCopy), nameof(ShowSavesHistory), nameof(ShowSavesDelete),
             nameof(ShowSavesHelp), nameof(ShowSavesDone), nameof(ShowHelpLink), nameof(SavesCanGoBack), nameof(SavesTrail), nameof(SavesTrailLast),
-            nameof(SavesSubtitle), nameof(SavesEmpty), nameof(AzimuthStripLine), nameof(AzimuthStripName), nameof(HasAzimuthStripName), nameof(ShowGameRunningNote), nameof(GameRunningText),
+            nameof(SavesSubtitle), nameof(ShowGameRunningNote), nameof(GameRunningText),
             nameof(CreateTitle), nameof(CreateSub), nameof(CreateAccent), nameof(ResolveCloud), nameof(ResolvePc), nameof(ResolveTitle), nameof(ResolveHardcore),
             nameof(CopyFromSide), nameof(CopyToSide), nameof(CopyTitle), nameof(CopySub), nameof(CopyNote), nameof(CanConfirmCopy),
-            nameof(CopyBlockedText), nameof(ShowCopyBlocked), nameof(DoneText), nameof(ManageSub), nameof(HistorySizeText),
+            nameof(CopyBlockedText), nameof(ShowCopyBlocked), nameof(DoneText), nameof(OldSaveResultText), nameof(HasOldSaveResult),
             nameof(ShowStartFromProfile), nameof(StartFromProfileLabel), nameof(StartFromProfileHint), nameof(StartFromProfileEnabled),
             nameof(ShowStartFromPc), nameof(StartFromPcHint), nameof(StartFreshHint), nameof(StartAccent),
         }) Changed(name);
