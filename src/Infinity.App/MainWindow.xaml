@@ -208,7 +208,7 @@
               <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                   <TextBlock Text="{Binding Value}" FontWeight="SemiBold" />
-                  <TextBlock Text=" ▲" Foreground="{x:Static local:SlotBrushes.Noob}" Visibility="{Binding Up, Converter={StaticResource Visible}}" />
+                  <TextBlock Text=" ▲" Foreground="{x:Static local:SlotBrushes.Good}" Visibility="{Binding Up, Converter={StaticResource Visible}}" />
                   <TextBlock Text=" ▼" Foreground="{StaticResource SmBad}" Visibility="{Binding Down, Converter={StaticResource Visible}}" />
                 </StackPanel>
                 <TextBlock Text="{Binding Key}" Foreground="{StaticResource InfinityMuted}" />
@@ -400,7 +400,7 @@
                         Stretch="Uniform" VerticalAlignment="Center" />
                   <TextBlock Text="{Binding FriendsCounts}" Margin="7,0,0,0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" />
                 </StackPanel>
-                <Ellipse Width="9" Height="9" Fill="{x:Static local:SlotBrushes.Noob}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-5,-7,0"
+                <Ellipse Width="9" Height="9" Fill="{x:Static local:SlotBrushes.Good}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-5,-7,0"
                          Visibility="{Binding FriendsPending, Converter={StaticResource Visible}}" />
               </Grid>
             </Button>
@@ -482,7 +482,7 @@
                                 <Ellipse.Style>
                                   <Style TargetType="Ellipse">
                                     <Setter Property="Fill" Value="{StaticResource InfinityFaint}" />
-                                    <Style.Triggers><DataTrigger Binding="{Binding Online}" Value="True"><Setter Property="Fill" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger></Style.Triggers>
+                                    <Style.Triggers><DataTrigger Binding="{Binding Online}" Value="True"><Setter Property="Fill" Value="{x:Static local:SlotBrushes.Good}" /></DataTrigger></Style.Triggers>
                                   </Style>
                                 </Ellipse.Style>
                               </Ellipse>
@@ -495,7 +495,7 @@
                                 <TextBlock.Style>
                                   <Style TargetType="TextBlock">
                                     <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
-                                    <Style.Triggers><DataTrigger Binding="{Binding Online}" Value="True"><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Noob}" /></DataTrigger></Style.Triggers>
+                                    <Style.Triggers><DataTrigger Binding="{Binding Online}" Value="True"><Setter Property="Foreground" Value="{x:Static local:SlotBrushes.Good}" /></DataTrigger></Style.Triggers>
                                   </Style>
                                 </TextBlock.Style>
                               </TextBlock>
@@ -506,7 +506,7 @@
                           <!-- a friend's live invite to this account: accept joins in the game's overlay; decline here -->
                           <StackPanel Margin="42,6,0,0" Visibility="{Binding Invited, Converter={StaticResource Visible}}">
                             <TextBlock Text="{Binding DataContext.S[play.friend_invited], RelativeSource={RelativeSource AncestorType=Window}}" FontSize="11"
-                                       Foreground="{x:Static local:SlotBrushes.Noob}" FontWeight="SemiBold" />
+                                       Foreground="{x:Static local:SlotBrushes.Good}" FontWeight="SemiBold" />
                             <WrapPanel Margin="0,4,0,0">
                               <Button Content="{Binding DataContext.S[play.friends_accept], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
                                       Padding="10,4" Margin="0,0,6,0" FontSize="12" Click="OnAcceptFriendInvite" />
@@ -1256,7 +1256,7 @@
                                           <Border DockPanel.Dock="Right" CornerRadius="10" Padding="8,2" Margin="8,0,0,0" Background="#0DFFFFFF" VerticalAlignment="Center"
                                                   MaxWidth="220" Visibility="{Binding HasChip, Converter={StaticResource Visible}}" ToolTip="{Binding ChipTip}">
                                             <StackPanel Orientation="Horizontal">
-                                              <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Noob}"
+                                              <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{x:Static local:SlotBrushes.Good}"
                                                        Visibility="{Binding ChipGood, Converter={StaticResource Visible}}" />
                                               <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{StaticResource SmWarn}"
                                                        Visibility="{Binding ChipWarn, Converter={StaticResource Visible}}" />
@@ -1342,8 +1342,8 @@
                     <Border Style="{StaticResource SmCard}" Margin="0,0,9,0" DataContext="{Binding ResolveCloud}">
                       <StackPanel>
                         <Grid HorizontalAlignment="Left">
-                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.NoobSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
-                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Noob}" />
+                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.GoodSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
+                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Good}" />
                           </Border>
                           <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
                             <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
@@ -1370,8 +1370,8 @@
                     <Border Style="{StaticResource SmCard}" Margin="9,0,0,0" DataContext="{Binding ResolvePc}">
                       <StackPanel>
                         <Grid HorizontalAlignment="Left">
-                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.NoobSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
-                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Noob}" />
+                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.GoodSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
+                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Good}" />
                           </Border>
                           <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
                             <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
@@ -1541,7 +1541,7 @@
 
                 <!-- ============ DONE ============ -->
                 <StackPanel MaxWidth="620" Margin="0,60,0,0" Visibility="{Binding ShowSavesDone, Converter={StaticResource Visible}}">
-                  <TextBlock Text="✓" FontSize="40" Foreground="{x:Static local:SlotBrushes.Noob}" HorizontalAlignment="Center" />
+                  <TextBlock Text="✓" FontSize="40" Foreground="{x:Static local:SlotBrushes.Good}" HorizontalAlignment="Center" />
                   <TextBlock Text="{Binding DoneText}" Style="{StaticResource SmH1}" TextAlignment="Center" HorizontalAlignment="Center" />
                   <TextBlock Text="{Binding S[sm.done_sub]}" Style="{StaticResource SmSub}" TextAlignment="Center" HorizontalAlignment="Center" />
                   <Button Content="{Binding S[sm.back_to_saves]}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}" HorizontalAlignment="Center"

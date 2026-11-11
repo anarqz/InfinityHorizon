@@ -11,19 +11,23 @@ using Infinity.Core.Shell;
 
 namespace Infinity.App;
 
-/// <summary>The accent of a slot: HARDCORE orange, NOOB green, Azimuth blue (the prototype's palette), with their soft fills.</summary>
+/// <summary>
+/// The prototype's palette: HARDCORE orange and AZIMUTH blue (the mode's one colour on PLAY, Profiles and every screen), with their soft
+/// fills; <see cref="Good"/> is the prototype's green for a good state (synced, newer, done, online), never a mode.
+/// </summary>
 public static class SlotBrushes
 {
     public static readonly SolidColorBrush Hardcore = Frozen(0xFF, 0xFF, 0x6A, 0x3D);
     public static readonly SolidColorBrush HardcoreSoft = Frozen(0x1F, 0xFF, 0x6A, 0x3D);
-    public static readonly SolidColorBrush Noob = Frozen(0xFF, 0x3D, 0xDC, 0x97);
-    public static readonly SolidColorBrush NoobSoft = Frozen(0x1F, 0x3D, 0xDC, 0x97);
+    public static readonly SolidColorBrush Good = Frozen(0xFF, 0x3D, 0xDC, 0x97);
+    public static readonly SolidColorBrush GoodSoft = Frozen(0x1F, 0x3D, 0xDC, 0x97);
     public static readonly SolidColorBrush Azimuth = Frozen(0xFF, 0x5A, 0xA8, 0xFF);
     public static readonly SolidColorBrush AzimuthSoft = Frozen(0x1F, 0x5A, 0xA8, 0xFF);
 
-    public static SolidColorBrush Accent(SaveSlot slot) => slot switch { SaveSlot.Hardcore => Hardcore, SaveSlot.Noob => Noob, _ => Azimuth };
+    /// <summary>A mode's accent: HARDCORE orange; AZIMUTH (wire <c>noob</c> and the Azimuth save alike) the prototype's Azimuth blue, everywhere.</summary>
+    public static SolidColorBrush Accent(SaveSlot slot) => slot == SaveSlot.Hardcore ? Hardcore : Azimuth;
 
-    public static SolidColorBrush Soft(SaveSlot slot) => slot switch { SaveSlot.Hardcore => HardcoreSoft, SaveSlot.Noob => NoobSoft, _ => AzimuthSoft };
+    public static SolidColorBrush Soft(SaveSlot slot) => slot == SaveSlot.Hardcore ? HardcoreSoft : AzimuthSoft;
 
     private static SolidColorBrush Frozen(byte a, byte r, byte g, byte b)
     {
@@ -131,7 +135,7 @@ public sealed record CheckStepRow(string Text, CheckStepState State)
     public string Glyph => State switch { CheckStepState.Done => "✓", CheckStepState.Running => "…", CheckStepState.Failed => "✕", _ => "·" };
     public Brush GlyphBrush => State switch
     {
-        CheckStepState.Done => SlotBrushes.Noob,
+        CheckStepState.Done => SlotBrushes.Good,
         CheckStepState.Running => Waiting,
         CheckStepState.Failed => Bad,
         _ => Muted,
@@ -458,7 +462,7 @@ public sealed partial class ShellViewModel
                     Cover = art?.Image,
                     HasCareerData = save is not null,
                     ChipText = S[save is null ? "sm.chip.az_none" : "sm.chip.az_pc"],
-                    ChipTip = S.Format("sm.chip.az_tip", ("folder", AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid))),
+                    ChipTip = S["sm.chip.az_tip"],
                     ChipTone = ChipTone.Neutral,
                     MenuOpen = _menu.IsOpen(AzimuthCardKey + "|" + game.Id),
                     Menu = AzimuthMenuOf(game),
@@ -511,11 +515,18 @@ public sealed partial class ShellViewModel
     /// <c>/me</c> (no request), with the sync's age ("15 · synced 2 days ago"), never presented as read from this PC's save; null without
     /// progress (the row shows "—").
     /// </summary>
-    private string? AzimuthLevel(GameDefinition game)
+    private string? AzimuthLevel(GameDefinition game) => AzimuthSyncedLevel(game) is { } p
+        ? S.Format("sm.row.level_synced", ("level", p.Level.ToString("N0", SavesCulture)), ("ago", Ago(p.SyncedAt))) : null;
+
+    /// <summary>
+    /// The identity's career level of <paramref name="game"/> from its last profile sync (<c>players[].careers[].progress</c> of the cached
+    /// <c>/me</c>, OD-239 #10; no request) and that sync's time; null without progress. The Profiles row and PLAY's AZIMUTH card both show it,
+    /// marked with the sync's age, never as read from this PC's save.
+    /// </summary>
+    private (long Level, string? SyncedAt)? AzimuthSyncedLevel(GameDefinition game)
     {
         if (OfflineMode || _session?.Me is not { Players: not null } me || AzimuthIdentity.Of(me) is not { } player) return null;
-        if (player.Careers.FirstOrDefault(c => c.Game == game.Id)?.Progress is not { Level: { } level } progress) return null;
-        return S.Format("sm.row.level_synced", ("level", level.ToString("N0", SavesCulture)), ("ago", Ago(progress.SyncedAt)));
+        return player.Careers.FirstOrDefault(c => c.Game == game.Id)?.Progress is { Level: { } level } progress ? (level, progress.SyncedAt) : null;
     }
 
     /// <summary>The row's fields, the same on both cards: "LV 15  ·  CR 15,858  ·  {last}", an unknown level or number shown "—".</summary>
@@ -1122,7 +1133,7 @@ public sealed partial class ShellViewModel
     {
         if (slot != SaveSlot.Hardcore || !row.Hardcore) return;
         if (LocalSaveOf(row.Profile.Xuid) is not { } local) { Message = S["sm.block.NoSource"]; return; }
-        OpenCopy(new CopyPlan(slot, S.Format("sm.copy_source", ("mode", ModeWord(slot)), ("name", row.Gamertag), ("folder", local.Folder)), local, null, null, null, false));
+        OpenCopy(new CopyPlan(slot, S.Format("sm.copy_source", ("mode", ModeWord(slot)), ("name", row.Gamertag)), local, null, null, null, false));
     }
 
     private void OpenCopy(CopyPlan plan)

@@ -227,7 +227,7 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// </summary>
     public OldSaveMoveResult MoveFromThisPc(ulong sourceXuid, Action<string>? backedUp = null, HistoryProfile? profile = null, HistoryReason? reason = null)
     {
-        if (sourceXuid == AzimuthSaves.OfflineXuid) return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.SAME_FOLDER", Message: "the Azimuth save cannot be moved onto itself");
+        if (sourceXuid == AzimuthSaves.OfflineXuid) return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.SAME_FOLDER", Message: "the Azimuth save cannot be copied onto itself");
         if (NotAzimuth(sourceXuid)) return new(OldSaveMoveOutcome.NotAzimuth, Code: "LOCAL.NOT_AZIMUTH", Message: AzimuthSaves.FolderFor(sourceXuid) + " is a HARDCORE profile's");
         if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning);
         LocalRevision? newest;
