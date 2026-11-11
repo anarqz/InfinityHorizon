@@ -32,10 +32,11 @@ public sealed partial class ShellViewModel
     /// player's answer. Every decision prompt the launcher has is named here, so a Play's overlay and its queue modal step aside for any
     /// of them (<see cref="PlayStepsAside"/>): the save conflict (Resolve: cloud or this PC), the refused first save (OD-133), a restored
     /// career waiting for the cloud and the restore itself, the career start (CR-S52 seed / scratch), a custom server's changed keys
-    /// (CR-L39), an Azimuth never opened, a mod confirmation and the sign-in form. A new prompt is added here, nowhere else.
+    /// (CR-L39), an Azimuth never opened, a mod confirmation, the sign-in form and the old save newer than the Azimuth save (OD-239). A new
+    /// prompt is added here, nowhere else.
     /// </summary>
     public bool AwaitingPlayer => ShowSaveConflict || ShowFreshStartRefused || ShowRestoreWaiting || ShowCareerRestore || ShowSeedPanel
-        || ShowTrustChange || ShowAzimuthFirstRun || ShowModConfirm || ShowSignIn;
+        || ShowTrustChange || ShowAzimuthFirstRun || ShowModConfirm || ShowSignIn || ShowOldSavePrompt;
 
     /// <summary>
     /// A Play is under way and a prompt waits for the player: the Play's overlay is hidden (its scope stays open with its label, so it

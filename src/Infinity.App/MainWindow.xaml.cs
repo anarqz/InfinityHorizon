@@ -226,8 +226,20 @@ public partial class MainWindow : Window
 
     private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
 
-    // OD-239: the old Noob cloud save's one-time export and the old local folder
-    private void OnOpenOldNoobExport(object sender, RoutedEventArgs e) => _vm.OpenOldNoobExport();
+    // OD-239: the AZIMUTH profile's old saves: move one into the Azimuth save, or (a cloud one) export it; the launcher-open prompt
+    private async void OnMoveOldSave(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) await _vm.MoveOldSaveAsync(row);
+    }
+
+    private void OnExportOldSave(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is OldSaveRow row) _vm.ExportOldSave(row);
+    }
+
+    private void OnOldSavePromptGo(object sender, RoutedEventArgs e) => _vm.OldSavePromptGoToProfiles();
+
+    private void OnOldSavePromptDismiss(object sender, RoutedEventArgs e) => _vm.DismissOldSavePrompt();
 
     private void OnPickOldNoobExport(object sender, RoutedEventArgs e) => _vm.PickOldNoobExportFolder();
 
