@@ -24,13 +24,22 @@ public sealed class UpdateCoordinator : IDisposable
     private bool _discoveryAttempted;
     private bool _releaseUnavailable;
     private bool _disposed;
+    private readonly Func<bool> _releaseSignedProbe;
+    private bool? _releaseSigned;
 
     public UpdateCoordinator(string stateDirectory)
         : this(stateDirectory, new GitHubReleases(),
-            new UpdatePackageVerifier(HookInstaller.ReleaseKey.ToArray(), TimeProvider.System, stateDirectory), TimeProvider.System) { }
+            new UpdatePackageVerifier(HookInstaller.ReleaseKey.ToArray(), TimeProvider.System, stateDirectory), TimeProvider.System,
+            () => ReleaseSignature.IsOfficialFile(Environment.ProcessPath)) { }
 
-    internal UpdateCoordinator(string stateDirectory, GitHubReleases source, UpdatePackageVerifier verifier, TimeProvider? clock = null)
+    /// <param name="releaseSigned">
+    /// Whether this launcher is release-signed (the build's signing identity: <see cref="ReleaseSignature.IsOfficialFile"/> on the
+    /// running exe). Asked once, off the caller's thread, by the first <see cref="DiscoverAsync"/>. Default (tests): release-signed.
+    /// </param>
+    internal UpdateCoordinator(string stateDirectory, GitHubReleases source, UpdatePackageVerifier verifier, TimeProvider? clock = null,
+        Func<bool>? releaseSigned = null)
     {
+        _releaseSignedProbe = releaseSigned ?? (() => true);
         ArgumentException.ThrowIfNullOrWhiteSpace(stateDirectory);
         _stateDirectory = Path.GetFullPath(stateDirectory);
         _source = source ?? throw new ArgumentNullException(nameof(source));
@@ -47,6 +56,13 @@ public sealed class UpdateCoordinator : IDisposable
     /// <summary>The verified GitHub release's version from the last discovery (signed descriptor), or null.</summary>
     public string? DiscoveredVersion => _discovery is { } discovery && Usable(discovery) ? discovery.Descriptor.Version : null;
 
+    /// <summary>
+    /// T-1111-AZIMUTH: this launcher is a development (DEV-signed or unsigned) build, known after the first discovery. Such a build is
+    /// never forced to a stable release: a newer one is a non-blocking notice (the shell's GitHub advisory). Release-signed builds
+    /// keep the forced update.
+    /// </summary>
+    public bool DevelopmentBuild => _releaseSigned == false;
+
     public async Task DiscoverAsync(CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -54,6 +70,7 @@ public sealed class UpdateCoordinator : IDisposable
         var previous = _discovery;
         try
         {
+            _releaseSigned ??= await Task.Run(_releaseSignedProbe, cancellation).ConfigureAwait(false);
             _discovery = null;
             _requiredDiscovery = null;
             _discoveryAttempted = false;
@@ -91,10 +108,12 @@ public sealed class UpdateCoordinator : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(info);
         var decision = EvaluateCore(current, info, game);
+        // a development build is never forced to a stable release: the same target, as a notice (Current), and nothing to stage
+        if (decision.Phase == UpdatePhase.Required && _releaseSigned != true) decision = new(UpdatePhase.Current, decision.TargetVersion);
         _requiredDiscovery = decision.Phase == UpdatePhase.Required ? _discovery : null;
         // a log shows the offer (or why there is none); a repeated evaluation with the same outcome is not logged again
         var line = string.Create(CultureInfo.InvariantCulture,
-            $"update: {decision.Phase}, target {decision.TargetVersion ?? "none"} (installed {Shown(current)}, signed release {DiscoveredVersion ?? "none"}, server latest {Shown(info.LatestLauncher)}, minimum {Shown(info.MinLauncher)}{(game is null ? "" : ", game " + game)})");
+            $"update: {decision.Phase}{(DevelopmentBuild ? " (development build: never forced)" : "")}, target {decision.TargetVersion ?? "none"} (installed {Shown(current)}, signed release {DiscoveredVersion ?? "none"}, server latest {Shown(info.LatestLauncher)}, minimum {Shown(info.MinLauncher)}{(game is null ? "" : ", game " + game)})");
         if (line != _loggedDecision) { _loggedDecision = line; _log?.Invoke(line); }
         return decision;
     }

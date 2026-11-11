@@ -81,9 +81,10 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// OD-118 (T1b): offline (before Sign in), a newer signed release on GitHub is shown as advice with a link to the official release
-    /// page. It comes from the GitHub discovery alone (the player's PC to GitHub), never blocks Play and sets no floor.
+    /// page. It comes from the GitHub discovery alone (the player's PC to GitHub), never blocks Play and sets no floor. A development
+    /// build (T-1111-AZIMUTH) is never forced to a stable release, so it shows the same advice signed in too.
     /// </summary>
-    public bool ShowGitHubAdvisory => !_onlineEngaged && _githubNewer is not null && !_githubAdvisoryDismissed && !Playing;
+    public bool ShowGitHubAdvisory => (!_onlineEngaged || _updater?.DevelopmentBuild == true) && _githubNewer is not null && !_githubAdvisoryDismissed && !Playing;
 
     public string GitHubAdvisoryText => _githubNewer is { } version ? S.Format("updater.github_newer", ("version", version)) : "";
 
@@ -131,6 +132,7 @@ public sealed partial class ShellViewModel
             if (_updateRecoveryBlocked) return;
             var decision = UpdateDecisionForTests is { } fake ? fake(await infoTask) : _updater.Evaluate(Version, await infoTask, _gate.Game);
             (_launcherUpdatePhase, _updateTarget) = (decision.Phase, decision.TargetVersion);
+            if (_updater.DevelopmentBuild) ObserveDiscoveredRelease(DiscoveredVersion); // a newer stable release: advice, never forced
         }
         catch (Exception error) when (UpdateFailure(error))
         {
