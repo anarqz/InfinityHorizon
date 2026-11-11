@@ -193,16 +193,28 @@ public enum OldSaveMoveOutcome
     Failed,
 }
 
-/// <summary>What <see cref="OldSaveMove"/> did. <see cref="BackupPath"/>: the dated copy of the whole <c>User_9000000000000</c> folder, once made.</summary>
-public sealed record OldSaveMoveResult(OldSaveMoveOutcome Outcome, string? BackupPath = null, ulong? Revision = null, string? Code = null, string? Message = null);
+/// <summary>
+/// What <see cref="OldSaveMove"/> did. <see cref="BackupPath"/>: the dated backup's <c>saves</c> folder, once made, holding one folder per
+/// container the install writes (<c>User_9000000000000</c>, and for FM5 each <c>BaseLivery_*</c>/<c>GarageThumbnail_*</c> the bundle carries);
+/// <see cref="BackupFolders"/>: those of them that held something, each a full path.
+/// </summary>
+public sealed record OldSaveMoveResult(OldSaveMoveOutcome Outcome, string? BackupPath = null, ulong? Revision = null, string? Code = null, string? Message = null)
+{
+    public IReadOnlyList<string> BackupFolders { get; init; } = [];
+}
+
+/// <summary>A verified backup: its <c>saves</c> folder and the container folders it holds.</summary>
+public sealed record OldSaveBackup(string Path, IReadOnlyList<string> Folders);
 
 /// <summary>
 /// OD-239 "Move to my Azimuth save": an old save of an AZIMUTH profile becomes the newest revision of Azimuth's own save of its game.
 /// <list type="number">
 /// <item>Refused while the game runs (<paramref name="gameRunning"/>, asked again right before any write).</item>
 /// <item>A cloud save is first downloaded and verified (SAVES_API.md §4.2: <c>revisions?limit=1</c>, then its bundle).</item>
-/// <item>The WHOLE <c>User_9000000000000</c> folder (every revision folder, torn or not, and any other file) is copied into a dated entry of the
-/// launcher's history (<see cref="LocalHistory.Archive"/>, every file verified by hash), outside Azimuth's folder; its path is known and reported
+/// <item>Every container folder the install writes, WHOLE (<c>User_9000000000000</c> and, for a bundle with siblings such as FM5's, each
+/// <c>BaseLivery_*</c>/<c>GarageThumbnail_*</c> it carries, <see cref="ICareerBundle.Containers"/>: every revision folder, torn or not, and any
+/// other file) is copied into a dated entry of the launcher's history (<see cref="LocalHistory.ArchiveContainers"/>, every file verified by
+/// hash), outside Azimuth's folder; its path is known and reported
 /// before anything is written. A failed copy writes nothing. (The install's own <c>fi-launcher-archive\…\shadowed-*</c> copies only the
 /// 16-hex revision folders.)</item>
 /// <item>Then the install: <see cref="AzimuthSaves.Clone"/> from this PC's folder, or the career bundle's install of the download.</item>
@@ -222,22 +234,29 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// <summary>Azimuth's own save of this game: <c>&lt;saves&gt;\player-1\User_9000000000000</c>.</summary>
     public string AzimuthFolder => CloudSaveFiles.ProfileDir(_savesRoot, AzimuthSaves.OfflineXuid);
 
+    /// <summary>The player folder every container lives in (<c>&lt;saves&gt;\player-1</c>).</summary>
+    private string PlayerDir => Path.GetDirectoryName(AzimuthFolder)!;
+
     /// <summary>
-    /// The dated backup of the whole Azimuth folder (an empty entry when there is none yet), verified; returns the folder holding the copy
-    /// (<c>&lt;history&gt;\&lt;yyyyMMddTHHmmssZ&gt;-copy-old-save-to-azimuth\saves</c>, laid out as <c>User_9000000000000</c>). Throws
-    /// <see cref="HistoryException"/> when it does not verify (nothing left behind).
+    /// The dated backup of every whole container folder in <paramref name="containers"/> (names in <c>player-1</c>; a missing one holds
+    /// nothing, none at all is an empty entry), verified file by file; returns the folder holding the copy
+    /// (<c>&lt;history&gt;\&lt;yyyyMMddTHHmmssZ&gt;-copy-old-save-to-azimuth\saves</c>, one <c>&lt;container&gt;</c> folder each) and the
+    /// container folders it holds. Throws <see cref="HistoryException"/> when it does not verify (nothing left behind).
     /// </summary>
-    public string BackUp(HistoryProfile? profile = null)
+    public OldSaveBackup BackUp(IReadOnlyList<string> containers, HistoryProfile? profile = null)
     {
+        ArgumentNullException.ThrowIfNull(containers);
         var now = _now();
         _history.EnsureOriginal(_savesRoot, now); // §7.2: the title's saves as first found, once
-        var item = _history.Archive("copy", AzimuthFolder, Reason, now, from: "old-save", to: "azimuth", profile, slug: "old save to azimuth");
-        return Path.Combine(item.Folder, LocalHistory.SavesDir);
+        var item = _history.ArchiveContainers("copy", PlayerDir, containers, Reason, now, from: "old-save", to: "azimuth", profile, slug: "old save to azimuth");
+        var saves = Path.Combine(item.Folder, LocalHistory.SavesDir);
+        return new OldSaveBackup(saves, [.. containers.Select(c => Path.Combine(saves, c)).Where(Directory.Exists)]);
     }
 
     /// <summary>
     /// This PC's old folder of <paramref name="sourceXuid"/> (its newest sealed revision, read now) onto Azimuth's save. <paramref name="backedUp"/>
-    /// receives the backup's path before the install starts.
+    /// receives the backup's path before the install starts. The clone writes the <c>User_9000000000000</c> folder only (the old career's
+    /// siblings are already in this <c>player-1</c>), so that is what is backed up.
     /// </summary>
     public OldSaveMoveResult MoveFromThisPc(ulong sourceXuid, Action<string>? backedUp = null)
     {
@@ -247,20 +266,23 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
         try { newest = AzimuthSaves.NewestSealed(CloudSaveFiles.ProfileDir(_savesRoot, sourceXuid)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.READ_FAILED", Message: e.Message); }
         if (newest is null) return new(OldSaveMoveOutcome.NoSave);
-        var (backup, why) = BackUpOrWhy(backedUp);
+        var (backup, why) = BackUpOrWhy([AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)], backedUp);
         if (why is not null) return why;
-        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, backup);
+        if (_gameRunning()) return With(new(OldSaveMoveOutcome.GameRunning), backup);
         try
         {
             var at = OldSaves.RevisionTime(newest);
             var result = AzimuthSaves.Clone(_savesRoot, new SaveProfile(AzimuthSaves.FolderFor(sourceXuid), sourceXuid, newest, at, null), AzimuthSaves.OfflineXuid, _now());
-            return new(OldSaveMoveOutcome.Moved, backup, result.Number);
+            return With(new(OldSaveMoveOutcome.Moved, Revision: result.Number), backup);
         }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
         {
-            return new(OldSaveMoveOutcome.Failed, backup, Code: "LOCAL.WRITE_FAILED", Message: e.Message);
+            return With(new(OldSaveMoveOutcome.Failed, Code: "LOCAL.WRITE_FAILED", Message: e.Message), backup);
         }
     }
+
+    private static OldSaveMoveResult With(OldSaveMoveResult result, OldSaveBackup? backup) =>
+        backup is null ? result : result with { BackupPath = backup.Path, BackupFolders = backup.Folders };
 
     /// <summary>
     /// The old cloud line's newest revision onto Azimuth's save: downloaded and verified first (<paramref name="bundle"/>: the game's format),
@@ -284,27 +306,28 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
         if (valid is null || failure is not null)
             return new(OldSaveMoveOutcome.Failed, Revision: newest.Revision, Code: failure?.Code ?? "SAVES.INTEGRITY", Message: failure?.Message ?? "the bundle was not read");
         if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, Revision: newest.Revision);
-        var (backup, why) = BackUpOrWhy(backedUp);
+        // every container the game's bundle will write (FM5: the profile and each sibling it carries), backed up before the install
+        var (backup, why) = BackUpOrWhy(bundle.Containers(valid, AzimuthSaves.OfflineXuid), backedUp);
         if (why is not null) return why with { Revision = newest.Revision };
-        if (_gameRunning()) return new(OldSaveMoveOutcome.GameRunning, backup, newest.Revision);
+        if (_gameRunning()) return With(new(OldSaveMoveOutcome.GameRunning, Revision: newest.Revision), backup);
         try
         {
             var installed = bundle.Install(_savesRoot, AzimuthSaves.OfflineXuid, valid, valid.ContentSha256, Guid.CreateVersion7().ToString("N"), "before-old-save-move", null);
-            return new(OldSaveMoveOutcome.Moved, backup, installed.Number);
+            return With(new(OldSaveMoveOutcome.Moved, Revision: installed.Number), backup);
         }
         catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
         {
-            return new(OldSaveMoveOutcome.Failed, backup, newest.Revision, "LOCAL.WRITE_FAILED", e.Message);
+            return With(new(OldSaveMoveOutcome.Failed, Revision: newest.Revision, Code: "LOCAL.WRITE_FAILED", Message: e.Message), backup);
         }
     }
 
-    /// <summary>The backup's path (handed to <paramref name="backedUp"/> first), or why there is none.</summary>
-    private (string? Path, OldSaveMoveResult? Failure) BackUpOrWhy(Action<string>? backedUp)
+    /// <summary>The backup (its path handed to <paramref name="backedUp"/> first), or why there is none.</summary>
+    private (OldSaveBackup? Backup, OldSaveMoveResult? Failure) BackUpOrWhy(IReadOnlyList<string> containers, Action<string>? backedUp)
     {
         try
         {
-            var backup = BackUp();
-            backedUp?.Invoke(backup);
+            var backup = BackUp(containers);
+            backedUp?.Invoke(backup.Path);
             return (backup, null);
         }
         catch (Exception e) when (e is HistoryException or IOException or UnauthorizedAccessException)

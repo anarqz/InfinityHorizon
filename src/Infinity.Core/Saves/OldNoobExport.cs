@@ -31,8 +31,9 @@ public sealed record OldNoobExportResult(OldNoobExportOutcome Outcome, string? F
 /// OD-239 items 6-7: an AZIMUTH profile has no cloud save any more, but the cloud keeps an old Noob line read-only until it is erased 90 days
 /// after the Azimuth release. The launcher offers once to export its newest revision (SAVES_API.md §4.2: <c>revisions?limit=1</c>, then its
 /// bundle, verified as every download is) to a file in a folder the player picks; it is never written into Azimuth's saves or install, and
-/// nothing on this PC (the old <c>User_&lt;XUID&gt;</c> folder included) is changed. The file is a ZIP of the revision folder
-/// (<c>revisions/&lt;label&gt;/…</c>), the layout Azimuth keeps on disk, so a player can copy progress by hand.
+/// nothing on this PC (the old <c>User_&lt;XUID&gt;</c> folder included) is changed. The download is read with the line's own game's bundle
+/// (<see cref="SaveLayout.Bundle"/>). The file is a ZIP of the revision folder (<c>revisions/&lt;label&gt;/…</c>) plus every other container
+/// the bundle holds (<see cref="Zip"/>), the layout Azimuth keeps on disk, so a player can copy progress by hand.
 /// </summary>
 public static class OldNoobExport
 {
@@ -90,17 +91,19 @@ public static class OldNoobExport
         ArgumentNullException.ThrowIfNull(line);
         ArgumentNullException.ThrowIfNull(forbidden);
         if (Refusal(folder, forbidden) is { } refused) return new(OldNoobExportOutcome.Refused, Code: refused);
-        var source = await ProfileSeed.FetchSourceAsync(api, access, line.Xuid, cancellation).ConfigureAwait(false);
+        // the line's own game reads its bundle (FM5SAVE1 with every sibling container); a game the catalog does not know is never guessed
+        if (Infinity.Core.Process.GameDefinition.ById(line.Game) is not { } game)
+            return new(OldNoobExportOutcome.Failed, Code: UnknownGame, Message: "the save's game is not one this launcher knows: " + line.Game);
+        var source = await ProfileSeed.FetchSourceAsync(api, access, line.Xuid, game.Saves.Bundle, cancellation).ConfigureAwait(false);
         if (source.IsNoRevision) return new(OldNoobExportOutcome.NoRevision);
         if (source.Packed is not { } packed)
             return new(OldNoobExportOutcome.Failed, Revision: source.Revision, Code: source.Error?.Code, Message: source.Error?.Message);
         if (Refusal(folder, forbidden) is { } late) return new(OldNoobExportOutcome.Refused, Code: late);
         var target = Full(folder)!;
-        var label = packed.Number.ToString("x16", CultureInfo.InvariantCulture);
         string? temp = null;
         try
         {
-            var zip = Zip(label, packed.Files);
+            var zip = Zip(packed, game.Saves);
             var path = FreePath(target, FileName(line));
             temp = path + ".part";
             await File.WriteAllBytesAsync(temp, zip, cancellation).ConfigureAwait(false);
@@ -122,21 +125,38 @@ public static class OldNoobExport
         }
     }
 
-    /// <summary>The ZIP: every file of the revision under <c>revisions/&lt;label&gt;/</c>, as Azimuth lays it out.</summary>
-    public static byte[] Zip(string label, IReadOnlyList<SaveFile> files)
+    /// <summary>A failed export's code when the line's game is not in the catalog.</summary>
+    public const string UnknownGame = "LOCAL.UNKNOWN_GAME";
+
+    /// <summary>
+    /// The ZIP, as Azimuth lays a save out: the profile's revision under <c>revisions/&lt;label&gt;/</c>, then every other container of the
+    /// bundle (FM5: the garage's <c>BaseLivery_*</c>/<c>GarageThumbnail_*</c>) under
+    /// <c>&lt;<see cref="SaveLayout.StagedSiblingsDir"/>&gt;/&lt;name&gt;/revisions/&lt;its label&gt;/</c>, the layout of a save copied off a PC.
+    /// </summary>
+    public static byte[] Zip(PackedRevision packed, SaveLayout layout)
     {
-        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(packed);
+        ArgumentNullException.ThrowIfNull(layout);
         using var buffer = new MemoryStream();
         using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var file in files)
-            {
-                var entry = archive.CreateEntry("revisions/" + label + "/" + file.Name.Replace('\\', '/'), CompressionLevel.Optimal);
-                using var stream = entry.Open();
-                stream.Write(file.Bytes);
-            }
+            Add(archive, layout.RevisionsDir + "/" + Label(packed.Number) + "/", packed.Files);
+            foreach (var sibling in (packed.Containers ?? []).Skip(1))
+                Add(archive, layout.StagedSiblingsDir + "/" + sibling.Name + "/" + layout.RevisionsDir + "/" + Label(sibling.Label) + "/", sibling.Files);
         }
         return buffer.ToArray();
+    }
+
+    private static string Label(ulong number) => number.ToString("x16", CultureInfo.InvariantCulture);
+
+    private static void Add(ZipArchive archive, string prefix, IReadOnlyList<SaveFile> files)
+    {
+        foreach (var file in files)
+        {
+            var entry = archive.CreateEntry(prefix + file.Name.Replace('\\', '/'), CompressionLevel.Optimal);
+            using var stream = entry.Open();
+            stream.Write(file.Bytes);
+        }
     }
 
     private static string FreePath(string folder, string name)

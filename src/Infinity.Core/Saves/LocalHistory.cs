@@ -108,10 +108,38 @@ public sealed class LocalHistory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(reason);
         if (!Actions.Contains(action) || action == Original) throw new ArgumentException("not a history action: " + action, nameof(action));
+        return Write(NewFolder(action, nowUtc, slug), action, [(source, string.Empty)], reason, nowUtc, from, to, profile);
+    }
+
+    /// <summary>
+    /// <see cref="Archive"/> of several containers of one <c>player-1</c> (<paramref name="playerDir"/>) in one entry: each named folder is
+    /// copied into <c>saves\&lt;name&gt;</c> and verified by hash (a missing one holds nothing; none at all records <c>empty</c>). Throws
+    /// <see cref="HistoryException"/> (nothing left behind) when a copy does not match its source.
+    /// </summary>
+    public HistoryItem ArchiveContainers(string action, string playerDir, IReadOnlyList<string> containers, HistoryReason reason, DateTime nowUtc,
+        string? from = null, string? to = null, HistoryProfile? profile = null, string? slug = null)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(playerDir);
+        ArgumentNullException.ThrowIfNull(containers);
+        ArgumentNullException.ThrowIfNull(reason);
+        if (!Actions.Contains(action) || action == Original) throw new ArgumentException("not a history action: " + action, nameof(action));
+        foreach (var name in containers)
+        {
+            if (string.IsNullOrEmpty(name) || name != System.IO.Path.GetFileName(name) || name is "." or "..")
+                throw new ArgumentException("not a container name: " + name, nameof(containers));
+        }
+        var sources = containers.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(n => ((string?)System.IO.Path.Combine(playerDir, n), n)).ToList();
+        return Write(NewFolder(action, nowUtc, slug), action, sources, reason, nowUtc, from, to, profile);
+    }
+
+    private string NewFolder(string action, DateTime nowUtc, string? slug)
+    {
         var name = Stamp(nowUtc) + "-" + action + (string.IsNullOrWhiteSpace(slug) ? string.Empty : "-" + Slug(slug));
         var folder = System.IO.Path.Combine(Root, name);
         for (var i = 2; Directory.Exists(folder); i++) folder = System.IO.Path.Combine(Root, name + "-" + i.ToString(CultureInfo.InvariantCulture));
-        return Write(folder, action, source, reason, nowUtc, from, to, profile);
+        return folder;
     }
 
     /// <summary>
@@ -127,7 +155,7 @@ public sealed class LocalHistory
         {
             if (HasOriginal) return null;
             if (Directory.Exists(OriginalFolder)) Directory.Delete(OriginalFolder, recursive: true); // a half-written one from a crash
-            return Write(OriginalFolder, Original, PlayerDir(savesRoot), new HistoryReason("Azimuth's save as Infinity first found it", "O save do Azimuth como o Infinity o encontrou"),
+            return Write(OriginalFolder, Original, [(PlayerDir(savesRoot), string.Empty)], new HistoryReason("Azimuth's save as Infinity first found it", "O save do Azimuth como o Infinity o encontrou"),
                 nowUtc, null, null, null);
         }
     }
@@ -215,28 +243,31 @@ public sealed class LocalHistory
     /// <summary><c>&lt;saves&gt;/player-1</c>: what Azimuth reads, and what <see cref="EnsureOriginal"/> keeps.</summary>
     public static string PlayerDir(string savesRoot) => System.IO.Path.Combine(savesRoot, "player-1");
 
-    private HistoryItem Write(string folder, string action, string? source, HistoryReason reason, DateTime nowUtc, string? from, string? to, HistoryProfile? profile)
+    /// <summary>Copies each source folder into <c>saves\&lt;Into&gt;</c> (empty: <c>saves</c> itself), every file verified by hash.</summary>
+    private HistoryItem Write(string folder, string action, IReadOnlyList<(string? Source, string Into)> sources, HistoryReason reason, DateTime nowUtc,
+        string? from, string? to, HistoryProfile? profile)
     {
         var saves = System.IO.Path.Combine(folder, SavesDir);
         try
         {
             Directory.CreateDirectory(saves);
             var files = new List<HistoryFile>();
-            var empty = source is null || !Directory.Exists(source);
-            if (!empty)
+            foreach (var (source, into) in sources)
             {
-                CopyTree(source!, saves);
-                foreach (var path in Directory.EnumerateFiles(source!, "*", SearchOption.AllDirectories).OrderBy(p => p, StringComparer.Ordinal))
+                if (source is null || !Directory.Exists(source)) continue;
+                var target = into.Length == 0 ? saves : System.IO.Path.Combine(saves, into);
+                CopyTree(source, target);
+                foreach (var path in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories).OrderBy(p => p, StringComparer.Ordinal))
                 {
-                    var relative = System.IO.Path.GetRelativePath(source!, path);
+                    var relative = System.IO.Path.Combine(into, System.IO.Path.GetRelativePath(source, path));
                     var copy = System.IO.Path.Combine(saves, relative);
                     var expected = Sha256Of(path);
                     if (!File.Exists(copy) || !string.Equals(Sha256Of(copy), expected, StringComparison.Ordinal))
                         throw new HistoryException("the copy of " + relative + " does not match its source");
                     files.Add(new HistoryFile(relative.Replace(System.IO.Path.DirectorySeparatorChar, '/'), new FileInfo(path).Length, expected));
                 }
-                empty = files.Count == 0;
             }
+            var empty = files.Count == 0;
             var entry = new HistoryEntry(1, nowUtc.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), action, Game.Id, Game.TitleKey,
                 from, to, profile, reason, _launcherVersion, files, empty ? true : null);
             File.WriteAllText(System.IO.Path.Combine(folder, EntryFile), JsonSerializer.Serialize(entry, Json));

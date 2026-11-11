@@ -186,12 +186,12 @@ public sealed partial class ShellViewModel
             Log($"saves: old save {save.Key} → Azimuth {result.Outcome} r{result.Revision} {result.Code}");
             _oldSaveResult = result.Outcome switch
             {
-                OldSaveMoveOutcome.Moved => S.Format("oldsave.moved", ("game", GameName(game.Id)), ("backup", result.BackupPath ?? string.Empty)),
-                OldSaveMoveOutcome.GameRunning when result.BackupPath is { } kept => S.Format("oldsave.stopped_running", ("backup", kept)),
+                OldSaveMoveOutcome.Moved => S.Format("oldsave.moved", ("game", GameName(game.Id)), ("backup", BackupText(result))),
+                OldSaveMoveOutcome.GameRunning when result.BackupPath is not null => S.Format("oldsave.stopped_running", ("backup", BackupText(result))),
                 OldSaveMoveOutcome.GameRunning => S["saves.game_running"],
                 OldSaveMoveOutcome.NoSave => S["oldsave.nothing"],
                 OldSaveMoveOutcome.BackupFailed => S.Format("oldsave.backup_failed", ("reason", result.Message ?? result.Code ?? "?")),
-                _ when result.BackupPath is { } kept => S.Format("oldsave.failed", ("reason", result.Message ?? result.Code ?? "?"), ("backup", kept)),
+                _ when result.BackupPath is not null => S.Format("oldsave.failed", ("reason", result.Message ?? result.Code ?? "?"), ("backup", BackupText(result))),
                 _ => S.Format("oldsave.failed_nothing", ("reason", result.Code ?? result.Message ?? "?")),
             };
             Message = _oldSaveResult;
@@ -201,6 +201,18 @@ public sealed partial class ShellViewModel
         });
         await RefreshOldSavesAsync(prompt: false);
         FillSaveCards();
+    }
+
+    /// <summary>
+    /// The backup as the result names it: its folder, and when it holds more than one container (FM5's liveries and thumbnails beside the
+    /// profile) the name of each folder in it.
+    /// </summary>
+    private string BackupText(OldSaveMoveResult result)
+    {
+        var path = result.BackupPath ?? string.Empty;
+        return result.BackupFolders.Count > 1
+            ? S.Format("oldsave.backup_folders", ("path", path), ("folders", string.Join(", ", result.BackupFolders.Select(Path.GetFileName))))
+            : path;
     }
 
     /// <summary>The game runs: the launcher plays it, or azimuth.exe is up (the harness can force it).</summary>

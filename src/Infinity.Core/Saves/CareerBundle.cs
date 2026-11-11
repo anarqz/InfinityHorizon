@@ -31,6 +31,12 @@ public interface ICareerBundle
     /// throws <see cref="SaveException"/> (with <see cref="SaveException.Landed"/> when the profile's revision landed but its final check failed).
     /// </summary>
     InstalledRevision Install(string savesRoot, ulong xuid, ValidBundle bundle, string expectedContent, string stagingId, string label, Action<string>? afterMove);
+
+    /// <summary>
+    /// Every container folder of <c>player-1</c> that <see cref="Install"/> of <paramref name="bundle"/> onto <paramref name="xuid"/> may
+    /// write, the profile's <c>User_&lt;hex&gt;</c> first (what a caller backs up before the install).
+    /// </summary>
+    IReadOnlyList<string> Containers(ValidBundle bundle, ulong xuid);
 }
 
 /// <summary>FH2SAVE1: the existing <see cref="CloudSaveFiles"/> and <see cref="Fh2Bundle"/> calls, unchanged.</summary>
@@ -53,6 +59,9 @@ public sealed class Fh2CareerBundle : ICareerBundle
         ArgumentNullException.ThrowIfNull(bundle);
         return CloudSaveFiles.Install(savesRoot, xuid, bundle.Files, expectedContent, stagingId, label, afterMove);
     }
+
+    /// <summary>FH2SAVE1 is the profile's folder only.</summary>
+    public IReadOnlyList<string> Containers(ValidBundle bundle, ulong xuid) => [AzimuthSaves.FolderFor(xuid)];
 }
 
 /// <summary>
@@ -214,6 +223,13 @@ public sealed class Fm5CareerBundle(SaveLayout layout) : ICareerBundle
             Siblings = [.. installed.Select(i => i.Name)],
             SkippedSiblings = skipped,
         };
+    }
+
+    /// <summary>The profile's <c>User_&lt;hex&gt;</c>, then each sibling the bundle carries (bundle order).</summary>
+    public IReadOnlyList<string> Containers(ValidBundle bundle, ulong xuid)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        return [_layout.UserFolder(xuid), .. (bundle.Containers ?? []).Skip(1).Select(c => c.Name)];
     }
 
     /// <summary>The container's newest sealed revision holds exactly these files (a container that does not read as its kind is not the same).</summary>
