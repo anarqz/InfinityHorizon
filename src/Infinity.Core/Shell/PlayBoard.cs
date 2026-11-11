@@ -147,7 +147,9 @@ public sealed class PlaySelection(string stateDirectory)
 /// <summary>
 /// Owner 2026-11-08 (PROFILES_ROWS): the Profiles page's two kinds of ⋯ menu. A profile card's ⋯ holds only the profile's own actions
 /// (<see cref="ProfileLevel"/>); each game row under it has its own ⋯ with that game's CAREER actions (<see cref="CareerLevel"/>), which open
-/// the existing screens with the row's game set. No tool plays a game; the one start is "Start the other profile from this" career.
+/// the existing screens with the row's game set. No tool plays or starts a career (OD-239: an AZIMUTH row's old "Start my HARDCORE profile
+/// from this" seeded from the stale export-only cloud line, not the Azimuth save it plays, so it is gone; a Hardcore career still starts from
+/// another profile on its own creation, CR-S52).
 /// </summary>
 public static class ProfileTools
 {
@@ -155,7 +157,6 @@ public static class ProfileTools
     public const string History = "history";
     public const string Resolve = "resolve";
     public const string CopyTo = "copy-azimuth";
-    public const string StartOther = "start-other";
     public const string Download = "download";
     public const string HelpSensei = "help";
     public const string Rename = "rename";
@@ -166,7 +167,7 @@ public static class ProfileTools
     public static IReadOnlyList<string> ProfileLevel { get; } = [DeleteProfile, Rename, HelpSensei];
 
     /// <summary>A game row's career tools, in the menu's order (owner 2026-11-08).</summary>
-    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, StartOther, History, Resolve, ManageSaves, Download, DeleteCareer];
+    public static IReadOnlyList<string> CareerLevel { get; } = [CopyTo, History, Resolve, ManageSaves, Download, DeleteCareer];
 
     /// <summary>The profile card's menu (whether each is enabled is the page's).</summary>
     /// <param name="canRename">The server allows this profile a rename now (a name change notice): otherwise Rename is not listed.</param>
@@ -181,18 +182,17 @@ public static class ProfileTools
     }
 
     /// <summary>One game row's menu: the career tools that apply to it, in order (whether each is enabled is the page's).</summary>
-    /// <param name="started">The profile has a started career of the row's game (its saves can be copied, resolved, downloaded, start the other profile).</param>
+    /// <param name="started">The profile has a started career of the row's game (its saves can be copied, resolved, downloaded).</param>
     /// <param name="canDownload">Its sync chip allows a download onto this PC (a game with cloud saves).</param>
     /// <param name="canDeleteCareer">A career of the game exists to delete.</param>
     /// <param name="hardcore">
-    /// The row is a Hardcore career. OD-239: an Azimuth career has no cloud save, so it lists no History, Resolve or Download; it starts
-    /// fresh only, so no Hardcore career "starts it from this"; it can still start the Hardcore career (the §4.10 check) and copy to Azimuth.
+    /// The row is a Hardcore career. OD-239: an Azimuth career has no cloud save, so it lists no History, Resolve or Download, and it starts
+    /// no other profile's career (its cloud line is export-only and stale); it can still copy to Azimuth.
     /// </param>
     public static IReadOnlyList<string> CareerMenu(bool started, bool canDownload, bool canDeleteCareer, bool hardcore = true)
     {
         var list = new List<string>();
         if (started) list.Add(CopyTo);
-        if (started && !hardcore) list.Add(StartOther);
         if (hardcore) list.Add(History);
         if (started && hardcore) list.Add(Resolve);
         list.Add(ManageSaves);

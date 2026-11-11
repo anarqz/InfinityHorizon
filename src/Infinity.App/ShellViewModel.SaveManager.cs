@@ -511,7 +511,6 @@ public sealed partial class ShellViewModel
                 ProfileTools.CopyTo => LocalSaveOf(card!.Player.Xuid) is not null
                     ? new MenuAction(id, S["sm.menu.copy_azimuth"], !running, running ? S["sm.block.GameRunning"] : null)
                     : new MenuAction(id, S["sm.menu.copy_azimuth"], false, S["sm.block.NoSource"]),
-                ProfileTools.StartOther => StartOtherAction(game),
                 ProfileTools.History => new MenuAction(id, S["sm.menu.history"], true),
                 ProfileTools.Resolve => SaveChips.NeedsResolve(chip)
                     ? new MenuAction(id, S["sm.resolve"], true) : new MenuAction(id, S["sm.resolve"], false, S["sm.menu.resolve_nothing"]),
@@ -522,27 +521,6 @@ public sealed partial class ShellViewModel
             list.Add(blocked is not null ? action with { Enabled = false, Reason = blocked } : action);
         }
         return list;
-    }
-
-    /// <summary>
-    /// An Azimuth row's "Start my HARDCORE profile from this": the Hardcore career of this game starts from this one through the §4.10 check
-    /// (PLAY's inline choice). OD-239: no career ever starts an Azimuth one, so a Hardcore row offers no such item.
-    /// </summary>
-    private MenuAction StartOtherAction(GameDefinition game)
-    {
-        const string otherMode = "hardcore";
-        var otherWord = ModeWord(SaveSlot.Hardcore);
-        var label = S.Format("sm.menu.start_other", ("mode", otherWord));
-        var other = ProfileRows.Where(r => r.Card?.Player.Mode == otherMode).Select(r => r.Card!).ToList();
-        if (other.Count == 0) return new MenuAction(ProfileTools.StartOther, label, false, S.Format("sm.row.no_other_profile", ("mode", otherWord)));
-        if (_session?.Me is not { Players: not null } board) return new MenuAction(ProfileTools.StartOther, label, false);
-        var cards = game.Id == _gate.Game ? other
-            : other.Select(c => ProfileGameRows.Build(board, c.Player.ProfileId, [game], _ => BoardFlagsNow(board)).Single().Card).OfType<BoardCard>().ToList();
-        if (cards.Any(c => c.Startable)) return new MenuAction(ProfileTools.StartOther, label, !Playing, Playing ? S["play.session_active"] : null);
-        var why = cards.Any(c => c.State == CareerState.NotOffered) ? S.Format("sm.no_hardcore", ("game", game.Name))
-            : cards.Any(c => c.State == CareerState.Started) ? S.Format("sm.row.other_started", ("mode", otherWord), ("game", game.Name))
-            : S.Format("sm.row.start_other_off", ("game", game.Name));
-        return new MenuAction(ProfileTools.StartOther, label, false, why);
     }
 
     private string StatsOf(Career? career)
@@ -816,9 +794,6 @@ public sealed partial class ShellViewModel
             case ProfileTools.CopyTo:
                 OpenCopyFromProfile(slot, row);
                 break;
-            case ProfileTools.StartOther:
-                StartOtherProfileFrom(row);
-                break;
             case ProfileTools.History:
                 await OpenHistoryAsync(slot);
                 break;
@@ -837,26 +812,6 @@ public sealed partial class ShellViewModel
                 break;
         }
         ChangedSaves();
-    }
-
-    /// <summary>
-    /// "Start my {other mode} profile from this": the other profile's start choice opens on PLAY for this game (its "From my {mode} profile"
-    /// is this career); nothing launches by itself.
-    /// </summary>
-    private void StartOtherProfileFrom(ProfileRow source)
-    {
-        if (source.Hardcore) return; // OD-239: an Azimuth career starts fresh only
-        const string otherMode = "hardcore";
-        if (ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == otherMode && r.Card.Startable) is not { } target)
-        {
-            Message = S.Format("sm.row.no_other_profile", ("mode", ModeWord(SaveSlot.Hardcore)));
-            return;
-        }
-        _playAfterStart = false;
-        PickProfileRow(target);
-        if (_startRow is null) return;
-        Log($"saves: start {otherMode} {CurrentGame.Id} from the {source.Profile.Mode} career (Profiles row)");
-        OpenHome();
     }
 
     /// <summary>The explainer's "Create a HARDCORE/NOOB profile": the new-profile form with that mode.</summary>

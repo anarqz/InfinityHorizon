@@ -601,10 +601,10 @@ public sealed class CloudSaves
     /// <c>Repr-Digest</c>, every bundle check, and the content digest the revision was listed with. The valid bundle, else why not (a
     /// bundle that reads but holds other content is returned with its failure).
     /// </summary>
-    public static (ValidBundle? Bundle, SaveFailure? Failure) VerifyDownload(SaveBundleDownload download, ulong revision, string expectedContent, ICareerBundle? format = null)
+    public static (ValidBundle? Bundle, SaveFailure? Failure) VerifyDownload(SaveBundleDownload download, ulong revision, string expectedContent, ICareerBundle format)
     {
         ArgumentNullException.ThrowIfNull(download);
-        format ??= Fh2CareerBundle.Instance;
+        ArgumentNullException.ThrowIfNull(format);
         if (SaveReconcile.NormalizeDigest(expectedContent) is not { } expected) return (null, SaveFailure.Integrity("the revision has no content digest"));
         if (download.Revision is { } served && served != revision)
             return (null, SaveFailure.Integrity(string.Create(CultureInfo.InvariantCulture, $"asked for revision {revision}, the server sent {served}")));

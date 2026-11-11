@@ -104,10 +104,13 @@ public static class ProfileSeed
     /// then <c>GET .../save/revisions/{rev}/bundle</c>) and verified as every download is (size, <c>Repr-Digest</c>, the served revision,
     /// the listed content digest, every bundle check): the bytes the dry run checks and, on accept, the ones committed. This PC's folders
     /// are never the source. <see cref="SeedSource.NoRevision"/> when the source has no cloud revision; a failure carries its code.
+    /// <paramref name="format"/> is the game's own bundle (<see cref="SaveLayout.Bundle"/>): an FM5 career is read as FM5SAVE1 with every
+    /// sibling container (<see cref="PackedRevision.Containers"/>).
     /// </summary>
-    public static async Task<SeedSource> FetchSourceAsync(ISaveApi api, string access, string sourceXuid, CancellationToken cancellation = default)
+    public static async Task<SeedSource> FetchSourceAsync(ISaveApi api, string access, string sourceXuid, ICareerBundle format, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(api);
+        ArgumentNullException.ThrowIfNull(format);
         var page = await api.RevisionsAsync(access, sourceXuid, null, 1, cancellation).ConfigureAwait(false);
         if (!page.Ok || page.Value is null)
         {
@@ -119,12 +122,13 @@ public static class ProfileSeed
         {
             return SeedSource.Failed(download.Error ?? new ErrorBody("HTTP.EMPTY", "empty body", null), download.Status, download.RetryAfter, newest.Revision);
         }
-        var (bundle, failure) = CloudSaves.VerifyDownload(download.Value, newest.Revision, newest.ContentSha256);
+        var (bundle, failure) = CloudSaves.VerifyDownload(download.Value, newest.Revision, newest.ContentSha256, format);
         if (bundle is null || failure is not null)
         {
             return SeedSource.Failed(new ErrorBody(failure?.Code ?? NotSent, failure?.Message ?? "the bundle was not read", null), download.Status, null, newest.Revision);
         }
-        return new SeedSource(new PackedRevision(bundle.Label, bundle.Files, download.Value.Bytes, bundle.ContentSha256), newest.Revision, null, null, null);
+        return new SeedSource(new PackedRevision(bundle.Label, bundle.Files, download.Value.Bytes, bundle.ContentSha256) { Containers = bundle.Containers },
+            newest.Revision, null, null, null);
     }
 
     /// <summary>
@@ -139,7 +143,7 @@ public static class ProfileSeed
     {
         ArgumentNullException.ThrowIfNull(api);
         // resumes on the caller's context (no ConfigureAwait(false)): checking moves the caller's step list
-        var source = await FetchSourceAsync(api, access, sourceXuid, cancellation);
+        var source = await FetchSourceAsync(api, access, sourceXuid, api.Bundle, cancellation);
         if (source.Packed is not { } packed) return new SeedRun(source, null);
         checking?.Invoke(source);
         var answer = await api.CheckSeedAsync(access, targetXuid, sourceXuid, packed.Bundle, cancellation).ConfigureAwait(false);
@@ -163,9 +167,11 @@ public static class ProfileSeed
         InstalledRevision installed;
         try
         {
-            installed = CloudSaveFiles.Install(savesRoot, targetXuid, packed.Files, packed.ContentSha256, Guid.CreateVersion7().ToString("N"), ArchiveLabel);
+            // the line's own bundle installs every container it holds (FM5: the profile and its garage's siblings)
+            var valid = saves.Bundle.Validate(packed.Bundle);
+            installed = saves.Bundle.Install(savesRoot, targetXuid, valid, packed.ContentSha256, Guid.CreateVersion7().ToString("N"), ArchiveLabel, null);
         }
-        catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is SaveException or BundleException or IOException or UnauthorizedAccessException)
         {
             return SaveFailure.Integrity(e.Message);
         }
