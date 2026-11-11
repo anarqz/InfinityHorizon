@@ -29,7 +29,8 @@ static int game_patch_apply(unsigned char *at, const FiGamePatch *patch) {
 /* OD-239 8 (T-1111-AZIMUTH): launch.c, once an Azimuth session's ticket checked out and before the getters let the game read its
    identity (account.c account_wait holds them until azimuth_account_launch_done), so before the game builds its save container's
    name at profile load: the selected game's Azimuth save rows, all or nothing over their exact original bytes. A Hardcore
-   session (`azimuth` 0) writes nothing and logs nothing. On a refusal the game opens the container its identity names. */
+   session (`azimuth` 0) writes nothing and logs nothing. On a refusal the game opens the container its identity names, and the
+   launcher is told (Event 6 "1|launch.azimuth_save_refused"), so the player sees it. */
 void fi_game_azimuth_save(int azimuth) {
     const FiGameProfile *game = fi_game_profile();
     const FiGamePatch *rows = 0;
@@ -37,20 +38,23 @@ void fi_game_azimuth_save(int azimuth) {
     if (!azimuth) {
         return;
     }
+    unsigned char *image = fi_game_selected_image;
     if (!count) {
         log_append("AZIMUTH SAVE NOT APPLIED: this game has no Azimuth save row; nothing written.\r\n");
-        return;
-    }
-    unsigned char *image = fi_game_selected_image;
-    if (!image) {
+    } else if (!image) {
         log_append("AZIMUTH SAVE NOT APPLIED: no game image was handed over; nothing written.\r\n");
-        return;
+    } else {
+        int result = fi_game_patches_apply(memory_read, game_patch_write, image, rows, count, &failed);
+        log_append(result > 0 ? "AZIMUTH SAVE: " : result == 0 ? "AZIMUTH SAVE NOT APPLIED (unexpected bytes, nothing written): "
+                                                               : "AZIMUTH SAVE NOT APPLIED (a write failed): ");
+        log_append(rows[result > 0 ? 0 : failed].what);
+        log_append(".\r\n");
+        if (result > 0) {
+            return;
+        }
     }
-    int result = fi_game_patches_apply(memory_read, game_patch_write, image, rows, count, &failed);
-    log_append(result > 0 ? "AZIMUTH SAVE: " : result == 0 ? "AZIMUTH SAVE NOT APPLIED (unexpected bytes, nothing written): "
-                                                           : "AZIMUTH SAVE NOT APPLIED (a write failed): ");
-    log_append(rows[result > 0 ? 0 : failed].what);
-    log_append(".\r\n");
+    /* never only the log: the launcher shows the player an overlay toast (HookEvents.NoticeToast fills in the folder) */
+    fi_launch_notice(FI_NOTICE_WARNING, "launch.azimuth_save_refused");
 }
 
 /* "<label> 0x<16 hex digits>" and a line break. */
