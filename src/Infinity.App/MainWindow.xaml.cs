@@ -451,6 +451,8 @@ public partial class MainWindow : Window
 
     private void OnRestoreOriginal(object sender, RoutedEventArgs e) => _vm.OpenRestoreOriginal();
     private async void OnConfirmCopy(object sender, RoutedEventArgs e) => await _vm.ConfirmCopyAsync();
+    private void OnPickOtherSaveFolder(object sender, RoutedEventArgs e) => _vm.PickOtherSaveFolder();
+    private void OnTogglePickBackups(object sender, RoutedEventArgs e) => _vm.TogglePickBackups();
     private async void OnUseOtherSave(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is SavePickRow row) await _vm.UseOtherSaveAsync(row);

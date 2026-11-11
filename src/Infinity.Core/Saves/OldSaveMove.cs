@@ -209,7 +209,7 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
     /// First the verified backup of every container written (<c>User_9000000000000</c> and those siblings), its path handed to
     /// <paramref name="backedUp"/>; then <see cref="AzimuthSaves.CloneRevision"/> of each. The source is only read.
     /// </summary>
-    public OldSaveMoveResult CopyFrom(SaveSource source, SaveLayout layout, Action<string>? backedUp = null, HistoryProfile? profile = null)
+    public OldSaveMoveResult CopyFrom(SaveSource source, SaveLayout layout, Action<string>? backedUp = null, HistoryProfile? profile = null, HistoryReason? reason = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(layout);
@@ -248,7 +248,7 @@ public sealed class OldSaveMove(string savesRoot, LocalHistory history, Func<boo
         {
             return new(OldSaveMoveOutcome.Failed, Code: "LOCAL.READ_FAILED", Message: e.Message);
         }
-        var (backup, why) = BackUpOrWhy([target, .. siblings.Select(s => s.Name)], backedUp, profile, OtherSaveReason, "other save to azimuth");
+        var (backup, why) = BackUpOrWhy([target, .. siblings.Select(s => s.Name)], backedUp, profile, reason ?? OtherSaveReason, "other save to azimuth");
         if (why is not null) return why;
         if (_gameRunning()) return With(new(OldSaveMoveOutcome.GameRunning), backup);
         try

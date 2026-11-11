@@ -1436,6 +1436,22 @@
                 <StackPanel x:Name="OtherSavePicker" MaxWidth="860" Visibility="{Binding ShowSavesPick, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding PickTitle}" Style="{StaticResource SmH1}" />
                   <TextBlock Text="{Binding PickSub}" Style="{StaticResource SmSub}" />
+                  <!-- azimuth9: first, a folder from anywhere (the launcher's own picker), then a divider, then the saves this PC has -->
+                  <Border x:Name="PickFolderCard" Style="{StaticResource SmCard}" Margin="0,0,0,10" Padding="16,12">
+                    <DockPanel>
+                      <Button DockPanel.Dock="Right" Content="{Binding S[othersave.browse]}" Style="{StaticResource SmButton}" VerticalAlignment="Center" Margin="12,0,0,0"
+                              Click="OnPickOtherSaveFolder" IsEnabled="{Binding CanUseOtherSave}" />
+                      <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding S[othersave.pick_folder]}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding S[othersave.pick_folder_hint]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </DockPanel>
+                  </Border>
+                  <Border Style="{StaticResource SmNote}" Visibility="{Binding HasOldSaveResult, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding OldSaveResultText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
+                  </Border>
+                  <Border BorderBrush="{StaticResource SmLine}" BorderThickness="0,1,0,0" Margin="0,8,0,12" />
+                  <TextBlock Text="{Binding S[othersave.group_profiles]}" FontWeight="Bold" FontSize="15" Margin="0,0,0,8" />
                   <TextBlock Text="{Binding S[othersave.none]}" Style="{StaticResource SmHint}" Visibility="{Binding PickEmpty, Converter={StaticResource Visible}}" />
                   <ItemsControl ItemsSource="{Binding PickRows}" Focusable="False">
                     <ItemsControl.ItemTemplate>
@@ -1447,6 +1463,29 @@
                                     IsEnabled="{Binding DataContext.CanUseOtherSave, RelativeSource={RelativeSource AncestorType=Window}}" AutomationProperties.Name="{Binding Title}" />
                             <StackPanel VerticalAlignment="Center">
                               <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                              <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding LineTip}" />
+                            </StackPanel>
+                          </DockPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <!-- the launcher's backups: collapsed by default, newest first, each saying what it kept and why -->
+                  <DockPanel Margin="0,10,0,8" Visibility="{Binding HasPickBackups, Converter={StaticResource Visible}}">
+                    <Button x:Name="PickBackupsToggle" DockPanel.Dock="Right" Content="{Binding PickBackupsToggle}" Style="{StaticResource SmButton}" Padding="10,4" FontSize="12"
+                            Click="OnTogglePickBackups" />
+                    <TextBlock Text="{Binding PickBackupsHeader}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center" />
+                  </DockPanel>
+                  <ItemsControl ItemsSource="{Binding PickBackupRows}" Focusable="False" Visibility="{Binding PickBackupsOpen, Converter={StaticResource Visible}}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource SmCard}" Margin="0,0,0,10" Padding="16,12">
+                          <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="{Binding DataContext.S[othersave.use], RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Style="{StaticResource SmButton}" VerticalAlignment="Center" Margin="12,0,0,0" Click="OnUseOtherSave"
+                                    IsEnabled="{Binding DataContext.CanUseOtherSave, RelativeSource={RelativeSource AncestorType=Window}}" AutomationProperties.Name="{Binding Title}" />
+                            <StackPanel VerticalAlignment="Center">
+                              <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
                               <TextBlock Text="{Binding Line}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding LineTip}" />
                             </StackPanel>
                           </DockPanel>
