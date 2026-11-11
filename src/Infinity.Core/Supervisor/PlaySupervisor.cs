@@ -59,7 +59,7 @@ public sealed record SupervisorConfig(
 
     /// <summary>
     /// OD-112: the session's multiplayer mod set (the same instance the <see cref="Worlds"/> bridge uses).
-    /// A non-empty <see cref="Matchmaking.IModSetSource.Planned"/> admits the session as <c>modded</c> (GATE_API.md §2).
+    /// A planned mod that counts as modded (<see cref="Matchmaking.IModSetSource.Modded"/>, OD-236) admits the session as <c>modded</c> (GATE_API.md §2).
     /// </summary>
     public Matchmaking.IModSetSource? Mods { get; init; }
 
@@ -296,6 +296,16 @@ public sealed class PlaySupervisor
         }
     }
 
+    /// <summary>Review 3.1.2 (finding 5): set by <see cref="CancelBeforeSpawn"/>; read only at the checkpoints before the game is started.</summary>
+    private volatile bool _cancelBeforeSpawn;
+
+    /// <summary>
+    /// Review 3.1.2 (finding 5): the player's Cancel of a launch the supervisor is preparing. It never interrupts a step (a cloud save being
+    /// installed or uploaded finishes first): the next checkpoint before the game is started leaves the gate and ends as a cancelled queue.
+    /// Once the game is started it changes nothing; the shell's <see cref="SupervisorCommand.Quit"/> closes it then.
+    /// </summary>
+    public void CancelBeforeSpawn() => _cancelBeforeSpawn = true;
+
     /// <summary>One gate session and one game process; null when it ended without a game exit.</summary>
     private async Task<ExitDisposition?> OneSessionAsync(string? initialSessionId, CancellationToken cancellation)
     {
@@ -508,7 +518,7 @@ public sealed class PlaySupervisor
 
     private async Task<bool> CancelBeforeSpawnAsync(string sessionId, ulong? fence, CancellationToken cancellation)
     {
-        if (!cancellation.IsCancellationRequested && !_online.IsPaused) return false;
+        if (!cancellation.IsCancellationRequested && !_online.IsPaused && !_cancelBeforeSpawn) return false;
         if (_online.IsPaused) EmitPause(await _online.Paused.ConfigureAwait(false));
         var left = await LeaveQuietly(sessionId, "player", fence).ConfigureAwait(false);
         _emit(new SupervisorEvent.Ended("queue_cancelled", left));

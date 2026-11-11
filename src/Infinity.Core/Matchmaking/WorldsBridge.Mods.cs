@@ -13,15 +13,11 @@ public sealed partial class WorldsBridge
     /// The set to send (null: vanilla, left out of the body). Alex 2026-11-10 (T-1110-NOMODMATCH): "The only thing we'll hold now, is show to
     /// other users which mods they're using, and that's it": mods never decide who joins whom, so nothing here ever refuses a join, a host,
     /// a request, an invite or free roam (the refusal is always null). The set is what ExtraOptions reported loaded once it answered, else
-    /// the launch's planned set; a modded session (the gate's <c>modded</c>, a non-empty plan) always declares a non-empty set, as the server
-    /// reads it (400 <c>{field: "mods"}</c> otherwise).
+    /// the launch's planned set; a modded session (the gate's <c>modded</c>, OD-236: a mod that counts as modded) always declares a non-empty
+    /// set, as the server reads it (400 <c>{field: "mods"}</c> otherwise). A session that is not modded declares its set only once the server
+    /// accepts it (<see cref="ModSets.UnmoddedSetsAccepted"/>, <see cref="ModSets.Wire"/>).
     /// </summary>
-    private (IReadOnlyList<ModEntry>? Mods, string? Refusal) WireMods()
-    {
-        var state = ModSet.State;
-        if (state.Phase == ModSetPhase.Ready && state.Mods.Count > 0) return (state.Mods, null);
-        return (ModSet.Planned.Count > 0 ? ModSet.Planned : null, null);
-    }
+    private (IReadOnlyList<ModEntry>? Mods, string? Refusal) WireMods() => (ModSets.Wire(ModSet, ModSets.UnmoddedSetsAccepted), null);
 
     /// <summary>
     /// OD-181 (CR-L48): the catalog's name of a mod by its multiplayer id (the localized name, or null when the catalog does

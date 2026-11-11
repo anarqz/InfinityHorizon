@@ -153,6 +153,39 @@ public static class SaveImport
     }
 
     /// <summary>
+    /// Review 3.1.2 (finding 12): <see cref="SiblingRefusal"/> for a container already on this PC, true only for a genuine content refusal (no
+    /// sealed revision, not its kind's files, unreadable text). A file that cannot be read now (locked, no access) is no refusal: the
+    /// container is left as it is, never given a revision on top for a transient reason.
+    /// </summary>
+    internal static bool SiblingContentRefused(string dir, string name, SaveLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.Bundle is not Fm5CareerBundle || Fm5Bundle.KindOfSibling(name) is not { } kind) return false;
+        try
+        {
+            // the seal check reads every file: one it could not open now reads as "not sealed", which is not the container's content
+            if (AzimuthSaves.NewestSealed(dir) is not { } newest) return !AnyFileUnreadableNow(dir);
+            Fm5CareerBundle.ReadContainer(newest, Fm5Bundle.FilesOf(kind));
+            return false;
+        }
+        // a file the commit names that is not there is content (the container is incomplete); a lock or a denied read is not
+        catch (Exception e) when (e is SaveException or System.Text.DecoderFallbackException or FileNotFoundException or DirectoryNotFoundException) { return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>A file under <paramref name="dir"/> that exists but cannot be opened for reading now (a lock, no access).</summary>
+    private static bool AnyFileUnreadableNow(string dir)
+    {
+        foreach (var file in Directory.EnumerateFiles(dir, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }))
+        {
+            try { using var _ = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// The sibling container names <paramref name="revision"/>'s career rows point to (<see cref="SaveLayout.References"/>; empty when the
     /// game names none). The data file is read from a private temporary copy past its header, read-only; a file that is not the database
     /// the layout says throws <see cref="SaveException"/> (never guessed around). Values that are not a sibling name are not references.
@@ -264,7 +297,7 @@ public static class SaveImport
             {
                 var name = Path.GetFileName(sibling);
                 var destination = Path.Combine(savesRoot, layout.PlayerDir, name);
-                if (Directory.Exists(destination) && SiblingRefusal(destination, name, layout) is not null)
+                if (Directory.Exists(destination) && SiblingContentRefused(destination, name, layout))
                 {
                     // hotfix 3.1.2: the container on this PC does not read as Play reads it (no sealed revision left, or not its kind's
                     // files) while the save's own does: the save's newest revision goes on top of it (nothing on this PC is overwritten)

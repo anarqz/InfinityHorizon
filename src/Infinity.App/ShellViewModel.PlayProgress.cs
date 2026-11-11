@@ -59,6 +59,9 @@ public sealed partial class ShellViewModel
     /// <summary>The supervisor started the game process for the current attempt (a cancel then closes the game instead of leaving the gate).</summary>
     private bool _playSpawned;
 
+    /// <summary>The running online attempt's supervisor (review 3.1.2, finding 5), or null.</summary>
+    private PlaySupervisor? _supervisor;
+
     /// <summary>
     /// One Play attempt (online or offline) under its overlay: the overlay opens with <paramref name="label"/>, and whatever ends the attempt
     /// (the game started, a refusal, a cancel, the session's end, an exception) closes it. A cancelled attempt that is still unwinding
@@ -77,6 +80,7 @@ public sealed partial class ShellViewModel
             if (ReferenceEquals(_playAttempt, own)) _playAttempt = null;
             EndPlayProgress();
             if (!_playLaunched) PlayRefusedVisibly();
+            Changed(string.Empty); // the mods page's buttons (ModsIdle) come back once a cancelled attempt has stopped
         }
     }
 
@@ -110,8 +114,16 @@ public sealed partial class ShellViewModel
         catch (ObjectDisposedException) { } // already over
         if (_play is not null && _offlineChild is null && _commands is not null)
         {
-            if (_playSpawned) _commands.Writer.TryWrite(new SupervisorCommand.Quit());
-            else StopPlay();
+            // review 3.1.2 (finding 5): once the supervisor runs, a cancel never leaves a started game without its session. Still asking
+            // the gate (nothing written yet): the attempt stops as Leave queue does. Admitted: the preparation stops at its next checkpoint,
+            // never inside a cloud save step (CancelBeforeSpawn), and a game that was started meanwhile is closed (Quit), whether or not the
+            // Spawned event has reached the window yet.
+            if (_waitingForAdmission && !_playSpawned) StopPlay();
+            else
+            {
+                _supervisor?.CancelBeforeSpawn();
+                _commands.Writer.TryWrite(new SupervisorCommand.Quit());
+            }
         }
         EndPlayProgress();
         Message = S["play.cancelled"];

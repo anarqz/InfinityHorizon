@@ -58,19 +58,15 @@ public sealed partial class ShellViewModel
     {
         if (_install is not { } install || ModManagerFactory() is not { } factory || !ExtraOptionsLayout.HasModsFolder(CurrentGame.Id)) return;
         var game = CurrentGame.Id; var hardcore = ProfileHardcore; var first = LoadFirstFolders(game);
-        var held = Path.Combine(_stateDirectory, HardcoreHeldFileFor(game)); var managedHeld = ManagedHardcoreHeldFile(game);
         var names = _modHealth.Installed.Where(i => i.Manifest is not null).GroupBy(i => i.Id, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => ModName(g.First().Manifest!), StringComparer.Ordinal);
         ModToggleAllResult? result = null;
         await RunModOperationAsync(async () =>
         {
             var progress = new Progress<string>(stage => ModStep(S["mods.progress." + stage]));
-            result = await Task.Run(() =>
-            {
-                // the player's choice for every folder: what a Hardcore launch held off is not given back later
-                ExtraOptionsMods.ForgetHeld(held); ManagedModFiles.ForgetHardcoreHeld(managedHeld);
-                return factory().SetEnabledAll(game, enable, first, progress, hardcore);
-            });
+            // review 3.1.2: what it changes leaves the Hardcore holds inside the operation, under its lock (the factory's held files); a mod it
+            // refuses, or a run that stops, keeps its hold
+            result = await Task.Run(() => factory().SetEnabledAll(game, enable, first, progress, hardcore));
         }, S["mods.action_done"], label: S.Format(enable ? "mods.lock.enable_all" : "mods.lock.disable_all", ("game", GameLabel)));
         if (result is null) return; // refused or failed as a whole: RunModOperationAsync said why
         Log("mods: " + (enable ? "enable" : "disable") + " all " + game + ": " + result.Changed.Count + " managed, " + result.ManualChanged + " by hand"

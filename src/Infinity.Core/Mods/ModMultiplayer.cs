@@ -38,29 +38,34 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
     /// </summary>
     public bool EntersLobbySet => Impact != "cosmetic";
 
-    /// <summary>See <see cref="EntersLobbySet"/>: the mods of the lobby set (Hardcore's rule is <see cref="AllowedInHardcore"/>).</summary>
+    /// <summary>See <see cref="EntersLobbySet"/>: the mods of the declared set (Hardcore's rule and the <c>modded</c> flag: <see cref="CountsAsModded"/>).</summary>
     public static bool AffectsMultiplayer(ModManifest manifest) =>
         (manifest ?? throw new ArgumentNullException(nameof(manifest))).Multiplayer is { EntersLobbySet: true };
 
     /// <summary>
-    /// Whether a Hardcore profile keeps the mod (OD-233: both modes or Noob only). Alex 2026-11-10: "Car Packs mods from InfinityCatalog =
-    /// Can be used in Hardcore", declared by the manifest's <c>modes</c> (<see cref="ModManifest.DeclaresHardcore"/>), while the pack still
-    /// enters the lobby set (<see cref="AffectsMultiplayer"/> is about the lobby, this about the mode). <paramref name="catalog"/>
-    /// (<see cref="HardcorePolicy"/>): the catalog entry of the same id decides for an installed copy, whose snapshot may predate the
-    /// declaration (<c>modes</c> is no content, <see cref="ModManifest.SameContent"/>); a mod the catalog does not list keeps its own.
+    /// OD-236: whether the mod makes a session <c>modded</c> (<see cref="ModManifest.CountsAsModded"/>, the catalog's <c>countsAsModded</c>).
+    /// <paramref name="catalog"/> (<see cref="ModdedPolicy"/>): the catalog entry of the same id decides for an installed copy, whose snapshot
+    /// may predate the declaration (the field is no content, <see cref="ModManifest.SameContent"/>); a mod the catalog does not list keeps
+    /// its own. No mod id is named anywhere: the catalog data decides.
     /// </summary>
-    public static bool AllowedInHardcore(ModManifest manifest, IReadOnlyDictionary<string, bool>? catalog = null)
+    public static bool CountsAsModded(ModManifest manifest, IReadOnlyDictionary<string, bool>? catalog = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        return catalog is not null && catalog.TryGetValue(manifest.Id, out var listed) ? listed : manifest.DeclaresHardcore;
+        return catalog is not null && catalog.TryGetValue(manifest.Id, out var listed) ? listed : manifest.CountsAsModded;
     }
 
-    /// <summary>The catalog's Hardcore rule by mod id, for <see cref="AllowedInHardcore"/> (an immutable copy: safe off the UI thread).</summary>
-    public static IReadOnlyDictionary<string, bool> HardcorePolicy(IEnumerable<ModManifest> catalog)
+    /// <summary>
+    /// OD-236: a Hardcore profile keeps exactly the mods that do not count as modded (spotify-radio, garage-revving and the car packs in the
+    /// official catalog); every other mod plays in Noob only (OD-233). See <see cref="CountsAsModded"/>.
+    /// </summary>
+    public static bool AllowedInHardcore(ModManifest manifest, IReadOnlyDictionary<string, bool>? catalog = null) => !CountsAsModded(manifest, catalog);
+
+    /// <summary>The catalog's <c>countsAsModded</c> by mod id, for <see cref="CountsAsModded"/> (an immutable copy: safe off the UI thread).</summary>
+    public static IReadOnlyDictionary<string, bool> ModdedPolicy(IEnumerable<ModManifest> catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var policy = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var manifest in catalog) policy.TryAdd(manifest.Id, manifest.DeclaresHardcore);
+        foreach (var manifest in catalog) policy.TryAdd(manifest.Id, manifest.CountsAsModded);
         return policy;
     }
 

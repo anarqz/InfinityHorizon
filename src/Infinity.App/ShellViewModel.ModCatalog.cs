@@ -307,27 +307,40 @@ public sealed partial class ShellViewModel
         : _modHealth.Installed.Count(i => i.Enabled && i.Problem is null && i.Manifest is { } m && !AllowedInHardcore(m) && m.ModsGame == CurrentGame.Id)
           + ExtraOptionsModItems.Count(i => i.Enabled && i.Game == CurrentGame.Id);
 
-    /// <summary>The catalog's Hardcore rule by id (<see cref="ModMultiplayer.HardcorePolicy"/>), rebuilt when the catalog changes.</summary>
-    private IReadOnlyDictionary<string, bool> HardcoreCatalog
+    /// <summary>
+    /// OD-236 (Alex 2026-11-10: "Noobs can use any MODS for playing online, but they don't store records"): a Noob online launch of the chosen
+    /// game whose declared set would hold a mod that counts as modded (an enabled launcher mod of the set, <see cref="CountsAsModded"/>, or
+    /// any enabled hand-copied folder). Shown as one line on PLAY, never a blocker.
+    /// </summary>
+    private bool NoobModdedSession => !ProfileHardcore && PlaysOnline
+        && (_modHealth.Installed.Any(i => i.Enabled && i.Problem is null && i.Manifest is { } m && m.ModsGame == CurrentGame.Id
+                && ModMultiplayer.AffectsMultiplayer(m) && CountsAsModded(m))
+            || ExtraOptionsModItems.Any(i => i.Enabled && i.Game == CurrentGame.Id));
+
+    /// <summary>The catalog's <c>countsAsModded</c> by id (<see cref="ModMultiplayer.ModdedPolicy"/>), rebuilt when the catalog changes.</summary>
+    private IReadOnlyDictionary<string, bool> ModdedCatalog
     {
         get
         {
-            if (!ReferenceEquals(_hardcoreCatalogFor, _manifestCatalog)) { _hardcoreCatalog = ModMultiplayer.HardcorePolicy(_manifestCatalog); _hardcoreCatalogFor = _manifestCatalog; }
-            return _hardcoreCatalog;
+            if (!ReferenceEquals(_moddedCatalogFor, _manifestCatalog)) { _moddedCatalog = ModMultiplayer.ModdedPolicy(_manifestCatalog); _moddedCatalogFor = _manifestCatalog; }
+            return _moddedCatalog;
         }
     }
-    private IReadOnlyDictionary<string, bool> _hardcoreCatalog = new Dictionary<string, bool>();
-    private IReadOnlyList<ModManifest>? _hardcoreCatalogFor;
+    private IReadOnlyDictionary<string, bool> _moddedCatalog = new Dictionary<string, bool>();
+    private IReadOnlyList<ModManifest>? _moddedCatalogFor;
+
+    /// <summary>OD-236: the mod makes a session modded (<see cref="ModMultiplayer.CountsAsModded"/>: the catalog entry's <c>countsAsModded</c>).</summary>
+    private bool CountsAsModded(ModManifest manifest) => ModMultiplayer.CountsAsModded(manifest, ModdedCatalog);
 
     /// <summary>
-    /// Alex 2026-11-10 ("Car Packs mods from InfinityCatalog = Can be used in Hardcore"): a Hardcore profile keeps the mods for both modes
-    /// (<see cref="ModMultiplayer.AllowedInHardcore"/>: the catalog entry's <c>modes</c>, else OD-233's cosmetic rule).
+    /// OD-236 (Alex 2026-11-10: "Players can use spotify-radio, carpacks, garage-revving on HARDCORE"): a Hardcore profile keeps exactly the
+    /// mods that do not count as modded (<see cref="ModMultiplayer.AllowedInHardcore"/>).
     /// </summary>
-    private bool AllowedInHardcore(ModManifest manifest) => ModMultiplayer.AllowedInHardcore(manifest, HardcoreCatalog);
+    private bool AllowedInHardcore(ModManifest manifest) => ModMultiplayer.AllowedInHardcore(manifest, ModdedCatalog);
     /// <summary>OD-232: enabled installations of a retired format an online launch refuses (<see cref="ModLaunchPreparation.BlocksOnline"/>), by name.</summary>
     private IReadOnlyList<string> RetiredOnlineMods => !PlaysOnline ? [] : _modHealth.Installed
         .Where(i => i.Enabled && i.Manifest is { } m && ModLaunchPreparation.BlocksOnline(m)).Select(i => i.Manifest!.Text("name", S.Locale)).ToArray();
-    private string RetiredOnlineRefusal(IEnumerable<string> names) => S.Format("mods.retired_online_refused", ("mods", string.Join(", ", names)));
+    // Alex 2026-11-10 (review 3.1.2, finding 6): no longer a refusal; the online launch turns them off for good (one line on PLAY says so)
 
     /// <summary>Shown on Play: why Play waits for mods, or that some need attention (never a silent block).</summary>
     // OD-118 T1f: while the mod catalog loads or after it failed, Play says so (it never blocks Play).
@@ -335,8 +348,9 @@ public sealed partial class ShellViewModel
         : !_catalogLoaded && _catalogLoading ? S["play.catalog_loading"]
         : !_catalogLoaded && _catalogFailure is not null ? S["play.catalog_failed"]
         : HardcoreTurnsOff is var off and > 0 ? S.Format("mods.hardcore_turn_off", ("count", off.ToString(CultureInfo.CurrentCulture)))
-        : RetiredOnlineMods is { Count: > 0 } retired ? RetiredOnlineRefusal(retired)
-        : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"] : null;
+        : RetiredOnlineMods is { Count: > 0 } retired ? S.Format("mods.retired_turn_off", ("count", retired.Count.ToString(CultureInfo.CurrentCulture)))
+        : _modStateError is not null ? S["mods.state_unreadable"] : _modHealth.HasWarnings ? S["mods.play_warning"]
+        : NoobModdedSession ? S["mods.noob_modded"] : null;
     public bool ShowModPlayNotice => ModPlayNotice is not null && !Playing;
 
     /// <summary>OD-118 T1f: the catalog failed and is not loading: PLAY offers a retry next to the reason.</summary>
@@ -359,8 +373,14 @@ public sealed partial class ShellViewModel
         var azimuth = _install.Root; var game = ContentLocation?.Mount;
         var state = ModHome;
         var cache = DevelopmentMods ? Environment.GetEnvironmentVariable("FI_DEV_MOD_PACKAGE_CACHE") : null;
-        var hardcore = HardcoreCatalog; // the catalog's Hardcore rule, read here (the factory runs on workers)
-        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache) { HardcoreCatalog = hardcore };
+        var modded = ModdedCatalog; // the catalog's countsAsModded, read here (the factory runs on workers)
+        var launcherState = _stateDirectory; // review 3.1.2: the player's own changes leave the Hardcore holds kept there
+        return () => new ManagedModFiles(azimuth, game, state, GameRunning, cache)
+        {
+            ModdedCatalog = modded,
+            HardcoreHeldFile = g => ManagedHardcoreHeldFileIn(launcherState, g),
+            HandHeldFile = g => Path.Combine(launcherState, HardcoreHeldFileFor(g)),
+        };
     }
 
     /// <summary>Constructs the manager; only for code already off the UI thread or the harness.</summary>
@@ -1000,7 +1020,7 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>Why a mod operation cannot run now (<see cref="ModsIdle"/> is false), as an i18n key.</summary>
-    private string ModsWaitReason => Playing ? "mods.wait.playing" : LauncherUpdateBusy ? "mods.wait.update" : IntegrityChecking ? "mods.wait.integrity" : _modOperation ? "mods.wait.busy" : "mods.wait.launcher";
+    private string ModsWaitReason => Playing ? "mods.wait.playing" : PlayAttemptStopping ? "mods.wait.play_stopping" : LauncherUpdateBusy ? "mods.wait.update" : IntegrityChecking ? "mods.wait.integrity" : _modOperation ? "mods.wait.busy" : "mods.wait.launcher";
 
     /// <summary>
     /// Every mod change the player asks for (install, install all, enable/disable, update, uninstall, recover, resolve, relink, settings,

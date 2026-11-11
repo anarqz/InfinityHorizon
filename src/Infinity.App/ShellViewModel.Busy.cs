@@ -29,8 +29,12 @@ public sealed partial class ShellViewModel
     /// <summary>Test seam: every rebuild of the screen after the overlay closed.</summary>
     internal int SettleCount { get; private set; }
 
-    /// <summary>The modal overlay is up. Hotfix 3.1.2: never over a prompt that waits for the player during a Play (<see cref="PlayStepsAside"/>).</summary>
-    public bool ShowBusyOverlay => _busyState.IsBusy && !PlayStepsAside;
+    /// <summary>
+    /// The modal overlay is up. Hotfix 3.1.2: never over a prompt that waits for the player during a Play (<see cref="PlayStepsAside"/>).
+    /// Review 3.1.2 (finding 8): only the Play's own scope steps aside; any other open scope or action (a sign-in the prompt started, its
+    /// spinner and Cancel) still shows.
+    /// </summary>
+    public bool ShowBusyOverlay => _busyState.IsBusy && !(PlayStepsAside && _busyState.Depth == 1 && !_busyState.ActionRunning);
 
     public string BusyLabel => _busyState.Label;
 
@@ -47,7 +51,9 @@ public sealed partial class ShellViewModel
     /// (3.1.1): so can a Play's "Joining queue…" once it asks the server for a place (Leave queue). Hotfix 3.1.2: and any Play's overlay
     /// once it has been up for <see cref="PlayCancelAfter"/> (never a dead end).
     /// </summary>
-    public bool CanCancelBusy => ShowBusyOverlay && (_signIn is not null || _playOverlay is not null && !_busy && (CanLeaveQueue || PlayCancelReady));
+    // Review 3.1.2 (finding 9): a Play's Cancel stays available while one of its steps runs (_busy, offline mod preparation until the game
+    // starts): the step finishes, the attempt stops at its next check (never inside a write). Leave queue still waits for an idle moment.
+    public bool CanCancelBusy => ShowBusyOverlay && (_signIn is not null || _playOverlay is not null && (!_busy && CanLeaveQueue || PlayCancelReady));
 
     /// <summary>The label the overlay shows now, for the dispatcher watchdog's thread (a field read).</summary>
     internal string BusyActivity => _busyActivity;

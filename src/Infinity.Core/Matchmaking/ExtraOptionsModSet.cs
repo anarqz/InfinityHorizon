@@ -6,8 +6,11 @@ using Infinity.Core.Mods;
 
 namespace Infinity.Core.Matchmaking;
 
-/// <summary>One enabled <c>mods\</c> folder of the plan: the folder, the id ExtraOptions logs it by, and its lobby entry.</summary>
-public sealed record ExtraOptionsPlannedMod(string Folder, string ModId, ModEntry Entry);
+/// <summary>
+/// One enabled <c>mods\</c> folder of the plan: the folder, the id ExtraOptions logs it by, its lobby entry, and whether it makes the session
+/// <c>modded</c> (OD-236: false only for a launcher-installed mod whose catalog entry says <c>countsAsModded: false</c>).
+/// </summary>
+public sealed record ExtraOptionsPlannedMod(string Folder, string ModId, ModEntry Entry, bool CountsAsModded = true);
 
 /// <summary>
 /// Owner 2026-10-28: "Infinity should read which mods are loaded by ExtraOptions and send this when a lobby is opened as the list of
@@ -50,6 +53,9 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
     public IReadOnlyList<ExtraOptionsPlannedMod> Plan => _plan;
 
     public IReadOnlyList<ModEntry> Planned { get; }
+
+    /// <summary>OD-236: a planned mod counts as modded (a hand-copied folder always does).</summary>
+    public bool Modded => _plan.Any(p => p.CountsAsModded);
 
     public ModSetState State { get { lock (_lock) return _state; } }
 
@@ -121,14 +127,19 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
     /// <param name="hash">
     /// False: the files are not read (<see cref="Unhashed"/> stands for each fingerprint), the plan a launch declares when hashing failed.
     /// T-1110-NOMODMATCH: the set is shown to other players only, so a launch never stops for its mods: more than
-    /// <see cref="MatchmakingLimits.ModsMax"/> declares the first ones by id, and files that cannot be read are declared unhashed.
+    /// <see cref="MatchmakingLimits.ModsMax"/> declares the first ones by id (those that count as modded first, so the cut never hides the
+    /// <c>modded</c> flag), and files that cannot be read are declared unhashed.
+    /// </param>
+    /// <param name="notModdedFolders">
+    /// OD-236: the folders of launcher-installed mods that do not count as modded (the catalog's <c>countsAsModded: false</c>); every other
+    /// planned folder, hand-copied ones included, counts (<see cref="ExtraOptionsPlannedMod.CountsAsModded"/>).
     /// </param>
     public static IReadOnlyList<ExtraOptionsPlannedMod> PlanFor(string azimuthRoot, IReadOnlySet<string> cosmeticFolders, string game = ModManifest.DefaultGame,
-        bool hash = true)
+        bool hash = true, IReadOnlySet<string>? notModdedFolders = null)
     {
-        var plan = PlanAll(azimuthRoot, cosmeticFolders, game, hash);
+        var plan = PlanAll(azimuthRoot, cosmeticFolders, game, hash, notModdedFolders);
         return plan.Count <= MatchmakingLimits.ModsMax ? plan
-            : [.. plan.OrderBy(p => p.Entry.Id, StringComparer.Ordinal).Take(MatchmakingLimits.ModsMax)];
+            : [.. plan.OrderBy(p => p.CountsAsModded ? 0 : 1).ThenBy(p => p.Entry.Id, StringComparer.Ordinal).Take(MatchmakingLimits.ModsMax)];
     }
 
     /// <summary>The fingerprint of a mod whose files could not be read (SHA-256 of nothing): display only.</summary>
@@ -136,9 +147,10 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
 
     /// <summary>How many mods <see cref="PlanFor"/> would declare without the cap (for the log).</summary>
     public static int CountFor(string azimuthRoot, IReadOnlySet<string> cosmeticFolders, string game = ModManifest.DefaultGame) =>
-        PlanAll(azimuthRoot, cosmeticFolders, game, hash: false).Count;
+        PlanAll(azimuthRoot, cosmeticFolders, game, hash: false, null).Count;
 
-    private static List<ExtraOptionsPlannedMod> PlanAll(string azimuthRoot, IReadOnlySet<string> cosmeticFolders, string game, bool hash)
+    private static List<ExtraOptionsPlannedMod> PlanAll(string azimuthRoot, IReadOnlySet<string> cosmeticFolders, string game, bool hash,
+        IReadOnlySet<string>? notModdedFolders)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(cosmeticFolders);
@@ -157,7 +169,7 @@ public sealed class ExtraOptionsModSetSource : IModSetSource
             }
             var entry = new ModEntry { Id = id, Version = LobbyVersion(mod.Version),
                 Fingerprint = hash ? Fingerprint(Path.Combine(ExtraOptionsMods.ModsDirectory(azimuthRoot, game), mod.Folder)) : Unhashed };
-            plan.Add(new ExtraOptionsPlannedMod(mod.Folder, mod.Id, entry));
+            plan.Add(new ExtraOptionsPlannedMod(mod.Folder, mod.Id, entry, notModdedFolders?.Contains(mod.Folder) != true));
         }
         return plan;
     }
