@@ -21,7 +21,8 @@ enum {
     FI_FEATURES_ALL = (1u << 4) - 1u
 };
 
-/* In memory only, from the game's first IXMLHTTPRequest2, and only over its exact original bytes. */
+/* In memory only, and only over its exact original bytes: `patches` from the game's first IXMLHTTPRequest2,
+   `azimuth_save_patches` from an Azimuth session's ticket (OD-239 8), before the game reads its identity. */
 typedef struct {
     unsigned rva;
     unsigned char size;
@@ -166,7 +167,34 @@ typedef struct {
        Event 9 reports FI_WATCH_SCREEN_UNKNOWN, so the launcher takes no invite there. FM5: its hopper cloud config loaded (SAURON). */
     const FiReadyTerm *screen_terms;
     unsigned screen_term_count;
+    /* OD-239 8 (T-1111-AZIMUTH): the rows an Azimuth session (the ticket's mode `noob`, the internal id) writes once its ticket
+       checked out and before the game may read its identity (launch.c launch_go_online), so the game opens Azimuth's own save
+       container User_9000000000000 while its online identity stays the profile's. All or nothing (fi_game_patches_apply); a
+       Hardcore session never writes them. 0: none. */
+    const FiGamePatch *azimuth_save_patches;
+    unsigned azimuth_save_patch_count;
 } FiGameProfile;
+
+/* OD-239 8 (T-1111-AZIMUTH; SAURON's static RE, deprecated/beta/notes/local-docs/re/azimuth-104-save-path.md in the monorepo):
+   the game names its profile's ConnectedStorage container swprintf(buf, L"User_%I64X", player->vt[+0x40]()), the XUID cached
+   from IUser slot 15, and Azimuth uses that name as the folder under saves\player-1. The row replaces that virtual call, a pure
+   read of the cached XUID, by mov r8, 0x9000000000000 (Azimuth's own offline XUID, the launcher's AzimuthSaves.OfflineXuid), the
+   formatter's third argument: the folder is User_9000000000000. The game's XUID, its sessions and its server calls keep the
+   profile's. rax is dead after the run (the formatter, a varargs wrapper of a vsnwprintf-style call, never reads it and its
+   result overwrites it), the dropped mov rcx is overwritten by the next lea, r12/r14 are untouched, and no branch lands inside
+   either range (SAURON, objdump). Next instruction in both: lea rdx, L"User_%I64X" (FH2 0x141e136e0, FM5 0x141c70148). */
+static const FiGamePatch fi_fh2_azimuth_save[] = {
+    /* 0x1402e3a96: mov rax,[r12]; mov rcx,r12; call [rax+40h]; mov r8,rax */
+    {0x2e3a96u, 13, {0x49, 0x8b, 0x04, 0x24, 0x49, 0x8b, 0xcc, 0xff, 0x50, 0x40, 0x4c, 0x8b, 0xc0},
+     {0x49, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00, 0x90, 0x90, 0x90},
+     "Azimuth save: the profile's container is User_9000000000000"},
+};
+static const FiGamePatch fi_fm5_azimuth_save[] = {
+    /* 0x1401a06f9: mov rax,[r14]; mov rcx,r14; call [rax+40h]; mov r8,rax */
+    {0x1a06f9u, 12, {0x49, 0x8b, 0x06, 0x49, 0x8b, 0xce, 0xff, 0x50, 0x40, 0x4c, 0x8b, 0xc0},
+     {0x49, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00, 0x90, 0x90},
+     "Azimuth save: the profile's container is User_9000000000000"},
+};
 
 /* FM5 1.0.0.20 (docs/launcher/FM5_INFINITY_HANDOFF.md 3).
    Azimuth's store answers every privilege check with Restricted, and FM5's MULTIPLAYER path stops silently on it:
@@ -253,13 +281,49 @@ static const FiReadyTerm fi_fm5_screen_terms[] = {
 
 static const FiGameProfile fi_game_profiles[] = {
     {FI_GAME_FH2, "FH2", GAME_TIMESTAMP, GAME_IMAGE_SIZE, FI_FEATURES_ALL, L"title-1a96545b", L"media\\stripped\\gamedbRC.slt", 2,
-     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0, 0, 0},
+     0, 0, 0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0, 0, 0,
+     fi_fh2_azimuth_save, sizeof(fi_fh2_azimuth_save) / sizeof(fi_fh2_azimuth_save[0])},
     {FI_GAME_FM5, "FM5", 0x53d8d1f2u, 0x279d000u, 0, L"title-7b35d917", L"media\\db\\gamedb.slt", -1,
      fi_fm5_patches, sizeof(fi_fm5_patches) / sizeof(fi_fm5_patches[0]),
      fi_fm5_watches, sizeof(fi_fm5_watches) / sizeof(fi_fm5_watches[0]),
      fi_fm5_ready, sizeof(fi_fm5_ready) / sizeof(fi_fm5_ready[0]), 0x25d0398u, 0x5cu, {0x25d0398u, 0x261d1a0u},
-     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u, 0x101bcf8u, fi_fm5_screen_terms, sizeof(fi_fm5_screen_terms) / sizeof(fi_fm5_screen_terms[0])},
+     FI_FM5_HEARTBEAT_WINDOW_MS, 1, 0x101bca0u, 0x101bcf8u, fi_fm5_screen_terms, sizeof(fi_fm5_screen_terms) / sizeof(fi_fm5_screen_terms[0]),
+     fi_fm5_azimuth_save, sizeof(fi_fm5_azimuth_save) / sizeof(fi_fm5_azimuth_save[0])},
 };
+
+/* OD-239 8: the rows a session writes for Azimuth's own save: the game's azimuth_save_patches when `azimuth` (the ticket's mode
+   is `noob`), none otherwise (Hardcore). Pure, for tests. */
+static inline unsigned fi_game_azimuth_save_rows(const FiGameProfile *game, int azimuth, const FiGamePatch **rows) {
+    *rows = azimuth && game->azimuth_save_patch_count ? game->azimuth_save_patches : 0;
+    return *rows ? game->azimuth_save_patch_count : 0;
+}
+
+/* Writes `size` bytes at `address` (game_patches.h: VirtualProtect, copy, instruction cache flush). 1 when written. */
+typedef int (*FiPatchWriter)(unsigned char *address, const unsigned char *bytes, size_t size);
+
+/* `rows` over `image`, all or nothing: every row is read and compared with its original bytes first, and one that is unreadable,
+   malformed or not its original writes nothing at all (0, *failed its index). Then each row's replacement is written (1; -1 when a
+   write failed, *failed its index). Pure, for tests (game_patches.h passes memory_read and game_patch_write). */
+static inline int fi_game_patches_apply(FiWatchReader read, FiPatchWriter write, unsigned char *image, const FiGamePatch *rows,
+                                        unsigned count, unsigned *failed) {
+    *failed = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        unsigned char current[sizeof(rows[i].original)];
+        int same = rows[i].size > 0 && rows[i].size <= sizeof(current) && read(image + rows[i].rva, current, rows[i].size);
+        for (unsigned j = 0; same && j < rows[i].size; ++j) same = current[j] == rows[i].original[j];
+        if (!same) {
+            *failed = i;
+            return 0;
+        }
+    }
+    for (unsigned i = 0; i < count; ++i) {
+        if (!write(image + rows[i].rva, rows[i].replacement, rows[i].size)) {
+            *failed = i;
+            return -1;
+        }
+    }
+    return 1;
+}
 
 /* OD-223: what the game's screen row reports, the walk's value `value` (`read_ok` when it succeeded) gated by the profile's
    screen_terms read from `image` with `read`: FI_WATCH_SCREEN_UNKNOWN unless the walk succeeded, fits 0..254 and every term holds. Pure,

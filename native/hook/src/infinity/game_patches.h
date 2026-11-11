@@ -5,18 +5,52 @@
 #ifndef FI_GAME_PATCHES_H
 #define FI_GAME_PATCHES_H
 
-static int game_patch_apply(unsigned char *at, const FiGamePatch *patch) {
-    unsigned char current[sizeof(patch->original)];
+/* game_profile.h FiPatchWriter: `size` bytes at `at`, code or data. */
+static int game_patch_write(unsigned char *at, const unsigned char *bytes, size_t size) {
     DWORD old_protection, ignored;
-    if (patch->size > sizeof(current) || !memory_read(at, current, patch->size) ||
-        !memory_equal(current, patch->original, patch->size) ||
-        !VirtualProtect(at, patch->size, PAGE_EXECUTE_READWRITE, &old_protection)) {
+    if (!VirtualProtect(at, size, PAGE_EXECUTE_READWRITE, &old_protection)) {
         return 0;
     }
-    memory_copy(at, patch->replacement, patch->size);
-    FlushInstructionCache(GetCurrentProcess(), at, patch->size);
-    VirtualProtect(at, patch->size, old_protection, &ignored);
+    memory_copy(at, bytes, size);
+    FlushInstructionCache(GetCurrentProcess(), at, size);
+    VirtualProtect(at, size, old_protection, &ignored);
     return 1;
+}
+
+static int game_patch_apply(unsigned char *at, const FiGamePatch *patch) {
+    unsigned char current[sizeof(patch->original)];
+    if (patch->size > sizeof(current) || !memory_read(at, current, patch->size) ||
+        !memory_equal(current, patch->original, patch->size)) {
+        return 0;
+    }
+    return game_patch_write(at, patch->replacement, patch->size);
+}
+
+/* OD-239 8 (T-1111-AZIMUTH): launch.c, once an Azimuth session's ticket checked out and before the getters let the game read its
+   identity (account.c account_wait holds them until azimuth_account_launch_done), so before the game builds its save container's
+   name at profile load: the selected game's Azimuth save rows, all or nothing over their exact original bytes. A Hardcore
+   session (`azimuth` 0) writes nothing and logs nothing. On a refusal the game opens the container its identity names. */
+void fi_game_azimuth_save(int azimuth) {
+    const FiGameProfile *game = fi_game_profile();
+    const FiGamePatch *rows = 0;
+    unsigned count = fi_game_azimuth_save_rows(game, azimuth, &rows), failed = 0;
+    if (!azimuth) {
+        return;
+    }
+    if (!count) {
+        log_append("AZIMUTH SAVE NOT APPLIED: this game has no Azimuth save row; nothing written.\r\n");
+        return;
+    }
+    unsigned char *image = fi_game_selected_image;
+    if (!image) {
+        log_append("AZIMUTH SAVE NOT APPLIED: no game image was handed over; nothing written.\r\n");
+        return;
+    }
+    int result = fi_game_patches_apply(memory_read, game_patch_write, image, rows, count, &failed);
+    log_append(result > 0 ? "AZIMUTH SAVE: " : result == 0 ? "AZIMUTH SAVE NOT APPLIED (unexpected bytes, nothing written): "
+                                                           : "AZIMUTH SAVE NOT APPLIED (a write failed): ");
+    log_append(rows[result > 0 ? 0 : failed].what);
+    log_append(".\r\n");
 }
 
 /* "<label> 0x<16 hex digits>" and a line break. */
